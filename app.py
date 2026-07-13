@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from flask import Flask, render_template_string, request, jsonify, redirect, session, url_for
 from flask_socketio import SocketIO
 from authlib.integrations.flask_client import OAuth
+from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
 
 load_dotenv()
@@ -69,6 +70,9 @@ if not ALLOWED_EMAILS:
 # ================================
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+# Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
+# https://temp.arkeanos.net/... instead of the local bind address/scheme.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
