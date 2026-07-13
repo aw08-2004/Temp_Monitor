@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import socket
@@ -12,7 +13,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # ================================
 # CONFIG
@@ -110,6 +111,48 @@ def get_cpu_temp():
         print(f"Error reading local temp: {e}")
 
     return None
+
+
+# ================================
+# SYSTEM IDENTITY  --  BIOS asset tag / serial number / model, read once at startup
+# ================================
+_PLACEHOLDER_ASSET_TAGS = ("default string", "no asset", "to be filled", "invalid")
+
+
+def get_system_info():
+    """Reads BIOS/chassis identity via CIM. Values don't change at runtime, so call once."""
+    ps_command = (
+        "$bios = Get-CimInstance Win32_BIOS; "
+        "$cs = Get-CimInstance Win32_ComputerSystem; "
+        "$encl = Get-CimInstance Win32_SystemEnclosure; "
+        "[PSCustomObject]@{ "
+        "SerialNumber = $bios.SerialNumber; "
+        "Model = $cs.Model; "
+        "AssetTag = $encl.SMBIOSAssetTag "
+        "} | ConvertTo-Json -Compress"
+    )
+    info = {"serial_number": None, "model": None, "asset_tag": None}
+    try:
+        output = subprocess.check_output(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_command],
+            timeout=15,
+            stderr=subprocess.DEVNULL,
+        )
+        parsed = json.loads(output)
+
+        serial = str(parsed.get("SerialNumber") or "").strip()
+        model = str(parsed.get("Model") or "").strip()
+        asset_tag = str(parsed.get("AssetTag") or "").strip()
+
+        info["serial_number"] = serial or None
+        info["model"] = model or None
+        # Many boards ship with a placeholder like "Default string" when no asset tag is set
+        if asset_tag and not any(p in asset_tag.lower() for p in _PLACEHOLDER_ASSET_TAGS):
+            info["asset_tag"] = asset_tag
+    except Exception as e:
+        print(f"[system-info] Could not read BIOS/system info: {e}")
+
+    return info
 
 
 # ================================
@@ -214,6 +257,9 @@ if __name__ == "__main__":
     print(f"Reading sensors from {LHM_URL}")
     print(f"Sending data to {HUB_URL} every {INTERVAL} seconds.")
 
+    system_info = get_system_info()
+    print(f"System info: {system_info}")
+
     check_for_update()               # check #1: every startup
     last_update_check = time.time()
 
@@ -227,9 +273,11 @@ if __name__ == "__main__":
 
         if current_temp is not None:
             try:
+                payload = {"machine": MACHINE_NAME, "temp": current_temp}
+                payload.update(system_info)
                 response = requests.post(
                     HUB_URL,
-                    json={"machine": MACHINE_NAME, "temp": current_temp},
+                    json=payload,
                     timeout=3,
                     allow_redirects=False
                 )

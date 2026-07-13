@@ -164,6 +164,17 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS machine_info (
+                machine TEXT PRIMARY KEY,
+                asset_tag TEXT,
+                serial_number TEXT,
+                model TEXT,
+                updated_at TEXT
+            )
+            """
+        )
 
 def write_readings_batch(records):
     if not records:
@@ -287,6 +298,28 @@ def save_and_emit_temp(machine, temp):
         'temp': temp_value,
         'threshold': OVERHEAT_THRESHOLD
     })
+
+def save_machine_info(machine, asset_tag, serial_number, model):
+    machine_name = str(machine).strip()
+    asset_tag = (str(asset_tag).strip() or None) if asset_tag else None
+    serial_number = (str(serial_number).strip() or None) if serial_number else None
+    model = (str(model).strip() or None) if model else None
+    if not machine_name or not any([asset_tag, serial_number, model]):
+        return
+
+    with get_db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO machine_info(machine, asset_tag, serial_number, model, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(machine) DO UPDATE SET
+                asset_tag = excluded.asset_tag,
+                serial_number = excluded.serial_number,
+                model = excluded.model,
+                updated_at = excluded.updated_at
+            """,
+            (machine_name, asset_tag, serial_number, model, to_timestamp_str(datetime.now())),
+        )
 
 def query_raw_history(start_epoch, end_epoch, machine, limit):
     sql = """
@@ -432,9 +465,20 @@ def report_temp():
     data = request.json
     if not data or 'machine' not in data or 'temp' not in data:
         return jsonify({"error": "Invalid payload"}), 400
-    
-    save_and_emit_temp(data['machine'], float(data['temp']))
+
+    machine = data['machine']
+    save_and_emit_temp(machine, float(data['temp']))
+    save_machine_info(machine, data.get('asset_tag'), data.get('serial_number'), data.get('model'))
     return jsonify({"status": "success"}), 200
+
+@app.route('/api/machines')
+def get_machines():
+    """Machine identity info (asset tag / serial number / model) reported by companions."""
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT machine, asset_tag, serial_number, model, updated_at FROM machine_info ORDER BY machine ASC"
+        ).fetchall()
+    return jsonify([dict(row) for row in rows])
 
 @app.route('/api/history')
 def get_history():
