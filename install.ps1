@@ -23,9 +23,10 @@ $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Repo           = "aw08-2004/Temp_Monitor"
+$InstallerUrl   = "https://raw.githubusercontent.com/$Repo/main/install.ps1"
 $CompanionUrl   = "https://raw.githubusercontent.com/$Repo/main/companion.py"
 $LhmApi         = "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
-$LhmFallback    = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v0.9.6/LibreHardwareMonitor-net472.zip"
+$LhmFallback    = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v0.9.6/LibreHardwareMonitor.zip"
 $LhmDir         = Join-Path $InstallDir "LibreHardwareMonitor"
 $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
 $TaskCompanion  = "TempMonitor - Companion"
@@ -45,9 +46,24 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] `
 
 if (-not $isAdmin) {
     Write-Host "Elevating..." -ForegroundColor Yellow
-    $argList = @("-ExecutionPolicy","Bypass","-File","`"$PSCommandPath`"")
-    if ($Uninstall) { $argList += "-Uninstall" }
-    Start-Process powershell -Verb RunAs -ArgumentList $argList
+
+    if ($PSCommandPath) {
+        # Running from a local file -- relaunch that same file
+        $argList = @("-ExecutionPolicy","Bypass","-File","`"$PSCommandPath`"")
+        if ($Uninstall) { $argList += "-Uninstall" }
+        Start-Process powershell -Verb RunAs -ArgumentList $argList
+    } else {
+        # Running via `irm | iex` -- no script file to relaunch, so re-fetch
+        # and re-invoke as a scriptblock (preserves param binding) in the
+        # elevated process.
+        $remoteArgs = foreach ($key in $PSBoundParameters.Keys) {
+            $val = $PSBoundParameters[$key]
+            if ($val -is [switch]) { if ($val.IsPresent) { "-$key" } }
+            else { "-$key"; "`"$val`"" }
+        }
+        $cmd = "& ([scriptblock]::Create((irm '$InstallerUrl'))) $($remoteArgs -join ' ')"
+        Start-Process powershell -Verb RunAs -ArgumentList @("-ExecutionPolicy","Bypass","-Command", $cmd)
+    }
     exit
 }
 
