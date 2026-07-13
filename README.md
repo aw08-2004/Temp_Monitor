@@ -45,6 +45,8 @@ The installer will elevate itself automatically if not already run as admin.
 - Python 3 (via `winget`, if missing) + the `requests` package
 - LibreHardwareMonitor (latest GitHub release), configured to run its web
   server on the configured port
+- PawnIO (skipped if the `PawnIO` service already exists) -- the kernel
+  driver LibreHardwareMonitor needs to read sensors on modern Windows
 - `companion.py`, pulled from `main`
 - Two scheduled tasks (run at logon, admin rights): LibreHardwareMonitor,
   then the companion agent 30s later

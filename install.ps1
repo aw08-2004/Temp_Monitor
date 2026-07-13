@@ -27,6 +27,7 @@ $InstallerUrl   = "https://raw.githubusercontent.com/$Repo/main/install.ps1"
 $CompanionUrl   = "https://raw.githubusercontent.com/$Repo/main/companion.py"
 $LhmApi         = "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
 $LhmFallback    = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v0.9.6/LibreHardwareMonitor.zip"
+$PawnIoUrl      = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/refs/heads/master/LibreHardwareMonitor.Windows.Forms/Resources/PawnIO_setup.exe"
 $LhmDir         = Join-Path $InstallDir "LibreHardwareMonitor"
 $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
 $TaskCompanion  = "TempMonitor - Companion"
@@ -197,7 +198,30 @@ if (Test-Path $lhmExe) {
 }
 
 # ----------------------------------------------------------------------
-# 4. LHM config -- web server ON, start minimized, live in the tray
+# 4. PawnIO -- kernel driver LHM needs for sensor access (replaces WinRing0)
+# ----------------------------------------------------------------------
+Step "Installing PawnIO driver"
+
+if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
+    Ok "Already installed, skipping"
+} else {
+    $pawnioPath = Join-Path $env:TEMP "PawnIO_setup.exe"
+    Say "Downloading $PawnIoUrl"
+    Invoke-WebRequest -Uri $PawnIoUrl -OutFile $pawnioPath -UseBasicParsing
+    Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
+
+    $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install", "-silent" -Wait -PassThru -NoNewWindow
+    Remove-Item $pawnioPath -Force -ErrorAction SilentlyContinue
+
+    if ($proc.ExitCode -ne 0) {
+        Warn "PawnIO installer exited with code $($proc.ExitCode). Sensors may not be readable."
+    } else {
+        Ok "PawnIO installed"
+    }
+}
+
+# ----------------------------------------------------------------------
+# 5. LHM config -- web server ON, start minimized, live in the tray
 #    LHM reads <exe name>.config from its own folder (PersistentSettings)
 # ----------------------------------------------------------------------
 Step "Configuring LibreHardwareMonitor web server (port $Port)"
@@ -223,7 +247,7 @@ $lhmConfig = Join-Path $LhmDir "LibreHardwareMonitor.config"
 Ok "Wrote $lhmConfig"
 
 # ----------------------------------------------------------------------
-# 5. companion.py
+# 6. companion.py
 # ----------------------------------------------------------------------
 Step "Downloading companion.py"
 $companionPath = Join-Path $InstallDir "companion.py"
@@ -232,7 +256,7 @@ $ver = (Select-String -Path $companionPath -Pattern '^VERSION\s*=\s*"([\d.]+)"')
 Ok "companion.py v$ver -> $companionPath"
 
 # ----------------------------------------------------------------------
-# 6. Scheduled tasks (RunLevel Highest = admin without a UAC prompt every logon)
+# 7. Scheduled tasks (RunLevel Highest = admin without a UAC prompt every logon)
 # ----------------------------------------------------------------------
 Step "Registering scheduled tasks"
 
@@ -263,7 +287,7 @@ Register-ScheduledTask -TaskName $TaskCompanion -Force `
 Ok "Task: $TaskCompanion (30s delay)"
 
 # ----------------------------------------------------------------------
-# 7. Start and verify
+# 8. Start and verify
 # ----------------------------------------------------------------------
 Step "Starting services"
 
