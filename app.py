@@ -7,11 +7,16 @@ import sqlite3
 import queue
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from functools import wraps
 import wmi
 import pythoncom
-from flask import Flask, render_template_string, request, jsonify
+from dotenv import load_dotenv
+from flask import Flask, render_template_string, request, jsonify, redirect, session, url_for
 from flask_socketio import SocketIO
+from authlib.integrations.flask_client import OAuth
 import requests
+
+load_dotenv()
 
 # ================================
 # CONFIG
@@ -38,9 +43,32 @@ VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300}
 LOCAL_MACHINE = socket.gethostname()
 
 # ================================
+# AUTH CONFIG (Google sign-in)
+# ================================
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
+ALLOWED_EMAILS = {
+    email.strip().lower()
+    for email in os.environ.get("ALLOWED_EMAILS", "").split(",")
+    if email.strip()
+}
+
+if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and FLASK_SECRET_KEY):
+    raise RuntimeError(
+        "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and FLASK_SECRET_KEY must all be set "
+        "(as env vars, or in a .env file) to run the hub -- see README."
+    )
+if not ALLOWED_EMAILS:
+    raise RuntimeError(
+        "ALLOWED_EMAILS must list at least one allowed Google account email (comma-separated)."
+    )
+
+# ================================
 # WEB & WEBSOCKET SETUP
 # ================================
 app = Flask(__name__)
+app.secret_key = FLASK_SECRET_KEY
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
@@ -48,6 +76,71 @@ socketio = SocketIO(
     transports=["polling"],
     allow_upgrades=False
 )
+
+oauth = OAuth(app)
+oauth.register(
+    name="google",
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+
+def login_required(view):
+    """Gate a route behind an authenticated + allow-listed session. Never applied to /api/report."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("user"):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Authentication required"}), 401
+            return redirect(url_for("login"))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.route("/login")
+def login():
+    if session.get("user"):
+        return redirect(url_for("index"))
+    return render_template_string(LOGIN_HTML)
+
+
+@app.route("/login/google")
+def login_google():
+    redirect_uri = url_for("auth_callback", _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@app.route("/auth/callback")
+def auth_callback():
+    token = oauth.google.authorize_access_token()
+    user_info = token.get("userinfo") or oauth.google.userinfo(token=token)
+    email = (user_info.get("email") or "").strip().lower()
+
+    if not user_info.get("email_verified", True):
+        return "Google account email is not verified.", 403
+    if email not in ALLOWED_EMAILS:
+        return f"Access denied: {email} is not authorized for this dashboard.", 403
+
+    session["user"] = {
+        "email": email,
+        "name": user_info.get("name") or email,
+        "picture": user_info.get("picture"),
+    }
+    return redirect(url_for("index"))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+@socketio.on("connect")
+def handle_socket_connect():
+    if not session.get("user"):
+        return False  # reject the connection; browser falls back to no live updates
 
 # ================================
 # HELPERS
@@ -472,6 +565,7 @@ def report_temp():
     return jsonify({"status": "success"}), 200
 
 @app.route('/api/machines')
+@login_required
 def get_machines():
     """Machine identity info (asset tag / serial number / model) reported by companions."""
     with get_db_conn() as conn:
@@ -481,6 +575,7 @@ def get_machines():
     return jsonify([dict(row) for row in rows])
 
 @app.route('/api/history')
+@login_required
 def get_history():
     """Provide history data with optional range/machine/resolution controls."""
     date = request.args.get("date")
@@ -528,6 +623,7 @@ def get_history():
     return jsonify(history)
 
 @app.route('/api/daily_summary')
+@login_required
 def get_daily_summary():
     """Provide daily averages and reading counts for selected date."""
     date = request.args.get("date") or today_str()
@@ -583,6 +679,54 @@ def get_daily_summary():
         "machine_count": len(machine_averages),
         "reading_count": int(summary["reading_count"])
     })
+
+# ================================
+# LOGIN PAGE
+# ================================
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in - Temp Monitor</title>
+<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg: #0f172a; --card: #1e293b; --accent: #22c55e;
+    --text: #e2e8f0; --muted: #94a3b8;
+}
+* { box-sizing: border-box; font-family: 'Inter', sans-serif; }
+body {
+    background: linear-gradient(135deg, #0f172a, #020617); color: var(--text);
+    height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center;
+}
+.card {
+    background: var(--card); padding: 40px; border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4); text-align: center; max-width: 340px;
+}
+h1 { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+p { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+.google-btn {
+    display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #1f1f1f;
+    padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;
+}
+.google-btn:hover { background: #f0f0f0; }
+</style>
+</head>
+<body>
+    <div class="card">
+        <h1>Temp Monitor</h1>
+        <p>Sign in with an authorized Google account to view the dashboard.</p>
+        <a class="google-btn" href="{{ url_for('login_google') }}">
+            <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.95v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.95H.95A9 9 0 0 0 0 9c0 1.45.35 2.83.95 4.05l3.02-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0A9 9 0 0 0 .95 4.95l3.02 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+            Sign in with Google
+        </a>
+    </div>
+</body>
+</html>
+"""
 
 # ================================
 # WEB DASHBOARD
@@ -649,6 +793,8 @@ h1 { font-size: 28px; font-weight: 600; }
         <div class="header-right">
             <a class="nav-link" href="/history">Daily Summary</a>
             <span id="socket-status" style="color: #eab308;">Connecting...</span>
+            <span>{{ session.user.email }}</span>
+            <a class="nav-link" href="{{ url_for('logout') }}">Sign out</a>
         </div>
     </header>
 
@@ -1508,10 +1654,12 @@ th { color: var(--muted); font-weight: 500; }
 """
 
 @app.route("/")
+@login_required
 def index():
     return render_template_string(HTML)
 
 @app.route("/history")
+@login_required
 def history_page():
     return render_template_string(HISTORY_HTML)
 

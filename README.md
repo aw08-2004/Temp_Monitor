@@ -69,11 +69,37 @@ the top of `companion.py` on every push to `main`, or nothing will update.
 
 ## Hub
 
-`app.py` receives reports at `POST /api/report`, and serves live/historical
-views at `/` and `/history`. Data is persisted to `logs/temp_v2.db`
-(SQLite) with optional CSV archiving; rotated log files also live under
-`logs/`. Run it via `wsgi.py`, or directly with:
+`app.py` receives reports at `POST /api/report` (open, no auth -- companions
+must be able to post without signing in), and serves live/historical views at
+`/` and `/history` (gated behind Google sign-in, see below). Data is
+persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving; rotated
+log files also live under `logs/`. Run it via `wsgi.py`, or directly with:
 
 ```powershell
 python app.py
 ```
+
+### Google sign-in setup
+
+Viewing the dashboard (`/`, `/history`, and the `/api/history`,
+`/api/daily_summary`, `/api/machines` endpoints, plus live Socket.IO updates)
+requires signing in with an allow-listed Google account. `POST /api/report`
+is intentionally exempt so companion agents never need credentials.
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
+   create an **OAuth 2.0 Client ID** (Application type: Web application).
+2. Add an authorized redirect URI: `https://temp.arkeanos.net/auth/callback`
+   (and `http://localhost:3001/auth/callback` for local dev).
+3. Set the following as environment variables, or in a `.env` file next to
+   `app.py` (gitignored):
+
+   ```
+   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   FLASK_SECRET_KEY=a-long-random-string   # signs the session cookie
+   ALLOWED_EMAILS=you@example.com,teammate@example.com
+   ```
+
+`app.py` fails fast at startup if any of these are missing. Only emails in
+`ALLOWED_EMAILS` (comma-separated, case-insensitive) can complete sign-in;
+everyone else gets a 403 after authenticating with Google.
