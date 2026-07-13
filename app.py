@@ -879,6 +879,36 @@ h1 { font-size: 28px; font-weight: 600; }
         loadLiveHistory();
     });
 
+    // Machine identity (asset tag / serial number / model) reported by companions
+    let machineInfoMap = {};
+
+    function formatMachineInfo(info) {
+        if (!info) return '';
+        const parts = [];
+        if (info.model) parts.push(info.model);
+        if (info.serial_number) parts.push(`SN: ${info.serial_number}`);
+        if (info.asset_tag) parts.push(`Asset: ${info.asset_tag}`);
+        return parts.join(' • ');
+    }
+
+    function applyMachineInfo(machine) {
+        const infoEl = document.getElementById('info-' + machine);
+        if (!infoEl) return;
+        const text = formatMachineInfo(machineInfoMap[machine]);
+        infoEl.textContent = text;
+        infoEl.style.display = text ? '' : 'none';
+    }
+
+    async function refreshMachineInfo() {
+        try {
+            const resp = await fetch('/api/machines');
+            if (!resp.ok) return;
+            const rows = await resp.json();
+            machineInfoMap = Object.fromEntries(rows.map((r) => [r.machine, r]));
+            for (const machine in machineInfoMap) applyMachineInfo(machine);
+        } catch (e) { /* non-critical, dashboard still works without it */ }
+    }
+
     // Helper: Create or update UI Card for a machine
     function updateMachineCard(machine, temp, threshold) {
         let card = document.getElementById('card-' + machine);
@@ -888,10 +918,16 @@ h1 { font-size: 28px; font-weight: 600; }
             card.className = 'card';
             card.innerHTML = `
                 <h2>${machine}</h2>
+                <div class="label" id="info-${machine}" style="display:none;"></div>
                 <div class="stat" id="temp-${machine}">-- °C</div>
                 <div class="label" id="status-${machine}">Online</div>
             `;
             machineCards.appendChild(card);
+            if (machineInfoMap[machine]) {
+                applyMachineInfo(machine);
+            } else {
+                refreshMachineInfo(); // metadata may not have loaded yet for a brand-new machine
+            }
         }
 
         const tempEl = document.getElementById('temp-' + machine);
@@ -1020,6 +1056,7 @@ h1 { font-size: 28px; font-weight: 600; }
     });
     syncLiveResolutionControl();
     loadLiveHistory();
+    refreshMachineInfo();
     document.getElementById('tempChart').addEventListener('wheel', () => {
         scheduleLiveViewportReload();
     }, { passive: true });
