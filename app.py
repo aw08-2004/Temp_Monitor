@@ -28,6 +28,7 @@ CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
+HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -142,8 +143,9 @@ if not ALLOWED_EMAILS:
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
-# https://temp.arkeanos.net/... instead of the local bind address/scheme.
+# HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+print(f"[hub] Configured public URL: {HUB_URL}")
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",

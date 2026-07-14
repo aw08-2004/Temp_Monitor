@@ -4,7 +4,7 @@ CPU temperature monitoring across machines. Each machine runs a lightweight
 **companion** agent that reads sensors via LibreHardwareMonitor and reports
 them to a central **hub** (Flask + Socket.IO) for live charts and history.
 
-- Hub: `app.py` (served via `wsgi.py`), live at https://temp.arkeanos.net
+- Hub: `app.py` (served via `wsgi.py`), live at https://your.domain.com
 - Companion agent: `companion.py`
 - Installer: `install.ps1`
 
@@ -88,7 +88,7 @@ is intentionally exempt so companion agents never need credentials.
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
    create an **OAuth 2.0 Client ID** (Application type: Web application).
-2. Add an authorized redirect URI: `https://temp.arkeanos.net/auth/callback`
+2. Add an authorized redirect URI: `https://your.domain.com/auth/callback`
    (and `http://localhost:3001/auth/callback` for local dev).
 3. Set the following as environment variables, or in a `.env` file next to
    `app.py` (gitignored):
@@ -98,6 +98,7 @@ is intentionally exempt so companion agents never need credentials.
    GOOGLE_CLIENT_SECRET=your-client-secret
    FLASK_SECRET_KEY=a-long-random-string   # signs the session cookie
    ALLOWED_EMAILS=you@example.com,teammate@example.com
+   HUB_URL=https://your.domain.com         # public URL of this hub
    ```
 
 `app.py` fails fast at startup if any of these are missing. Only emails in
