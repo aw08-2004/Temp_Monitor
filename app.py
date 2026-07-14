@@ -24,6 +24,9 @@ load_dotenv()
 # ================================
 # CONFIG
 # ================================
+# Bump on every push to main and restart the hub service -- shown in the
+# dashboard header so a stale/un-restarted deployment is obvious at a glance.
+HUB_VERSION = "1.0.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 SPIKE_THRESHOLD = 10
@@ -945,6 +948,7 @@ h1 { font-size: 28px; font-weight: 600; }
         <div class="header-right">
             <a class="nav-link" href="/history">Daily Summary</a>
             <span id="socket-status" style="color: #eab308;">Connecting...</span>
+            <span>Hub v{{ hub_version }}</span>
             <span>{{ session.user.email }}</span>
             <a class="nav-link" href="{{ url_for('logout') }}">Sign out</a>
         </div>
@@ -1127,6 +1131,7 @@ h1 { font-size: 28px; font-weight: 600; }
             <a class="nav-link" href="/">All machines</a>
             <a class="nav-link" href="/history">Daily Summary</a>
             <span id="socket-status" style="color: #eab308;">Connecting...</span>
+            <span>Hub v{{ hub_version }}</span>
             <a class="nav-link" href="{{ url_for('logout') }}">Sign out</a>
         </div>
     </header>
@@ -1550,7 +1555,10 @@ th { color: var(--muted); font-weight: 500; }
 <div class="container">
     <header>
         <h1>Daily Temperature Summary</h1>
-        <a href="/" class="back-link">Live Dashboard</a>
+        <div style="display:flex; align-items:center; gap:12px;">
+            <span class="label">Hub v{{ hub_version }}</span>
+            <a href="/" class="back-link">Live Dashboard</a>
+        </div>
     </header>
 
     <div class="card toolbar">
@@ -1934,17 +1942,19 @@ th { color: var(--muted); font-weight: 500; }
 @app.route("/")
 @login_required
 def index():
-    return render_template_string(HTML)
+    return render_template_string(HTML, hub_version=HUB_VERSION)
 
 @app.route("/history")
 @login_required
 def history_page():
-    return render_template_string(HISTORY_HTML)
+    return render_template_string(HISTORY_HTML, hub_version=HUB_VERSION)
 
 @app.route("/machine/<machine>")
 @login_required
 def machine_page(machine):
-    return render_template_string(MACHINE_HTML, machine=machine, overheat_threshold=OVERHEAT_THRESHOLD)
+    return render_template_string(
+        MACHINE_HTML, machine=machine, overheat_threshold=OVERHEAT_THRESHOLD, hub_version=HUB_VERSION
+    )
 
 # ================================
 # START
