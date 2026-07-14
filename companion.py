@@ -15,7 +15,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -380,7 +380,7 @@ if __name__ == "__main__":
 
         if current_temp is not None:
             try:
-                payload = {"machine": MACHINE_NAME, "temp": current_temp}
+                payload = {"machine": MACHINE_NAME, "temp": current_temp, "companion_version": VERSION}
                 payload.update(system_info)
                 if time.time() - last_uptime_check >= UPTIME_INTERVAL:
                     uptime_seconds = get_uptime_seconds()

@@ -68,6 +68,22 @@ def get_latest_uptime(machine):
     with latest_uptime_lock:
         return latest_uptime.get(str(machine).strip())
 
+# Latest known temp per machine (°C). Same in-memory, non-persisted approach as
+# latest_uptime -- lets pages that aren't the live dashboard (e.g. a single
+# machine's detail page) show a current reading without waiting on history.
+latest_temp = {}
+latest_temp_lock = threading.Lock()
+
+def set_latest_temp(machine, temp):
+    if temp is None:
+        return
+    with latest_temp_lock:
+        latest_temp[str(machine).strip()] = float(temp)
+
+def get_latest_temp(machine):
+    with latest_temp_lock:
+        return latest_temp.get(str(machine).strip())
+
 # ================================
 # COMPANION VERSION WATCHER  --  lets companions self-update promptly instead of
 # waiting for their own weekly GitHub poll. We periodically check the same
@@ -345,6 +361,9 @@ def init_db():
             )
             """
         )
+        existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(machine_info)")}
+        if "companion_version" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN companion_version TEXT")
 
 def write_readings_batch(records):
     if not records:
@@ -462,6 +481,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None):
     enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value)
 
     set_latest_uptime(machine_name, uptime_seconds)
+    set_latest_temp(machine_name, temp_value)
 
     # Emit via WebSocket
     socketio.emit('new_temp', {
@@ -472,26 +492,28 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None):
         'uptime_seconds': get_latest_uptime(machine_name)
     })
 
-def save_machine_info(machine, asset_tag, serial_number, model):
+def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None):
     machine_name = str(machine).strip()
     asset_tag = (str(asset_tag).strip() or None) if asset_tag else None
     serial_number = (str(serial_number).strip() or None) if serial_number else None
     model = (str(model).strip() or None) if model else None
-    if not machine_name or not any([asset_tag, serial_number, model]):
+    companion_version = (str(companion_version).strip() or None) if companion_version else None
+    if not machine_name or not any([asset_tag, serial_number, model, companion_version]):
         return
 
     with get_db_conn() as conn:
         conn.execute(
             """
-            INSERT INTO machine_info(machine, asset_tag, serial_number, model, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
-                asset_tag = excluded.asset_tag,
-                serial_number = excluded.serial_number,
-                model = excluded.model,
+                asset_tag = COALESCE(excluded.asset_tag, machine_info.asset_tag),
+                serial_number = COALESCE(excluded.serial_number, machine_info.serial_number),
+                model = COALESCE(excluded.model, machine_info.model),
+                companion_version = COALESCE(excluded.companion_version, machine_info.companion_version),
                 updated_at = excluded.updated_at
             """,
-            (machine_name, asset_tag, serial_number, model, to_timestamp_str(datetime.now())),
+            (machine_name, asset_tag, serial_number, model, companion_version, to_timestamp_str(datetime.now())),
         )
 
 def query_raw_history(start_epoch, end_epoch, machine, limit):
@@ -646,7 +668,13 @@ def report_temp():
     except (TypeError, ValueError):
         uptime_seconds = None
     save_and_emit_temp(machine, float(data['temp']), uptime_seconds)
-    save_machine_info(machine, data.get('asset_tag'), data.get('serial_number'), data.get('model'))
+    save_machine_info(
+        machine,
+        data.get('asset_tag'),
+        data.get('serial_number'),
+        data.get('model'),
+        data.get('companion_version'),
+    )
 
     response_payload = {"status": "success"}
     latest_version = get_latest_companion_version()
@@ -657,14 +685,53 @@ def report_temp():
 @app.route('/api/machines')
 @login_required
 def get_machines():
-    """Machine identity info (asset tag / serial number / model) reported by companions."""
+    """Machine identity info (asset tag / serial number / model / companion version)
+    reported by companions, plus their latest known live temp and uptime."""
     with get_db_conn() as conn:
         rows = conn.execute(
-            "SELECT machine, asset_tag, serial_number, model, updated_at FROM machine_info ORDER BY machine ASC"
+            "SELECT machine, asset_tag, serial_number, model, companion_version, updated_at "
+            "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     result = [dict(row) for row in rows]
+    known_machines = {row['machine'] for row in result}
+    # Also surface machines that have reported temps but no identity fields yet
+    # (e.g. an older companion, or the very first report before a DB write lands).
+    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
+        if machine not in known_machines:
+            result.append({
+                'machine': machine, 'asset_tag': None, 'serial_number': None,
+                'model': None, 'companion_version': None, 'updated_at': None,
+            })
+            known_machines.add(machine)
     for row in result:
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
+        row['temp'] = get_latest_temp(row['machine'])
+    result.sort(key=lambda row: row['machine'])
+    return jsonify(result)
+
+
+@app.route('/api/machines/<machine>')
+@login_required
+def get_machine(machine):
+    """Single machine's identity info + latest live temp/uptime, for its detail page."""
+    machine_name = str(machine).strip()
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT machine, asset_tag, serial_number, model, companion_version, updated_at "
+            "FROM machine_info WHERE machine = ?",
+            (machine_name,),
+        ).fetchone()
+    uptime_seconds = get_latest_uptime(machine_name)
+    temp = get_latest_temp(machine_name)
+    if row is None and uptime_seconds is None and temp is None:
+        return jsonify({"error": "Unknown machine"}), 404
+
+    result = dict(row) if row else {
+        'machine': machine_name, 'asset_tag': None, 'serial_number': None,
+        'model': None, 'companion_version': None, 'updated_at': None,
+    }
+    result['uptime_seconds'] = uptime_seconds
+    result['temp'] = temp
     return jsonify(result)
 
 @app.route('/api/history')
@@ -833,10 +900,6 @@ HTML = """
 <title>Live Multi-Node CPU Monitor</title>
 <link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-<!-- Chart.js and date adapter for time scales -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
 <!-- Socket.IO -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 
@@ -854,28 +917,24 @@ h1 { font-size: 28px; font-weight: 600; }
 .nav-link { color: #93c5fd; text-decoration: none; border: 1px solid #334155; padding: 6px 10px; border-radius: 10px; }
 .nav-link:hover { color: #bfdbfe; border-color: #475569; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px;}
-.card { background: var(--card); padding: 20px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); transition: 0.3s; }
+.card {
+    background: var(--card); padding: 20px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    transition: 0.15s; cursor: pointer; border: 1px solid transparent;
+}
+.card:hover { border-color: #475569; transform: translateY(-2px); }
 .card h2 { font-size: 16px; margin-bottom: 5px; color: var(--muted); font-weight: 400; }
 .stat { font-size: 32px; font-weight: 600; margin-bottom: 8px; transition: color 0.3s; }
 .label { font-size: 13px; color: var(--muted); }
+.empty-state { color: var(--muted); font-size: 14px; }
 
 /* Overheat Animations */
-.overheat { background: #450a0a; border: 1px solid var(--danger); animation: pulse 1s infinite; }
+.overheat { background: #450a0a; border-color: var(--danger); animation: pulse 1s infinite; }
 .overheat .stat { color: var(--danger); }
 @keyframes pulse {
     0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
     70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
     100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
-.chart-tools { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
-.chart-tools button, .chart-tools select {
-    background: #0b1220; color: var(--text); border: 1px solid #334155;
-    border-radius: 10px; padding: 6px 10px; cursor: pointer;
-}
-.chart-tools button:hover { border-color: #64748b; }
-.chart-tools label { color: var(--muted); font-size: 13px; }
-.chart-tools input[type="checkbox"] { width: 16px; height: 16px; accent-color: #22c55e; cursor: pointer; }
-.chart-container { position: relative; height: 400px; width: 100%; }
 </style>
 </head>
 <body>
@@ -893,36 +952,10 @@ h1 { font-size: 28px; font-weight: 600; }
 
     <!-- Dynamic Machine Cards go here -->
     <div class="grid" id="machine-cards"></div>
-
-    <div class="card">
-        <h2>Live Temperature Graph</h2>
-        <div class="chart-tools">
-            <label for="live-resolution">Resolution:</label>
-            <select id="live-resolution">
-                <option value="raw">Raw</option>
-                <option value="10s">10s</option>
-                <option value="1m">1m</option>
-                <option value="5m" selected>5m</option>
-            </select>
-            <span id="live-resolution-in-use" class="label">In use: --</span>
-            <input id="live-dynamic-resolution" type="checkbox" checked>
-            <label for="live-dynamic-resolution">Dynamic on zoom</label>
-            <button id="live-zoom-in" type="button">Zoom In</button>
-            <button id="live-zoom-out" type="button">Zoom Out</button>
-            <button id="live-reset-zoom" type="button">Reset Zoom</button>
-        </div>
-        <div class="chart-container">
-            <canvas id="tempChart"></canvas>
-        </div>
-    </div>
+    <div class="empty-state" id="empty-state" style="display:none;">No machines have reported in yet.</div>
 </div>
 
 <script>
-    const zoomPlugin = window['chartjs-plugin-zoom'];
-    if (zoomPlugin) {
-        Chart.register(zoomPlugin.default || zoomPlugin);
-    }
-
     // Request Desktop Notifications
     if (Notification.permission !== "granted" && Notification.permission !== "denied") {
         Notification.requestPermission();
@@ -930,196 +963,7 @@ h1 { font-size: 28px; font-weight: 600; }
 
     const socket = io({ transports: ['polling'], upgrade: false });
     const machineCards = document.getElementById('machine-cards');
-    const liveResolutionEl = document.getElementById('live-resolution');
-    const liveResolutionInUseEl = document.getElementById('live-resolution-in-use');
-    const liveDynamicResolutionEl = document.getElementById('live-dynamic-resolution');
-    let chart;
-    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-    let colorIndex = 0;
-    const LIVE_UPDATE_INTERVAL_MS = 250;
-    const LIVE_VIEWPORT_RELOAD_DEBOUNCE_MS = 250;
-    let liveChartUpdateTimer = null;
-    let liveViewportReloadTimer = null;
-    let liveHistoryLoadInFlight = false;
-    let lastLiveHistoryRequest = null;
-
-    function formatDateForApi(date) {
-        const pad = (value) => String(value).padStart(2, '0');
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-    }
-
-    function scheduleLiveChartUpdate() {
-        if (liveChartUpdateTimer !== null) return;
-        liveChartUpdateTimer = setTimeout(() => {
-            pruneLiveDatasetsToToday();
-            chart.update('none');
-            liveChartUpdateTimer = null;
-        }, LIVE_UPDATE_INTERVAL_MS);
-    }
-
-    function toChartTimestamp(value) {
-        if (typeof value === 'number' && Number.isFinite(value)) {
-            return value > 1e12 ? value : value * 1000;
-        }
-        if (typeof value === 'string' && value.trim()) {
-            const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-            const parsed = Date.parse(normalized);
-            return Number.isNaN(parsed) ? null : parsed;
-        }
-        return null;
-    }
-
-    function chooseLiveResolutionForSpan(spanMs) {
-        if (spanMs <= 45 * 60 * 1000) return 'raw';
-        if (spanMs <= 6 * 60 * 60 * 1000) return '10s';
-        if (spanMs <= 18 * 60 * 60 * 1000) return '1m';
-        return '5m';
-    }
-
-    function syncLiveResolutionControl() {
-        if (!liveResolutionEl || !liveDynamicResolutionEl) return;
-        liveResolutionEl.disabled = liveDynamicResolutionEl.checked;
-    }
-
-    function getSelectedLiveResolution() {
-        const selected = (liveResolutionEl?.value || '5m').trim().toLowerCase();
-        if (selected === 'raw' || selected === '10s' || selected === '1m' || selected === '5m') {
-            return selected;
-        }
-        return '5m';
-    }
-
-    function formatLiveResolutionLabel(resolution) {
-        if (resolution === 'raw') return 'Raw';
-        if (resolution === '10s') return '10s';
-        if (resolution === '1m') return '1m';
-        if (resolution === '5m') return '5m';
-        return '--';
-    }
-
-    function setLiveResolutionInUse(resolution) {
-        if (!liveResolutionInUseEl) return;
-        liveResolutionInUseEl.textContent = `In use: ${formatLiveResolutionLabel(resolution)}`;
-    }
-
-    function getRequestedLiveResolution(spanMs) {
-        if (liveDynamicResolutionEl?.checked) {
-            const resolved = chooseLiveResolutionForSpan(spanMs);
-            if (liveResolutionEl) liveResolutionEl.value = resolved;
-            return resolved;
-        }
-        return getSelectedLiveResolution();
-    }
-
-    function getStartOfTodayMs() {
-        const start = new Date();
-        start.setHours(0, 0, 0, 0);
-        return start.getTime();
-    }
-
-    function pruneLiveDatasetsToToday() {
-        const startOfTodayMs = getStartOfTodayMs();
-        for (const dataset of chart.data.datasets) {
-            dataset.data = dataset.data.filter((point) => {
-                const x = Number(point?.x);
-                return Number.isFinite(x) && x >= startOfTodayMs;
-            });
-        }
-    }
-
-    function getLiveDefaultRange() {
-        return { minMs: getStartOfTodayMs(), maxMs: Date.now() };
-    }
-
-    function getLiveViewportRange() {
-        const defaultRange = getLiveDefaultRange();
-        const xScale = chart?.scales?.x;
-        if (!xScale) return defaultRange;
-        const scaleMin = Number(xScale.min);
-        const scaleMax = Number(xScale.max);
-        if (!Number.isFinite(scaleMin) || !Number.isFinite(scaleMax)) return defaultRange;
-        const minMs = Math.max(defaultRange.minMs, Math.floor(scaleMin));
-        const maxMs = Math.min(defaultRange.maxMs, Math.ceil(scaleMax));
-        if (maxMs <= minMs) return defaultRange;
-        return { minMs, maxMs };
-    }
-
-    function buildLiveHistoryUrl(minMs, maxMs, resolution) {
-        const from = new Date(minMs);
-        const to = new Date(maxMs);
-        return `/api/history?from=${encodeURIComponent(formatDateForApi(from))}&to=${encodeURIComponent(formatDateForApi(to))}&resolution=${encodeURIComponent(resolution)}&limit=all`;
-    }
-
-    function scheduleLiveViewportReload() {
-        if (!liveDynamicResolutionEl?.checked) return;
-        if (liveViewportReloadTimer !== null) clearTimeout(liveViewportReloadTimer);
-        liveViewportReloadTimer = setTimeout(() => {
-            loadLiveViewportRange();
-            liveViewportReloadTimer = null;
-        }, LIVE_VIEWPORT_RELOAD_DEBOUNCE_MS);
-    }
-
-    // Initialize Chart.js
-    const ctx = document.getElementById('tempChart').getContext('2d');
-    chart = new Chart(ctx, {
-        type: 'line',
-        data: { datasets: [] },
-        options: {
-            responsive: true, maintainAspectRatio: false,
-            normalized: true,
-            animation: { duration: 0 }, // Disable animation for performance on live updates
-            interaction: { mode: 'nearest', axis: 'x', intersect: false },
-            scales: {
-                x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, title: { display: true, text: 'Time' }, grid: {color: '#334155'} },
-                y: { title: { display: true, text: 'Temperature (°C)' }, grid: {color: '#334155'} }
-            },
-            plugins: {
-                decimation: {
-                    enabled: true,
-                    algorithm: 'lttb',
-                    samples: 300
-                },
-                legend: { labels: { color: '#e2e8f0' } },
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                    callbacks: {
-                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} °C`
-                    }
-                },
-                zoom: {
-                    pan: { enabled: true, mode: 'x' },
-                    zoom: {
-                        wheel: { enabled: true },
-                        pinch: { enabled: true },
-                        drag: { enabled: true, backgroundColor: 'rgba(34, 197, 94, 0.15)' },
-                        mode: 'x'
-                    },
-                    onZoom: () => scheduleLiveViewportReload(),
-                    onPan: () => scheduleLiveViewportReload(),
-                    onZoomComplete: () => scheduleLiveViewportReload(),
-                    onPanComplete: () => scheduleLiveViewportReload()
-                }
-            }
-        }
-    });
-
-    document.getElementById('live-zoom-in').addEventListener('click', () => {
-        if (typeof chart.zoom === 'function') chart.zoom(1.2);
-        scheduleLiveViewportReload();
-    });
-    document.getElementById('live-zoom-out').addEventListener('click', () => {
-        if (typeof chart.zoom === 'function') chart.zoom(0.8);
-        scheduleLiveViewportReload();
-    });
-    document.getElementById('live-reset-zoom').addEventListener('click', () => {
-        if (typeof chart.resetZoom === 'function') chart.resetZoom();
-        lastLiveHistoryRequest = null;
-        loadLiveHistory();
-    });
-
-    // Machine identity (asset tag / serial number / model) reported by companions
-    let machineInfoMap = {};
+    const emptyStateEl = document.getElementById('empty-state');
 
     function formatMachineInfo(info) {
         if (!info) return '';
@@ -1128,19 +972,6 @@ h1 { font-size: 28px; font-weight: 600; }
         if (info.serial_number) parts.push(`SN: ${info.serial_number}`);
         if (info.asset_tag) parts.push(`Asset: ${info.asset_tag}`);
         return parts.join(' • ');
-    }
-
-    function applyMachineInfo(machine) {
-        const infoEl = document.getElementById('info-' + machine);
-        if (infoEl) {
-            const text = formatMachineInfo(machineInfoMap[machine]);
-            infoEl.textContent = text;
-            infoEl.style.display = text ? '' : 'none';
-        }
-        const info = machineInfoMap[machine];
-        if (info && info.uptime_seconds !== undefined) {
-            updateMachineUptime(machine, info.uptime_seconds);
-        }
     }
 
     function formatUptime(seconds) {
@@ -1157,24 +988,12 @@ h1 { font-size: 28px; font-weight: 600; }
         return parts.join(' ');
     }
 
-    function updateMachineUptime(machine, uptimeSeconds) {
-        const uptimeEl = document.getElementById('uptime-' + machine);
-        if (!uptimeEl) return;
-        uptimeEl.textContent = `Uptime: ${formatUptime(uptimeSeconds)}`;
-    }
-
-    async function refreshMachineInfo() {
-        try {
-            const resp = await fetch('/api/machines');
-            if (!resp.ok) return;
-            const rows = await resp.json();
-            machineInfoMap = Object.fromEntries(rows.map((r) => [r.machine, r]));
-            for (const machine in machineInfoMap) applyMachineInfo(machine);
-        } catch (e) { /* non-critical, dashboard still works without it */ }
+    function goToMachine(machine) {
+        window.location.href = '/machine/' + encodeURIComponent(machine);
     }
 
     // Helper: Create or update UI Card for a machine
-    function updateMachineCard(machine, temp, threshold, uptimeSeconds) {
+    function updateMachineCard(machine, temp, threshold, uptimeSeconds, info) {
         let card = document.getElementById('card-' + machine);
         if (!card) {
             card = document.createElement('div');
@@ -1185,20 +1004,28 @@ h1 { font-size: 28px; font-weight: 600; }
                 <div class="label" id="info-${machine}" style="display:none;"></div>
                 <div class="stat" id="temp-${machine}">-- °C</div>
                 <div class="label" id="uptime-${machine}">Uptime: --</div>
-                <div class="label" id="status-${machine}">Online</div>
+                <div class="label" id="status-${machine}">--</div>
             `;
+            card.addEventListener('click', () => goToMachine(machine));
             machineCards.appendChild(card);
-            if (machineInfoMap[machine]) {
-                applyMachineInfo(machine);
-            } else {
-                refreshMachineInfo(); // metadata may not have loaded yet for a brand-new machine
-            }
+            emptyStateEl.style.display = 'none';
         }
 
-        const tempEl = document.getElementById('temp-' + machine);
+        if (info) {
+            const infoEl = document.getElementById('info-' + machine);
+            const text = formatMachineInfo(info);
+            infoEl.textContent = text;
+            infoEl.style.display = text ? '' : 'none';
+        }
+
+        if (uptimeSeconds !== undefined && uptimeSeconds !== null) {
+            document.getElementById('uptime-' + machine).textContent = `Uptime: ${formatUptime(uptimeSeconds)}`;
+        }
+
         const statusEl = document.getElementById('status-' + machine);
-        tempEl.innerText = temp.toFixed(1) + ' °C';
-        if (uptimeSeconds !== undefined) updateMachineUptime(machine, uptimeSeconds);
+        if (temp === undefined || temp === null) return;
+
+        document.getElementById('temp-' + machine).innerText = Number(temp).toFixed(1) + ' °C';
 
         // Overheat Logic
         if (temp >= threshold) {
@@ -1220,54 +1047,308 @@ h1 { font-size: 28px; font-weight: 600; }
         }
     }
 
-    // Helper: Add dataset to chart
-    function getOrCreateDataset(machine) {
-        let dataset = chart.data.datasets.find(ds => ds.label === machine);
-        if (!dataset) {
-            dataset = {
-                label: machine,
-                data: [],
-                parsing: false,
-                borderColor: colors[colorIndex % colors.length],
-                backgroundColor: 'transparent',
-                borderWidth: 2,
-                tension: 0.3,
-                pointRadius: 0, // Hide points for cleaner line
-                pointHoverRadius: 6,
-                pointHitRadius: 20
-            };
-            chart.data.datasets.push(dataset);
-            colorIndex++;
-        }
-        return dataset;
+    async function refreshMachineInfo() {
+        try {
+            const resp = await fetch('/api/machines');
+            if (!resp.ok) return;
+            const rows = await resp.json();
+            emptyStateEl.style.display = rows.length ? 'none' : 'block';
+            for (const row of rows) {
+                updateMachineCard(row.machine, row.temp, 85, row.uptime_seconds, row);
+            }
+        } catch (e) { /* non-critical, dashboard still works without it */ }
     }
 
-    async function loadLiveHistoryRange(minMs, maxMs, resolution, resetZoom) {
-        if (liveHistoryLoadInFlight) return;
-        liveHistoryLoadInFlight = true;
-        try {
-            const historyRes = await fetch(buildLiveHistoryUrl(minMs, maxMs, resolution));
-            const data = await historyRes.json();
-            chart.data.datasets = [];
-            colorIndex = 0;
-            for (const [machine, points] of Object.entries(data)) {
-                const dataset = getOrCreateDataset(machine);
-                dataset.data = points
-                    .map((point) => {
-                        const x = toChartTimestamp(point.x ?? point.timestamp ?? point.ts_text);
-                        const y = Number(point.y);
-                        if (x === null || !Number.isFinite(y)) return null;
-                        return { x, y };
-                    })
-                    .filter(Boolean);
+    refreshMachineInfo();
 
-                // Update card with latest temp from history
-                if (points.length > 0) {
-                    updateMachineCard(machine, points[points.length - 1].y, 85); // fallback threshold
+    // Handle Live Socket Updates
+    socket.on('connect', () => { document.getElementById('socket-status').innerText = 'Live 🟢'; document.getElementById('socket-status').style.color = '#22c55e'; });
+    socket.on('disconnect', () => { document.getElementById('socket-status').innerText = 'Offline 🔴'; document.getElementById('socket-status').style.color = '#ef4444'; });
+
+    socket.on('new_temp', (msg) => {
+        updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds);
+    });
+</script>
+</body>
+</html>
+"""
+
+MACHINE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ machine }} - Temp Monitor</title>
+<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+<style>
+:root {
+    --bg: #0f172a; --card: #1e293b; --accent: #22c55e;
+    --text: #e2e8f0; --muted: #94a3b8; --danger: #ef4444;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+body { background: linear-gradient(135deg, #0f172a, #020617); color: var(--text); padding: 30px; }
+.container { max-width: 1200px; margin: auto; }
+header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; flex-wrap: wrap; gap: 10px; }
+h1 { font-size: 28px; font-weight: 600; }
+.header-right { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--muted); }
+.nav-link { color: #93c5fd; text-decoration: none; border: 1px solid #334155; padding: 6px 10px; border-radius: 10px; }
+.nav-link:hover { color: #bfdbfe; border-color: #475569; }
+.card { background: var(--card); padding: 20px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); margin-bottom: 20px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 20px; }
+.stat-card h2 { font-size: 14px; margin-bottom: 6px; color: var(--muted); font-weight: 400; }
+.stat { font-size: 32px; font-weight: 600; }
+.label { font-size: 13px; color: var(--muted); }
+.overheat .stat { color: var(--danger); }
+.overheat { background: #450a0a; border: 1px solid var(--danger); }
+.identity-line { font-size: 14px; color: var(--muted); margin-top: -4px; margin-bottom: 20px; }
+.chart-tools { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+.chart-tools button, .chart-tools select, .chart-tools input[type="date"] {
+    background: #0b1220; color: var(--text); border: 1px solid #334155;
+    border-radius: 10px; padding: 6px 10px; cursor: pointer;
+}
+.chart-tools button:hover { border-color: #64748b; }
+.chart-tools label { color: var(--muted); font-size: 13px; }
+.chart-tools input[type="checkbox"] { width: 16px; height: 16px; accent-color: #22c55e; cursor: pointer; }
+.chart-container { position: relative; height: 420px; width: 100%; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>{{ machine }}</h1>
+        <div class="header-right">
+            <a class="nav-link" href="/">All machines</a>
+            <a class="nav-link" href="/history">Daily Summary</a>
+            <span id="socket-status" style="color: #eab308;">Connecting...</span>
+            <a class="nav-link" href="{{ url_for('logout') }}">Sign out</a>
+        </div>
+    </header>
+
+    <div class="grid">
+        <div class="card stat-card" id="temp-card">
+            <h2>Live Temperature</h2>
+            <div class="stat" id="stat-temp">-- °C</div>
+            <div class="label" id="stat-status">--</div>
+        </div>
+        <div class="card stat-card">
+            <h2>Uptime</h2>
+            <div class="stat" id="stat-uptime">--</div>
+        </div>
+        <div class="card stat-card">
+            <h2>Companion Version</h2>
+            <div class="stat" id="stat-version">--</div>
+        </div>
+        <div class="card stat-card">
+            <h2>Identity</h2>
+            <div class="label" id="stat-model">Model: --</div>
+            <div class="label" id="stat-serial">Serial: --</div>
+            <div class="label" id="stat-asset">Asset tag: --</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-bottom: 10px;">Temperature History</h2>
+        <div class="chart-tools">
+            <label for="day-picker">Day:</label>
+            <input id="day-picker" type="date">
+            <label for="resolution">Resolution:</label>
+            <select id="resolution">
+                <option value="raw">Raw</option>
+                <option value="10s">10s</option>
+                <option value="1m">1m</option>
+                <option value="5m">5m</option>
+            </select>
+            <span id="resolution-in-use" class="label">In use: --</span>
+            <input id="dynamic-resolution" type="checkbox" checked>
+            <label for="dynamic-resolution">Dynamic on zoom</label>
+            <button id="zoom-in" type="button">Zoom In</button>
+            <button id="zoom-out" type="button">Zoom Out</button>
+            <button id="reset-zoom" type="button">Reset Zoom</button>
+        </div>
+        <div class="chart-container">
+            <canvas id="tempChart"></canvas>
+        </div>
+        <div id="no-data" class="label" style="margin-top: 12px; display: none;">No readings found for this day.</div>
+    </div>
+</div>
+
+<script>
+    const MACHINE = decodeURIComponent(window.location.pathname.split('/').pop());
+    const OVERHEAT_THRESHOLD = {{ overheat_threshold }};
+
+    const zoomPlugin = window['chartjs-plugin-zoom'];
+    if (zoomPlugin) Chart.register(zoomPlugin.default || zoomPlugin);
+
+    if (Notification.permission !== "granted" && Notification.permission !== "denied") {
+        Notification.requestPermission();
+    }
+
+    const socket = io({ transports: ['polling'], upgrade: false });
+    const dayPicker = document.getElementById('day-picker');
+    const resolutionEl = document.getElementById('resolution');
+    const resolutionInUseEl = document.getElementById('resolution-in-use');
+    const dynamicResolutionEl = document.getElementById('dynamic-resolution');
+    const noDataEl = document.getElementById('no-data');
+    const tempCard = document.getElementById('temp-card');
+    const statusEl = document.getElementById('stat-status');
+    const VIEWPORT_RELOAD_DEBOUNCE_MS = 250;
+    let viewportReloadTimer = null;
+    let lastHistoryRequest = null;
+    let historyLoadInFlight = false;
+    let viewingToday = true;
+
+    function getLocalDateString() {
+        const now = new Date();
+        const local = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
+        return local.toISOString().split('T')[0];
+    }
+
+    function formatDateForApi(date) {
+        const pad = (value) => String(value).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    function getDayRange(dateString) {
+        const start = new Date(`${dateString}T00:00:00`);
+        if (Number.isNaN(start.getTime())) return null;
+        const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        return { startMs: start.getTime(), endMs: Math.min(end.getTime(), Date.now()) };
+    }
+
+    function chooseResolutionForSpan(spanMs) {
+        if (spanMs <= 45 * 60 * 1000) return 'raw';
+        if (spanMs <= 6 * 60 * 60 * 1000) return '10s';
+        if (spanMs <= 18 * 60 * 60 * 1000) return '1m';
+        return '5m';
+    }
+
+    function syncResolutionControl() {
+        resolutionEl.disabled = dynamicResolutionEl.checked;
+    }
+
+    function getSelectedResolution(spanMs) {
+        if (dynamicResolutionEl.checked) {
+            const resolved = chooseResolutionForSpan(spanMs);
+            resolutionEl.value = resolved;
+            return resolved;
+        }
+        return (resolutionEl.value || '5m').trim().toLowerCase();
+    }
+
+    function setResolutionInUse(resolution) {
+        resolutionInUseEl.textContent = `In use: ${resolution || '--'}`;
+    }
+
+    function toChartTimestamp(value) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value > 1e12 ? value : value * 1000;
+        }
+        if (typeof value === 'string' && value.trim()) {
+            const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+            const parsed = Date.parse(normalized);
+            return Number.isNaN(parsed) ? null : parsed;
+        }
+        return null;
+    }
+
+    function buildHistoryUrl(date, minMs, maxMs, resolution) {
+        const params = new URLSearchParams();
+        params.set('machine', MACHINE);
+        params.set('date', date);
+        params.set('from', formatDateForApi(new Date(minMs)));
+        params.set('to', formatDateForApi(new Date(maxMs)));
+        params.set('resolution', resolution);
+        params.set('limit', 'all');
+        return `/api/history?${params.toString()}`;
+    }
+
+    function scheduleViewportReload() {
+        if (!dynamicResolutionEl.checked || !selectedDayRange) return;
+        if (viewportReloadTimer !== null) clearTimeout(viewportReloadTimer);
+        viewportReloadTimer = setTimeout(() => {
+            loadVisibleViewport();
+            viewportReloadTimer = null;
+        }, VIEWPORT_RELOAD_DEBOUNCE_MS);
+    }
+
+    const chart = new Chart(document.getElementById('tempChart').getContext('2d'), {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: MACHINE,
+                data: [],
+                parsing: false,
+                borderColor: '#3b82f6',
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                tension: 0.25,
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                pointHitRadius: 20
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            normalized: true,
+            animation: { duration: 0 },
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+            scales: {
+                x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, title: { display: true, text: 'Time' }, grid: { color: '#334155' } },
+                y: { title: { display: true, text: 'Temperature (°C)' }, grid: { color: '#334155' } }
+            },
+            plugins: {
+                decimation: { enabled: true, algorithm: 'lttb', samples: 400 },
+                legend: { display: false },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)} °C` }
+                },
+                zoom: {
+                    pan: { enabled: true, mode: 'x' },
+                    zoom: {
+                        wheel: { enabled: true },
+                        pinch: { enabled: true },
+                        drag: { enabled: true, backgroundColor: 'rgba(34, 197, 94, 0.15)' },
+                        mode: 'x'
+                    },
+                    onZoom: () => scheduleViewportReload(),
+                    onPan: () => scheduleViewportReload(),
+                    onZoomComplete: () => scheduleViewportReload(),
+                    onPanComplete: () => scheduleViewportReload()
                 }
             }
-            pruneLiveDatasetsToToday();
-            setLiveResolutionInUse(resolution);
+        }
+    });
+
+    let selectedDayRange = null;
+
+    async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
+        if (historyLoadInFlight || !dayPicker.value) return;
+        historyLoadInFlight = true;
+        try {
+            const historyRes = await fetch(buildHistoryUrl(dayPicker.value, minMs, maxMs, resolution));
+            const data = await historyRes.json();
+            const points = data[MACHINE] || [];
+            chart.data.datasets[0].data = points
+                .map((point) => {
+                    const x = toChartTimestamp(point.x ?? point.timestamp ?? point.ts_text);
+                    const y = Number(point.y);
+                    if (x === null || !Number.isFinite(y)) return null;
+                    return { x, y };
+                })
+                .filter(Boolean);
+            noDataEl.style.display = chart.data.datasets[0].data.length ? 'none' : 'block';
+            setResolutionInUse(resolution);
+
             if (resetZoom) {
                 chart.options.scales.x.min = undefined;
                 chart.options.scales.x.max = undefined;
@@ -1278,68 +1359,145 @@ h1 { font-size: 28px; font-weight: 600; }
                 chart.options.scales.x.max = maxMs;
                 chart.update('none');
             }
-            lastLiveHistoryRequest = { minMs, maxMs, resolution };
+            lastHistoryRequest = { minMs, maxMs, resolution };
         } finally {
-            liveHistoryLoadInFlight = false;
+            historyLoadInFlight = false;
         }
     }
 
-    async function loadLiveHistory() {
-        const { minMs, maxMs } = getLiveDefaultRange();
-        const resolution = getRequestedLiveResolution(maxMs - minMs);
-        await loadLiveHistoryRange(minMs, maxMs, resolution, true);
-    }
-
-    async function loadLiveViewportRange() {
-        if (!liveDynamicResolutionEl?.checked) return;
-        const { minMs, maxMs } = getLiveViewportRange();
+    async function loadVisibleViewport() {
+        if (!selectedDayRange || historyLoadInFlight) return;
+        const xScale = chart.scales?.x;
+        if (!xScale) return;
+        const scaleMin = Number(xScale.min);
+        const scaleMax = Number(xScale.max);
+        if (!Number.isFinite(scaleMin) || !Number.isFinite(scaleMax)) return;
+        const minMs = Math.max(selectedDayRange.startMs, Math.floor(scaleMin));
+        const maxMs = Math.min(selectedDayRange.endMs, Math.ceil(scaleMax));
         if (maxMs <= minMs) return;
-        const resolution = getRequestedLiveResolution(maxMs - minMs);
+        const resolution = getSelectedResolution(maxMs - minMs);
         if (
-            lastLiveHistoryRequest &&
-            lastLiveHistoryRequest.resolution === resolution &&
-            Math.abs(lastLiveHistoryRequest.minMs - minMs) < 10000 &&
-            Math.abs(lastLiveHistoryRequest.maxMs - maxMs) < 10000
+            lastHistoryRequest &&
+            lastHistoryRequest.resolution === resolution &&
+            Math.abs(lastHistoryRequest.minMs - minMs) < 10000 &&
+            Math.abs(lastHistoryRequest.maxMs - maxMs) < 10000
         ) {
             return;
         }
-        await loadLiveHistoryRange(minMs, maxMs, resolution, false);
+        await loadHistoryRange(minMs, maxMs, resolution, false);
     }
 
-    liveDynamicResolutionEl.addEventListener('change', () => {
-        syncLiveResolutionControl();
-        lastLiveHistoryRequest = null;
-        if (liveDynamicResolutionEl.checked) {
-            loadLiveViewportRange();
-        } else {
-            loadLiveHistory();
-        }
+    async function loadSelectedDay() {
+        const date = dayPicker.value;
+        if (!date) return;
+        const range = getDayRange(date);
+        if (!range) return;
+        viewingToday = date === getLocalDateString();
+        selectedDayRange = range;
+        lastHistoryRequest = null;
+        await loadHistoryRange(
+            range.startMs,
+            range.endMs,
+            getSelectedResolution(range.endMs - range.startMs),
+            true
+        );
+    }
+
+    document.getElementById('zoom-in').addEventListener('click', () => {
+        if (typeof chart.zoom === 'function') chart.zoom(1.2);
+        scheduleViewportReload();
     });
-    liveResolutionEl.addEventListener('change', () => {
-        if (liveDynamicResolutionEl?.checked) return;
-        lastLiveHistoryRequest = null;
-        loadLiveHistory();
+    document.getElementById('zoom-out').addEventListener('click', () => {
+        if (typeof chart.zoom === 'function') chart.zoom(0.8);
+        scheduleViewportReload();
     });
-    syncLiveResolutionControl();
-    loadLiveHistory();
-    refreshMachineInfo();
+    document.getElementById('reset-zoom').addEventListener('click', () => {
+        if (!selectedDayRange) return;
+        const resolution = getSelectedResolution(selectedDayRange.endMs - selectedDayRange.startMs);
+        loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
+    });
+    dayPicker.addEventListener('change', loadSelectedDay);
+    resolutionEl.addEventListener('change', () => {
+        if (dynamicResolutionEl.checked || !selectedDayRange) return;
+        const resolution = getSelectedResolution(selectedDayRange.endMs - selectedDayRange.startMs);
+        lastHistoryRequest = null;
+        loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
+    });
+    dynamicResolutionEl.addEventListener('change', () => {
+        syncResolutionControl();
+        if (!selectedDayRange) return;
+        const resolution = getSelectedResolution(selectedDayRange.endMs - selectedDayRange.startMs);
+        lastHistoryRequest = null;
+        loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
+    });
     document.getElementById('tempChart').addEventListener('wheel', () => {
-        scheduleLiveViewportReload();
+        scheduleViewportReload();
     }, { passive: true });
 
-    // Handle Live Socket Updates
+    function formatUptime(seconds) {
+        const value = Number(seconds);
+        if (!Number.isFinite(value)) return '--';
+        const total = Math.max(0, Math.floor(value));
+        const days = Math.floor(total / 86400);
+        const hours = Math.floor((total % 86400) / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const parts = [];
+        if (days) parts.push(`${days}d`);
+        if (days || hours) parts.push(`${hours}h`);
+        parts.push(`${minutes}m`);
+        return parts.join(' ');
+    }
+
+    function applyTemp(temp) {
+        if (temp === undefined || temp === null) return;
+        document.getElementById('stat-temp').textContent = Number(temp).toFixed(1) + ' °C';
+        if (temp >= OVERHEAT_THRESHOLD) {
+            tempCard.classList.add('overheat');
+            statusEl.textContent = '🔥 OVERHEATING';
+            statusEl.style.color = '#ef4444';
+        } else {
+            tempCard.classList.remove('overheat');
+            statusEl.textContent = 'Normal';
+            statusEl.style.color = 'var(--muted)';
+        }
+    }
+
+    async function loadMachineInfo() {
+        try {
+            const resp = await fetch('/api/machines/' + encodeURIComponent(MACHINE));
+            if (!resp.ok) return;
+            const info = await resp.json();
+            applyTemp(info.temp);
+            document.getElementById('stat-uptime').textContent = formatUptime(info.uptime_seconds);
+            document.getElementById('stat-version').textContent = info.companion_version || '--';
+            document.getElementById('stat-model').textContent = 'Model: ' + (info.model || '--');
+            document.getElementById('stat-serial').textContent = 'Serial: ' + (info.serial_number || '--');
+            document.getElementById('stat-asset').textContent = 'Asset tag: ' + (info.asset_tag || '--');
+        } catch (e) { /* non-critical */ }
+    }
+
+    dayPicker.value = getLocalDateString();
+    syncResolutionControl();
+    loadSelectedDay();
+    loadMachineInfo();
+
     socket.on('connect', () => { document.getElementById('socket-status').innerText = 'Live 🟢'; document.getElementById('socket-status').style.color = '#22c55e'; });
     socket.on('disconnect', () => { document.getElementById('socket-status').innerText = 'Offline 🔴'; document.getElementById('socket-status').style.color = '#ef4444'; });
 
     socket.on('new_temp', (msg) => {
-        updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds);
-        
+        if (msg.machine !== MACHINE) return;
+        applyTemp(msg.temp);
+        if (msg.uptime_seconds !== undefined && msg.uptime_seconds !== null) {
+            document.getElementById('stat-uptime').textContent = formatUptime(msg.uptime_seconds);
+        }
+        if (!viewingToday) return;
+
         const x = toChartTimestamp(msg.timestamp_ms ?? msg.timestamp_epoch ?? msg.timestamp);
         if (x === null) return;
-
-        const dataset = getOrCreateDataset(msg.machine);
-        dataset.data.push({ x, y: Number(msg.temp) });
-        scheduleLiveChartUpdate();
+        chart.data.datasets[0].data.push({ x, y: Number(msg.temp) });
+        if (selectedDayRange) selectedDayRange.endMs = Math.max(selectedDayRange.endMs, x);
+        noDataEl.style.display = 'none';
+        chart.update('none');
     });
 </script>
 </body>
@@ -1782,6 +1940,11 @@ def index():
 @login_required
 def history_page():
     return render_template_string(HISTORY_HTML)
+
+@app.route("/machine/<machine>")
+@login_required
+def machine_page(machine):
+    return render_template_string(MACHINE_HTML, machine=machine, overheat_threshold=OVERHEAT_THRESHOLD)
 
 # ================================
 # START
