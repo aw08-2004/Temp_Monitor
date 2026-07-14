@@ -15,7 +15,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -31,6 +31,7 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 HUB_URL = "https://temp.arkeanos.net/api/report"
 LHM_URL = "http://localhost:8085/data.json"   # LibreHardwareMonitor's built-in web server
 INTERVAL = 5                                   # seconds between temp reports
+UPTIME_INTERVAL = 10 * 60                      # seconds between uptime reports
 
 # Machine identity: the PC's own name. Override only if you really need to.
 MACHINE_NAME = os.environ.get("TEMP_MONITOR_MACHINE") or socket.gethostname()
@@ -367,6 +368,7 @@ if __name__ == "__main__":
 
     check_for_update()               # check #1: every startup
     last_update_check = time.time()
+    last_uptime_check = 0            # force an uptime report on the first cycle
 
     while True:
         # check #2: once a week if the process just keeps running
@@ -380,9 +382,11 @@ if __name__ == "__main__":
             try:
                 payload = {"machine": MACHINE_NAME, "temp": current_temp}
                 payload.update(system_info)
-                uptime_seconds = get_uptime_seconds()
-                if uptime_seconds is not None:
-                    payload["uptime_seconds"] = uptime_seconds
+                if time.time() - last_uptime_check >= UPTIME_INTERVAL:
+                    uptime_seconds = get_uptime_seconds()
+                    if uptime_seconds is not None:
+                        payload["uptime_seconds"] = uptime_seconds
+                    last_uptime_check = time.time()
                 response = requests.post(
                     HUB_URL,
                     json=payload,
