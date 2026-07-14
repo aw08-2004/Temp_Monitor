@@ -70,10 +70,19 @@ the top of `companion.py` on every push to `main`, or nothing will update.
 ## Hub
 
 `app.py` receives reports at `POST /api/report` (open, no auth -- companions
-must be able to post without signing in), and serves live/historical views at
-`/` and `/history` (gated behind Google sign-in, see below). Data is
-persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving; rotated
-log files also live under `logs/`. Run it via `wsgi.py`, or directly with:
+must be able to post without signing in), and serves these views (gated
+behind Google sign-in, see below):
+
+- `/` -- a card per machine (live temp, status, uptime); click one to open
+  its detail page
+- `/machine/<name>` -- that machine's live temp, uptime, companion version,
+  asset tag/serial number/model, and its own history chart (day picker +
+  live updates for today)
+- `/history` -- daily summary/average across all machines
+
+Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
+rotated log files also live under `logs/`. Run it via `wsgi.py`, or directly
+with:
 
 ```powershell
 python app.py
@@ -81,10 +90,11 @@ python app.py
 
 ### Google sign-in setup
 
-Viewing the dashboard (`/`, `/history`, and the `/api/history`,
-`/api/daily_summary`, `/api/machines` endpoints, plus live Socket.IO updates)
-requires signing in with an allow-listed Google account. `POST /api/report`
-is intentionally exempt so companion agents never need credentials.
+Viewing the dashboard (`/`, `/machine/<name>`, `/history`, and the
+`/api/history`, `/api/daily_summary`, `/api/machines`, `/api/machines/<name>`
+endpoints, plus live Socket.IO updates) requires signing in with an
+allow-listed Google account. `POST /api/report` is intentionally exempt so
+companion agents never need credentials.
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
    create an **OAuth 2.0 Client ID** (Application type: Web application).
