@@ -27,6 +27,7 @@ $InstallerUrl   = "https://raw.githubusercontent.com/$Repo/main/install.ps1"
 $CompanionUrl   = "https://raw.githubusercontent.com/$Repo/main/companion.py"
 $LhmApi         = "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
 $LhmFallback    = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v0.9.6/LibreHardwareMonitor.zip"
+$PythonFallback = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"
 $PawnIoUrl      = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/refs/heads/master/LibreHardwareMonitor.Windows.Forms/Resources/PawnIO_setup.exe"
 $LhmDir         = Join-Path $InstallDir "LibreHardwareMonitor"
 $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
@@ -124,15 +125,46 @@ function Resolve-Python {
 
 $py = Resolve-Python
 if (-not $py) {
-    Warn "Python not found. Installing via winget..."
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Die "winget is unavailable. Install Python 3 manually from python.org, tick 'Add to PATH', and re-run this."
+    Warn "Python not found."
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Say "Installing via winget..."
+        # Pin --source winget: without it, winget also probes the msstore
+        # source, and a bad msstore cert/network on the machine aborts the
+        # whole install even though the winget source works fine.
+        winget install --id Python.Python.3.12 --source winget --scope machine `
+            --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { Warn "winget install failed (exit $LASTEXITCODE)." }
+
+        $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                    [Environment]::GetEnvironmentVariable("Path","User")
+        $py = Resolve-Python
+    } else {
+        Warn "winget is unavailable."
     }
-    winget install --id Python.Python.3.12 --scope machine --silent --accept-package-agreements --accept-source-agreements
-    $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
-                [Environment]::GetEnvironmentVariable("Path","User")
-    $py = Resolve-Python
-    if (-not $py) { Die "Python still not on PATH. Reboot and re-run the installer." }
+
+    if (-not $py) {
+        Say "Falling back to direct download from python.org..."
+        $pyInstaller = Join-Path $env:TEMP "python-installer.exe"
+        try {
+            Invoke-WebRequest -Uri $PythonFallback -OutFile $pyInstaller -UseBasicParsing
+            $proc = Start-Process -FilePath $pyInstaller -Wait -PassThru -ArgumentList `
+                "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0"
+            if ($proc.ExitCode -ne 0) { Warn "python.org installer exited with code $($proc.ExitCode)." }
+        } catch {
+            Warn "Direct download failed: $_"
+        } finally {
+            Remove-Item $pyInstaller -Force -ErrorAction SilentlyContinue
+        }
+
+        $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                    [Environment]::GetEnvironmentVariable("Path","User")
+        $py = Resolve-Python
+    }
+
+    if (-not $py) {
+        Die "Python still not on PATH. Reboot and re-run the installer, or install Python 3 manually from python.org (tick 'Add to PATH')."
+    }
 }
 Ok "Found $($py.Version)"
 
