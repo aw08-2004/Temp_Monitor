@@ -292,7 +292,8 @@ Ok "companion.py v$ver -> $companionPath"
 # ----------------------------------------------------------------------
 Step "Registering scheduled tasks"
 
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal = New-ScheduledTaskPrincipal -UserId $currentUser `
                                         -LogonType Interactive -RunLevel Highest
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                                           -DontStopIfGoingOnBatteries `
