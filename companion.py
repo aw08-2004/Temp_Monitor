@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import re
@@ -13,7 +14,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 # ================================
 # CONFIG
@@ -156,6 +157,17 @@ def get_system_info():
 
 
 # ================================
+# UPTIME  --  ms since boot via kernel32, no extra dependency needed
+# ================================
+def get_uptime_seconds():
+    try:
+        return round(ctypes.windll.kernel32.GetTickCount64() / 1000)
+    except Exception as e:
+        print(f"[uptime] Could not read system uptime: {e}")
+        return None
+
+
+# ================================
 # SELF-UPDATER
 # ================================
 def parse_version(text):
@@ -275,6 +287,9 @@ if __name__ == "__main__":
             try:
                 payload = {"machine": MACHINE_NAME, "temp": current_temp}
                 payload.update(system_info)
+                uptime_seconds = get_uptime_seconds()
+                if uptime_seconds is not None:
+                    payload["uptime_seconds"] = uptime_seconds
                 response = requests.post(
                     HUB_URL,
                     json=payload,

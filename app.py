@@ -1,3 +1,4 @@
+import ctypes
 import os
 import time
 import threading
@@ -42,6 +43,28 @@ MAX_HISTORY_MACHINE_MULTIPLIER = 16
 VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300}
 
 LOCAL_MACHINE = socket.gethostname()
+
+# Latest known uptime per machine (seconds since boot). Not persisted -- it's a
+# live status value, not history, so it just lives in memory and rides along
+# with temp reports/live socket updates.
+latest_uptime = {}
+latest_uptime_lock = threading.Lock()
+
+def get_uptime_seconds():
+    try:
+        return round(ctypes.windll.kernel32.GetTickCount64() / 1000)
+    except Exception:
+        return None
+
+def set_latest_uptime(machine, uptime_seconds):
+    if uptime_seconds is None:
+        return
+    with latest_uptime_lock:
+        latest_uptime[str(machine).strip()] = int(uptime_seconds)
+
+def get_latest_uptime(machine):
+    with latest_uptime_lock:
+        return latest_uptime.get(str(machine).strip())
 
 # ================================
 # AUTH CONFIG (Google sign-in)
@@ -373,7 +396,7 @@ def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp):
         print("WARNING: SQLite queue is full; writing synchronously.")
         write_readings_batch([record])
 
-def save_and_emit_temp(machine, temp):
+def save_and_emit_temp(machine, temp, uptime_seconds=None):
     machine_name = str(machine).strip()
     if not machine_name:
         raise ValueError("Machine name cannot be empty.")
@@ -388,12 +411,15 @@ def save_and_emit_temp(machine, temp):
 
     enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value)
 
+    set_latest_uptime(machine_name, uptime_seconds)
+
     # Emit via WebSocket
     socketio.emit('new_temp', {
         'machine': machine_name,
         'timestamp': timestamp_str,
         'temp': temp_value,
-        'threshold': OVERHEAT_THRESHOLD
+        'threshold': OVERHEAT_THRESHOLD,
+        'uptime_seconds': get_latest_uptime(machine_name)
     })
 
 def save_machine_info(machine, asset_tag, serial_number, model):
@@ -538,7 +564,7 @@ def local_logger():
                 if temp >= OVERHEAT_THRESHOLD:
                     print(f"OVERHEATING: {temp}°C")
                 
-                save_and_emit_temp(LOCAL_MACHINE, temp)
+                save_and_emit_temp(LOCAL_MACHINE, temp, get_uptime_seconds())
                 last_temp = temp
                 
             time.sleep(CHECK_INTERVAL)
@@ -564,7 +590,11 @@ def report_temp():
         return jsonify({"error": "Invalid payload"}), 400
 
     machine = data['machine']
-    save_and_emit_temp(machine, float(data['temp']))
+    try:
+        uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
+    except (TypeError, ValueError):
+        uptime_seconds = None
+    save_and_emit_temp(machine, float(data['temp']), uptime_seconds)
     save_machine_info(machine, data.get('asset_tag'), data.get('serial_number'), data.get('model'))
     return jsonify({"status": "success"}), 200
 
@@ -576,7 +606,10 @@ def get_machines():
         rows = conn.execute(
             "SELECT machine, asset_tag, serial_number, model, updated_at FROM machine_info ORDER BY machine ASC"
         ).fetchall()
-    return jsonify([dict(row) for row in rows])
+    result = [dict(row) for row in rows]
+    for row in result:
+        row['uptime_seconds'] = get_latest_uptime(row['machine'])
+    return jsonify(result)
 
 @app.route('/api/history')
 @login_required
@@ -1043,10 +1076,35 @@ h1 { font-size: 28px; font-weight: 600; }
 
     function applyMachineInfo(machine) {
         const infoEl = document.getElementById('info-' + machine);
-        if (!infoEl) return;
-        const text = formatMachineInfo(machineInfoMap[machine]);
-        infoEl.textContent = text;
-        infoEl.style.display = text ? '' : 'none';
+        if (infoEl) {
+            const text = formatMachineInfo(machineInfoMap[machine]);
+            infoEl.textContent = text;
+            infoEl.style.display = text ? '' : 'none';
+        }
+        const info = machineInfoMap[machine];
+        if (info && info.uptime_seconds !== undefined) {
+            updateMachineUptime(machine, info.uptime_seconds);
+        }
+    }
+
+    function formatUptime(seconds) {
+        const value = Number(seconds);
+        if (!Number.isFinite(value)) return '--';
+        const total = Math.max(0, Math.floor(value));
+        const days = Math.floor(total / 86400);
+        const hours = Math.floor((total % 86400) / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const parts = [];
+        if (days) parts.push(`${days}d`);
+        if (days || hours) parts.push(`${hours}h`);
+        parts.push(`${minutes}m`);
+        return parts.join(' ');
+    }
+
+    function updateMachineUptime(machine, uptimeSeconds) {
+        const uptimeEl = document.getElementById('uptime-' + machine);
+        if (!uptimeEl) return;
+        uptimeEl.textContent = `Uptime: ${formatUptime(uptimeSeconds)}`;
     }
 
     async function refreshMachineInfo() {
@@ -1060,7 +1118,7 @@ h1 { font-size: 28px; font-weight: 600; }
     }
 
     // Helper: Create or update UI Card for a machine
-    function updateMachineCard(machine, temp, threshold) {
+    function updateMachineCard(machine, temp, threshold, uptimeSeconds) {
         let card = document.getElementById('card-' + machine);
         if (!card) {
             card = document.createElement('div');
@@ -1070,6 +1128,7 @@ h1 { font-size: 28px; font-weight: 600; }
                 <h2>${machine}</h2>
                 <div class="label" id="info-${machine}" style="display:none;"></div>
                 <div class="stat" id="temp-${machine}">-- °C</div>
+                <div class="label" id="uptime-${machine}">Uptime: --</div>
                 <div class="label" id="status-${machine}">Online</div>
             `;
             machineCards.appendChild(card);
@@ -1083,6 +1142,7 @@ h1 { font-size: 28px; font-weight: 600; }
         const tempEl = document.getElementById('temp-' + machine);
         const statusEl = document.getElementById('status-' + machine);
         tempEl.innerText = temp.toFixed(1) + ' °C';
+        if (uptimeSeconds !== undefined) updateMachineUptime(machine, uptimeSeconds);
 
         // Overheat Logic
         if (temp >= threshold) {
@@ -1216,7 +1276,7 @@ h1 { font-size: 28px; font-weight: 600; }
     socket.on('disconnect', () => { document.getElementById('socket-status').innerText = 'Offline 🔴'; document.getElementById('socket-status').style.color = '#ef4444'; });
 
     socket.on('new_temp', (msg) => {
-        updateMachineCard(msg.machine, msg.temp, msg.threshold);
+        updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds);
         
         const x = toChartTimestamp(msg.timestamp_ms ?? msg.timestamp_epoch ?? msg.timestamp);
         if (x === null) return;
