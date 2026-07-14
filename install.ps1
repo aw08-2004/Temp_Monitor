@@ -292,8 +292,13 @@ Ok "companion.py v$ver -> $companionPath"
 # ----------------------------------------------------------------------
 Step "Registering scheduled tasks"
 
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$principal = New-ScheduledTaskPrincipal -UserId $currentUser `
+# Pass the SID directly rather than a "DOMAIN\User" string -- some machines
+# (seen on ones with a leftover/corrupted HomeGroup profile) fail the internal
+# name-to-SID lookup Register-ScheduledTask does for a name string, with
+# "No mapping between account names and security IDs was done" (0x80070534).
+# The SID is already resolved, so it skips that lookup entirely.
+$currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$principal = New-ScheduledTaskPrincipal -UserId $currentUserSid `
                                         -LogonType Interactive -RunLevel Highest
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                                           -DontStopIfGoingOnBatteries `
