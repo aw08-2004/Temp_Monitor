@@ -1,5 +1,6 @@
 import ctypes
 import os
+import re
 import time
 import threading
 import csv
@@ -65,6 +66,53 @@ def set_latest_uptime(machine, uptime_seconds):
 def get_latest_uptime(machine):
     with latest_uptime_lock:
         return latest_uptime.get(str(machine).strip())
+
+# ================================
+# COMPANION VERSION WATCHER  --  lets companions self-update promptly instead of
+# waiting for their own weekly GitHub poll. We periodically check the same
+# source companion.py updates from, and echo the newest known version back in
+# /api/report's response; companion.py checks for an update as soon as it sees
+# a newer number there.
+# ================================
+COMPANION_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/companion.py"
+COMPANION_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
+
+latest_companion_version = None
+latest_companion_version_lock = threading.Lock()
+
+def get_latest_companion_version():
+    with latest_companion_version_lock:
+        return latest_companion_version
+
+def refresh_latest_companion_version():
+    global latest_companion_version
+    try:
+        resp = requests.get(COMPANION_SOURCE_URL, timeout=10)
+        resp.raise_for_status()
+        match = re.search(r'^VERSION\s*=\s*["\']([\d.]+)["\']', resp.text, re.MULTILINE)
+        if match:
+            with latest_companion_version_lock:
+                latest_companion_version = match.group(1)
+    except Exception as e:
+        print(f"[companion-version] Could not refresh latest version: {e}")
+
+def companion_version_watcher():
+    while True:
+        refresh_latest_companion_version()
+        time.sleep(COMPANION_VERSION_CHECK_INTERVAL)
+
+companion_version_watcher_thread = None
+companion_version_watcher_lock = threading.Lock()
+
+def start_companion_version_watcher():
+    global companion_version_watcher_thread
+    with companion_version_watcher_lock:
+        if companion_version_watcher_thread and companion_version_watcher_thread.is_alive():
+            return
+        companion_version_watcher_thread = threading.Thread(
+            target=companion_version_watcher, daemon=True, name="companion_version_watcher"
+        )
+        companion_version_watcher_thread.start()
 
 # ================================
 # AUTH CONFIG (Google sign-in)
@@ -507,6 +555,7 @@ def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_second
     return {machine_name: list(points) for machine_name, points in history.items()}
 
 init_db()
+start_companion_version_watcher()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -596,7 +645,12 @@ def report_temp():
         uptime_seconds = None
     save_and_emit_temp(machine, float(data['temp']), uptime_seconds)
     save_machine_info(machine, data.get('asset_tag'), data.get('serial_number'), data.get('model'))
-    return jsonify({"status": "success"}), 200
+
+    response_payload = {"status": "success"}
+    latest_version = get_latest_companion_version()
+    if latest_version:
+        response_payload["latest_version"] = latest_version
+    return jsonify(response_payload), 200
 
 @app.route('/api/machines')
 @login_required

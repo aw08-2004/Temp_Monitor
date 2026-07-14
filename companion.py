@@ -1,3 +1,4 @@
+import ast
 import ctypes
 import json
 import os
@@ -14,7 +15,15 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.2.0"
+VERSION = "2.3.0"
+
+# Third-party packages the companion needs. Update this alongside any new
+# import so a self-update installs them automatically -- see install_requirements().
+REQUIREMENTS = ["requests"]
+
+# Spawn helper subprocesses (pip, the restarted self) with no console window,
+# even when running under python.exe instead of pythonw.exe.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 # ================================
 # CONFIG
@@ -188,6 +197,54 @@ def looks_like_valid_companion(text):
     )
 
 
+def parse_requirements(text):
+    """Pull the REQUIREMENTS list literal out of a companion.py source string."""
+    match = re.search(r'^REQUIREMENTS\s*=\s*(\[[^\]]*\])', text, re.MULTILINE)
+    if not match:
+        return []
+    try:
+        parsed = ast.literal_eval(match.group(1))
+        return [str(p) for p in parsed if str(p).strip()]
+    except (ValueError, SyntaxError):
+        return []
+
+
+def install_requirements(requirements):
+    """pip install the new version's deps before swapping it in. Idempotent -- pip
+    no-ops on packages that are already satisfied, so this is cheap on every update."""
+    if not requirements:
+        return True
+
+    print(f"[update] Ensuring dependencies: {', '.join(requirements)}")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet",
+             "--disable-pip-version-check", *requirements],
+            check=True,
+            timeout=180,
+            creationflags=_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as e:
+        print(f"[update] Failed to install dependencies {requirements}: {e}")
+        return False
+
+
+def replace_with_retry(tmp_path, dest_path, attempts=5, delay_seconds=1.0):
+    """os.replace, retrying past transient locks (AV scan, indexer) so an update
+    doesn't get abandoned just because the file was briefly in use."""
+    for attempt in range(1, attempts + 1):
+        try:
+            os.replace(tmp_path, dest_path)
+            return
+        except PermissionError:
+            if attempt == attempts:
+                raise
+            time.sleep(delay_seconds)
+
+
 def restart_self(chain_count):
     env = os.environ.copy()
     env["TEMP_MONITOR_RESTARTS"] = str(chain_count + 1)
@@ -195,8 +252,39 @@ def restart_self(chain_count):
     print("[update] Restarting into the new version...\n")
     sys.stdout.flush()
 
-    subprocess.Popen([sys.executable, SCRIPT_PATH] + sys.argv[1:], env=env, cwd=SCRIPT_DIR)
+    subprocess.Popen(
+        [sys.executable, SCRIPT_PATH] + sys.argv[1:],
+        env=env,
+        cwd=SCRIPT_DIR,
+        creationflags=_NO_WINDOW,
+    )
     sys.exit(0)
+
+
+def handle_hub_response(response, last_update_check):
+    """Hub echoes back the newest companion version it knows about (see app.py's
+    /api/report). If it's ahead of us, check now instead of waiting for the
+    weekly poll -- this is what makes updates roll out promptly."""
+    try:
+        data = response.json()
+    except ValueError:
+        return last_update_check
+
+    hub_version = data.get("latest_version") if isinstance(data, dict) else None
+    if not hub_version:
+        return last_update_check
+
+    try:
+        is_newer = version_tuple(hub_version) > version_tuple(VERSION)
+    except (ValueError, AttributeError):
+        return last_update_check
+
+    if is_newer:
+        print(f"[update] Hub reports v{hub_version} is available, checking now...")
+        check_for_update()
+        return time.time()
+
+    return last_update_check
 
 
 def check_for_update():
@@ -237,6 +325,11 @@ def check_for_update():
             print(f"[update] Downloaded file has a syntax error, aborting: {e}")
             return
 
+        if not install_requirements(parse_requirements(remote_src)):
+            os.remove(tmp_path)
+            print("[update] Aborting update: dependency installation failed.")
+            return
+
         backup_path = SCRIPT_PATH + ".bak"
         try:
             with open(SCRIPT_PATH, "r", encoding="utf-8") as src, \
@@ -247,7 +340,7 @@ def check_for_update():
             os.remove(tmp_path)
             return
 
-        os.replace(tmp_path, SCRIPT_PATH)
+        replace_with_retry(tmp_path, SCRIPT_PATH)
         print(f"[update] Updated to v{remote_version} (backup at {backup_path})")
 
         restart_self(chain_count)
@@ -297,6 +390,7 @@ if __name__ == "__main__":
                     allow_redirects=False
                 )
                 print(f"Sent: {current_temp}°C - Hub responded: {response.status_code}")
+                last_update_check = handle_hub_response(response, last_update_check)
             except requests.exceptions.RequestException:
                 print("Failed to connect to Hub. Retrying next cycle...")
 
