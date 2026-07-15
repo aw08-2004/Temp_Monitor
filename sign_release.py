@@ -19,11 +19,21 @@ Usage
       Sign FILE with the private key and write FILE + '.sig' (hex signature).
       Run this after every edit to companion.py, then commit BOTH files together.
 
+  python sign_release.py --sign-command --type run_script --machine PC-01 \
+                         --params '{"script": "..."}' [--key PATH]
+      Sign a single high-risk fleet command (run_script / install_driver /
+      update_bios). Prints the detached signature hex to paste into the hub's
+      "issue command" form. The hub AND the agent both verify this same signature
+      over the canonical payload (see fleet.canonical_command_bytes) before the
+      command is queued or executed -- so a high-risk command can only originate
+      from whoever holds this offline private key, not from a compromised hub.
+
 Note: .gitattributes pins companion.py / companion.py.sig to '-text' so git never
 rewrites line endings -- otherwise the committed bytes wouldn't match what you
 signed and clients would reject the update.
 """
 import argparse
+import json
 import os
 import sys
 
@@ -89,15 +99,59 @@ def sign(path, file):
     print("Commit BOTH companion.py and companion.py.sig together, then push.")
 
 
+def sign_command(path, command_type, machine, params_json):
+    """Sign one high-risk fleet command with the offline private key and print the
+    detached signature hex. Canonicalization is imported from fleet.py so the
+    signer and the two verifiers (hub + agent) can never drift out of sync."""
+    Ed25519PrivateKey, _ = _ed25519()
+    if not os.path.exists(path):
+        sys.exit(f"No signing key at {path}. Run: python sign_release.py --genkey")
+
+    try:
+        params = json.loads(params_json) if params_json else {}
+    except (ValueError, TypeError) as e:
+        sys.exit(f"--params must be valid JSON: {e}")
+    if not isinstance(params, dict):
+        sys.exit("--params must be a JSON object (e.g. '{\"script\": \"...\"}')")
+
+    # Single source of truth for the signed bytes -- same function the hub and
+    # agent use to verify.
+    try:
+        from fleet import canonical_command_bytes, HIGH_RISK_COMMANDS
+    except ImportError:
+        sys.exit("fleet.py must be importable (run from the repo root).")
+    if command_type not in HIGH_RISK_COMMANDS:
+        sys.exit(f"{command_type!r} is not a high-risk command; only these need signing: "
+                 f"{', '.join(sorted(HIGH_RISK_COMMANDS))}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+
+    message = canonical_command_bytes(command_type, machine, params)
+    signature = priv.sign(message)
+    print(f"Command : {command_type} on {machine}")
+    print(f"Params  : {json.dumps(params, sort_keys=True, separators=(',', ':'))}")
+    print("\nSignature (paste into the hub's issue-command form):")
+    print(signature.hex())
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Sign companion.py for the self-updater.")
+    ap = argparse.ArgumentParser(description="Sign companion.py / fleet commands for Temp_Monitor.")
     ap.add_argument("--genkey", action="store_true", help="generate a new keypair instead of signing")
+    ap.add_argument("--sign-command", action="store_true", help="sign one high-risk fleet command")
+    ap.add_argument("--type", help="command type to sign (with --sign-command)")
+    ap.add_argument("--machine", help="target machine name (with --sign-command)")
+    ap.add_argument("--params", default="{}", help="JSON params object (with --sign-command)")
     ap.add_argument("--key", default=DEFAULT_KEY_PATH, help="path to the private signing key")
     ap.add_argument("--file", default=DEFAULT_FILE, help="file to sign (default: companion.py)")
     args = ap.parse_args()
 
     if args.genkey:
         genkey(args.key)
+    elif args.sign_command:
+        if not args.type or not args.machine:
+            sys.exit("--sign-command requires --type and --machine")
+        sign_command(args.key, args.type, args.machine, args.params)
     else:
         sign(args.key, args.file)
 

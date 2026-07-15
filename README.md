@@ -114,3 +114,48 @@ companion agents never need credentials.
 `app.py` fails fast at startup if any of these are missing. Only emails in
 `ALLOWED_EMAILS` (comma-separated, case-insensitive) can complete sign-in;
 everyone else gets a 403 after authenticating with Google.
+
+## Fleet command channel (RMM)
+
+Beyond telemetry, the hub can queue **commands** for a machine that its agent
+pulls and executes (restart, rename, install, etc.). This is the hub→agent
+direction, added by [fleet.py](fleet.py) (core logic) and
+[fleet_web.py](fleet_web.py) (HTTP surface), with state in the same SQLite DB
+(`agents`, `commands`, `command_results`, `audit_log`).
+
+**Security model.** The channel is built to be safe even against a compromised
+hub:
+
+- **Agent enrollment**: an agent presents a shared `AGENT_ENROLLMENT_SECRET` to
+  `POST /api/agent/enroll` and receives a per-agent bearer token (only its hash
+  is stored). All other agent endpoints require `Authorization: Bearer
+  <agent_id>:<token>`.
+- **Command tiers**: low-risk commands (`restart`, `shutdown`, `rename`,
+  `gpupdate`, `install_app`) dispatch on an authorized console session alone.
+  High-risk commands (`run_script`, `install_driver`, `update_bios`) additionally
+  require an **offline Ed25519 signature** over the canonical payload — verified
+  by the hub *and* re-verified by the agent before executing. The private key
+  lives off the repo (same trust root as signed self-updates); sign a command
+  with:
+
+  ```powershell
+  python sign_release.py --sign-command --type run_script --machine PC-01 --params '{"script":"..."}'
+  ```
+
+- **Fail closed**: with `AGENT_ENROLLMENT_SECRET` unset no agent can enroll; with
+  `COMMAND_SIGNING_PUBLIC_KEY_HEX` unset every high-risk command is refused. Both
+  are optional env vars, so telemetry-only deployments are unaffected.
+
+Add to the hub's environment / `.env`:
+
+```
+AGENT_ENROLLMENT_SECRET=a-long-random-shared-secret
+COMMAND_SIGNING_PUBLIC_KEY_HEX=<64-hex Ed25519 public key from sign_release.py --genkey>
+```
+
+**Endpoints.** Agent-facing (token auth): `POST /api/agent/enroll`,
+`POST /api/agent/heartbeat`, `GET /api/agent/commands` (pull + claim),
+`POST /api/agent/commands/<id>/result`. Console-facing (Google sign-in):
+`GET /api/fleet/status` (online/offline), `GET|POST /api/fleet/commands`,
+`GET /api/fleet/commands/<id>`. Every issue/claim/complete/enroll is written to
+`audit_log`.

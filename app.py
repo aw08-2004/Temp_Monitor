@@ -20,6 +20,9 @@ from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
 
+import fleet
+from fleet_web import create_fleet_blueprint
+
 load_dotenv()
 
 # ================================
@@ -27,7 +30,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.6.0"
+HUB_VERSION = "1.7.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -252,6 +255,25 @@ if not ALLOWED_EMAILS:
     )
 
 # ================================
+# FLEET (command channel) CONFIG
+# ================================
+# These are OPTIONAL so existing telemetry-only deployments keep booting. The
+# fleet features fail closed until set: with no enrollment secret no agent can
+# enroll, and with no command public key every high-risk command is refused.
+#   AGENT_ENROLLMENT_SECRET       -- shared secret an agent presents to enroll
+#   COMMAND_SIGNING_PUBLIC_KEY_HEX-- Ed25519 public key (64 hex) for verifying
+#                                    signed high-risk commands. Its PRIVATE half
+#                                    lives offline (see sign_release.py --genkey);
+#                                    it may be the same keypair as the update key
+#                                    or a separate one.
+AGENT_ENROLLMENT_SECRET = os.environ.get("AGENT_ENROLLMENT_SECRET", "")
+COMMAND_SIGNING_PUBLIC_KEY_HEX = os.environ.get("COMMAND_SIGNING_PUBLIC_KEY_HEX", "")
+if not AGENT_ENROLLMENT_SECRET:
+    print("[fleet] AGENT_ENROLLMENT_SECRET unset -- agent enrollment disabled (fail closed).")
+if not COMMAND_SIGNING_PUBLIC_KEY_HEX:
+    print("[fleet] COMMAND_SIGNING_PUBLIC_KEY_HEX unset -- high-risk commands will be refused.")
+
+# ================================
 # WEB & WEBSOCKET SETUP
 # ================================
 app = Flask(__name__)
@@ -288,6 +310,13 @@ def login_required(view):
             return redirect(url_for("login"))
         return view(*args, **kwargs)
     return wrapped
+
+
+# Fleet command-channel endpoints (agent-facing token auth + console-facing
+# login_required). Registered here, once login_required exists to hand in.
+app.register_blueprint(create_fleet_blueprint(
+    DB_PATH, AGENT_ENROLLMENT_SECRET, COMMAND_SIGNING_PUBLIC_KEY_HEX, login_required
+))
 
 
 @app.route("/login")
@@ -780,6 +809,7 @@ def start_retention_pruner():
 
 
 init_db()
+fleet.init_fleet_db(DB_PATH)
 start_companion_version_watcher()
 start_retention_pruner()
 
@@ -885,6 +915,9 @@ def report_temp():
         if client_ts > now_epoch + 300 or client_ts < now_epoch - RETENTION_DAYS * 86400:
             client_ts = None
     save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors, timestamp_epoch=client_ts)
+    # Keep an enrolled agent's online/offline status fresh off its ordinary temp
+    # reports too, so it doesn't read offline between dedicated heartbeats.
+    fleet.touch_last_seen(DB_PATH, machine)
     save_machine_info(
         machine,
         data.get('asset_tag'),
