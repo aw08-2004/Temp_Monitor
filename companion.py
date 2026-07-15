@@ -15,7 +15,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -313,19 +313,58 @@ def replace_with_retry(tmp_path, dest_path, attempts=5, delay_seconds=1.0):
 
 
 def restart_self(chain_count):
+    """Relaunch into the freshly-written companion.py.
+
+    The tricky part is that in production we run as a Windows Scheduled Task, and
+    Task Scheduler puts each task inside a job object. When our process exits, the
+    job is closed and every child in it is killed -- so simply Popen-ing a
+    replacement and exiting (what we used to do) races: the new process is torn
+    down with us, nothing is left running, and because we exited 0 the task's
+    "restart on failure" never fires. The whole fleet then sits on the new file
+    but the old, still-loaded code until the next logon. That's the bug this fixes.
+
+    Strategy: try to launch the replacement so it *breaks away* from the job. If
+    the job forbids breakaway (the Task Scheduler case), CreateProcess fails and we
+    instead exit non-zero, letting the task's RestartCount/RestartInterval (set in
+    install.ps1) relaunch us cleanly from the new file on disk. Outside a job (e.g.
+    run by hand from a console) the breakaway simply succeeds and we restart in
+    place."""
     env = os.environ.copy()
     env["TEMP_MONITOR_RESTARTS"] = str(chain_count + 1)
 
-    print("[update] Restarting into the new version...\n")
+    print("[update] Restarting into the new version...")
     sys.stdout.flush()
 
-    subprocess.Popen(
-        [sys.executable, SCRIPT_PATH] + sys.argv[1:],
-        env=env,
-        cwd=SCRIPT_DIR,
-        creationflags=_NO_WINDOW,
-    )
-    sys.exit(0)
+    argv = [sys.executable, SCRIPT_PATH] + sys.argv[1:]
+
+    if os.name == "nt":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+        try:
+            subprocess.Popen(
+                argv,
+                env=env,
+                cwd=SCRIPT_DIR,
+                close_fds=True,
+                creationflags=(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                               | CREATE_BREAKAWAY_FROM_JOB),
+            )
+        except OSError:
+            # Inside a no-breakaway job (Task Scheduler). Any child we spawn dies
+            # with us, so don't leave a doomed process behind -- exit non-zero and
+            # let the task host restart us from the new file. os._exit avoids
+            # atexit/buffered-IO cleanup so the exit code reaches Task Scheduler
+            # unambiguously.
+            print("[update] No-breakaway job detected; exiting for task-host restart.")
+            sys.stdout.flush()
+            os._exit(17)
+        else:
+            sys.exit(0)
+    else:
+        subprocess.Popen(argv, env=env, cwd=SCRIPT_DIR, close_fds=True,
+                         start_new_session=True)
+        sys.exit(0)
 
 
 def handle_hub_response(response, last_update_check):
