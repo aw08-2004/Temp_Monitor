@@ -26,7 +26,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.0.0"
+HUB_VERSION = "1.1.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 SPIKE_THRESHOLD = 10
