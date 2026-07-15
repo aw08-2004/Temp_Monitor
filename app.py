@@ -27,7 +27,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.3.0"
+HUB_VERSION = "1.4.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -618,7 +618,11 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None):
     set_latest_sensors(machine_name, sensors)
     persist_live_status(machine_name, temp_value, uptime_seconds)
 
-    # Emit via WebSocket
+    # Emit via WebSocket. Diagnostics come from the freshest cached sensors, not
+    # this report's raw `sensors`, so a report that arrived without a sensor block
+    # (an older companion, or a second stale instance double-reporting for the same
+    # machine) doesn't blank out CPU/GPU Load & Clock in the UI every other update.
+    # set_latest_sensors() above only overwrites the cache when sensors are present.
     socketio.emit('new_temp', {
         'machine': machine_name,
         'timestamp': timestamp_str,
@@ -626,7 +630,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None):
         'threshold': OVERHEAT_THRESHOLD,
         'low_load_threshold': LOW_LOAD_THRESHOLD,
         'uptime_seconds': get_latest_uptime(machine_name),
-        'diagnostics': extract_diagnostics(sensors),
+        'diagnostics': extract_diagnostics(get_latest_sensors(machine_name)),
     })
 
 def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None):
