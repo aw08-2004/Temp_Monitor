@@ -15,7 +15,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -96,23 +96,12 @@ def _walk(node, in_cpu=False, found=None):
     return found
 
 
-def get_cpu_temp():
-    """Reads CPU temperature from the LibreHardwareMonitor web server."""
+def fetch_lhm_data():
+    """Fetches and parses the full LibreHardwareMonitor sensor tree, once per cycle."""
     try:
         resp = requests.get(LHM_URL, timeout=3)
         resp.raise_for_status()
-        sensors = _walk(resp.json())
-
-        if not sensors:
-            print("No CPU temperature sensors found. Is LibreHardwareMonitor running as admin?")
-            return None
-
-        for wanted in PREFERRED_SENSORS:
-            for name, value in sensors:
-                if wanted in name:
-                    return value
-
-        return sensors[0][1]  # any CPU temp beats no CPU temp
+        return resp.json()
 
     except requests.exceptions.RequestException:
         print(f"Cannot reach LibreHardwareMonitor at {LHM_URL}. Is it running with the web server enabled?")
@@ -122,6 +111,64 @@ def get_cpu_temp():
         print(f"Error reading local temp: {e}")
 
     return None
+
+
+def pick_cpu_temp(data):
+    """Picks the best single CPU temperature out of an already-fetched LHM tree."""
+    sensors = _walk(data)
+
+    if not sensors:
+        print("No CPU temperature sensors found. Is LibreHardwareMonitor running as admin?")
+        return None
+
+    for wanted in PREFERRED_SENSORS:
+        for name, value in sensors:
+            if wanted in name:
+                return value
+
+    return sensors[0][1]  # any CPU temp beats no CPU temp
+
+
+def flatten_sensors(node, hardware=None, hardware_id=None, group=None, found=None):
+    """Collects every leaf sensor in the whole LHM tree (not just CPU) into a flat
+    list of dicts, so the hub can store/diagnose off of everything LHM reports.
+
+    hardware_id (e.g. "/amdcpu/0", "/gpu-nvidia/0", "/ram") is kept alongside the
+    human-readable hardware name (e.g. "AMD Ryzen 7 5800X") because the display
+    name never contains the literal words "cpu"/"gpu"/etc -- hardware_id is what
+    reliably identifies the hardware category, same as _walk's "cpu" in
+    HardwareId check above.
+    """
+    if found is None:
+        found = []
+
+    text = node.get("Text")
+    children = node.get("Children") or []
+    node_hardware_id = node.get("HardwareId")
+
+    if node_hardware_id:
+        hardware = text
+        hardware_id = str(node_hardware_id).lower()
+    elif "Type" not in node and text:
+        # Sensor-type group node (e.g. "Temperatures", "Clocks", "Load") -- its
+        # children are the actual leaf sensors.
+        group = text
+
+    if not children and ("Value" in node or "RawValue" in node):
+        found.append({
+            "hardware": hardware,
+            "hardware_id": hardware_id,
+            "group": group,
+            "name": text,
+            "type": node.get("Type"),
+            "value": _parse_value(node),
+            "text": node.get("Value"),
+        })
+
+    for child in children:
+        flatten_sensors(child, hardware, hardware_id, group, found)
+
+    return found
 
 
 # ================================
@@ -376,12 +423,16 @@ if __name__ == "__main__":
             last_update_check = time.time()
             check_for_update()
 
-        current_temp = get_cpu_temp()
+        lhm_data = fetch_lhm_data()
+        current_temp = pick_cpu_temp(lhm_data) if lhm_data else None
 
         if current_temp is not None:
             try:
                 payload = {"machine": MACHINE_NAME, "temp": current_temp, "companion_version": VERSION}
                 payload.update(system_info)
+                sensors = flatten_sensors(lhm_data)
+                if sensors:
+                    payload["sensors"] = sensors
                 if time.time() - last_uptime_check >= UPTIME_INTERVAL:
                     uptime_seconds = get_uptime_seconds()
                     if uptime_seconds is not None:

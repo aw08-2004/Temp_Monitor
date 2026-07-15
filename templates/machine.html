@@ -8,7 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 {% endblock %}
 {% block content %}
-<div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}">
+<div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}" data-low-load-threshold="{{ low_load_threshold }}">
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
     <div class="card-grid">
@@ -20,6 +20,20 @@
         <div class="card stat-card">
             <div class="stat-card__label">Uptime</div>
             <div class="stat-card__value" id="stat-uptime">--</div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-card__label">CPU Load</div>
+            <div class="stat-card__value" id="stat-cpu-load">-- %</div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-card__label">CPU Clock</div>
+            <div class="stat-card__value" id="stat-cpu-clock">-- MHz</div>
+        </div>
+        <div class="card stat-card identity-block">
+            <div class="stat-card__label">GPU</div>
+            <div class="stat-card__meta" id="stat-gpu-temp">Temp: --</div>
+            <div class="stat-card__meta" id="stat-gpu-load">Load: --</div>
+            <div class="stat-card__meta" id="stat-gpu-clock">Clock: --</div>
         </div>
         <div class="card stat-card">
             <div class="stat-card__label">Companion Version</div>

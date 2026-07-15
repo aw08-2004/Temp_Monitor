@@ -1,6 +1,7 @@
 const config = document.getElementById('machine-config');
 const MACHINE = config.dataset.machine;
 const OVERHEAT_THRESHOLD = Number(config.dataset.overheatThreshold);
+const LOW_LOAD_THRESHOLD = Number(config.dataset.lowLoadThreshold);
 
 const zoomPlugin = window['chartjs-plugin-zoom'];
 if (zoomPlugin) Chart.register(zoomPlugin.default || zoomPlugin);
@@ -254,16 +255,36 @@ document.getElementById('tempChart').addEventListener('wheel', () => {
     scheduleViewportReload();
 }, { passive: true });
 
+let lastCpuLoadPct = null;
+
 function applyTemp(temp) {
     if (temp === undefined || temp === null) return;
     document.getElementById('stat-temp').textContent = Number(temp).toFixed(1) + ' °C';
-    if (temp >= OVERHEAT_THRESHOLD) {
-        tempCard.classList.add('stat-card--overheat');
-        setStatusPill(statusEl, 'danger', '🔥 OVERHEATING');
-    } else {
+    const status = classifyOverheatStatus(temp, OVERHEAT_THRESHOLD, lastCpuLoadPct, LOW_LOAD_THRESHOLD);
+    if (status === 'normal') {
         tempCard.classList.remove('stat-card--overheat');
         setStatusPill(statusEl, 'ok', 'Normal');
+    } else if (status === 'overheat-expected') {
+        tempCard.classList.add('stat-card--overheat');
+        setStatusPill(statusEl, 'warn', '🔥 Overheating (high load)');
+    } else {
+        tempCard.classList.add('stat-card--overheat');
+        setStatusPill(statusEl, 'danger', '🔥 Overheating (low load — investigate)');
     }
+}
+
+function formatMetric(value, suffix) {
+    return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} ${suffix}` : '--';
+}
+
+function applyDiagnostics(diagnostics) {
+    const d = diagnostics || {};
+    lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
+    document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');
+    document.getElementById('stat-cpu-clock').textContent = formatMetric(d.cpu_clock_mhz, 'MHz');
+    document.getElementById('stat-gpu-temp').textContent = 'Temp: ' + formatMetric(d.gpu_temp, '°C');
+    document.getElementById('stat-gpu-load').textContent = 'Load: ' + formatMetric(d.gpu_load_pct, '%');
+    document.getElementById('stat-gpu-clock').textContent = 'Clock: ' + formatMetric(d.gpu_clock_mhz, 'MHz');
 }
 
 async function loadMachineInfo() {
@@ -271,6 +292,7 @@ async function loadMachineInfo() {
         const resp = await fetch('/api/machines/' + encodeURIComponent(MACHINE));
         if (!resp.ok) return;
         const info = await resp.json();
+        applyDiagnostics(info.diagnostics);
         applyTemp(info.temp);
         document.getElementById('stat-uptime').textContent = formatUptime(info.uptime_seconds);
         document.getElementById('stat-version').textContent = info.companion_version || '--';
@@ -287,6 +309,7 @@ loadMachineInfo();
 
 socket.on('new_temp', (msg) => {
     if (msg.machine !== MACHINE) return;
+    applyDiagnostics(msg.diagnostics);
     applyTemp(msg.temp);
     if (msg.uptime_seconds !== undefined && msg.uptime_seconds !== null) {
         document.getElementById('stat-uptime').textContent = formatUptime(msg.uptime_seconds);

@@ -31,6 +31,15 @@ function requestNotificationPermission() {
     }
 }
 
+// Distinguishes "hot because it's under heavy load" (expected) from "hot while
+// mostly idle" (worth investigating -- possible cooling/thermal-paste/dust issue).
+// Unknown load (older companion, no sensors yet) conservatively reads as "investigate".
+function classifyOverheatStatus(temp, overheatThreshold, cpuLoadPct, lowLoadThreshold) {
+    if (temp === undefined || temp === null || temp < overheatThreshold) return 'normal';
+    if (typeof cpuLoadPct === 'number' && cpuLoadPct >= lowLoadThreshold) return 'overheat-expected';
+    return 'overheat-investigate';
+}
+
 function notifyOverheat(machine, temp) {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     new Notification('CPU Overheat Alert!', {

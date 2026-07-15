@@ -1,4 +1,5 @@
 ﻿import ctypes
+import json
 import os
 import re
 import time
@@ -26,9 +27,12 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.1.0"
+HUB_VERSION = "1.2.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
+# Below this CPU load %, a high temp reading is flagged "investigate" rather than
+# "expected" -- sent to the frontend the same way OVERHEAT_THRESHOLD is.
+LOW_LOAD_THRESHOLD = 40
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
@@ -95,6 +99,64 @@ def get_latest_temp(machine):
     if cached is not None:
         return cached
     return load_cached_live_status(machine_name).get('temp')
+
+latest_sensors = {}
+latest_sensors_lock = threading.Lock()
+
+def set_latest_sensors(machine, sensors):
+    if not sensors:
+        return
+    with latest_sensors_lock:
+        latest_sensors[str(machine).strip()] = sensors
+
+def get_latest_sensors(machine):
+    with latest_sensors_lock:
+        return latest_sensors.get(str(machine).strip())
+
+def _find_sensor_value(sensors, hardware_substr, sensor_type, preferred_name_substrs=None):
+    """Fuzzy-matches one numeric value out of a flattened LHM sensor list -- same
+    preferred-name-first-match style as companion.py's PREFERRED_SENSORS, since
+    sensor naming varies across CPU/GPU vendors."""
+    def matches_hardware(s):
+        # hardware_id (e.g. "/amdcpu/0", "/gpu-nvidia/0", "/ram") is what reliably
+        # identifies the category -- the display name ("AMD Ryzen 7 5800X") never
+        # contains the literal word "cpu"/"gpu"/etc, so check both defensively.
+        haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+        return hardware_substr in haystack
+
+    candidates = [
+        s for s in sensors
+        if s.get("type") == sensor_type
+        and matches_hardware(s)
+        and isinstance(s.get("value"), (int, float))
+    ]
+    if not candidates:
+        return None
+    if preferred_name_substrs:
+        for wanted in preferred_name_substrs:
+            for s in candidates:
+                if wanted in str(s.get("name") or "").lower():
+                    return s["value"]
+    return candidates[0]["value"]
+
+def extract_diagnostics(sensors):
+    """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
+    list (see companion.py's flatten_sensors). Every field is None when not
+    found -- e.g. no discrete GPU, or an older companion that sent no sensors."""
+    if not sensors:
+        return {
+            "cpu_load_pct": None, "cpu_clock_mhz": None,
+            "gpu_temp": None, "gpu_load_pct": None, "gpu_clock_mhz": None,
+            "memory_load_pct": None,
+        }
+    return {
+        "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
+        "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
+        "gpu_temp": _find_sensor_value(sensors, "gpu", "Temperature", ["gpu core", "gpu hot spot", "gpu package"]),
+        "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", ["gpu core", "d3d 3d"]),
+        "gpu_clock_mhz": _find_sensor_value(sensors, "gpu", "Clock", ["gpu core", "gpu shader"]),
+        "memory_load_pct": _find_sensor_value(sensors, "ram", "Load", ["memory"]),
+    }
 
 def load_cached_live_status(machine_name):
     """DB-backed fallback for get_latest_temp/get_latest_uptime right after a hub
@@ -371,6 +433,9 @@ def init_db():
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_unique ON readings(ts_epoch, machine, temp)"
         )
+        existing_reading_columns = {row["name"] for row in conn.execute("PRAGMA table_info(readings)")}
+        if "sensors_json" not in existing_reading_columns:
+            conn.execute("ALTER TABLE readings ADD COLUMN sensors_json TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS imported_days (
@@ -402,7 +467,7 @@ def write_readings_batch(records):
         return
     with get_db_conn() as conn:
         conn.executemany(
-            "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp, sensors_json) VALUES (?, ?, ?, ?, ?)",
             records,
         )
 
@@ -481,16 +546,16 @@ def ensure_day_loaded_from_csv(date):
             except (TypeError, ValueError):
                 continue
             records.append(
-                (to_timestamp_str(parsed_ts), to_epoch_seconds(parsed_ts), machine, temp)
+                (to_timestamp_str(parsed_ts), to_epoch_seconds(parsed_ts), machine, temp, None)
             )
 
     write_readings_batch(records)
     with get_db_conn() as conn:
         conn.execute("INSERT OR IGNORE INTO imported_days(day) VALUES (?)", (date,))
 
-def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp):
+def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp, sensors_json=None):
     ensure_db_writer_running()
-    record = (timestamp_str, timestamp_epoch, machine, float(temp))
+    record = (timestamp_str, timestamp_epoch, machine, float(temp), sensors_json)
     try:
         db_write_queue.put_nowait(record)
     except queue.Full:
@@ -532,7 +597,7 @@ def persist_live_status(machine, temp, uptime_seconds):
             (machine_name, temp, uptime_seconds, to_timestamp_str(datetime.now())),
         )
 
-def save_and_emit_temp(machine, temp, uptime_seconds=None):
+def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None):
     machine_name = str(machine).strip()
     if not machine_name:
         raise ValueError("Machine name cannot be empty.")
@@ -545,10 +610,12 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None):
     if WRITE_CSV_ARCHIVE:
         append_csv_archive(timestamp_str, machine_name, temp_value)
 
-    enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value)
+    sensors_json = json.dumps(sensors) if sensors else None
+    enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value, sensors_json)
 
     set_latest_uptime(machine_name, uptime_seconds)
     set_latest_temp(machine_name, temp_value)
+    set_latest_sensors(machine_name, sensors)
     persist_live_status(machine_name, temp_value, uptime_seconds)
 
     # Emit via WebSocket
@@ -557,7 +624,9 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None):
         'timestamp': timestamp_str,
         'temp': temp_value,
         'threshold': OVERHEAT_THRESHOLD,
-        'uptime_seconds': get_latest_uptime(machine_name)
+        'low_load_threshold': LOW_LOAD_THRESHOLD,
+        'uptime_seconds': get_latest_uptime(machine_name),
+        'diagnostics': extract_diagnostics(sensors),
     })
 
 def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None):
@@ -735,7 +804,10 @@ def report_temp():
         uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
     except (TypeError, ValueError):
         uptime_seconds = None
-    save_and_emit_temp(machine, float(data['temp']), uptime_seconds)
+    sensors = data.get('sensors')
+    if not isinstance(sensors, list):
+        sensors = None
+    save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors)
     save_machine_info(
         machine,
         data.get('asset_tag'),
@@ -774,6 +846,7 @@ def get_machines():
     for row in result:
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
         row['temp'] = get_latest_temp(row['machine'])
+        row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
     result.sort(key=lambda row: row['machine'])
     return jsonify(result)
 
@@ -800,6 +873,7 @@ def get_machine(machine):
     }
     result['uptime_seconds'] = uptime_seconds
     result['temp'] = temp
+    result['diagnostics'] = extract_diagnostics(get_latest_sensors(machine_name))
     return jsonify(result)
 
 @app.route('/api/history')
@@ -922,7 +996,8 @@ def history_page():
 @login_required
 def machine_page(machine):
     return render_template(
-        "machine.html", machine=machine, overheat_threshold=OVERHEAT_THRESHOLD, hub_version=HUB_VERSION
+        "machine.html", machine=machine, overheat_threshold=OVERHEAT_THRESHOLD,
+        low_load_threshold=LOW_LOAD_THRESHOLD, hub_version=HUB_VERSION
     )
 
 # ================================

@@ -1,3 +1,7 @@
+// /api/machines doesn't send thresholds today (matches the existing hardcoded 85
+// below), so this mirrors that pattern rather than introducing a new inconsistency.
+const LOW_LOAD_THRESHOLD = 40;
+
 requestNotificationPermission();
 
 const socket = connectSocketWithStatus();
@@ -17,7 +21,7 @@ function goToMachine(machine) {
     window.location.href = '/machine/' + encodeURIComponent(machine);
 }
 
-function updateMachineCard(machine, temp, threshold, uptimeSeconds, info) {
+function updateMachineCard(machine, temp, threshold, uptimeSeconds, info, diagnostics) {
     let card = document.getElementById('card-' + machine);
     if (!card) {
         card = document.createElement('div');
@@ -51,15 +55,24 @@ function updateMachineCard(machine, temp, threshold, uptimeSeconds, info) {
 
     document.getElementById('temp-' + machine).innerText = Number(temp).toFixed(1) + ' °C';
 
-    if (temp >= threshold) {
-        if (!card.classList.contains('stat-card--overheat')) {
-            card.classList.add('stat-card--overheat');
-            setStatusPill(statusEl, 'danger', '🔥 OVERHEATING');
-            notifyOverheat(machine, temp);
-        }
-    } else {
+    const cpuLoadPct = diagnostics && typeof diagnostics.cpu_load_pct === 'number' ? diagnostics.cpu_load_pct : null;
+    const status = classifyOverheatStatus(temp, threshold, cpuLoadPct, LOW_LOAD_THRESHOLD);
+
+    if (status === 'normal') {
         card.classList.remove('stat-card--overheat');
         setStatusPill(statusEl, 'ok', 'Normal');
+        return;
+    }
+
+    const wasOverheating = card.classList.contains('stat-card--overheat');
+    card.classList.add('stat-card--overheat');
+    if (status === 'overheat-expected') {
+        setStatusPill(statusEl, 'warn', '🔥 Overheating (high load)');
+    } else {
+        setStatusPill(statusEl, 'danger', '🔥 Overheating (low load — investigate)');
+    }
+    if (!wasOverheating) {
+        notifyOverheat(machine, temp);
     }
 }
 
@@ -70,7 +83,7 @@ async function refreshMachineInfo() {
         const rows = await resp.json();
         emptyStateEl.style.display = rows.length ? 'none' : 'block';
         for (const row of rows) {
-            updateMachineCard(row.machine, row.temp, 85, row.uptime_seconds, row);
+            updateMachineCard(row.machine, row.temp, 85, row.uptime_seconds, row, row.diagnostics);
         }
     } catch (e) { /* non-critical, dashboard still works without it */ }
 }
@@ -78,5 +91,5 @@ async function refreshMachineInfo() {
 refreshMachineInfo();
 
 socket.on('new_temp', (msg) => {
-    updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds);
+    updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds, undefined, msg.diagnostics);
 });
