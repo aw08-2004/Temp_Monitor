@@ -27,7 +27,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.4.0"
+HUB_VERSION = "1.5.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -1013,9 +1013,12 @@ def machine_page(machine):
 application = app
 
 if __name__ == "__main__":
-    # Start local logger in background
-    start_local_logger()
-    
+    # Local self-reporting is intentionally disabled: the companion agent runs on
+    # the hub machine too and reports this host with full sensor data, so starting
+    # local_logger here would double-report the hostname and make the dashboard's
+    # Load/Clock flicker. See wsgi.py for how to re-enable on a companion-less box.
+    # start_local_logger()
+
     # Use socketio.run instead of app.run
     print(f"Starting hub on {LOCAL_MACHINE}...")
     socketio.run(app, host="0.0.0.0", port=3001, debug=False, allow_unsafe_werkzeug=True)
