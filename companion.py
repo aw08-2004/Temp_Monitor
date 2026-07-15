@@ -15,7 +15,7 @@ import requests
 # ================================
 # VERSION  --  bump on every push to main, or nothing will update
 # ================================
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -129,6 +129,18 @@ def pick_cpu_temp(data):
     return sensors[0][1]  # any CPU temp beats no CPU temp
 
 
+def get_cpu_temp():
+    """Backwards-compatible one-call helper: fetch the LHM tree and return the best
+    CPU temp. The main loop now calls fetch_lhm_data()/pick_cpu_temp() separately so
+    it can reuse the tree for flatten_sensors(), but this wrapper is kept ON PURPOSE:
+    companions deployed at v2.5.0 and earlier gate their self-update on the literal
+    string 'def get_cpu_temp' being present in the downloaded source. Dropping it
+    strands every one of them at their current version -- which is the bug this
+    version fixes. Do not remove until the whole fleet is past 2.6.0."""
+    data = fetch_lhm_data()
+    return pick_cpu_temp(data) if data else None
+
+
 def flatten_sensors(node, hardware=None, hardware_id=None, group=None, found=None):
     """Collects every leaf sensor in the whole LHM tree (not just CPU) into a flat
     list of dicts, so the hub can store/diagnose off of everything LHM reports.
@@ -237,10 +249,17 @@ def version_tuple(v):
 
 
 def looks_like_valid_companion(text):
-    """Cheap sanity checks so a GitHub error page can never overwrite the script."""
+    """Cheap sanity checks so a GitHub error page can never overwrite the script.
+
+    Keyed on structural markers (a core config constant + the updater itself)
+    rather than an individual sensor-helper name. The previous check looked for
+    'def get_cpu_temp', which was renamed to pick_cpu_temp in the 2.6.0 commit --
+    that silently stranded the whole fleet, because every deployed companion
+    rejected the new source as invalid and refused to self-update."""
     return (
         len(text) > 500
-        and "def get_cpu_temp" in text
+        and "HUB_URL" in text
+        and "def check_for_update" in text
         and parse_version(text) is not None
     )
 
