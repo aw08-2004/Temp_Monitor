@@ -176,9 +176,10 @@ Ok "Interpreter: $pythonExe"
 
 Step "Installing Python packages"
 & $pythonExe -m pip install --upgrade pip --quiet
-& $pythonExe -m pip install requests --quiet
+# cryptography is needed so the companion can verify signed self-updates (Ed25519).
+& $pythonExe -m pip install requests cryptography --quiet
 if ($LASTEXITCODE -ne 0) { Die "pip install failed." }
-Ok "requests installed"
+Ok "requests + cryptography installed"
 
 # ----------------------------------------------------------------------
 # 2. Files

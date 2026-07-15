@@ -27,7 +27,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.5.0"
+HUB_VERSION = "1.6.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -41,10 +41,18 @@ LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(LOG_DIR, "temp_v2.db")
-WRITE_CSV_ARCHIVE = True
+# Daily CSV archives are retired -- the DB is the single source of truth now.
+# Existing CSV files on disk are left untouched; we just stop writing new ones.
+WRITE_CSV_ARCHIVE = False
 SQLITE_TIMEOUT_SECONDS = 30
 DB_WRITE_BATCH_SIZE = 200
 DB_WRITE_FLUSH_SECONDS = 0.5
+
+# Readings retention. A background pruner deletes readings older than this, so the
+# DB stays bounded instead of growing forever (see start_retention_pruner()).
+RETENTION_DAYS = 30
+RETENTION_PRUNE_INTERVAL_SECONDS = 24 * 60 * 60
+RETENTION_PRUNE_BATCH = 50000
 LIVE_DEFAULT_WINDOW_HOURS = 3
 DEFAULT_HISTORY_LIMIT = 1200
 MAX_HISTORY_POINTS_PER_MACHINE = 2000
@@ -597,15 +605,24 @@ def persist_live_status(machine, temp, uptime_seconds):
             (machine_name, temp, uptime_seconds, to_timestamp_str(datetime.now())),
         )
 
-def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None):
+def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timestamp_epoch=None):
     machine_name = str(machine).strip()
     if not machine_name:
         raise ValueError("Machine name cannot be empty.")
 
     temp_value = float(temp)
     now = datetime.now()
-    timestamp_str = to_timestamp_str(now)
-    timestamp_epoch = to_epoch_seconds(now)
+    # A reading may carry the companion's own timestamp (client_ts) -- e.g. a
+    # backfilled reading that was buffered while the hub was unreachable. Store it
+    # under its real time; only treat "current" readings as live status.
+    if timestamp_epoch is not None:
+        reading_dt = datetime.fromtimestamp(int(timestamp_epoch))
+    else:
+        reading_dt = now
+    is_historical = (now - reading_dt).total_seconds() > 60
+
+    timestamp_str = to_timestamp_str(reading_dt)
+    timestamp_epoch = to_epoch_seconds(reading_dt)
 
     if WRITE_CSV_ARCHIVE:
         append_csv_archive(timestamp_str, machine_name, temp_value)
@@ -613,10 +630,13 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None):
     sensors_json = json.dumps(sensors) if sensors else None
     enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value, sensors_json)
 
-    set_latest_uptime(machine_name, uptime_seconds)
-    set_latest_temp(machine_name, temp_value)
-    set_latest_sensors(machine_name, sensors)
-    persist_live_status(machine_name, temp_value, uptime_seconds)
+    # Backfilled (historical) readings go into history only; they must not clobber
+    # the "current" live-status caches with a stale value.
+    if not is_historical:
+        set_latest_uptime(machine_name, uptime_seconds)
+        set_latest_temp(machine_name, temp_value)
+        set_latest_sensors(machine_name, sensors)
+        persist_live_status(machine_name, temp_value, uptime_seconds)
 
     # Emit via WebSocket. Diagnostics come from the freshest cached sensors, not
     # this report's raw `sensors`, so a report that arrived without a sensor block
@@ -626,6 +646,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None):
     socketio.emit('new_temp', {
         'machine': machine_name,
         'timestamp': timestamp_str,
+        'timestamp_epoch': timestamp_epoch,
         'temp': temp_value,
         'threshold': OVERHEAT_THRESHOLD,
         'low_load_threshold': LOW_LOAD_THRESHOLD,
@@ -719,8 +740,48 @@ def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_second
         })
     return {machine_name: list(points) for machine_name, points in history.items()}
 
+# ================================
+# RETENTION  --  keep the readings table bounded to RETENTION_DAYS
+# ================================
+def prune_old_readings_once():
+    """Delete readings older than RETENTION_DAYS, in batches so the first big prune
+    (potentially millions of rows) never holds a single long write lock that would
+    stall the reading writer. Returns the number of rows removed."""
+    cutoff = int(time.time()) - RETENTION_DAYS * 86400
+    total = 0
+    while True:
+        with get_db_conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM readings WHERE id IN "
+                "(SELECT id FROM readings WHERE ts_epoch < ? LIMIT ?)",
+                (cutoff, RETENTION_PRUNE_BATCH),
+            )
+            deleted = cur.rowcount or 0
+        total += deleted
+        if deleted < RETENTION_PRUNE_BATCH:
+            break
+        time.sleep(0.2)  # let other writers/readers through between batches
+    if total:
+        print(f"[retention] Pruned {total} reading(s) older than {RETENTION_DAYS} days.")
+    return total
+
+
+def retention_pruner():
+    while True:
+        try:
+            prune_old_readings_once()
+        except Exception as e:
+            print(f"[retention] Prune failed: {e}")
+        time.sleep(RETENTION_PRUNE_INTERVAL_SECONDS)
+
+
+def start_retention_pruner():
+    threading.Thread(target=retention_pruner, daemon=True, name="retention_pruner").start()
+
+
 init_db()
 start_companion_version_watcher()
+start_retention_pruner()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -811,7 +872,19 @@ def report_temp():
     sensors = data.get('sensors')
     if not isinstance(sensors, list):
         sensors = None
-    save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors)
+    # Optional companion-supplied timestamp (used to backfill readings buffered
+    # while the hub was down). Ignore values that are in the future or older than
+    # our retention window -- those are clock-skew garbage, fall back to now().
+    client_ts = data.get('client_ts')
+    try:
+        client_ts = int(client_ts) if client_ts is not None else None
+    except (TypeError, ValueError):
+        client_ts = None
+    if client_ts is not None:
+        now_epoch = int(time.time())
+        if client_ts > now_epoch + 300 or client_ts < now_epoch - RETENTION_DAYS * 86400:
+            client_ts = None
+    save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors, timestamp_epoch=client_ts)
     save_machine_info(
         machine,
         data.get('asset_tag'),

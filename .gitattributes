@@ -1,0 +1,5 @@
+# Keep the self-updated files byte-stable so Ed25519 signatures stay valid.
+# git must NOT rewrite line endings for these, or companion.py.sig won't match the
+# bytes raw.githubusercontent.com serves and clients will reject every update.
+companion.py -text
+companion.py.sig -text

@@ -2,3 +2,8 @@ logs
 .venv
 __pycache__
 .env
+
+# Private signing key for companion self-updates -- MUST never be committed.
+.temp_monitor_signing_key
+*.temp_monitor_signing_key
+
