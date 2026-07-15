@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Temp Monitor{% endblock %}</title>
+<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+<script>
+(function () {
+    try {
+        var saved = localStorage.getItem('tempmonitor:theme');
+        var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) { /* localStorage unavailable, default dark stays */ }
+})();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+<div class="app-shell">
+    {% include "partials/_sidebar.html" %}
+    <div class="app-shell__main">
+        {% include "partials/_topbar.html" %}
+        <main class="app-shell__content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='js/common.js') }}"></script>
+{% block page_scripts %}{% endblock %}
+</body>
+</html>

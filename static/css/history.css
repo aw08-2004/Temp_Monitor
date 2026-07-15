@@ -1,0 +1,12 @@
+.history-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--space-5);
+    margin-bottom: var(--space-6);
+}
+
+.history-hint {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-3);
+}

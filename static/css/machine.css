@@ -1,0 +1,12 @@
+.identity-block .stat-card__meta {
+    display: block;
+    margin-bottom: var(--space-1);
+}
+
+.identity-block .stat-card__meta:last-child {
+    margin-bottom: 0;
+}
+
+.chart-card {
+    margin-top: var(--space-6);
+}

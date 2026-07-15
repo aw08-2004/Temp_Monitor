@@ -1,0 +1,78 @@
+/* Design tokens: color, type, spacing, radius. Themed via [data-theme] on <html>. */
+
+:root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 16px;
+    --text-lg: 20px;
+    --text-xl: 28px;
+    --text-2xl: 34px;
+    --text-stat: 32px;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    --radius-sm: 8px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+
+    --sidebar-width: 240px;
+
+    --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+:root[data-theme="dark"] {
+    --bg: #0b0e14;
+    --surface: #12151c;
+    --card: #171b24;
+    --card-border: #262b38;
+    --text: #e6e8ec;
+    --muted: #8a90a0;
+
+    --accent: #3b82f6;
+    --accent-hover: #5b93f5;
+    --accent-contrast: #ffffff;
+
+    --success: #22c55e;
+    --success-bg: #123321;
+    --warning: #eab308;
+    --warning-bg: #3a2f0a;
+    --danger: #ef4444;
+    --danger-bg: #3a1418;
+
+    --focus-ring: rgba(59, 130, 246, 0.5);
+    --control-bg: #0b1220;
+    --scrollbar: #262b38;
+}
+
+:root[data-theme="light"] {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --card: #ffffff;
+    --card-border: #e4e7ec;
+    --text: #14161a;
+    --muted: #6b7280;
+
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-contrast: #ffffff;
+
+    --success: #16a34a;
+    --success-bg: #e8f8ee;
+    --warning: #ca8a04;
+    --warning-bg: #fdf3d8;
+    --danger: #dc2626;
+    --danger-bg: #fee2e2;
+
+    --focus-ring: rgba(37, 99, 235, 0.35);
+    --control-bg: #f2f3f5;
+    --scrollbar: #e4e7ec;
+}

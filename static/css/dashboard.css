@@ -1,0 +1,17 @@
+.machine-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: var(--space-5);
+}
+
+.machine-card__name {
+    font-size: var(--text-md);
+    font-weight: 600;
+    margin-bottom: var(--space-1);
+}
+
+.machine-card__info {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    margin-bottom: var(--space-3);
+}

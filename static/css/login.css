@@ -1,0 +1,60 @@
+body.login-body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+}
+
+.login-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: var(--space-8);
+    text-align: center;
+    max-width: 340px;
+    width: 100%;
+}
+
+.login-card__brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+}
+
+.login-card__brand img {
+    width: 28px;
+    height: 28px;
+}
+
+.login-card h1 {
+    font-size: var(--text-lg);
+    font-weight: 600;
+}
+
+.login-card p {
+    color: var(--muted);
+    font-size: var(--text-base);
+    margin-bottom: var(--space-6);
+}
+
+.google-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    background: #fff;
+    color: #1f1f1f;
+    padding: var(--space-3) var(--space-5);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: var(--text-base);
+    border: 1px solid #e4e7ec;
+}
+
+.google-btn:hover {
+    background: #f0f0f0;
+}

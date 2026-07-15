@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Daily Summary - Temp Monitor{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/history.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">Daily Temperature Summary</h1>
+
+<div class="card toolbar">
+    <label for="day-picker">Select day:</label>
+    <input id="day-picker" class="input" type="date">
+    <label for="daily-resolution">Resolution:</label>
+    <select id="daily-resolution" class="select">
+        <option value="raw">Raw</option>
+        <option value="10s" selected>10s</option>
+        <option value="1m">1m</option>
+        <option value="5m">5m</option>
+    </select>
+    <span id="daily-resolution-in-use" class="stat-card__meta">In use: --</span>
+    <input id="daily-dynamic-resolution" class="checkbox" type="checkbox" checked>
+    <label for="daily-dynamic-resolution">Dynamic on zoom</label>
+    <button id="load-day" type="button" class="btn">Load Day</button>
+    <button id="zoom-in" type="button" class="btn">Zoom In</button>
+    <button id="zoom-out" type="button" class="btn">Zoom Out</button>
+    <button id="reset-zoom" type="button" class="btn">Reset Zoom</button>
+</div>
+
+<div class="history-grid">
+    <div class="card stat-card">
+        <div class="stat-card__label">Overall Daily Average</div>
+        <div id="overall-avg" class="stat-card__value">-- °C</div>
+        <div id="daily-meta" class="stat-card__meta">Select a day to load data.</div>
+    </div>
+    <div class="card">
+        <div class="section-title">Average by Machine</div>
+        <table class="data-table">
+            <thead>
+                <tr><th>Machine</th><th>Average (°C)</th></tr>
+            </thead>
+            <tbody id="machine-avg-body">
+                <tr><td colspan="2" class="stat-card__meta">No data loaded.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="section-title">Daily Temperature Graph</div>
+    <div class="history-hint">Use mouse wheel or drag to zoom. Hover points to see exact temperatures.</div>
+    <div class="chart-container">
+        <canvas id="dailyChart"></canvas>
+    </div>
+    <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">No readings found for this day.</div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/history.js') }}"></script>
+{% endblock %}

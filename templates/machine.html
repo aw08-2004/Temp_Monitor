@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ machine }} - Temp Monitor{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+{% endblock %}
+{% block content %}
+<div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}">
+    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
+
+    <div class="card-grid">
+        <div class="card stat-card" id="temp-card">
+            <div class="stat-card__label">Live Temperature</div>
+            <div class="stat-card__value" id="stat-temp">-- °C</div>
+            <span class="status-pill status-pill--muted" id="stat-status"><span class="status-pill__dot"></span>--</span>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-card__label">Uptime</div>
+            <div class="stat-card__value" id="stat-uptime">--</div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-card__label">Companion Version</div>
+            <div class="stat-card__value" id="stat-version">--</div>
+        </div>
+        <div class="card stat-card identity-block">
+            <div class="stat-card__label">Identity</div>
+            <div class="stat-card__meta" id="stat-model">Model: --</div>
+            <div class="stat-card__meta" id="stat-serial">Serial: --</div>
+            <div class="stat-card__meta" id="stat-asset">Asset tag: --</div>
+        </div>
+    </div>
+
+    <div class="card chart-card">
+        <div class="section-title">Temperature History</div>
+        <div class="toolbar">
+            <label for="day-picker">Day:</label>
+            <input id="day-picker" class="input" type="date">
+            <label for="resolution">Resolution:</label>
+            <select id="resolution" class="select">
+                <option value="raw">Raw</option>
+                <option value="10s">10s</option>
+                <option value="1m">1m</option>
+                <option value="5m">5m</option>
+            </select>
+            <span id="resolution-in-use" class="stat-card__meta">In use: --</span>
+            <input id="dynamic-resolution" class="checkbox" type="checkbox" checked>
+            <label for="dynamic-resolution">Dynamic on zoom</label>
+            <button id="zoom-in" type="button" class="btn">Zoom In</button>
+            <button id="zoom-out" type="button" class="btn">Zoom Out</button>
+            <button id="reset-zoom" type="button" class="btn">Reset Zoom</button>
+        </div>
+        <div class="chart-container">
+            <canvas id="tempChart"></canvas>
+        </div>
+        <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">No readings found for this day.</div>
+    </div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/machine.js') }}"></script>
+{% endblock %}
