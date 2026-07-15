@@ -27,7 +27,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.2.0"
+HUB_VERSION = "1.3.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -985,19 +985,22 @@ def get_daily_summary():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html", hub_version=HUB_VERSION)
+    return render_template("index.html", hub_version=HUB_VERSION,
+                           latest_companion_version=get_latest_companion_version())
 
 @app.route("/history")
 @login_required
 def history_page():
-    return render_template("history.html", hub_version=HUB_VERSION)
+    return render_template("history.html", hub_version=HUB_VERSION,
+                           latest_companion_version=get_latest_companion_version())
 
 @app.route("/machine/<machine>")
 @login_required
 def machine_page(machine):
     return render_template(
         "machine.html", machine=machine, overheat_threshold=OVERHEAT_THRESHOLD,
-        low_load_threshold=LOW_LOAD_THRESHOLD, hub_version=HUB_VERSION
+        low_load_threshold=LOW_LOAD_THRESHOLD, hub_version=HUB_VERSION,
+        latest_companion_version=get_latest_companion_version()
     )
 
 # ================================
