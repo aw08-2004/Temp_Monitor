@@ -49,9 +49,13 @@ VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300}
 
 LOCAL_MACHINE = socket.gethostname()
 
-# Latest known uptime per machine (seconds since boot). Not persisted -- it's a
-# live status value, not history, so it just lives in memory and rides along
-# with temp reports/live socket updates.
+# Latest known uptime/temp per machine -- kept in memory for speed, but also
+# mirrored to machine_info (see persist_live_status) so a hub restart doesn't
+# instantly blank them out. The DB fallback only counts for LIVE_STATUS_CACHE_SECONDS;
+# past that a machine that's actually gone quiet should read as unknown again,
+# not show an arbitrarily stale reading forever.
+LIVE_STATUS_CACHE_SECONDS = 10 * 60
+
 latest_uptime = {}
 latest_uptime_lock = threading.Lock()
 
@@ -68,12 +72,13 @@ def set_latest_uptime(machine, uptime_seconds):
         latest_uptime[str(machine).strip()] = int(uptime_seconds)
 
 def get_latest_uptime(machine):
+    machine_name = str(machine).strip()
     with latest_uptime_lock:
-        return latest_uptime.get(str(machine).strip())
+        cached = latest_uptime.get(machine_name)
+    if cached is not None:
+        return cached
+    return load_cached_live_status(machine_name).get('uptime_seconds')
 
-# Latest known temp per machine (°C). Same in-memory, non-persisted approach as
-# latest_uptime -- lets pages that aren't the live dashboard (e.g. a single
-# machine's detail page) show a current reading without waiting on history.
 latest_temp = {}
 latest_temp_lock = threading.Lock()
 
@@ -84,8 +89,28 @@ def set_latest_temp(machine, temp):
         latest_temp[str(machine).strip()] = float(temp)
 
 def get_latest_temp(machine):
+    machine_name = str(machine).strip()
     with latest_temp_lock:
-        return latest_temp.get(str(machine).strip())
+        cached = latest_temp.get(machine_name)
+    if cached is not None:
+        return cached
+    return load_cached_live_status(machine_name).get('temp')
+
+def load_cached_live_status(machine_name):
+    """DB-backed fallback for get_latest_temp/get_latest_uptime right after a hub
+    restart, when the in-memory dicts above are empty. Only trusts a row up to
+    LIVE_STATUS_CACHE_SECONDS old -- see the comment above."""
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT last_temp, last_uptime_seconds, updated_at FROM machine_info WHERE machine = ?",
+            (machine_name,),
+        ).fetchone()
+    if not row or not row["updated_at"]:
+        return {}
+    updated_at = parse_request_datetime(row["updated_at"])
+    if updated_at is None or (datetime.now() - updated_at).total_seconds() > LIVE_STATUS_CACHE_SECONDS:
+        return {}
+    return {"temp": row["last_temp"], "uptime_seconds": row["last_uptime_seconds"]}
 
 # ================================
 # COMPANION VERSION WATCHER  --  lets companions self-update promptly instead of
@@ -367,6 +392,10 @@ def init_db():
         existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(machine_info)")}
         if "companion_version" not in existing_columns:
             conn.execute("ALTER TABLE machine_info ADD COLUMN companion_version TEXT")
+        if "last_temp" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN last_temp REAL")
+        if "last_uptime_seconds" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN last_uptime_seconds INTEGER")
 
 def write_readings_batch(records):
     if not records:
@@ -468,6 +497,41 @@ def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp):
         print("WARNING: SQLite queue is full; writing synchronously.")
         write_readings_batch([record])
 
+# How often persist_live_status actually hits SQLite per machine. Reports come in
+# every few seconds, but the cache only needs to be fresh to within
+# LIVE_STATUS_CACHE_SECONDS, so there's no need to write anywhere near that often.
+LIVE_STATUS_PERSIST_INTERVAL_SECONDS = 30
+_last_live_status_persist = {}
+_last_live_status_persist_lock = threading.Lock()
+
+def persist_live_status(machine, temp, uptime_seconds):
+    """Mirror the latest temp/uptime into machine_info so get_latest_temp/
+    get_latest_uptime (via load_cached_live_status) can serve them for a while
+    after a hub restart, instead of going blank until the machine reports again."""
+    machine_name = str(machine).strip()
+    if not machine_name:
+        return
+
+    now = time.time()
+    with _last_live_status_persist_lock:
+        last = _last_live_status_persist.get(machine_name, 0)
+        if now - last < LIVE_STATUS_PERSIST_INTERVAL_SECONDS:
+            return
+        _last_live_status_persist[machine_name] = now
+
+    with get_db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO machine_info(machine, last_temp, last_uptime_seconds, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(machine) DO UPDATE SET
+                last_temp = excluded.last_temp,
+                last_uptime_seconds = excluded.last_uptime_seconds,
+                updated_at = excluded.updated_at
+            """,
+            (machine_name, temp, uptime_seconds, to_timestamp_str(datetime.now())),
+        )
+
 def save_and_emit_temp(machine, temp, uptime_seconds=None):
     machine_name = str(machine).strip()
     if not machine_name:
@@ -485,6 +549,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None):
 
     set_latest_uptime(machine_name, uptime_seconds)
     set_latest_temp(machine_name, temp_value)
+    persist_live_status(machine_name, temp_value, uptime_seconds)
 
     # Emit via WebSocket
     socketio.emit('new_temp', {
