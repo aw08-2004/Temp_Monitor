@@ -9,7 +9,7 @@ machine runs an agent that reads sensors and reports them to a central **hub**
   See [agent/README.md](agent/README.md).
 - **Companion (legacy, existing installs):** `companion.py` — a Python scheduled-task
   agent. Self-updates now migrate it to the C# agent automatically (see below).
-- Installer (legacy companion): `install.ps1`
+- Unified installer (Agent / Companion / Hub): `install.ps1`
 
 ## Two agents, one hub
 
@@ -34,38 +34,52 @@ See [agent/README.md](agent/README.md) for the full C#/.NET agent: build/publish
 signing/release process, and `agent/install/agent-install.ps1` (installs the Windows
 Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 
+## Unified installer
+
+`install.ps1` at the repo root is a single menu-driven installer covering all
+three pieces -- Agent, Companion, and Hub. Run it with no arguments for an
+interactive menu; it prompts for whatever the chosen path needs (enrollment
+secret, hub URL, OAuth creds, ...), defaulting to values already in a local
+`.env` when run from a clone. The installer elevates itself automatically if
+not already run as admin.
+
+**From the web:**
+
+```powershell
+irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1 | iex
+```
+
+**Non-interactive**, pass `-Component` plus the relevant parameters (`iex`
+alone can't take arguments, so invoke the fetched script as a scriptblock
+instead):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) -Component Agent -AgentUrl <url> -EnrollmentSecret <secret>
+```
+
+**From a local clone:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1                                   # interactive menu
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -Uninstall
+powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                        # bare -Uninstall = legacy companion, for back-compat
+```
+
+Component-specific parameters: `-InstallDir <path>` / `-Port <port>` (Companion,
+defaults `C:\Program Files\TempMonitor` / `8085`); `-AgentUrl` / `-AgentExe` /
+`-EnrollmentSecret` / `-HubUrl` / `-CommandSigningPublicKey` (Agent); `-HubPort
+<port>` (Hub, default `3001`) -- Hub setup must be run from a local clone since
+it needs the full app, not just one file.
+
 ## Installing the companion agent (legacy)
 
 Existing installs keep working as-is; new installs should use the agent above
 instead. Run on the Windows machine you want to monitor. The installer needs an
 elevated (admin) PowerShell, since LibreHardwareMonitor needs admin rights to
 read sensors and the agent runs via scheduled tasks.
-
-**From the web (recommended):**
-
-```powershell
-irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1 | iex
-```
-
-**With parameters** (`iex` alone can't take arguments, so invoke the fetched
-script as a scriptblock instead):
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) -Uninstall
-```
-
-Supported parameters: `-Uninstall`, `-InstallDir <path>` (default
-`C:\Program Files\TempMonitor`), `-Port <port>` (default `8085`, used by
-LibreHardwareMonitor's web server).
-
-**From a local clone:**
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
-```
-
-The installer will elevate itself automatically if not already run as admin.
 
 ### What it installs
 

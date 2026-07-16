@@ -10,3 +10,137 @@
 .chart-card {
     margin-top: var(--space-6);
 }
+
+/* ============ Fleet command panel ============ */
+.fleet-card {
+    margin-top: var(--space-6);
+}
+
+.fleet-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-2);
+}
+
+.fleet-toolbar {
+    margin-top: var(--space-4);
+    margin-bottom: var(--space-3);
+}
+
+.fleet-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin-bottom: var(--space-4);
+}
+
+.fleet-params:empty {
+    margin-bottom: 0;
+}
+
+.fleet-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 220px;
+    flex: 1 1 220px;
+}
+
+.fleet-field--wide {
+    flex-basis: 100%;
+}
+
+.fleet-field__label {
+    font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+.fleet-field__hint {
+    font-size: var(--text-xs);
+    color: var(--muted);
+}
+
+.fleet-field textarea.input {
+    resize: vertical;
+    min-height: 76px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-sm);
+    width: 100%;
+}
+
+/* The offline-signing hint carries a long shell command; let it scroll rather
+   than force the whole page horizontal. */
+.fleet-sign-hint {
+    flex-basis: 100%;
+    background: var(--control-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-xs);
+    color: var(--muted);
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.fleet-feedback {
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-4);
+    border: 1px solid transparent;
+}
+
+.fleet-feedback--ok {
+    background: var(--success-bg);
+    border-color: var(--success);
+    color: var(--success);
+}
+
+.fleet-feedback--error {
+    background: var(--danger-bg);
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.fleet-history-title {
+    margin-top: var(--space-6);
+}
+
+.fleet-history-table {
+    table-layout: auto;
+}
+
+.fleet-row {
+    cursor: pointer;
+}
+
+.fleet-row:hover td {
+    background: var(--control-bg);
+}
+
+.fleet-row__type {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-sm);
+}
+
+.fleet-output {
+    background: var(--control-bg);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-xs);
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.fleet-badge-risk {
+    margin-left: var(--space-2);
+}
