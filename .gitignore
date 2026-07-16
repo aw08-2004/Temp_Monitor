@@ -11,4 +11,4 @@ __pycache__
 agent/**/bin/
 agent/**/obj/
 agent/dist/
-
+sign_release.py
