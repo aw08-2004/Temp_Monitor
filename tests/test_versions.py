@@ -1,0 +1,153 @@
+"""Tests the hub's per-client version advertisement (app.get_advertised_version
+and the latest_version it echoes from /api/report).
+
+The fleet runs two update trains that share one companion_version field, so a
+single global "latest version" strands one of them: advertise 2.10.1 and every
+3.x agent stops updating; advertise 3.0.1 and every 2.x companion tries to
+install an agent build as if it were companion.py. These tests pin the routing.
+
+Run from the repo root so `import app` resolves.
+"""
+import os
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# app.py resolves LOG_DIR/DB_PATH relative to the cwd at import time, so run it
+# against a throwaway directory rather than the real logs/temp_v2.db.
+_TMPDIR = tempfile.mkdtemp(prefix="hub-version-test-")
+os.chdir(_TMPDIR)
+
+import app
+
+PASS = 0
+FAIL = 0
+
+
+def check(name, cond):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  [ok] {name}")
+    else:
+        FAIL += 1
+        print(f"  [XX] {name}")
+
+
+def set_trains(companion, agent):
+    app.latest_companion_version = companion
+    app.latest_agent_version = agent
+
+
+def test_version_compare():
+    print("\n-- cmp_versions --")
+    check("2.10.1 > 2.9.9 (numeric, not lexical)", app.cmp_versions("2.10.1", "2.9.9") > 0)
+    check("3.0.0 > 2.10.1", app.cmp_versions("3.0.0", "2.10.1") > 0)
+    check("2.8 == 2.8.0 (zero padded)", app.cmp_versions("2.8", "2.8.0") == 0)
+    check("suffix ignored", app.cmp_versions("3.0.1-rc1", "3.0.1") == 0)
+    check("garbage sorts lowest", app.cmp_versions("garbage", "0.0.1") < 0)
+
+
+def test_companion_train():
+    print("\n-- companion train (2.x) climbs to the migration release --")
+    set_trains("2.10.1", "3.0.1")
+    check("2.8.0 -> 2.10.1 (stepping stone)", app.get_advertised_version("2.8.0") == "2.10.1")
+    check("2.10.0 -> 2.10.1", app.get_advertised_version("2.10.0") == "2.10.1")
+    check("never advertised an agent build", app.get_advertised_version("2.8.0") != "3.0.1")
+
+    print("\n-- clients that report no usable version fall back to companion --")
+    check("None -> 2.10.1", app.get_advertised_version(None) == "2.10.1")
+    check("'' -> 2.10.1", app.get_advertised_version("") == "2.10.1")
+    check("garbage -> 2.10.1", app.get_advertised_version("garbage") == "2.10.1")
+
+
+def test_companion_final_is_terminal():
+    print("\n-- a companion at the migration release is done taking hints --")
+    set_trains("2.10.1", "3.0.1")
+    check("2.10.1 -> None (waits to be replaced by the agent)",
+          app.get_advertised_version("2.10.1") is None)
+    check("2.10.1 never handed the agent version (would hammer GitHub every 5s)",
+          app.get_advertised_version("2.10.1") != "3.0.1")
+
+    print("\n-- ...even if companion.py on main moves past it --")
+    set_trains("2.11.0", "3.0.1")
+    check("2.10.1 still -> None (no companion-to-companion update)",
+          app.get_advertised_version("2.10.1") is None)
+    check("2.8.0 still climbs toward the ladder", app.get_advertised_version("2.8.0") == "2.11.0")
+
+
+def test_agent_train():
+    print("\n-- agent train (3.x) gets the latest agent --")
+    set_trains("2.10.1", "3.0.1")
+    check("3.0.0 -> 3.0.1 (the regression this fixes)",
+          app.get_advertised_version("3.0.0") == "3.0.1")
+    check("3.0.1 -> 3.0.1 (no nudge)", app.get_advertised_version("3.0.1") == "3.0.1")
+    check("agent never pushed back onto 2.x", app.get_advertised_version("3.0.0") != "2.10.1")
+
+    print("\n-- a newer agent release rolls forward without a hub change --")
+    set_trains("2.10.1", "3.4.0")
+    check("3.0.1 -> 3.4.0", app.get_advertised_version("3.0.1") == "3.4.0")
+    check("2.8.0 still -> 2.10.1", app.get_advertised_version("2.8.0") == "2.10.1")
+
+
+def test_unknown_trains():
+    print("\n-- nothing known yet: omit rather than guess --")
+    set_trains(None, None)
+    check("companion client -> None", app.get_advertised_version("2.8.0") is None)
+    check("agent client -> None", app.get_advertised_version("3.0.0") is None)
+
+    set_trains("2.10.1", None)
+    check("agent client with no manifest read yet -> None (not 2.10.1)",
+          app.get_advertised_version("3.0.0") is None)
+    check("companion client still served", app.get_advertised_version("2.8.0") == "2.10.1")
+
+    set_trains(None, "3.0.1")
+    check("agent client served with no companion read", app.get_advertised_version("3.0.1") == "3.0.1")
+    check("companion client with no companion read -> None", app.get_advertised_version("2.8.0") is None)
+
+
+def test_report_endpoint():
+    print("\n-- /api/report echoes the right train --")
+    set_trains("2.10.1", "3.0.1")
+    client = app.app.test_client()
+
+    def report(version):
+        payload = {"machine": "version-test-box", "temp": 42.0}
+        if version is not None:
+            payload["companion_version"] = version
+        resp = client.post("/api/report", json=payload)
+        return resp.status_code, resp.get_json()
+
+    status, body = report("2.8.0")
+    check("old companion: 200", status == 200)
+    check("old companion: latest_version=2.10.1", body.get("latest_version") == "2.10.1")
+
+    status, body = report("2.10.1")
+    check("companion at migration release: 200", status == 200)
+    check("companion at migration release: latest_version omitted",
+          "latest_version" not in body)
+
+    status, body = report("3.0.0")
+    check("agent: 200", status == 200)
+    check("agent: latest_version=3.0.1", body.get("latest_version") == "3.0.1")
+
+    status, body = report(None)
+    check("no version field: 200", status == 200)
+    check("no version field: latest_version=2.10.1", body.get("latest_version") == "2.10.1")
+
+    set_trains(None, None)
+    status, body = report("3.0.0")
+    check("unknown trains: 200", status == 200)
+    check("unknown trains: latest_version omitted", "latest_version" not in body)
+
+
+if __name__ == "__main__":
+    test_version_compare()
+    test_companion_train()
+    test_companion_final_is_terminal()
+    test_agent_train()
+    test_unknown_trains()
+    test_report_endpoint()
+    print(f"\n==== {PASS} passed, {FAIL} failed ====")
+    sys.exit(1 if FAIL else 0)

@@ -30,7 +30,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.7.0"
+HUB_VERSION = "1.8.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -186,21 +186,81 @@ def load_cached_live_status(machine_name):
     return {"temp": row["last_temp"], "uptime_seconds": row["last_uptime_seconds"]}
 
 # ================================
-# COMPANION VERSION WATCHER  --  lets companions self-update promptly instead of
-# waiting for their own weekly GitHub poll. We periodically check the same
-# source companion.py updates from, and echo the newest known version back in
-# /api/report's response; companion.py checks for an update as soon as it sees
-# a newer number there.
+# VERSION WATCHER  --  lets clients self-update promptly instead of waiting for
+# their own weekly GitHub poll. We periodically check the same sources they
+# update from, and echo the newest version *that client should be running* back
+# in /api/report's response; both companion.py and the agent check for an update
+# as soon as they see a number ahead of their own.
+#
+# The fleet runs two trains that share the companion_version field:
+#   * companion.py (2.x), which self-updates from the raw script on main, and
+#   * TempMonitorAgent (3.x), the C# service, which self-updates from a signed
+#     manifest.
+# A companion can only reach the agent by first updating to 2.10.1 -- that's the
+# release whose migration path installs the service and decommissions itself. So
+# 2.x clients are climbed to 2.10.1 and then left alone, 3.x clients get the
+# latest agent. Advertising one global number strands one train or the other.
 # ================================
 COMPANION_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/companion.py"
+AGENT_MANIFEST_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
 COMPANION_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
+# First version of the C# agent. A client reporting >= this is on the agent train
+# and must never be pointed back at a 2.x companion number.
+AGENT_TRAIN_MIN_VERSION = "3.0.0"
+# Last stop on the companion train: the release that installs the agent and
+# decommissions itself. A companion that reaches this is done taking version
+# hints -- it now waits to be replaced by the agent, on its own migration
+# schedule. Only bump this if a 2.10.x hotfix ever has to reach the machines
+# that haven't migrated yet; companion.py is otherwise end-of-life.
+COMPANION_FINAL_VERSION = "2.10.1"
 
 latest_companion_version = None
-latest_companion_version_lock = threading.Lock()
+latest_agent_version = None
+latest_version_lock = threading.Lock()
+
+def version_tuple(v):
+    """Tolerant version parse: reads the leading dotted-numeric prefix and ignores
+    any suffix (e.g. '2.8.0-rc1' -> (2, 8, 0)). Never raises. Mirrors the
+    identically-named helper in companion.py."""
+    match = re.match(r"\s*(\d+(?:\.\d+)*)", str(v))
+    if not match:
+        return (0,)
+    return tuple(int(p) for p in match.group(1).split("."))
+
+def cmp_versions(a, b):
+    """Return 1 if a > b, -1 if a < b, 0 if equal. Pads to equal length so that
+    '2.8' and '2.8.0' compare as equal rather than '2.8' < '2.8.0'."""
+    ta, tb = version_tuple(a), version_tuple(b)
+    n = max(len(ta), len(tb))
+    ta += (0,) * (n - len(ta))
+    tb += (0,) * (n - len(tb))
+    return (ta > tb) - (ta < tb)
 
 def get_latest_companion_version():
-    with latest_companion_version_lock:
+    with latest_version_lock:
         return latest_companion_version
+
+def get_latest_agent_version():
+    with latest_version_lock:
+        return latest_agent_version
+
+def get_advertised_version(reported_version):
+    """The version to echo back to a client currently running `reported_version`.
+
+    Agent-train clients (3.x) get the latest agent. Companions get climbed to
+    COMPANION_FINAL_VERSION and then deliberately go quiet: once a companion is
+    there it has everything it needs to install the agent, so we stop hinting and
+    let its migration replace it with 3.x. Clients too old to report a version at
+    all are treated as companions.
+
+    Returns None when there is nothing useful to say -- a companion waiting on
+    migration, or a train we haven't read yet -- in which case /api/report omits
+    latest_version entirely and the client falls back to its own poll."""
+    if reported_version and cmp_versions(reported_version, AGENT_TRAIN_MIN_VERSION) >= 0:
+        return get_latest_agent_version()
+    if reported_version and cmp_versions(reported_version, COMPANION_FINAL_VERSION) >= 0:
+        return None
+    return get_latest_companion_version()
 
 def refresh_latest_companion_version():
     global latest_companion_version
@@ -209,14 +269,31 @@ def refresh_latest_companion_version():
         resp.raise_for_status()
         match = re.search(r'^VERSION\s*=\s*["\']([\d.]+)["\']', resp.text, re.MULTILINE)
         if match:
-            with latest_companion_version_lock:
+            with latest_version_lock:
                 latest_companion_version = match.group(1)
     except Exception as e:
         print(f"[companion-version] Could not refresh latest version: {e}")
 
+def refresh_latest_agent_version():
+    """Read the agent's version straight out of the signed release manifest, so the
+    hub advertises exactly what the agent's own updater would install. We don't
+    verify the signature here -- the agent does that before it installs anything,
+    and this number is only ever a hint to go check."""
+    global latest_agent_version
+    try:
+        resp = requests.get(AGENT_MANIFEST_URL, timeout=10)
+        resp.raise_for_status()
+        version = (resp.json() or {}).get("version")
+        if version:
+            with latest_version_lock:
+                latest_agent_version = str(version)
+    except Exception as e:
+        print(f"[agent-version] Could not refresh latest version: {e}")
+
 def companion_version_watcher():
     while True:
         refresh_latest_companion_version()
+        refresh_latest_agent_version()
         time.sleep(COMPANION_VERSION_CHECK_INTERVAL)
 
 companion_version_watcher_thread = None
@@ -918,16 +995,17 @@ def report_temp():
     # Keep an enrolled agent's online/offline status fresh off its ordinary temp
     # reports too, so it doesn't read offline between dedicated heartbeats.
     fleet.touch_last_seen(DB_PATH, machine)
+    reported_version = data.get('companion_version')
     save_machine_info(
         machine,
         data.get('asset_tag'),
         data.get('serial_number'),
         data.get('model'),
-        data.get('companion_version'),
+        reported_version,
     )
 
     response_payload = {"status": "success"}
-    latest_version = get_latest_companion_version()
+    latest_version = get_advertised_version(reported_version)
     if latest_version:
         response_payload["latest_version"] = latest_version
     return jsonify(response_payload), 200
@@ -1096,13 +1174,15 @@ def get_daily_summary():
 @login_required
 def index():
     return render_template("index.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version())
+                           latest_companion_version=get_latest_companion_version(),
+                           latest_agent_version=get_latest_agent_version())
 
 @app.route("/history")
 @login_required
 def history_page():
     return render_template("history.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version())
+                           latest_companion_version=get_latest_companion_version(),
+                           latest_agent_version=get_latest_agent_version())
 
 @app.route("/machine/<machine>")
 @login_required
@@ -1110,7 +1190,8 @@ def machine_page(machine):
     return render_template(
         "machine.html", machine=machine, overheat_threshold=OVERHEAT_THRESHOLD,
         low_load_threshold=LOW_LOAD_THRESHOLD, hub_version=HUB_VERSION,
-        latest_companion_version=get_latest_companion_version()
+        latest_companion_version=get_latest_companion_version(),
+        latest_agent_version=get_latest_agent_version()
     )
 
 # ================================

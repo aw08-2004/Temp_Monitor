@@ -3,6 +3,9 @@
     <span id="socket-status" class="status-pill status-pill--muted"><span class="status-pill__dot"></span>Connecting&hellip;</span>
     {% endif %}
     <span class="badge">Hub v{{ hub_version }}</span>
+    {% if latest_agent_version %}
+    <span class="badge">Agent v{{ latest_agent_version }}</span>
+    {% endif %}
     {% if latest_companion_version %}
     <span class="badge">Companion v{{ latest_companion_version }}</span>
     {% endif %}
