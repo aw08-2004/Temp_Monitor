@@ -20,7 +20,7 @@ import requests
 # From 2.8.0 onward every pushed companion.py must also be re-signed (see
 # sign_release.py) or clients will refuse the update. See UPDATE_PUBLIC_KEY_HEX.
 # ================================
-VERSION = "2.10.0"
+VERSION = "2.10.1"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -471,24 +471,79 @@ def _clear_restart_state():
         log.warning(f"[update] Could not clear restart state: {e}")
 
 
+# --- scheduled-task self-heal: guarantee a relaunch after we exit ---
+# We run as a Windows Scheduled Task, and Task Scheduler puts each task instance in
+# a job object with KILL_ON_JOB_CLOSE. When our process exits, Task Scheduler tears
+# the job down and kills anything still in it -- including any "detached" helper we
+# spawn ourselves, since a plain child process stays a member of the same job unless
+# it genuinely breaks away. CREATE_BREAKAWAY_FROM_JOB is one way to escape, but it
+# only works if the job explicitly allows it, which Task Scheduler's jobs often
+# don't (verified empirically: it raises OSError here). The task's own
+# RestartCount/RestartInterval settings look like the obvious fallback, but they do
+# NOT fire on a plain non-zero exit code -- that setting is for a narrower "task
+# failed to launch" failure class, not "the exe we ran returned 17" (also verified
+# empirically: a real task configured with RestartCount=3/RestartInterval=1min never
+# restarted after a clean-but-nonzero exit).
+#
+# The only relaunch mechanism that's actually reliable is the one Task Scheduler
+# itself already uses successfully to start us the first time: a trigger, fired by
+# the Task Scheduler service (not a descendant of our job, so immune to our job
+# being torn down). So instead of fighting job semantics, we make sure our own
+# task's trigger has a short repetition -- if we're not running, the next repetition
+# tick relaunches us from whatever's on disk, cleanly, within one interval.
+_TASK_NAME = "TempMonitor - Companion"
+_TASK_REPETITION_INTERVAL = "PT2M"
+
+
+def _ensure_task_repetition():
+    """Best-effort, idempotent: make sure our own scheduled task's trigger has the
+    self-heal repetition set, adding it if an older install (or install.ps1 predating
+    this) doesn't have it yet. Only touches the trigger's Repetition -- Action,
+    Principal, and other Settings are left exactly as install.ps1 configured them.
+
+    Deliberately sets ONLY Repetition.Interval, leaving Duration empty: Task
+    Scheduler's repetition Duration rejects year/month designators (e.g. "P10Y"
+    errors as "incorrectly formatted or out of range" -- verified empirically), and
+    an empty Duration with StopAtDurationEnd=False already means "repeat every
+    Interval indefinitely", which is exactly what's wanted here.
+
+    Never fatal; -ErrorAction Stop inside the PS command turns a CIM failure into a
+    catchable exception so a partial/silent failure can't be misreported as
+    success -- any error is logged and this is just retried on the next update."""
+    ps_command = (
+        f"try {{ "
+        f"$t = Get-ScheduledTask -TaskName '{_TASK_NAME}' -ErrorAction Stop; "
+        "$trig = $t.Triggers[0]; "
+        f"if ($trig.Repetition.Interval -ne '{_TASK_REPETITION_INTERVAL}') {{ "
+        f"$trig.Repetition.Interval = '{_TASK_REPETITION_INTERVAL}'; "
+        f"Set-ScheduledTask -TaskName '{_TASK_NAME}' -Trigger $trig -ErrorAction Stop | Out-Null; "
+        "Write-Output 'updated' } else { Write-Output 'already-set' } "
+        "} catch { Write-Output \"FAILED: $($_.Exception.Message)\" }"
+    )
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_command],
+            timeout=20, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+        ).decode("utf-8", "ignore").strip()
+        if out.startswith("FAILED"):
+            log.warning(f"[update] Could not set task repetition trigger: {out}")
+        else:
+            log.info(f"[update] Task repetition trigger: {out}")
+    except Exception as e:
+        log.warning(f"[update] Could not verify/set task repetition trigger: {e}")
+
+
 def restart_self():
     """Relaunch into the freshly-written companion.py.
 
-    In production we run as a Windows Scheduled Task, and Task Scheduler puts each
-    task inside a job object. When our process exits, the job is closed and every
-    child in it is killed -- so simply Popen-ing a replacement and exiting races:
-    the new process is torn down with us, nothing is left running, and because we
-    exited 0 the task's "restart on failure" never fires. The whole fleet then sits
-    on the new file but the old, still-loaded code until the next logon.
-
-    Strategy: try to launch the replacement so it *breaks away* from the job. If the
-    job forbids breakaway (the Task Scheduler case), CreateProcess fails and we
-    instead exit non-zero, letting the task's RestartCount/RestartInterval (set in
-    install.ps1) relaunch us cleanly from the new file on disk. Outside a job (e.g.
-    run by hand from a console) the breakaway simply succeeds and we restart in
-    place. The restart-loop guard lives in a file (see _write_restart_state), so it
-    holds across both paths even though the task-host restart gets a fresh env."""
+    Best-effort fast path: try to launch the replacement so it breaks away from the
+    Task Scheduler job and keeps running immediately in place. This works when run
+    by hand from a console (no job at all), and may work under some Task Scheduler
+    configurations, but must not be relied on (see _ensure_task_repetition). Either
+    way we exit cleanly afterward -- the guaranteed fallback is the task's own
+    repetition trigger picking us back up within one interval."""
     log.info("[update] Restarting into the new version...")
+    _ensure_task_repetition()
 
     argv = [sys.executable, SCRIPT_PATH] + sys.argv[1:]
 
@@ -505,13 +560,11 @@ def restart_self():
                                | CREATE_BREAKAWAY_FROM_JOB),
             )
         except OSError:
-            # Inside a no-breakaway job (Task Scheduler). Any child we spawn dies
-            # with us, so don't leave a doomed process behind -- exit non-zero and
-            # let the task host restart us from the new file. os._exit avoids
-            # atexit/buffered-IO cleanup so the exit code reaches Task Scheduler
-            # unambiguously.
-            log.info("[update] No-breakaway job detected; exiting for task-host restart.")
-            os._exit(17)
+            # No breakaway -- fine, the repetition trigger (just confirmed/set
+            # above) will relaunch us. os._exit avoids atexit/buffered-IO cleanup.
+            log.info("[update] No-breakaway job detected; the task's repetition "
+                      "trigger will relaunch us within one interval.")
+            os._exit(0)
         else:
             sys.exit(0)
     else:

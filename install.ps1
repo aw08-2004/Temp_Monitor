@@ -315,15 +315,29 @@ Register-ScheduledTask -TaskName $TaskLhm -Force `
     -Description "Hardware sensor daemon for Temp Monitor. Serves JSON on localhost:$Port." | Out-Null
 Ok "Task: $TaskLhm"
 
-# Companion 30s later, so LHM's web server is up
+# Companion 30s later, so LHM's web server is up. Also repeats every 2 minutes
+# (indefinitely) as a self-heal mechanism: Task Scheduler puts the task in a job
+# object that kills any child we spawn when we exit, so neither a "detached"
+# relaunch helper nor the -RestartCount/-RestartInterval settings above reliably
+# bring the task back after companion.py swaps itself during a self-update (verified
+# empirically -- RestartCount/RestartInterval do not fire on a plain nonzero exit,
+# they're for a narrower "task failed to launch" class). The repetition trigger is
+# the one relaunch path that's actually reliable, since it's driven by the Task
+# Scheduler service itself, not a descendant of our job. -MultipleInstances
+# IgnoreNew (the default) means a tick while we're already running is a no-op; it
+# only actually starts a new instance once we've exited.
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $trigger.Delay = "PT30S"
+$trigger.Repetition.Interval = "PT2M"
+# Duration deliberately left empty: Task Scheduler rejects year/month designators
+# there (e.g. "P10Y" errors as "incorrectly formatted or out of range"), and an
+# empty Duration already means "repeat every Interval indefinitely".
 Register-ScheduledTask -TaskName $TaskCompanion -Force `
     -Action    (New-ScheduledTaskAction -Execute $pythonwExe -Argument "`"$companionPath`"" -WorkingDirectory $InstallDir) `
     -Trigger   $trigger `
     -Principal $principal -Settings $settings `
     -Description "Reports CPU temperature to the Temp Monitor hub." | Out-Null
-Ok "Task: $TaskCompanion (30s delay)"
+Ok "Task: $TaskCompanion (30s delay, repeats every 2min as a self-heal restart path)"
 
 # ----------------------------------------------------------------------
 # 8. Start and verify
