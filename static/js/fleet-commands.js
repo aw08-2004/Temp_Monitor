@@ -202,9 +202,13 @@
             signHint.textContent = 'Sign this command offline once the params below are valid JSON.';
             return;
         }
+        // PowerShell strips inner double quotes when handing an argument to a native
+        // exe, so an unescaped '{"a":"b"}' reaches Python as {a:b} and fails to parse.
+        // Emit the backslash-escaped form, which is what this repo's tooling is driven from.
+        const psParams = compact.replace(/"/g, '\\"');
         signHint.textContent =
             `python sign_release.py --sign-command --type ${spec.type} ` +
-            `--machine ${MACHINE_NAME} --params '${compact}'`;
+            `--machine ${MACHINE_NAME} --params '${psParams}'`;
     }
 
     function renderParams() {

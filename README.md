@@ -210,8 +210,12 @@ hub:
   trust root as signed self-updates); sign a command with:
 
   ```powershell
-  python sign_release.py --sign-command --type run_script --machine PC-01 --params '{"script":"..."}'
+  python sign_release.py --sign-command --type run_script --machine PC-01 --params '{\"script\":\"...\"}'
   ```
+
+  The backslashes are not optional in PowerShell: it strips inner double quotes when
+  passing an argument to a native exe, so an unescaped `'{"script":"..."}'` arrives at
+  Python as `{script:...}` and fails to parse. In bash, drop the backslashes.
 
 - **Fail closed**: with `AGENT_ENROLLMENT_SECRET` unset no agent can enroll; with
   `COMMAND_SIGNING_PUBLIC_KEY_HEX` unset every high-risk command is refused. Both

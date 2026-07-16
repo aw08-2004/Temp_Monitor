@@ -119,7 +119,18 @@ def sign_command(path, command_type, machine, params_json):
     try:
         params = json.loads(params_json) if params_json else {}
     except (ValueError, TypeError) as e:
-        sys.exit(f"--params must be valid JSON: {e}")
+        # PowerShell strips inner double quotes when passing an argument to a native
+        # exe, so '{"script":"x"}' arrives here as {script:x}. That is by far the most
+        # common cause of this failure on this (Windows-first) project, and the raw
+        # json error alone sends people hunting for a typo that isn't there.
+        hint = ""
+        if "{" in str(params_json) and '"' not in str(params_json):
+            hint = (
+                "\n\nLooks like the quotes were stripped before Python saw them. "
+                "PowerShell does this to native-exe arguments; escape them:\n"
+                "    --params '{\\\"script\\\":\\\"...\\\"}'"
+            )
+        sys.exit(f"--params must be valid JSON: {e}{hint}")
     if not isinstance(params, dict):
         sys.exit("--params must be a JSON object (e.g. '{\"script\": \"...\"}')")
 
