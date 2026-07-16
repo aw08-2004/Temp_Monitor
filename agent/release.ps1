@@ -69,7 +69,8 @@ if (-not $DryRun) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         Die "gh CLI not found. Install it (winget install GitHub.cli) and run 'gh auth login' first."
     }
-    $ghUser = gh api user --jq .login 2>$null
+    $ghUser = $null
+    try { $ghUser = gh api user --jq .login 2>$null } catch { $ghUser = $null }
     if (-not $ghUser) { Die "gh is not authenticated. Run 'gh auth login' first." }
     Ok "gh authenticated as $ghUser"
 }
@@ -123,8 +124,14 @@ if ($DryRun) {
     Say "[dry-run] gh release view $Tag --repo $Repo   (create if missing)"
 } else {
     $exists = $true
-    gh release view $Tag --repo $Repo *> $null
-    if ($LASTEXITCODE -ne 0) { $exists = $false }
+    try {
+        gh release view $Tag --repo $Repo *> $null
+        if ($LASTEXITCODE -ne 0) { $exists = $false }
+    } catch {
+        # $ErrorActionPreference = Stop promotes gh's stderr output (expected here --
+        # this is how we detect "release doesn't exist yet") to a terminating error.
+        $exists = $false
+    }
 
     if ($exists) {
         Ok "Release $Tag already exists, reusing it"
