@@ -20,7 +20,7 @@ import requests
 # From 2.8.0 onward every pushed companion.py must also be re-signed (see
 # sign_release.py) or clients will refuse the update. See UPDATE_PUBLIC_KEY_HEX.
 # ================================
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -65,6 +65,22 @@ SCRIPT_DIR = os.path.dirname(SCRIPT_PATH)
 # outside the install dir so an update swap never disturbs it.
 PROGRAM_DATA_DIR = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "TempMonitor")
 RESTART_STATE_PATH = os.path.join(PROGRAM_DATA_DIR, ".restart_state.json")
+
+# --- Migration to the C#/.NET fleet agent (Windows Service) -------------------
+# From 2.10.0, companion.py retires itself in favor of TempMonitorAgent.exe, which
+# reaches telemetry parity AND adds the fleet command channel (restart/rename/
+# scripts/etc. -- see agent/). This is fully automatic and fleet-wide: every
+# machine that self-updates to this version attempts the swap on its own. It is
+# designed to fail safe -- any error at any step just leaves companion.py running
+# and retries (capped) later; nothing here ever removes the fallback until the new
+# agent is CONFIRMED running.
+MIGRATION_ENABLED = True                          # kill-switch for a hotfix push
+AGENT_MANIFEST_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
+AGENT_INSTALLER_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/install/agent-install.ps1"
+AGENT_SERVICE_NAME = "TempMonitorAgent"
+MIGRATION_STATE_PATH = os.path.join(PROGRAM_DATA_DIR, ".migration_state.json")
+MIGRATION_CHECK_INTERVAL = 24 * 60 * 60           # once a day
+MIGRATION_MAX_ATTEMPTS = 5                        # then give up and stay on companion.py
 
 # Sensor names we like, best first
 PREFERRED_SENSORS = [
@@ -648,6 +664,139 @@ def flush_offline_buffer(buffer):
 
 
 # ================================
+# MIGRATION  --  install the C# agent, then decommission this companion
+# ================================
+def _agent_service_state():
+    """Returns the C# agent's SCM state string (e.g. 'RUNNING', 'STOPPED'), or None
+    if the service doesn't exist or sc.exe couldn't be reached."""
+    try:
+        out = subprocess.check_output(
+            ["sc.exe", "query", AGENT_SERVICE_NAME],
+            timeout=10, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+        ).decode("utf-8", "ignore")
+    except Exception:
+        return None
+    match = re.search(r"STATE\s*:\s*\d+\s+(\w+)", out)
+    return match.group(1) if match else None
+
+
+def _read_migration_state():
+    try:
+        with open(MIGRATION_STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return {"attempts": int(data.get("attempts") or 0)}
+    except Exception:
+        pass
+    return {"attempts": 0}
+
+
+def _write_migration_state(state):
+    try:
+        os.makedirs(PROGRAM_DATA_DIR, exist_ok=True)
+        with open(MIGRATION_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception as e:
+        log.warning(f"[migration] Could not write migration state: {e}")
+
+
+def _decommission_self():
+    """The C# agent is confirmed running -- unregister companion's scheduled tasks
+    and stop LibreHardwareMonitor (the agent reads sensors in-process, it doesn't
+    need the standalone LHM web server), then exit for good. Both companion and the
+    new agent report the same machine name, so leaving both running would double
+    every reading -- this must be a clean handoff, not a dual-run period."""
+    log.info("[migration] C# agent confirmed running -- decommissioning companion.")
+    for task in ("TempMonitor - Companion", "TempMonitor - LibreHardwareMonitor"):
+        try:
+            subprocess.run(["schtasks", "/Delete", "/TN", task, "/F"],
+                            timeout=15, capture_output=True, creationflags=_NO_WINDOW)
+        except Exception as e:
+            log.warning(f"[migration] Could not remove scheduled task {task!r}: {e}")
+    try:
+        subprocess.run(["taskkill", "/IM", "LibreHardwareMonitor.exe", "/F"],
+                        timeout=15, capture_output=True, creationflags=_NO_WINDOW)
+    except Exception as e:
+        log.warning(f"[migration] Could not stop LibreHardwareMonitor: {e}")
+    log.info("[migration] Decommissioned. Telemetry and fleet commands now come from "
+              "TempMonitorAgent. Exiting.")
+    os._exit(0)
+
+
+def check_and_migrate_to_agent():
+    """Fully automatic, fleet-wide: if the C# Windows Service agent isn't installed
+    yet, fetch its signed release manifest (same Ed25519 trust root as companion's
+    own self-update), install it, confirm it's actually running, then decommission
+    this companion. Never fatal -- any failure just leaves companion.py running and
+    retries (capped) on the next check."""
+    if not MIGRATION_ENABLED:
+        return
+
+    state = _read_migration_state()
+    if state["attempts"] >= MIGRATION_MAX_ATTEMPTS:
+        return  # gave up -- keep reporting via companion.py indefinitely
+
+    existing_state = _agent_service_state()
+    if existing_state is not None:
+        if existing_state == "RUNNING":
+            _decommission_self()
+        return  # installed but not (yet) running -- leave it be, check again later
+
+    log.info("[migration] TempMonitorAgent service not found -- attempting install.")
+    state["attempts"] += 1
+    _write_migration_state(state)
+
+    try:
+        manifest_resp = requests.get(AGENT_MANIFEST_URL, timeout=10)
+        manifest_resp.raise_for_status()
+        manifest_bytes = manifest_resp.content
+
+        sig_resp = requests.get(AGENT_MANIFEST_URL + ".sig", timeout=10)
+        sig_resp.raise_for_status()
+        sig_hex = sig_resp.text.strip()
+
+        if not verify_signature(manifest_bytes, sig_hex):
+            log.error("[migration] Agent manifest signature invalid -- aborting (fail closed).")
+            return
+
+        manifest = json.loads(manifest_bytes)
+        agent_url = manifest["url"]
+
+        installer_resp = requests.get(AGENT_INSTALLER_URL, timeout=15)
+        installer_resp.raise_for_status()
+        installer_path = os.path.join(tempfile.gettempdir(), "agent-install.ps1")
+        with open(installer_path, "w", encoding="utf-8") as f:
+            f.write(installer_resp.text)
+
+        # Companion already runs elevated (RunLevel Highest), so this needs no
+        # further UAC prompt. No -EnrollmentSecret: the agent runs telemetry-only
+        # until an operator enrolls it separately, same as a fresh manual install.
+        result = subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", installer_path,
+             "-AgentUrl", agent_url],
+            timeout=300, capture_output=True, text=True, creationflags=_NO_WINDOW,
+        )
+        log.info(f"[migration] Installer exit code: {result.returncode}")
+        if result.returncode != 0:
+            log.warning(f"[migration] Installer failed:\n{result.stdout[-1000:]}\n{result.stderr[-1000:]}")
+            return
+
+        for _ in range(10):
+            time.sleep(2)
+            if _agent_service_state() == "RUNNING":
+                _decommission_self()
+                return
+        log.warning("[migration] Service did not reach RUNNING state after install; will retry later.")
+
+    except requests.exceptions.RequestException as e:
+        log.warning(f"[migration] Could not reach GitHub: {e}. Will try again later.")
+    except SystemExit:
+        raise
+    except Exception:
+        log.error("[migration] Unexpected error during migration attempt:\n" + traceback.format_exc())
+
+
+# ================================
 # MAIN LOOP
 # ================================
 if __name__ == "__main__":
@@ -664,8 +813,10 @@ if __name__ == "__main__":
     if _st and _cmp_versions(_st, VERSION) <= 0:
         _clear_restart_state()
 
-    check_for_update()               # check #1: every startup
+    check_for_update()                # check #1: every startup
+    check_and_migrate_to_agent()      # attempt #1: every startup
     last_update_check = time.time()
+    last_migration_check = time.time()
     last_uptime_check = 0            # force an uptime report on the first cycle
     last_sensor_report = 0           # force a sensor report on the first cycle
     lhm_fail_streak = 0
@@ -676,6 +827,10 @@ if __name__ == "__main__":
         if time.time() - last_update_check >= UPDATE_INTERVAL:
             last_update_check = time.time()
             check_for_update()
+
+        if time.time() - last_migration_check >= MIGRATION_CHECK_INTERVAL:
+            last_migration_check = time.time()
+            check_and_migrate_to_agent()
 
         lhm_data = fetch_lhm_data()
         if lhm_data is None:

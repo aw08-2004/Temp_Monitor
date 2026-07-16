@@ -3,3 +3,7 @@
 # bytes raw.githubusercontent.com serves and clients will reject every update.
 companion.py -text
 companion.py.sig -text
+
+# The C# agent's self-update manifest is signed byte-for-byte, same as companion.py.
+agent/agent.manifest.json -text
+agent/agent.manifest.json.sig -text

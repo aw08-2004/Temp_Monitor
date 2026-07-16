@@ -1,16 +1,43 @@
 # Temp Monitor
 
-CPU temperature monitoring across machines. Each machine runs a lightweight
-**companion** agent that reads sensors via LibreHardwareMonitor and reports
-them to a central **hub** (Flask + Socket.IO) for live charts and history.
+CPU temperature monitoring and remote fleet management across machines. Each
+machine runs an agent that reads sensors and reports them to a central **hub**
+(Flask + Socket.IO) for live charts, history, and remote commands.
 
 - Hub: `app.py` (served via `wsgi.py`), live at https://your.domain.com
-- Companion agent: `companion.py`
-- Installer: `install.ps1`
+- **Agent (recommended, new machines):** `agent/` — a C#/.NET Windows Service.
+  See [agent/README.md](agent/README.md).
+- **Companion (legacy, existing installs):** `companion.py` — a Python scheduled-task
+  agent. Self-updates now migrate it to the C# agent automatically (see below).
+- Installer (legacy companion): `install.ps1`
 
-## Installing the companion agent
+## Two agents, one hub
 
-Run on the Windows machine you want to monitor. The installer needs an
+The hub accepts telemetry and fleet commands from either agent — they speak the
+same wire protocol (`POST /api/report` for telemetry; `/api/agent/*` for the fleet
+command channel). You don't need to run both on the same machine; the migration
+path below moves each machine from one to the other automatically.
+
+|                              | Companion (`companion.py`)         | Agent (`agent/`)                          |
+|------------------------------|-------------------------------------|--------------------------------------------|
+| Language / runtime           | Python, needs a Python install      | C#/.NET, self-contained single-file exe    |
+| Runs as                      | Per-logon Scheduled Task (user session) | Windows Service (**SYSTEM**, session 0) |
+| Sensors                      | LibreHardwareMonitor.exe + its `:8085` web server | LibreHardwareMonitorLib, in-process |
+| Telemetry (`/api/report`)    | Yes                                  | Yes (parity)                                |
+| Fleet commands (restart/rename/scripts/etc.) | No                    | Yes — enroll/heartbeat/poll/execute/report |
+| Self-update                  | Signed Python source swap           | Signed binary swap (manifest + sha256)      |
+| Status                       | Legacy — auto-migrates away          | Recommended for all new installs            |
+
+## Installing the agent (recommended, new machines)
+
+See [agent/README.md](agent/README.md) for the full C#/.NET agent: build/publish,
+signing/release process, and `agent/install/agent-install.ps1` (installs the Windows
+Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
+
+## Installing the companion agent (legacy)
+
+Existing installs keep working as-is; new installs should use the agent above
+instead. Run on the Windows machine you want to monitor. The installer needs an
 elevated (admin) PowerShell, since LibreHardwareMonitor needs admin rights to
 read sensors and the agent runs via scheduled tasks.
 
@@ -42,7 +69,7 @@ The installer will elevate itself automatically if not already run as admin.
 
 ### What it installs
 
-- Python 3 (via `winget`, if missing) + the `requests` package
+- Python 3 (via `winget`, if missing) + the `requests`/`cryptography` packages
 - LibreHardwareMonitor (latest GitHub release), configured to run its web
   server on the configured port
 - PawnIO (skipped if the `PawnIO` service already exists) -- the kernel
@@ -66,16 +93,43 @@ install directory. Python itself is left alone.
 weekly thereafter while running, swapping itself for the newer version when
 found. No separate version file is needed — bump the `VERSION` constant near
 the top of `companion.py` on every push to `main`, or nothing will update.
+From **2.8.0** onward, updates are Ed25519-signed (see [Signing releases](#signing-releases)
+below) — an unsigned or tampered `companion.py` is refused, not applied.
+
+### Migration to the C# agent (automatic, from companion 2.10.0)
+
+From companion **2.10.0**, every machine that self-updates checks whether the
+C#/.NET agent (`TempMonitorAgent` Windows Service) is already installed. If not, it:
+
+1. Fetches the agent's signed release manifest (`agent/agent.manifest.json` + `.sig`,
+   same Ed25519 trust root as companion's own self-update) and verifies it — fail
+   closed, same as every other signed artifact in this repo.
+2. Downloads and runs `agent/install/agent-install.ps1` (companion already runs
+   elevated, so no extra UAC prompt) to install the Windows Service. No enrollment
+   secret is passed — the new agent runs telemetry-only until an operator enrolls it
+   separately, exactly like a fresh manual install.
+3. Confirms the service reaches `RUNNING` before trusting it.
+4. Once confirmed, **decommissions companion.py**: unregisters its own scheduled
+   tasks, stops LibreHardwareMonitor (the agent reads sensors in-process and doesn't
+   need it), and exits. This is a clean handoff, not a dual-run period — both agents
+   report the same machine name, so running both at once would double every reading.
+
+This is fully automatic and fleet-wide: it is **not** gated behind a flag. It's
+designed to fail safe at every step — a failed install (network issue, blocked
+driver install, etc.) just leaves companion.py running normally and retries (capped
+at 5 attempts, once a day) on the next check; nothing removes the fallback until the
+new agent is confirmed running. Set `MIGRATION_ENABLED = False` near the top of
+`companion.py` and push as a hotfix if this ever needs to be paused fleet-wide.
 
 ## Hub
 
-`app.py` receives reports at `POST /api/report` (open, no auth -- companions
+`app.py` receives reports at `POST /api/report` (open, no auth -- agents
 must be able to post without signing in), and serves these views (gated
 behind Google sign-in, see below):
 
 - `/` -- a card per machine (live temp, status, uptime); click one to open
   its detail page
-- `/machine/<name>` -- that machine's live temp, uptime, companion version,
+- `/machine/<name>` -- that machine's live temp, uptime, agent version,
   asset tag/serial number/model, and its own history chart (day picker +
   live updates for today)
 - `/history` -- daily summary/average across all machines
@@ -94,7 +148,7 @@ Viewing the dashboard (`/`, `/machine/<name>`, `/history`, and the
 `/api/history`, `/api/daily_summary`, `/api/machines`, `/api/machines/<name>`
 endpoints, plus live Socket.IO updates) requires signing in with an
 allow-listed Google account. `POST /api/report` is intentionally exempt so
-companion agents never need credentials.
+agents never need credentials.
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
    create an **OAuth 2.0 Client ID** (Application type: Web application).
@@ -121,7 +175,9 @@ Beyond telemetry, the hub can queue **commands** for a machine that its agent
 pulls and executes (restart, rename, install, etc.). This is the hub→agent
 direction, added by [fleet.py](fleet.py) (core logic) and
 [fleet_web.py](fleet_web.py) (HTTP surface), with state in the same SQLite DB
-(`agents`, `commands`, `command_results`, `audit_log`).
+(`agents`, `commands`, `command_results`, `audit_log`). **The C#/.NET agent
+(`agent/`) implements the client side of this channel; `companion.py` does not**
+(it's telemetry-only, which is why it migrates itself away — see above).
 
 **Security model.** The channel is built to be safe even against a compromised
 hub:
@@ -134,9 +190,10 @@ hub:
   `gpupdate`, `install_app`) dispatch on an authorized console session alone.
   High-risk commands (`run_script`, `install_driver`, `update_bios`) additionally
   require an **offline Ed25519 signature** over the canonical payload — verified
-  by the hub *and* re-verified by the agent before executing. The private key
-  lives off the repo (same trust root as signed self-updates); sign a command
-  with:
+  by the hub *and* re-verified by the agent before executing, using the agent's own
+  classification of what counts as high-risk (so a compromised hub can't downgrade
+  a command just by clearing the flag). The private key lives off the repo (same
+  trust root as signed self-updates); sign a command with:
 
   ```powershell
   python sign_release.py --sign-command --type run_script --machine PC-01 --params '{"script":"..."}'
@@ -144,7 +201,8 @@ hub:
 
 - **Fail closed**: with `AGENT_ENROLLMENT_SECRET` unset no agent can enroll; with
   `COMMAND_SIGNING_PUBLIC_KEY_HEX` unset every high-risk command is refused. Both
-  are optional env vars, so telemetry-only deployments are unaffected.
+  are optional env vars, so telemetry-only deployments are unaffected. **Neither is
+  currently configured on this hub** — set both before issuing any fleet commands.
 
 Add to the hub's environment / `.env`:
 
@@ -159,3 +217,22 @@ COMMAND_SIGNING_PUBLIC_KEY_HEX=<64-hex Ed25519 public key from sign_release.py -
 `GET /api/fleet/status` (online/offline), `GET|POST /api/fleet/commands`,
 `GET /api/fleet/commands/<id>`. Every issue/claim/complete/enroll is written to
 `audit_log`.
+
+## Signing releases
+
+Two artifacts in this repo are Ed25519-signed so a compromised hub or repo commit
+can't push code that runs as admin fleet-wide unverified:
+
+- **`companion.py`** — re-sign with `python sign_release.py` after every edit, then
+  commit `companion.py` + `companion.py.sig` together. `.gitattributes` pins both
+  `-text` so git never rewrites line endings (the signed bytes must match exactly
+  what clients download).
+- **The C# agent** (`agent/`) — see [agent/README.md](agent/README.md) for
+  `agent/release.ps1` (automates the whole release: version bump, publish,
+  GitHub release, sign, upload) or the manual `sign_release.py --sign-agent` steps.
+
+One-time setup: `python sign_release.py --genkey`, keep the private key OFF the
+repo, paste the printed public key into `companion.py`'s `UPDATE_PUBLIC_KEY_HEX`
+(the C# agent's `AgentConfig.UpdatePublicKeyHex` reuses the same key/trust root).
+`sign_release.py --sign-command` uses a separate, independently-configurable trust
+root (`COMMAND_SIGNING_PUBLIC_KEY_HEX`) for the fleet command channel — see above.

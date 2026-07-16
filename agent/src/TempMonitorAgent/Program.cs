@@ -1,0 +1,65 @@
+using Serilog;
+using TempMonitorAgent;
+using TempMonitorAgent.Fleet;
+using TempMonitorAgent.Fleet.Executors;
+using TempMonitorAgent.State;
+using TempMonitorAgent.Telemetry;
+using TempMonitorAgent.Update;
+
+// Rotating file log under %ProgramData% so field issues on client machines are
+// diagnosable (parity with companion.py's RotatingFileHandler). Console sink too,
+// useful when run interactively for testing.
+Directory.CreateDirectory(AgentConfig.ProgramDataDir);
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.File(
+        AgentConfig.LogPath,
+        rollOnFileSizeLimit: true,
+        fileSizeLimitBytes: 1_000_000,
+        retainedFileCountLimit: 4,
+        shared: true,
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3} {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
+
+try
+{
+    var builder = Host.CreateApplicationBuilder(args);
+
+    builder.Services.AddWindowsService(o => o.ServiceName = "TempMonitorAgent");
+    builder.Services.AddSerilog();
+
+    // Core state + telemetry
+    builder.Services.AddSingleton<AgentState>();
+    builder.Services.AddSingleton<ISensorSource, SensorReader>();
+    builder.Services.AddSingleton(sp =>
+        SystemInfo.Read(sp.GetRequiredService<ILoggerFactory>().CreateLogger("SystemInfo")));
+    builder.Services.AddSingleton<TelemetryReporter>();
+
+    // Fleet command channel
+    builder.Services.AddSingleton<FleetClient>();
+    builder.Services.AddSingleton<CommandDispatcher>();
+    builder.Services.AddSingleton<ICommandExecutor, RestartExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, GpUpdateExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, InstallAppExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
+    builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
+
+    // Self-update
+    builder.Services.AddSingleton<SelfUpdater>();
+
+    builder.Services.AddHostedService<Worker>();
+
+    var host = builder.Build();
+    host.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Agent terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
