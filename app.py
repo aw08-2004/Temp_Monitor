@@ -30,7 +30,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.10.0"
+HUB_VERSION = "1.10.1"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than

@@ -6,6 +6,29 @@
     flex-direction: column;
     padding: var(--space-5) var(--space-4);
     gap: var(--space-6);
+
+    /* Stay put while the page scrolls.
+       sticky, not fixed: the .app-shell grid column already reserves the width, so
+       sticky keeps the layout honest, whereas fixed would take the sidebar out of flow
+       and need a matching offset on the main column.
+       align-self:start is required, not cosmetic -- a grid item defaults to stretch,
+       which sizes it to the whole row and leaves sticky nothing to move within.
+       height+overflow so a long nav on a short screen scrolls itself rather than
+       being cut off. */
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+/* Below the layout breakpoint the grid collapses to one column (see base.css
+   .app-shell) and the sidebar is hidden. This lives HERE rather than in base.css's
+   media query because components.css loads afterwards: media queries add no
+   specificity, so the `.sidebar { display: flex }` above would win on source order and
+   the sidebar would never actually hide. */
+@media (max-width: 900px) {
+    .sidebar { display: none; }
 }
 
 .sidebar__brand {
@@ -53,7 +76,10 @@
     border-left: 2px solid transparent;
 }
 
-.sidebar__link:hover {
+/* :not(--active) for the same reason as .tabs__tab: a BEM modifier is ONE class, so
+   `.sidebar__link--active` is (0,1,0) and loses to a bare `.sidebar__link:hover`
+   (0,2,0) -- hovering the page you're already on dropped it from --accent to --text. */
+.sidebar__link:not(.sidebar__link--active):hover {
     color: var(--text);
     background: var(--card);
 }

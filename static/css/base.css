@@ -66,10 +66,10 @@ button, select, input {
     .app-shell {
         grid-template-columns: 1fr;
     }
-    .sidebar {
-        display: none;
-    }
     .app-shell__content {
         padding: var(--space-4);
     }
+    /* Hiding .sidebar lives with the rest of its styles in components.css -- putting it
+       here silently did nothing, since that file loads later and media queries add no
+       specificity. */
 }
