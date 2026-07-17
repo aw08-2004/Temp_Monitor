@@ -32,7 +32,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.14.0"
+HUB_VERSION = "1.15.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -399,12 +399,14 @@ def perform_hub_update(repo_root):
     return True
 
 def restart_hub():
-    """Exit so the Scheduled Task's 2-minute repetition relaunches waitress with the new
-    code. Abrupt by design -- WAL + per-batch commits make this as safe as the crash the
-    task already recovers from. Downtime is <=2 min."""
+    """Exit non-zero so the supervisor treats it as a failure and relaunches waitress with
+    the new code. Under the WinSW service that's `onfailure action="restart"` (~5s); under
+    the legacy SYSTEM Scheduled Task the 2-min repetition trigger relaunches regardless of
+    exit code. Abrupt by design -- WAL + per-batch commits make this as safe as the crash
+    the supervisor already recovers from."""
     print("[hub-update] New version applied -- exiting for the service to relaunch.")
     sys.stdout.flush()
-    os._exit(0)
+    os._exit(1)
 
 def hub_update_watcher():
     while True:

@@ -152,8 +152,9 @@ def test_hub_self_update():
           app.parse_hub_version('HUB_VERSION = "1.0.0"\nHUB_VERSION = "2.0.0"') == "1.0.0")
 
     print("\n-- hub self-update: update decision --")
-    check("remote ahead triggers", app.cmp_versions("1.15.0", app.HUB_VERSION) > 0)
+    check("remote ahead triggers", app.cmp_versions("999.0.0", app.HUB_VERSION) > 0)
     check("same version no update", app.cmp_versions(app.HUB_VERSION, app.HUB_VERSION) == 0)
+    check("older remote does not trigger", app.cmp_versions("0.0.1", app.HUB_VERSION) < 0)
 
     print("\n-- hub self-update: watcher flag gating --")
     saved_flag = app.HUB_AUTO_UPDATE

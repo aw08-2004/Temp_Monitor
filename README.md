@@ -70,9 +70,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                 
 
 Component-specific parameters: `-InstallDir <path>` / `-Port <port>` (Companion,
 defaults `C:\Program Files\TempMonitor` / `8085`); `-AgentUrl` / `-AgentExe` /
-`-EnrollmentSecret` / `-HubUrl` (Agent); `-HubPort <port>` (Hub, default `3001`)
--- Hub setup must be run from a local clone since it needs the full app, not just
-one file.
+`-EnrollmentSecret` / `-HubUrl` (Agent); `-HubPort <port>` (default `3001`) and
+`-HubInstallDir <path>` (default `C:\Program Files\TempMonitor\Hub`) (Hub). The Hub
+installs as the **`Temp Monitor - Hub` Windows Service** (Python wrapped with WinSW,
+running as LocalSystem) and git-clones the repo into the chosen location, so it needs
+`git` on `PATH` but no longer has to be run from a pre-existing clone.
 
 ## Installing the companion agent (legacy)
 
@@ -117,13 +119,15 @@ The hub can keep itself current too, but it's **off by default** — set
 touches itself). When enabled, the hub checks `HUB_VERSION` on `main` every 15
 minutes; when `main` is ahead it runs `git fetch` + `git reset --hard origin/main`
 in its own clone (mirroring `main` exactly — **local changes on the hub box are
-discarded**), best-effort re-installs `requirements.txt`, then exits so the
-`TempMonitor - Hub` scheduled task relaunches waitress on the new code (its normal
-2-minute self-heal; expect up to ~2 min of downtime). Requirements: the hub runs
-from a clone under that task, and `git` is on `PATH`. Unlike the companion/agent
-trains this trusts the pinned git origin over HTTPS rather than the Ed25519 release
-key. As with every hub change, bump `HUB_VERSION` near the top of `app.py` on each
-push to `main`, or the hub won't know to update.
+discarded**), best-effort re-installs `requirements.txt`, then exits non-zero so the
+`Temp Monitor - Hub` Windows Service auto-restarts waitress on the new code (WinSW
+`onfailure`, ~5 s downtime). Requirements: the hub runs from a git clone (the
+installer sets this up) and `git` is on `PATH`. Unlike the companion/agent trains
+this trusts the pinned git origin over HTTPS rather than the Ed25519 release key. As
+with every hub change, bump `HUB_VERSION` near the top of `app.py` on each push to
+`main`, or the hub won't know to update. (The installer offers to set
+`HUB_AUTO_UPDATE=1` for you; on hubs still on the older scheduled-task deployment the
+same exit instead relies on the task's 2-minute repetition.)
 
 ### Migration to the C# agent (automatic, from companion 2.10.0)
 

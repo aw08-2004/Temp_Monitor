@@ -41,7 +41,8 @@ param(
     [string]$HubUrl,
 
     # --- Hub ---
-    [int]$HubPort = 3001
+    [int]$HubPort = 3001,
+    [string]$HubInstallDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,7 +59,16 @@ $PawnIoUrl      = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreH
 $LhmDir         = Join-Path $InstallDir "LibreHardwareMonitor"
 $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
 $TaskCompanion  = "TempMonitor - Companion"
-$TaskHub        = "TempMonitor - Hub"
+$TaskHub        = "TempMonitor - Hub"          # legacy scheduled task (pre-service), cleaned up on install/uninstall
+
+# --- Hub-as-Windows-Service ---
+$HubInstallDefault = "C:\Program Files\TempMonitor\Hub"
+$RepoGitUrl        = "https://github.com/$Repo.git"
+# WinSW wraps the Python/waitress process as a real Windows Service (Python can't be one on
+# its own). Pinned to a stable v2 release; same "download a pinned asset" pattern as LHM/PawnIO.
+$WinSwUrl          = "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe"
+$HubServiceId      = "TempMonitorHub"
+$HubServiceName    = "Temp Monitor - Hub"
 
 function Say($msg)  { Write-Host "  $msg" }
 function Ok($msg)   { Write-Host "  [ok] $msg"   -ForegroundColor Green }
@@ -600,32 +610,87 @@ function Install-Agent {
 # ========================================================================
 # Hub (Flask + Socket.IO)
 # ========================================================================
+# Where the hub lives: -HubInstallDir if given, else the default under Program Files, else --
+# for uninstall -- an existing clone next to install.ps1. Kept in one place so install and
+# uninstall agree on the location.
+function Resolve-HubDir {
+    if ($HubInstallDir) { return $HubInstallDir.TrimEnd('\') }
+    if (Test-Path (Join-Path $HubInstallDefault "app.py")) { return $HubInstallDefault }
+    if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "app.py"))) { return $PSScriptRoot }
+    return $HubInstallDefault
+}
+
+function Remove-HubService([string]$hubDir) {
+    if (-not (Get-Service -Name $HubServiceId -ErrorAction SilentlyContinue)) { return $false }
+    $wrapperExe = Join-Path $hubDir "$HubServiceId.exe"
+    if (Test-Path $wrapperExe) {
+        & $wrapperExe stop      2>&1 | Out-Null
+        & $wrapperExe uninstall 2>&1 | Out-Null
+    } else {
+        # Wrapper exe is gone but the service registration lingers -- tear it down directly.
+        & sc.exe stop   $HubServiceId | Out-Null
+        & sc.exe delete $HubServiceId | Out-Null
+    }
+    Start-Sleep -Seconds 2
+    return $true
+}
+
 function Uninstall-Hub {
     Step "Uninstalling Hub"
+    $hubDir = Resolve-HubDir
+    if (Remove-HubService $hubDir) {
+        Ok "Removed service: $HubServiceName"
+    } else {
+        Say "Service not present."
+    }
+    # Also clear the legacy scheduled task, in case this box predates the service.
     if (Get-ScheduledTask -TaskName $TaskHub -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $TaskHub -Confirm:$false
-        Ok "Removed task: $TaskHub"
-    } else {
-        Say "Task not present."
+        Ok "Removed legacy scheduled task: $TaskHub"
     }
-    Warn "Left .env and the repo files in place -- they may still hold data you want."
+    Warn "Left the hub files at $hubDir (including .env and logs) in place -- they may still hold data you want."
     Write-Host "`nDone.`n" -ForegroundColor Green
 }
 
 function Install-Hub {
-    if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot "app.py"))) {
-        Die "Hub install must be run from a local clone of the repo (app.py not found next to install.ps1). Clone https://github.com/$Repo first."
-    }
-    $RepoRoot = $PSScriptRoot
-    $envPath = Join-Path $RepoRoot ".env"
-    $existing = Read-DotEnv $envPath
+    # Resolve where the hub will live and make sure it's a git clone (self-update does
+    # `git reset --hard origin/main`, so the tree needs a GitHub origin). If the target
+    # already has app.py it's an existing clone (or the folder we were launched from);
+    # otherwise clone into it.
+    $default = if ($HubInstallDir) { $HubInstallDir } else { $HubInstallDefault }
+    $hubDir  = (Prompt-Value "Hub install location" $default).TrimEnd('\')
 
     Write-Host @"
 
   Temp Monitor - Hub Installer
-  This machine will run app.py (Flask + Socket.IO) as the fleet hub.
+  Installs app.py (Flask + Socket.IO) as the '$HubServiceName' Windows Service.
+  Location: $hubDir
 
 "@ -ForegroundColor Cyan
+
+    Step "Preparing hub files at $hubDir"
+    if (Test-Path (Join-Path $hubDir "app.py")) {
+        Ok "Using existing repo at $hubDir"
+        if (-not (Test-Path (Join-Path $hubDir ".git"))) {
+            Warn "$hubDir is not a git clone -- hub self-update (HUB_AUTO_UPDATE) will not work here."
+        }
+    } else {
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            Die "git is required to install the hub to a new location (and for hub self-update). Install Git for Windows, then re-run."
+        }
+        if ((Test-Path $hubDir) -and (Get-ChildItem -Force $hubDir | Select-Object -First 1)) {
+            Die "$hubDir already exists, is not a repo clone (no app.py), and is not empty. Pick an empty/new folder or an existing clone."
+        }
+        $parent = Split-Path $hubDir -Parent
+        if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+        Say "Cloning $RepoGitUrl ..."
+        & git clone $RepoGitUrl "$hubDir"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $hubDir "app.py"))) { Die "git clone failed." }
+        Ok "Cloned hub to $hubDir"
+    }
+
+    $envPath  = Join-Path $hubDir ".env"
+    $existing = Read-DotEnv $envPath
 
     Step "Checking Python"
     $py = Resolve-Python
@@ -635,7 +700,7 @@ function Install-Hub {
 
     Step "Installing Python packages"
     & $pythonExe -m pip install --upgrade pip --quiet
-    & $pythonExe -m pip install -r (Join-Path $RepoRoot "requirements.txt") --quiet
+    & $pythonExe -m pip install -r (Join-Path $hubDir "requirements.txt") --quiet
     if ($LASTEXITCODE -ne 0) { Die "pip install failed." }
     Ok "Dependencies installed"
 
@@ -663,6 +728,13 @@ function Install-Hub {
     }
     $enrollSecret  = Prompt-Value "  Agent enrollment secret" $enrollSecretDefault -Secret
 
+    Say ""
+    $autoUpdateDefault = $existing["HUB_AUTO_UPDATE"]
+    if (-not $autoUpdateDefault) {
+        $au = Read-Host "  Enable hub self-update from main (git reset --hard)? (y/N)"
+        if ($au -match '^[Yy]') { $autoUpdateDefault = "1" }
+    }
+
     $lines = @(
         "GOOGLE_CLIENT_ID=$googleId"
         "GOOGLE_CLIENT_SECRET=$googleSecret"
@@ -670,11 +742,13 @@ function Install-Hub {
         "ALLOWED_EMAILS=$allowedEmails"
         "HUB_URL=$hubUrlValue"
     )
-    if ($enrollSecret) { $lines += "AGENT_ENROLLMENT_SECRET=$enrollSecret" }
+    if ($enrollSecret)      { $lines += "AGENT_ENROLLMENT_SECRET=$enrollSecret" }
+    if ($autoUpdateDefault) { $lines += "HUB_AUTO_UPDATE=$autoUpdateDefault" }
     Set-Content -Path $envPath -Value $lines -Encoding UTF8
     Ok "Wrote $envPath"
 
-    Step "Registering scheduled task"
+    Step "Installing the $HubServiceName service"
+    # Serve via waitress; prefer its console script, fall back to `python -m waitress`.
     $scriptsDir  = Join-Path (Split-Path $pythonExe -Parent) "Scripts"
     $waitressExe = Join-Path $scriptsDir "waitress-serve.exe"
     if (Test-Path $waitressExe) {
@@ -685,24 +759,54 @@ function Install-Hub {
         $hubArgs = "-m waitress --host=0.0.0.0 --port=$HubPort wsgi:application"
     }
 
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-                    -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
-                    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-    # Same self-heal pattern as the companion task: a repetition trigger driven
-    # by the Task Scheduler service survives the process being killed or
-    # crashing, where RestartCount/RestartInterval alone would not.
-    $trigger = New-ScheduledTaskTrigger -AtStartup
-    $trigger.Repetition.Interval = "PT2M"
+    # Retire the legacy scheduled task if this box predates the service, so the two don't
+    # both bind the port.
+    if (Get-ScheduledTask -TaskName $TaskHub -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $TaskHub -Confirm:$false
+        Ok "Removed legacy scheduled task: $TaskHub"
+    }
+    # Reinstall cleanly if a prior service is already registered.
+    if (Remove-HubService $hubDir) { Say "Reconfiguring existing service." }
 
-    Register-ScheduledTask -TaskName $TaskHub -Force `
-        -Action    (New-ScheduledTaskAction -Execute $hubExec -Argument $hubArgs -WorkingDirectory $RepoRoot) `
-        -Trigger   $trigger -Principal $principal -Settings $settings `
-        -Description "Temp Monitor hub (Flask/Socket.IO via waitress)." | Out-Null
-    Ok "Task: $TaskHub (runs at startup as SYSTEM, self-heals every 2min)"
+    $wrapperExe = Join-Path $hubDir "$HubServiceId.exe"
+    $wrapperXml = Join-Path $hubDir "$HubServiceId.xml"
+    if (-not (Test-Path $wrapperExe)) {
+        Say "Downloading WinSW service wrapper..."
+        try { Invoke-WebRequest -Uri $WinSwUrl -OutFile $wrapperExe -UseBasicParsing }
+        catch { Die "Could not download the WinSW service wrapper from $WinSwUrl -- $($_.Exception.Message)" }
+        Ok "Wrapper: $wrapperExe"
+    }
+
+    # WinSW runs as LocalSystem by default (matches the old SYSTEM task). The service inherits
+    # config from .env because waitress runs with <workingdirectory>=$hubDir and app.py calls
+    # load_dotenv() from cwd. onfailure=restart is also what the hub self-update relies on:
+    # restart_hub() exits non-zero, WinSW relaunches within ~5s.
+    $xml = @"
+<service>
+  <id>$HubServiceId</id>
+  <name>$HubServiceName</name>
+  <description>Temp Monitor hub (Flask/Socket.IO via waitress).</description>
+  <executable>$([System.Security.SecurityElement]::Escape($hubExec))</executable>
+  <arguments>$([System.Security.SecurityElement]::Escape($hubArgs))</arguments>
+  <workingdirectory>$([System.Security.SecurityElement]::Escape($hubDir))</workingdirectory>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="5 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>
+"@
+    Set-Content -Path $wrapperXml -Value $xml -Encoding UTF8
+    Ok "Wrote $wrapperXml"
+
+    & $wrapperExe install
+    if ($LASTEXITCODE -ne 0) { Die "Service install failed (WinSW exit $LASTEXITCODE)." }
+    Start-Service -Name $HubServiceId
+    Ok "Service '$HubServiceName' installed and started (LocalSystem, Automatic)"
 
     Step "Starting hub"
-    Start-ScheduledTask -TaskName $TaskHub
     Say "Waiting for the hub to respond..."
     $live = $false
     foreach ($i in 1..20) {
@@ -716,7 +820,7 @@ function Install-Hub {
         }
     }
     if ($live) { Ok "Hub responding on http://localhost:$HubPort/" }
-    else { Warn "No response yet on port $HubPort -- check Task Scheduler history or %ProgramData% logs." }
+    else { Warn "No response yet on port $HubPort -- check 'Get-Service $HubServiceId' and $hubDir\$HubServiceId.wrapper.log." }
 
     Write-Host @"
 
@@ -724,8 +828,9 @@ function Install-Hub {
 
   Hub URL (local) : http://localhost:$HubPort/
   Hub URL (public): $hubUrlValue
+  Location        : $hubDir
   Config          : $envPath
-  Task            : $TaskHub
+  Service         : $HubServiceName  (Get-Service $HubServiceId)
 
   Uninstall: powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub -Uninstall
 
