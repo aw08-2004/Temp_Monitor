@@ -156,6 +156,78 @@ def main():
         check("console sees run_script done",
               c.get(f"/api/fleet/commands/{rcid}").get_json()["status"] == fleet.STATUS_DONE)
 
+        print("\n== Live output streaming over HTTP ==")
+        r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
+                                                "params": {"script": "loop"}})
+        scid = r.get_json()["command_id"]
+        c.get("/api/agent/commands", headers=auth)  # claim it
+
+        r = c.post(f"/api/agent/commands/{scid}/output",
+                   json={"seq": 0, "chunk": "step 1\n"}, headers=auth)
+        check("agent posts output -> 200", r.status_code == 200)
+        check("not truncated yet", r.get_json()["truncated"] is False)
+        c.post(f"/api/agent/commands/{scid}/output",
+               json={"seq": 1, "chunk": "step 2\n"}, headers=auth)
+
+        r = c.get(f"/api/fleet/commands/{scid}/output")
+        body = r.get_json()
+        check("console reads chunks -> 200", r.status_code == 200)
+        check("chunks in order", [x["text"] for x in body["chunks"]] == ["step 1\n", "step 2\n"])
+        check("next_seq is the resume cursor", body["next_seq"] == 2)
+        check("status bundled with output (one request per poll tick)",
+              body["status"] == fleet.STATUS_CLAIMED)
+
+        r = c.get(f"/api/fleet/commands/{scid}/output?after_seq=0")
+        check("after_seq fetches only what's new",
+              [x["seq"] for x in r.get_json()["chunks"]] == [1])
+        r = c.get(f"/api/fleet/commands/{scid}/output?after_seq=notanumber")
+        check("bad after_seq -> 400", r.status_code == 400)
+        r = c.get("/api/fleet/commands/nope/output")
+        check("output for unknown command -> 404", r.status_code == 404)
+
+        r = c.post("/api/agent/enroll", json={"machine": "PC-09", "enrollment_secret": SECRET})
+        other = r.get_json()
+        r = c.post(f"/api/agent/commands/{scid}/output",
+                   json={"seq": 5, "chunk": "evil"},
+                   headers={"Authorization": f"Bearer {other['agent_id']}:{other['token']}"})
+        check("foreign agent posting output -> 403", r.status_code == 403)
+        r = c.post("/api/agent/commands/nope/output", json={"seq": 0, "chunk": "x"}, headers=auth)
+        check("output for unknown command -> 404", r.status_code == 404)
+        r = c.post(f"/api/agent/commands/{scid}/output",
+                   json={"seq": 0, "chunk": "x" * (fleet.STREAM_MAX_CHUNK_CHARS + 1)},
+                   headers=auth)
+        check("oversized chunk -> 400", r.status_code == 400)
+        r = c.post(f"/api/agent/commands/{scid}/output", json={"seq": "abc", "chunk": "x"}, headers=auth)
+        check("non-integer seq -> 400", r.status_code == 400)
+        check("output endpoint needs agent auth",
+              c.post(f"/api/agent/commands/{scid}/output", json={"seq": 9, "chunk": "x"}).status_code == 401)
+
+        c.post(f"/api/agent/commands/{scid}/result",
+               json={"success": True, "output": "step 1\nstep 2\n"}, headers=auth)
+        r = c.get(f"/api/fleet/commands/{scid}/output")
+        body = r.get_json()
+        check("result appears once complete", body["result"]["success"] == 1)
+        check("scrollback survives completion", len(body["chunks"]) == 2)
+        r = c.post(f"/api/agent/commands/{scid}/output",
+                   json={"seq": 9, "chunk": "late"}, headers=auth)
+        check("output after result -> 403 (run is over)", r.status_code == 403)
+
+        print("\n== Old agent (3.0.1) compatibility ==")
+        # A pre-3.1 agent never posts chunks -- it just returns the whole output at the
+        # end. The console distinguishes the two by next_seq == 0, and renders
+        # result.output as one block in that case. Guard the mixed-fleet window.
+        r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "gpupdate"})
+        ocid = r.get_json()["command_id"]
+        c.get("/api/agent/commands", headers=auth)
+        c.post(f"/api/agent/commands/{ocid}/result",
+               json={"success": True, "output": "Policy refreshed."}, headers=auth)
+        body = c.get(f"/api/fleet/commands/{ocid}/output").get_json()
+        check("no chunks from a non-streaming agent", body["chunks"] == [])
+        check("next_seq stays 0 -> console falls back to result.output", body["next_seq"] == 0)
+        check("status still reported", body["status"] == fleet.STATUS_DONE)
+        check("full output still available via result",
+              body["result"]["output"] == "Policy refreshed.")
+
         print("\n== Status & result isolation ==")
         r = c.get("/api/fleet/status")
         check("status shows PC-01 online",

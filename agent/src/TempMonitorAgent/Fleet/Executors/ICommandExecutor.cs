@@ -3,11 +3,16 @@ using System.Text.Json.Nodes;
 namespace TempMonitorAgent.Fleet.Executors;
 
 /// <summary>One executable command type. The dispatcher routes a claimed command here
-/// by Type; authorization already happened at the hub's console session gate.</summary>
+/// by Type; authorization already happened at the hub's console session gate.
+///
+/// <paramref name="onOutput"/> receives output lines as they are produced, for the
+/// console's live terminal. Executors that finish fast or produce nothing useful mid-run
+/// (restart, shutdown, rename) may ignore it; the full text is returned in CommandResult
+/// either way, so streaming is an addition to the result, never a replacement.</summary>
 public interface ICommandExecutor
 {
     string Type { get; }
-    Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct);
+    Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct);
 }
 
 /// <summary>Helpers for pulling typed values out of a command's params object.</summary>

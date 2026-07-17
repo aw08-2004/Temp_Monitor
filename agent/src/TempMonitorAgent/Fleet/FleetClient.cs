@@ -8,12 +8,25 @@ using TempMonitorAgent.State;
 
 namespace TempMonitorAgent.Fleet;
 
+/// <summary>Outcome of posting one output chunk. <c>Truncated</c> is the hub telling us
+/// the per-command output cap is reached and to stop streaming this command.</summary>
+public readonly record struct OutputPostResult(bool Ok, bool Truncated);
+
+/// <summary>The one call OutputStreamer needs from FleetClient. Exists as an interface
+/// purely so the streamer's sequencing/retry/coalescing logic can be tested against a
+/// fake — FleetClient itself owns a real HttpClient and isn't otherwise substitutable.</summary>
+public interface IOutputSink
+{
+    Task<OutputPostResult> PostOutputAsync(string commandId, int seq, string text, CancellationToken ct);
+}
+
 /// <summary>
 /// Client for the hub's fleet command channel. Enrolls once (persisting the returned
-/// agent_id/token), then heartbeats, polls+claims commands, and reports results — all
-/// authenticated with "Authorization: Bearer &lt;agent_id&gt;:&lt;token&gt;".
+/// agent_id/token), then heartbeats, polls+claims commands, streams live output, and
+/// reports results — all authenticated with
+/// "Authorization: Bearer &lt;agent_id&gt;:&lt;token&gt;".
 /// </summary>
-public sealed class FleetClient : IDisposable
+public sealed class FleetClient : IDisposable, IOutputSink
 {
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
@@ -114,6 +127,46 @@ public sealed class FleetClient : IDisposable
         {
             _log.LogDebug("Command poll failed: {Msg}", e.Message);
             return new List<FleetCommand>();
+        }
+    }
+
+    /// <summary>Post one chunk of a running command's output. Only OutputStreamer should
+    /// call this — it owns the sequence numbering that makes retries idempotent.
+    ///
+    /// A 403 means the hub considers the command finished (or not ours); there is no
+    /// point retrying, so report Ok with Truncated so the streamer stops cleanly rather
+    /// than burning its retry budget. A pre-1.10 hub has no such endpoint and 404s —
+    /// same treatment, which is what makes a new agent degrade gracefully to one-shot
+    /// output against an old hub instead of failing the command.</summary>
+    public async Task<OutputPostResult> PostOutputAsync(
+        string commandId, int seq, string text, CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return new OutputPostResult(Ok: false, Truncated: false);
+
+        var body = new JsonObject { ["seq"] = seq, ["chunk"] = text };
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, AgentConfig.CommandOutputUrl(commandId));
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+
+            if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            {
+                _log.LogDebug("Output for {Id} not accepted ({Status}); stopping stream",
+                    commandId, (int)resp.StatusCode);
+                return new OutputPostResult(Ok: true, Truncated: true);
+            }
+            if (!resp.IsSuccessStatusCode)
+                return new OutputPostResult(Ok: false, Truncated: false);
+
+            var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var truncated = json?["truncated"]?.GetValue<bool>() ?? false;
+            return new OutputPostResult(Ok: true, Truncated: truncated);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Output post for {Id} seq {Seq} failed: {Msg}", commandId, seq, e.Message);
+            return new OutputPostResult(Ok: false, Truncated: false);
         }
     }
 

@@ -100,6 +100,105 @@ def main():
         check("list_commands no longer exposes requires_signature",
               all("requires_signature" not in row for row in fleet.list_commands(db_path)))
 
+        print("\n== Live output streaming ==")
+        scid = fleet.create_command(db_path, "PC-01", "run_script",
+                                    {"script": "loop"}, issued_by="helpdesk@x.com")
+        fleet.claim_commands(db_path, agent_id, "PC-01")
+
+        check("no output yet -> next_seq 0 (a non-streaming agent looks identical)",
+              fleet.get_command_output(db_path, scid)["next_seq"] == 0)
+
+        for i, text in enumerate(["step 1\n", "step 2\n", "step 3\n"]):
+            fleet.append_command_output(db_path, scid, agent_id, i, text)
+        out = fleet.get_command_output(db_path, scid)
+        check("chunks come back in seq order",
+              [c["text"] for c in out["chunks"]] == ["step 1\n", "step 2\n", "step 3\n"])
+        check("next_seq is the cursor to resume from", out["next_seq"] == 3)
+        check("status rides along with the chunks", out["status"] == fleet.STATUS_CLAIMED)
+        check("no result while still running", out["result"] is None)
+
+        after = fleet.get_command_output(db_path, scid, after_seq=1)
+        check("after_seq returns only newer chunks",
+              [c["seq"] for c in after["chunks"]] == [2])
+
+        # The whole retry story depends on this being a no-op.
+        fleet.append_command_output(db_path, scid, agent_id, 1, "step 2\n")
+        check("re-posting the same seq is idempotent",
+              len(fleet.get_command_output(db_path, scid)["chunks"]) == 3)
+        fleet.append_command_output(db_path, scid, agent_id, 1, "DIFFERENT")
+        check("re-posting a seq cannot overwrite the original text",
+              fleet.get_command_output(db_path, scid)["chunks"][1]["text"] == "step 2\n")
+
+        expect_raise("foreign agent cannot inject output", PermissionError,
+                     lambda: fleet.append_command_output(db_path, scid, agent2, 9, "evil"))
+        expect_raise("output for an unknown command raises", KeyError,
+                     lambda: fleet.append_command_output(db_path, "nope", agent_id, 0, "x"))
+        expect_raise("oversized chunk rejected", ValueError,
+                     lambda: fleet.append_command_output(
+                         db_path, scid, agent_id, 99,
+                         "x" * (fleet.STREAM_MAX_CHUNK_CHARS + 1)))
+        expect_raise("non-integer seq rejected", ValueError,
+                     lambda: fleet.append_command_output(db_path, scid, agent_id, "abc", "x"))
+        expect_raise("negative seq rejected", ValueError,
+                     lambda: fleet.append_command_output(db_path, scid, agent_id, -1, "x"))
+        expect_raise("non-integer after_seq rejected", ValueError,
+                     lambda: fleet.get_command_output(db_path, scid, after_seq="abc"))
+        expect_raise("output for an unknown command on read raises", KeyError,
+                     lambda: fleet.get_command_output(db_path, "nope"))
+
+        print("\n== Output cap ==")
+        ccid = fleet.create_command(db_path, "PC-01", "run_script",
+                                    {"script": "runaway"}, issued_by="helpdesk@x.com")
+        fleet.claim_commands(db_path, agent_id, "PC-01")
+        big = "x" * fleet.STREAM_MAX_CHUNK_CHARS
+        capped_at = None
+        for i in range(60):  # 60 * 16k = 960k, well past the 256k cap
+            if fleet.append_command_output(db_path, ccid, agent_id, i, big):
+                capped_at = i
+                break
+        check("runaway output reports truncated", capped_at is not None)
+        capped = fleet.get_command_output(db_path, ccid)
+        check("cap is surfaced to the console", capped["truncated"] is True)
+        total = sum(len(c["text"]) for c in capped["chunks"])
+        check("stored output stays near the cap, not unbounded",
+              total < fleet.STREAM_MAX_COMMAND_CHARS * 2)
+        marker_count = sum(1 for c in capped["chunks"]
+                           if c["text"] == fleet.STREAM_TRUNCATION_MARKER)
+        # Further posts after the cap must not each append another marker.
+        for i in range(capped_at + 1, capped_at + 5):
+            fleet.append_command_output(db_path, ccid, agent_id, i, big)
+        after_cap = fleet.get_command_output(db_path, ccid)
+        check("marker written exactly once",
+              sum(1 for c in after_cap["chunks"]
+                  if c["text"] == fleet.STREAM_TRUNCATION_MARKER) == 1 and marker_count <= 1)
+        check("post-cap chunks are dropped, not stored",
+              len(after_cap["chunks"]) == len(capped["chunks"]))
+
+        print("\n== Output after completion ==")
+        fleet.complete_command(db_path, scid, agent_id, success=True, output="step 1\nstep 2\nstep 3\n")
+        done = fleet.get_command_output(db_path, scid)
+        check("result appears alongside the chunks", done["result"]["success"] == 1)
+        check("status flips to done", done["status"] == fleet.STATUS_DONE)
+        check("chunks survive completion (scrollback stays readable)",
+              len(done["chunks"]) == 3)
+        expect_raise("late output for a finished command refused", PermissionError,
+                     lambda: fleet.append_command_output(db_path, scid, agent_id, 50, "late"))
+
+        print("\n== Output pruning ==")
+        pruned = fleet.prune_command_output(db_path, int(time.time()) + 60)
+        check("pruner removes aged scrollback", pruned > 0)
+        check("pruned command keeps its durable result",
+              fleet.get_command(db_path, scid)["result"]["output"] == "step 1\nstep 2\nstep 3\n")
+        check("pruned command has no chunks left",
+              fleet.get_command_output(db_path, scid)["chunks"] == [])
+        fresh_cid = fleet.create_command(db_path, "PC-05", "run_script", {"script": "x"},
+                                         issued_by="a@x.com")
+        fleet.claim_commands(db_path, "agent-5", "PC-05")
+        fleet.append_command_output(db_path, fresh_cid, "agent-5", 0, "running")
+        fleet.prune_command_output(db_path, int(time.time()) - 3600)
+        check("pruner spares recent output",
+              len(fleet.get_command_output(db_path, fresh_cid)["chunks"]) == 1)
+
         print("\n== Pre-1.10 DB compatibility ==")
         # The live DB predates the signing removal and still has requires_signature +
         # signature. init_fleet_db is CREATE TABLE IF NOT EXISTS with no ALTER path, so

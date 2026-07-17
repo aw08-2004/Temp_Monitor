@@ -890,12 +890,29 @@ def prune_old_readings_once():
     return total
 
 
+def prune_command_output_once():
+    """Drop live-terminal scrollback for commands that finished long ago. The durable
+    record (command_results.output) is untouched -- these rows only exist so an operator
+    can watch a command stream, and 256KB per command adds up otherwise."""
+    cutoff = int(time.time()) - fleet.OUTPUT_RETENTION_SECONDS
+    removed = fleet.prune_command_output(DB_PATH, cutoff)
+    if removed:
+        print(f"[retention] Pruned {removed} command output chunk(s).")
+    return removed
+
+
 def retention_pruner():
     while True:
         try:
             prune_old_readings_once()
         except Exception as e:
             print(f"[retention] Prune failed: {e}")
+        # Separate try: a failure pruning chunks must not stop readings being pruned,
+        # and vice versa -- the readings table is the one that grows unboundedly.
+        try:
+            prune_command_output_once()
+        except Exception as e:
+            print(f"[retention] Command-output prune failed: {e}")
         time.sleep(RETENTION_PRUNE_INTERVAL_SECONDS)
 
 

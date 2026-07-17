@@ -92,6 +92,30 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
         commands = fleet.claim_commands(db_path, agent_id, machine)
         return jsonify({"commands": commands}), 200
 
+    @bp.route("/api/agent/commands/<command_id>/output", methods=["POST"])
+    @agent_auth
+    def agent_command_output(agent_id, machine, command_id):
+        """Streamed output from a command still running on this agent.
+
+        The agent posts {seq, chunk} as lines arrive so the console terminal shows
+        progress rather than waiting for the whole run. Idempotent per (command, seq):
+        a retry of a POST that actually landed is a no-op, so the agent must reuse the
+        same seq. `truncated: true` tells the agent to stop streaming this command --
+        the full text still reaches command_results at completion.
+        """
+        data = request.get_json(silent=True) or {}
+        try:
+            truncated = fleet.append_command_output(
+                db_path, command_id, agent_id, data.get("seq"), data.get("chunk"))
+        except KeyError:
+            return jsonify({"error": "unknown command"}), 404
+        except PermissionError as e:
+            # Includes "already completed" -- the run is over, don't reopen it.
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"status": "ok", "truncated": truncated}), 200
+
     @bp.route("/api/agent/commands/<command_id>/result", methods=["POST"])
     @agent_auth
     def agent_command_result(agent_id, machine, command_id):
@@ -125,6 +149,21 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
         if command is None:
             return jsonify({"error": "unknown command"}), 404
         return jsonify(command), 200
+
+    @bp.route("/api/fleet/commands/<command_id>/output", methods=["GET"])
+    @login_required
+    def fleet_get_command_output(command_id):
+        """Live scrollback for the terminal. `after_seq` is the client's cursor; pass
+        back the `next_seq` from the previous response to fetch only what's new.
+        Status and result ride along so one poll tick is one request."""
+        try:
+            after_seq = int(request.args.get("after_seq", -1))
+        except (TypeError, ValueError):
+            return jsonify({"error": "after_seq must be an integer"}), 400
+        try:
+            return jsonify(fleet.get_command_output(db_path, command_id, after_seq)), 200
+        except KeyError:
+            return jsonify({"error": "unknown command"}), 404
 
     @bp.route("/api/fleet/commands", methods=["POST"])
     @login_required

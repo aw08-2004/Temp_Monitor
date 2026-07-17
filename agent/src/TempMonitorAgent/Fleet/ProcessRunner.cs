@@ -6,12 +6,18 @@ namespace TempMonitorAgent.Fleet;
 public readonly record struct ProcessOutcome(int ExitCode, string Output, bool TimedOut);
 
 /// <summary>Runs a child process, capturing combined stdout/stderr with a timeout.
-/// Used by the command executors (shutdown.exe, gpupdate, winget, scripts).</summary>
+/// Used by the command executors (shutdown.exe, gpupdate, winget, scripts).
+///
+/// Pass <paramref name="onLine"/> to also receive each line as it arrives, which is how
+/// a long-running command streams progress to the hub while it runs (see OutputStreamer).
+/// The full text is still buffered and returned regardless, so the completion result is
+/// unaffected by whether anyone is streaming.</summary>
 public static class ProcessRunner
 {
     public static async Task<ProcessOutcome> RunAsync(
         string fileName, string arguments, CancellationToken ct,
-        int timeoutSeconds = 300, string? workingDir = null)
+        int timeoutSeconds = 300, string? workingDir = null,
+        Action<string>? onLine = null)
     {
         using var proc = new Process
         {
@@ -27,9 +33,25 @@ public static class ProcessRunner
             },
         };
 
+        // OutputDataReceived and ErrorDataReceived are raised on separate threadpool
+        // threads, so the buffer needs a lock (it never had one -- two interleaved
+        // AppendLine calls could corrupt it). Invoking onLine inside the same lock also
+        // hands the sink its lines already serialized, which is what lets OutputStreamer
+        // assign sequence numbers without a second lock of its own.
         var sb = new StringBuilder();
-        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) sb.AppendLine(e.Data); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) sb.AppendLine(e.Data); };
+        var gate = new object();
+        void Handle(string? line)
+        {
+            if (line is null) return;
+            lock (gate)
+            {
+                sb.AppendLine(line);
+                try { onLine?.Invoke(line); }
+                catch { /* a broken sink must never kill the command */ }
+            }
+        }
+        proc.OutputDataReceived += (_, e) => Handle(e.Data);
+        proc.ErrorDataReceived += (_, e) => Handle(e.Data);
 
         proc.Start();
         proc.BeginOutputReadLine();
@@ -38,6 +60,8 @@ public static class ProcessRunner
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
+        string Snapshot() { lock (gate) { return sb.ToString().Trim(); } }
+
         try
         {
             await proc.WaitForExitAsync(timeoutCts.Token);
@@ -45,9 +69,9 @@ public static class ProcessRunner
         catch (OperationCanceledException)
         {
             try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
-            return new ProcessOutcome(-1, sb.ToString().Trim(), TimedOut: true);
+            return new ProcessOutcome(-1, Snapshot(), TimedOut: true);
         }
 
-        return new ProcessOutcome(proc.ExitCode, sb.ToString().Trim(), TimedOut: false);
+        return new ProcessOutcome(proc.ExitCode, Snapshot(), TimedOut: false);
     }
 }

@@ -3,12 +3,15 @@ using Microsoft.Extensions.Logging;
 
 namespace TempMonitorAgent.Fleet.Executors;
 
+// restart/shutdown/rename take onOutput but ignore it: they return in well under the
+// console's poll interval, so there is no progress to narrate.
+
 /// <summary>restart: reboot the machine after an optional delay (default 60s).</summary>
 public sealed class RestartExecutor : ICommandExecutor
 {
     public string Type => "restart";
 
-    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         int delay = cmd.Params.GetInt("delay_seconds", 60);
         var outcome = await ProcessRunner.RunAsync(
@@ -24,7 +27,7 @@ public sealed class ShutdownExecutor : ICommandExecutor
 {
     public string Type => "shutdown";
 
-    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         int delay = cmd.Params.GetInt("delay_seconds", 60);
         var outcome = await ProcessRunner.RunAsync(
@@ -43,7 +46,7 @@ public sealed class RenameExecutor : ICommandExecutor
 
     public string Type => "rename";
 
-    public Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         var newName = cmd.Params.GetString("new_name");
         if (string.IsNullOrWhiteSpace(newName))
@@ -75,32 +78,35 @@ public sealed class RenameExecutor : ICommandExecutor
     }
 }
 
-/// <summary>gpupdate: force a Group Policy refresh.</summary>
+/// <summary>gpupdate: force a Group Policy refresh. Streams — it can run for minutes.</summary>
 public sealed class GpUpdateExecutor : ICommandExecutor
 {
     public string Type => "gpupdate";
 
-    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
-        var outcome = await ProcessRunner.RunAsync("gpupdate.exe", "/force", ct, timeoutSeconds: 180);
+        var outcome = await ProcessRunner.RunAsync(
+            "gpupdate.exe", "/force", ct, timeoutSeconds: 180, onLine: onOutput);
         return outcome.ExitCode == 0
             ? CommandResult.Ok(outcome.Output)
             : CommandResult.Fail($"gpupdate exited {outcome.ExitCode}: {outcome.Output}");
     }
 }
 
-/// <summary>install_app: install via winget (params.id) or msiexec (params.msi_path).</summary>
+/// <summary>install_app: install via winget (params.id) or msiexec (params.msi_path).
+/// Streams — a winget install is a 600s-timeout operation with real progress output.</summary>
 public sealed class InstallAppExecutor : ICommandExecutor
 {
     public string Type => "install_app";
 
-    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         var id = cmd.Params.GetString("id");
         if (!string.IsNullOrWhiteSpace(id))
         {
             var args = $"install --id {id} --silent --accept-package-agreements --accept-source-agreements";
-            var outcome = await ProcessRunner.RunAsync("winget.exe", args, ct, timeoutSeconds: 600);
+            var outcome = await ProcessRunner.RunAsync(
+                "winget.exe", args, ct, timeoutSeconds: 600, onLine: onOutput);
             return outcome.ExitCode == 0
                 ? CommandResult.Ok(outcome.Output)
                 : CommandResult.Fail($"winget exited {outcome.ExitCode}: {outcome.Output}");
@@ -109,7 +115,8 @@ public sealed class InstallAppExecutor : ICommandExecutor
         var msi = cmd.Params.GetString("msi_path");
         if (!string.IsNullOrWhiteSpace(msi))
         {
-            var outcome = await ProcessRunner.RunAsync("msiexec.exe", $"/i \"{msi}\" /qn /norestart", ct, timeoutSeconds: 600);
+            var outcome = await ProcessRunner.RunAsync(
+                "msiexec.exe", $"/i \"{msi}\" /qn /norestart", ct, timeoutSeconds: 600, onLine: onOutput);
             return outcome.ExitCode == 0
                 ? CommandResult.Ok($"msiexec ok: {outcome.Output}")
                 : CommandResult.Fail($"msiexec exited {outcome.ExitCode}: {outcome.Output}");

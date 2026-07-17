@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using TempMonitorAgent.Fleet;
@@ -10,9 +11,13 @@ namespace TempMonitorAgent;
 /// <summary>
 /// The service's main loop. Ticks every INTERVAL seconds: reports telemetry (with the
 /// full sensor block and uptime on their own slower cadences), and on the command
-/// cadence enrolls/heartbeats/polls the fleet channel and runs any claimed commands.
+/// cadence enrolls/heartbeats/polls the fleet channel and dispatches any claimed commands.
 /// Periodically (and when the hub hints a newer version) it checks for a signed
 /// self-update; applying one exits the process so the SCM restarts onto the new binary.
+///
+/// Claimed commands run on their own tasks rather than inline, so a long one (run_script
+/// can take its full 600s) never stalls telemetry or heartbeats. Keeping the loop ticking
+/// is what stops a machine reading "offline" while it is busy running your command.
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -23,6 +28,10 @@ public sealed class Worker : BackgroundService
     private readonly FleetClient _fleet;
     private readonly CommandDispatcher _dispatcher;
     private readonly SelfUpdater _updater;
+
+    /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
+    /// loop from re-dispatching something already running.</summary>
+    private readonly ConcurrentDictionary<string, Task> _running = new();
 
     private readonly string? _enrollmentSecret;
 
@@ -96,7 +105,20 @@ public sealed class Worker : BackgroundService
                 }
 
                 // --- Self-update -----------------------------------------------
-                if (updateDue || (now - lastUpdateCheck).TotalSeconds >= AgentConfig.UpdateIntervalSeconds)
+                // Never swap the binary out from under a running command: applying an
+                // update exits the process (code 17) for the SCM to restart, which would
+                // kill a half-finished script and report nothing back. This couldn't
+                // happen while commands were awaited inline; now that they run on their
+                // own tasks, it can. Deferring costs at most one command's runtime on a
+                // weekly check, and `updateDue` is left set so the next tick retries.
+                bool updateWanted =
+                    updateDue || (now - lastUpdateCheck).TotalSeconds >= AgentConfig.UpdateIntervalSeconds;
+                if (updateWanted && !_running.IsEmpty)
+                {
+                    _log.LogInformation("Update deferred: {N} command(s) still running", _running.Count);
+                    updateDue = true;
+                }
+                else if (updateWanted)
                 {
                     updateDue = false;
                     lastUpdateCheck = now;
@@ -129,8 +151,49 @@ public sealed class Worker : BackgroundService
         var commands = await _fleet.PollCommandsAsync(ct);
         foreach (var cmd in commands)
         {
-            var result = await _dispatcher.ExecuteAsync(cmd, ct);
+            // Commands used to be awaited inline here, which meant a run_script blocked
+            // this method -- and therefore the whole main loop -- for up to its 600s
+            // timeout. Telemetry and heartbeats stopped for the duration, so a machine
+            // went "offline" (90s window) while its own command was still running. Now
+            // each command runs on its own task and the loop keeps ticking, which is also
+            // what makes streamed output worth watching.
+            if (_running.Count >= AgentConfig.MaxConcurrentCommands)
+            {
+                _log.LogWarning("At {Max} concurrent commands; refusing {Type} {Id}",
+                    AgentConfig.MaxConcurrentCommands, cmd.Type, cmd.Id);
+                await _fleet.ReportResultAsync(
+                    cmd.Id, CommandResult.Fail("agent busy: too many commands already running"), ct);
+                continue;
+            }
+            _running[cmd.Id] = Task.Run(() => RunOneAsync(cmd, ct), ct);
+        }
+
+        // Reap finished entries so the dictionary can't grow without bound.
+        foreach (var (id, task) in _running.ToArray())
+            if (task.IsCompleted) _running.TryRemove(id, out _);
+    }
+
+    private async Task RunOneAsync(FleetCommand cmd, CancellationToken ct)
+    {
+        await using var streamer = new OutputStreamer(_fleet, cmd.Id, _log);
+        try
+        {
+            var result = await _dispatcher.ExecuteAsync(cmd, streamer.Add, ct);
+            // ORDER MATTERS: the console stops polling for output once the command hits a
+            // terminal status, so the last chunks must be flushed BEFORE the result lands
+            // or the operator silently loses the tail of what they ran.
+            await streamer.CompleteAsync(ct);
             await _fleet.ReportResultAsync(cmd.Id, result, ct);
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning(e, "Command {Id} failed outside the executor", cmd.Id);
+            try { await _fleet.ReportResultAsync(cmd.Id, CommandResult.Fail($"agent error: {e.Message}"), ct); }
+            catch { /* the hub will expire it */ }
+        }
+        finally
+        {
+            _running.TryRemove(cmd.Id, out _);
         }
     }
 

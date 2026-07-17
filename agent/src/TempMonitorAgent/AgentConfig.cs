@@ -23,6 +23,8 @@ public static class AgentConfig
     public static string CommandsUrl => HubBase + "/api/agent/commands";
     public static string CommandResultUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
+    public static string CommandOutputUrl(string commandId) =>
+        HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
 
     /// <summary>Machine identity sent to the hub (the "machine" field).</summary>
     public static string MachineName =>
@@ -39,6 +41,21 @@ public static class AgentConfig
 
     public const int OfflineBufferMax = 1000;
     public const int MaxChainRestarts = 3;
+
+    // --- Live command output streaming -------------------------------------
+    // Flush every 1.5s (or sooner if the buffer fills). The console polls output at
+    // ~1s, so this keeps perceived latency under ~2.5s while stopping a chatty script
+    // from turning into one POST per line.
+    public const int StreamFlushMillis = 1500;
+    // Matches fleet.STREAM_MAX_CHUNK_CHARS: the hub rejects a bigger chunk, so split
+    // before we get there.
+    public const int StreamMaxChunkChars = 16_000;
+    public const int StreamPostRetries = 3;
+
+    // Commands execute off the main loop (see Worker), so a long script no longer
+    // blocks telemetry/heartbeats. Bound the concurrency so a queued pile of scripts
+    // can't exhaust the box.
+    public const int MaxConcurrentCommands = 4;
 
     // Exit code the service returns to request an SCM-driven restart onto a
     // freshly swapped binary (installer configures `sc failure ... restart`).

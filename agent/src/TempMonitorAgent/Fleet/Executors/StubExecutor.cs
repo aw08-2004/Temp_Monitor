@@ -12,6 +12,6 @@ public sealed class StubExecutor : ICommandExecutor
 
     public StubExecutor(string type) => Type = type;
 
-    public Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
         => Task.FromResult(CommandResult.Fail($"{Type} is not implemented yet"));
 }

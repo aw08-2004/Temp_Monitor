@@ -27,7 +27,11 @@ public sealed class CommandDispatcher
         _executors = executors.ToDictionary(e => e.Type, StringComparer.Ordinal);
     }
 
-    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    /// <summary><paramref name="onOutput"/> is handed to the executor for live streaming;
+    /// the returned CommandResult still carries the complete output regardless, so the
+    /// hub's durable record doesn't depend on anyone watching.</summary>
+    public async Task<CommandResult> ExecuteAsync(
+        FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         if (!_executors.TryGetValue(cmd.Type, out var executor))
             return CommandResult.Fail($"unknown command type: {cmd.Type}");
@@ -35,7 +39,7 @@ public sealed class CommandDispatcher
         try
         {
             _log.LogInformation("Executing {Type} {Id}", cmd.Type, cmd.Id);
-            var result = await executor.ExecuteAsync(cmd, ct);
+            var result = await executor.ExecuteAsync(cmd, onOutput, ct);
             return Truncate(result);
         }
         catch (Exception e)

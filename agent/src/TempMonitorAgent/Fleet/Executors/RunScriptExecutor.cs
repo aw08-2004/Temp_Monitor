@@ -13,7 +13,7 @@ public sealed class RunScriptExecutor : ICommandExecutor
 {
     public string Type => "run_script";
 
-    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, CancellationToken ct)
+    public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         var script = cmd.Params.GetString("script");
         if (string.IsNullOrEmpty(script))
@@ -29,11 +29,12 @@ public sealed class RunScriptExecutor : ICommandExecutor
             await File.WriteAllTextAsync(scriptPath, script, ct);
 
             ProcessOutcome outcome = isCmd
-                ? await ProcessRunner.RunAsync("cmd.exe", $"/c \"{scriptPath}\"", ct, timeoutSeconds: 600)
+                ? await ProcessRunner.RunAsync(
+                    "cmd.exe", $"/c \"{scriptPath}\"", ct, timeoutSeconds: 600, onLine: onOutput)
                 : await ProcessRunner.RunAsync(
                     "powershell.exe",
                     $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\"",
-                    ct, timeoutSeconds: 600);
+                    ct, timeoutSeconds: 600, onLine: onOutput);
 
             var summary = $"exit={outcome.ExitCode}{(outcome.TimedOut ? " (timed out)" : "")}\n{outcome.Output}";
             return outcome.ExitCode == 0 && !outcome.TimedOut

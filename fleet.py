@@ -143,6 +143,32 @@ def init_fleet_db(db_path):
             )
             """
         )
+        # Live output, streamed by the agent while a command runs, so the console
+        # terminal can show progress instead of a spinner. This is SCROLLBACK, not the
+        # record: command_results.output remains the durable, complete copy that the
+        # agent posts on completion, and these rows are pruned on a short horizon (see
+        # prune_command_output).
+        #
+        # `seq` is a per-command counter owned by the agent. PRIMARY KEY (command_id,
+        # seq) + INSERT OR IGNORE makes a retried POST a free no-op -- which is why the
+        # agent must retry the SAME seq rather than allocating a new one. stdout and
+        # stderr are deliberately not distinguished: ProcessRunner already merges them
+        # into one buffer and the terminal renders them identically.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS command_output_chunks (
+                command_id  TEXT NOT NULL,
+                seq         INTEGER NOT NULL,
+                chunk       TEXT NOT NULL,
+                received_at INTEGER NOT NULL,
+                PRIMARY KEY (command_id, seq)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_output_chunks_cmd "
+            "ON command_output_chunks(command_id, seq)"
+        )
         # Append-only audit trail: every command issued/claimed/completed and every
         # enrollment. This is the record you reach for after "who restarted prod?".
         conn.execute(
@@ -407,6 +433,158 @@ def complete_command(db_path, command_id, agent_id, success, output=None):
     audit(db_path, actor=f"agent:{agent_id}", action="complete_command", target=machine,
           detail={"command_id": command_id, "success": bool(success)})
     return machine
+
+
+# ================================
+# LIVE OUTPUT STREAMING
+# ================================
+# Caps. The per-chunk cap bounds one request; the per-command cap bounds a runaway
+# script (a `while($true){ echo x }` would otherwise fill the disk). The agent flushes
+# at the same per-chunk threshold so it splits before the hub has to reject anything.
+STREAM_MAX_CHUNK_CHARS = 16_000
+STREAM_MAX_COMMAND_CHARS = 256_000
+STREAM_MAX_CHUNKS = 2000
+STREAM_TRUNCATION_MARKER = "\n…(output cap reached — streaming stopped)\n"
+
+# Scrollback horizon. command_results.output is the durable record, so chunks only need
+# to outlive an operator watching the terminal.
+OUTPUT_RETENTION_SECONDS = 24 * 60 * 60
+
+
+def append_command_output(db_path, command_id, agent_id, seq, chunk):
+    """Append one streamed output chunk from the executing agent. Returns True if the
+    per-command cap has been hit (the agent should stop streaming), else False.
+
+    Idempotent on (command_id, seq): a retried POST for a chunk that already landed is
+    a silent no-op, so the agent can retry a timed-out request without risking a
+    duplicate or a gap. Refuses a command this agent didn't claim, mirroring
+    complete_command -- one agent must not be able to inject output into another's.
+    """
+    command_id = str(command_id)
+    try:
+        seq = int(seq)
+    except (TypeError, ValueError):
+        raise ValueError("seq must be an integer")
+    if seq < 0:
+        raise ValueError("seq must be non-negative")
+    if chunk is None:
+        chunk = ""
+    chunk = str(chunk)
+    if len(chunk) > STREAM_MAX_CHUNK_CHARS:
+        raise ValueError(
+            f"chunk exceeds {STREAM_MAX_CHUNK_CHARS} chars; split it agent-side"
+        )
+
+    now = int(time.time())
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT status, claimed_by FROM commands WHERE id = ?", (command_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError("unknown command")
+        if row["claimed_by"] != str(agent_id):
+            raise PermissionError("command was not claimed by this agent")
+        if row["status"] != STATUS_CLAIMED:
+            # Already done/failed/expired: the run is over, so late output is either a
+            # retry racing the result or a confused agent. Either way, don't reopen it.
+            raise PermissionError(f"command is {row['status']}, not accepting output")
+
+        # The marker's presence IS the "capped" flag -- no extra column, and it survives
+        # a hub restart because it's just another chunk row.
+        stats = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(chunk)), 0) AS total, "
+            "       COALESCE(MAX(chunk = ?), 0) AS capped "
+            "FROM command_output_chunks WHERE command_id = ?",
+            (STREAM_TRUNCATION_MARKER, command_id),
+        ).fetchone()
+        if stats["capped"]:
+            return True  # already capped; drop silently and keep telling the agent to stop
+
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO command_output_chunks"
+            "(command_id, seq, chunk, received_at) VALUES (?, ?, ?, ?)",
+            (command_id, seq, chunk, now),
+        )
+        # OR IGNORE means a duplicate seq changes nothing, so don't count it toward the cap.
+        inserted = (cur.rowcount or 0) > 0
+        total = stats["total"] + (len(chunk) if inserted else 0)
+        count = stats["n"] + (1 if inserted else 0)
+
+        if total >= STREAM_MAX_COMMAND_CHARS or count >= STREAM_MAX_CHUNKS:
+            # Write the marker in the SAME transaction as the chunk that crossed the cap,
+            # so `truncated` is true for the console the moment it is true for the agent.
+            # seq+1 is safe: the agent stops streaming on this return value, so it will
+            # never post that number itself.
+            conn.execute(
+                "INSERT OR IGNORE INTO command_output_chunks"
+                "(command_id, seq, chunk, received_at) VALUES (?, ?, ?, ?)",
+                (command_id, seq + 1, STREAM_TRUNCATION_MARKER, now),
+            )
+            return True
+        return False
+
+
+def get_command_output(db_path, command_id, after_seq=-1):
+    """Chunks with seq > after_seq, in order, plus the command's current status and
+    result. Bundled so the terminal needs ONE request per poll rather than two.
+
+    `next_seq` is the cursor to pass back as after_seq. It stays 0 for a command whose
+    agent never streamed (a pre-3.1 agent), which is how the console tells "no output
+    yet" from "this agent doesn't stream" -- see the render rule in fleet-terminal.js.
+    """
+    command_id = str(command_id)
+    try:
+        after_seq = int(after_seq)
+    except (TypeError, ValueError):
+        raise ValueError("after_seq must be an integer")
+
+    with get_conn(db_path) as conn:
+        command = conn.execute(
+            "SELECT status FROM commands WHERE id = ?", (command_id,)
+        ).fetchone()
+        if command is None:
+            raise KeyError("unknown command")
+        rows = conn.execute(
+            "SELECT seq, chunk FROM command_output_chunks "
+            "WHERE command_id = ? AND seq > ? ORDER BY seq ASC",
+            (command_id, after_seq),
+        ).fetchall()
+        highest = conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) AS m FROM command_output_chunks "
+            "WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()["m"]
+        truncated = conn.execute(
+            "SELECT 1 FROM command_output_chunks WHERE command_id = ? AND chunk = ? LIMIT 1",
+            (command_id, STREAM_TRUNCATION_MARKER),
+        ).fetchone() is not None
+        result = conn.execute(
+            "SELECT success, output, completed_at FROM command_results WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+
+    return {
+        "chunks": [{"seq": r["seq"], "text": r["chunk"]} for r in rows],
+        "next_seq": highest + 1,
+        "status": command["status"],
+        "truncated": truncated,
+        "result": dict(result) if result else None,
+    }
+
+
+def prune_command_output(db_path, older_than):
+    """Drop scrollback for commands whose last chunk predates `older_than` (epoch).
+    Keeps the chunk table bounded; command_results.output is untouched, so history and
+    the audit trail are unaffected. Returns rows removed."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM command_output_chunks WHERE command_id IN ("
+            "  SELECT command_id FROM command_output_chunks"
+            "  GROUP BY command_id HAVING MAX(received_at) < ?"
+            ")",
+            (int(older_than),),
+        )
+        return cur.rowcount or 0
 
 
 def get_command(db_path, command_id):
