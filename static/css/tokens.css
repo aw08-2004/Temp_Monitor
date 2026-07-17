@@ -2,6 +2,7 @@
 
 :root {
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
     --text-xs: 12px;
     --text-sm: 13px;
@@ -51,6 +52,10 @@
     --focus-ring: rgba(59, 130, 246, 0.5);
     --control-bg: #0b1220;
     --scrollbar: #262b38;
+
+    /* Dimmer behind a modal. Separate from --control-bg because it must read as
+       "the page is inert", not "this is a surface". */
+    --overlay-scrim: rgb(0 0 0 / 0.62);
 }
 
 :root[data-theme="light"] {

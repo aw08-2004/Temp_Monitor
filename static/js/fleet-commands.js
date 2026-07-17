@@ -11,9 +11,8 @@
 (function () {
     'use strict';
 
-    const machineConfig = document.getElementById('machine-config');
-    if (!machineConfig) return;
-    const MACHINE_NAME = machineConfig.dataset.machine;
+    if (!window.FleetApi || !FleetApi.machine) return;
+    const MACHINE_NAME = FleetApi.machine;
 
     const agentStatusEl = document.getElementById('fleet-agent-status');
     const agentHintEl = document.getElementById('fleet-agent-hint');
@@ -128,12 +127,6 @@
         feedbackEl.textContent = '';
     }
 
-    async function getJson(url) {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-        return response.json();
-    }
-
     // ---------------- Params form ----------------
     function makeControl(field) {
         if (field.type === 'textarea') {
@@ -237,37 +230,19 @@
 
         if (spec.confirm && !window.confirm(spec.confirm(params))) return;
 
-        const body = { machine: MACHINE_NAME, type: spec.type, params };
-
         sendBtn.disabled = true;
         try {
-            const response = await fetch('/api/fleet/commands', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                showFeedback('error', data.error || `Hub returned ${response.status}.`);
-                return;
-            }
-            showFeedback('ok', `Queued ${spec.type} (${data.command_id}). The agent picks it up within ~10s.`);
-            hasActiveCommand = true;
-            await refreshHistory();
-            schedulePoll();
+            const commandId = await FleetApi.issueCommand(spec.type, params);
+            showFeedback('ok', `Queued ${spec.type} (${commandId}). The agent picks it up within ~10s.`);
         } catch (e) {
-            showFeedback('error', `Request failed: ${e.message}`);
+            showFeedback('error', e.message);
         } finally {
             sendBtn.disabled = false;
         }
     }
 
     // ---------------- History ----------------
-    function formatTime(epochSeconds) {
-        const value = Number(epochSeconds);
-        if (!Number.isFinite(value)) return '--';
-        return new Date(value * 1000).toLocaleString();
-    }
+    const formatTime = FleetApi.formatTime;
 
     function removeDetailRows() {
         historyBody.querySelectorAll('[data-detail-for]').forEach((el) => el.remove());
@@ -285,7 +260,7 @@
         const cell = document.createElement('td');
         cell.colSpan = 4;
         const pre = document.createElement('pre');
-        pre.className = 'fleet-output';
+        pre.className = 'console-surface fleet-output';
         // Show the last known text while refetching, so polling doesn't flicker
         // the output back to "Loading…" under the reader.
         pre.textContent = detailCache.get(commandId) ?? 'Loading…';
@@ -295,7 +270,7 @@
 
         let text;
         try {
-            const command = await getJson(`/api/fleet/commands/${encodeURIComponent(commandId)}`);
+            const command = await FleetApi.getCommand(commandId);
             const lines = [`params: ${JSON.stringify(command.params)}`];
             if (command.result) {
                 lines.push(`success: ${command.result.success ? 'yes' : 'no'}`);
@@ -379,7 +354,7 @@
 
     async function refreshHistory() {
         try {
-            const rows = await getJson(`/api/fleet/commands?machine=${encodeURIComponent(MACHINE_NAME)}`);
+            const rows = await FleetApi.listCommands(MACHINE_NAME);
             hasActiveCommand = rows.some((row) => ACTIVE_STATUSES.has(row.status));
             renderHistory(rows);
         } catch (e) {
@@ -390,7 +365,7 @@
 
     async function refreshAgentStatus() {
         try {
-            const rows = await getJson('/api/fleet/status');
+            const rows = await FleetApi.agentStatus();
             const entry = rows.find((row) => row.machine === MACHINE_NAME);
             if (!entry) {
                 setStatusPill(agentStatusEl, 'muted', 'No agent enrolled');
@@ -442,6 +417,13 @@
     refreshBtn.addEventListener('click', () => {
         refreshHistory();
         refreshAgentStatus();
+    });
+    // Fires for this panel's own sends AND for anything the Terminal tab runs, so a
+    // script typed there shows up here without either module knowing about the other.
+    FleetApi.onCommandIssued(() => {
+        hasActiveCommand = true;
+        refreshHistory();
+        schedulePoll();
     });
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') tick();

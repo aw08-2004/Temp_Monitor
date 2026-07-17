@@ -212,6 +212,86 @@
 :root[data-theme="dark"] .theme-toggle .icon-sun { display: none; }
 :root[data-theme="dark"] .theme-toggle .icon-moon { display: inline-block; }
 
+/* ============ Screen-reader only ============ */
+/* Visible to assistive tech, not on screen. For labels whose purpose is obvious
+   sighted (the terminal's prompt) but which still need naming. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ============ Tabs ============ */
+/* Roving-tabindex tablist; tabs.js owns aria-selected and the panels' `hidden`. */
+.tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: var(--space-5);
+    flex-wrap: wrap;
+}
+
+.tabs__tab {
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    /* Overlap the tablist's own border so the active underline replaces it rather
+       than stacking a second line under it. */
+    margin-bottom: -1px;
+    padding: var(--space-3) var(--space-4);
+    font-family: inherit;
+    font-size: var(--text-base);
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+/* :not(--active) is load-bearing, not decoration. A BEM modifier is ONE class, so
+   `.tabs__tab--active` is (0,1,0) while `.tabs__tab:hover` is (0,2,0) -- a bare hover
+   rule silently wins and the tab you just clicked (mouse still over it) renders in
+   --text instead of --accent. Scoping hover to inactive tabs sidesteps the whole
+   specificity race. (.sidebar__link has this same latent bug.) */
+.tabs__tab:not(.tabs__tab--active):hover { color: var(--text); }
+
+.tabs__tab--active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.tabs__tab:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+/* Explicit, because a panel with display:flex/grid would otherwise beat the UA
+   stylesheet's [hidden] rule and render while "hidden". */
+.tab-panel[hidden] { display: none; }
+
+/* ============ Console surface ============ */
+/* Monospace output pane. Shared by the command panel's inline result view and the
+   terminal's scrollback so the two can't drift apart. */
+.console-surface {
+    background: var(--control-bg);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    margin: 0;
+    font-family: var(--font-mono);
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+}
+
 /* ============ Cards ============ */
 .card {
     background: var(--card);

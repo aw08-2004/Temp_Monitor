@@ -112,16 +112,100 @@
     font-size: var(--text-sm);
 }
 
+/* Composes .console-surface (components.css) for the shared monospace pane. */
 .fleet-output {
-    background: var(--control-bg);
-    border-radius: var(--radius-md);
-    padding: var(--space-3);
-    margin: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: var(--text-xs);
-    color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-word;
     max-height: 320px;
-    overflow-y: auto;
+}
+
+/* ============ Terminal ============ */
+.terminal-card {
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-3);
+}
+
+.terminal__head-actions {
+    margin-left: auto;
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+/* Composes .console-surface. tabindex=0 so the scrollback is keyboard-scrollable
+   for anyone not using a mouse. */
+.terminal__scrollback {
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    min-height: 360px;
+    max-height: 60vh;
+    flex: 1;
+}
+
+.terminal__scrollback:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.terminal__line { display: block; }
+.terminal__line--echo { color: var(--accent); font-weight: 600; }
+.terminal__line--meta { color: var(--muted); }
+.terminal__line--err { color: var(--danger); }
+
+.terminal__promptline {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+}
+
+.terminal__ps {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--accent);
+    padding-top: 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.terminal__input {
+    flex: 1;
+    resize: none;
+    overflow: hidden;
+    background: var(--control-bg);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+}
+
+.terminal__input:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
+    border-color: var(--accent);
+}
+
+.terminal__input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.terminal__hint {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    margin-top: var(--space-2);
+}
+
+.terminal__hint--warn {
+    color: var(--warning);
 }

@@ -11,6 +11,16 @@
 <div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}" data-low-load-threshold="{{ low_load_threshold }}">
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
+    <div class="tabs" role="tablist" aria-label="Machine views" data-tabs-key="machine">
+        <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-overview"
+                aria-controls="tab-overview" aria-selected="true">Overview</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-terminal"
+                aria-controls="tab-terminal" aria-selected="false" tabindex="-1">Terminal</button>
+    </div>
+
+    {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
+       the Chart.js canvas below would size itself to nothing if it started hidden. #}
+    <div class="tab-panel" id="tab-overview" role="tabpanel" aria-labelledby="tab-btn-overview">
     <div class="card-grid">
         <div class="card stat-card" id="temp-card">
             <div class="stat-card__label">Live Temperature</div>
@@ -98,9 +108,46 @@
         </div>
         <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">No readings found for this day.</div>
     </div>
+    </div>{# /tab-overview #}
+
+    <div class="tab-panel" id="tab-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal" hidden>
+        <div class="card terminal-card">
+            <div class="terminal__head">
+                <div class="section-title" style="margin-bottom: 0;">Terminal</div>
+                <span class="status-pill status-pill--muted" id="terminal-status"><span class="status-pill__dot"></span>Idle</span>
+                <div class="terminal__head-actions">
+                    <label for="terminal-shell" class="fleet-field__label">Shell</label>
+                    <select id="terminal-shell" class="select">
+                        <option value="powershell">PowerShell</option>
+                        <option value="cmd">cmd</option>
+                    </select>
+                    <button id="terminal-clear" type="button" class="btn btn--ghost">Clear</button>
+                </div>
+            </div>
+
+            {# aria-live=polite so a screen reader announces streamed output as it lands.
+               Rendered with textContent only -- this is untrusted agent-side text. #}
+            <pre class="console-surface terminal__scrollback" id="terminal-scrollback" tabindex="0"
+                 aria-live="polite" aria-label="Command output"></pre>
+
+            <div class="terminal__promptline">
+                <span class="terminal__ps" id="terminal-ps" aria-hidden="true">PS {{ machine }}&gt;</span>
+                <label for="terminal-input" class="sr-only">Script to run on {{ machine }}</label>
+                <textarea id="terminal-input" class="terminal__input" rows="1" spellcheck="false"
+                          autocomplete="off" autocapitalize="off"
+                          placeholder="Get-Service Spooler"></textarea>
+                <button id="terminal-run" type="button" class="btn btn--primary">Run</button>
+            </div>
+            <div id="terminal-hint" class="terminal__hint"></div>
+        </div>
+    </div>{# /tab-terminal #}
 </div>
 {% endblock %}
 {% block page_scripts %}
+{# Order matters: fleet-api.js defines the window.FleetApi the two fleet modules use. #}
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-commands.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 {% endblock %}
