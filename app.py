@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 import threading
 import csv
@@ -30,7 +32,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.12.0"
+HUB_VERSION = "1.14.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -39,6 +41,9 @@ LOW_LOAD_THRESHOLD = 40
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
+# Opt-in hub self-update. Off by default so a dev clone never resets itself; the
+# operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. See hub_update_watcher().
+HUB_AUTO_UPDATE = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in ("1", "true", "yes", "on")
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -70,6 +75,12 @@ LOCAL_MACHINE = socket.gethostname()
 # past that a machine that's actually gone quiet should read as unknown again,
 # not show an arbitrarily stale reading forever.
 LIVE_STATUS_CACHE_SECONDS = 10 * 60
+
+# A machine that hasn't reported within this window drops off the live Dashboard and
+# reads as "offline" in the Asset Inventory. Live temp reports refresh
+# machine_info.updated_at at least every ~30s (persist_live_status throttling), so a
+# 2-minute window comfortably tolerates a couple of missed reports without flapping.
+DASHBOARD_ONLINE_WINDOW_SECONDS = 120
 
 latest_uptime = {}
 latest_uptime_lock = threading.Lock()
@@ -185,6 +196,19 @@ def load_cached_live_status(machine_name):
         return {}
     return {"temp": row["last_temp"], "uptime_seconds": row["last_uptime_seconds"]}
 
+def derive_machine_status(updated_at):
+    """'online' | 'offline' for the Dashboard and Asset Inventory, derived purely from
+    how recently the machine reported (machine_info.updated_at). Note we deliberately do
+    NOT treat presence in the in-memory latest_temp cache as "online": that cache is
+    never evicted, so a machine that reported once this process lifetime would read
+    online forever."""
+    if not updated_at:
+        return "offline"
+    parsed = parse_request_datetime(updated_at) if isinstance(updated_at, str) else None
+    if parsed is None:
+        return "offline"
+    return "online" if (datetime.now() - parsed).total_seconds() <= DASHBOARD_ONLINE_WINDOW_SECONDS else "offline"
+
 # ================================
 # VERSION WATCHER  --  lets clients self-update promptly instead of waiting for
 # their own weekly GitHub poll. We periodically check the same sources they
@@ -203,6 +227,10 @@ def load_cached_live_status(machine_name):
 # ================================
 COMPANION_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/companion.py"
 AGENT_MANIFEST_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
+# The hub reads its own latest version straight out of app.py on main -- same source-of-truth
+# and raw-GitHub trust as the client version hints above. Used only by the opt-in self-updater.
+HUB_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/app.py"
+HUB_UPDATE_CHECK_INTERVAL = 15 * 60  # 15 minutes
 COMPANION_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
 # First version of the C# agent. A client reporting >= this is on the agent train
 # and must never be pointed back at a 2.x companion number.
@@ -308,6 +336,106 @@ def start_companion_version_watcher():
             target=companion_version_watcher, daemon=True, name="companion_version_watcher"
         )
         companion_version_watcher_thread.start()
+
+# ================================
+# HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). The hub runs from a git clone as a
+# SYSTEM Scheduled Task ("TempMonitor - Hub") that self-heals every 2 minutes. So an
+# update is just: pull the clone up to main, then exit -- the task relaunches waitress,
+# which re-imports the new code. This trusts the pinned git origin over HTTPS plus push
+# access to main; it does NOT touch the separate Ed25519 fleet-update trust root.
+# ================================
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+def parse_hub_version(text):
+    """Pull the HUB_VERSION string out of an app.py source blob, or None. Pure; mirrors
+    the VERSION parse in refresh_latest_companion_version()."""
+    match = re.search(r'^HUB_VERSION\s*=\s*["\']([\d.]+)["\']', str(text or ""), re.MULTILINE)
+    return match.group(1) if match else None
+
+def fetch_remote_hub_version():
+    """Latest HUB_VERSION on main, or None on any error (logged, never raises)."""
+    try:
+        resp = requests.get(HUB_SOURCE_URL, timeout=10)
+        resp.raise_for_status()
+        return parse_hub_version(resp.text)
+    except Exception as e:
+        print(f"[hub-update] Could not read remote hub version: {e}")
+        return None
+
+def _run_git(args, cwd):
+    """Run a git command, returning (ok, combined_output). Never raises -- a missing git
+    binary or a timeout comes back as ok=False so the caller just skips this cycle."""
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=120
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode == 0, out.strip()
+    except Exception as e:
+        return False, str(e)
+
+def perform_hub_update(repo_root):
+    """Bring the clone at repo_root up to origin/main via fetch + hard reset, then a
+    best-effort dependency install. Returns True only if fetch AND reset succeeded --
+    the caller restarts only then. Discards local drift by design (operator-confirmed)."""
+    ok, out = _run_git(["fetch", "origin", "main"], repo_root)
+    if not ok:
+        print(f"[hub-update] git fetch failed, skipping: {out}")
+        return False
+    ok, out = _run_git(["reset", "--hard", "origin/main"], repo_root)
+    if not ok:
+        print(f"[hub-update] git reset failed, skipping: {out}")
+        return False
+    print(f"[hub-update] Updated working tree to origin/main: {out}")
+    # Best-effort: a release that adds a dependency shouldn't crash-loop the restart.
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r",
+             os.path.join(repo_root, "requirements.txt"), "--quiet"],
+            cwd=repo_root, capture_output=True, text=True, timeout=300,
+        )
+    except Exception as e:
+        print(f"[hub-update] pip install after update failed (continuing): {e}")
+    return True
+
+def restart_hub():
+    """Exit so the Scheduled Task's 2-minute repetition relaunches waitress with the new
+    code. Abrupt by design -- WAL + per-batch commits make this as safe as the crash the
+    task already recovers from. Downtime is <=2 min."""
+    print("[hub-update] New version applied -- exiting for the service to relaunch.")
+    sys.stdout.flush()
+    os._exit(0)
+
+def hub_update_watcher():
+    while True:
+        try:
+            if HUB_AUTO_UPDATE:
+                remote = fetch_remote_hub_version()
+                if remote and cmp_versions(remote, HUB_VERSION) > 0:
+                    print(f"[hub-update] main is {remote} (running {HUB_VERSION}); updating.")
+                    if perform_hub_update(REPO_ROOT):
+                        restart_hub()
+        except Exception as e:
+            print(f"[hub-update] watcher error (continuing): {e}")
+        time.sleep(HUB_UPDATE_CHECK_INTERVAL)
+
+hub_update_watcher_thread = None
+hub_update_watcher_lock = threading.Lock()
+
+def start_hub_update_watcher():
+    """No-op unless HUB_AUTO_UPDATE is set, so dev clones never self-reset."""
+    global hub_update_watcher_thread
+    if not HUB_AUTO_UPDATE:
+        print("[hub-update] HUB_AUTO_UPDATE unset -- hub self-update disabled.")
+        return
+    with hub_update_watcher_lock:
+        if hub_update_watcher_thread and hub_update_watcher_thread.is_alive():
+            return
+        hub_update_watcher_thread = threading.Thread(
+            target=hub_update_watcher, daemon=True, name="hub_update_watcher"
+        )
+        hub_update_watcher_thread.start()
+        print("[hub-update] HUB_AUTO_UPDATE enabled -- watching main every 15 min.")
 
 # ================================
 # AUTH CONFIG (Google sign-in)
@@ -931,6 +1059,7 @@ def start_retention_pruner():
 init_db()
 fleet.init_fleet_db(DB_PATH)
 start_companion_version_watcher()
+start_hub_update_watcher()
 start_retention_pruner()
 
 # ================================
@@ -1079,6 +1208,7 @@ def get_machines():
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
         row['temp'] = get_latest_temp(row['machine'])
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
+        row['status'] = derive_machine_status(row['updated_at'])
     result.sort(key=lambda row: row['machine'])
     return jsonify(result)
 
@@ -1106,7 +1236,36 @@ def get_machine(machine):
     result['uptime_seconds'] = uptime_seconds
     result['temp'] = temp
     result['diagnostics'] = extract_diagnostics(get_latest_sensors(machine_name))
+    result['status'] = derive_machine_status(result.get('updated_at'))
     return jsonify(result)
+
+
+@app.route('/api/machines/<machine>', methods=['DELETE'])
+@login_required
+def delete_machine(machine):
+    """Hard-delete a decommissioned machine: its identity row, all temperature history,
+    and its fleet agent enrollment. Irreversible. If the machine's companion is still
+    running it will re-enroll and reappear on its next report -- this is meant for
+    machines that are actually gone."""
+    machine_name = str(machine).strip()
+    if not machine_name:
+        return jsonify({"error": "Machine name required"}), 400
+    with get_db_conn() as conn:
+        conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
+        conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
+    fleet.delete_machine(DB_PATH, machine_name)
+    # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
+    with latest_temp_lock:
+        latest_temp.pop(machine_name, None)
+    with latest_uptime_lock:
+        latest_uptime.pop(machine_name, None)
+    with latest_sensors_lock:
+        latest_sensors.pop(machine_name, None)
+    with _last_live_status_persist_lock:
+        _last_live_status_persist.pop(machine_name, None)
+    actor = (session.get("user") or {}).get("email", "unknown")
+    fleet.audit(DB_PATH, actor, "machine.delete", machine_name)
+    return jsonify({"status": "deleted"}), 200
 
 @app.route('/api/history')
 @login_required
@@ -1225,6 +1384,13 @@ def index():
 @login_required
 def history_page():
     return render_template("history.html", hub_version=HUB_VERSION,
+                           latest_companion_version=get_latest_companion_version(),
+                           latest_agent_version=get_latest_agent_version())
+
+@app.route("/inventory")
+@login_required
+def inventory_page():
+    return render_template("inventory.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 

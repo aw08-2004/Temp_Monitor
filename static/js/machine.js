@@ -19,6 +19,37 @@ const dynamicResolutionEl = document.getElementById('dynamic-resolution');
 const noDataEl = document.getElementById('no-data');
 const tempCard = document.getElementById('temp-card');
 const statusEl = document.getElementById('stat-status');
+const uptimeLabelEl = document.getElementById('stat-uptime-label');
+const uptimeValueEl = document.getElementById('stat-uptime');
+
+// Concise "3h ago" from a server-local "YYYY-MM-DD HH:MM:SS" string, for the offline
+// "Last seen" readout (the hub and operators run in the same timezone).
+function formatRelativeTime(updatedAt) {
+    if (!updatedAt) return '--';
+    const then = new Date(String(updatedAt).replace(' ', 'T'));
+    if (Number.isNaN(then.getTime())) return updatedAt;
+    const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+}
+
+// The Uptime card doubles as a "Last seen" card when the machine is offline -- a stale
+// uptime is meaningless, and last-seen is what you actually want for a machine that's gone quiet.
+function showUptime(uptimeSeconds) {
+    uptimeLabelEl.textContent = 'Uptime';
+    uptimeValueEl.textContent = formatUptime(uptimeSeconds);
+    uptimeValueEl.removeAttribute('title');
+}
+
+function showLastSeen(updatedAt) {
+    uptimeLabelEl.textContent = 'Last seen';
+    uptimeValueEl.textContent = formatRelativeTime(updatedAt);
+    if (updatedAt) uptimeValueEl.title = updatedAt; else uptimeValueEl.removeAttribute('title');
+}
 const VIEWPORT_RELOAD_DEBOUNCE_MS = 250;
 let viewportReloadTimer = null;
 let lastHistoryRequest = null;
@@ -294,7 +325,11 @@ async function loadMachineInfo() {
         const info = await resp.json();
         applyDiagnostics(info.diagnostics);
         applyTemp(info.temp);
-        document.getElementById('stat-uptime').textContent = formatUptime(info.uptime_seconds);
+        if (info.status === 'offline') {
+            showLastSeen(info.updated_at);
+        } else {
+            showUptime(info.uptime_seconds);
+        }
         document.getElementById('stat-version').textContent = info.companion_version || '--';
         document.getElementById('stat-model').textContent = 'Model: ' + (info.model || '--');
         document.getElementById('stat-serial').textContent = 'Serial: ' + (info.serial_number || '--');
@@ -311,8 +346,10 @@ socket.on('new_temp', (msg) => {
     if (msg.machine !== MACHINE) return;
     applyDiagnostics(msg.diagnostics);
     applyTemp(msg.temp);
+    // A live report means the machine is online now, so restore the uptime readout
+    // (it may have been showing "Last seen" from an earlier offline load).
     if (msg.uptime_seconds !== undefined && msg.uptime_seconds !== null) {
-        document.getElementById('stat-uptime').textContent = formatUptime(msg.uptime_seconds);
+        showUptime(msg.uptime_seconds);
     }
     // Follow a companion self-update without a refresh. Only present when the client
     // reported one, so an older client's silence can't blank the version we already show.

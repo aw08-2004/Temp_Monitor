@@ -363,6 +363,44 @@ def main():
         check("oversized params truncated in audit detail",
               len(detail) < 10_000 and big is not None)
 
+        print("\n== Machine hard-delete ==")
+        # Enroll a throwaway machine with a command, a result and an output chunk, then
+        # purge it and confirm every fleet row for it is gone -- and PC-01 is untouched.
+        del_id, del_tok = fleet.enroll_agent(db_path, "PC-DEL", SECRET, SECRET)
+        del_cmd = fleet.create_command(db_path, "PC-DEL", "restart", {}, issued_by="helpdesk@x.com")
+        fleet.claim_commands(db_path, del_id, "PC-DEL")
+        fleet.complete_command(db_path, del_cmd, del_id, success=True, output="done")
+        with fleet.get_conn(db_path) as conn:
+            conn.execute(
+                "INSERT INTO command_output_chunks(command_id, seq, chunk, received_at) "
+                "VALUES (?, ?, ?, ?)", (del_cmd, 0, "hello", int(time.time())))
+
+        pc01_cmds_before = None
+        with fleet.get_conn(db_path) as conn:
+            pc01_cmds_before = conn.execute(
+                "SELECT COUNT(*) AS n FROM commands WHERE machine = 'PC-01'").fetchone()["n"]
+
+        fleet.delete_machine(db_path, "PC-DEL")
+
+        with fleet.get_conn(db_path) as conn:
+            agents_n = conn.execute("SELECT COUNT(*) AS n FROM agents WHERE machine = 'PC-DEL'").fetchone()["n"]
+            cmds_n = conn.execute("SELECT COUNT(*) AS n FROM commands WHERE machine = 'PC-DEL'").fetchone()["n"]
+            res_n = conn.execute("SELECT COUNT(*) AS n FROM command_results WHERE command_id = ?", (del_cmd,)).fetchone()["n"]
+            chunk_n = conn.execute("SELECT COUNT(*) AS n FROM command_output_chunks WHERE command_id = ?", (del_cmd,)).fetchone()["n"]
+            pc01_cmds_after = conn.execute("SELECT COUNT(*) AS n FROM commands WHERE machine = 'PC-01'").fetchone()["n"]
+        check("delete_machine removes agent rows", agents_n == 0)
+        check("delete_machine removes command rows", cmds_n == 0)
+        check("delete_machine removes command_results", res_n == 0)
+        check("delete_machine removes output chunks", chunk_n == 0)
+        check("delete_machine leaves other machines untouched", pc01_cmds_after == pc01_cmds_before)
+        check("deleted machine drops out of list_agent_status",
+              all(s["machine"] != "PC-DEL" for s in fleet.list_agent_status(db_path)))
+        # Purging is name-safe: empty/whitespace name is a no-op, not a full-table wipe.
+        fleet.delete_machine(db_path, "   ")
+        with fleet.get_conn(db_path) as conn:
+            check("delete_machine('  ') is a no-op",
+                  conn.execute("SELECT COUNT(*) AS n FROM agents WHERE machine = 'PC-01'").fetchone()["n"] >= 1)
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:

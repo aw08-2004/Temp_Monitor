@@ -110,6 +110,21 @@ the top of `companion.py` on every push to `main`, or nothing will update.
 From **2.8.0** onward, updates are Ed25519-signed (see [Signing releases](#signing-releases)
 below) — an unsigned or tampered `companion.py` is refused, not applied.
 
+### Hub self-updates (opt-in)
+
+The hub can keep itself current too, but it's **off by default** — set
+`HUB_AUTO_UPDATE=1` in the hub's `.env` to enable it (a dev clone left unset never
+touches itself). When enabled, the hub checks `HUB_VERSION` on `main` every 15
+minutes; when `main` is ahead it runs `git fetch` + `git reset --hard origin/main`
+in its own clone (mirroring `main` exactly — **local changes on the hub box are
+discarded**), best-effort re-installs `requirements.txt`, then exits so the
+`TempMonitor - Hub` scheduled task relaunches waitress on the new code (its normal
+2-minute self-heal; expect up to ~2 min of downtime). Requirements: the hub runs
+from a clone under that task, and `git` is on `PATH`. Unlike the companion/agent
+trains this trusts the pinned git origin over HTTPS rather than the Ed25519 release
+key. As with every hub change, bump `HUB_VERSION` near the top of `app.py` on each
+push to `main`, or the hub won't know to update.
+
 ### Migration to the C# agent (automatic, from companion 2.10.0)
 
 From companion **2.10.0**, every machine that self-updates checks whether the

@@ -341,6 +341,30 @@ def list_agent_status(db_path, now=None, offline_after=DEFAULT_OFFLINE_AFTER_SEC
     return result
 
 
+def delete_machine(db_path, machine):
+    """Remove all fleet rows for a machine: its agent enrollments, its queued/past
+    commands, and the command_results / command_output_chunks tied to those commands.
+    The append-only audit_log is intentionally left intact (the hub audits the deletion
+    itself). Called when an operator hard-deletes a decommissioned machine."""
+    machine = str(machine or "").strip()
+    if not machine:
+        return
+    with get_conn(db_path) as conn:
+        cmd_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM commands WHERE machine = ?", (machine,)
+        ).fetchall()]
+        if cmd_ids:
+            placeholders = ",".join("?" for _ in cmd_ids)
+            conn.execute(
+                f"DELETE FROM command_results WHERE command_id IN ({placeholders})", cmd_ids
+            )
+            conn.execute(
+                f"DELETE FROM command_output_chunks WHERE command_id IN ({placeholders})", cmd_ids
+            )
+        conn.execute("DELETE FROM commands WHERE machine = ?", (machine,))
+        conn.execute("DELETE FROM agents WHERE machine = ?", (machine,))
+
+
 # ================================
 # COMMAND QUEUE
 # ================================

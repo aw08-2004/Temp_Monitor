@@ -142,6 +142,68 @@ def test_report_endpoint():
     check("unknown trains: latest_version omitted", "latest_version" not in body)
 
 
+def test_hub_self_update():
+    print("\n-- hub self-update: parse_hub_version --")
+    check("parses double-quoted", app.parse_hub_version('HUB_VERSION = "1.14.0"\n') == "1.14.0")
+    check("parses single-quoted", app.parse_hub_version("HUB_VERSION = '2.0.3'") == "2.0.3")
+    check("ignores non-anchored text", app.parse_hub_version('X_HUB_VERSION = "9.9.9"') is None)
+    check("none when absent", app.parse_hub_version("nothing here") is None)
+    check("first match wins",
+          app.parse_hub_version('HUB_VERSION = "1.0.0"\nHUB_VERSION = "2.0.0"') == "1.0.0")
+
+    print("\n-- hub self-update: update decision --")
+    check("remote ahead triggers", app.cmp_versions("1.15.0", app.HUB_VERSION) > 0)
+    check("same version no update", app.cmp_versions(app.HUB_VERSION, app.HUB_VERSION) == 0)
+
+    print("\n-- hub self-update: watcher flag gating --")
+    saved_flag = app.HUB_AUTO_UPDATE
+    app.hub_update_watcher_thread = None
+    app.HUB_AUTO_UPDATE = False
+    app.start_hub_update_watcher()
+    check("disabled -> no watcher thread", app.hub_update_watcher_thread is None)
+    # Enabled: stub the fetch so the loop never touches the network, then confirm it runs.
+    orig_fetch = app.fetch_remote_hub_version
+    app.fetch_remote_hub_version = lambda: None
+    app.HUB_AUTO_UPDATE = True
+    try:
+        app.start_hub_update_watcher()
+        check("enabled -> watcher thread alive",
+              app.hub_update_watcher_thread is not None and app.hub_update_watcher_thread.is_alive())
+    finally:
+        app.fetch_remote_hub_version = orig_fetch
+        app.HUB_AUTO_UPDATE = saved_flag
+
+    print("\n-- hub self-update: perform_hub_update pulls a clone up to origin/main --")
+    import subprocess as _sp
+
+    def _git(cwd, *args):
+        _sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                cwd=cwd, capture_output=True, text=True, check=True)
+    try:
+        base = tempfile.mkdtemp(prefix="hub-selfupdate-")
+        origin = os.path.join(base, "origin")
+        os.makedirs(origin)
+        _git(origin, "init", "-b", "main")
+        with open(os.path.join(origin, "app.py"), "w") as f:
+            f.write('HUB_VERSION = "1.0.0"\n')
+        open(os.path.join(origin, "requirements.txt"), "w").close()
+        _git(origin, "add", "-A")
+        _git(origin, "commit", "-m", "v1")
+        work = os.path.join(base, "work")
+        _sp.run(["git", "clone", origin, work], capture_output=True, text=True, check=True)
+        # origin advances; the hub's clone must fast-follow via reset --hard.
+        with open(os.path.join(origin, "app.py"), "w") as f:
+            f.write('HUB_VERSION = "2.0.0"\n')
+        _git(origin, "commit", "-am", "v2")
+        ok = app.perform_hub_update(work)
+        with open(os.path.join(work, "app.py")) as f:
+            pulled = f.read()
+        check("perform_hub_update returned True", ok is True)
+        check("clone advanced to origin/main (2.0.0)", app.parse_hub_version(pulled) == "2.0.0")
+    except Exception as e:
+        check(f"perform_hub_update dry run (unexpected error: {e})", False)
+
+
 if __name__ == "__main__":
     test_version_compare()
     test_companion_train()
@@ -149,5 +211,6 @@ if __name__ == "__main__":
     test_agent_train()
     test_unknown_trains()
     test_report_endpoint()
+    test_hub_self_update()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

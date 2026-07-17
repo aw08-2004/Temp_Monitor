@@ -81,14 +81,25 @@ async function refreshMachineInfo() {
         const resp = await fetch('/api/machines');
         if (!resp.ok) return;
         const rows = await resp.json();
-        emptyStateEl.style.display = rows.length ? 'none' : 'block';
-        for (const row of rows) {
+        // The live Dashboard shows only currently-online machines. Offline (and
+        // deleted) machines live in the Asset Inventory, not here.
+        const online = rows.filter((row) => row.status === 'online');
+        const onlineNames = new Set(online.map((row) => row.machine));
+        // Reconcile: drop any card whose machine is no longer online.
+        for (const card of Array.from(machineCards.children)) {
+            const name = card.id.replace(/^card-/, '');
+            if (!onlineNames.has(name)) card.remove();
+        }
+        emptyStateEl.style.display = online.length ? 'none' : 'block';
+        for (const row of online) {
             updateMachineCard(row.machine, row.temp, 85, row.uptime_seconds, row, row.diagnostics);
         }
     } catch (e) { /* non-critical, dashboard still works without it */ }
 }
 
 refreshMachineInfo();
+// Re-poll so a machine that goes quiet disappears from the live view without a reload.
+setInterval(refreshMachineInfo, 30000);
 
 socket.on('new_temp', (msg) => {
     updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds, undefined, msg.diagnostics);
