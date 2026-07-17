@@ -2,8 +2,8 @@
 
 A Windows Service (runs under **LocalSystem**) that replaces the Python `companion.py`
 for RMM. It reaches telemetry parity with the companion **and** speaks the hub's fleet
-command channel: it enrolls, heartbeats, polls for commands, verifies signatures
-fail-closed, executes them, reports results, and updates itself from a signed manifest.
+command channel: it enrolls, heartbeats, polls for commands, executes them, reports
+results, and updates itself from a **signed** manifest (verified fail-closed).
 
 - **Target:** .NET 10 (`net10.0-windows`), published **self-contained single-file
   win-x64** (no runtime install needed on the fleet).
@@ -17,11 +17,11 @@ src/TempMonitorAgent/
   Program.cs / Worker.cs         host + main loop
   AgentConfig.cs                 constants, endpoints, trust roots, %ProgramData% paths
   Telemetry/                     SensorReader (LHM), SystemInfo (WMI), TelemetryReporter
-  Fleet/                         FleetClient, CommandCanonicalizer, SignatureVerifier,
-                                 CommandDispatcher, Executors/
+  Fleet/                         FleetClient, SignatureVerifier, CommandDispatcher,
+                                 Executors/
   Update/                        SelfUpdater, VersionUtil
   State/                         AgentState (agent.json, restart_state.json)
-tests/TempMonitorAgent.Tests/    xUnit: canonicalizer golden vectors, sig verify, versions
+tests/TempMonitorAgent.Tests/    xUnit: update-manifest sig verify, versions
 install/agent-install.ps1        installs the service (+ PawnIO, recovery, enroll secret)
 ```
 
@@ -30,22 +30,26 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
 - Fleet: `POST /api/agent/enroll` → `{agent_id, token}`; then
   `Authorization: Bearer <agent_id>:<token>` on `POST /api/agent/heartbeat`,
   `GET /api/agent/commands` (pull+claim), `POST /api/agent/commands/<id>/result`.
-- **High-risk** (`run_script`, `install_driver`, `update_bios`) require a valid Ed25519
-  signature over `CommandCanonicalizer.CanonicalBytes` — the byte-exact mirror of
-  `fleet.canonical_command_bytes`. The agent enforces this on its **own**
-  classification, so a compromised hub cannot downgrade a command by clearing the flag.
+- Commands are **not signed**. The agent executes what an enrolled, authenticated pull
+  returns; the hub authorizes on an allow-listed console session and records every
+  command in its `audit_log`. (Until hub 1.10 / agent 3.1, `run_script`,
+  `install_driver` and `update_bios` additionally required an offline Ed25519 signature
+  verified here. No key was ever configured, so in practice they were always refused —
+  which is why removing the gate is what made them work, not a loosening.)
 
 Implemented executors: `restart`, `shutdown`, `rename`, `gpupdate`, `install_app`,
-`run_script` (signed). `install_driver` / `update_bios` are signature-gated stubs.
+`run_script`. `install_driver` / `update_bios` are stubs.
+
+**Still signed, and unrelated to the above:** the self-update manifest. `SelfUpdater`
+verifies it with `SignatureVerifier.VerifyRaw` against `AgentConfig.UpdatePublicKeyHex`
+before any binary replaces the running one. That is what stops a compromised hub from
+pushing malicious code to the fleet — do not remove it.
 
 ## Configuration
 - `TEMP_MONITOR_HUB` — hub base URL (default `https://temp.arkeanos.net`).
 - `TEMP_MONITOR_MACHINE` — machine name (default `Environment.MachineName`).
 - `AGENT_ENROLLMENT_SECRET` — enrollment secret (installer writes it to
   `HKLM\SOFTWARE\TempMonitorAgent`; env overrides for testing).
-- `COMMAND_SIGNING_PUBLIC_KEY_HEX` — must equal the hub's; bake into
-  `AgentConfig.CommandSigningPublicKeyHexEmbedded` for production. Empty ⇒ every
-  high-risk command is refused (fail-closed).
 - `TEMP_MONITOR_NO_UPDATE=1` — disable self-update (testing).
 
 ## Build / test / publish
@@ -87,7 +91,7 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
 ```powershell
 agent/install/agent-install.ps1 -AgentExe .\dist\TempMonitorAgent.exe -EnrollmentSecret <secret>
 agent/install/agent-install.ps1 -AgentUrl <release-url> -EnrollmentSecret <secret> `
-    -CommandSigningPublicKey <64-hex> -HubUrl https://temp.arkeanos.net
+    -HubUrl https://temp.arkeanos.net
 agent/install/agent-install.ps1 -Uninstall
 ```
 Logs: `%ProgramData%\TempMonitorAgent\companion.log`.

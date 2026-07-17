@@ -26,14 +26,14 @@ public sealed class RestartState
     [JsonPropertyName("count")] public int Count { get; set; }
 }
 
-/// <summary>A command as delivered by GET /api/agent/commands.</summary>
+/// <summary>A command as delivered by GET /api/agent/commands.
+/// A pre-1.10 hub also sends requires_signature/signature; System.Text.Json ignores
+/// unknown members by default, so this deserializes cleanly against either hub.</summary>
 public sealed class FleetCommand
 {
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("type")] public string Type { get; set; } = "";
     [JsonPropertyName("params")] public JsonNode? Params { get; set; }
-    [JsonPropertyName("requires_signature")] public bool RequiresSignature { get; set; }
-    [JsonPropertyName("signature")] public string? Signature { get; set; }
 }
 
 /// <summary>Result of executing a command, reported back to the hub.</summary>

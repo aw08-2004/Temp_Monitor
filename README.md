@@ -70,9 +70,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                 
 
 Component-specific parameters: `-InstallDir <path>` / `-Port <port>` (Companion,
 defaults `C:\Program Files\TempMonitor` / `8085`); `-AgentUrl` / `-AgentExe` /
-`-EnrollmentSecret` / `-HubUrl` / `-CommandSigningPublicKey` (Agent); `-HubPort
-<port>` (Hub, default `3001`) -- Hub setup must be run from a local clone since
-it needs the full app, not just one file.
+`-EnrollmentSecret` / `-HubUrl` (Agent); `-HubPort <port>` (Hub, default `3001`)
+-- Hub setup must be run from a local clone since it needs the full app, not just
+one file.
 
 ## Installing the companion agent (legacy)
 
@@ -193,40 +193,56 @@ direction, added by [fleet.py](fleet.py) (core logic) and
 (`agent/`) implements the client side of this channel; `companion.py` does not**
 (it's telemetry-only, which is why it migrates itself away — see above).
 
-**Security model.** The channel is built to be safe even against a compromised
-hub:
+**Security model.**
 
 - **Agent enrollment**: an agent presents a shared `AGENT_ENROLLMENT_SECRET` to
   `POST /api/agent/enroll` and receives a per-agent bearer token (only its hash
   is stored). All other agent endpoints require `Authorization: Bearer
-  <agent_id>:<token>`.
-- **Command tiers**: low-risk commands (`restart`, `shutdown`, `rename`,
-  `gpupdate`, `install_app`) dispatch on an authorized console session alone.
-  High-risk commands (`run_script`, `install_driver`, `update_bios`) additionally
-  require an **offline Ed25519 signature** over the canonical payload — verified
-  by the hub *and* re-verified by the agent before executing, using the agent's own
-  classification of what counts as high-risk (so a compromised hub can't downgrade
-  a command just by clearing the flag). The private key lives off the repo (same
-  trust root as signed self-updates); sign a command with:
+  <agent_id>:<token>`. With the secret unset, no agent can enroll (fail closed).
+- **Issuing a command requires nothing but a signed-in, allow-listed session.**
+  Every type — including `run_script`, which runs arbitrary PowerShell **as SYSTEM** —
+  dispatches on that alone. So:
 
-  ```powershell
-  python sign_release.py --sign-command --type run_script --machine PC-01 --params '{\"script\":\"...\"}'
-  ```
+  > ⚠️ **`ALLOWED_EMAILS` is the entire perimeter for remote code execution as SYSTEM
+  > across the fleet.** Anyone on that list can run anything, anywhere, at any time.
+  > Treat adding an address to it as granting domain-admin-equivalent power, and keep
+  > those accounts on MFA.
 
-  The backslashes are not optional in PowerShell: it strips inner double quotes when
-  passing an argument to a native exe, so an unescaped `'{"script":"..."}'` arrives at
-  Python as `{script:...}` and fails to parse. In bash, drop the backslashes.
+  This is deliberate: the channel is operated by a helpdesk group, and the previous
+  design (below) could not serve more than one person.
+- **The `audit_log` is the accountability control.** Every enroll / issue / claim /
+  complete is appended, and `issue_command` records the issuing operator's email plus
+  the **full command params, including script text**. With no second gate, that trail
+  is the only answer to "who ran this?" — so it must never be allowed to go quiet.
+- **CSRF**: the console endpoints only accept `application/json` bodies. That is
+  load-bearing, not incidental — it's what stops a cross-site POST from a signed-in
+  operator's browser becoming fleet-wide RCE (that content type isn't CORS-safelisted,
+  so cross-origin requests preflight and fail; an HTML form can't produce it). The
+  session cookie is additionally pinned `SameSite=Lax` + `Secure`. Don't add
+  `force=True` to a `get_json()` call, a form-encoded fallback, or permissive CORS.
 
-- **Fail closed**: with `AGENT_ENROLLMENT_SECRET` unset no agent can enroll; with
-  `COMMAND_SIGNING_PUBLIC_KEY_HEX` unset every high-risk command is refused. Both
-  are optional env vars, so telemetry-only deployments are unaffected. **Neither is
-  currently configured on this hub** — set both before issuing any fleet commands.
+<details>
+<summary>Previously: signed high-risk commands (removed in hub 1.10 / agent 3.1)</summary>
+
+`run_script`, `install_driver` and `update_bios` used to additionally require an
+**offline Ed25519 signature** over the canonical payload, verified by the hub and
+re-verified by the agent, produced with `sign_release.py --sign-command`. It assumed a
+single operator holding the private key and gave a helpdesk group no way to run a script
+without that person signing it for them.
+
+It was also never actually live: no `COMMAND_SIGNING_PUBLIC_KEY_HEX` was ever configured
+on the hub, and `AgentConfig`'s embedded key was left empty, so both ends failed closed
+and **every high-risk command was refused outright**. Removing the gate is what made
+`run_script` work at all; it did not loosen a working control.
+
+Self-update signing is a **separate trust root and is untouched** — see
+[Signing releases](#signing-releases).
+</details>
 
 Add to the hub's environment / `.env`:
 
 ```
 AGENT_ENROLLMENT_SECRET=a-long-random-shared-secret
-COMMAND_SIGNING_PUBLIC_KEY_HEX=<64-hex Ed25519 public key from sign_release.py --genkey>
 ```
 
 **Endpoints.** Agent-facing (token auth): `POST /api/agent/enroll`,
@@ -252,5 +268,9 @@ can't push code that runs as admin fleet-wide unverified:
 One-time setup: `python sign_release.py --genkey`, keep the private key OFF the
 repo, paste the printed public key into `companion.py`'s `UPDATE_PUBLIC_KEY_HEX`
 (the C# agent's `AgentConfig.UpdatePublicKeyHex` reuses the same key/trust root).
-`sign_release.py --sign-command` uses a separate, independently-configurable trust
-root (`COMMAND_SIGNING_PUBLIC_KEY_HEX`) for the fleet command channel — see above.
+
+This is the **release** trust root: it governs what *code* the fleet is allowed to run,
+and it is fully enforced. It is unrelated to fleet *commands*, which are no longer signed
+(see [Fleet command channel](#fleet-command-channel)). Don't conflate the two — a
+compromised hub still must not be able to push a malicious binary, which is exactly what
+these signatures prevent.

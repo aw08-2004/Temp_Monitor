@@ -12,14 +12,22 @@ Two audiences, two auth schemes:
   * Console-facing endpoints (/api/fleet/*): gated behind the same Google
     sign-in as the rest of the dashboard, via the login_required passed in from
     app.py. This is where an operator issues commands and reads status/audit.
+    That session gate is the ONLY authorization on the command path -- commands
+    carry no signature (see fleet.py's module docstring) -- so it is also the
+    perimeter for running code as SYSTEM across the fleet.
 
-High-risk commands (run_script / install_driver / update_bios) must arrive with a
-valid offline Ed25519 signature; create_command re-verifies it here before
-queueing, and the agent verifies it again before executing.
+Note for anyone extending the console endpoints: reading the body with
+request.get_json(silent=True) is load-bearing beyond convenience. It requires
+Content-Type: application/json, which is not CORS-safelisted, so a cross-origin
+fetch preflights and fails (no ACAO here) and an HTML form -- the one cross-site
+POST needing no preflight -- cannot produce that content type. That is what keeps
+a CSRF against a signed-in operator from becoming fleet-wide RCE. Do not add
+force=True, and do not accept a form-encoded fallback. (app.py additionally pins
+SameSite=Lax on the session cookie.)
 """
 import functools
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 import fleet
 
@@ -41,7 +49,7 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
-def create_fleet_blueprint(db_path, enrollment_secret, command_public_key_hex, login_required):
+def create_fleet_blueprint(db_path, enrollment_secret, login_required):
     """Build the fleet Blueprint. `login_required` is app.py's session gate, passed
     in to avoid a circular import and to keep one source of truth for auth."""
     bp = Blueprint("fleet", __name__)
@@ -121,7 +129,6 @@ def create_fleet_blueprint(db_path, enrollment_secret, command_public_key_hex, l
     @bp.route("/api/fleet/commands", methods=["POST"])
     @login_required
     def fleet_issue_command():
-        from flask import session
         data = request.get_json(silent=True) or {}
         issued_by = (session.get("user") or {}).get("email", "unknown")
         try:
@@ -131,11 +138,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, command_public_key_hex, l
                 command_type=data.get("type"),
                 params=data.get("params") or {},
                 issued_by=issued_by,
-                signature=data.get("signature"),
-                public_key_hex=command_public_key_hex,
             )
-        except PermissionError as e:
-            return jsonify({"error": str(e)}), 403
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"command_id": command_id}), 201

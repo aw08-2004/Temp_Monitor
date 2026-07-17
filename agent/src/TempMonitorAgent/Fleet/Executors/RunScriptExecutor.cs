@@ -1,10 +1,13 @@
 namespace TempMonitorAgent.Fleet.Executors;
 
 /// <summary>
-/// run_script (HIGH-RISK, signature-gated by the dispatcher): write params.script to a
-/// temp file and run it. params.shell selects "powershell" (default) or "cmd".
-/// Because it runs arbitrary code as SYSTEM, it only ever reaches here after a valid
-/// offline Ed25519 signature has been verified.
+/// run_script: write params.script to a temp file and run it. params.shell selects
+/// "powershell" (default) or "cmd".
+///
+/// This runs arbitrary code as SYSTEM on the strength of the hub having authorized it
+/// (an allow-listed console session), so the hub's audit_log is the record of who asked
+/// for what. It used to additionally require an offline Ed25519 signature verified here
+/// on the agent; that gate is gone.
 /// </summary>
 public sealed class RunScriptExecutor : ICommandExecutor
 {

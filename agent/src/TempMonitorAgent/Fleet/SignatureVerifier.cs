@@ -1,26 +1,22 @@
-using System.Text.Json.Nodes;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
 
 namespace TempMonitorAgent.Fleet;
 
 /// <summary>
-/// Verifies Ed25519 signatures over canonical command bytes and over raw update
-/// manifests. Fails closed exactly like fleet.verify_command_signature /
-/// companion.verify_signature: an unset key, missing signature, malformed hex, or a
-/// bad signature all return false — no exception ever escapes as "valid".
+/// The agent's update trust root: verifies the Ed25519 signature over the self-update
+/// manifest before any downloaded binary is allowed to replace the running one (see
+/// SelfUpdater + AgentConfig.UpdatePublicKeyHex). Fails closed exactly like
+/// companion.verify_signature — an unset key, missing signature, malformed hex, or a
+/// bad signature all return false, and no exception ever escapes as "valid".
+///
+/// This once also verified signed fleet commands. Commands are no longer signed (the
+/// hub authorizes them on the console session instead), but this path is unrelated to
+/// that change and must stay enforced: it is what stops a compromised hub from pushing
+/// a malicious binary to the fleet.
 /// </summary>
 public static class SignatureVerifier
 {
-    /// <summary>Verify a signed fleet command before executing it.</summary>
-    public static bool VerifyCommand(
-        string? publicKeyHex, string commandType, string machine,
-        JsonNode? paramsNode, string? signatureHex)
-    {
-        var message = CommandCanonicalizer.CanonicalBytes(commandType, machine, paramsNode);
-        return VerifyRaw(publicKeyHex, message, signatureHex);
-    }
-
     /// <summary>Verify a detached Ed25519 signature (hex) over arbitrary bytes.</summary>
     public static bool VerifyRaw(string? publicKeyHex, byte[] message, string? signatureHex)
     {

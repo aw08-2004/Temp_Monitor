@@ -45,16 +45,12 @@ public static class AgentConfig
     public const int RestartExitCode = 17;
 
     // --- Trust roots -------------------------------------------------------
-    // Ed25519 public key that verifies signed fleet commands. Must equal the
-    // hub's COMMAND_SIGNING_PUBLIC_KEY_HEX. Baked into the binary for production;
-    // overridable via env for testing. Empty => every high-risk command refused.
-    public static string CommandSigningPublicKeyHex =>
-        Environment.GetEnvironmentVariable("COMMAND_SIGNING_PUBLIC_KEY_HEX")
-        ?? CommandSigningPublicKeyHexEmbedded;
-
-    // TODO: paste the real 64-hex key from `python sign_release.py --genkey`
-    // (the same value configured on the hub). Left blank => fail-closed.
-    private const string CommandSigningPublicKeyHexEmbedded = "";
+    // Fleet COMMANDS are not signed: the hub authorizes them on an allow-listed
+    // console session and records them in its audit_log. (There was a
+    // COMMAND_SIGNING_PUBLIC_KEY_HEX here; it was never populated, so in practice
+    // every high-risk command was refused before this was removed.)
+    //
+    // The UPDATE trust root below is separate and still fully enforced.
 
     // Ed25519 public key that verifies the signed self-update manifest. Reuses
     // the existing companion update key (UPDATE_PUBLIC_KEY_HEX in companion.py).

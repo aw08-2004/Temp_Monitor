@@ -1,10 +1,10 @@
 namespace TempMonitorAgent.Fleet.Executors;
 
 /// <summary>
-/// Placeholder for high-risk command types not yet implemented (install_driver,
-/// update_bios). The dispatcher still verifies their signature first, so this proves
-/// the full signed path end-to-end; it just reports "not implemented" until the
-/// vendor tooling (Dell DCU, etc.) is wired up in a later pass.
+/// Placeholder for command types not yet implemented (install_driver, update_bios).
+/// The hub accepts and queues them and the dispatcher routes them, so the full channel
+/// is exercised end-to-end; this just reports "not implemented" until the vendor tooling
+/// (Dell DCU, etc.) is wired up in a later pass.
 /// </summary>
 public sealed class StubExecutor : ICommandExecutor
 {

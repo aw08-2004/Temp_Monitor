@@ -2,7 +2,9 @@
 //
 // Issues commands via POST /api/fleet/commands (Google-session gated, same as the
 // rest of the dashboard) and polls their lifecycle back out of
-// GET /api/fleet/commands?machine=<name>.
+// GET /api/fleet/commands?machine=<name>. That session gate is the only
+// authorization: commands are not signed, so anything issued here runs as SYSTEM on
+// the target. The hub audits every one against the operator's email.
 //
 // Wrapped in an IIFE: machine.js is a classic script sharing the global lexical
 // scope, so top-level `const config`/`socket` here would collide with its bindings.
@@ -23,42 +25,38 @@
     const historyBody = document.getElementById('fleet-history');
     const historyEmptyEl = document.getElementById('fleet-history-empty');
 
-    // Mirrors fleet.py's LOW_RISK_COMMANDS / HIGH_RISK_COMMANDS. Low-risk types get a
-    // typed form; high-risk ones get a raw params textarea + signature field, because
-    // the offline signature covers the exact params object and must round-trip
-    // unchanged (see fleet.canonical_command_bytes).
+    // Mirrors fleet.py's ALL_COMMANDS. Every type is issued on the session alone --
+    // commands are no longer signed, so run_script gets an ordinary typed form like
+    // the rest. (It previously needed a raw JSON textarea + a pasted signature hex,
+    // because the offline signature covered the exact params bytes and had to
+    // round-trip unchanged.)
     const COMMAND_SPECS = [
         {
             type: 'gpupdate',
             label: 'gpupdate — force a Group Policy refresh',
-            risk: 'low',
             fields: []
         },
         {
             type: 'restart',
             label: 'restart — reboot the machine',
-            risk: 'low',
             confirm: (params) => `Reboot ${MACHINE_NAME} in ${params.delay_seconds ?? 60}s?`,
             fields: [{ name: 'delay_seconds', label: 'Delay (seconds)', type: 'number', value: 60 }]
         },
         {
             type: 'shutdown',
             label: 'shutdown — power off the machine',
-            risk: 'low',
             confirm: (params) => `Shut down ${MACHINE_NAME} in ${params.delay_seconds ?? 60}s?`,
             fields: [{ name: 'delay_seconds', label: 'Delay (seconds)', type: 'number', value: 60 }]
         },
         {
             type: 'rename',
             label: 'rename — change the computer name',
-            risk: 'low',
             confirm: (params) => `Rename ${MACHINE_NAME} to "${params.new_name}"? Takes effect on its next reboot.`,
             fields: [{ name: 'new_name', label: 'New computer name', type: 'text', required: true }]
         },
         {
             type: 'install_app',
             label: 'install_app — install via winget or MSI',
-            risk: 'low',
             fields: [
                 { name: 'id', label: 'winget package ID', type: 'text', hint: 'e.g. Google.Chrome' },
                 { name: 'msi_path', label: 'or MSI path', type: 'text', hint: 'Must be reachable by the SYSTEM account' }
@@ -69,21 +67,31 @@
         },
         {
             type: 'run_script',
-            label: 'run_script — run a PowerShell script',
-            risk: 'high',
-            defaultParams: { script: '' }
+            label: 'run_script — run a PowerShell or cmd script',
+            confirm: () => `Run this script on ${MACHINE_NAME} as SYSTEM?`,
+            fields: [
+                {
+                    name: 'script', label: 'Script', type: 'textarea', required: true,
+                    hint: 'Runs as SYSTEM, with a 600s timeout. Output appears once it finishes.'
+                },
+                {
+                    name: 'shell', label: 'Shell', type: 'select', value: 'powershell',
+                    options: [
+                        { value: 'powershell', label: 'PowerShell' },
+                        { value: 'cmd', label: 'cmd' }
+                    ]
+                }
+            ]
         },
         {
             type: 'install_driver',
             label: 'install_driver — not implemented on the agent yet',
-            risk: 'high',
-            defaultParams: {}
+            fields: []
         },
         {
             type: 'update_bios',
             label: 'update_bios — not implemented on the agent yet',
-            risk: 'high',
-            defaultParams: {}
+            fields: []
         }
     ];
 
@@ -127,21 +135,46 @@
     }
 
     // ---------------- Params form ----------------
+    function makeControl(field) {
+        if (field.type === 'textarea') {
+            const el = document.createElement('textarea');
+            el.className = 'input';
+            el.rows = 6;
+            el.spellcheck = false;
+            if (field.value !== undefined) el.value = field.value;
+            return el;
+        }
+        if (field.type === 'select') {
+            const el = document.createElement('select');
+            el.className = 'select';
+            for (const option of field.options) {
+                const opt = document.createElement('option');
+                opt.value = option.value;
+                opt.textContent = option.label;
+                el.appendChild(opt);
+            }
+            if (field.value !== undefined) el.value = field.value;
+            return el;
+        }
+        const el = document.createElement('input');
+        el.className = 'input';
+        el.type = field.type;
+        if (field.value !== undefined) el.value = field.value;
+        return el;
+    }
+
     function makeField(spec, field) {
         const wrap = document.createElement('label');
-        wrap.className = 'fleet-field';
+        wrap.className = field.type === 'textarea' ? 'fleet-field fleet-field--wide' : 'fleet-field';
 
         const label = document.createElement('span');
         label.className = 'fleet-field__label';
         label.textContent = field.required ? `${field.label} *` : field.label;
         wrap.appendChild(label);
 
-        const input = document.createElement('input');
-        input.className = 'input';
-        input.type = field.type;
-        input.dataset.param = field.name;
-        if (field.value !== undefined) input.value = field.value;
-        wrap.appendChild(input);
+        const control = makeControl(field);
+        control.dataset.param = field.name;
+        wrap.appendChild(control);
 
         if (field.hint) {
             const hint = document.createElement('span');
@@ -152,78 +185,11 @@
         return wrap;
     }
 
-    function makeHighRiskFields(spec) {
-        const fragment = document.createDocumentFragment();
-
-        const paramsWrap = document.createElement('label');
-        paramsWrap.className = 'fleet-field fleet-field--wide';
-        const paramsLabel = document.createElement('span');
-        paramsLabel.className = 'fleet-field__label';
-        paramsLabel.textContent = 'Params (JSON) *';
-        paramsWrap.appendChild(paramsLabel);
-        const paramsInput = document.createElement('textarea');
-        paramsInput.className = 'input';
-        paramsInput.id = 'fleet-params-json';
-        paramsInput.value = JSON.stringify(spec.defaultParams ?? {}, null, 2);
-        paramsWrap.appendChild(paramsInput);
-        const paramsHint = document.createElement('span');
-        paramsHint.className = 'fleet-field__hint';
-        paramsHint.textContent = 'Must match the params you signed, exactly.';
-        paramsWrap.appendChild(paramsHint);
-        fragment.appendChild(paramsWrap);
-
-        const sigWrap = document.createElement('label');
-        sigWrap.className = 'fleet-field fleet-field--wide';
-        const sigLabel = document.createElement('span');
-        sigLabel.className = 'fleet-field__label';
-        sigLabel.textContent = 'Offline signature (hex) *';
-        sigWrap.appendChild(sigLabel);
-        const sigInput = document.createElement('input');
-        sigInput.className = 'input';
-        sigInput.type = 'text';
-        sigInput.id = 'fleet-signature';
-        sigInput.placeholder = 'Paste the signature printed by sign_release.py';
-        sigWrap.appendChild(sigInput);
-        fragment.appendChild(sigWrap);
-
-        const signHint = document.createElement('div');
-        signHint.className = 'fleet-sign-hint';
-        signHint.id = 'fleet-sign-hint';
-        fragment.appendChild(signHint);
-
-        return { fragment, paramsInput, signHint };
-    }
-
-    function updateSignHint(spec, paramsInput, signHint) {
-        let compact;
-        try {
-            compact = JSON.stringify(JSON.parse(paramsInput.value || '{}'));
-        } catch (e) {
-            signHint.textContent = 'Sign this command offline once the params below are valid JSON.';
-            return;
-        }
-        // PowerShell strips inner double quotes when handing an argument to a native
-        // exe, so an unescaped '{"a":"b"}' reaches Python as {a:b} and fails to parse.
-        // Emit the backslash-escaped form, which is what this repo's tooling is driven from.
-        const psParams = compact.replace(/"/g, '\\"');
-        signHint.textContent =
-            `python sign_release.py --sign-command --type ${spec.type} ` +
-            `--machine ${MACHINE_NAME} --params '${psParams}'`;
-    }
-
     function renderParams() {
         const spec = currentSpec();
         paramsEl.textContent = '';
         clearFeedback();
         if (!spec) return;
-
-        if (spec.risk === 'high') {
-            const { fragment, paramsInput, signHint } = makeHighRiskFields(spec);
-            paramsEl.appendChild(fragment);
-            updateSignHint(spec, paramsInput, signHint);
-            paramsInput.addEventListener('input', () => updateSignHint(spec, paramsInput, signHint));
-            return;
-        }
 
         for (const field of spec.fields) {
             paramsEl.appendChild(makeField(spec, field));
@@ -262,26 +228,8 @@
         clearFeedback();
 
         let params;
-        let signature = null;
-
         try {
-            if (spec.risk === 'high') {
-                const rawParams = document.getElementById('fleet-params-json').value.trim() || '{}';
-                try {
-                    params = JSON.parse(rawParams);
-                } catch (e) {
-                    throw new Error(`Params must be valid JSON: ${e.message}`);
-                }
-                if (params === null || typeof params !== 'object' || Array.isArray(params)) {
-                    throw new Error('Params must be a JSON object.');
-                }
-                signature = document.getElementById('fleet-signature').value.trim();
-                if (!signature) {
-                    throw new Error(`${spec.type} is high-risk and requires an offline signature.`);
-                }
-            } else {
-                params = collectParams(spec);
-            }
+            params = collectParams(spec);
         } catch (e) {
             showFeedback('error', e.message);
             return;
@@ -290,7 +238,6 @@
         if (spec.confirm && !window.confirm(spec.confirm(params))) return;
 
         const body = { machine: MACHINE_NAME, type: spec.type, params };
-        if (signature) body.signature = signature;
 
         sendBtn.disabled = true;
         try {
@@ -404,12 +351,6 @@
             typeText.className = 'fleet-row__type';
             typeText.textContent = row.type;
             typeCell.appendChild(typeText);
-            if (row.requires_signature) {
-                const badge = document.createElement('span');
-                badge.className = 'badge fleet-badge-risk';
-                badge.textContent = 'signed';
-                typeCell.appendChild(badge);
-            }
             tr.appendChild(typeCell);
 
             const byCell = document.createElement('td');

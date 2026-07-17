@@ -11,11 +11,13 @@ import fleet
 from fleet_web import create_fleet_blueprint
 from flask import Flask, jsonify
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives import serialization
-
 PASS = 0
 FAIL = 0
+
+# Which operator the fake session gate reports. Mutable so a test can switch identity
+# mid-run (the audit trail is the only accountability control now, so "which operator
+# did the hub record?" needs to be assertable).
+CURRENT_USER = "operator@x.com"
 
 
 def check(name, cond):
@@ -41,20 +43,16 @@ def main():
     os.close(db_fd)
     try:
         fleet.init_fleet_db(db_path)
-        priv = Ed25519PrivateKey.generate()
-        pub_hex = priv.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
-        ).hex()
         SECRET = "hub-enroll-secret"
 
         app = Flask(__name__)
         app.secret_key = "test"
-        app.register_blueprint(create_fleet_blueprint(db_path, SECRET, pub_hex, fake_login_required))
+        app.register_blueprint(create_fleet_blueprint(db_path, SECRET, fake_login_required))
         # session.get("user") is read by issue-command; seed it.
         @app.before_request
         def _seed_session():
             from flask import session
-            session["user"] = {"email": "operator@x.com"}
+            session["user"] = {"email": CURRENT_USER}
         c = app.test_client()
 
         print("\n== Enrollment endpoint ==")
@@ -77,7 +75,7 @@ def main():
         check("heartbeat with good token -> 200",
               c.post("/api/agent/heartbeat", headers=auth).status_code == 200)
 
-        print("\n== Console issues low-risk command, agent executes ==")
+        print("\n== Console issues a command, agent executes ==")
         r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "restart"})
         check("issue restart -> 201", r.status_code == 201)
         cid = r.get_json()["command_id"]
@@ -89,16 +87,74 @@ def main():
         r = c.get(f"/api/fleet/commands/{cid}")
         check("console sees command done", r.get_json()["status"] == fleet.STATUS_DONE)
 
-        print("\n== High-risk command signature gate over HTTP ==")
+        print("\n== run_script needs no signature over HTTP ==")
         r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
                                                 "params": {"script": "echo hi"}})
-        check("unsigned run_script -> 403", r.status_code == 403)
-        sig = priv.sign(fleet.canonical_command_bytes("run_script", "PC-01", {"script": "echo hi"})).hex()
+        check("run_script -> 201", r.status_code == 201)
+        rcid = r.get_json()["command_id"]
+        # A leftover 'signature' from an old client must not resurrect the gate or 400.
         r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
-                                                "params": {"script": "echo hi"}, "signature": sig})
-        check("signed run_script -> 201", r.status_code == 201)
+                                                "params": {"script": "echo hi"},
+                                                "signature": "deadbeef"})
+        check("stray signature field ignored, not rejected", r.status_code == 201)
         r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "bogus"})
         check("unknown type -> 400", r.status_code == 400)
+        r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
+                                                "params": "not-an-object"})
+        check("non-object params -> 400", r.status_code == 400)
+
+        print("\n== Audit attributes the command to the session, not the body ==")
+        global CURRENT_USER
+        CURRENT_USER = "someone.else@x.com"
+        r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
+                                                "params": {"script": "whoami"},
+                                                "issued_by": "spoofed@evil.example"})
+        check("issue as second operator -> 201", r.status_code == 201)
+        CURRENT_USER = "operator@x.com"
+        with fleet.get_conn(db_path) as conn:
+            row = conn.execute(
+                "SELECT actor, detail_json FROM audit_log WHERE action = 'issue_command' "
+                "ORDER BY id DESC LIMIT 1").fetchone()
+        check("audit records the SESSION email", row["actor"] == "someone.else@x.com")
+        check("body-supplied issued_by cannot spoof the actor",
+              "spoofed@evil.example" not in row["actor"])
+        check("audit captured the script text", "whoami" in (row["detail_json"] or ""))
+
+        print("\n== CSRF: the JSON content-type requirement is the control ==")
+        # With no signature gate, a CSRF on a signed-in operator would be fleet-wide RCE.
+        # What blocks it is that these endpoints only read application/json bodies: that
+        # type is not CORS-safelisted (so a cross-origin fetch preflights and fails), and
+        # an HTML form -- the one cross-site POST needing no preflight -- cannot produce
+        # it. Pin that here so nobody "helpfully" adds force=True or a form fallback.
+        r = c.post("/api/fleet/commands",
+                   data={"machine": "PC-01", "type": "restart", "params": "{}"},
+                   headers={"Origin": "https://evil.example"})
+        check("cross-site form-encoded POST rejected", r.status_code == 400)
+        r = c.post("/api/fleet/commands",
+                   data='{"machine":"PC-01","type":"restart","params":{}}',
+                   content_type="text/plain",
+                   headers={"Origin": "https://evil.example"})
+        check("cross-site text/plain JSON smuggling rejected", r.status_code == 400)
+        r = c.options("/api/fleet/commands", headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type"})
+        check("no CORS grant on the command route (preflight cannot succeed)",
+              r.headers.get("Access-Control-Allow-Origin") is None)
+
+        print("\n== Agent executes an unsigned run_script end to end ==")
+        r = c.get("/api/agent/commands", headers=auth)
+        claimed = r.get_json()["commands"]
+        rc = [x for x in claimed if x["id"] == rcid]
+        check("agent claims the run_script", len(rc) == 1)
+        check("claim carries params, no signature fields",
+              rc and rc[0]["params"] == {"script": "echo hi"}
+              and "signature" not in rc[0] and "requires_signature" not in rc[0])
+        r = c.post(f"/api/agent/commands/{rcid}/result",
+                   json={"success": True, "output": "hi"}, headers=auth)
+        check("agent reports run_script result -> 200", r.status_code == 200)
+        check("console sees run_script done",
+              c.get(f"/api/fleet/commands/{rcid}").get_json()["status"] == fleet.STATUS_DONE)
 
         print("\n== Status & result isolation ==")
         r = c.get("/api/fleet/status")

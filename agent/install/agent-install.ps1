@@ -28,8 +28,7 @@ param(
     [string]$AgentUrl,                       # download URL for the agent exe
     [string]$AgentExe,                       # OR a local path to the agent exe
     [string]$EnrollmentSecret,               # shared secret for POST /api/agent/enroll
-    [string]$HubUrl,                          # optional hub base override (TEMP_MONITOR_HUB)
-    [string]$CommandSigningPublicKey         # optional 64-hex Ed25519 key (COMMAND_SIGNING_PUBLIC_KEY_HEX)
+    [string]$HubUrl                          # optional hub base override (TEMP_MONITOR_HUB)
 )
 
 $ErrorActionPreference = "Stop"
@@ -159,9 +158,12 @@ if ($HubUrl) {
     [Environment]::SetEnvironmentVariable("TEMP_MONITOR_HUB", $HubUrl, "Machine")
     Ok "Hub override: $HubUrl"
 }
-if ($CommandSigningPublicKey) {
-    [Environment]::SetEnvironmentVariable("COMMAND_SIGNING_PUBLIC_KEY_HEX", $CommandSigningPublicKey, "Machine")
-    Ok "Command signing public key configured"
+# Commands are no longer signed, so this machine-level key is dead config. Clear a
+# stale one left by a pre-1.10 install rather than leaving it to confuse the next
+# person who greps the environment for it.
+if ([Environment]::GetEnvironmentVariable("COMMAND_SIGNING_PUBLIC_KEY_HEX", "Machine")) {
+    [Environment]::SetEnvironmentVariable("COMMAND_SIGNING_PUBLIC_KEY_HEX", $null, "Machine")
+    Ok "Removed obsolete COMMAND_SIGNING_PUBLIC_KEY_HEX (commands are no longer signed)"
 }
 
 # ----------------------------------------------------------------------

@@ -1,21 +1,34 @@
 """Fleet management core -- agent enrollment, per-agent auth, the hub->agent
-command queue, signed-command verification, and online/offline status.
+command queue, and online/offline status.
 
 This is the foundation that turns Temp_Monitor from one-directional telemetry
 (companion -> hub) into an RMM: the hub can now queue commands FOR a machine, and
 an authenticated agent pulls and executes them. The moment that channel exists,
 the open `/api/report` trust model is no longer enough -- anyone who can talk to
-the command endpoints could restart or reprogram the whole fleet. So this module
-is built security-first:
+the command endpoints could restart or reprogram the whole fleet. Two controls
+carry that weight:
 
   * Agents must ENROLL (presenting a shared enrollment secret) to get a
     per-agent bearer token; only the token's SHA-256 is stored, never the token.
-  * High-risk command types (arbitrary script, driver install, BIOS flash) must
-    carry an Ed25519 signature made with the OFFLINE private key, verified both
-    here and again on the agent -- the exact same trust root as the signed
-    self-update (see companion.py verify_signature / sign_release.py). A
-    compromised hub therefore still cannot brick the fleet without the offline
-    key.
+  * Issuing a command requires an authenticated, allow-listed console session
+    (ALLOWED_EMAILS). Every issue/claim/completion lands in the append-only
+    audit_log, including the full params -- with no second gate, that trail is
+    the accountability control, so it must never be allowed to go quiet.
+
+Commands are NOT signed. They used to be: high-risk types (run_script,
+install_driver, update_bios) once required an Ed25519 signature made with an
+offline private key, verified here and again on the agent. That model assumed a
+single operator holding the key, and could not serve a helpdesk group -- no
+teammate could run a script without the key holder signing it for them. It was
+also never actually live (no key was ever configured on hub or agent, so every
+high-risk command was refused outright). It is gone; ALLOWED_EMAILS is now the
+whole perimeter for running code as SYSTEM across the fleet.
+
+This does NOT touch the release/self-update trust root, which is a SEPARATE
+Ed25519 key and is still fully enforced: see sign_release.py (sign / sign_agent),
+companion.py verify_signature, and the agent's SelfUpdater +
+AgentConfig.UpdatePublicKeyHex. A compromised hub still cannot push a malicious
+binary to the fleet.
 
 Kept deliberately free of Flask so it can be unit-tested in isolation; app.py
 wires thin HTTP endpoints on top of these functions.
@@ -31,24 +44,22 @@ import uuid
 # ================================
 # COMMAND TAXONOMY
 # ================================
-# Low-risk commands are dispatched on authenticated + authorized session alone.
-# High-risk commands additionally REQUIRE a valid offline Ed25519 signature over
-# the canonical payload (see canonical_command_bytes) -- these are the ones that
-# can run arbitrary code or physically brick hardware, so a stolen hub session or
-# a compromised hub process must not be enough to issue them.
-LOW_RISK_COMMANDS = frozenset({
+# Every type dispatches on an authenticated + allow-listed console session alone.
+# There is deliberately no risk split any more: run_script runs arbitrary code as
+# SYSTEM, but so does install_app (winget) and so, effectively, does a rename or a
+# restart of the wrong box -- gating a subset behind an offline key bought little
+# and cost the helpdesk group the ability to use the channel at all. The audit_log
+# is what distinguishes these now, not a signature.
+ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
     "rename",
     "gpupdate",
     "install_app",
-})
-HIGH_RISK_COMMANDS = frozenset({
     "run_script",
     "install_driver",
     "update_bios",
 })
-ALL_COMMANDS = LOW_RISK_COMMANDS | HIGH_RISK_COMMANDS
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -63,10 +74,6 @@ DEFAULT_COMMAND_TTL_SECONDS = 15 * 60
 # any contact". Kept a bit above the companion's report cadence so a single missed
 # report doesn't flap the status.
 DEFAULT_OFFLINE_AFTER_SECONDS = 90
-
-
-def is_high_risk(command_type):
-    return command_type in HIGH_RISK_COMMANDS
 
 
 # ================================
@@ -98,6 +105,13 @@ def init_fleet_db(db_path):
         # One machine can re-enroll (reinstall) and supersede its old agent row;
         # we look agents up by agent_id, but also want fast machine lookups.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine)")
+        # NOTE: databases created before command signing was removed also carry
+        # `requires_signature INTEGER NOT NULL DEFAULT 0` and `signature TEXT`
+        # here. They are deliberately left in place rather than migrated away:
+        # the former has a DEFAULT and the latter is nullable, so the INSERT below
+        # (which names its columns) works unchanged against both an old table and
+        # a fresh one, and nothing reads them any more. Do NOT re-add them, and do
+        # NOT reference them in a SELECT -- a fresh DB has no such columns.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS commands (
@@ -105,8 +119,6 @@ def init_fleet_db(db_path):
                 machine           TEXT NOT NULL,
                 type              TEXT NOT NULL,
                 params_json       TEXT NOT NULL,
-                requires_signature INTEGER NOT NULL DEFAULT 0,
-                signature         TEXT,
                 issued_by         TEXT NOT NULL,
                 created_at        INTEGER NOT NULL,
                 expires_at        INTEGER NOT NULL,
@@ -276,64 +288,21 @@ def list_agent_status(db_path, now=None, offline_after=DEFAULT_OFFLINE_AFTER_SEC
 
 
 # ================================
-# COMMAND SIGNING (verify side)
-# ================================
-def canonical_command_bytes(command_type, machine, params):
-    """The exact bytes an offline signer signs and both hub and agent verify.
-
-    Deterministic JSON (sorted keys, no spaces) over ONLY the security-relevant
-    fields -- type, machine, params. Hub-assigned metadata (id, timestamps, TTL)
-    is intentionally excluded so the same signature is valid regardless of when
-    the command is queued. Signer (sign_release.py --sign-command), this module,
-    and the agent must all build these bytes identically.
-    """
-    payload = {
-        "type": str(command_type),
-        "machine": str(machine),
-        "params": params if params is not None else {},
-    }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def verify_command_signature(public_key_hex, command_type, machine, params, signature_hex):
-    """Verify an Ed25519 signature over canonical_command_bytes. Fails closed on
-    an unset key, missing cryptography, malformed input, or mismatch -- mirrors
-    companion.py's verify_signature exactly."""
-    if not public_key_hex:
-        return False
-    if not signature_hex:
-        return False
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        from cryptography.exceptions import InvalidSignature
-    except Exception:
-        return False
-    try:
-        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex))
-        pub.verify(
-            bytes.fromhex(str(signature_hex).strip()),
-            canonical_command_bytes(command_type, machine, params),
-        )
-        return True
-    except InvalidSignature:
-        return False
-    except Exception:
-        return False
-
-
-# ================================
 # COMMAND QUEUE
 # ================================
+# Cap on the params recorded in the audit trail. Big enough for any realistic
+# script, bounded so one pasted megabyte can't bloat the log table.
+AUDIT_PARAMS_MAX_CHARS = 4096
+
+
 def create_command(db_path, machine, command_type, params, issued_by,
-                   signature=None, public_key_hex=None,
                    ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS):
     """Queue a command for a machine. Returns its id.
 
-    Enforces the risk tier: an unknown type is rejected, and a high-risk type is
-    rejected unless `signature` verifies against `public_key_hex` over the
-    canonical payload. The agent verifies the SAME signature again before
-    executing -- this hub-side check is the first of two gates, so a bad command
-    never even reaches the fleet.
+    Validates the type and params shape; authorization happened upstream, at the
+    session gate (see fleet_web.create_fleet_blueprint / app.login_required).
+    Every call is audited with the full params, because that record is the only
+    thing standing behind "who ran this script?".
     """
     machine = str(machine or "").strip()
     if not machine:
@@ -345,29 +314,22 @@ def create_command(db_path, machine, command_type, params, issued_by,
     if not isinstance(params, dict):
         raise ValueError("params must be an object")
 
-    requires_signature = is_high_risk(command_type)
-    if requires_signature:
-        if not verify_command_signature(public_key_hex, command_type, machine, params, signature):
-            raise PermissionError(
-                f"{command_type} is high-risk and requires a valid offline signature"
-            )
-
     command_id = uuid.uuid4().hex
     now = int(time.time())
+    params_json = json.dumps(params, sort_keys=True)
     with get_conn(db_path) as conn:
         conn.execute(
-            "INSERT INTO commands(id, machine, type, params_json, requires_signature, "
-            "signature, issued_by, created_at, expires_at, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO commands(id, machine, type, params_json, "
+            "issued_by, created_at, expires_at, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                command_id, machine, command_type, json.dumps(params, sort_keys=True),
-                1 if requires_signature else 0, signature, str(issued_by),
+                command_id, machine, command_type, params_json, str(issued_by),
                 now, now + int(ttl_seconds), STATUS_PENDING,
             ),
         )
     audit(db_path, actor=issued_by, action="issue_command", target=machine,
           detail={"command_id": command_id, "type": command_type,
-                  "high_risk": requires_signature})
+                  "params": params_json[:AUDIT_PARAMS_MAX_CHARS]})
     return command_id
 
 
@@ -384,7 +346,7 @@ def _expire_stale(conn, machine, now):
 def claim_commands(db_path, agent_id, machine):
     """Atomically hand every currently-pending command for `machine` to the
     calling agent and mark them claimed. Returns a list of dicts the agent can
-    execute (id, type, params, requires_signature, signature).
+    execute (id, type, params).
 
     Expiry is enforced first so a long-offline agent coming back doesn't run a
     pile of stale actions. Marking claimed here (rather than on result) makes
@@ -396,7 +358,7 @@ def claim_commands(db_path, agent_id, machine):
     with get_conn(db_path) as conn:
         _expire_stale(conn, machine, now)
         rows = conn.execute(
-            "SELECT id, type, params_json, requires_signature, signature "
+            "SELECT id, type, params_json "
             "FROM commands WHERE machine = ? AND status = ? ORDER BY created_at ASC",
             (machine, STATUS_PENDING),
         ).fetchall()
@@ -409,8 +371,6 @@ def claim_commands(db_path, agent_id, machine):
                 "id": row["id"],
                 "type": row["type"],
                 "params": json.loads(row["params_json"]),
-                "requires_signature": bool(row["requires_signature"]),
-                "signature": row["signature"],
             })
     if claimed:
         audit(db_path, actor=f"agent:{agent_id}", action="claim_commands", target=machine,
@@ -460,6 +420,11 @@ def get_command(db_path, command_id):
             (str(command_id),),
         ).fetchone()
     command = dict(row)
+    # SELECT * over a pre-1.10 DB also picks up the vestigial signing columns (see
+    # init_fleet_db). Drop them so this response is identical whatever the DB's age,
+    # and so nothing downstream reads a dead 'signature' field as meaningful.
+    for legacy in ("requires_signature", "signature"):
+        command.pop(legacy, None)
     command["params"] = json.loads(command.pop("params_json"))
     command["result"] = dict(result) if result else None
     return command
@@ -467,7 +432,7 @@ def get_command(db_path, command_id):
 
 def list_commands(db_path, machine=None, limit=100):
     """Recent commands, newest first, optionally scoped to one machine."""
-    sql = "SELECT id, machine, type, issued_by, created_at, status, requires_signature FROM commands"
+    sql = "SELECT id, machine, type, issued_by, created_at, status FROM commands"
     params = []
     if machine:
         sql += " WHERE machine = ?"

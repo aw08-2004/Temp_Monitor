@@ -2,8 +2,8 @@ using System.Text.Json.Nodes;
 
 namespace TempMonitorAgent.Fleet.Executors;
 
-/// <summary>One executable command type. The dispatcher gates high-risk types on a
-/// valid signature before ExecuteAsync is ever called.</summary>
+/// <summary>One executable command type. The dispatcher routes a claimed command here
+/// by Type; authorization already happened at the hub's console session gate.</summary>
 public interface ICommandExecutor
 {
     string Type { get; }

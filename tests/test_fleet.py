@@ -9,9 +9,6 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fleet
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives import serialization
-
 PASS = 0
 FAIL = 0
 
@@ -42,15 +39,6 @@ def main():
     try:
         fleet.init_fleet_db(db_path)
 
-        # --- offline signing keypair (simulates sign_release.py private key) ---
-        priv = Ed25519PrivateKey.generate()
-        pub_hex = priv.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
-        ).hex()
-
-        def sign(ctype, machine, params):
-            return priv.sign(fleet.canonical_command_bytes(ctype, machine, params)).hex()
-
         print("\n== Enrollment & auth ==")
         SECRET = "enroll-secret-xyz"
         agent_id, token = fleet.enroll_agent(db_path, "PC-01", SECRET, SECRET)
@@ -71,12 +59,11 @@ def main():
         check("list_agent_status shows PC-01 online",
               any(s["machine"] == "PC-01" and s["status"] == "online" for s in statuses))
 
-        print("\n== Low-risk command lifecycle ==")
+        print("\n== Command lifecycle ==")
         cid = fleet.create_command(db_path, "PC-01", "restart", {}, issued_by="admin@x.com")
         check("restart command created", bool(cid))
         claimed = fleet.claim_commands(db_path, agent_id, "PC-01")
         check("agent claims exactly 1 command", len(claimed) == 1 and claimed[0]["id"] == cid)
-        check("claimed restart needs no signature", claimed[0]["requires_signature"] is False)
         # Re-claim returns nothing (already claimed)
         check("second claim is empty", fleet.claim_commands(db_path, agent_id, "PC-01") == [])
         machine = fleet.complete_command(db_path, cid, agent_id, success=True, output="rebooting")
@@ -94,29 +81,78 @@ def main():
         expect_raise("completing unknown command raises", KeyError,
                      lambda: fleet.complete_command(db_path, "nope", agent_id, True))
 
-        print("\n== High-risk command signing enforcement ==")
-        expect_raise("run_script without signature rejected", PermissionError,
+        print("\n== Commands need no signature ==")
+        # These three used to require an offline Ed25519 signature. They no longer do:
+        # an authorized session is the whole gate, so a helpdesk operator can issue them
+        # directly. (In practice the old gate was never passable -- no key was ever
+        # configured on hub or agent -- so run_script was refused outright.)
+        script = {"script": "Get-Service Spooler", "shell": "powershell"}
+        rcid = fleet.create_command(db_path, "PC-01", "run_script", script, issued_by="helpdesk@x.com")
+        check("run_script accepted with no signature", bool(rcid))
+        for ctype in ("install_driver", "update_bios"):
+            check(f"{ctype} accepted with no signature",
+                  bool(fleet.create_command(db_path, "PC-01", ctype, {}, issued_by="helpdesk@x.com")))
+
+        rclaim = [c for c in fleet.claim_commands(db_path, agent_id, "PC-01") if c["id"] == rcid][0]
+        check("claimed run_script carries params intact", rclaim["params"] == script)
+        check("claim no longer exposes signature fields",
+              "signature" not in rclaim and "requires_signature" not in rclaim)
+        check("list_commands no longer exposes requires_signature",
+              all("requires_signature" not in row for row in fleet.list_commands(db_path)))
+
+        print("\n== Pre-1.10 DB compatibility ==")
+        # The live DB predates the signing removal and still has requires_signature +
+        # signature. init_fleet_db is CREATE TABLE IF NOT EXISTS with no ALTER path, so
+        # it will never rewrite them -- the whole no-migration bet is that they are
+        # inert. Prove it against a production-shaped table.
+        legacy_fd, legacy_db = tempfile.mkstemp(suffix=".db")
+        os.close(legacy_fd)
+        try:
+            with fleet.get_conn(legacy_db) as conn:
+                conn.execute("""
+                    CREATE TABLE commands (
+                        id TEXT PRIMARY KEY, machine TEXT NOT NULL, type TEXT NOT NULL,
+                        params_json TEXT NOT NULL,
+                        requires_signature INTEGER NOT NULL DEFAULT 0, signature TEXT,
+                        issued_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL, status TEXT NOT NULL,
+                        claimed_at INTEGER, claimed_by TEXT)""")
+                conn.execute(
+                    "INSERT INTO commands VALUES ('old1','PC-9','run_script',"
+                    "'{\"script\":\"legacy\"}',1,'abc123','admin@x.com',1,9999999999,"
+                    "'done',1,'agent-old')")
+            fleet.init_fleet_db(legacy_db)
+
+            lcid = fleet.create_command(legacy_db, "PC-9", "run_script",
+                                        {"script": "new"}, issued_by="helpdesk@x.com")
+            check("create_command works against a pre-1.10 table", bool(lcid))
+            with fleet.get_conn(legacy_db) as conn:
+                r = conn.execute("SELECT requires_signature, signature FROM commands "
+                                 "WHERE id = ?", (lcid,)).fetchone()
+            check("legacy columns default harmlessly on insert",
+                  r["requires_signature"] == 0 and r["signature"] is None)
+            check("claim works against a pre-1.10 table",
+                  len(fleet.claim_commands(legacy_db, "agent-new", "PC-9")) == 1)
+            check("get_command reads a legacy signed row",
+                  fleet.get_command(legacy_db, "old1")["type"] == "run_script")
+            # SELECT * would otherwise leak the dead columns on old DBs only, making the
+            # API response shape depend on the DB's age.
+            check("get_command hides vestigial signing columns",
+                  all(k not in fleet.get_command(legacy_db, "old1")
+                      for k in ("requires_signature", "signature")))
+        finally:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.remove(legacy_db + suffix)
+                except OSError:
+                    pass
+
+        print("\n== Params shape validation ==")
+        expect_raise("non-dict params rejected", ValueError,
                      lambda: fleet.create_command(db_path, "PC-01", "run_script",
-                                                  {"script": "echo hi"}, issued_by="admin@x.com",
-                                                  public_key_hex=pub_hex))
-        bad_sig = sign("run_script", "PC-01", {"script": "DIFFERENT"})
-        expect_raise("run_script with tampered/mismatched signature rejected", PermissionError,
-                     lambda: fleet.create_command(db_path, "PC-01", "run_script",
-                                                  {"script": "echo hi"}, issued_by="admin@x.com",
-                                                  signature=bad_sig, public_key_hex=pub_hex))
-        good_sig = sign("run_script", "PC-01", {"script": "echo hi"})
-        hcid = fleet.create_command(db_path, "PC-01", "run_script", {"script": "echo hi"},
-                                    issued_by="admin@x.com", signature=good_sig, public_key_hex=pub_hex)
-        check("run_script with valid signature accepted", bool(hcid))
-        hclaim = [c for c in fleet.claim_commands(db_path, agent_id, "PC-01") if c["id"] == hcid][0]
-        check("claimed high-risk carries signature for agent re-verify",
-              hclaim["requires_signature"] and hclaim["signature"] == good_sig)
-        check("agent-side re-verify of same signature passes",
-              fleet.verify_command_signature(pub_hex, "run_script", "PC-01",
-                                             {"script": "echo hi"}, good_sig))
-        check("verify fails closed with empty pubkey",
-              fleet.verify_command_signature("", "run_script", "PC-01",
-                                             {"script": "echo hi"}, good_sig) is False)
+                                                  ["not", "a", "dict"], issued_by="a"))
+        expect_raise("blank machine rejected", ValueError,
+                     lambda: fleet.create_command(db_path, "   ", "restart", {}, issued_by="a"))
 
         print("\n== Unknown type & expiry ==")
         expect_raise("unknown command type rejected", ValueError,
@@ -127,10 +163,34 @@ def main():
               fleet.get_command(db_path, exp_cid)["status"] == fleet.STATUS_EXPIRED)
 
         print("\n== Audit trail ==")
+        # With signing gone this trail is the ONLY record of who ran what, so it is
+        # load-bearing rather than nice-to-have -- assert its contents, not just that
+        # a row exists.
         with fleet.get_conn(db_path) as conn:
-            actions = [r["action"] for r in conn.execute("SELECT action FROM audit_log ORDER BY id")]
+            rows = [dict(r) for r in conn.execute(
+                "SELECT actor, action, target, detail_json FROM audit_log ORDER BY id")]
+        actions = [r["action"] for r in rows]
         for expected in ("enroll", "issue_command", "claim_commands", "complete_command"):
             check(f"audit logged '{expected}'", expected in actions)
+
+        issues = [r for r in rows if r["action"] == "issue_command"]
+        run_script_audit = [r for r in issues if '"run_script"' in (r["detail_json"] or "")]
+        check("issue_command audit names the issuing operator",
+              any(r["actor"] == "helpdesk@x.com" for r in run_script_audit))
+        check("issue_command audit records the script text (accountability control)",
+              any("Get-Service Spooler" in (r["detail_json"] or "") for r in run_script_audit))
+        check("issue_command audit no longer records high_risk",
+              all("high_risk" not in (r["detail_json"] or "") for r in issues))
+
+        # A pasted megabyte must not bloat the log table.
+        big = fleet.create_command(db_path, "PC-01", "run_script",
+                                   {"script": "x" * 50_000}, issued_by="helpdesk@x.com")
+        with fleet.get_conn(db_path) as conn:
+            detail = conn.execute(
+                "SELECT detail_json FROM audit_log WHERE action = 'issue_command' "
+                "ORDER BY id DESC LIMIT 1").fetchone()["detail_json"]
+        check("oversized params truncated in audit detail",
+              len(detail) < 10_000 and big is not None)
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

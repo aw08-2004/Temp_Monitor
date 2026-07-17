@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Sign companion.py for the Temp_Monitor self-updater.
+"""Sign companion.py / the agent manifest for the Temp_Monitor self-updater.
 
 Clients (companion.py) verify a detached Ed25519 signature over the exact bytes of
 companion.py before applying an update, using the public key embedded in that file's
 UPDATE_PUBLIC_KEY_HEX. This script generates that keypair and produces the
 companion.py.sig file you commit alongside companion.py.
+
+This is the RELEASE trust root: it decides what code the fleet is allowed to run as
+SYSTEM, and it is fully enforced. It is unrelated to fleet COMMANDS, which used to
+be signed here too (--sign-command) and no longer are -- issuing a command now
+requires only an authenticated, allow-listed console session, so a whole helpdesk
+group can use the channel without sharing an offline key. See fleet.py's module
+docstring. Do not conflate the two: a compromised hub still must not be able to push
+a malicious binary, which is exactly what the signatures below prevent.
 
 Usage
 -----
@@ -18,15 +26,6 @@ Usage
   python sign_release.py [--key PATH] [--file companion.py]
       Sign FILE with the private key and write FILE + '.sig' (hex signature).
       Run this after every edit to companion.py, then commit BOTH files together.
-
-  python sign_release.py --sign-command --type run_script --machine PC-01 \
-                         --params '{"script": "..."}' [--key PATH]
-      Sign a single high-risk fleet command (run_script / install_driver /
-      update_bios). Prints the detached signature hex to paste into the hub's
-      "issue command" form. The hub AND the agent both verify this same signature
-      over the canonical payload (see fleet.canonical_command_bytes) before the
-      command is queued or executed -- so a high-risk command can only originate
-      from whoever holds this offline private key, not from a compromised hub.
 
   python sign_release.py --sign-agent --file agent/dist/TempMonitorAgent.exe \
                          --agent-version 3.0.1 --agent-url <release-asset-url> [--key PATH]
@@ -108,53 +107,6 @@ def sign(path, file):
     print("Commit BOTH companion.py and companion.py.sig together, then push.")
 
 
-def sign_command(path, command_type, machine, params_json):
-    """Sign one high-risk fleet command with the offline private key and print the
-    detached signature hex. Canonicalization is imported from fleet.py so the
-    signer and the two verifiers (hub + agent) can never drift out of sync."""
-    Ed25519PrivateKey, _ = _ed25519()
-    if not os.path.exists(path):
-        sys.exit(f"No signing key at {path}. Run: python sign_release.py --genkey")
-
-    try:
-        params = json.loads(params_json) if params_json else {}
-    except (ValueError, TypeError) as e:
-        # PowerShell strips inner double quotes when passing an argument to a native
-        # exe, so '{"script":"x"}' arrives here as {script:x}. That is by far the most
-        # common cause of this failure on this (Windows-first) project, and the raw
-        # json error alone sends people hunting for a typo that isn't there.
-        hint = ""
-        if "{" in str(params_json) and '"' not in str(params_json):
-            hint = (
-                "\n\nLooks like the quotes were stripped before Python saw them. "
-                "PowerShell does this to native-exe arguments; escape them:\n"
-                "    --params '{\\\"script\\\":\\\"...\\\"}'"
-            )
-        sys.exit(f"--params must be valid JSON: {e}{hint}")
-    if not isinstance(params, dict):
-        sys.exit("--params must be a JSON object (e.g. '{\"script\": \"...\"}')")
-
-    # Single source of truth for the signed bytes -- same function the hub and
-    # agent use to verify.
-    try:
-        from fleet import canonical_command_bytes, HIGH_RISK_COMMANDS
-    except ImportError:
-        sys.exit("fleet.py must be importable (run from the repo root).")
-    if command_type not in HIGH_RISK_COMMANDS:
-        sys.exit(f"{command_type!r} is not a high-risk command; only these need signing: "
-                 f"{', '.join(sorted(HIGH_RISK_COMMANDS))}")
-
-    with open(path, "r", encoding="utf-8") as f:
-        priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
-
-    message = canonical_command_bytes(command_type, machine, params)
-    signature = priv.sign(message)
-    print(f"Command : {command_type} on {machine}")
-    print(f"Params  : {json.dumps(params, sort_keys=True, separators=(',', ':'))}")
-    print("\nSignature (paste into the hub's issue-command form):")
-    print(signature.hex())
-
-
 def sign_agent(path, exe_file, version, url, manifest_path):
     """Build and sign the C# agent's self-update manifest. The signed bytes are
     written verbatim to the manifest file so what's served == what was signed."""
@@ -191,13 +143,9 @@ def sign_agent(path, exe_file, version, url, manifest_path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Sign companion.py / fleet commands / agent for Temp_Monitor.")
+    ap = argparse.ArgumentParser(description="Sign companion.py / the agent manifest for Temp_Monitor.")
     ap.add_argument("--genkey", action="store_true", help="generate a new keypair instead of signing")
-    ap.add_argument("--sign-command", action="store_true", help="sign one high-risk fleet command")
     ap.add_argument("--sign-agent", action="store_true", help="sign the C# agent self-update manifest")
-    ap.add_argument("--type", help="command type to sign (with --sign-command)")
-    ap.add_argument("--machine", help="target machine name (with --sign-command)")
-    ap.add_argument("--params", default="{}", help="JSON params object (with --sign-command)")
     ap.add_argument("--agent-version", help="agent version for the manifest (with --sign-agent)")
     ap.add_argument("--agent-url", help="release-asset URL of the agent exe (with --sign-agent)")
     ap.add_argument("--manifest",
@@ -209,10 +157,6 @@ def main():
 
     if args.genkey:
         genkey(args.key)
-    elif args.sign_command:
-        if not args.type or not args.machine:
-            sys.exit("--sign-command requires --type and --machine")
-        sign_command(args.key, args.type, args.machine, args.params)
     elif args.sign_agent:
         sign_agent(args.key, args.file, args.agent_version, args.agent_url, args.manifest)
     else:

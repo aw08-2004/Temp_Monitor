@@ -4,20 +4,18 @@ using TempMonitorAgent.Fleet.Executors;
 namespace TempMonitorAgent.Fleet;
 
 /// <summary>
-/// Routes a claimed command to its executor. Enforces the risk tier using the AGENT's
-/// own classification — not the hub's requires_signature flag — so a compromised hub
-/// cannot downgrade a high-risk command by clearing the flag. High-risk types must
-/// carry a valid offline Ed25519 signature over the canonical payload or they are
-/// refused before any code runs (the second of the channel's two gates).
+/// Routes a claimed command to its executor.
+///
+/// The agent no longer second-guesses the hub on authorization: commands used to carry
+/// an offline Ed25519 signature that was verified here before execution, but that model
+/// could not serve a helpdesk group and was never live in production (no key was ever
+/// configured, so every high-risk command was refused outright). Authorization now lives
+/// entirely at the hub's console session gate, and the hub's audit_log is the record.
+/// Enrollment still bounds who can even receive commands, and the SEPARATE update trust
+/// root (SignatureVerifier.VerifyRaw + SelfUpdater) still bounds what code may run.
 /// </summary>
 public sealed class CommandDispatcher
 {
-    // Must match fleet.py HIGH_RISK_COMMANDS. The agent trusts this set, not the hub.
-    private static readonly HashSet<string> HighRisk = new()
-    {
-        "run_script", "install_driver", "update_bios",
-    };
-
     private const int MaxOutputChars = 16_000;
 
     private readonly ILogger<CommandDispatcher> _log;
@@ -33,20 +31,6 @@ public sealed class CommandDispatcher
     {
         if (!_executors.TryGetValue(cmd.Type, out var executor))
             return CommandResult.Fail($"unknown command type: {cmd.Type}");
-
-        // Agent-side gate: any high-risk type needs a valid signature, regardless of
-        // what requires_signature says on the wire.
-        if (HighRisk.Contains(cmd.Type))
-        {
-            var ok = SignatureVerifier.VerifyCommand(
-                AgentConfig.CommandSigningPublicKeyHex,
-                cmd.Type, AgentConfig.MachineName, cmd.Params, cmd.Signature);
-            if (!ok)
-            {
-                _log.LogWarning("Refused {Type} {Id}: signature verification failed", cmd.Type, cmd.Id);
-                return CommandResult.Fail("signature verification failed — command refused");
-            }
-        }
 
         try
         {

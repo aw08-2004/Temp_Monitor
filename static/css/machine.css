@@ -71,21 +71,6 @@
     width: 100%;
 }
 
-/* The offline-signing hint carries a long shell command; let it scroll rather
-   than force the whole page horizontal. */
-.fleet-sign-hint {
-    flex-basis: 100%;
-    background: var(--control-bg);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-3);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: var(--text-xs);
-    color: var(--muted);
-    overflow-x: auto;
-    white-space: pre;
-}
-
 .fleet-feedback {
     border-radius: var(--radius-md);
     padding: var(--space-3);
@@ -139,8 +124,4 @@
     word-break: break-word;
     max-height: 320px;
     overflow-y: auto;
-}
-
-.fleet-badge-risk {
-    margin-left: var(--space-2);
 }

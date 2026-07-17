@@ -39,7 +39,6 @@ param(
     [string]$AgentExe,
     [string]$EnrollmentSecret,
     [string]$HubUrl,
-    [string]$CommandSigningPublicKey,
 
     # --- Hub ---
     [int]$HubPort = 3001
@@ -578,15 +577,10 @@ function Install-Agent {
     if ($EnrollmentSecret) { $secretDefault = $EnrollmentSecret }
     $resolvedSecret = Prompt-Value "Agent enrollment secret (blank = telemetry-only until enrolled later)" $secretDefault -Secret
 
-    $cspkDefault = $envDefaults["COMMAND_SIGNING_PUBLIC_KEY_HEX"]
-    if ($CommandSigningPublicKey) { $cspkDefault = $CommandSigningPublicKey }
-    $resolvedCspk = Prompt-Value "Command signing public key (optional, 64-hex)" $cspkDefault
-
     $agentArgs = @{}
     if ($resolvedExe) { $agentArgs.AgentExe = $resolvedExe } else { $agentArgs.AgentUrl = $resolvedUrl }
     if ($resolvedSecret) { $agentArgs.EnrollmentSecret = $resolvedSecret }
     if ($resolvedHubUrl) { $agentArgs.HubUrl = $resolvedHubUrl }
-    if ($resolvedCspk)   { $agentArgs.CommandSigningPublicKey = $resolvedCspk }
 
     $localInstaller = $null
     if ($PSScriptRoot) {
@@ -668,7 +662,6 @@ function Install-Hub {
         if ($gen -notmatch '^[Nn]') { $enrollSecretDefault = New-RandomSecret }
     }
     $enrollSecret  = Prompt-Value "  Agent enrollment secret" $enrollSecretDefault -Secret
-    $cspk          = Prompt-Value "  Command signing public key (64-hex, from sign_release.py --genkey)" $existing["COMMAND_SIGNING_PUBLIC_KEY_HEX"]
 
     $lines = @(
         "GOOGLE_CLIENT_ID=$googleId"
@@ -678,7 +671,6 @@ function Install-Hub {
         "HUB_URL=$hubUrlValue"
     )
     if ($enrollSecret) { $lines += "AGENT_ENROLLMENT_SECRET=$enrollSecret" }
-    if ($cspk)         { $lines += "COMMAND_SIGNING_PUBLIC_KEY_HEX=$cspk" }
     Set-Content -Path $envPath -Value $lines -Encoding UTF8
     Ok "Wrote $envPath"
 

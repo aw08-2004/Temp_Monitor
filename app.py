@@ -30,7 +30,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.9.0"
+HUB_VERSION = "1.10.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -334,27 +334,45 @@ if not ALLOWED_EMAILS:
 # ================================
 # FLEET (command channel) CONFIG
 # ================================
-# These are OPTIONAL so existing telemetry-only deployments keep booting. The
-# fleet features fail closed until set: with no enrollment secret no agent can
-# enroll, and with no command public key every high-risk command is refused.
-#   AGENT_ENROLLMENT_SECRET       -- shared secret an agent presents to enroll
-#   COMMAND_SIGNING_PUBLIC_KEY_HEX-- Ed25519 public key (64 hex) for verifying
-#                                    signed high-risk commands. Its PRIVATE half
-#                                    lives offline (see sign_release.py --genkey);
-#                                    it may be the same keypair as the update key
-#                                    or a separate one.
+# OPTIONAL so existing telemetry-only deployments keep booting. Enrollment fails
+# closed until set: with no enrollment secret, no agent can enroll.
+#   AGENT_ENROLLMENT_SECRET -- shared secret an agent presents to enroll
+#
+# Commands themselves carry no signature. Every command type dispatches on an
+# authenticated, allow-listed console session alone, so any operator in
+# ALLOWED_EMAILS can act on the fleet without holding an offline key. That makes
+# ALLOWED_EMAILS the entire perimeter for arbitrary code execution as SYSTEM, and
+# the append-only audit_log (which records the issuer and the full params) the
+# accountability control. Release/self-update signing is a SEPARATE, RETAINED
+# trust root -- see sign_release.py --sign-agent and AgentConfig.UpdatePublicKeyHex.
 AGENT_ENROLLMENT_SECRET = os.environ.get("AGENT_ENROLLMENT_SECRET", "")
-COMMAND_SIGNING_PUBLIC_KEY_HEX = os.environ.get("COMMAND_SIGNING_PUBLIC_KEY_HEX", "")
 if not AGENT_ENROLLMENT_SECRET:
     print("[fleet] AGENT_ENROLLMENT_SECRET unset -- agent enrollment disabled (fail closed).")
-if not COMMAND_SIGNING_PUBLIC_KEY_HEX:
-    print("[fleet] COMMAND_SIGNING_PUBLIC_KEY_HEX unset -- high-risk commands will be refused.")
 
 # ================================
 # WEB & WEBSOCKET SETUP
 # ================================
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+# Session cookie hardening. A console session can run arbitrary code as SYSTEM on
+# any enrolled machine, so a CSRF against a signed-in operator would be fleet-wide
+# RCE. Today that is blocked only incidentally: the command endpoints read their
+# body with request.get_json(silent=True), which requires Content-Type:
+# application/json -- not a CORS-safelisted type, so a cross-origin fetch always
+# preflights and fails (no ACAO on these routes), and an HTML form (the one
+# cross-site POST needing no preflight) cannot produce that content type. That
+# defence evaporates if anyone adds force=True, a form-encoded fallback, or
+# permissive CORS, so pin the real control here:
+#   SameSite=Lax -- Flask sets NO SameSite attribute by default, leaving this to
+#     the browser's Lax-by-default (Chrome/Edge yes, Firefox still not by default,
+#     and Chrome exempts cookies <2min old from it on top-level POSTs). Lax, not
+#     Strict: the Google OAuth callback is a top-level cross-site GET redirect and
+#     needs the cookie to find its state.
+#   Secure -- derived from HUB_URL so http://localhost dev still signs in.
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=HUB_URL.startswith("https://"),
+)
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
@@ -392,7 +410,7 @@ def login_required(view):
 # Fleet command-channel endpoints (agent-facing token auth + console-facing
 # login_required). Registered here, once login_required exists to hand in.
 app.register_blueprint(create_fleet_blueprint(
-    DB_PATH, AGENT_ENROLLMENT_SECRET, COMMAND_SIGNING_PUBLIC_KEY_HEX, login_required
+    DB_PATH, AGENT_ENROLLMENT_SECRET, login_required
 ))
 
 
