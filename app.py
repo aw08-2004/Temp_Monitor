@@ -35,7 +35,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.16.0"
+HUB_VERSION = "1.17.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -556,7 +556,11 @@ def login():
 
 @app.route("/login/google")
 def login_google():
-    redirect_uri = url_for("auth_callback", _external=True)
+    # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
+    # terminator (nginx/Cloudflare) the request can reach waitress as plain http, so the
+    # _external form emits http://.../auth/callback -- which Google rejects as a
+    # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
+    redirect_uri = HUB_URL.rstrip("/") + url_for("auth_callback")
     return oauth.google.authorize_redirect(redirect_uri)
 
 
