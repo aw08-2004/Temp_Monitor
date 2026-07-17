@@ -8,7 +8,7 @@ namespace TempMonitorAgent;
 public static class AgentConfig
 {
     /// <summary>Reported to the hub as companion_version; also the self-update baseline.</summary>
-    public const string Version = "3.0.1";
+    public const string Version = "3.1.0";
 
     // --- Hub endpoints -----------------------------------------------------
     // Base URL is overridable via TEMP_MONITOR_HUB for local testing
