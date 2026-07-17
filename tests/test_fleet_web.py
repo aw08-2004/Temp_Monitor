@@ -228,6 +228,64 @@ def main():
         check("full output still available via result",
               body["result"]["output"] == "Policy refreshed.")
 
+        print("\n== Favorites API ==")
+        # CURRENT_USER is already declared global above (audit attribution section).
+        CURRENT_USER = "ann@x.com"
+        r = c.post("/api/fleet/favorites", json={
+            "name": "Ann private", "type": "run_script",
+            "params": {"script": "echo ann"}, "shared": False})
+        check("create favorite -> 201", r.status_code == 201)
+        ann_fav = r.get_json()["favorite_id"]
+
+        CURRENT_USER = "bob@x.com"
+        r = c.post("/api/fleet/favorites", json={
+            "name": "Team fix", "type": "run_script",
+            "params": {"script": "Restart-Service Spooler"}, "shared": True})
+        bob_shared = r.get_json()["favorite_id"]
+        c.post("/api/fleet/favorites", json={"name": "Bob private", "type": "gpupdate",
+                                             "params": {}, "shared": False})
+
+        CURRENT_USER = "ann@x.com"
+        ids = {f["id"] for f in c.get("/api/fleet/favorites").get_json()}
+        check("GET returns own + shared only",
+              ann_fav in ids and bob_shared in ids and len(ids) == 2)
+
+        # The real escalation vector: ownership must come from the session, never the body.
+        r = c.post("/api/fleet/favorites", json={
+            "name": "spoof attempt", "type": "gpupdate", "params": {},
+            "owner_email": "bob@x.com"})
+        check("create with body owner_email -> 201", r.status_code == 201)
+        spoofed = r.get_json()["favorite_id"]
+        CURRENT_USER = "bob@x.com"
+        bob_ids = {f["id"] for f in c.get("/api/fleet/favorites").get_json()}
+        check("body-supplied owner_email is ignored; session wins",
+              spoofed not in bob_ids)
+
+        # Sharing grants read, not write.
+        r = c.put(f"/api/fleet/favorites/{ann_fav}", json={"name": "hijacked"})
+        check("non-owner PUT -> 403", r.status_code == 403)
+        r = c.delete(f"/api/fleet/favorites/{ann_fav}")
+        check("non-owner DELETE -> 403", r.status_code == 403)
+
+        CURRENT_USER = "ann@x.com"
+        r = c.put(f"/api/fleet/favorites/{ann_fav}", json={"name": "Ann renamed", "shared": True})
+        check("owner PUT -> 200", r.status_code == 200)
+        check("rename applied",
+              any(f["name"] == "Ann renamed" for f in c.get("/api/fleet/favorites").get_json()))
+        r = c.post("/api/fleet/favorites", json={"name": "Ann renamed", "type": "gpupdate",
+                                                 "params": {}})
+        check("duplicate name -> 400", r.status_code == 400)
+        r = c.post("/api/fleet/favorites", json={"name": "bad", "type": "frobnicate",
+                                                 "params": {}})
+        check("unknown type -> 400", r.status_code == 400)
+        r = c.put("/api/fleet/favorites/nope", json={"name": "x"})
+        check("unknown favorite PUT -> 404", r.status_code == 404)
+        r = c.delete("/api/fleet/favorites/nope")
+        check("unknown favorite DELETE -> 404", r.status_code == 404)
+        r = c.delete(f"/api/fleet/favorites/{ann_fav}")
+        check("owner DELETE -> 200", r.status_code == 200)
+        CURRENT_USER = "operator@x.com"
+
         print("\n== Status & result isolation ==")
         r = c.get("/api/fleet/status")
         check("status shows PC-01 online",

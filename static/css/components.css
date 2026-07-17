@@ -303,6 +303,62 @@
    stylesheet's [hidden] rule and render while "hidden". */
 .tab-panel[hidden] { display: none; }
 
+/* ============ Modal ============ */
+/* Built on native <dialog>.showModal(), which gives focus trapping, background
+   inertness, Esc-to-close and top-layer stacking for free -- hand-rolling those is
+   ~150 lines of JS this codebase has no precedent for maintaining. */
+.modal {
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+    color: var(--text);
+    padding: 0;
+    width: min(620px, 92vw);
+    max-height: 85vh;
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    /* Restores centering. A modal <dialog> is centred by the UA stylesheet's
+       `margin: auto` against `inset: 0` -- but base.css's `* { margin: 0 }` reset wipes
+       that out, pinning the dialog to the top-left corner. */
+    margin: auto;
+}
+
+/* The literal fallback is deliberate, not a token violation: ::backdrop does not
+   inherit custom properties from the originating element in every engine, so
+   var(--overlay-scrim) can resolve to nothing there. The fallback is a neutral scrim
+   rather than a theme colour. */
+.modal::backdrop {
+    background: var(--overlay-scrim, rgb(0 0 0 / 0.6));
+}
+
+.modal__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border-bottom: 1px solid var(--card-border);
+}
+
+.modal__title {
+    font-size: var(--text-md);
+    font-weight: 600;
+}
+
+.modal__body {
+    padding: var(--space-5);
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.modal__foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border-top: 1px solid var(--card-border);
+}
+
 /* ============ Console surface ============ */
 /* Monospace output pane. Shared by the command panel's inline result view and the
    terminal's scrollback so the two can't drift apart. */

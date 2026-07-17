@@ -29,15 +29,17 @@
     // reads application/json bodies, which is what stops a cross-site form POST from a
     // signed-in operator's browser from issuing fleet commands (commands are not signed;
     // the session is the only gate). See fleet_web.py's module docstring.
-    async function postJson(url, body) {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
+    async function sendJson(method, url, body) {
+        const init = { method, headers: { 'Content-Type': 'application/json' } };
+        if (body !== undefined) init.body = JSON.stringify(body);
+        const response = await fetch(url, init);
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Hub returned ${response.status}.`);
         return data;
+    }
+
+    function postJson(url, body) {
+        return sendJson('POST', url, body);
     }
 
     function formatTime(epochSeconds) {
@@ -76,6 +78,23 @@
 
         agentStatus() {
             return getJson('/api/fleet/status');
+        },
+
+        // Saved commands/scripts. Ownership is always taken from the session server-side,
+        // so there is deliberately no owner field to pass here.
+        favorites: {
+            list() {
+                return getJson('/api/fleet/favorites');
+            },
+            create(favorite) {
+                return postJson('/api/fleet/favorites', favorite);
+            },
+            update(id, favorite) {
+                return sendJson('PUT', `/api/fleet/favorites/${encodeURIComponent(id)}`, favorite);
+            },
+            remove(id) {
+                return sendJson('DELETE', `/api/fleet/favorites/${encodeURIComponent(id)}`);
+            }
         },
 
         /** Subscribe to "a command was issued from this page". */

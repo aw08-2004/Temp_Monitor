@@ -199,6 +199,78 @@ def main():
         check("pruner spares recent output",
               len(fleet.get_command_output(db_path, fresh_cid)["chunks"]) == 1)
 
+        print("\n== Favorites ==")
+        ann, bob = "ann@x.com", "bob@x.com"
+        f_private = fleet.create_favorite(db_path, ann, "Ann's private fix",
+                                          "run_script", {"script": "echo ann"}, shared=False)
+        f_shared = fleet.create_favorite(db_path, bob, "Team spooler fix",
+                                         "run_script", {"script": "Restart-Service Spooler"},
+                                         shared=True)
+        f_bob_private = fleet.create_favorite(db_path, bob, "Bob's private",
+                                             "gpupdate", {}, shared=False)
+        check("create returns an id", bool(f_private))
+
+        ann_sees = {f["id"] for f in fleet.list_favorites(db_path, ann)}
+        check("owner sees their own private favorite", f_private in ann_sees)
+        check("teammate's SHARED favorite is visible", f_shared in ann_sees)
+        check("teammate's PRIVATE favorite is not", f_bob_private not in ann_sees)
+
+        ann_list = fleet.list_favorites(db_path, ann)
+        check("owned flag marks what this user may edit",
+              next(f for f in ann_list if f["id"] == f_private)["owned"] is True and
+              next(f for f in ann_list if f["id"] == f_shared)["owned"] is False)
+        check("params round-trip",
+              next(f for f in ann_list if f["id"] == f_shared)["params"]
+              == {"script": "Restart-Service Spooler"})
+
+        expect_raise("duplicate name for the same owner rejected", ValueError,
+                     lambda: fleet.create_favorite(db_path, ann, "Ann's private fix",
+                                                   "gpupdate", {}))
+        # Two people must each be able to keep their own "Fix printer spooler".
+        check("same name is fine for a DIFFERENT owner",
+              bool(fleet.create_favorite(db_path, ann, "Team spooler fix", "gpupdate", {})))
+        expect_raise("unknown command type rejected", ValueError,
+                     lambda: fleet.create_favorite(db_path, ann, "bad", "frobnicate", {}))
+        expect_raise("non-dict params rejected", ValueError,
+                     lambda: fleet.create_favorite(db_path, ann, "bad2", "run_script", "nope"))
+        expect_raise("blank name rejected", ValueError,
+                     lambda: fleet.create_favorite(db_path, ann, "   ", "gpupdate", {}))
+        expect_raise("overlong name rejected", ValueError,
+                     lambda: fleet.create_favorite(db_path, ann, "x" * 200, "gpupdate", {}))
+
+        # Sharing makes a favorite readable, NOT writable.
+        expect_raise("non-owner cannot update a shared favorite", PermissionError,
+                     lambda: fleet.update_favorite(db_path, f_shared, ann, name="hijacked"))
+        expect_raise("non-owner cannot delete a shared favorite", PermissionError,
+                     lambda: fleet.delete_favorite(db_path, f_shared, ann))
+        expect_raise("updating an unknown favorite raises", KeyError,
+                     lambda: fleet.update_favorite(db_path, "nope", ann, name="x"))
+        expect_raise("deleting an unknown favorite raises", KeyError,
+                     lambda: fleet.delete_favorite(db_path, "nope", ann))
+
+        fleet.update_favorite(db_path, f_private, ann, name="Ann's renamed fix")
+        updated = next(f for f in fleet.list_favorites(db_path, ann) if f["id"] == f_private)
+        check("owner can rename", updated["name"] == "Ann's renamed fix")
+        check("unspecified fields survive a partial update",
+              updated["params"] == {"script": "echo ann"} and updated["shared"] is False)
+
+        fleet.update_favorite(db_path, f_private, ann, shared=True)
+        check("owner can share -> teammate sees it",
+              f_private in {f["id"] for f in fleet.list_favorites(db_path, bob)})
+        fleet.update_favorite(db_path, f_private, ann, shared=False)
+        check("owner can un-share -> teammate loses it",
+              f_private not in {f["id"] for f in fleet.list_favorites(db_path, bob)})
+
+        fleet.delete_favorite(db_path, f_private, ann)
+        check("owner can delete",
+              f_private not in {f["id"] for f in fleet.list_favorites(db_path, ann)})
+
+        with fleet.get_conn(db_path) as conn:
+            fav_actions = [r["action"] for r in conn.execute(
+                "SELECT action FROM audit_log WHERE action LIKE '%favorite%'")]
+        for expected in ("create_favorite", "update_favorite", "delete_favorite"):
+            check(f"audit logged '{expected}'", expected in fav_actions)
+
         print("\n== Pre-1.10 DB compatibility ==")
         # The live DB predates the signing removal and still has requires_signature +
         # signature. init_fleet_db is CREATE TABLE IF NOT EXISTS with no ALTER path, so

@@ -169,6 +169,34 @@ def init_fleet_db(db_path):
             "CREATE INDEX IF NOT EXISTS idx_output_chunks_cmd "
             "ON command_output_chunks(command_id, seq)"
         )
+        # Saved commands/scripts, per operator. Not machine-scoped: a favorite is a
+        # reusable template ("fix the print spooler"), and scoping it to one machine
+        # would defeat the point. `shared` opts a favorite into the whole team's list --
+        # private by default, because a half-finished script shouldn't be fleet-visible
+        # the moment it's saved.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fleet_favorites (
+                id           TEXT PRIMARY KEY,
+                owner_email  TEXT NOT NULL,
+                name         TEXT NOT NULL,
+                command_type TEXT NOT NULL,
+                params_json  TEXT NOT NULL,
+                shared       INTEGER NOT NULL DEFAULT 0,
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_favorites_owner ON fleet_favorites(owner_email)"
+        )
+        # Unique per OWNER, not globally: two operators may each keep their own
+        # "Fix printer spooler" without colliding.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_favorites_owner_name "
+            "ON fleet_favorites(owner_email, name)"
+        )
         # Append-only audit trail: every command issued/claimed/completed and every
         # enrollment. This is the record you reach for after "who restarted prod?".
         conn.execute(
@@ -606,6 +634,135 @@ def get_command(db_path, command_id):
     command["params"] = json.loads(command.pop("params_json"))
     command["result"] = dict(result) if result else None
     return command
+
+
+# ================================
+# FAVORITES (saved commands / scripts)
+# ================================
+FAVORITE_NAME_MAX_CHARS = 120
+
+
+def _favorite_row(row):
+    fav = dict(row)
+    fav["params"] = json.loads(fav.pop("params_json"))
+    fav["shared"] = bool(fav["shared"])
+    return fav
+
+
+def _validate_favorite(name, command_type, params):
+    """Shared by create/update. Mirrors create_command's type+params rules, so a
+    favorite can never store something the command endpoint would reject."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    if len(name) > FAVORITE_NAME_MAX_CHARS:
+        raise ValueError(f"name must be {FAVORITE_NAME_MAX_CHARS} characters or fewer")
+    if command_type not in ALL_COMMANDS:
+        raise ValueError(f"unknown command type: {command_type!r}")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise ValueError("params must be an object")
+    return name, params
+
+
+def list_favorites(db_path, email):
+    """This operator's own favorites plus anything a teammate marked shared, newest
+    first. `owned` tells the console which rows this user may edit or delete."""
+    email = str(email or "").strip()
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, owner_email, name, command_type, params_json, shared, "
+            "       created_at, updated_at "
+            "FROM fleet_favorites WHERE owner_email = ? OR shared = 1 "
+            "ORDER BY updated_at DESC",
+            (email,),
+        ).fetchall()
+    favorites = []
+    for row in rows:
+        fav = _favorite_row(row)
+        fav["owned"] = fav["owner_email"] == email
+        favorites.append(fav)
+    return favorites
+
+
+def create_favorite(db_path, email, name, command_type, params, shared=False):
+    """Save a command as a favorite for `email`. Returns its id."""
+    email = str(email or "").strip()
+    if not email:
+        raise ValueError("owner email is required")
+    name, params = _validate_favorite(name, command_type, params)
+
+    favorite_id = uuid.uuid4().hex
+    now = int(time.time())
+    try:
+        with get_conn(db_path) as conn:
+            conn.execute(
+                "INSERT INTO fleet_favorites(id, owner_email, name, command_type, "
+                "params_json, shared, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (favorite_id, email, name, command_type,
+                 json.dumps(params, sort_keys=True), 1 if shared else 0, now, now),
+            )
+    except sqlite3.IntegrityError:
+        # The unique (owner, name) index. Surfaced as ValueError so the HTTP layer
+        # answers 400 rather than leaking a driver error as a 500.
+        raise ValueError(f"you already have a favorite named {name!r}")
+    audit(db_path, actor=email, action="create_favorite", target=name,
+          detail={"favorite_id": favorite_id, "type": command_type, "shared": bool(shared)})
+    return favorite_id
+
+
+def update_favorite(db_path, favorite_id, email, name=None, command_type=None,
+                    params=None, shared=None):
+    """Edit a favorite. Owner-only: a shared favorite is readable by the team but still
+    belongs to whoever made it. Only the fields passed are changed."""
+    favorite_id = str(favorite_id)
+    email = str(email or "").strip()
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT owner_email, name, command_type, params_json, shared "
+            "FROM fleet_favorites WHERE id = ?",
+            (favorite_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError("unknown favorite")
+        if row["owner_email"] != email:
+            raise PermissionError("only the owner can change this favorite")
+
+        new_name = row["name"] if name is None else name
+        new_type = row["command_type"] if command_type is None else command_type
+        new_params = json.loads(row["params_json"]) if params is None else params
+        new_name, new_params = _validate_favorite(new_name, new_type, new_params)
+        new_shared = row["shared"] if shared is None else (1 if shared else 0)
+
+        try:
+            conn.execute(
+                "UPDATE fleet_favorites SET name = ?, command_type = ?, params_json = ?, "
+                "shared = ?, updated_at = ? WHERE id = ?",
+                (new_name, new_type, json.dumps(new_params, sort_keys=True),
+                 new_shared, int(time.time()), favorite_id),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"you already have a favorite named {new_name!r}")
+    audit(db_path, actor=email, action="update_favorite", target=new_name,
+          detail={"favorite_id": favorite_id, "shared": bool(new_shared)})
+
+
+def delete_favorite(db_path, favorite_id, email):
+    favorite_id = str(favorite_id)
+    email = str(email or "").strip()
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT owner_email, name FROM fleet_favorites WHERE id = ?", (favorite_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError("unknown favorite")
+        if row["owner_email"] != email:
+            raise PermissionError("only the owner can delete this favorite")
+        conn.execute("DELETE FROM fleet_favorites WHERE id = ?", (favorite_id,))
+    audit(db_path, actor=email, action="delete_favorite", target=row["name"],
+          detail={"favorite_id": favorite_id})
 
 
 def list_commands(db_path, machine=None, limit=100):

@@ -209,3 +209,92 @@
 .terminal__hint--warn {
     color: var(--warning);
 }
+
+/* ============ Favorites ============ */
+.favorites__group-title {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: var(--space-2);
+}
+
+.favorites__group + .favorites__group {
+    margin-top: var(--space-5);
+}
+
+.favorites__row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+}
+
+.favorites__row:hover {
+    border-color: var(--accent);
+}
+
+.favorites__row-main {
+    min-width: 0;   /* lets the preview ellipsis actually kick in inside a flex row */
+    flex: 1;
+}
+
+.favorites__row-name {
+    font-weight: 500;
+    margin-bottom: var(--space-1);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.favorites__row-preview {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.favorites__row-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.favorites__field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin-bottom: var(--space-4);
+}
+
+.favorites__field-label {
+    font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+.favorites__field textarea.input {
+    resize: vertical;
+    min-height: 120px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    width: 100%;
+}
+
+.favorites__checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.favorites__error {
+    font-size: var(--text-sm);
+    color: var(--danger);
+    margin-bottom: var(--space-3);
+}

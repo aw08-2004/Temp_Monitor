@@ -165,11 +165,70 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
         except KeyError:
             return jsonify({"error": "unknown command"}), 404
 
+    def _current_email():
+        """The signed-in operator. ALWAYS the source of ownership/attribution -- never
+        take an email from the request body, or one operator could write rows as
+        another and the audit trail would be fiction."""
+        return (session.get("user") or {}).get("email", "unknown")
+
+    @bp.route("/api/fleet/favorites", methods=["GET"])
+    @login_required
+    def fleet_list_favorites():
+        return jsonify(fleet.list_favorites(db_path, _current_email())), 200
+
+    @bp.route("/api/fleet/favorites", methods=["POST"])
+    @login_required
+    def fleet_create_favorite():
+        data = request.get_json(silent=True) or {}
+        try:
+            favorite_id = fleet.create_favorite(
+                db_path,
+                email=_current_email(),
+                name=data.get("name"),
+                command_type=data.get("type"),
+                params=data.get("params") or {},
+                shared=bool(data.get("shared")),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"favorite_id": favorite_id}), 201
+
+    @bp.route("/api/fleet/favorites/<favorite_id>", methods=["PUT"])
+    @login_required
+    def fleet_update_favorite(favorite_id):
+        data = request.get_json(silent=True) or {}
+        try:
+            fleet.update_favorite(
+                db_path, favorite_id, _current_email(),
+                name=data.get("name"),
+                command_type=data.get("type"),
+                params=data.get("params"),
+                shared=data.get("shared"),
+            )
+        except KeyError:
+            return jsonify({"error": "unknown favorite"}), 404
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"status": "updated"}), 200
+
+    @bp.route("/api/fleet/favorites/<favorite_id>", methods=["DELETE"])
+    @login_required
+    def fleet_delete_favorite(favorite_id):
+        try:
+            fleet.delete_favorite(db_path, favorite_id, _current_email())
+        except KeyError:
+            return jsonify({"error": "unknown favorite"}), 404
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        return jsonify({"status": "deleted"}), 200
+
     @bp.route("/api/fleet/commands", methods=["POST"])
     @login_required
     def fleet_issue_command():
         data = request.get_json(silent=True) or {}
-        issued_by = (session.get("user") or {}).get("email", "unknown")
+        issued_by = _current_email()
         try:
             command_id = fleet.create_command(
                 db_path,

@@ -25,6 +25,8 @@
     const inputEl = document.getElementById('terminal-input');
     const runBtn = document.getElementById('terminal-run');
     const clearBtn = document.getElementById('terminal-clear');
+    const favoritesBtn = document.getElementById('terminal-favorites');
+    const saveFavBtn = document.getElementById('terminal-save-fav');
     const shellEl = document.getElementById('terminal-shell');
     const statusEl = document.getElementById('terminal-status');
     const hintEl = document.getElementById('terminal-hint');
@@ -282,9 +284,44 @@
         }
     }
 
+    // ---------------- Favorites ----------------
+    // Picking a favorite loads it into the prompt rather than firing it immediately: it
+    // may have come from a teammate and is about to run as SYSTEM, so the operator gets
+    // to read it first. Non-run_script favorites can't be typed at a shell, so those are
+    // issued directly.
+    function usePick(favorite) {
+        if (favorite.command_type !== 'run_script') {
+            append(`\n[running favorite "${favorite.name}" (${favorite.command_type})]\n`, 'meta');
+            FleetApi.issueCommand(favorite.command_type, favorite.params)
+                .then(() => append('Queued. See Recent commands on the Overview tab.\n', 'meta'))
+                .catch((e) => append(`${e.message}\n`, 'err'));
+            return;
+        }
+        inputEl.value = favorite.params.script || '';
+        if (favorite.params.shell) shellEl.value = favorite.params.shell;
+        autoGrow();
+        inputEl.focus();
+        append(`\n[loaded favorite "${favorite.name}" — review it, then press Enter]\n`, 'meta');
+    }
+
+    function saveCurrent() {
+        const script = inputEl.value.trim();
+        if (!script) {
+            append('\nNothing to save — type a script first.\n', 'meta');
+            inputEl.focus();
+            return;
+        }
+        FleetFavorites.openSave({
+            type: 'run_script',
+            params: { script, shell: shellEl.value }
+        });
+    }
+
     // ---------------- Init ----------------
     clearBtn.addEventListener('click', clearScrollback);
     runBtn.addEventListener('click', run);
+    favoritesBtn.addEventListener('click', () => FleetFavorites.open({ onPick: usePick }));
+    saveFavBtn.addEventListener('click', saveCurrent);
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && active) schedulePoll(0);
     });

@@ -121,6 +121,8 @@
                         <option value="powershell">PowerShell</option>
                         <option value="cmd">cmd</option>
                     </select>
+                    <button id="terminal-favorites" type="button" class="btn">★ Favorites</button>
+                    <button id="terminal-save-fav" type="button" class="btn btn--ghost">Save as favorite</button>
                     <button id="terminal-clear" type="button" class="btn btn--ghost">Clear</button>
                 </div>
             </div>
@@ -142,11 +144,24 @@
         </div>
     </div>{# /tab-terminal #}
 </div>
+
+{# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
+   the top layer regardless of where it sits in the DOM. #}
+<dialog class="modal" id="favorites-dialog" aria-labelledby="favorites-title">
+    <div class="modal__head">
+        <div class="modal__title" id="favorites-title">Favorites</div>
+        <button type="button" id="favorites-close" class="btn btn--icon" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal__body" id="favorites-body"></div>
+    <div class="modal__foot" id="favorites-foot"></div>
+</dialog>
 {% endblock %}
 {% block page_scripts %}
-{# Order matters: fleet-api.js defines the window.FleetApi the two fleet modules use. #}
+{# Order matters: fleet-api.js defines the window.FleetApi the others use, and
+   fleet-terminal.js calls into window.FleetFavorites. #}
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-commands.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
