@@ -30,7 +30,7 @@ load_dotenv()
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.11.0"
+HUB_VERSION = "1.12.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -729,7 +729,8 @@ def persist_live_status(machine, temp, uptime_seconds):
             (machine_name, temp, uptime_seconds, to_timestamp_str(datetime.now())),
         )
 
-def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timestamp_epoch=None):
+def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timestamp_epoch=None,
+                       companion_version=None):
     machine_name = str(machine).strip()
     if not machine_name:
         raise ValueError("Machine name cannot be empty.")
@@ -767,7 +768,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     # (an older companion, or a second stale instance double-reporting for the same
     # machine) doesn't blank out CPU/GPU Load & Clock in the UI every other update.
     # set_latest_sensors() above only overwrites the cache when sensors are present.
-    socketio.emit('new_temp', {
+    payload = {
         'machine': machine_name,
         'timestamp': timestamp_str,
         'timestamp_epoch': timestamp_epoch,
@@ -776,7 +777,14 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
         'low_load_threshold': LOW_LOAD_THRESHOLD,
         'uptime_seconds': get_latest_uptime(machine_name),
         'diagnostics': extract_diagnostics(get_latest_sensors(machine_name)),
-    })
+    }
+    # The version the client just reported, so the machine page's version card
+    # follows a self-update without a refresh. Omitted (not sent as null) when the
+    # report didn't carry one -- an older client's silence must not blank a version
+    # the UI already knows, same reasoning as the diagnostics cache above.
+    if companion_version:
+        payload['companion_version'] = str(companion_version)
+    socketio.emit('new_temp', payload)
 
 def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None):
     machine_name = str(machine).strip()
@@ -1026,11 +1034,12 @@ def report_temp():
         now_epoch = int(time.time())
         if client_ts > now_epoch + 300 or client_ts < now_epoch - RETENTION_DAYS * 86400:
             client_ts = None
-    save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors, timestamp_epoch=client_ts)
+    reported_version = data.get('companion_version')
+    save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors,
+                       timestamp_epoch=client_ts, companion_version=reported_version)
     # Keep an enrolled agent's online/offline status fresh off its ordinary temp
     # reports too, so it doesn't read offline between dedicated heartbeats.
     fleet.touch_last_seen(DB_PATH, machine)
-    reported_version = data.get('companion_version')
     save_machine_info(
         machine,
         data.get('asset_tag'),

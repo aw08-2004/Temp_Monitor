@@ -314,6 +314,11 @@ socket.on('new_temp', (msg) => {
     if (msg.uptime_seconds !== undefined && msg.uptime_seconds !== null) {
         document.getElementById('stat-uptime').textContent = formatUptime(msg.uptime_seconds);
     }
+    // Follow a companion self-update without a refresh. Only present when the client
+    // reported one, so an older client's silence can't blank the version we already show.
+    if (msg.companion_version) {
+        document.getElementById('stat-version').textContent = msg.companion_version;
+    }
     if (!viewingToday) return;
 
     const x = toChartTimestamp(msg.timestamp_ms ?? msg.timestamp_epoch ?? msg.timestamp);
