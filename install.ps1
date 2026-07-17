@@ -73,7 +73,10 @@ $HubServiceName    = "Temp Monitor - Hub"
 function Say($msg)  { Write-Host "  $msg" }
 function Ok($msg)   { Write-Host "  [ok] $msg"   -ForegroundColor Green }
 function Warn($msg) { Write-Host "  [!!] $msg"   -ForegroundColor Yellow }
-function Die($msg)  { Write-Host "  [xx] $msg"   -ForegroundColor Red; exit 1 }
+# Prints the failure, then throws instead of `exit`-ing: the top-level dispatch catches it and
+# returns, so the (elevated, -NoExit) console stays open for the log. The marker prefix lets the
+# handler tell "we already printed a friendly [xx]" apart from an unexpected error.
+function Die($msg)  { Write-Host "  [xx] $msg"   -ForegroundColor Red; throw "TempMonitorInstaller: $msg" }
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 
 # ----------------------------------------------------------------------
@@ -85,18 +88,38 @@ function Mask([string]$v) {
     return $v.Substring(0, 3) + ("*" * 6) + $v.Substring($v.Length - 3)
 }
 
-function Prompt-Value([string]$Label, [string]$Default = "", [switch]$Secret) {
-    $shown = ""
-    if ($Default) { if ($Secret) { $shown = " [" + (Mask $Default) + "]" } else { $shown = " [$Default]" } }
-    $val = Read-Host "$Label$shown"
-    $val = "$val".Trim()
-    if (-not $val) { return $Default }
-    return $val
+function Prompt-Value([string]$Label, [string]$Default = "", [switch]$Secret,
+                     [switch]$Required, [scriptblock]$Validate, [string]$ValidateHint) {
+    # Reprompts instead of failing: an empty answer keeps the [default]; -Required rejects an
+    # empty result; -Validate {param($v) ...} rejects a value that doesn't pass. Existing callers
+    # that pass neither behave exactly as before.
+    while ($true) {
+        $shown = ""
+        if ($Default) { if ($Secret) { $shown = " [" + (Mask $Default) + "]" } else { $shown = " [$Default]" } }
+        $val = "$(Read-Host "$Label$shown")".Trim()
+        if (-not $val) { $val = $Default }
+        if ($Required -and -not $val) {
+            Warn "A value is required -- please enter one."
+            continue
+        }
+        if ($Validate -and $val) {
+            $ok = $false
+            try { $ok = [bool](& $Validate $val) } catch { $ok = $false }
+            if (-not $ok) {
+                if ($ValidateHint) { Warn $ValidateHint } else { Warn "That value isn't valid -- please try again." }
+                continue
+            }
+        }
+        return $val
+    }
 }
 
 function New-RandomSecret([int]$Bytes = 24) {
+    # RandomNumberGenerator.Fill() is .NET Core / 5+ only -- Windows PowerShell 5.1 runs on
+    # .NET Framework 4.x, so use the Create()/GetBytes() API that exists on both.
     $b = New-Object byte[] $Bytes
-    [Security.Cryptography.RandomNumberGenerator]::Fill($b)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
     -join ($b | ForEach-Object { $_.ToString("x2") })
 }
 
@@ -155,7 +178,7 @@ function Show-Menu {
         "2" { return "Companion" }
         "3" { return "Hub" }
         "4" { return "UninstallMenu" }
-        "0" { exit }
+        "0" { return "Exit" }
         default { Warn "Invalid choice."; return Show-Menu }
     }
 }
@@ -171,7 +194,7 @@ function Show-UninstallMenu {
         "1" { return "Agent" }
         "2" { return "Companion" }
         "3" { return "Hub" }
-        "0" { exit }
+        "0" { return "Exit" }
         default { Warn "Invalid choice."; return Show-UninstallMenu }
     }
 }
@@ -192,17 +215,19 @@ if (-not $isAdmin) {
         else { "-$key"; "`"$val`"" }
     }
 
+    # -NoExit keeps the elevated console open after the script finishes (or after you pick
+    # Exit) so you can scroll back through the install log instead of the window vanishing.
     if ($PSCommandPath) {
         # Running from a local file -- relaunch that same file, forwarding every
         # bound parameter (not just -Uninstall) so -Component/-AgentUrl/etc. survive.
-        $argList = @("-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"") + $remoteArgList
+        $argList = @("-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"") + $remoteArgList
         Start-Process powershell -Verb RunAs -ArgumentList $argList
     } else {
         # Running via `irm | iex` -- no script file to relaunch, so re-fetch
         # and re-invoke as a scriptblock (preserves param binding) in the
         # elevated process.
         $cmd = "& ([scriptblock]::Create((irm '$InstallerUrl'))) $($remoteArgList -join ' ')"
-        Start-Process powershell -Verb RunAs -ArgumentList @("-ExecutionPolicy", "Bypass", "-Command", $cmd)
+        Start-Process powershell -Verb RunAs -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $cmd)
     }
     exit
 }
@@ -706,18 +731,22 @@ function Install-Hub {
 
     Step "Configuring .env"
     Say "Press Enter to keep the value shown in [brackets]."
-    $googleId      = Prompt-Value "Google OAuth client ID" $existing["GOOGLE_CLIENT_ID"]
-    $googleSecret  = Prompt-Value "Google OAuth client secret" $existing["GOOGLE_CLIENT_SECRET"] -Secret
+    $googleId      = Prompt-Value "Google OAuth client ID" $existing["GOOGLE_CLIENT_ID"] -Required
+    $googleSecret  = Prompt-Value "Google OAuth client secret" $existing["GOOGLE_CLIENT_SECRET"] -Secret -Required
 
     $flaskSecretDefault = $existing["FLASK_SECRET_KEY"]
     if (-not $flaskSecretDefault) { $flaskSecretDefault = New-RandomSecret }
-    $flaskSecret   = Prompt-Value "Flask session secret key" $flaskSecretDefault -Secret
+    $flaskSecret   = Prompt-Value "Flask session secret key" $flaskSecretDefault -Secret -Required
 
-    $allowedEmails = Prompt-Value "Allowed Google emails (comma-separated)" $existing["ALLOWED_EMAILS"]
+    $allowedEmails = Prompt-Value "Allowed Google emails (comma-separated)" $existing["ALLOWED_EMAILS"] `
+                        -Required -Validate { param($v) $v -match '@' } `
+                        -ValidateHint "Enter at least one email address (must contain '@')."
 
     $hubUrlDefault = $existing["HUB_URL"]
     if (-not $hubUrlDefault) { $hubUrlDefault = "https://temp.arkeanos.net" }
-    $hubUrlValue   = Prompt-Value "Public hub URL" $hubUrlDefault
+    $hubUrlValue   = Prompt-Value "Public hub URL" $hubUrlDefault `
+                        -Required -Validate { param($v) $v -match '^https?://' } `
+                        -ValidateHint "Enter a full URL starting with http:// or https://."
 
     Say ""
     Say "Fleet command channel (optional -- leave blank to keep telemetry-only):"
@@ -854,8 +883,27 @@ if (-not $Component) {
     }
 }
 
-switch ($Component) {
-    "Agent"     { if ($Uninstall) { Uninstall-Agent }     else { Install-Agent } }
-    "Companion" { if ($Uninstall) { Uninstall-Companion } else { Install-Companion } }
-    "Hub"       { if ($Uninstall) { Uninstall-Hub }       else { Install-Hub } }
+# Exit chosen from a menu: end the script gracefully but DON'T `exit` -- that would kill the
+# (elevated) console the user wants to keep open to read the log. `return` at script scope
+# stops here and, with the relaunch's -NoExit, leaves them at a live prompt.
+if ($Component -eq "Exit" -or -not $Component) {
+    Write-Host "`n  Exiting installer. This window stays open so you can review the log above." -ForegroundColor Cyan
+    return
+}
+
+try {
+    switch ($Component) {
+        "Agent"     { if ($Uninstall) { Uninstall-Agent }     else { Install-Agent } }
+        "Companion" { if ($Uninstall) { Uninstall-Companion } else { Install-Companion } }
+        "Hub"       { if ($Uninstall) { Uninstall-Hub }       else { Install-Hub } }
+    }
+} catch {
+    # A Die (or any terminating error, since $ErrorActionPreference = 'Stop') lands here.
+    # Die already printed a friendly [xx] line; only surface the raw message for other errors.
+    # Don't `exit` -- keep the console open so the log above stays readable.
+    if ("$($_.Exception.Message)" -notlike "TempMonitorInstaller:*") {
+        Write-Host "  [xx] $($_.Exception.Message)" -ForegroundColor Red
+    }
+    Write-Host "`n  Install did not complete -- review the log above. This window stays open." -ForegroundColor Yellow
+    return
 }
