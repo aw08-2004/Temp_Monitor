@@ -25,14 +25,17 @@ import requests
 import fleet
 from fleet_web import create_fleet_blueprint
 
-load_dotenv()
+# Load .env from next to this file rather than the cwd -- under the Windows service the working
+# directory isn't the hub folder -- and with utf-8-sig so a UTF-8 BOM (which PowerShell and
+# Windows editors happily prepend) doesn't corrupt the first key and blank out the config.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), encoding="utf-8-sig")
 
 # ================================
 # CONFIG
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.15.0"
+HUB_VERSION = "1.16.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than

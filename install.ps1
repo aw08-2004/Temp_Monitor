@@ -773,7 +773,10 @@ function Install-Hub {
     )
     if ($enrollSecret)      { $lines += "AGENT_ENROLLMENT_SECRET=$enrollSecret" }
     if ($autoUpdateDefault) { $lines += "HUB_AUTO_UPDATE=$autoUpdateDefault" }
-    Set-Content -Path $envPath -Value $lines -Encoding UTF8
+    # Write WITHOUT a BOM: PowerShell 5.1's `Set-Content -Encoding UTF8` prepends a UTF-8 BOM,
+    # which python-dotenv folds into the first key (﻿GOOGLE_CLIENT_ID) so the hub reads its
+    # config as unset and crash-loops. UTF8Encoding($false) = no BOM.
+    [System.IO.File]::WriteAllLines($envPath, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
     Ok "Wrote $envPath"
 
     Step "Installing the $HubServiceName service"
@@ -827,7 +830,7 @@ function Install-Hub {
   </log>
 </service>
 "@
-    Set-Content -Path $wrapperXml -Value $xml -Encoding UTF8
+    [System.IO.File]::WriteAllText($wrapperXml, $xml, (New-Object System.Text.UTF8Encoding($false)))
     Ok "Wrote $wrapperXml"
 
     & $wrapperExe install
