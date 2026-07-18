@@ -58,6 +58,13 @@
 .terminal__line--echo { color: var(--accent); font-weight: 600; }
 .terminal__line--meta { color: var(--muted); }
 .terminal__line--err { color: var(--danger); }
+/* Locally-echoed stdin the operator typed into a running command. */
+.terminal__line--input { color: var(--text); font-style: italic; }
+
+/* Narrow per-command timeout field in the terminal toolbar. */
+.terminal__timeout {
+    width: 5.5em;
+}
 
 .terminal__promptline {
     display: flex;

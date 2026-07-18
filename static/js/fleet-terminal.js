@@ -31,6 +31,10 @@
     const statusEl = document.getElementById('terminal-status');
     const hintEl = document.getElementById('terminal-hint');
     const panelEl = document.getElementById('tab-terminal');
+    const stopBtn = document.getElementById('terminal-stop');
+    const resetBtn = document.getElementById('terminal-reset');
+    const timeoutEl = document.getElementById('terminal-timeout');
+    const psEl = document.getElementById('terminal-ps');
 
     const HISTORY_KEY = `tempmonitor:termhist:${MACHINE}`;
     const HISTORY_MAX = 100;
@@ -39,11 +43,15 @@
     // After this long with no new output, ease off -- a 10-minute silent script shouldn't
     // cost 600 requests.
     const QUIET_BACKOFF_MS = 60_000;
-    // The agent's own ceiling (RunScriptExecutor). Past this it kills the process, so a
-    // command still "running" well beyond it means the agent died holding it.
-    const SCRIPT_TIMEOUT_MS = 600_000;
-    const GIVE_UP_MS = SCRIPT_TIMEOUT_MS + 120_000;
-    // Agents older than this don't stream and refuse run_script outright.
+    // A submission may legitimately run a very long time (a persistent shell has no fixed
+    // ceiling; the operator sets a per-run timeout). Give up watching only well past the
+    // largest timeout we'd send, so a genuinely long run isn't abandoned.
+    const GIVE_UP_MS = 24 * 60 * 60 * 1000 + 120_000;
+    // Interactive terminal (persistent shell, stdin, cd persistence) needs a 3.2.0 agent.
+    // Below it, run_script still works one-shot -- we fall back to that (no stdin, no cd
+    // persistence) so the tab is still useful during a rollout, and warn why.
+    const MIN_INTERACTIVE_AGENT = '3.2.0';
+    // Older still: pre-3.1 agents don't stream at all.
     const MIN_STREAMING_AGENT = '3.1.0';
 
     let history = loadHistory();
@@ -51,6 +59,8 @@
     let draft = '';
     let pollTimer = null;
     let active = null;   // { commandId, cursor, startedAt, lastChunkAt }
+    let interactive = true;   // set false by refreshHint() against a pre-3.2 agent
+    let cwd = null;           // last known shell cwd, for the prompt
 
     // ---------------- Scrollback ----------------
     function atBottom() {
@@ -71,7 +81,21 @@
 
     function clearScrollback() {
         scrollbackEl.textContent = '';
-        append(`Connected to ${MACHINE}. Commands run as SYSTEM.\n`, 'meta');
+        const how = interactive
+            ? 'One persistent shell per operator; cd and variables persist. Commands run as SYSTEM.'
+            : 'Commands run as SYSTEM.';
+        append(`Connected to ${MACHINE}. ${how}\n`, 'meta');
+    }
+
+    // The prompt reflects the shell's real working directory once we've heard one back;
+    // until then (and for a pre-3.2 agent that reports none) it falls back to the machine.
+    function promptText() {
+        const where = cwd || MACHINE;
+        return shellEl.value === 'cmd' ? `${where}>` : `PS ${where}>`;
+    }
+
+    function updatePrompt() {
+        if (psEl) psEl.textContent = promptText();
     }
 
     // ---------------- Command history ----------------
@@ -109,9 +133,12 @@
     }
 
     function setBusy(busy) {
-        inputEl.disabled = busy;
-        runBtn.disabled = busy;
-        if (!busy) inputEl.focus();
+        // In interactive mode the input stays live while a submission runs -- that's how the
+        // operator answers a prompt (types stdin). Only a pre-3.2 (one-shot) agent disables it.
+        inputEl.disabled = busy && !interactive;
+        runBtn.disabled = busy && !interactive;
+        if (stopBtn) stopBtn.disabled = !busy;
+        if (!busy || interactive) inputEl.focus();
     }
 
     function caretOnFirstLine() {
@@ -127,7 +154,10 @@
     inputEl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            run();
+            // With a submission already running (interactive agent), Enter pipes the line to
+            // its stdin -- answering a prompt -- rather than starting a new command.
+            if (interactive && active) sendInput();
+            else run();
             return;
         }
         if (e.key === 'l' && e.ctrlKey) {
@@ -151,13 +181,17 @@
     });
 
     // ---------------- Running ----------------
+    function readTimeout() {
+        const n = Number(timeoutEl && timeoutEl.value);
+        return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+    }
+
     async function run() {
         const script = inputEl.value.trim();
         if (!script || active) return;
 
         const shell = shellEl.value;
-        const prompt = shell === 'cmd' ? `${MACHINE}>` : `PS ${MACHINE}>`;
-        append(`\n${prompt} ${script}\n`, 'echo');
+        append(`\n${promptText()} ${script}\n`, 'echo');
         pushHistory(script);
         historyIndex = history.length;
         draft = '';
@@ -166,14 +200,49 @@
         setBusy(true);
         setStatusPill(statusEl, 'warn', 'Running');
 
+        const params = { script, shell };
+        const timeout = readTimeout();
+        if (timeout) params.timeout_seconds = timeout;
         try {
-            const commandId = await FleetApi.issueCommand('run_script', { script, shell });
+            const commandId = await FleetApi.issueCommand('run_script', params);
             active = { commandId, cursor: -1, startedAt: Date.now(), lastChunkAt: Date.now() };
             schedulePoll(POLL_FAST_MS);
         } catch (e) {
             append(`${e.message}\n`, 'err');
             setStatusPill(statusEl, 'danger', 'Failed');
             setBusy(false);
+        }
+    }
+
+    // Pipe the current line to the running submission's stdin (answering a prompt). The
+    // program's response streams back on the run_script command we're already polling.
+    async function sendInput() {
+        const data = inputEl.value;
+        append(`${data}\n`, 'input');   // local echo -- redirected stdin isn't echoed by the shell
+        inputEl.value = '';
+        autoGrow();
+        try {
+            await FleetApi.issueCommand('shell_input', { data, shell: shellEl.value });
+        } catch (e) {
+            append(`[could not send input: ${e.message}]\n`, 'err');
+        }
+    }
+
+    async function sendSignal() {
+        if (!active) return;
+        append('\n^C\n', 'meta');
+        try { await FleetApi.issueCommand('shell_signal', { shell: shellEl.value }); }
+        catch (e) { append(`[stop failed: ${e.message}]\n`, 'err'); }
+    }
+
+    async function resetSession() {
+        try {
+            await FleetApi.issueCommand('shell_reset', { shell: shellEl.value });
+            cwd = null;
+            updatePrompt();
+            append('\n[session reset — a fresh shell will start on your next command]\n', 'meta');
+        } catch (e) {
+            append(`[reset failed: ${e.message}]\n`, 'err');
         }
     }
 
@@ -224,6 +293,11 @@
                 finish('muted', 'Expired');
                 return;
             }
+            // Adopt the shell's real working directory for the prompt, if the agent reported one.
+            if (body.result && body.result.cwd) {
+                cwd = body.result.cwd;
+                updatePrompt();
+            }
             const ok = body.status === 'done';
             append(`\n[${ok ? 'completed' : 'failed'} at ${FleetApi.formatTime(
                 body.result ? body.result.completed_at : Date.now() / 1000)}]\n`, ok ? 'meta' : 'err');
@@ -267,20 +341,45 @@
 
     async function refreshHint() {
         const base = `Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears. ` +
-                     `Scripts run as SYSTEM and are killed after 10 minutes.`;
+                     `Scripts run as SYSTEM. cd and variables persist; set a per-run timeout above.`;
         hintEl.className = 'terminal__hint';
         hintEl.textContent = base;
         try {
             const info = await FleetApi.getJson(`/api/machines/${encodeURIComponent(MACHINE)}`);
             const version = info && info.companion_version;
             if (version && versionLess(version, MIN_STREAMING_AGENT)) {
+                // Pre-3.1: refuses run_script outright.
+                setInteractive(false);
                 hintEl.className = 'terminal__hint terminal__hint--warn';
                 hintEl.textContent =
                     `This machine reports agent v${version}. Live output and run_script need ` +
                     `v${MIN_STREAMING_AGENT} — it will refuse scripts until it self-updates. ` + base;
+            } else if (version && versionLess(version, MIN_INTERACTIVE_AGENT)) {
+                // 3.1.x: streams, but each command is a fresh process (no cd persistence, no
+                // stdin). Fall back to one-shot behavior and say so.
+                setInteractive(false);
+                hintEl.className = 'terminal__hint terminal__hint--warn';
+                hintEl.textContent =
+                    `This machine reports agent v${version}. A persistent shell (cd persistence, ` +
+                    `answering prompts) needs v${MIN_INTERACTIVE_AGENT}; until it self-updates, each ` +
+                    `command runs in a fresh process. ` + base;
+            } else {
+                setInteractive(true);
             }
         } catch (e) {
             /* hint only; the terminal works regardless */
+        }
+    }
+
+    // Toggle the interactive affordances (stdin, Stop, Reset, live input during a run) to
+    // match the agent's capability. A one-shot agent hides them and disables input mid-run.
+    function setInteractive(on) {
+        interactive = on;
+        for (const el of [stopBtn, resetBtn, timeoutEl]) {
+            if (el) el.hidden = !on;
+        }
+        if (timeoutEl && timeoutEl.previousElementSibling) {
+            timeoutEl.previousElementSibling.hidden = !on;   // its label
         }
     }
 
@@ -320,15 +419,19 @@
 
     // ---------------- Init ----------------
     clearBtn.addEventListener('click', clearScrollback);
-    runBtn.addEventListener('click', run);
+    runBtn.addEventListener('click', () => { if (interactive && active) sendInput(); else run(); });
     favoritesBtn.addEventListener('click', () => FleetFavorites.open({ onPick: usePick }));
     saveFavBtn.addEventListener('click', saveCurrent);
+    if (stopBtn) stopBtn.addEventListener('click', sendSignal);
+    if (resetBtn) resetBtn.addEventListener('click', resetSession);
+    if (shellEl) shellEl.addEventListener('change', updatePrompt);
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && active) schedulePoll(0);
     });
     // The panel starts hidden, so focus only once it's actually shown (tabs.js fires this).
     if (panelEl) panelEl.addEventListener('tab:shown', () => inputEl.focus());
 
+    updatePrompt();
     clearScrollback();
     autoGrow();
     refreshHint();

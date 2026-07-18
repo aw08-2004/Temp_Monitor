@@ -34,10 +34,17 @@ public sealed class FleetCommand
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("type")] public string Type { get; set; } = "";
     [JsonPropertyName("params")] public JsonNode? Params { get; set; }
+
+    /// <summary>The operator who issued this, set from the hub's trusted session (never a
+    /// client body). The interactive terminal keys each operator's persistent shell on it,
+    /// so one operator can't drive another's session. Absent on a pre-3.2 hub -> empty.</summary>
+    [JsonPropertyName("issued_by")] public string IssuedBy { get; set; } = "";
 }
 
-/// <summary>Result of executing a command, reported back to the hub.</summary>
-public readonly record struct CommandResult(bool Success, string? Output)
+/// <summary>Result of executing a command, reported back to the hub. <c>Cwd</c> is the
+/// working directory a persistent shell was left in (run_script only); null otherwise, and
+/// an older hub simply ignores the extra field.</summary>
+public readonly record struct CommandResult(bool Success, string? Output, string? Cwd = null)
 {
     public static CommandResult Ok(string? output = null) => new(true, output);
     public static CommandResult Fail(string output) => new(false, output);

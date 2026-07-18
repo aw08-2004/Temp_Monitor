@@ -178,6 +178,7 @@ public sealed class FleetClient : IDisposable, IOutputSink
         {
             ["success"] = result.Success,
             ["output"] = result.Output,
+            ["cwd"] = result.Cwd,
         };
         try
         {

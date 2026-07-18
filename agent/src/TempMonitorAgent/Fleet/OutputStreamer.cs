@@ -45,13 +45,18 @@ public sealed class OutputStreamer : IAsyncDisposable
         _pump = Task.Run(PumpAsync);
     }
 
-    /// <summary>Buffer one line. Thread-safe, non-blocking, never throws.</summary>
-    public void Add(string line)
+    /// <summary>Buffer a chunk of RAW output text. Thread-safe, non-blocking, never throws.
+    ///
+    /// The text is appended verbatim -- no trailing '\n' is added, because the interactive
+    /// shell delivers partial lines (a prompt with no newline is the whole point) and adding
+    /// one per call would corrupt them. Line-oriented producers (ProcessRunner) append their
+    /// own newline before calling this.</summary>
+    public void Add(string text)
     {
         lock (_gate)
         {
             if (_stopped || _completed) return;
-            _buffer.Append(line).Append('\n');
+            _buffer.Append(text);
             // Only nudge the pump when we're already at the size threshold; otherwise let
             // the timer coalesce, which is the whole point of buffering.
             if (_buffer.Length < AgentConfig.StreamMaxChunkChars) return;

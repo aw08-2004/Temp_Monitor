@@ -122,8 +122,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
         data = request.get_json(silent=True) or {}
         success = bool(data.get("success"))
         output = data.get("output")
+        cwd = data.get("cwd")
         try:
-            fleet.complete_command(db_path, command_id, agent_id, success, output)
+            fleet.complete_command(db_path, command_id, agent_id, success, output, cwd)
         except KeyError:
             return jsonify({"error": "unknown command"}), 404
         except PermissionError as e:

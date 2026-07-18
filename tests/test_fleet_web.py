@@ -87,6 +87,17 @@ def main():
         r = c.get(f"/api/fleet/commands/{cid}")
         check("console sees command done", r.get_json()["status"] == fleet.STATUS_DONE)
 
+        print("\n== Agent reports shell cwd on the result ==")
+        r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
+                                                "params": {"script": "cd C:\\Windows"}})
+        wcid = r.get_json()["command_id"]
+        c.get("/api/agent/commands", headers=auth)   # claim it
+        r = c.post(f"/api/agent/commands/{wcid}/result",
+                   json={"success": True, "output": "", "cwd": "C:\\Windows"}, headers=auth)
+        check("agent posts result with cwd -> 200", r.status_code == 200)
+        body = c.get(f"/api/fleet/commands/{wcid}/output").get_json()
+        check("cwd round-trips to the console for the prompt", body["result"]["cwd"] == "C:\\Windows")
+
         print("\n== run_script needs no signature over HTTP ==")
         r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
                                                 "params": {"script": "echo hi"}})

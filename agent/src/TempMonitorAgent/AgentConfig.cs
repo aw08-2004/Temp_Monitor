@@ -7,8 +7,9 @@ namespace TempMonitorAgent;
 /// </summary>
 public static class AgentConfig
 {
-    /// <summary>Reported to the hub as companion_version; also the self-update baseline.</summary>
-    public const string Version = "3.1.0";
+    /// <summary>Reported to the hub as companion_version; also the self-update baseline.
+    /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
+    public const string Version = "3.2.0";
 
     // --- Hub endpoints -----------------------------------------------------
     // Base URL is overridable via TEMP_MONITOR_HUB for local testing
@@ -54,8 +55,22 @@ public static class AgentConfig
 
     // Commands execute off the main loop (see Worker), so a long script no longer
     // blocks telemetry/heartbeats. Bound the concurrency so a queued pile of scripts
-    // can't exhaust the box.
+    // can't exhaust the box. Session-control commands (shell_input/signal/reset) are
+    // exempt -- they must reach a running submission even when this cap is hit.
     public const int MaxConcurrentCommands = 4;
+
+    // --- Interactive shell sessions ----------------------------------------
+    // One persistent shell per (operator, shell type). Reaped after this much idle time
+    // with no in-flight submission, and capped so a crowd of operators can't spawn
+    // unbounded SYSTEM shells. Default per-submission timeout when the console doesn't
+    // send params.timeout_seconds.
+    public const int ShellIdleTimeoutSeconds = 30 * 60;
+    public const int MaxShellSessions = 8;
+    public const int ShellDefaultTimeoutSeconds = 600;
+
+    // While a submission is in flight, poll the command channel this fast so typed
+    // shell_input reaches the shell promptly instead of waiting out CommandPollSeconds.
+    public const int CommandPollFastSeconds = 1;
 
     // Exit code the service returns to request an SCM-driven restart onto a
     // freshly swapped binary (installer configures `sc failure ... restart`).

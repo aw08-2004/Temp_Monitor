@@ -94,8 +94,15 @@
                         <option value="powershell">PowerShell</option>
                         <option value="cmd">cmd</option>
                     </select>
+                    <label for="terminal-timeout" class="fleet-field__label">Timeout (s)</label>
+                    <input id="terminal-timeout" class="input terminal__timeout" type="number"
+                           min="1" value="600" title="Per-command timeout in seconds">
                     <button id="terminal-favorites" type="button" class="btn">★ Favorites</button>
                     <button id="terminal-save-fav" type="button" class="btn btn--ghost">Save as favorite</button>
+                    <button id="terminal-stop" type="button" class="btn btn--ghost" disabled
+                            title="Stop the running command (Ctrl-C); keeps the shell">Stop</button>
+                    <button id="terminal-reset" type="button" class="btn btn--ghost"
+                            title="Discard the shell and start a fresh one">Reset session</button>
                     <button id="terminal-clear" type="button" class="btn btn--ghost">Clear</button>
                 </div>
             </div>

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using TempMonitorAgent.Fleet;
+using TempMonitorAgent.Fleet.Shell;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
@@ -28,6 +29,7 @@ public sealed class Worker : BackgroundService
     private readonly FleetClient _fleet;
     private readonly CommandDispatcher _dispatcher;
     private readonly SelfUpdater _updater;
+    private readonly ShellSessionManager _shells;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -37,7 +39,8 @@ public sealed class Worker : BackgroundService
 
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
-        TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher, SelfUpdater updater)
+        TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
+        SelfUpdater updater, ShellSessionManager shells)
     {
         _log = log;
         _state = state;
@@ -46,6 +49,7 @@ public sealed class Worker : BackgroundService
         _fleet = fleet;
         _dispatcher = dispatcher;
         _updater = updater;
+        _shells = shells;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -59,6 +63,7 @@ public sealed class Worker : BackgroundService
         if (await _updater.CheckAndApplyAsync(stoppingToken)) { Restart(); return; }
 
         var now = DateTime.UtcNow;
+        var lastTemp = DateTime.MinValue;
         var lastSensor = DateTime.MinValue;
         var lastUptime = DateTime.MinValue;
         var lastCommandPoll = DateTime.MinValue;
@@ -68,37 +73,47 @@ public sealed class Worker : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             now = DateTime.UtcNow;
+            // While an operator's shell is mid-submission we tick fast, so typed shell_input
+            // reaches the shell within ~1s instead of waiting out the normal poll cadence.
+            bool shellActive = _shells.AnyActiveSubmission;
             try
             {
-                // --- Telemetry -------------------------------------------------
-                bool includeSensors = (now - lastSensor).TotalSeconds >= AgentConfig.SensorIntervalSeconds;
-                bool includeUptime = (now - lastUptime).TotalSeconds >= AgentConfig.UptimeIntervalSeconds;
-
-                var snapshot = _sensors.Read();
-                if (snapshot.CpuTemp is double temp)
+                // --- Telemetry (own cadence, so fast-ticking doesn't spam temp reports) ---
+                if ((now - lastTemp).TotalSeconds >= AgentConfig.IntervalSeconds)
                 {
-                    var result = await _reporter.ReportAsync(
-                        temp,
-                        includeSensors ? snapshot.Sensors : null,
-                        includeUptime ? SystemInfo.UptimeSeconds() : null,
-                        stoppingToken);
+                    bool includeSensors = (now - lastSensor).TotalSeconds >= AgentConfig.SensorIntervalSeconds;
+                    bool includeUptime = (now - lastUptime).TotalSeconds >= AgentConfig.UptimeIntervalSeconds;
 
-                    if (includeSensors) lastSensor = now;
-                    if (includeUptime) lastUptime = now;
-
-                    if (result.LatestVersion is { Length: > 0 } lv &&
-                        VersionUtil.Compare(lv, AgentConfig.Version) > 0)
+                    var snapshot = _sensors.Read();
+                    if (snapshot.CpuTemp is double temp)
                     {
-                        updateDue = true;
+                        var result = await _reporter.ReportAsync(
+                            temp,
+                            includeSensors ? snapshot.Sensors : null,
+                            includeUptime ? SystemInfo.UptimeSeconds() : null,
+                            stoppingToken);
+
+                        if (includeSensors) lastSensor = now;
+                        if (includeUptime) lastUptime = now;
+
+                        if (result.LatestVersion is { Length: > 0 } lv &&
+                            VersionUtil.Compare(lv, AgentConfig.Version) > 0)
+                        {
+                            updateDue = true;
+                        }
                     }
-                }
-                else
-                {
-                    _log.LogWarning("No CPU temperature reading this cycle");
+                    else
+                    {
+                        _log.LogWarning("No CPU temperature reading this cycle");
+                    }
+                    lastTemp = now;
                 }
 
                 // --- Fleet command channel -------------------------------------
-                if ((now - lastCommandPoll).TotalSeconds >= AgentConfig.CommandPollSeconds)
+                double pollEvery = shellActive
+                    ? AgentConfig.CommandPollFastSeconds
+                    : AgentConfig.CommandPollSeconds;
+                if ((now - lastCommandPoll).TotalSeconds >= pollEvery)
                 {
                     await RunFleetCycleAsync(stoppingToken);
                     lastCommandPoll = now;
@@ -134,7 +149,10 @@ public sealed class Worker : BackgroundService
                 _log.LogWarning(e, "Loop iteration failed");
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(AgentConfig.IntervalSeconds), stoppingToken); }
+            var loopDelay = _shells.AnyActiveSubmission
+                ? AgentConfig.CommandPollFastSeconds
+                : AgentConfig.IntervalSeconds;
+            try { await Task.Delay(TimeSpan.FromSeconds(loopDelay), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -157,7 +175,11 @@ public sealed class Worker : BackgroundService
             // went "offline" (90s window) while its own command was still running. Now
             // each command runs on its own task and the loop keeps ticking, which is also
             // what makes streamed output worth watching.
-            if (_running.Count >= AgentConfig.MaxConcurrentCommands)
+            // Session-control commands (shell_input/signal/reset) steer a shell that is
+            // ALREADY running a submission -- refusing them for concurrency would deadlock the
+            // very command holding a slot. They're near-instant, so let them straight through.
+            bool isControl = cmd.Type is "shell_input" or "shell_signal" or "shell_reset";
+            if (!isControl && _running.Count >= AgentConfig.MaxConcurrentCommands)
             {
                 _log.LogWarning("At {Max} concurrent commands; refusing {Type} {Id}",
                     AgentConfig.MaxConcurrentCommands, cmd.Type, cmd.Id);

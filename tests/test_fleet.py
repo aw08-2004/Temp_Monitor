@@ -100,6 +100,42 @@ def main():
         check("list_commands no longer exposes requires_signature",
               all("requires_signature" not in row for row in fleet.list_commands(db_path)))
 
+        print("\n== Interactive shell commands ==")
+        # The session-control types the persistent terminal uses.
+        for ctype in ("shell_input", "shell_signal", "shell_reset"):
+            check(f"{ctype} is a valid command type", ctype in fleet.ALL_COMMANDS)
+        sin = fleet.create_command(db_path, "PC-01", "shell_input",
+                                   {"data": "Y\n", "shell": "powershell"}, issued_by="op1@x.com")
+        check("shell_input command created", bool(sin))
+        # The agent keys each operator's shell on issued_by; claim must carry it, and from the
+        # trusted session -- never a client body.
+        sin_claim = [c for c in fleet.claim_commands(db_path, agent_id, "PC-01") if c["id"] == sin][0]
+        check("claim carries issued_by for session routing", sin_claim["issued_by"] == "op1@x.com")
+        # Session-control commands are transient -- not saveable as favorites.
+        for ctype in ("shell_input", "shell_signal", "shell_reset"):
+            expect_raise(f"{ctype} rejected as a favorite", ValueError,
+                         lambda ct=ctype: fleet.create_favorite(
+                             db_path, "op1@x.com", "bad", ct, {}))
+
+        print("\n== run_script reports cwd ==")
+        # A persistent shell reports the directory it was left in, so the console can render a
+        # real prompt. It rides on the result and surfaces in both output and command views.
+        wcid = fleet.create_command(db_path, "PC-01", "run_script",
+                                    {"script": "cd C:\\\\Windows"}, issued_by="op1@x.com")
+        fleet.claim_commands(db_path, agent_id, "PC-01")
+        fleet.complete_command(db_path, wcid, agent_id, success=True,
+                               output="", cwd="C:\\Windows")
+        check("cwd surfaces in get_command_output result",
+              fleet.get_command_output(db_path, wcid)["result"]["cwd"] == "C:\\Windows")
+        check("cwd surfaces in get_command result",
+              fleet.get_command(db_path, wcid)["result"]["cwd"] == "C:\\Windows")
+        # Older agents / non-shell commands report no cwd; the column is nullable.
+        ncid = fleet.create_command(db_path, "PC-01", "gpupdate", {}, issued_by="op1@x.com")
+        fleet.claim_commands(db_path, agent_id, "PC-01")
+        fleet.complete_command(db_path, ncid, agent_id, success=True, output="done")
+        check("cwd is null when the agent reports none",
+              fleet.get_command_output(db_path, ncid)["result"]["cwd"] is None)
+
         print("\n== Live output streaming ==")
         scid = fleet.create_command(db_path, "PC-01", "run_script",
                                     {"script": "loop"}, issued_by="helpdesk@x.com")

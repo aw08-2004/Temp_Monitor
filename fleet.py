@@ -50,6 +50,18 @@ import uuid
 # restart of the wrong box -- gating a subset behind an offline key bought little
 # and cost the helpdesk group the ability to use the channel at all. The audit_log
 # is what distinguishes these now, not a signature.
+# Session-control types for the interactive terminal. Unlike the executable commands
+# above, these carry no work of their own -- they steer an operator's persistent shell
+# on the agent (see agent Fleet/Shell/ShellSessionManager): shell_input writes stdin to
+# the running submission, shell_signal is Ctrl-C (kill the shell's children, keep the
+# shell), shell_reset recycles the shell. They are transient, so they are deliberately
+# NOT favoritable (see _validate_favorite) -- there's nothing reusable to save.
+SESSION_CONTROL_COMMANDS = frozenset({
+    "shell_input",
+    "shell_signal",
+    "shell_reset",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -59,7 +71,7 @@ ALL_COMMANDS = frozenset({
     "run_script",
     "install_driver",
     "update_bios",
-})
+}) | SESSION_CONTROL_COMMANDS
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -143,6 +155,14 @@ def init_fleet_db(db_path):
             )
             """
         )
+        # `cwd`: the working directory the agent's persistent shell was left in after a
+        # run_script submission, so the terminal can render a real prompt (PS C:\foo>).
+        # Added after command_results shipped, so migrate an existing table in place with
+        # the PRAGMA-guard idiom used elsewhere (app.py). Nullable -- other command types
+        # and pre-3.2 agents simply don't report one.
+        result_columns = {r["name"] for r in conn.execute("PRAGMA table_info(command_results)")}
+        if "cwd" not in result_columns:
+            conn.execute("ALTER TABLE command_results ADD COLUMN cwd TEXT")
         # Live output, streamed by the agent while a command runs, so the console
         # terminal can show progress instead of a spinner. This is SCROLLBACK, not the
         # record: command_results.output remains the durable, complete copy that the
@@ -436,7 +456,7 @@ def claim_commands(db_path, agent_id, machine):
     with get_conn(db_path) as conn:
         _expire_stale(conn, machine, now)
         rows = conn.execute(
-            "SELECT id, type, params_json "
+            "SELECT id, type, params_json, issued_by "
             "FROM commands WHERE machine = ? AND status = ? ORDER BY created_at ASC",
             (machine, STATUS_PENDING),
         ).fetchall()
@@ -449,6 +469,10 @@ def claim_commands(db_path, agent_id, machine):
                 "id": row["id"],
                 "type": row["type"],
                 "params": json.loads(row["params_json"]),
+                # The agent keys each operator's persistent shell on this. It comes from
+                # the trusted session (create_command's issued_by), never a client body,
+                # which is what stops one operator reaching another's shell session.
+                "issued_by": row["issued_by"],
             })
     if claimed:
         audit(db_path, actor=f"agent:{agent_id}", action="claim_commands", target=machine,
@@ -456,10 +480,14 @@ def claim_commands(db_path, agent_id, machine):
     return claimed
 
 
-def complete_command(db_path, command_id, agent_id, success, output=None):
+def complete_command(db_path, command_id, agent_id, success, output=None, cwd=None):
     """Record an agent's result for a command and move it to done/failed. Rejects
     a result for a command that wasn't claimed by this agent, so one agent can't
-    close out another's command."""
+    close out another's command.
+
+    `cwd` is the working directory the agent's persistent shell was left in (run_script
+    only); other commands report None and the terminal falls back to its last known cwd.
+    """
     command_id = str(command_id)
     now = int(time.time())
     with get_conn(db_path) as conn:
@@ -472,10 +500,12 @@ def complete_command(db_path, command_id, agent_id, success, output=None):
         if row["claimed_by"] != str(agent_id):
             raise PermissionError("command was not claimed by this agent")
         conn.execute(
-            "INSERT OR REPLACE INTO command_results(command_id, agent_id, success, output, completed_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO command_results"
+            "(command_id, agent_id, success, output, completed_at, cwd) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (command_id, str(agent_id), 1 if success else 0,
-             None if output is None else str(output), now),
+             None if output is None else str(output), now,
+             None if cwd is None else str(cwd)),
         )
         conn.execute(
             "UPDATE commands SET status = ? WHERE id = ?",
@@ -611,7 +641,7 @@ def get_command_output(db_path, command_id, after_seq=-1):
             (command_id, STREAM_TRUNCATION_MARKER),
         ).fetchone() is not None
         result = conn.execute(
-            "SELECT success, output, completed_at FROM command_results WHERE command_id = ?",
+            "SELECT success, output, completed_at, cwd FROM command_results WHERE command_id = ?",
             (command_id,),
         ).fetchone()
 
@@ -646,7 +676,7 @@ def get_command(db_path, command_id):
         if row is None:
             return None
         result = conn.execute(
-            "SELECT success, output, completed_at FROM command_results WHERE command_id = ?",
+            "SELECT success, output, completed_at, cwd FROM command_results WHERE command_id = ?",
             (str(command_id),),
         ).fetchone()
     command = dict(row)
@@ -683,6 +713,9 @@ def _validate_favorite(name, command_type, params):
         raise ValueError(f"name must be {FAVORITE_NAME_MAX_CHARS} characters or fewer")
     if command_type not in ALL_COMMANDS:
         raise ValueError(f"unknown command type: {command_type!r}")
+    if command_type in SESSION_CONTROL_COMMANDS:
+        # These steer a live shell session; there is nothing reusable to save.
+        raise ValueError(f"{command_type!r} commands cannot be saved as a favorite")
     if params is None:
         params = {}
     if not isinstance(params, dict):

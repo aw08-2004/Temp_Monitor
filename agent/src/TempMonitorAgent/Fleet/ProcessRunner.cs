@@ -46,7 +46,9 @@ public static class ProcessRunner
             lock (gate)
             {
                 sb.AppendLine(line);
-                try { onLine?.Invoke(line); }
+                // The sink (OutputStreamer.Add) now takes raw text, so re-add the newline the
+                // line-event API stripped -- otherwise streamed lines would run together.
+                try { onLine?.Invoke(line + "\n"); }
                 catch { /* a broken sink must never kill the command */ }
             }
         }

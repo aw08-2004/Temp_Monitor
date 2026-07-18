@@ -2,6 +2,7 @@ using Serilog;
 using TempMonitorAgent;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
+using TempMonitorAgent.Fleet.Shell;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
@@ -38,12 +39,17 @@ try
     // Fleet command channel
     builder.Services.AddSingleton<FleetClient>();
     builder.Services.AddSingleton<CommandDispatcher>();
+    // Persistent interactive shells live here (singleton, disposed at host shutdown).
+    builder.Services.AddSingleton<ShellSessionManager>();
     builder.Services.AddSingleton<ICommandExecutor, RestartExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, GpUpdateExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, InstallAppExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, ShellInputExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, ShellSignalExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
 
