@@ -23,6 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
 
 import fleet
+import alerts
 from fleet_web import create_fleet_blueprint
 
 # Load .env from next to this file rather than the cwd -- under the Windows service the working
@@ -35,7 +36,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.18.0"
+HUB_VERSION = "1.19.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -1037,12 +1038,15 @@ def resolve_serial_group(serial, actor="system:dedup"):
             (str(serial).strip(),),
         ).fetchall()
     if len(rows) <= 1:
+        # No collision (any more) -- clear a stale open alert if one lingered.
+        alerts.resolve_for_serial(DB_PATH, serial)
         return [r["machine"] for r in rows]
 
     online = [r for r in rows if derive_machine_status(r["updated_at"]) == "online"]
     if len(online) >= 2:
-        # Two live machines claim one serial -- keep them separate for now. The Alerts
-        # pass raises a duplicate_serial alert here so an operator can merge manually.
+        # Two live machines claim one serial -- refuse to auto-merge and raise a
+        # duplicate_serial alert so an operator can pick a survivor and merge manually.
+        alerts.upsert_duplicate(DB_PATH, serial, [r["machine"] for r in rows])
         return [r["machine"] for r in rows]
 
     if online:
@@ -1055,6 +1059,8 @@ def resolve_serial_group(serial, actor="system:dedup"):
     for r in rows:
         if r["machine"] != survivor:
             merge_machines(survivor, r["machine"], actor=actor)
+    # Collision collapsed to a single record -- clear any alert it had raised.
+    alerts.resolve_for_serial(DB_PATH, serial)
     return [survivor]
 
 
@@ -1201,6 +1207,7 @@ def start_retention_pruner():
 
 init_db()
 fleet.init_fleet_db(DB_PATH)
+alerts.init_alerts_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()
@@ -1417,6 +1424,78 @@ def delete_machine(machine):
     fleet.audit(DB_PATH, actor, "machine.delete", machine_name)
     return jsonify({"status": "deleted"}), 200
 
+
+@app.route('/api/alerts')
+@login_required
+def get_alerts():
+    """Open alerts for the Alerts tab. Each duplicate_serial alert is enriched with the
+    current status/model of every machine involved, so the UI can show which are still
+    online and let the operator pick a survivor to merge into."""
+    open_alerts = alerts.list_open(DB_PATH)
+    with get_db_conn() as conn:
+        info = {r["machine"]: r for r in conn.execute(
+            "SELECT machine, model, updated_at FROM machine_info"
+        ).fetchall()}
+    for alert in open_alerts:
+        enriched = []
+        for machine in alert.get("machines", []):
+            row = info.get(machine)
+            enriched.append({
+                "machine": machine,
+                "present": row is not None,
+                "status": derive_machine_status(row["updated_at"]) if row else "offline",
+                "model": (row["model"] if row else None),
+                "updated_at": (row["updated_at"] if row else None),
+            })
+        alert["machines"] = enriched
+    return jsonify(open_alerts)
+
+
+@app.route('/api/machines/merge', methods=['POST'])
+@login_required
+def merge_machines_endpoint():
+    """Operator-triggered merge of duplicate machines. Body: {survivor, victims:[...]}.
+    Absorbs each victim into the survivor (history preserved) and resolves any open
+    duplicate_serial alert for the survivor's serial."""
+    data = request.json or {}
+    survivor = str(data.get("survivor") or "").strip()
+    victims = data.get("victims") or []
+    if not survivor or not isinstance(victims, list):
+        return jsonify({"error": "survivor and a victims list are required"}), 400
+    victims = [str(v).strip() for v in victims if str(v).strip() and str(v).strip() != survivor]
+    if not victims:
+        return jsonify({"error": "no valid victims to merge"}), 400
+
+    names = [survivor] + victims
+    with get_db_conn() as conn:
+        found = {r["machine"]: r["serial_number"] for r in conn.execute(
+            f"SELECT machine, serial_number FROM machine_info "
+            f"WHERE machine IN ({','.join('?' for _ in names)})",
+            names,
+        ).fetchall()}
+    if survivor not in found:
+        return jsonify({"error": f"unknown survivor '{survivor}'"}), 404
+    missing = [v for v in victims if v not in found]
+    if missing:
+        return jsonify({"error": f"unknown machine(s): {', '.join(missing)}"}), 404
+
+    actor = (session.get("user") or {}).get("email", "unknown")
+    for victim in victims:
+        merge_machines(survivor, victim, actor=actor)
+    if found.get(survivor):
+        alerts.resolve_for_serial(DB_PATH, found[survivor])
+    return jsonify({"status": "merged", "survivor": survivor, "victims": victims}), 200
+
+
+@app.route('/api/alerts/<int:alert_id>/dismiss', methods=['POST'])
+@login_required
+def dismiss_alert(alert_id):
+    if not alerts.dismiss(DB_PATH, alert_id):
+        return jsonify({"error": "no open alert with that id"}), 404
+    actor = (session.get("user") or {}).get("email", "unknown")
+    fleet.audit(DB_PATH, actor, "alert.dismiss", str(alert_id))
+    return jsonify({"status": "dismissed"}), 200
+
 @app.route('/api/history')
 @login_required
 def get_history():
@@ -1523,6 +1602,15 @@ def get_daily_summary():
         "reading_count": int(summary["reading_count"])
     })
 
+@app.context_processor
+def inject_open_alert_count():
+    """Feed the sidebar's Alerts badge on every page render. Cheap COUNT on a small
+    table; never let it break a page if the alerts store is momentarily unavailable."""
+    try:
+        return {"open_alert_count": alerts.count_open(DB_PATH)}
+    except Exception:
+        return {"open_alert_count": 0}
+
 @app.route("/")
 @login_required
 def index():
@@ -1541,6 +1629,13 @@ def history_page():
 @login_required
 def inventory_page():
     return render_template("inventory.html", hub_version=HUB_VERSION,
+                           latest_companion_version=get_latest_companion_version(),
+                           latest_agent_version=get_latest_agent_version())
+
+@app.route("/alerts")
+@login_required
+def alerts_page():
+    return render_template("alerts.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 

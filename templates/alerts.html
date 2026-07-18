@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Alerts - Temp Monitor{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">Alerts</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">
+    Conflicts that need a human decision. Right now this surfaces duplicate machines that share a serial number and
+    are both online — the hub won't merge live machines automatically, so pick which record to keep and the others
+    are merged into it (their temperature history is preserved).
+</p>
+
+<div id="alerts-list"></div>
+<div class="empty-state" id="alerts-empty" style="display:none;">No open alerts. You're all caught up.</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/alerts.js') }}"></script>
+{% endblock %}

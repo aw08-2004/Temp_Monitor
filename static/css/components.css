@@ -103,6 +103,19 @@
     pointer-events: none;
 }
 
+/* Unread-alert count on the Alerts link. margin-left:auto pushes it to the far edge. */
+.sidebar__badge {
+    margin-left: auto;
+    min-width: 18px;
+    text-align: center;
+    font-size: var(--text-xs);
+    font-weight: 700;
+    color: #fff;
+    background: var(--danger, #e5484d);
+    padding: 0 var(--space-2);
+    border-radius: 999px;
+}
+
 /* ============ Topbar ============ */
 .topbar {
     display: flex;
