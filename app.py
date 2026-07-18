@@ -35,7 +35,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.17.0"
+HUB_VERSION = "1.18.0"
 CHECK_INTERVAL = 5
 OVERHEAT_THRESHOLD = 85
 # Below this CPU load %, a high temp reading is flagged "investigate" rather than
@@ -947,6 +947,140 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
             (machine_name, asset_tag, serial_number, model, companion_version, to_timestamp_str(datetime.now())),
         )
 
+# ================================
+# DUPLICATE-SERIAL DEDUP / MERGE
+# ================================
+# machine_info is keyed by hostname, but the same physical box reappears under a new
+# hostname when an agent upgrade renames/re-cases it (e.g. OpenClaw -> OPENCLAW), leaving
+# two rows that share one BIOS serial. We collapse those, always preferring the record
+# that is still reporting; two genuinely-live machines on one serial are left alone (a
+# real conflict for the operator to resolve manually).
+
+# BIOS/OEM placeholder serials many machines share -- never key identity on these, or
+# unrelated whiteboxes/VMs would be merged into one record.
+_JUNK_SERIALS = {
+    "", "0", "none", "null", "n/a", "na", "not specified", "not applicable",
+    "to be filled by o.e.m.", "to be filled by o.e.m", "default string",
+    "system serial number", "chassis serial number", "unknown", "invalid",
+    "empty", "123456789", "0123456789",
+}
+
+def is_valid_serial(serial):
+    """True only for a serial distinct enough to key identity on. Rejects blanks and
+    common BIOS placeholder strings so unrelated machines are never merged."""
+    if not serial:
+        return False
+    return str(serial).strip().lower() not in _JUNK_SERIALS
+
+
+def _evict_live_status(machine_name):
+    """Drop a machine's in-memory live caches so a removed hostname doesn't linger on
+    the Dashboard/Inventory. Shared by hard-delete and duplicate-merge."""
+    with latest_temp_lock:
+        latest_temp.pop(machine_name, None)
+    with latest_uptime_lock:
+        latest_uptime.pop(machine_name, None)
+    with latest_sensors_lock:
+        latest_sensors.pop(machine_name, None)
+    with _last_live_status_persist_lock:
+        _last_live_status_persist.pop(machine_name, None)
+
+
+def merge_machines(survivor, dropped, actor="system:dedup"):
+    """Absorb `dropped` into `survivor` -- the same physical machine seen under an old
+    hostname. Re-points the dropped host's readings onto the survivor so temperature
+    history stays continuous, backfills any identity field the survivor is missing from
+    the dropped row, then removes the dropped identity row and its stale fleet
+    enrollment. Irreversible."""
+    survivor = str(survivor or "").strip()
+    dropped = str(dropped or "").strip()
+    if not survivor or not dropped or survivor == dropped:
+        return
+    with get_db_conn() as conn:
+        # Preserve history: the dropped hostname's readings belong to the same box.
+        conn.execute("UPDATE readings SET machine = ? WHERE machine = ?", (survivor, dropped))
+        d = conn.execute(
+            "SELECT asset_tag, serial_number, model, companion_version "
+            "FROM machine_info WHERE machine = ?",
+            (dropped,),
+        ).fetchone()
+        if d is not None:
+            conn.execute(
+                """
+                UPDATE machine_info SET
+                    asset_tag = COALESCE(asset_tag, ?),
+                    serial_number = COALESCE(serial_number, ?),
+                    model = COALESCE(model, ?),
+                    companion_version = COALESCE(companion_version, ?)
+                WHERE machine = ?
+                """,
+                (d["asset_tag"], d["serial_number"], d["model"], d["companion_version"], survivor),
+            )
+        conn.execute("DELETE FROM machine_info WHERE machine = ?", (dropped,))
+    fleet.delete_machine(DB_PATH, dropped)
+    _evict_live_status(dropped)
+    fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor})
+
+
+def resolve_serial_group(serial, actor="system:dedup"):
+    """Collapse duplicate machine_info rows that share `serial`, preferring live records:
+      - exactly one online  -> merge the offline duplicate(s) into it
+      - all offline         -> merge into the most recently updated row
+      - two or more online   -> leave them separate (a genuine conflict)
+    Returns the machines still present for that serial afterwards."""
+    if not is_valid_serial(serial):
+        return []
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT machine, updated_at FROM machine_info "
+            "WHERE serial_number = ? COLLATE NOCASE",
+            (str(serial).strip(),),
+        ).fetchall()
+    if len(rows) <= 1:
+        return [r["machine"] for r in rows]
+
+    online = [r for r in rows if derive_machine_status(r["updated_at"]) == "online"]
+    if len(online) >= 2:
+        # Two live machines claim one serial -- keep them separate for now. The Alerts
+        # pass raises a duplicate_serial alert here so an operator can merge manually.
+        return [r["machine"] for r in rows]
+
+    if online:
+        survivor = online[0]["machine"]
+    else:
+        # All offline: keep the most recently updated row (updated_at is fixed-width
+        # "YYYY-MM-DD HH:MM:SS", so a lexicographic max is a chronological max).
+        survivor = max(rows, key=lambda r: r["updated_at"] or "")["machine"]
+
+    for r in rows:
+        if r["machine"] != survivor:
+            merge_machines(survivor, r["machine"], actor=actor)
+    return [survivor]
+
+
+def resolve_all_duplicate_serials(actor="system:dedup:startup"):
+    """One-shot startup sweep: collapse every set of duplicate rows sharing a valid
+    serial. Cleans up duplicates that predate this feature, including all-offline ones
+    no live report would otherwise trigger a merge for."""
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT serial_number
+            FROM machine_info
+            WHERE serial_number IS NOT NULL AND TRIM(serial_number) <> ''
+            GROUP BY serial_number COLLATE NOCASE
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+    for row in rows:
+        serial = row["serial_number"]
+        if not is_valid_serial(serial):
+            continue
+        try:
+            resolve_serial_group(serial, actor=actor)
+        except Exception as e:
+            print(f"[dedup] Failed to resolve duplicates for serial {serial!r}: {e}")
+
 def query_raw_history(start_epoch, end_epoch, machine, limit):
     sql = """
         SELECT machine, ts_text, temp
@@ -1067,6 +1201,11 @@ def start_retention_pruner():
 
 init_db()
 fleet.init_fleet_db(DB_PATH)
+# Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
+try:
+    resolve_all_duplicate_serials()
+except Exception as e:
+    print(f"[dedup] Startup duplicate sweep failed: {e}")
 start_companion_version_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
@@ -1185,6 +1324,15 @@ def report_temp():
         data.get('model'),
         reported_version,
     )
+    # Now that this machine's identity is fresh (and online), collapse any offline
+    # duplicate reporting the same BIOS serial -- the OpenClaw -> OPENCLAW rename case.
+    # Never let a dedup hiccup fail the report itself.
+    reported_serial = data.get('serial_number')
+    if is_valid_serial(reported_serial):
+        try:
+            resolve_serial_group(reported_serial)
+        except Exception as e:
+            print(f"[dedup] Duplicate-serial resolution failed for {machine!r}: {e}")
 
     response_payload = {"status": "success"}
     latest_version = get_advertised_version(reported_version)
@@ -1264,14 +1412,7 @@ def delete_machine(machine):
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
     fleet.delete_machine(DB_PATH, machine_name)
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
-    with latest_temp_lock:
-        latest_temp.pop(machine_name, None)
-    with latest_uptime_lock:
-        latest_uptime.pop(machine_name, None)
-    with latest_sensors_lock:
-        latest_sensors.pop(machine_name, None)
-    with _last_live_status_persist_lock:
-        _last_live_status_persist.pop(machine_name, None)
+    _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")
     fleet.audit(DB_PATH, actor, "machine.delete", machine_name)
     return jsonify({"status": "deleted"}), 200
