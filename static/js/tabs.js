@@ -59,11 +59,23 @@
             activate(next, { focus: true });
         });
 
+        const tabForHash = () => (location.hash
+            ? tabs.find((t) => panelFor(t) && `#${panelFor(t).id}` === location.hash)
+            : null);
+
+        // Changing only the fragment is a same-document navigation: the page never
+        // reloads, so the DOMContentLoaded restore below doesn't run again and a link to
+        // #tab-data would do nothing when you're already on the page. Returns undefined
+        // for a hash belonging to another tablist (or to no panel at all), which is why
+        // this only acts on a match -- an unrelated in-page anchor must not steal a tab.
+        window.addEventListener('hashchange', () => {
+            const target = tabForHash();
+            if (target) activate(target);
+        });
+
         // Restore, in priority order: an explicit #hash (so a tab is linkable), then the
         // last tab this browser used, else whatever the markup marked active.
-        const fromHash = location.hash
-            ? tabs.find((t) => panelFor(t) && `#${panelFor(t).id}` === location.hash)
-            : null;
+        const fromHash = tabForHash();
         let stored = null;
         try { stored = localStorage.getItem(key); } catch (e) { /* ignore */ }
         const fromStorage = stored ? tabs.find((t) => t.id === stored) : null;
