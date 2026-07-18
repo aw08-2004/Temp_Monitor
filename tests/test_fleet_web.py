@@ -5,9 +5,11 @@ import functools
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fleet
+import settings
 from fleet_web import create_fleet_blueprint
 from flask import Flask, jsonify
 
@@ -43,6 +45,10 @@ def main():
     os.close(db_fd)
     try:
         fleet.init_fleet_db(db_path)
+        # fleet_web reads fleet.offline_after_seconds / fleet.command_ttl_seconds from
+        # here and passes them into fleet.py, which stays settings-free.
+        settings.init_settings_db(db_path)
+        settings.invalidate()
         SECRET = "hub-enroll-secret"
 
         app = Flask(__name__)
@@ -297,10 +303,77 @@ def main():
         check("owner DELETE -> 200", r.status_code == 200)
         CURRENT_USER = "operator@x.com"
 
+        print("\n== Heartbeat config channel ==")
+        hdr = {"Authorization": f"Bearer {agent_id}:{token}"}
+        # An agent that holds no version yet must be given the config.
+        r = c.post("/api/agent/heartbeat", json={"config_version": ""}, headers=hdr)
+        check("heartbeat 200", r.status_code == 200)
+        body = r.get_json()
+        check("stale agent is sent config", "config" in body)
+        version = body.get("config_version")
+        check("config carries a version", bool(version))
+        check("config carries the sensor preference",
+              "computer.primary_sensor_preference" in body["config"])
+        # Only agent-flagged settings travel; hub internals must not leak to endpoints.
+        check("hub-only knobs are not shipped",
+              not any(k.startswith(("hub.", "data.", "fleet.")) for k in body["config"]))
+        # Trust roots must never be settable from the hub.
+        for forbidden in ("update_manifest_url", "update_public_key", "hub_base", "registry"):
+            check(f"config carries no {forbidden}",
+                  not any(forbidden in k.lower() for k in body["config"]))
+
+        # An up-to-date agent gets a two-field response, so the 10s heartbeat stays cheap.
+        r = c.post("/api/agent/heartbeat", json={"config_version": version}, headers=hdr)
+        check("current agent is not re-sent config", "config" not in r.get_json())
+
+        # Changing an agent-facing setting re-arms the push...
+        settings.set_many(db_path, {"computer.primary_sensor_preference": ["core max"]})
+        r = c.post("/api/agent/heartbeat", json={"config_version": version}, headers=hdr)
+        check("a config change is pushed on the next heartbeat", "config" in r.get_json())
+        check("pushed config reflects the change",
+              r.get_json()["config"]["computer.primary_sensor_preference"] == ["core max"])
+        new_version = r.get_json()["config_version"]
+        check("the version changed", new_version != version)
+
+        # ...but a hub-only setting must not churn the fleet.
+        settings.set_many(db_path, {"data.retention_days": 45})
+        r = c.post("/api/agent/heartbeat", json={"config_version": new_version}, headers=hdr)
+        check("a hub-only change does not push to agents", "config" not in r.get_json())
+
+        # Reverting hashes back to the original, so agents that never saw the
+        # intermediate value don't re-apply anything.
+        settings.reset(db_path, ["computer.primary_sensor_preference"])
+        r = c.post("/api/agent/heartbeat", json={"config_version": version}, headers=hdr)
+        check("reverting restores the original version (content hash, not a counter)",
+              "config" not in r.get_json())
+
+        # A heartbeat with no body at all must still work (older agents).
+        r = c.post("/api/agent/heartbeat", headers=hdr)
+        check("bodyless heartbeat still 200", r.status_code == 200)
+        check("bodyless heartbeat is sent config", "config" in r.get_json())
+        r = c.post("/api/agent/heartbeat", json={"config_version": "x"})
+        check("heartbeat without a bearer token -> 401", r.status_code == 401)
+        settings.reset(db_path, ["data.retention_days"])
+
         print("\n== Status & result isolation ==")
         r = c.get("/api/fleet/status")
         check("status shows PC-01 online",
               any(s["machine"] == "PC-01" and s["status"] == "online" for s in r.get_json()))
+
+        # The configured offline window must actually reach fleet.list_agent_status --
+        # backdate last_seen past a deliberately tiny window and the agent flips offline.
+        with fleet.get_conn(db_path) as conn:
+            conn.execute("UPDATE agents SET last_seen = ? WHERE machine = 'PC-01'",
+                         (int(time.time()) - 60,))
+        settings.set_many(db_path, {"fleet.offline_after_seconds": 30})
+        r = c.get("/api/fleet/status")
+        check("configured offline window is honoured",
+              any(s["machine"] == "PC-01" and s["status"] == "offline" for s in r.get_json()))
+        settings.set_many(db_path, {"fleet.offline_after_seconds": 3600})
+        r = c.get("/api/fleet/status")
+        check("widening the window brings it back online",
+              any(s["machine"] == "PC-01" and s["status"] == "online" for s in r.get_json()))
+        settings.reset(db_path, ["fleet.offline_after_seconds"])
         # A second agent must not close the first agent's freshly-claimed command.
         r = c.post("/api/agent/enroll", json={"machine": "PC-02", "enrollment_secret": SECRET})
         a2, t2 = r.get_json()["agent_id"], r.get_json()["token"]

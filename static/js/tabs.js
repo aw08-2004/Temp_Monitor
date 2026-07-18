@@ -46,8 +46,12 @@
             const current = tabs.indexOf(document.activeElement);
             if (current < 0) return;
             let next = null;
-            if (e.key === 'ArrowRight') next = tabs[(current + 1) % tabs.length];
-            else if (e.key === 'ArrowLeft') next = tabs[(current - 1 + tabs.length) % tabs.length];
+            // Both axes unconditionally, rather than plumbing an orientation flag: a
+            // vertical tablist that ignores Up/Down is an accessibility bug (ARIA
+            // specifies them for aria-orientation="vertical"), and on a horizontal strip
+            // Up/Down previously did nothing, so accepting them costs no behaviour.
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(current + 1) % tabs.length];
+            else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(current - 1 + tabs.length) % tabs.length];
             else if (e.key === 'Home') next = tabs[0];
             else if (e.key === 'End') next = tabs[tabs.length - 1];
             if (!next) return;

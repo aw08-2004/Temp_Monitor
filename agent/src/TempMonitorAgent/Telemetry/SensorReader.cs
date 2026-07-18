@@ -1,5 +1,6 @@
 using LibreHardwareMonitor.Hardware;
 using Microsoft.Extensions.Logging;
+using TempMonitorAgent.State;
 
 namespace TempMonitorAgent.Telemetry;
 
@@ -11,17 +12,6 @@ namespace TempMonitorAgent.Telemetry;
 /// </summary>
 public sealed class SensorReader : ISensorSource
 {
-    // Best-first CPU temperature preference, matched as a substring of the sensor
-    // name (lowercased) — identical to companion.py PREFERRED_SENSORS.
-    private static readonly string[] PreferredSensors =
-    {
-        "cpu package",
-        "core (tctl/tdie)",
-        "core average",
-        "core max",
-        "cpu cores",
-    };
-
     private readonly ILogger<SensorReader> _log;
     private readonly Computer _computer;
     private readonly UpdateVisitor _visitor = new();
@@ -105,14 +95,37 @@ public sealed class SensorReader : ISensorSource
             CollectHardware(sub, sensors, cpuTemps);
     }
 
+    /// <summary>
+    /// Pick the primary CPU temperature, honouring the operator's configured preference.
+    ///
+    /// Read fresh from RuntimeConfigStore on every call rather than captured once, so a
+    /// config push takes effect on the very next loop tick — no restart, no reconnect.
+    /// </summary>
     private static double? PickCpuTemp(List<(string name, double value)> cpuTemps)
     {
         if (cpuTemps.Count == 0) return null;
-        foreach (var wanted in PreferredSensors)
+        var config = RuntimeConfigStore.Current;
+
+        // A pinned sensor is matched exactly: the operator chose it from the names this
+        // machine actually reports, so a partial hit means the sensor is gone, and we
+        // should fall through to the preference order rather than guess at a near-miss.
+        if (!string.IsNullOrWhiteSpace(config.PrimarySensorName))
+        {
+            var want = config.PrimarySensorName!.Trim().ToLowerInvariant();
+            foreach (var (name, value) in cpuTemps)
+                if (name == want)
+                    return value;
+        }
+
+        foreach (var wanted in config.PreferredSensors)
             foreach (var (name, value) in cpuTemps)
                 if (name.Contains(wanted))
                     return value;
-        return cpuTemps[0].value; // any CPU temp beats none
+
+        // Any CPU temp beats none. Note this differs from the hub's re-derivation, which
+        // deliberately returns "no opinion" instead — the hub can fall back to the value
+        // we chose here, whereas we have nothing better to fall back to.
+        return cpuTemps[0].value;
     }
 
     // Lenient parse for the general list: keep legitimate 0/negative, reject only

@@ -156,23 +156,39 @@ def test_hub_self_update():
     check("same version no update", app.cmp_versions(app.HUB_VERSION, app.HUB_VERSION) == 0)
     check("older remote does not trigger", app.cmp_versions("0.0.1", app.HUB_VERSION) < 0)
 
-    print("\n-- hub self-update: watcher flag gating --")
-    saved_flag = app.HUB_AUTO_UPDATE
-    app.hub_update_watcher_thread = None
-    app.HUB_AUTO_UPDATE = False
-    app.start_hub_update_watcher()
-    check("disabled -> no watcher thread", app.hub_update_watcher_thread is None)
-    # Enabled: stub the fetch so the loop never touches the network, then confirm it runs.
+    print("\n-- hub self-update: tri-state enable flag --")
+    # The gate moved out of start_hub_update_watcher() and into hub_auto_update_enabled(),
+    # which the loop re-reads every tick. The watcher thread now always starts, because a
+    # thread that was never started can't notice the setting being switched on at runtime.
+    import settings as _settings
+    saved_env = app.HUB_AUTO_UPDATE_ENV
+    try:
+        for env_flag in (False, True):
+            app.HUB_AUTO_UPDATE_ENV = env_flag
+            _settings.reset(app.DB_PATH, ["hub.auto_update"])
+            check(f"unset setting follows .env ({env_flag})",
+                  app.hub_auto_update_enabled() is env_flag)
+            _settings.set_many(app.DB_PATH, {"hub.auto_update": True})
+            check(f"explicit True overrides .env ({env_flag})",
+                  app.hub_auto_update_enabled() is True)
+            _settings.set_many(app.DB_PATH, {"hub.auto_update": False})
+            check(f"explicit False overrides .env ({env_flag})",
+                  app.hub_auto_update_enabled() is False)
+    finally:
+        app.HUB_AUTO_UPDATE_ENV = saved_env
+        _settings.reset(app.DB_PATH, ["hub.auto_update"])
+
+    print("\n-- hub self-update: watcher starts regardless of the flag --")
+    # Stub the fetch so the loop never touches the network.
     orig_fetch = app.fetch_remote_hub_version
     app.fetch_remote_hub_version = lambda: None
-    app.HUB_AUTO_UPDATE = True
+    app.hub_update_watcher_thread = None
     try:
         app.start_hub_update_watcher()
-        check("enabled -> watcher thread alive",
+        check("watcher thread alive so a runtime toggle can take effect",
               app.hub_update_watcher_thread is not None and app.hub_update_watcher_thread.is_alive())
     finally:
         app.fetch_remote_hub_version = orig_fetch
-        app.HUB_AUTO_UPDATE = saved_flag
 
     print("\n-- hub self-update: perform_hub_update pulls a clone up to origin/main --")
     import subprocess as _sp

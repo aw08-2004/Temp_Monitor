@@ -181,6 +181,11 @@
 .status-pill--muted { color: var(--muted); }
 
 /* ============ Buttons ============ */
+/* Explicit, for the same reason .tab-panel[hidden] is: display:inline-flex below beats
+   the UA stylesheet's [hidden] rule, so `btn.hidden = true` would set the attribute and
+   change nothing on screen. */
+.btn[hidden] { display: none; }
+
 .btn {
     display: inline-flex;
     align-items: center;
@@ -315,6 +320,183 @@
 /* Explicit, because a panel with display:flex/grid would otherwise beat the UA
    stylesheet's [hidden] rule and render while "hidden". */
 .tab-panel[hidden] { display: none; }
+
+/* ---- Vertical variant (Settings) ---- */
+/* Same tabs.js, same roving tabindex; only the axis changes. The active indicator moves
+   from the bottom edge to the trailing edge, so the base rule's border-bottom has to be
+   neutralised rather than merely overridden -- otherwise every tab keeps a stray
+   underline and the active one shows two marks. */
+.tabs--vertical {
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    border-bottom: none;
+    border-right: 1px solid var(--card-border);
+    margin-bottom: 0;
+    margin-right: var(--space-5);
+    min-width: 190px;
+    flex-shrink: 0;
+}
+
+.tabs--vertical .tabs__tab {
+    text-align: left;
+    border-bottom: none;
+    border-right: 2px solid transparent;
+    margin-bottom: 0;
+    /* Overlap the tablist's own border so the active marker replaces it rather than
+       stacking a second line beside it -- the horizontal rule's margin-bottom:-1px,
+       rotated. */
+    margin-right: -1px;
+}
+
+.tabs--vertical .tabs__tab--active {
+    border-right-color: var(--accent);
+}
+
+.tabs--vertical .tabs__tab:focus-visible {
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.settings-layout {
+    display: flex;
+    align-items: flex-start;
+}
+
+/* min-width:0 so a wide field inside a panel can't push the flex item past the
+   viewport instead of shrinking. */
+.settings-layout__panels {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Narrow screens: fall back to the horizontal strip. Every vertical override above has
+   to be reverted explicitly, since these rules are more specific than the base ones. */
+@media (max-width: 720px) {
+    .settings-layout { display: block; }
+
+    .tabs--vertical {
+        flex-direction: row;
+        flex-wrap: wrap;
+        border-right: none;
+        border-bottom: 1px solid var(--card-border);
+        margin-right: 0;
+        margin-bottom: var(--space-5);
+        min-width: 0;
+    }
+
+    .tabs--vertical .tabs__tab {
+        border-right: none;
+        border-bottom: 2px solid transparent;
+        margin-right: 0;
+        margin-bottom: -1px;
+    }
+
+    .tabs--vertical .tabs__tab--active {
+        border-right-color: transparent;
+        border-bottom-color: var(--accent);
+    }
+
+    .tabs--vertical .tabs__tab:focus-visible {
+        border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    }
+}
+
+/* ============ Settings fields ============ */
+.setting {
+    padding: var(--space-4) 0;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.setting:last-child { border-bottom: none; }
+
+.setting__row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.setting__label {
+    flex: 1;
+    min-width: 220px;
+    font-weight: 500;
+}
+
+.setting__unit {
+    color: var(--muted);
+    font-size: var(--text-sm);
+}
+
+.setting__help {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
+    max-width: 70ch;
+}
+
+.setting__default {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
+}
+
+/* Hidden until the server rejects this field, so the layout doesn't reserve a gap
+   under every input for an error that usually never comes. */
+.setting__error {
+    color: var(--danger);
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
+}
+
+.setting__error:empty { display: none; }
+
+.setting__input { width: 120px; }
+
+/* Ordered preference list (the sensor knob). */
+.pref-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--space-3) 0;
+}
+
+.pref-list__item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+}
+
+.pref-list__rank {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    min-width: 1.5em;
+}
+
+.pref-list__name { flex: 1; }
+
+/* Sticky save bar. Sits at the bottom of the viewport while a panel has unsaved
+   changes, so a change made at the top of a long panel can still be saved without
+   scrolling back down. */
+/* Same [hidden] caveat as .btn and .tab-panel -- display:flex below would otherwise win. */
+.settings-actions[hidden] { display: none; }
+
+.settings-actions {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4) 0;
+    margin-top: var(--space-4);
+    background: var(--bg);
+    border-top: 1px solid var(--card-border);
+}
+
+.settings-actions__status {
+    flex: 1;
+    color: var(--muted);
+    font-size: var(--text-sm);
+}
 
 /* ============ Modal ============ */
 /* Built on native <dialog>.showModal(), which gives focus trapping, background

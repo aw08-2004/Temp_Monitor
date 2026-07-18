@@ -56,6 +56,10 @@ public sealed class Worker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _state.EnsureStateDir();
+        // Restore the hub-delivered config before the first sensor read. Without this a
+        // reboot or self-update would run on compiled defaults until the first heartbeat
+        // lands, so the box would read the "wrong" sensor for ~10 seconds every time.
+        RuntimeConfigStore.Set(_state.LoadRuntimeConfig());
         _log.LogInformation("TempMonitor agent v{Version} - machine: {Machine} - hub: {Hub}",
             AgentConfig.Version, AgentConfig.MachineName, AgentConfig.HubBase);
 

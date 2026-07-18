@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Settings - Temp Monitor{% endblock %}
+{% block content %}
+{#
+   Deliberately near-empty. The section list is fixed markup (sections are an
+   information-architecture decision), but every FIELD inside a panel is rendered by
+   settings.js from GET /api/settings. That's what lets a new knob be one line in
+   settings.py's REGISTRY with no change here and none in the JS.
+#}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Settings</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">
+    Operational tuning for the hub and the fleet. Every setting shows its default, and
+    anything you haven't changed behaves exactly as it did before this page existed.
+</p>
+
+<div class="settings-layout">
+    <div class="tabs tabs--vertical" role="tablist" aria-label="Settings sections"
+         aria-orientation="vertical" data-tabs-key="settings">
+        <button class="tabs__tab tabs__tab--active" type="button" role="tab"
+                id="tab-btn-computer" aria-controls="tab-computer" aria-selected="true">Computer</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-hub"
+                aria-controls="tab-hub" aria-selected="false" tabindex="-1">Hub</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-data"
+                aria-controls="tab-data" aria-selected="false" tabindex="-1">Data &amp; Retention</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-fleet"
+                aria-controls="tab-fleet" aria-selected="false" tabindex="-1">Fleet</button>
+    </div>
+    <div class="settings-layout__panels">
+        <div class="tab-panel" id="tab-computer" role="tabpanel" aria-labelledby="tab-btn-computer"></div>
+        <div class="tab-panel" id="tab-hub" role="tabpanel" aria-labelledby="tab-btn-hub"></div>
+        <div class="tab-panel" id="tab-data" role="tabpanel" aria-labelledby="tab-btn-data"></div>
+        <div class="tab-panel" id="tab-fleet" role="tabpanel" aria-labelledby="tab-btn-fleet"></div>
+    </div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+{# tabs.js drives the vertical section tablist. It binds on DOMContentLoaded and is
+   included per-page (same as machine.html), so it has to be listed here explicitly --
+   without it every panel renders at once. #}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+{% endblock %}

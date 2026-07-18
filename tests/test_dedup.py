@@ -21,6 +21,7 @@ _TMPDIR = tempfile.mkdtemp(prefix="hub-dedup-test-")
 os.chdir(_TMPDIR)
 
 import app
+import settings
 
 PASS = 0
 FAIL = 0
@@ -48,7 +49,8 @@ def report(machine, serial, temp=42.0):
 def make_offline(machine, seconds_ago=None):
     """Backdate a machine's updated_at so derive_machine_status() reads it offline."""
     if seconds_ago is None:
-        seconds_ago = app.DASHBOARD_ONLINE_WINDOW_SECONDS + 180
+        seconds_ago = settings.get_int(
+            app.DB_PATH, "fleet.dashboard_online_window_seconds") + 180
     ts = app.to_timestamp_str(datetime.now() - timedelta(seconds=seconds_ago))
     with app.get_db_conn() as conn:
         conn.execute("UPDATE machine_info SET updated_at=? WHERE machine=?", (ts, machine))

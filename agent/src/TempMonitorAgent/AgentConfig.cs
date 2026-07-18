@@ -9,7 +9,7 @@ public static class AgentConfig
 {
     /// <summary>Reported to the hub as companion_version; also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.2.0";
+    public const string Version = "3.3.0";
 
     // --- Hub endpoints -----------------------------------------------------
     // Base URL is overridable via TEMP_MONITOR_HUB for local testing
@@ -105,6 +105,10 @@ public static class AgentConfig
             "TempMonitorAgent");
 
     public static string AgentIdentityPath => Path.Combine(ProgramDataDir, "agent.json");
+    /// <summary>Hub-delivered operational config (see RuntimeConfig). Persisted so a
+    /// restart or self-update doesn't fall back to compiled defaults until the next
+    /// heartbeat.</summary>
+    public static string AgentConfigPath => Path.Combine(ProgramDataDir, "config.json");
     public static string RestartStatePath => Path.Combine(ProgramDataDir, "restart_state.json");
     public static string LogPath => Path.Combine(ProgramDataDir, "companion.log");
     public static string UpdateStagingDir => Path.Combine(ProgramDataDir, "update");

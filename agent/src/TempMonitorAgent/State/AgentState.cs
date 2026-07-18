@@ -72,6 +72,29 @@ public sealed class AgentState
         catch { /* ignore */ }
     }
 
+    // --- Hub-delivered runtime config --------------------------------------
+    public RuntimeConfig LoadRuntimeConfig()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.AgentConfigPath))
+            {
+                var json = File.ReadAllText(AgentConfig.AgentConfigPath);
+                var cfg = JsonSerializer.Deserialize<RuntimeConfig>(json);
+                if (cfg is not null) return cfg;
+            }
+        }
+        catch { /* fall through to compiled defaults */ }
+        return RuntimeConfig.Default;
+    }
+
+    public void SaveRuntimeConfig(RuntimeConfig config)
+    {
+        EnsureStateDir();
+        var json = JsonSerializer.Serialize(config, JsonOpts);
+        AtomicWrite(AgentConfig.AgentConfigPath, json);
+    }
+
     private static void AtomicWrite(string path, string contents)
     {
         var tmp = path + ".tmp";

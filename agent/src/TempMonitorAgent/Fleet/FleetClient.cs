@@ -93,19 +93,68 @@ public sealed class FleetClient : IDisposable, IOutputSink
         }
     }
 
+    /// <summary>
+    /// Liveness ping, and the channel the hub delivers operational config over.
+    ///
+    /// We send the config_version we currently hold; the hub includes a config payload
+    /// only when it differs, so the steady-state 10-second heartbeat stays tiny. Config
+    /// rides here rather than on /api/report because this endpoint is authenticated —
+    /// /api/report deliberately is not.
+    /// </summary>
     public async Task<bool> HeartbeatAsync(CancellationToken ct)
     {
         if (!_identity.IsEnrolled) return false;
         try
         {
             using var req = Authorized(HttpMethod.Post, AgentConfig.HeartbeatUrl);
+            var known = RuntimeConfigStore.Current.ConfigVersion;
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new Dictionary<string, string> { ["config_version"] = known }),
+                Encoding.UTF8, "application/json");
+
             using var resp = await _http.SendAsync(req, ct);
-            return resp.IsSuccessStatusCode;
+            if (!resp.IsSuccessStatusCode) return false;
+
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            ApplyConfigFromHeartbeat(text);
+            return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Heartbeat failed: {Msg}", e.Message);
             return false;
+        }
+    }
+
+    /// <summary>Apply a config payload if the heartbeat carried one. Fails soft: a
+    /// malformed payload leaves the running config untouched, because losing sensor
+    /// selection is worse than ignoring one bad push.</summary>
+    private void ApplyConfigFromHeartbeat(string body)
+    {
+        try
+        {
+            var root = JsonNode.Parse(body)?.AsObject();
+            if (root is null) return;
+            if (!root.TryGetPropertyValue("config", out var configNode) || configNode is null) return;
+
+            var version = root["config_version"]?.GetValue<string>() ?? "";
+            var payload = new Dictionary<string, object?>();
+            foreach (var (key, value) in configNode.AsObject())
+            {
+                payload[key] = value is JsonArray arr
+                    ? arr.Select(n => (object?)n?.ToString()).ToList()
+                    : value?.ToString();
+            }
+
+            var applied = RuntimeConfigStore.Current.Apply(payload, version);
+            RuntimeConfigStore.Set(applied);
+            _state.SaveRuntimeConfig(applied);
+            _log.LogInformation("Applied hub config {Version}: sensors [{Sensors}]",
+                version, string.Join(", ", applied.PreferredSensors));
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed hub config: {Msg}", e.Message);
         }
     }
 

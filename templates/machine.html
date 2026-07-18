@@ -57,6 +57,27 @@
         </div>
     </div>
 
+    {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is
+       per-machine state, like the asset tag -- Settings holds the fleet-wide preference
+       order this overrides. #}
+    <div class="card">
+        <div class="section-title">Primary temperature sensor</div>
+        <div class="toolbar" style="margin-bottom: var(--space-2);">
+            <label for="primary-sensor">Use sensor:</label>
+            <select id="primary-sensor" class="select">
+                <option value="">Follow the fleet preference order</option>
+            </select>
+            <button id="primary-sensor-save" type="button" class="btn btn--primary" hidden>Save</button>
+            <span id="primary-sensor-status" class="stat-card__meta"></span>
+        </div>
+        <p class="stat-card__meta" style="max-width: 70ch;">
+            Which sensor this machine's headline temperature comes from. Leave it on the
+            default to follow the order configured in
+            <a href="{{ url_for('settings_page') }}#tab-computer">Settings &rarr; Computer</a>.
+            Applies to new readings; history keeps the value recorded at the time.
+        </p>
+    </div>
+
     <div class="card chart-card">
         <div class="section-title">Temperature History</div>
         <div class="toolbar">

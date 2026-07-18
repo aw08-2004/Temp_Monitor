@@ -1,6 +1,10 @@
-// /api/machines doesn't send thresholds today (matches the existing hardcoded 85
-// below), so this mirrors that pattern rather than introducing a new inconsistency.
-const LOW_LOAD_THRESHOLD = 40;
+// Thresholds come from the server (they're operator-settable in Settings), via data
+// attributes on #dashboard-config -- same idiom as machine.js. These used to be
+// hardcoded 40/85 here, which meant the Dashboard and the machine page could disagree
+// about whether the same reading was overheating once the setting moved.
+const dashboardConfig = document.getElementById('dashboard-config');
+const OVERHEAT_THRESHOLD = Number(dashboardConfig.dataset.overheatThreshold);
+const LOW_LOAD_THRESHOLD = Number(dashboardConfig.dataset.lowLoadThreshold);
 
 requestNotificationPermission();
 
@@ -92,7 +96,7 @@ async function refreshMachineInfo() {
         }
         emptyStateEl.style.display = online.length ? 'none' : 'block';
         for (const row of online) {
-            updateMachineCard(row.machine, row.temp, 85, row.uptime_seconds, row, row.diagnostics);
+            updateMachineCard(row.machine, row.temp, OVERHEAT_THRESHOLD, row.uptime_seconds, row, row.diagnostics);
         }
     } catch (e) { /* non-critical, dashboard still works without it */ }
 }

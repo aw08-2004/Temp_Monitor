@@ -30,6 +30,7 @@ import functools
 from flask import Blueprint, jsonify, request, session
 
 import fleet
+import settings
 
 
 def _bearer_agent(db_path):
@@ -81,8 +82,25 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
     @bp.route("/api/agent/heartbeat", methods=["POST"])
     @agent_auth
     def agent_heartbeat(agent_id, machine):
-        # authenticate_agent already refreshed last_seen; nothing else to do.
-        return jsonify({"status": "ok", "machine": machine}), 200
+        """Liveness ping, and the hub -> agent configuration channel.
+
+        Config rides here rather than on /api/report deliberately. /api/report is
+        unauthenticated by design (it is the open telemetry ingress), so putting
+        per-machine settings in its response would hand anyone who can reach the hub and
+        guess a hostname a configuration oracle. This endpoint is already bearer
+        authenticated, already per-machine, and already polled every ~10s.
+
+        The agent sends the config_version it currently holds and the hub replies with
+        config only when that differs, so the steady-state heartbeat stays two fields.
+        """
+        # authenticate_agent already refreshed last_seen.
+        data = request.get_json(silent=True) or {}
+        payload = {"status": "ok", "machine": machine}
+        current_version = settings.agent_config_version(db_path)
+        if data.get("config_version") != current_version:
+            payload["config"] = settings.agent_config(db_path)
+            payload["config_version"] = current_version
+        return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])
     @agent_auth
@@ -135,7 +153,12 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
     @bp.route("/api/fleet/status", methods=["GET"])
     @login_required
     def fleet_status():
-        return jsonify(fleet.list_agent_status(db_path)), 200
+        # fleet.py stays settings-free and takes the window as an argument; this HTTP
+        # layer is where the operator's configured value gets injected.
+        return jsonify(fleet.list_agent_status(
+            db_path,
+            offline_after=settings.get_int(db_path, "fleet.offline_after_seconds"),
+        )), 200
 
     @bp.route("/api/fleet/commands", methods=["GET"])
     @login_required
@@ -237,6 +260,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
                 command_type=data.get("type"),
                 params=data.get("params") or {},
                 issued_by=issued_by,
+                ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

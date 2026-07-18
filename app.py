@@ -24,7 +24,9 @@ import requests
 
 import fleet
 import alerts
+import settings
 from fleet_web import create_fleet_blueprint
+from settings_web import create_settings_blueprint
 
 # Load .env from next to this file rather than the cwd -- under the Windows service the working
 # directory isn't the hub folder -- and with utf-8-sig so a UTF-8 BOM (which PowerShell and
@@ -36,18 +38,15 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.21.0"
+HUB_VERSION = "1.22.0"
 CHECK_INTERVAL = 5
-OVERHEAT_THRESHOLD = 85
-# Below this CPU load %, a high temp reading is flagged "investigate" rather than
-# "expected" -- sent to the frontend the same way OVERHEAT_THRESHOLD is.
-LOW_LOAD_THRESHOLD = 40
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
 # Opt-in hub self-update. Off by default so a dev clone never resets itself; the
-# operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. See hub_update_watcher().
-HUB_AUTO_UPDATE = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in ("1", "true", "yes", "on")
+# operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. The Settings tab can
+# override this per-hub -- see hub_auto_update_enabled() and hub_update_watcher().
+HUB_AUTO_UPDATE_ENV = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in ("1", "true", "yes", "on")
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -60,12 +59,12 @@ SQLITE_TIMEOUT_SECONDS = 30
 DB_WRITE_BATCH_SIZE = 200
 DB_WRITE_FLUSH_SECONDS = 0.5
 
-# Readings retention. A background pruner deletes readings older than this, so the
-# DB stays bounded instead of growing forever (see start_retention_pruner()).
-RETENTION_DAYS = 30
-RETENTION_PRUNE_INTERVAL_SECONDS = 24 * 60 * 60
+# Readings retention. A background pruner deletes readings older than the configured
+# window, so the DB stays bounded instead of growing forever (see start_retention_pruner()).
+# The window itself, and how often the pruner runs, are operator-settable:
+# data.retention_days and data.prune_interval_seconds. Batch size stays a constant --
+# it's a lock-contention tuning detail, not something an operator has an opinion about.
 RETENTION_PRUNE_BATCH = 50000
-LIVE_DEFAULT_WINDOW_HOURS = 3
 DEFAULT_HISTORY_LIMIT = 1200
 MAX_HISTORY_POINTS_PER_MACHINE = 2000
 MAX_HISTORY_MACHINE_MULTIPLIER = 16
@@ -75,16 +74,14 @@ LOCAL_MACHINE = socket.gethostname()
 
 # Latest known uptime/temp per machine -- kept in memory for speed, but also
 # mirrored to machine_info (see persist_live_status) so a hub restart doesn't
-# instantly blank them out. The DB fallback only counts for LIVE_STATUS_CACHE_SECONDS;
-# past that a machine that's actually gone quiet should read as unknown again,
-# not show an arbitrarily stale reading forever.
-LIVE_STATUS_CACHE_SECONDS = 10 * 60
-
-# A machine that hasn't reported within this window drops off the live Dashboard and
-# reads as "offline" in the Asset Inventory. Live temp reports refresh
-# machine_info.updated_at at least every ~30s (persist_live_status throttling), so a
-# 2-minute window comfortably tolerates a couple of missed reports without flapping.
-DASHBOARD_ONLINE_WINDOW_SECONDS = 120
+# instantly blank them out. The DB fallback only counts for a bounded age
+# (hub.live_status_cache_seconds); past that a machine that's actually gone quiet
+# should read as unknown again, not show an arbitrarily stale reading forever.
+#
+# The machine online/offline window is fleet.dashboard_online_window_seconds. Live
+# temp reports refresh machine_info.updated_at at least every ~30s
+# (persist_live_status throttling), so the 2-minute default comfortably tolerates a
+# couple of missed reports without flapping -- keep that in mind before setting it low.
 
 latest_uptime = {}
 latest_uptime_lock = threading.Lock()
@@ -165,6 +162,134 @@ def _find_sensor_value(sensors, hardware_substr, sensor_type, preferred_name_sub
                     return s["value"]
     return candidates[0]["value"]
 
+def _cpu_temp_candidates(sensors):
+    """Every usable CPU temperature in a reported sensor block.
+
+    Same rules the agent applies in SensorReader.CollectHardware: identify CPU hardware
+    by its identifier ("/amdcpu/0", "/intelcpu/0"), and treat 0/negative as "no reading"
+    rather than a real temperature -- LHM reports 0 for sensors it couldn't read, and a
+    0 °C CPU would otherwise look like the coldest, healthiest machine in the fleet.
+    """
+    candidates = []
+    for s in sensors or []:
+        if s.get("type") != "Temperature":
+            continue
+        haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+        if "cpu" not in haystack:
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+            continue
+        candidates.append((str(s.get("name") or "").lower(), value))
+    return candidates
+
+
+def pick_primary_temp(sensors, preferred=None, explicit=None):
+    """Re-derive a machine's primary CPU temperature from its reported sensor block.
+
+    Returns None when nothing matches, and that is the important part of the contract:
+    the caller keeps whatever temperature the AGENT picked. The obvious alternative --
+    falling back to "any CPU temperature", the way SensorReader does on the endpoint --
+    is wrong here, because the hub has something the agent doesn't: the agent's own
+    considered answer, already in the payload. Falling back to an arbitrary sensor would
+    let a renamed or missing sensor silently swap a real 91 °C package reading for a
+    28 °C board probe, and every overheat alert on that machine would quietly stop
+    firing. Degrade to today's behaviour instead.
+
+    `explicit` (a per-machine override chosen from a dropdown of real sensor names) is
+    matched exactly; `preferred` (the fleet-wide list) is matched as a substring. The
+    asymmetry is deliberate: the operator picked the override from names this machine
+    actually reports, whereas the preference list is a fuzzy heuristic that has to span
+    Intel and AMD naming ("cpu package" vs "core (tctl/tdie)").
+    """
+    candidates = _cpu_temp_candidates(sensors)
+    if not candidates:
+        return None
+
+    if explicit:
+        want = str(explicit).strip().lower()
+        for name, value in candidates:
+            if name == want:
+                return value
+        return None      # the named sensor is gone -- defer to the agent, don't guess
+
+    for wanted in (preferred or []):
+        for name, value in candidates:
+            if wanted in name:
+                return value
+    return None
+
+
+def list_cpu_temp_sensor_names(sensors):
+    """Distinct CPU temperature sensor names in a reported block, for the UI dropdown."""
+    seen = []
+    for name, _ in _cpu_temp_candidates(sensors):
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+# machine -> explicit primary sensor name, mirroring machine_info.primary_sensor_name.
+# Cached because it's consulted on every sensor-bearing report; overrides are set by
+# hand, so writes are vanishingly rare and a full reload on change is cheaper than a
+# per-report SELECT. Same copy-on-write discipline as settings.py: rebind, never mutate.
+_primary_sensor_overrides = None
+_primary_sensor_overrides_lock = threading.Lock()
+
+
+def get_primary_sensor_override(machine):
+    global _primary_sensor_overrides
+    overrides = _primary_sensor_overrides
+    if overrides is None:
+        with _primary_sensor_overrides_lock:
+            if _primary_sensor_overrides is None:
+                with get_db_conn() as conn:
+                    rows = conn.execute(
+                        "SELECT machine, primary_sensor_name FROM machine_info "
+                        "WHERE primary_sensor_name IS NOT NULL AND primary_sensor_name != ''"
+                    ).fetchall()
+                _primary_sensor_overrides = {r["machine"]: r["primary_sensor_name"] for r in rows}
+            overrides = _primary_sensor_overrides
+    return overrides.get(str(machine).strip())
+
+
+def set_primary_sensor_override(machine, sensor_name):
+    """Set (or clear, with a falsy name) a machine's explicit primary sensor."""
+    global _primary_sensor_overrides
+    machine_name = str(machine).strip()
+    value = str(sensor_name).strip().lower() if sensor_name else None
+    with _primary_sensor_overrides_lock:
+        with get_db_conn() as conn:
+            conn.execute(
+                "UPDATE machine_info SET primary_sensor_name = ? WHERE machine = ?",
+                (value, machine_name),
+            )
+        _primary_sensor_overrides = None      # rebuilt on the next read
+    return value
+
+
+def resolve_primary_temp(machine, reported_temp, sensors):
+    """The temperature to actually record for this report.
+
+    Falls back to `reported_temp` -- the agent's own pick -- whenever the configured
+    sensor isn't present in this block. See pick_primary_temp for why that fallback,
+    and not "any CPU temperature", is the safe one.
+    """
+    if not sensors:
+        return reported_temp
+    try:
+        rederived = pick_primary_temp(
+            sensors,
+            preferred=settings.get_list(DB_PATH, "computer.primary_sensor_preference"),
+            explicit=get_primary_sensor_override(machine),
+        )
+    except Exception as e:
+        # Never let sensor selection fail an ingest; the agent's value is always valid.
+        print(f"[sensors] Re-derivation failed for {machine!r}: {e}")
+        return reported_temp
+    return rederived if rederived is not None else reported_temp
+
+
 def extract_diagnostics(sensors):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
     list (see companion.py's flatten_sensors). Every field is None when not
@@ -187,7 +312,7 @@ def extract_diagnostics(sensors):
 def load_cached_live_status(machine_name):
     """DB-backed fallback for get_latest_temp/get_latest_uptime right after a hub
     restart, when the in-memory dicts above are empty. Only trusts a row up to
-    LIVE_STATUS_CACHE_SECONDS old -- see the comment above."""
+    hub.live_status_cache_seconds old -- see the comment above."""
     with get_db_conn() as conn:
         row = conn.execute(
             "SELECT last_temp, last_uptime_seconds, updated_at FROM machine_info WHERE machine = ?",
@@ -196,7 +321,8 @@ def load_cached_live_status(machine_name):
     if not row or not row["updated_at"]:
         return {}
     updated_at = parse_request_datetime(row["updated_at"])
-    if updated_at is None or (datetime.now() - updated_at).total_seconds() > LIVE_STATUS_CACHE_SECONDS:
+    max_age = settings.get_int(DB_PATH, "hub.live_status_cache_seconds")
+    if updated_at is None or (datetime.now() - updated_at).total_seconds() > max_age:
         return {}
     return {"temp": row["last_temp"], "uptime_seconds": row["last_uptime_seconds"]}
 
@@ -211,7 +337,10 @@ def derive_machine_status(updated_at):
     parsed = parse_request_datetime(updated_at) if isinstance(updated_at, str) else None
     if parsed is None:
         return "offline"
-    return "online" if (datetime.now() - parsed).total_seconds() <= DASHBOARD_ONLINE_WINDOW_SECONDS else "offline"
+    # Called once per machine per /api/machines request, so this read has to be cheap:
+    # settings.get() is a dict lookup off a copy-on-write cache, no DB round-trip.
+    window = settings.get_int(DB_PATH, "fleet.dashboard_online_window_seconds")
+    return "online" if (datetime.now() - parsed).total_seconds() <= window else "offline"
 
 # ================================
 # VERSION WATCHER  --  lets clients self-update promptly instead of waiting for
@@ -412,10 +541,26 @@ def restart_hub():
     sys.stdout.flush()
     os._exit(1)
 
+def hub_auto_update_enabled():
+    """Whether the hub may update itself. Tri-state, resolved in this order:
+
+      hub.auto_update = True/False  -> explicit operator override from the Settings tab
+      hub.auto_update = None        -> fall back to HUB_AUTO_UPDATE in .env (the default)
+
+    Keeping unset distinct from false is what lets Settings default to "whatever this
+    deployment was already configured to do" rather than silently overriding .env the
+    first time anyone opens the page.
+    """
+    override = settings.get_bool(DB_PATH, "hub.auto_update")
+    return HUB_AUTO_UPDATE_ENV if override is None else bool(override)
+
+
 def hub_update_watcher():
     while True:
         try:
-            if HUB_AUTO_UPDATE:
+            # Re-read every tick: an operator toggling this in Settings must take effect
+            # without a hub restart (and a restart is exactly what this thread causes).
+            if hub_auto_update_enabled():
                 remote = fetch_remote_hub_version()
                 if remote and cmp_versions(remote, HUB_VERSION) > 0:
                     print(f"[hub-update] main is {remote} (running {HUB_VERSION}); updating.")
@@ -429,11 +574,14 @@ hub_update_watcher_thread = None
 hub_update_watcher_lock = threading.Lock()
 
 def start_hub_update_watcher():
-    """No-op unless HUB_AUTO_UPDATE is set, so dev clones never self-reset."""
+    """Always starts the watcher; the loop itself decides whether to act.
+
+    This used to return early when the feature was off, but the toggle is now settable
+    at runtime -- and a thread that was never started can't notice being switched on.
+    An idle tick is one cached dict lookup every 15 minutes, so running it unconditionally
+    costs nothing and a dev clone with the setting off still never self-resets.
+    """
     global hub_update_watcher_thread
-    if not HUB_AUTO_UPDATE:
-        print("[hub-update] HUB_AUTO_UPDATE unset -- hub self-update disabled.")
-        return
     with hub_update_watcher_lock:
         if hub_update_watcher_thread and hub_update_watcher_thread.is_alive():
             return
@@ -441,7 +589,8 @@ def start_hub_update_watcher():
             target=hub_update_watcher, daemon=True, name="hub_update_watcher"
         )
         hub_update_watcher_thread.start()
-        print("[hub-update] HUB_AUTO_UPDATE enabled -- watching main every 15 min.")
+        state = "enabled" if hub_auto_update_enabled() else "disabled"
+        print(f"[hub-update] Watcher started -- hub self-update currently {state}.")
 
 # ================================
 # AUTH CONFIG (Google sign-in)
@@ -546,6 +695,8 @@ def login_required(view):
 app.register_blueprint(create_fleet_blueprint(
     DB_PATH, AGENT_ENROLLMENT_SECRET, login_required
 ))
+# Settings endpoints (console-facing only). Same reason for being registered here.
+app.register_blueprint(create_settings_blueprint(DB_PATH, login_required))
 
 
 @app.route("/login")
@@ -731,6 +882,12 @@ def init_db():
             conn.execute("ALTER TABLE machine_info ADD COLUMN last_temp REAL")
         if "last_uptime_seconds" not in existing_columns:
             conn.execute("ALTER TABLE machine_info ADD COLUMN last_uptime_seconds INTEGER")
+        # Per-machine override for which CPU sensor is THE temperature, beating the
+        # fleet-wide computer.primary_sensor_preference list. Lives here rather than in
+        # the settings table because it is per-machine state like asset_tag -- a global
+        # key/value store stops being one the moment it holds per-machine rows.
+        if "primary_sensor_name" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN primary_sensor_name TEXT")
 
 def write_readings_batch(records):
     if not records:
@@ -834,7 +991,7 @@ def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp, sensors_json=
 
 # How often persist_live_status actually hits SQLite per machine. Reports come in
 # every few seconds, but the cache only needs to be fresh to within
-# LIVE_STATUS_CACHE_SECONDS, so there's no need to write anywhere near that often.
+# hub.live_status_cache_seconds, so there's no need to write anywhere near that often.
 LIVE_STATUS_PERSIST_INTERVAL_SECONDS = 30
 _last_live_status_persist = {}
 _last_live_status_persist_lock = threading.Lock()
@@ -873,7 +1030,10 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     if not machine_name:
         raise ValueError("Machine name cannot be empty.")
 
-    temp_value = float(temp)
+    # Re-derive the primary temperature from the reported sensor block, so the operator's
+    # sensor choice applies to every agent immediately -- including ones too old to
+    # receive config. Reports without a sensor block keep the agent's own pick.
+    temp_value = float(resolve_primary_temp(machine_name, float(temp), sensors))
     now = datetime.now()
     # A reading may carry the companion's own timestamp (client_ts) -- e.g. a
     # backfilled reading that was buffered while the hub was unreachable. Store it
@@ -911,8 +1071,8 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
         'timestamp': timestamp_str,
         'timestamp_epoch': timestamp_epoch,
         'temp': temp_value,
-        'threshold': OVERHEAT_THRESHOLD,
-        'low_load_threshold': LOW_LOAD_THRESHOLD,
+        'threshold': settings.get_int(DB_PATH, "hub.overheat_threshold"),
+        'low_load_threshold': settings.get_int(DB_PATH, "hub.low_load_threshold"),
         'uptime_seconds': get_latest_uptime(machine_name),
         'diagnostics': extract_diagnostics(get_latest_sensors(machine_name)),
     }
@@ -1150,13 +1310,14 @@ def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_second
     return {machine_name: list(points) for machine_name, points in history.items()}
 
 # ================================
-# RETENTION  --  keep the readings table bounded to RETENTION_DAYS
+# RETENTION  --  keep the readings table bounded to data.retention_days
 # ================================
 def prune_old_readings_once():
-    """Delete readings older than RETENTION_DAYS, in batches so the first big prune
+    """Delete readings older than data.retention_days, in batches so the first big prune
     (potentially millions of rows) never holds a single long write lock that would
     stall the reading writer. Returns the number of rows removed."""
-    cutoff = int(time.time()) - RETENTION_DAYS * 86400
+    retention_days = settings.get_int(DB_PATH, "data.retention_days")
+    cutoff = int(time.time()) - retention_days * 86400
     total = 0
     while True:
         with get_db_conn() as conn:
@@ -1171,7 +1332,7 @@ def prune_old_readings_once():
             break
         time.sleep(0.2)  # let other writers/readers through between batches
     if total:
-        print(f"[retention] Pruned {total} reading(s) older than {RETENTION_DAYS} days.")
+        print(f"[retention] Pruned {total} reading(s) older than {retention_days} days.")
     return total
 
 
@@ -1179,26 +1340,40 @@ def prune_command_output_once():
     """Drop live-terminal scrollback for commands that finished long ago. The durable
     record (command_results.output) is untouched -- these rows only exist so an operator
     can watch a command stream, and 256KB per command adds up otherwise."""
-    cutoff = int(time.time()) - fleet.OUTPUT_RETENTION_SECONDS
+    cutoff = int(time.time()) - settings.get_int(
+        DB_PATH, "data.command_output_retention_seconds")
     removed = fleet.prune_command_output(DB_PATH, cutoff)
     if removed:
         print(f"[retention] Pruned {removed} command output chunk(s).")
     return removed
 
 
+# How often the pruner wakes to check whether it's due. Deliberately much shorter than
+# the prune interval itself: sleeping the whole interval in one call would mean an
+# operator's change to data.prune_interval_seconds didn't take effect until the next
+# prune (up to a week away), which reads as "the setting doesn't work".
+PRUNE_TICK_SECONDS = 30
+
+
 def retention_pruner():
+    # monotonic(), not time(), so an NTP correction or a DST step can't strand the
+    # pruner for hours or fire it in a tight loop.
+    last_run = None
     while True:
-        try:
-            prune_old_readings_once()
-        except Exception as e:
-            print(f"[retention] Prune failed: {e}")
-        # Separate try: a failure pruning chunks must not stop readings being pruned,
-        # and vice versa -- the readings table is the one that grows unboundedly.
-        try:
-            prune_command_output_once()
-        except Exception as e:
-            print(f"[retention] Command-output prune failed: {e}")
-        time.sleep(RETENTION_PRUNE_INTERVAL_SECONDS)
+        interval = settings.get_int(DB_PATH, "data.prune_interval_seconds")
+        if last_run is None or (time.monotonic() - last_run) >= interval:
+            try:
+                prune_old_readings_once()
+            except Exception as e:
+                print(f"[retention] Prune failed: {e}")
+            # Separate try: a failure pruning chunks must not stop readings being pruned,
+            # and vice versa -- the readings table is the one that grows unboundedly.
+            try:
+                prune_command_output_once()
+            except Exception as e:
+                print(f"[retention] Command-output prune failed: {e}")
+            last_run = time.monotonic()
+        time.sleep(PRUNE_TICK_SECONDS)
 
 
 def start_retention_pruner():
@@ -1208,6 +1383,7 @@ def start_retention_pruner():
 init_db()
 fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
+settings.init_settings_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()
@@ -1270,7 +1446,7 @@ def local_logger():
             if temp is not None:
                 if last_temp and abs(temp - last_temp) >= SPIKE_THRESHOLD:
                     print(f"WARNING SPIKE: {last_temp} -> {temp}")
-                if temp >= OVERHEAT_THRESHOLD:
+                if temp >= settings.get_int(DB_PATH, "hub.overheat_threshold"):
                     print(f"OVERHEATING: {temp}°C")
                 
                 save_and_emit_temp(LOCAL_MACHINE, temp, get_uptime_seconds())
@@ -1316,7 +1492,13 @@ def report_temp():
         client_ts = None
     if client_ts is not None:
         now_epoch = int(time.time())
-        if client_ts > now_epoch + 300 or client_ts < now_epoch - RETENTION_DAYS * 86400:
+        # Bounded by data.ingest_max_backdate_days, NOT by the retention window. They
+        # default to the same 30 days but are deliberately separate: shortening retention
+        # must not start silently flattening reconnect backfills. This code nulls
+        # client_ts rather than rejecting the report, so an over-tight bound would stamp
+        # a week of buffered readings with a single arrival time.
+        max_backdate = settings.get_int(DB_PATH, "data.ingest_max_backdate_days")
+        if client_ts > now_epoch + 300 or client_ts < now_epoch - max_backdate * 86400:
             client_ts = None
     reported_version = data.get('companion_version')
     save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors,
@@ -1401,7 +1583,72 @@ def get_machine(machine):
     result['temp'] = temp
     result['diagnostics'] = extract_diagnostics(get_latest_sensors(machine_name))
     result['status'] = derive_machine_status(result.get('updated_at'))
+    result['primary_sensor_name'] = get_primary_sensor_override(machine_name)
     return jsonify(result)
+
+
+def _recent_sensors_for(machine_name):
+    """This machine's freshest sensor block: the in-memory cache, falling back to the
+    newest stored block so the picker still works right after a hub restart."""
+    sensors = get_latest_sensors(machine_name)
+    if sensors:
+        return sensors
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT sensors_json FROM readings WHERE machine = ? AND sensors_json IS NOT NULL "
+            "ORDER BY ts_epoch DESC LIMIT 1",
+            (machine_name,),
+        ).fetchone()
+    if not row or not row["sensors_json"]:
+        return None
+    try:
+        return json.loads(row["sensors_json"])
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route('/api/machines/<machine>/sensors')
+@login_required
+def get_machine_sensors(machine):
+    """CPU temperature sensors this machine is actually reporting, for the primary-sensor
+    picker. Returns current values too, so an operator chooses by recognition ("CPU
+    Package -- 61.0 °C") instead of typing a name that has to match exactly."""
+    machine_name = str(machine).strip()
+    sensors = _recent_sensors_for(machine_name)
+    available = [
+        {"name": name, "value": value}
+        for name, value in _cpu_temp_candidates(sensors)
+    ]
+    return jsonify({
+        "machine": machine_name,
+        "sensors": available,
+        "primary_sensor_name": get_primary_sensor_override(machine_name),
+        "preference": settings.get_list(DB_PATH, "computer.primary_sensor_preference"),
+    })
+
+
+@app.route('/api/machines/<machine>/primary_sensor', methods=['PUT'])
+@login_required
+def put_machine_primary_sensor(machine):
+    """Pin this machine's primary temperature to one named sensor, or clear the pin
+    (null/empty) to fall back to the fleet-wide preference order."""
+    machine_name = str(machine).strip()
+    # silent=True, never force=True -- same CSRF reasoning as fleet_web/settings_web.
+    data = request.get_json(silent=True) or {}
+    name = data.get("primary_sensor_name")
+    if name is not None and not isinstance(name, str):
+        return jsonify({"error": "primary_sensor_name must be a string or null"}), 400
+
+    with get_db_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM machine_info WHERE machine = ?", (machine_name,)).fetchone()
+    if not exists:
+        return jsonify({"error": "Unknown machine"}), 404
+
+    applied = set_primary_sensor_override(machine_name, name)
+    fleet.audit(DB_PATH, (session.get("user") or {}).get("email", "unknown"),
+                "machine.primary_sensor", machine_name, {"to": applied})
+    return jsonify({"status": "saved", "primary_sensor_name": applied})
 
 
 @app.route('/api/machines/<machine>', methods=['DELETE'])
@@ -1522,7 +1769,8 @@ def get_history():
         end_dt = parse_request_datetime(to_raw) or datetime.now()
         start_dt = parse_request_datetime(from_raw)
         if start_dt is None:
-            start_dt = get_oldest_reading_datetime() or (end_dt - timedelta(hours=LIVE_DEFAULT_WINDOW_HOURS))
+            default_window = settings.get_int(DB_PATH, "hub.live_default_window_hours")
+            start_dt = get_oldest_reading_datetime() or (end_dt - timedelta(hours=default_window))
 
     if start_dt > end_dt:
         start_dt, end_dt = end_dt, start_dt
@@ -1615,6 +1863,8 @@ def inject_open_alert_count():
 @login_required
 def index():
     return render_template("index.html", hub_version=HUB_VERSION,
+                           overheat_threshold=settings.get_int(DB_PATH, "hub.overheat_threshold"),
+                           low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
                            latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
@@ -1639,12 +1889,21 @@ def alerts_page():
                            latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
+@app.route("/settings")
+@login_required
+def settings_page():
+    return render_template("settings.html", hub_version=HUB_VERSION,
+                           latest_companion_version=get_latest_companion_version(),
+                           latest_agent_version=get_latest_agent_version())
+
 @app.route("/machine/<machine>")
 @login_required
 def machine_page(machine):
     return render_template(
-        "machine.html", machine=machine, overheat_threshold=OVERHEAT_THRESHOLD,
-        low_load_threshold=LOW_LOAD_THRESHOLD, hub_version=HUB_VERSION,
+        "machine.html", machine=machine,
+        overheat_threshold=settings.get_int(DB_PATH, "hub.overheat_threshold"),
+        low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
+        hub_version=HUB_VERSION,
         latest_companion_version=get_latest_companion_version(),
         latest_agent_version=get_latest_agent_version()
     )

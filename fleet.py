@@ -529,7 +529,9 @@ STREAM_MAX_CHUNKS = 2000
 STREAM_TRUNCATION_MARKER = "\n…(output cap reached — streaming stopped)\n"
 
 # Scrollback horizon. command_results.output is the durable record, so chunks only need
-# to outlive an operator watching the terminal.
+# to outlive an operator watching the terminal. The live value is operator-settable
+# (data.command_output_retention_seconds); this is the fallback default, kept here so
+# fleet.py stays free of any settings dependency -- callers pass the cutoff in.
 OUTPUT_RETENTION_SECONDS = 24 * 60 * 60
 
 

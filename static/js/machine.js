@@ -337,10 +337,90 @@ async function loadMachineInfo() {
     } catch (e) { /* non-critical */ }
 }
 
+// ---- Primary sensor pin -------------------------------------------------------
+// Populated from what this machine is actually reporting, so the operator picks a real
+// name by recognition rather than typing one that has to match exactly.
+const primarySensorSelect = document.getElementById('primary-sensor');
+const primarySensorSave = document.getElementById('primary-sensor-save');
+const primarySensorStatus = document.getElementById('primary-sensor-status');
+let savedPrimarySensor = '';
+
+async function loadPrimarySensor() {
+    const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/sensors`);
+    if (!resp.ok) return;
+    const body = await resp.json();
+
+    savedPrimarySensor = body.primary_sensor_name || '';
+    // Rebuild, keeping the "follow the fleet order" option at the top.
+    primarySensorSelect.replaceChildren();
+    const followOpt = document.createElement('option');
+    followOpt.value = '';
+    followOpt.textContent = body.preference && body.preference.length
+        ? `Follow the fleet preference order (${body.preference.join(' → ')})`
+        : 'Follow the fleet preference order';
+    primarySensorSelect.appendChild(followOpt);
+
+    for (const s of body.sensors || []) {
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        // textContent, never innerHTML: these names come from the agent, and /api/report
+        // is unauthenticated.
+        opt.textContent = s.value === null || s.value === undefined
+            ? s.name
+            : `${s.name} — ${s.value} °C`;
+        primarySensorSelect.appendChild(opt);
+    }
+
+    // A pinned sensor the machine isn't currently reporting would otherwise vanish from
+    // the list and look unset. Show it, flagged, so the operator can see why the pin
+    // isn't taking effect.
+    if (savedPrimarySensor && !(body.sensors || []).some((s) => s.name === savedPrimarySensor)) {
+        const missing = document.createElement('option');
+        missing.value = savedPrimarySensor;
+        missing.textContent = `${savedPrimarySensor} — not currently reported`;
+        primarySensorSelect.appendChild(missing);
+    }
+
+    primarySensorSelect.value = savedPrimarySensor;
+    primarySensorSave.hidden = true;
+    primarySensorStatus.textContent = (!body.sensors || !body.sensors.length)
+        ? 'No CPU temperature sensors reported yet.'
+        : '';
+}
+
+primarySensorSelect.addEventListener('change', () => {
+    primarySensorSave.hidden = primarySensorSelect.value === savedPrimarySensor;
+    primarySensorStatus.textContent = '';
+});
+
+primarySensorSave.addEventListener('click', async () => {
+    primarySensorSave.disabled = true;
+    primarySensorSave.textContent = 'Saving…';
+    try {
+        const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/primary_sensor`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ primary_sensor_name: primarySensorSelect.value || null }),
+        });
+        if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${resp.status}`);
+        }
+        await loadPrimarySensor();
+        primarySensorStatus.textContent = 'Saved. Applies from the next reading.';
+    } catch (e) {
+        window.alert(`Could not save the primary sensor: ${e.message}`);
+    } finally {
+        primarySensorSave.disabled = false;
+        primarySensorSave.textContent = 'Save';
+    }
+});
+
 dayPicker.value = getLocalDateString();
 syncResolutionControl();
 loadSelectedDay();
 loadMachineInfo();
+loadPrimarySensor();
 
 socket.on('new_temp', (msg) => {
     if (msg.machine !== MACHINE) return;
