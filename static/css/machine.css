@@ -7,8 +7,18 @@
     margin-bottom: 0;
 }
 
-.chart-card {
+/* Cards stacked below the stat grid supply their own top separation. .card-grid has an
+   internal `gap` but no bottom margin, so a sibling card sits flush against the last row
+   of stat cards and reads as overlapping them. */
+.chart-card,
+.sensor-card {
     margin-top: var(--space-6);
+}
+
+/* The select carries long sensor names; without a cap it stretches to fill the toolbar
+   and dwarfs every other control on the page. Shrinks on narrow viewports. */
+.sensor-card .select {
+    max-width: min(100%, 30rem);
 }
 
 /* Shared field label styling; the Fleet Commands panel that introduced it is gone,

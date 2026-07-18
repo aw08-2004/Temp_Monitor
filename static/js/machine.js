@@ -343,6 +343,7 @@ async function loadMachineInfo() {
 const primarySensorSelect = document.getElementById('primary-sensor');
 const primarySensorSave = document.getElementById('primary-sensor-save');
 const primarySensorStatus = document.getElementById('primary-sensor-status');
+const primarySensorOrder = document.getElementById('primary-sensor-order');
 let savedPrimarySensor = '';
 
 async function loadPrimarySensor() {
@@ -351,14 +352,19 @@ async function loadPrimarySensor() {
     const body = await resp.json();
 
     savedPrimarySensor = body.primary_sensor_name || '';
-    // Rebuild, keeping the "follow the fleet order" option at the top.
+    // Rebuild, keeping the "follow the fleet order" option at the top. Its label stays
+    // short on purpose -- the preference chain can be five names long, and putting it in
+    // the option text stretches the select across the whole card. It goes in the help
+    // line below instead, where it costs no layout.
     primarySensorSelect.replaceChildren();
     const followOpt = document.createElement('option');
     followOpt.value = '';
-    followOpt.textContent = body.preference && body.preference.length
-        ? `Follow the fleet preference order (${body.preference.join(' → ')})`
-        : 'Follow the fleet preference order';
+    followOpt.textContent = 'Follow the fleet preference order';
     primarySensorSelect.appendChild(followOpt);
+
+    primarySensorOrder.textContent = (body.preference && body.preference.length)
+        ? ` (currently ${body.preference.join(' → ')})`
+        : '';
 
     for (const s of body.sensors || []) {
         const opt = document.createElement('option');
