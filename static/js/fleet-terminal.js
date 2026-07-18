@@ -236,7 +236,7 @@
         // tab closes.
         if (Date.now() - active.startedAt > GIVE_UP_MS) {
             append('\nNo response from the agent — giving up watching. The command may still ' +
-                   'be running; check Recent commands on the Overview tab.\n', 'err');
+                   'be running on the machine.\n', 'err');
             finish('muted', 'Unknown');
             return;
         }
@@ -293,7 +293,8 @@
         if (favorite.command_type !== 'run_script') {
             append(`\n[running favorite "${favorite.name}" (${favorite.command_type})]\n`, 'meta');
             FleetApi.issueCommand(favorite.command_type, favorite.params)
-                .then(() => append('Queued. See Recent commands on the Overview tab.\n', 'meta'))
+                .then(() => append('Queued — the agent picks it up within ~10s. This kind of ' +
+                                   'command reports no output here.\n', 'meta'))
                 .catch((e) => append(`${e.message}\n`, 'err'));
             return;
         }

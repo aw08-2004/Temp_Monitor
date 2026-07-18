@@ -57,33 +57,6 @@
         </div>
     </div>
 
-    <div class="card fleet-card">
-        <div class="fleet-card__head">
-            <div class="section-title" style="margin-bottom: 0;">Fleet Commands</div>
-            <span class="status-pill status-pill--muted" id="fleet-agent-status"><span class="status-pill__dot"></span>Checking…</span>
-        </div>
-        <div class="stat-card__meta" id="fleet-agent-hint"></div>
-
-        <div class="toolbar fleet-toolbar">
-            <label for="fleet-command">Command:</label>
-            <select id="fleet-command" class="select"></select>
-            <button id="fleet-send" type="button" class="btn btn--primary">Send</button>
-            <button id="fleet-refresh" type="button" class="btn btn--ghost">Refresh</button>
-        </div>
-
-        <div id="fleet-params" class="fleet-params"></div>
-        <div id="fleet-feedback" class="fleet-feedback" hidden></div>
-
-        <div class="section-title fleet-history-title">Recent commands</div>
-        <table class="data-table fleet-history-table">
-            <thead>
-                <tr><th>Issued</th><th>Command</th><th>By</th><th>Status</th></tr>
-            </thead>
-            <tbody id="fleet-history"></tbody>
-        </table>
-        <div id="fleet-history-empty" class="empty-state" hidden>No commands issued for this machine yet.</div>
-    </div>
-
     <div class="card chart-card">
         <div class="section-title">Temperature History</div>
         <div class="toolbar">
@@ -162,7 +135,6 @@
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
-<script src="{{ url_for('static', filename='js/fleet-commands.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 {% endblock %}
