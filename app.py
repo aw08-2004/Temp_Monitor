@@ -38,7 +38,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.22.0"
+HUB_VERSION = "1.22.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -660,9 +660,17 @@ app.config.update(
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 print(f"[hub] Configured public URL: {HUB_URL}")
+# cors_allowed_origins is pinned to our own origin, NOT "*". engine.io does not send a
+# literal "*": on "*" it reflects the caller's Origin back in Access-Control-Allow-Origin
+# and pairs it with Access-Control-Allow-Credentials: true (see engineio's
+# base_server._cors_headers), which is exactly the permissive-CORS case the session-cookie
+# comment above warns is fleet-wide RCE if it ever lets a cross-origin page ride an
+# operator's session. SameSite=Lax happens to withhold the cookie from those requests
+# today, but that is the browser's default doing the work, not ours. The socket carries
+# live telemetry for the whole fleet and is same-origin in every real deployment.
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=[HUB_URL.rstrip("/")],
     async_mode="threading",
     transports=["polling"],
     allow_upgrades=False
@@ -1134,6 +1142,28 @@ def is_valid_serial(serial):
     return str(serial).strip().lower() not in _JUNK_SERIALS
 
 
+# Anything that can reach the hub may POST /api/report under a name of its choosing --
+# that endpoint is unauthenticated by design (open telemetry ingress). So the name is
+# untrusted input that then flows into every console view, and it is stored, meaning a
+# bad one keeps re-rendering long after the report. The console builds its DOM with
+# textContent and Jinja autoescapes, so this is the second layer, not the only one;
+# it exists so a future innerHTML slip isn't immediately exploitable.
+#
+# Deliberately a rejection of characters that cannot appear in a real hostname, not an
+# allow-list of the ones that can: an allow-list here would silently drop legitimate
+# machines from a fleet that already has odd names in it, and the point is defence in
+# depth, not naming policy.
+MACHINE_NAME_MAX_CHARS = 128
+_MACHINE_NAME_FORBIDDEN = re.compile(r'[<>"\'&\x00-\x1f\x7f-\x9f]')
+
+def is_valid_machine_name(machine):
+    """True if `machine` is safe to store and render as a machine identifier."""
+    name = str(machine or "").strip()
+    if not name or len(name) > MACHINE_NAME_MAX_CHARS:
+        return False
+    return _MACHINE_NAME_FORBIDDEN.search(name) is None
+
+
 def _evict_live_status(machine_name):
     """Drop a machine's in-memory live caches so a removed hostname doesn't linger on
     the Dashboard/Inventory. Shared by hard-delete and duplicate-merge."""
@@ -1475,6 +1505,14 @@ def report_temp():
         return jsonify({"error": "Invalid payload"}), 400
 
     machine = data['machine']
+    if not is_valid_machine_name(machine):
+        return jsonify({"error": "Invalid machine name"}), 400
+    machine = str(machine).strip()
+    # float() on a non-numeric temp would otherwise surface as an unhandled 500.
+    try:
+        temp_value = float(data['temp'])
+    except (TypeError, ValueError):
+        return jsonify({"error": "temp must be a number"}), 400
     try:
         uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
     except (TypeError, ValueError):
@@ -1501,7 +1539,7 @@ def report_temp():
         if client_ts > now_epoch + 300 or client_ts < now_epoch - max_backdate * 86400:
             client_ts = None
     reported_version = data.get('companion_version')
-    save_and_emit_temp(machine, float(data['temp']), uptime_seconds, sensors,
+    save_and_emit_temp(machine, temp_value, uptime_seconds, sensors,
                        timestamp_epoch=client_ts, companion_version=reported_version)
     # Keep an enrolled agent's online/offline status fresh off its ordinary temp
     # reports too, so it doesn't read offline between dedicated heartbeats.

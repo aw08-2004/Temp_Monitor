@@ -31,13 +31,41 @@ function updateMachineCard(machine, temp, threshold, uptimeSeconds, info, diagno
         card = document.createElement('div');
         card.id = 'card-' + machine;
         card.className = 'card stat-card stat-card--interactive';
-        card.innerHTML = `
-            <div class="machine-card__name">${machine}</div>
-            <div class="machine-card__info" id="info-${machine}" style="display:none;"></div>
-            <div class="stat-card__value" id="temp-${machine}">-- °C</div>
-            <div class="stat-card__meta" id="uptime-${machine}">Uptime: --</div>
-            <span class="status-pill status-pill--muted" id="status-${machine}" style="margin-top: 10px;"><span class="status-pill__dot"></span>--</span>
-        `;
+        // Built with createElement/textContent, never an innerHTML template. The machine
+        // name arrives from /api/report, which is unauthenticated by design -- anything
+        // that can reach the hub picks its own name. Interpolating it into markup made
+        // that an unauthenticated stored-XSS into an operator session, and an operator
+        // session is fleet-wide code execution as SYSTEM (see fleet.py). Setting .id as a
+        // property is likewise safe for arbitrary names; getElementById takes a literal
+        // id, not a selector, so no escaping is needed on the lookups below.
+        const nameEl = document.createElement('div');
+        nameEl.className = 'machine-card__name';
+        nameEl.textContent = machine;
+
+        const infoEl = document.createElement('div');
+        infoEl.className = 'machine-card__info';
+        infoEl.id = 'info-' + machine;
+        infoEl.style.display = 'none';
+
+        const tempEl = document.createElement('div');
+        tempEl.className = 'stat-card__value';
+        tempEl.id = 'temp-' + machine;
+        tempEl.textContent = '-- °C';
+
+        const uptimeEl = document.createElement('div');
+        uptimeEl.className = 'stat-card__meta';
+        uptimeEl.id = 'uptime-' + machine;
+        uptimeEl.textContent = 'Uptime: --';
+
+        const pillEl = document.createElement('span');
+        pillEl.className = 'status-pill status-pill--muted';
+        pillEl.id = 'status-' + machine;
+        pillEl.style.marginTop = '10px';
+        const dotEl = document.createElement('span');
+        dotEl.className = 'status-pill__dot';
+        pillEl.append(dotEl, '--');
+
+        card.append(nameEl, infoEl, tempEl, uptimeEl, pillEl);
         card.addEventListener('click', () => goToMachine(machine));
         machineCards.appendChild(card);
         emptyStateEl.style.display = 'none';
