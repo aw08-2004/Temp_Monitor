@@ -43,7 +43,7 @@ public sealed class SelfUpdater
     /// (the process is exiting for restart); false otherwise.</summary>
     public async Task<bool> CheckAndApplyAsync(CancellationToken ct)
     {
-        if (Environment.GetEnvironmentVariable("TEMP_MONITOR_NO_UPDATE") == "1")
+        if (AgentConfig.UpdatesDisabled)
             return false;
 
         try

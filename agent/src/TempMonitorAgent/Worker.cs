@@ -236,11 +236,20 @@ public sealed class Worker : BackgroundService
         var env = Environment.GetEnvironmentVariable("AGENT_ENROLLMENT_SECRET");
         if (!string.IsNullOrEmpty(env)) return env;
 
-        try
+        // New key first, then the pre-rename one: an agent that self-updates onto a
+        // FleetHub build still has its secret under the legacy key until the installer
+        // is re-run, and losing it would drop the box back to telemetry-only.
+        foreach (var path in new[] { AgentConfig.RegistryKeyPath, AgentConfig.LegacyRegistryKeyPath })
         {
-            using var key = Registry.LocalMachine.OpenSubKey(AgentConfig.RegistryKeyPath);
-            return key?.GetValue(AgentConfig.RegistryEnrollmentSecretValue) as string;
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(path);
+                if (key?.GetValue(AgentConfig.RegistryEnrollmentSecretValue) is string s
+                    && !string.IsNullOrEmpty(s))
+                    return s;
+            }
+            catch { /* try the next key */ }
         }
-        catch { return null; }
+        return null;
     }
 }

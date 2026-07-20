@@ -24,19 +24,27 @@
 
 param(
     [switch]$Uninstall,
-    [string]$InstallDir = "C:\Program Files\TempMonitorAgent",
+    [string]$InstallDir = "C:\Program Files\FleetHub\Agent",
     [string]$AgentUrl,                       # download URL for the agent exe
     [string]$AgentExe,                       # OR a local path to the agent exe
     [string]$EnrollmentSecret,               # shared secret for POST /api/agent/enroll
-    [string]$HubUrl                          # optional hub base override (TEMP_MONITOR_HUB)
+    [string]$HubUrl                          # optional hub base override (FLEETHUB_HUB)
 )
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ServiceName = "TempMonitorAgent"
-$ExePath     = Join-Path $InstallDir "TempMonitorAgent.exe"
-$RegPath     = "HKLM:\SOFTWARE\TempMonitorAgent"
+# The Windows service name is deliberately NOT renamed yet. .NET sets ServiceBase.ServiceName
+# from AddWindowsService() in Program.cs, and a self-updating agent swaps its binary without
+# re-registering the service -- so renaming one side without the other leaves the registered
+# name and the binary's name disagreeing on exactly the machines already in the field.
+# Both move together when the assembly is renamed.
+$ServiceName    = "TempMonitorAgent"
+$ExeName        = "TempMonitorAgent.exe"
+$ExePath        = Join-Path $InstallDir $ExeName
+$RegPath        = "HKLM:\SOFTWARE\FleetHub\Agent"
+$LegacyRegPath  = "HKLM:\SOFTWARE\TempMonitorAgent"
+$LegacyInstall  = "C:\Program Files\TempMonitorAgent"
 $PawnIoUrl   = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/refs/heads/master/LibreHardwareMonitor.Windows.Forms/Resources/PawnIO_setup.exe"
 
 function Say($msg)  { Write-Host "  $msg" }
@@ -130,6 +138,22 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     Start-Sleep -Seconds 2
 }
 
+# Pre-rename installs live at C:\Program Files\TempMonitorAgent. Move them under the
+# shared FleetHub root so hub and agent sit together, and point the existing service
+# registration at the new path (below) rather than leaving a second copy behind.
+# %ProgramData% state and the enrollment secret are handled by the agent itself.
+if ($InstallDir -ne $LegacyInstall -and (Test-Path $LegacyInstall)) {
+    Say "Migrating existing install from $LegacyInstall"
+    foreach ($stale in @("$ExeName.old")) {
+        Remove-Item (Join-Path $LegacyInstall $stale) -Force -ErrorAction SilentlyContinue
+    }
+    Get-ChildItem -File $LegacyInstall -ErrorAction SilentlyContinue | ForEach-Object {
+        Move-Item $_.FullName (Join-Path $InstallDir $_.Name) -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item $LegacyInstall -Recurse -Force -ErrorAction SilentlyContinue
+    Ok "Moved agent to $InstallDir"
+}
+
 if ($AgentExe) {
     if (-not (Test-Path $AgentExe)) { Die "AgentExe not found: $AgentExe" }
     Copy-Item -Path $AgentExe -Destination $ExePath -Force
@@ -148,14 +172,30 @@ if ($AgentExe) {
 # ----------------------------------------------------------------------
 Step "Writing configuration"
 New-Item -Path $RegPath -Force | Out-Null
-if ($EnrollmentSecret) {
-    New-ItemProperty -Path $RegPath -Name "EnrollmentSecret" -Value $EnrollmentSecret -PropertyType String -Force | Out-Null
+
+# Carry a secret written by a pre-rename installer forward, so re-running this on an
+# enrolled machine without -EnrollmentSecret doesn't silently drop it back to
+# telemetry-only. The agent reads both keys, but consolidating here means the legacy
+# key can eventually be retired.
+$secret = $EnrollmentSecret
+if (-not $secret) {
+    $secret = (Get-ItemProperty -Path $LegacyRegPath -Name "EnrollmentSecret" -ErrorAction SilentlyContinue).EnrollmentSecret
+    if ($secret) { Say "Reusing the enrollment secret from $LegacyRegPath" }
+}
+if ($secret) {
+    New-ItemProperty -Path $RegPath -Name "EnrollmentSecret" -Value $secret -PropertyType String -Force | Out-Null
     Ok "Enrollment secret stored in $RegPath"
 } else {
     Warn "No -EnrollmentSecret given; the agent will run telemetry-only until enrolled."
 }
+
 if ($HubUrl) {
-    [Environment]::SetEnvironmentVariable("TEMP_MONITOR_HUB", $HubUrl, "Machine")
+    [Environment]::SetEnvironmentVariable("FLEETHUB_HUB", $HubUrl, "Machine")
+    # Clear the pre-rename variable so the two can't drift apart and leave an operator
+    # wondering which one the agent is honouring (it prefers FLEETHUB_HUB).
+    if ([Environment]::GetEnvironmentVariable("TEMP_MONITOR_HUB", "Machine")) {
+        [Environment]::SetEnvironmentVariable("TEMP_MONITOR_HUB", $null, "Machine")
+    }
     Ok "Hub override: $HubUrl"
 }
 # Commands are no longer signed, so this machine-level key is dead config. Clear a
@@ -172,11 +212,12 @@ if ([Environment]::GetEnvironmentVariable("COMMAND_SIGNING_PUBLIC_KEY_HEX", "Mac
 Step "Registering Windows Service"
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     Say "Service exists; updating binary path."
-    & sc.exe config $ServiceName binPath= "`"$ExePath`"" start= auto | Out-Null
+    # binPath must be re-pointed after a migration moved the exe under the shared root.
+    & sc.exe config $ServiceName binPath= "`"$ExePath`"" start= auto DisplayName= "FleetHub Agent" | Out-Null
 } else {
     New-Service -Name $ServiceName -BinaryPathName "`"$ExePath`"" `
-        -DisplayName "TempMonitor Fleet Agent" -StartupType Automatic `
-        -Description "Reports telemetry and executes fleet commands for Temp Monitor (RMM)." | Out-Null
+        -DisplayName "FleetHub Agent" -StartupType Automatic `
+        -Description "Reports telemetry and executes fleet commands for FleetHub (RMM)." | Out-Null
     Ok "Created service $ServiceName"
 }
 
@@ -192,7 +233,7 @@ Step "Starting service"
 Start-Sleep -Seconds 2
 $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -eq "Running") { Ok "Service running" }
-else { Warn "Service status: $($svc.Status). Check %ProgramData%\TempMonitorAgent\companion.log" }
+else { Warn "Service status: $($svc.Status). Check %ProgramData%\FleetHub\Agent\companion.log" }
 
 Write-Host @"
 
@@ -201,7 +242,7 @@ Write-Host @"
   Machine : $env:COMPUTERNAME
   Service : $ServiceName (LocalSystem, Automatic)
   Binary  : $ExePath
-  Logs    : $env:ProgramData\TempMonitorAgent\companion.log
+  Logs    : $env:ProgramData\FleetHub\Agent\companion.log
 
   Uninstall: powershell -ExecutionPolicy Bypass -File agent-install.ps1 -Uninstall
 

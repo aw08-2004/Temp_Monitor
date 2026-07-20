@@ -22,6 +22,9 @@ Log.Logger = new LoggerConfiguration()
         outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3} {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
 
+// Resolved during the ProgramDataDir touch above, before the logger existed.
+if (AgentConfig.TakeMigrationNote() is { Length: > 0 } note) Log.Information("{Note}", note);
+
 try
 {
     var builder = Host.CreateApplicationBuilder(args);

@@ -61,14 +61,36 @@ $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
 $TaskCompanion  = "TempMonitor - Companion"
 $TaskHub        = "TempMonitor - Hub"          # legacy scheduled task (pre-service), cleaned up on install/uninstall
 
+# --- Shared install root ---
+# Hub and Agent live side by side under one root so an operator has a single place to
+# look. Pre-rename installs used unrelated locations; those are detected and migrated
+# rather than left running alongside a second copy.
+$InstallRoot        = "C:\Program Files\FleetHub"
+$HubInstallDefault  = Join-Path $InstallRoot "Hub"
+$AgentInstallDir    = Join-Path $InstallRoot "Agent"
+$LegacyHubDir       = "C:\Program Files\TempMonitor\Hub"
+
 # --- Hub-as-Windows-Service ---
-$HubInstallDefault = "C:\Program Files\TempMonitor\Hub"
-$RepoGitUrl        = "https://github.com/$Repo.git"
 # WinSW wraps the Python/waitress process as a real Windows Service (Python can't be one on
 # its own). Pinned to a stable v2 release; same "download a pinned asset" pattern as LHM/PawnIO.
-$WinSwUrl          = "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe"
-$HubServiceId      = "TempMonitorHub"
-$HubServiceName    = "Temp Monitor - Hub"
+$WinSwUrl            = "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe"
+$HubServiceId        = "FleetHub"
+$HubServiceName      = "FleetHub - Hub"
+$LegacyHubServiceId  = "TempMonitorHub"
+
+# --- Hub runtime file set ---
+# The hub only needs these; the repo also carries the 85 MB agent/ tree, tests and docs
+# that have no business on a server. Anything not listed here is not installed.
+# Keep in sync with the same list in app.py's self-updater.
+$HubRuntimeFiles = @(
+    "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
+    "settings.py", "settings_web.py", "alerts.py", "requirements.txt"
+)
+$HubRuntimeDirs  = @("templates", "static")
+# Source archive for both first install and self-update. codeload serves a zip of a branch
+# without needing git on the box -- Expand-Archive is native to PowerShell 5.1, so this
+# adds no dependency (the old path required Git for Windows to be installed).
+$RepoZipUrl      = "https://codeload.github.com/$Repo/zip/refs/heads/main"
 
 function Say($msg)  { Write-Host "  $msg" }
 function Ok($msg)   { Write-Host "  [ok] $msg"   -ForegroundColor Green }
@@ -616,6 +638,9 @@ function Install-Agent {
     if ($resolvedExe) { $agentArgs.AgentExe = $resolvedExe } else { $agentArgs.AgentUrl = $resolvedUrl }
     if ($resolvedSecret) { $agentArgs.EnrollmentSecret = $resolvedSecret }
     if ($resolvedHubUrl) { $agentArgs.HubUrl = $resolvedHubUrl }
+    # Keep hub and agent under one root. Passed explicitly so a downloaded agent-install.ps1
+    # (whose own default could be an older release's) still lands where this installer says.
+    $agentArgs.InstallDir = $AgentInstallDir
 
     $localInstaller = $null
     if ($PSScriptRoot) {
@@ -641,23 +666,31 @@ function Install-Agent {
 function Resolve-HubDir {
     if ($HubInstallDir) { return $HubInstallDir.TrimEnd('\') }
     if (Test-Path (Join-Path $HubInstallDefault "app.py")) { return $HubInstallDefault }
+    # Pre-rename layout, so `-Uninstall` still finds a hub installed before the rename.
+    if (Test-Path (Join-Path $LegacyHubDir "app.py")) { return $LegacyHubDir }
     if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "app.py"))) { return $PSScriptRoot }
     return $HubInstallDefault
 }
 
 function Remove-HubService([string]$hubDir) {
-    if (-not (Get-Service -Name $HubServiceId -ErrorAction SilentlyContinue)) { return $false }
-    $wrapperExe = Join-Path $hubDir "$HubServiceId.exe"
-    if (Test-Path $wrapperExe) {
-        & $wrapperExe stop      2>&1 | Out-Null
-        & $wrapperExe uninstall 2>&1 | Out-Null
-    } else {
-        # Wrapper exe is gone but the service registration lingers -- tear it down directly.
-        & sc.exe stop   $HubServiceId | Out-Null
-        & sc.exe delete $HubServiceId | Out-Null
+    # Both ids, because a box installed before the rename registered TempMonitorHub and
+    # would otherwise be left running alongside the new service, both fighting for the port.
+    $removed = $false
+    foreach ($id in @($HubServiceId, $LegacyHubServiceId)) {
+        if (-not (Get-Service -Name $id -ErrorAction SilentlyContinue)) { continue }
+        $wrapperExe = Join-Path $hubDir "$id.exe"
+        if (Test-Path $wrapperExe) {
+            & $wrapperExe stop      2>&1 | Out-Null
+            & $wrapperExe uninstall 2>&1 | Out-Null
+        } else {
+            # Wrapper exe is gone but the service registration lingers -- tear it down directly.
+            & sc.exe stop   $id | Out-Null
+            & sc.exe delete $id | Out-Null
+        }
+        $removed = $true
     }
-    Start-Sleep -Seconds 2
-    return $true
+    if ($removed) { Start-Sleep -Seconds 2 }
+    return $removed
 }
 
 function Uninstall-Hub {
@@ -677,41 +710,124 @@ function Uninstall-Hub {
     Write-Host "`nDone.`n" -ForegroundColor Green
 }
 
+function Copy-HubRuntimeFiles {
+    <#
+      Copy just the hub's runtime file set from an extracted repo tree into $Dest.
+      Everything outside $HubRuntimeFiles/$HubRuntimeDirs -- the agent tree, tests, docs
+      -- is deliberately left behind.
+
+      Directories are mirrored rather than merged: a template or static asset deleted
+      upstream must disappear here too, otherwise a stale .html lingers forever. The
+      operator's own files (.env, logs/, the WinSW wrapper) live outside these dirs and
+      are never touched.
+    #>
+    param([string]$Source, [string]$Dest)
+
+    foreach ($f in $HubRuntimeFiles) {
+        $src = Join-Path $Source $f
+        if (-not (Test-Path $src)) { Die "Source archive is missing $f -- refusing to install a partial hub." }
+        Copy-Item $src (Join-Path $Dest $f) -Force
+    }
+    foreach ($d in $HubRuntimeDirs) {
+        $src = Join-Path $Source $d
+        if (-not (Test-Path $src)) { Die "Source archive is missing $d\ -- refusing to install a partial hub." }
+        $target = Join-Path $Dest $d
+        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+        Copy-Item $src $target -Recurse -Force
+    }
+}
+
+function Get-HubFiles {
+    <#
+      Download main as a zip and lay down only the hub runtime files at $Dest.
+      Replaces the previous `git clone` of the whole repo: no Git dependency, and
+      ~2 MB on disk instead of ~85 MB.
+    #>
+    param([string]$Dest)
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("fleethub-" + [guid]::NewGuid().ToString("n"))
+    $zip = "$tmp.zip"
+    try {
+        Say "Downloading hub files from $RepoZipUrl ..."
+        try { Invoke-WebRequest -Uri $RepoZipUrl -OutFile $zip -UseBasicParsing }
+        catch { Die "Could not download the hub source archive -- $($_.Exception.Message)" }
+
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        try { Expand-Archive -Path $zip -DestinationPath $tmp -Force }
+        catch { Die "Could not expand the hub source archive -- $($_.Exception.Message)" }
+
+        # codeload wraps everything in a single <repo>-<branch>/ folder.
+        $root = Get-ChildItem -Directory $tmp | Select-Object -First 1
+        if (-not $root) { Die "Source archive looked empty." }
+
+        if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Force -Path $Dest | Out-Null }
+        Copy-HubRuntimeFiles -Source $root.FullName -Dest $Dest
+        Ok "Installed hub runtime files to $Dest"
+    }
+    finally {
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Move-LegacyHubInstall {
+    <#
+      Pre-rename hubs live at C:\Program Files\TempMonitor\Hub under the TempMonitorHub
+      service. Carry the operator's data (.env and logs/, including the telemetry DB)
+      over to the new root rather than silently standing up an empty second install.
+    #>
+    param([string]$NewDir)
+
+    if (-not (Test-Path (Join-Path $LegacyHubDir "app.py"))) { return }
+    if ($NewDir -eq $LegacyHubDir) { return }
+
+    Warn "Found an existing hub at $LegacyHubDir (pre-FleetHub layout)."
+    $ans = Read-Host "  Move its config and data to $NewDir ? (Y/n)"
+    if ($ans -match '^[Nn]') { Say "Leaving it alone. Note both hubs would bind port $HubPort -- only one can run."; return }
+
+    if (Get-Service -Name $LegacyHubServiceId -ErrorAction SilentlyContinue) {
+        Say "Stopping the old $LegacyHubServiceId service..."
+        Stop-Service -Name $LegacyHubServiceId -Force -ErrorAction SilentlyContinue
+        $oldWrapper = Join-Path $LegacyHubDir "$LegacyHubServiceId.exe"
+        if (Test-Path $oldWrapper) { & $oldWrapper uninstall | Out-Null }
+        Ok "Removed the old service"
+    }
+
+    if (-not (Test-Path $NewDir)) { New-Item -ItemType Directory -Force -Path $NewDir | Out-Null }
+    foreach ($item in @(".env", "logs")) {
+        $src = Join-Path $LegacyHubDir $item
+        if (Test-Path $src) {
+            Move-Item $src (Join-Path $NewDir $item) -Force
+            Ok "Moved $item"
+        }
+    }
+    Warn "Left the old tree at $LegacyHubDir -- delete it once you've confirmed the new hub is healthy."
+}
+
 function Install-Hub {
-    # Resolve where the hub will live and make sure it's a git clone (self-update does
-    # `git reset --hard origin/main`, so the tree needs a GitHub origin). If the target
-    # already has app.py it's an existing clone (or the folder we were launched from);
-    # otherwise clone into it.
+    # Resolve where the hub will live, then lay down just the runtime files. No git
+    # clone and no Git dependency: self-update now pulls the same zip (see app.py).
     $default = if ($HubInstallDir) { $HubInstallDir } else { $HubInstallDefault }
     $hubDir  = (Prompt-Value "Hub install location" $default).TrimEnd('\')
 
     Write-Host @"
 
-  Temp Monitor - Hub Installer
+  FleetHub - Hub Installer
   Installs app.py (Flask + Socket.IO) as the '$HubServiceName' Windows Service.
   Location: $hubDir
 
 "@ -ForegroundColor Cyan
 
     Step "Preparing hub files at $hubDir"
-    if (Test-Path (Join-Path $hubDir "app.py")) {
-        Ok "Using existing repo at $hubDir"
-        if (-not (Test-Path (Join-Path $hubDir ".git"))) {
-            Warn "$hubDir is not a git clone -- hub self-update (HUB_AUTO_UPDATE) will not work here."
-        }
+    Move-LegacyHubInstall -NewDir $hubDir
+
+    if (Test-Path (Join-Path $hubDir ".git")) {
+        # A developer clone (this is also the folder the installer is often launched from).
+        # Overwriting tracked files here would stomp uncommitted work, and the hub's
+        # self-updater keeps using git when it sees .git, so leave the tree as-is.
+        Ok "Using the existing git clone at $hubDir (files left untouched)"
     } else {
-        if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-            Die "git is required to install the hub to a new location (and for hub self-update). Install Git for Windows, then re-run."
-        }
-        if ((Test-Path $hubDir) -and (Get-ChildItem -Force $hubDir | Select-Object -First 1)) {
-            Die "$hubDir already exists, is not a repo clone (no app.py), and is not empty. Pick an empty/new folder or an existing clone."
-        }
-        $parent = Split-Path $hubDir -Parent
-        if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-        Say "Cloning $RepoGitUrl ..."
-        & git clone $RepoGitUrl "$hubDir"
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $hubDir "app.py"))) { Die "git clone failed." }
-        Ok "Cloned hub to $hubDir"
+        Get-HubFiles -Dest $hubDir
     }
 
     $envPath  = Join-Path $hubDir ".env"
@@ -758,10 +874,21 @@ function Install-Hub {
     $enrollSecret  = Prompt-Value "  Agent enrollment secret" $enrollSecretDefault -Secret
 
     Say ""
+    # The hub's self-updater still drives git, so it only works in a clone. A sparse
+    # install has no .git -- surface that rather than letting an operator tick the box
+    # and believe the hub is keeping itself current when it silently isn't.
+    $isSparse = -not (Test-Path (Join-Path $hubDir ".git"))
     $autoUpdateDefault = $existing["HUB_AUTO_UPDATE"]
     if (-not $autoUpdateDefault) {
-        $au = Read-Host "  Enable hub self-update from main (git reset --hard)? (y/N)"
-        if ($au -match '^[Yy]') { $autoUpdateDefault = "1" }
+        if ($isSparse) {
+            Warn "Hub self-update needs a git clone and this is a files-only install -- skipping."
+            Say  "Upgrade by re-running this installer; it preserves .env and logs\."
+        } else {
+            $au = Read-Host "  Enable hub self-update from main (downloads and replaces hub files)? (y/N)"
+            if ($au -match '^[Yy]') { $autoUpdateDefault = "1" }
+        }
+    } elseif ($isSparse -and $autoUpdateDefault -eq "1") {
+        Warn "HUB_AUTO_UPDATE=1 is set but this install has no .git -- self-update will not run."
     }
 
     $lines = @(
@@ -817,7 +944,7 @@ function Install-Hub {
 <service>
   <id>$HubServiceId</id>
   <name>$HubServiceName</name>
-  <description>Temp Monitor hub (Flask/Socket.IO via waitress).</description>
+  <description>FleetHub hub (Flask/Socket.IO via waitress).</description>
   <executable>$([System.Security.SecurityElement]::Escape($hubExec))</executable>
   <arguments>$([System.Security.SecurityElement]::Escape($hubArgs))</arguments>
   <workingdirectory>$([System.Security.SecurityElement]::Escape($hubDir))</workingdirectory>
