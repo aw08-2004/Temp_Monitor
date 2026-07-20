@@ -220,6 +220,93 @@ def test_hub_self_update():
     except Exception as e:
         check(f"perform_hub_update dry run (unexpected error: {e})", False)
 
+    print("\n-- hub self-update: archive path replaces files in a non-clone install --")
+    # The installer no longer clones, so most hubs have no .git and update from the
+    # branch archive instead. Serve a synthetic zip rather than hitting the network.
+    import io as _io, zipfile as _zf
+
+    def _make_archive(version="2.0.0", omit=()):
+        buf = _io.BytesIO()
+        with _zf.ZipFile(buf, "w") as z:
+            for name in app.HUB_RUNTIME_FILES:
+                if name in omit:
+                    continue
+                body = f'HUB_VERSION = "{version}"\n' if name == "app.py" else ""
+                z.writestr(f"Temp_Monitor-main/{name}", body)
+            for d in app.HUB_RUNTIME_DIRS:
+                if d in omit:
+                    continue
+                z.writestr(f"Temp_Monitor-main/{d}/keep.txt", "x")
+        return buf.getvalue()
+
+    class _Resp:
+        def __init__(self, content): self.content = content
+        def raise_for_status(self): pass
+
+    orig_get = app.requests.get
+    orig_install = app._install_requirements
+    try:
+        # Happy path: files replaced, and a stale file inside a mirrored dir is removed.
+        work = tempfile.mkdtemp(prefix="hub-archive-")
+        with open(os.path.join(work, "app.py"), "w") as f:
+            f.write('HUB_VERSION = "1.0.0"\n')
+        os.makedirs(os.path.join(work, "templates"))
+        with open(os.path.join(work, "templates", "gone.html"), "w") as f:
+            f.write("stale")
+        # Operator data that must survive the update.
+        with open(os.path.join(work, ".env"), "w") as f:
+            f.write("HUB_URL=https://example.test\n")
+        os.makedirs(os.path.join(work, "logs"))
+        with open(os.path.join(work, "logs", "temp_v2.db"), "w") as f:
+            f.write("dbcontents")
+
+        app.requests.get = lambda *a, **k: _Resp(_make_archive())
+        app._install_requirements = lambda root: None
+        ok = app.perform_hub_update(work)
+        with open(os.path.join(work, "app.py")) as f:
+            pulled = f.read()
+
+        check("archive update returned True", ok is True)
+        check("app.py advanced to 2.0.0", app.parse_hub_version(pulled) == "2.0.0")
+        check("stale template removed by dir mirror",
+              not os.path.exists(os.path.join(work, "templates", "gone.html")))
+        check(".env preserved", os.path.exists(os.path.join(work, ".env")))
+        check("logs/ preserved",
+              open(os.path.join(work, "logs", "temp_v2.db")).read() == "dbcontents")
+
+        # Fail-closed: an archive missing part of the runtime set must not be applied,
+        # or the hub loses templates and crash-loops on restart.
+        work2 = tempfile.mkdtemp(prefix="hub-archive-bad-")
+        with open(os.path.join(work2, "app.py"), "w") as f:
+            f.write('HUB_VERSION = "1.0.0"\n')
+        app.requests.get = lambda *a, **k: _Resp(_make_archive(omit=("templates",)))
+        ok_bad = app.perform_hub_update(work2)
+        with open(os.path.join(work2, "app.py")) as f:
+            untouched = f.read()
+        check("incomplete archive refused", ok_bad is False)
+        check("live tree untouched after refusal",
+              app.parse_hub_version(untouched) == "1.0.0")
+
+        # Dispatch: presence of .git alone decides which strategy runs. A developer's
+        # checkout must never be overwritten by the archive.
+        orig_git_fn, orig_archive_fn = app._perform_hub_update_git, app._perform_hub_update_archive
+        try:
+            app._perform_hub_update_git = lambda root: "git"
+            app._perform_hub_update_archive = lambda root: "archive"
+            clone_dir = tempfile.mkdtemp(prefix="hub-dispatch-clone-")
+            os.makedirs(os.path.join(clone_dir, ".git"))
+            sparse_dir = tempfile.mkdtemp(prefix="hub-dispatch-sparse-")
+            check("clone routes to git", app.perform_hub_update(clone_dir) == "git")
+            check("non-clone routes to archive", app.perform_hub_update(sparse_dir) == "archive")
+        finally:
+            app._perform_hub_update_git = orig_git_fn
+            app._perform_hub_update_archive = orig_archive_fn
+    except Exception as e:
+        check(f"archive update dry run (unexpected error: {e})", False)
+    finally:
+        app.requests.get = orig_get
+        app._install_requirements = orig_install
+
 
 if __name__ == "__main__":
     test_version_compare()

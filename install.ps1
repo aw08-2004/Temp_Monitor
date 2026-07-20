@@ -874,21 +874,12 @@ function Install-Hub {
     $enrollSecret  = Prompt-Value "  Agent enrollment secret" $enrollSecretDefault -Secret
 
     Say ""
-    # The hub's self-updater still drives git, so it only works in a clone. A sparse
-    # install has no .git -- surface that rather than letting an operator tick the box
-    # and believe the hub is keeping itself current when it silently isn't.
-    $isSparse = -not (Test-Path (Join-Path $hubDir ".git"))
+    # Self-update works in both layouts: a files-only install pulls the branch archive
+    # and replaces the runtime file set; a clone still uses git. See perform_hub_update().
     $autoUpdateDefault = $existing["HUB_AUTO_UPDATE"]
     if (-not $autoUpdateDefault) {
-        if ($isSparse) {
-            Warn "Hub self-update needs a git clone and this is a files-only install -- skipping."
-            Say  "Upgrade by re-running this installer; it preserves .env and logs\."
-        } else {
-            $au = Read-Host "  Enable hub self-update from main (downloads and replaces hub files)? (y/N)"
-            if ($au -match '^[Yy]') { $autoUpdateDefault = "1" }
-        }
-    } elseif ($isSparse -and $autoUpdateDefault -eq "1") {
-        Warn "HUB_AUTO_UPDATE=1 is set but this install has no .git -- self-update will not run."
+        $au = Read-Host "  Enable hub self-update from main (downloads and replaces hub files)? (y/N)"
+        if ($au -match '^[Yy]') { $autoUpdateDefault = "1" }
     }
 
     $lines = @(

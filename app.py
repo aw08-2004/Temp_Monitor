@@ -1,15 +1,19 @@
 ﻿import ctypes
+import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import threading
 import csv
 import socket
 import sqlite3
 import queue
+import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import wraps
@@ -38,7 +42,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.22.1"
+HUB_VERSION = "1.23.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -471,13 +475,31 @@ def start_companion_version_watcher():
         companion_version_watcher_thread.start()
 
 # ================================
-# HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). The hub runs from a git clone as a
-# SYSTEM Scheduled Task ("TempMonitor - Hub") that self-heals every 2 minutes. So an
-# update is just: pull the clone up to main, then exit -- the task relaunches waitress,
-# which re-imports the new code. This trusts the pinned git origin over HTTPS plus push
-# access to main; it does NOT touch the separate Ed25519 fleet-update trust root.
+# HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). Update in place, then exit; the
+# supervising service relaunches waitress, which re-imports the new code.
+#
+# Two source strategies, chosen by what's on disk:
+#   .git present  -> fetch + reset --hard origin/main (developer clones, and hubs
+#                    installed before the installer stopped cloning)
+#   no .git       -> download the branch archive and replace the runtime file set
+#                    (what install.ps1 now produces: ~0.3 MB of hub files, no repo)
+#
+# Both trust GitHub over HTTPS plus push access to main; NEITHER touches the separate
+# Ed25519 fleet-update trust root that gates agent binaries.
 # ================================
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Source archive for the no-git path. codeload serves a branch zip directly.
+HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/heads/main"
+
+# The files that constitute a hub install. Anything outside this set (the agent tree,
+# tests, docs) is deliberately not shipped to a server.
+# MUST stay in sync with $HubRuntimeFiles/$HubRuntimeDirs in install.ps1.
+HUB_RUNTIME_FILES = (
+    "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
+    "settings.py", "settings_web.py", "alerts.py", "requirements.txt",
+)
+HUB_RUNTIME_DIRS = ("templates", "static")
 
 def parse_hub_version(text):
     """Pull the HUB_VERSION string out of an app.py source blob, or None. Pure; mirrors
@@ -507,10 +529,23 @@ def _run_git(args, cwd):
     except Exception as e:
         return False, str(e)
 
-def perform_hub_update(repo_root):
-    """Bring the clone at repo_root up to origin/main via fetch + hard reset, then a
-    best-effort dependency install. Returns True only if fetch AND reset succeeded --
-    the caller restarts only then. Discards local drift by design (operator-confirmed)."""
+def _install_requirements(repo_root):
+    """Best-effort dependency install after an update: a release that adds a dependency
+    shouldn't crash-loop the restart, so failure here is logged and tolerated."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r",
+             os.path.join(repo_root, "requirements.txt"), "--quiet"],
+            cwd=repo_root, capture_output=True, text=True, timeout=300,
+        )
+    except Exception as e:
+        print(f"[hub-update] pip install after update failed (continuing): {e}")
+
+
+def _perform_hub_update_git(repo_root):
+    """Bring the clone at repo_root up to origin/main via fetch + hard reset. Returns
+    True only if fetch AND reset succeeded -- the caller restarts only then. Discards
+    local drift by design (operator-confirmed)."""
     ok, out = _run_git(["fetch", "origin", "main"], repo_root)
     if not ok:
         print(f"[hub-update] git fetch failed, skipping: {out}")
@@ -520,16 +555,83 @@ def perform_hub_update(repo_root):
         print(f"[hub-update] git reset failed, skipping: {out}")
         return False
     print(f"[hub-update] Updated working tree to origin/main: {out}")
-    # Best-effort: a release that adds a dependency shouldn't crash-loop the restart.
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r",
-             os.path.join(repo_root, "requirements.txt"), "--quiet"],
-            cwd=repo_root, capture_output=True, text=True, timeout=300,
-        )
-    except Exception as e:
-        print(f"[hub-update] pip install after update failed (continuing): {e}")
+    _install_requirements(repo_root)
     return True
+
+
+def _stage_hub_archive(staging):
+    """Download and unpack the branch archive into `staging`, returning the path to the
+    unpacked tree, or None on any failure (logged, never raises).
+
+    Everything lands in staging and is checked for completeness BEFORE the caller
+    touches the live install -- a truncated download or a moved file upstream must fail
+    the update, not leave a hub with half its templates."""
+    try:
+        resp = requests.get(HUB_ARCHIVE_URL, timeout=120)
+        resp.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            zf.extractall(staging)
+    except Exception as e:
+        print(f"[hub-update] could not fetch the source archive: {e}")
+        return None
+
+    # codeload wraps everything in a single <repo>-<branch>/ directory.
+    roots = [d for d in os.listdir(staging) if os.path.isdir(os.path.join(staging, d))]
+    if len(roots) != 1:
+        print(f"[hub-update] unexpected archive layout ({len(roots)} top-level dirs), skipping")
+        return None
+    src = os.path.join(staging, roots[0])
+
+    missing = [n for n in HUB_RUNTIME_FILES + HUB_RUNTIME_DIRS
+               if not os.path.exists(os.path.join(src, n))]
+    if missing:
+        print(f"[hub-update] archive is missing {', '.join(missing)} -- refusing to update")
+        return None
+    return src
+
+
+def _perform_hub_update_archive(repo_root):
+    """Replace the hub runtime file set from the branch archive. Used when there's no
+    git clone to reset (the layout install.ps1 now produces)."""
+    staging = tempfile.mkdtemp(prefix="hub-update-")
+    try:
+        src = _stage_hub_archive(staging)
+        if src is None:
+            return False
+
+        # Swap only once everything is staged and verified. Directories are mirrored
+        # rather than merged so a template deleted upstream disappears here too;
+        # .env, logs/ and the service wrapper live outside this set and are untouched.
+        for name in HUB_RUNTIME_FILES:
+            shutil.copy2(os.path.join(src, name), os.path.join(repo_root, name))
+        for name in HUB_RUNTIME_DIRS:
+            target = os.path.join(repo_root, name)
+            if os.path.isdir(target):
+                shutil.rmtree(target)
+            shutil.copytree(os.path.join(src, name), target)
+
+        print(f"[hub-update] Replaced hub files in {repo_root} from {HUB_ARCHIVE_URL}")
+        _install_requirements(repo_root)
+        return True
+    except Exception as e:
+        # A failure part-way through the swap leaves the tree inconsistent, so say so
+        # loudly -- but still don't restart, since restarting is what would turn a
+        # broken tree into a crash-loop.
+        print(f"[hub-update] update failed while replacing files ({e}); hub left as-is")
+        return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def perform_hub_update(repo_root):
+    """Update the hub in place. Returns True only if the caller should now restart.
+
+    Prefers git when the install is a clone: a developer running from a checkout should
+    not have their working tree overwritten by an archive, and pre-sparse-install hubs
+    keep the behaviour they were deployed with."""
+    if os.path.isdir(os.path.join(repo_root, ".git")):
+        return _perform_hub_update_git(repo_root)
+    return _perform_hub_update_archive(repo_root)
 
 def restart_hub():
     """Exit non-zero so the supervisor treats it as a failure and relaunches waitress with
