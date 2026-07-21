@@ -15,6 +15,11 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _TMPDIR = tempfile.mkdtemp(prefix="hub-alerts-test-")
+# Point app.py's database at this module's own dir before importing it. app resolves its
+# DB from HUB_LOG_DIR now, not the cwd, so a standalone `python tests/test_alerts.py`
+# stays isolated from the real logs/. (Under `pytest tests/` app is imported once and
+# cached; conftest.py re-points each module per-test.)
+os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
 os.chdir(_TMPDIR)
 
 import app

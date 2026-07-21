@@ -19,6 +19,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _TMPDIR = tempfile.mkdtemp(prefix="hub-sensorpick-test-")
+# See test_alerts.py: app resolves its DB from HUB_LOG_DIR, so declare this module's dir
+# before importing app to keep a standalone run off the real logs/.
+os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
 os.chdir(_TMPDIR)
 
 import app

@@ -42,7 +42,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.23.0"
+HUB_VERSION = "1.24.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -52,7 +52,17 @@ HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
 # override this per-hub -- see hub_auto_update_enabled() and hub_update_watcher().
 HUB_AUTO_UPDATE_ENV = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in ("1", "true", "yes", "on")
 
-LOG_DIR = "logs"
+# Absolute, and overridable via HUB_LOG_DIR, so the database location never depends on
+# the process's current working directory. A relative "logs" is re-resolved by sqlite on
+# every connect, and the db_writer runs on a daemon thread -- so a background write that
+# resolves the path while another thread has changed cwd is a data race. It never bites
+# in production (the service's cwd is fixed), but it makes the test suite flaky. The
+# default sits next to this file, which under the WinSW service is the hub install dir --
+# exactly where the old cwd-relative "logs" resolved to, so this is behaviour-preserving.
+LOG_DIR = os.path.abspath(
+    os.environ.get("HUB_LOG_DIR")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(LOG_DIR, "temp_v2.db")

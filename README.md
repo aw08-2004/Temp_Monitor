@@ -1,4 +1,4 @@
-# Temp Monitor
+# FleetHub
 
 CPU temperature monitoring and remote fleet management across machines. Each
 machine runs an agent that reads sensors and reports them to a central **hub**
@@ -71,10 +71,20 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                 
 Component-specific parameters: `-InstallDir <path>` / `-Port <port>` (Companion,
 defaults `C:\Program Files\TempMonitor` / `8085`); `-AgentUrl` / `-AgentExe` /
 `-EnrollmentSecret` / `-HubUrl` (Agent); `-HubPort <port>` (default `3001`) and
-`-HubInstallDir <path>` (default `C:\Program Files\TempMonitor\Hub`) (Hub). The Hub
-installs as the **`Temp Monitor - Hub` Windows Service** (Python wrapped with WinSW,
-running as LocalSystem) and git-clones the repo into the chosen location, so it needs
-`git` on `PATH` but no longer has to be run from a pre-existing clone.
+`-HubInstallDir <path>` (default `C:\Program Files\FleetHub\Hub`) (Hub).
+
+Hub and Agent install side by side under one root — `C:\Program Files\FleetHub\Hub`
+and `C:\Program Files\FleetHub\Agent`. The Hub installs as the **`FleetHub - Hub`
+Windows Service** (Python wrapped with WinSW, running as LocalSystem).
+
+The Hub install downloads only the files the hub actually needs (~0.3 MB: the Python
+modules, `templates/`, `static/`, `requirements.txt`) rather than cloning the whole
+repo, so the agent tree, tests and docs never land on a server. `git` is no longer
+required on the hub box.
+
+Installs made before the FleetHub rename are detected and migrated: the old service is
+removed, `.env` and `logs/` (including the telemetry DB) are moved to the new root, and
+an existing agent's binary is moved with its service re-pointed at the new path.
 
 ## Installing the companion agent (legacy)
 
@@ -117,15 +127,26 @@ below) — an unsigned or tampered `companion.py` is refused, not applied.
 The hub can keep itself current too, but it's **off by default** — set
 `HUB_AUTO_UPDATE=1` in the hub's `.env` to enable it (a dev clone left unset never
 touches itself). When enabled, the hub checks `HUB_VERSION` on `main` every 15
-minutes; when `main` is ahead it runs `git fetch` + `git reset --hard origin/main`
-in its own clone (mirroring `main` exactly — **local changes on the hub box are
-discarded**), best-effort re-installs `requirements.txt`, then exits non-zero so the
-`Temp Monitor - Hub` Windows Service auto-restarts waitress on the new code (WinSW
-`onfailure`, ~5 s downtime). Requirements: the hub runs from a git clone (the
-installer sets this up) and `git` is on `PATH`. Unlike the companion/agent trains
-this trusts the pinned git origin over HTTPS rather than the Ed25519 release key. As
-with every hub change, bump `HUB_VERSION` near the top of `app.py` on each push to
-`main`, or the hub won't know to update. (The installer offers to set
+minutes; when `main` is ahead it updates itself, best-effort re-installs
+`requirements.txt`, then exits non-zero so the `FleetHub - Hub` Windows Service
+auto-restarts waitress on the new code (WinSW `onfailure`, ~5 s downtime).
+
+How it updates depends on the layout, decided by whether a `.git` directory is present:
+
+- **Files-only install** (what the installer now produces): downloads the branch
+  archive and replaces the hub runtime file set. The whole archive is staged and
+  checked for completeness first, so a truncated download leaves the hub untouched
+  rather than half-updated. `.env`, `logs/` and the service wrapper are never written.
+- **Git clone** (dev checkouts, and hubs deployed before the change): `git fetch` +
+  `git reset --hard origin/main`, mirroring `main` exactly — **local changes on the
+  hub box are discarded**. Requires `git` on `PATH`.
+
+Unlike the companion/agent trains, neither path uses the Ed25519 release key: both
+trust GitHub over HTTPS plus push access to `main` (the pinned git origin for a clone,
+the branch archive over TLS for a files-only install). The Ed25519 trust root still
+gates agent binaries and is untouched by this. As with every hub change, bump
+`HUB_VERSION` near the top of `app.py` on each push to `main`, or the hub won't know
+to update. (The installer offers to set
 `HUB_AUTO_UPDATE=1` for you; on hubs still on the older scheduled-task deployment the
 same exit instead relies on the task's 2-minute repetition.)
 

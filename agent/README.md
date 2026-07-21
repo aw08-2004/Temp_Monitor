@@ -1,4 +1,4 @@
-# Temp Monitor — C#/.NET Fleet Agent
+# FleetHub — C#/.NET Fleet Agent
 
 A Windows Service (runs under **LocalSystem**) that replaces the Python `companion.py`
 for RMM. It reaches telemetry parity with the companion **and** speaks the hub's fleet

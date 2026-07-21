@@ -1,5 +1,5 @@
 <#
-    Temp_Monitor - C#/.NET Fleet Agent Installer
+    FleetHub - C#/.NET Fleet Agent Installer
     https://github.com/aw08-2004/Temp_Monitor
 
     Installs the fleet agent as a Windows Service running under LocalSystem:
@@ -103,7 +103,7 @@ if ($Uninstall) {
 
 Write-Host @"
 
-  Temp Monitor - Fleet Agent Installer
+  FleetHub - Fleet Agent Installer
   Machine: $env:COMPUTERNAME
   Target : $InstallDir
 

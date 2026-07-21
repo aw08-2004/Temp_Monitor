@@ -1,5 +1,5 @@
 <#
-    Temp Monitor - Unified Installer
+    FleetHub - Unified Installer
     https://github.com/aw08-2004/Temp_Monitor
 
     Interactive menu over the three install paths:
@@ -172,7 +172,7 @@ function Resolve-Python {
 
 function Get-LatestAgentAssetUrl {
     try {
-        $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Headers @{ "User-Agent" = "TempMonitor-Installer" } -TimeoutSec 15
+        $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Headers @{ "User-Agent" = "FleetHub-Installer" } -TimeoutSec 15
         $rel = $rels | Where-Object { $_.tag_name -like "agent-v*" } | Select-Object -First 1
         if ($rel) {
             $asset = $rel.assets | Where-Object { $_.name -eq "TempMonitorAgent.exe" } | Select-Object -First 1
@@ -185,7 +185,7 @@ function Get-LatestAgentAssetUrl {
 function Show-Menu {
     Write-Host @"
 
-  Temp Monitor - Unified Installer
+  FleetHub - Unified Installer
   =================================
    1) Install Agent      (C#/.NET Windows Service - recommended)
    2) Install Companion  (legacy Python scheduled-task agent)
@@ -258,7 +258,7 @@ if (-not $isAdmin) {
 # Companion (legacy Python scheduled-task agent)
 # ========================================================================
 function Uninstall-Companion {
-    Step "Uninstalling Temp Monitor Companion"
+    Step "Uninstalling FleetHub Companion"
 
     foreach ($t in @($TaskCompanion, $TaskLhm)) {
         if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) {
@@ -284,7 +284,7 @@ function Uninstall-Companion {
 function Install-Companion {
     Write-Host @"
 
-  Temp Monitor - Companion Agent Installer
+  FleetHub - Companion Agent Installer
   Machine: $env:COMPUTERNAME
   Target : $InstallDir
 
@@ -373,7 +373,7 @@ function Install-Companion {
     } else {
         $zipUrl = $LhmFallback
         try {
-            $rel = Invoke-RestMethod -Uri $LhmApi -Headers @{ "User-Agent" = "TempMonitor-Installer" } -TimeoutSec 15
+            $rel = Invoke-RestMethod -Uri $LhmApi -Headers @{ "User-Agent" = "FleetHub-Installer" } -TimeoutSec 15
             $asset = $rel.assets | Where-Object { $_.name -like "*net472*.zip" } | Select-Object -First 1
             if ($asset) {
                 $zipUrl = $asset.browser_download_url
@@ -484,7 +484,7 @@ function Install-Companion {
         -Action    (New-ScheduledTaskAction -Execute $lhmExe -WorkingDirectory $LhmDir) `
         -Trigger   (New-ScheduledTaskTrigger -AtLogOn) `
         -Principal $principal -Settings $settings `
-        -Description "Hardware sensor daemon for Temp Monitor. Serves JSON on localhost:$Port." | Out-Null
+        -Description "Hardware sensor daemon for FleetHub. Serves JSON on localhost:$Port." | Out-Null
     Ok "Task: $TaskLhm"
 
     # Companion 30s later, so LHM's web server is up. Also repeats every 2 minutes
@@ -508,7 +508,7 @@ function Install-Companion {
         -Action    (New-ScheduledTaskAction -Execute $pythonwExe -Argument "`"$companionPath`"" -WorkingDirectory $InstallDir) `
         -Trigger   $trigger `
         -Principal $principal -Settings $settings `
-        -Description "Reports CPU temperature to the Temp Monitor hub." | Out-Null
+        -Description "Reports CPU temperature to the FleetHub hub." | Out-Null
     Ok "Task: $TaskCompanion (30s delay, repeats every 2min as a self-heal restart path)"
 
     # ------------------------------------------------------------------
@@ -595,7 +595,7 @@ function Uninstall-Agent {
 function Install-Agent {
     Write-Host @"
 
-  Temp Monitor - Agent Installer (C#/.NET Windows Service)
+  FleetHub - Agent Installer (C#/.NET Windows Service)
 
 "@ -ForegroundColor Cyan
 

@@ -18,6 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # app.py resolves LOG_DIR/DB_PATH relative to the cwd at import time, so run it
 # against a throwaway directory rather than the real logs/temp_v2.db.
 _TMPDIR = tempfile.mkdtemp(prefix="hub-dedup-test-")
+# See test_alerts.py: app resolves its DB from HUB_LOG_DIR, so declare this module's dir
+# before importing app to keep a standalone run off the real logs/.
+os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
 os.chdir(_TMPDIR)
 
 import app

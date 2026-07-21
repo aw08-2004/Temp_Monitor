@@ -1,7 +1,7 @@
 <aside class="sidebar">
     <div class="sidebar__brand">
         <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
-        <span class="sidebar__brand-name">Temp Monitor</span>
+        <span class="sidebar__brand-name">FleetHub</span>
     </div>
     <nav class="sidebar__nav">
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" href="{{ url_for('index') }}">
