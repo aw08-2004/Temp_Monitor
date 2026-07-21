@@ -30,9 +30,11 @@ import fleet
 import alerts
 import settings
 import permissions
+import packages
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
+from packages_web import create_packages_blueprint
 
 # Load .env from next to this file rather than the cwd -- under the Windows service the working
 # directory isn't the hub folder -- and with utf-8-sig so a UTF-8 BOM (which PowerShell and
@@ -44,7 +46,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.26.0"
+HUB_VERSION = "1.27.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -984,6 +986,12 @@ app.register_blueprint(create_fleet_blueprint(
 app.register_blueprint(create_settings_blueprint(DB_PATH, login_required, access))
 # Permission-group administration.
 app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, access))
+# Package definitions, deployments, and the agent-facing payload download. LOG_DIR is
+# handed in because the blob store lives beside the database (see packages.blob_root),
+# and HUB_URL because the agent's download URL has to be absolute.
+app.register_blueprint(create_packages_blueprint(
+    DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
+))
 
 
 @app.route("/login")
@@ -1538,6 +1546,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # silently drop machines out of operators' scopes -- a permission change nobody
     # made, discovered only when someone couldn't reach a PC they'd always managed.
     permissions.rename_machine(DB_PATH, dropped, survivor)
+    # Same reasoning for deployment targets: the merged-away hostname is the survivor, so
+    # a deploy aimed at the old name must follow it rather than stall forever on a
+    # machine that no longer exists.
+    packages.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor})
 
@@ -1783,11 +1795,44 @@ def start_retention_pruner():
     threading.Thread(target=retention_pruner, daemon=True, name="retention_pruner").start()
 
 
+def deploy_scheduler():
+    """Advance package deployments: read finished attempts back, dispatch due ones.
+
+    One thread, one pass at a time, so there is never a second tick racing the first to
+    dispatch the same target -- packages.dispatch_once only ever moves a row out of
+    `pending`, but two concurrent passes could both read it as pending. Being single-
+    threaded is the cheapest way to make that impossible, and the work is a couple of
+    indexed queries against a table with one row per machine per deploy.
+
+    Errors are caught and logged, never allowed to kill the thread: a deployment that
+    stops advancing because one malformed package raised is a silent failure, and the
+    operator's only symptom would be a progress bar that never moves.
+    """
+    while True:
+        interval = settings.get_int(DB_PATH, "deploy.scheduler_interval_seconds")
+        try:
+            reconciled, dispatched = packages.tick(
+                DB_PATH,
+                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+                hub_url=HUB_URL,
+            )
+            if reconciled or dispatched:
+                print(f"[deploy] Reconciled {reconciled}, dispatched {dispatched}.")
+        except Exception as e:
+            print(f"[deploy] Scheduler pass failed: {e}")
+        time.sleep(interval)
+
+
+def start_deploy_scheduler():
+    threading.Thread(target=deploy_scheduler, daemon=True, name="deploy_scheduler").start()
+
+
 init_db()
 fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
 permissions.init_permissions_db(DB_PATH)
+packages.init_packages_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()
@@ -1796,6 +1841,7 @@ except Exception as e:
 start_companion_version_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
+start_deploy_scheduler()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -2092,6 +2138,9 @@ def delete_machine(machine):
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.
     permissions.forget_machine(DB_PATH, machine_name)
+    # And drop its deployment targets, so a deploy isn't left stuck at 9/10 waiting on a
+    # machine whose command rows fleet.delete_machine has just removed.
+    packages.forget_machine(DB_PATH, machine_name)
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")

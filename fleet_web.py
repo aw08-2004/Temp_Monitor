@@ -299,6 +299,13 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         # is ever queued for a machine the caller cannot reach.
         if not access.in_scope(data.get("machine")):
             return jsonify({"error": "You do not have access to that machine."}), 403
+        # Scheduler-owned types are refused here even though create_command would accept
+        # them. They are gated on a DIFFERENT capability (deploy_packages), and a
+        # hand-rolled one would carry a deployment id nothing reconciles -- so the deploy
+        # would look queued in the console forever. Issue those through /api/packages.
+        if data.get("type") in fleet.SCHEDULED_COMMANDS:
+            return jsonify({"error": "Package deployments are issued from the Packages "
+                                     "page, not the command channel."}), 400
         try:
             command_id = fleet.create_command(
                 db_path,

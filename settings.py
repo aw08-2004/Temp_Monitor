@@ -164,10 +164,32 @@ REGISTRY = (
        minimum=60, maximum=86400, unit="seconds",
        help="A command not picked up by its target within this window expires instead of "
             "running much later on a machine that just came back."),
+
+    # ---------------- Deploy: package pushes ----------------
+    # Retry defaults are per-deployment values the schedule form pre-fills; changing them
+    # here does NOT alter deployments already created, which carry their own copy. That
+    # is deliberate -- a retry policy an operator agreed to when scheduling shouldn't
+    # change under them because someone edited a default mid-push.
+    _s("deploy.default_max_attempts", "deploy", "Default attempts per machine", "int", 3,
+       minimum=1, maximum=10,
+       help="How many times a deployment tries a machine before giving up. An attempt is "
+            "spent when the install fails OR when the machine never picks the command up."),
+    _s("deploy.default_retry_backoff_seconds", "deploy", "Default retry backoff", "int", 900,
+       minimum=60, maximum=86400, unit="seconds",
+       help="Wait before the first retry. It doubles each attempt (15 min, 30 min, 1 h...), "
+            "so a machine that's off for the weekend isn't retried every quarter hour."),
+    _s("deploy.max_upload_mb", "deploy", "Largest package file", "int", 512,
+       minimum=1, maximum=4096, unit="MB",
+       help="Upload limit for a hub-hosted installer. Files are stored beside the database "
+            "and shared between packages built from the same installer."),
+    _s("deploy.scheduler_interval_seconds", "deploy", "Run the deploy scheduler every",
+       "int", 30, minimum=10, maximum=3600, unit="seconds",
+       help="How often the hub checks for deployments that are due and reads finished "
+            "attempts back. Also the floor on how quickly a scheduled window starts."),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
-SECTIONS = ("computer", "hub", "data", "metrics", "fleet")
+SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy")
 
 
 # ---------------------------------------------------------------- storage
@@ -464,6 +486,7 @@ _SECTION_LABELS = {
     "data": "Data & Retention",
     "metrics": "History Metrics",
     "fleet": "Fleet",
+    "deploy": "Package Deployment",
 }
 
 

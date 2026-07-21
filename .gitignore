@@ -3,7 +3,6 @@ logs
 __pycache__
 .env
 sign_release.py
-features.md
 
 # Private signing key for companion self-updates -- MUST never be committed.
 .temp_monitor_signing_key

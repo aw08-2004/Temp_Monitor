@@ -40,4 +40,37 @@ public static class ParamsExtensions
         }
         return fallback;
     }
+
+    /// <summary>A nested object (deploy_package's `source` and `detection`), or null.</summary>
+    public static JsonObject? GetObject(this JsonNode? paramsNode, string key)
+    {
+        if (paramsNode is JsonObject obj && obj.TryGetPropertyValue(key, out var v))
+            return v as JsonObject;
+        return null;
+    }
+
+    /// <summary>An array of ints (deploy_package's `success_exit_codes`).
+    ///
+    /// Returns an EMPTY set when the key is absent or unusable rather than a default like
+    /// {0}. The caller decides what "no set" means -- guessing here would silently turn a
+    /// malformed payload into "exit 0 is success", which is the one wrong answer that
+    /// looks right.</summary>
+    public static HashSet<int> GetIntSet(this JsonNode? paramsNode, string key)
+    {
+        var set = new HashSet<int>();
+        if (paramsNode is JsonObject obj && obj.TryGetPropertyValue(key, out var v)
+            && v is JsonArray arr)
+        {
+            foreach (var item in arr)
+            {
+                if (item is null) continue;
+                try { set.Add(item.GetValue<int>()); }
+                catch
+                {
+                    if (int.TryParse(item.ToString(), out var parsed)) set.Add(parsed);
+                }
+            }
+        }
+        return set;
+    }
 }

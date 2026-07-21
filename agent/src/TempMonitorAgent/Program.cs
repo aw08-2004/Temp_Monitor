@@ -41,6 +41,10 @@ try
 
     // Fleet command channel
     builder.Services.AddSingleton<FleetClient>();
+    // DeployPackageExecutor takes the downloader as an interface (so its verify/run/detect
+    // logic is testable without a hub); FleetClient is the real implementation, and must
+    // resolve to the SAME singleton that holds this agent's enrollment token.
+    builder.Services.AddSingleton<IPackageDownloader>(sp => sp.GetRequiredService<FleetClient>());
     builder.Services.AddSingleton<CommandDispatcher>();
     // Persistent interactive shells live here (singleton, disposed at host shutdown).
     builder.Services.AddSingleton<ShellSessionManager>();
@@ -50,6 +54,7 @@ try
     builder.Services.AddSingleton<ICommandExecutor, GpUpdateExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, InstallAppExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, DeployPackageExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellInputExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellSignalExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();

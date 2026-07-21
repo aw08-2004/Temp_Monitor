@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Packages - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. Both tables, the source/detection editors and the machine picker are
+   built by packages.js from GET /api/packages -- the detection-rule vocabulary in
+   particular comes from the server rather than being duplicated here, so adding a kind
+   to packages.DETECTION_KINDS is a single edit.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Packages</h1>
+        <p class="stat-card__meta">
+            Describe an installer once -- payload, silent command line, and what proves it
+            worked -- then deploy it to machines and watch it land.
+        </p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-package">New package</button>
+</div>
+
+{# Driven by the shared tabs.js (ARIA roles, roving tabindex, arrow keys, #hash
+   linkability, last-tab persistence). Rolling a switcher by hand here would lose all of
+   that and, worse, would be a second implementation to drift out of sync. #}
+<div class="tabs" role="tablist" aria-label="Package views" data-tabs-key="packages">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-packages"
+            aria-controls="packages-pane" aria-selected="true">Packages</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-deployments"
+            aria-controls="deployments-pane" aria-selected="false" tabindex="-1">Deployments</button>
+</div>
+
+<div class="tab-panel" id="packages-pane" role="tabpanel" aria-labelledby="tab-btn-packages"></div>
+<div class="tab-panel" id="deployments-pane" role="tabpanel" aria-labelledby="tab-btn-deployments" hidden></div>
+
+<!-- ------------------------------------------------------ package editor -->
+<dialog class="modal" id="package-modal">
+    <form method="dialog" id="package-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="package-modal-title">New package</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="pkg-name">Name</label>
+            <input class="input" id="pkg-name" maxlength="120" autocomplete="off"
+                   placeholder="7-Zip" style="width: 100%;">
+
+            <div class="pkg-row">
+                <div>
+                    <label class="setting__label" for="pkg-version">Version <span class="setting__default">optional</span></label>
+                    <input class="input" id="pkg-version" maxlength="60" autocomplete="off"
+                           placeholder="24.09" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="pkg-timeout">Timeout</label>
+                    <input class="input" id="pkg-timeout" type="number" min="30" max="86400"
+                           value="900" style="width: 100%;">
+                </div>
+            </div>
+
+            <label class="setting__label" for="pkg-description" style="margin-top: var(--space-4);">Description <span class="setting__default">optional</span></label>
+            <input class="input" id="pkg-description" maxlength="200" autocomplete="off"
+                   placeholder="File archiver, silent MSI" style="width: 100%;">
+
+            <h3 class="perm-subhead">Payload</h3>
+            <div class="perm-scope-modes" id="source-kinds"></div>
+
+            <div id="source-upload" class="pkg-source-pane">
+                <input class="input" id="pkg-file" type="file" style="width: 100%;">
+                <p class="setting__default" id="pkg-file-state">
+                    The hub stores the file and pins its SHA-256. Agents verify that hash
+                    before running anything.
+                </p>
+            </div>
+            <div id="source-ref" class="pkg-source-pane" hidden>
+                <input class="input" id="pkg-ref" autocomplete="off" style="width: 100%;">
+                <p class="setting__default" id="pkg-ref-help"></p>
+                <label class="setting__label" for="pkg-ref-sha" style="margin-top: var(--space-3);">
+                    SHA-256 <span class="setting__default">optional -- pin it and the agent will refuse a payload that doesn't match</span>
+                </label>
+                <input class="input" id="pkg-ref-sha" maxlength="64" autocomplete="off"
+                       spellcheck="false" style="width: 100%;">
+            </div>
+
+            <h3 class="perm-subhead">How to install it</h3>
+            <div class="pkg-row">
+                <div>
+                    <label class="setting__label" for="pkg-command">Command</label>
+                    <input class="input" id="pkg-command" autocomplete="off" spellcheck="false"
+                           placeholder="msiexec.exe" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="pkg-args">Arguments</label>
+                    <input class="input" id="pkg-args" autocomplete="off" spellcheck="false"
+                           placeholder='/i "{file}" /qn /norestart' style="width: 100%;">
+                </div>
+            </div>
+            <p class="setting__default" id="pkg-cmd-help"></p>
+
+            <label class="setting__label" for="pkg-exit-codes" style="margin-top: var(--space-4);">Success exit codes</label>
+            <input class="input" id="pkg-exit-codes" autocomplete="off" value="0, 3010"
+                   style="width: 100%;">
+            <p class="setting__default">
+                Comma separated. 3010 means "installed, reboot required" -- drop it only if
+                you want a pending reboot to count as a failure.
+            </p>
+
+            <h3 class="perm-subhead">Proof it worked</h3>
+            <p class="setting__default" style="margin-bottom: var(--space-3);">
+                An installer exiting 0 is evidence, not proof -- silent installers routinely
+                return 0 having done nothing. This check runs after it and has to pass too.
+            </p>
+            <select class="input" id="pkg-detect-kind" style="width: 100%;"></select>
+            <p class="setting__default" id="pkg-detect-help"></p>
+
+            <div id="detect-file" class="pkg-detect-pane" hidden>
+                <label class="setting__label" for="detect-path">Path</label>
+                <input class="input" id="detect-path" autocomplete="off" spellcheck="false"
+                       placeholder="C:\Program Files\7-Zip\7z.exe" style="width: 100%;">
+            </div>
+            <div id="detect-registry" class="pkg-detect-pane" hidden>
+                <div class="pkg-row">
+                    <div>
+                        <label class="setting__label" for="detect-root">Root</label>
+                        <select class="input" id="detect-root" style="width: 100%;"></select>
+                    </div>
+                    <div>
+                        <label class="setting__label" for="detect-name">Value name</label>
+                        <input class="input" id="detect-name" autocomplete="off"
+                               placeholder="DisplayVersion" style="width: 100%;">
+                    </div>
+                </div>
+                <label class="setting__label" for="detect-key" style="margin-top: var(--space-3);">Key</label>
+                <input class="input" id="detect-key" autocomplete="off" spellcheck="false"
+                       placeholder="SOFTWARE\7-Zip" style="width: 100%;">
+                <label class="checkbox" style="margin-top: var(--space-3);">
+                    <input type="checkbox" id="detect-equals-on"> Require an exact value
+                </label>
+                <input class="input" id="detect-equals" autocomplete="off" disabled
+                       style="width: 100%; margin-top: var(--space-2);">
+            </div>
+            <div id="detect-version" class="pkg-detect-pane" hidden>
+                <div class="pkg-row">
+                    <div>
+                        <label class="setting__label" for="detect-product">Product name</label>
+                        <input class="input" id="detect-product" autocomplete="off"
+                               placeholder="7-Zip" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label class="setting__label" for="detect-min">Minimum version <span class="setting__default">optional</span></label>
+                        <input class="input" id="detect-min" autocomplete="off"
+                               placeholder="24.09" style="width: 100%;">
+                    </div>
+                </div>
+                <p class="setting__default">
+                    Matched against Windows' installed-programs list, in both the 64- and
+                    32-bit registry views.
+                </p>
+            </div>
+
+            <p class="setting__error" id="package-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="package-cancel">Cancel</button>
+            <button class="btn btn--primary" type="button" id="package-save">Save package</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- ------------------------------------------------------ deploy scheduler -->
+<dialog class="modal" id="deploy-modal">
+    <form method="dialog" id="deploy-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="deploy-modal-title">Deploy package</h2>
+        </div>
+        <div class="modal__body">
+            <h3 class="perm-subhead" style="border-top: none; padding-top: 0; margin-top: 0;">Machines</h3>
+            <div class="chip-list" id="deploy-machine-chips"></div>
+            <div class="chip-add">
+                <input class="input" id="deploy-machine-input" list="deploy-machine-options"
+                       placeholder="Add a machine by hostname" autocomplete="off">
+                <datalist id="deploy-machine-options"></datalist>
+                <button class="btn" type="button" id="deploy-machine-add">Add</button>
+            </div>
+
+            <h3 class="perm-subhead">When</h3>
+            <div class="pkg-row">
+                <div>
+                    <label class="setting__label" for="deploy-start">Start <span class="setting__default">blank = now</span></label>
+                    <input class="input" id="deploy-start" type="datetime-local" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="deploy-end">Give up after <span class="setting__default">blank = no deadline</span></label>
+                    <input class="input" id="deploy-end" type="datetime-local" style="width: 100%;">
+                </div>
+            </div>
+
+            <h3 class="perm-subhead">Retries</h3>
+            <div class="pkg-row">
+                <div>
+                    <label class="setting__label" for="deploy-attempts">Attempts per machine</label>
+                    <input class="input" id="deploy-attempts" type="number" min="1" max="10"
+                           value="3" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="deploy-backoff">First retry after (seconds)</label>
+                    <input class="input" id="deploy-backoff" type="number" min="60" max="86400"
+                           value="900" style="width: 100%;">
+                </div>
+            </div>
+            <p class="setting__default">
+                An attempt is spent when the install fails <em>or</em> when the machine never
+                picks the command up. The wait doubles each time.
+            </p>
+
+            <label class="setting__label" for="deploy-note" style="margin-top: var(--space-4);">Note <span class="setting__default">optional</span></label>
+            <input class="input" id="deploy-note" maxlength="200" autocomplete="off"
+                   placeholder="Q3 rollout" style="width: 100%;">
+
+            <p class="setting__error" id="deploy-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="deploy-cancel">Cancel</button>
+            <button class="btn btn--primary" type="button" id="deploy-save">Schedule</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- ------------------------------------------------------ progress -->
+<dialog class="modal" id="progress-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title" id="progress-title">Deployment</h2>
+        </div>
+        <div class="modal__body" id="progress-body"></div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="progress-retry">Retry failures</button>
+            <button class="btn" type="button" id="progress-cancel-deploy">Cancel deployment</button>
+            <button class="btn btn--primary" type="button" id="progress-close">Close</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/packages.js') }}"></script>
+{% endblock %}

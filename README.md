@@ -292,6 +292,64 @@ AGENT_ENROLLMENT_SECRET=a-long-random-shared-secret
 `GET /api/fleet/commands/<id>`. Every issue/claim/complete/enroll is written to
 `audit_log`.
 
+## Package deployment (PDQ-style)
+
+Define an installer once — payload, silent command line, what proves it worked — then
+aim it at machines and watch it land. Core logic in [packages.py](packages.py), HTTP
+surface in [packages_web.py](packages_web.py), UI at `/packages`, agent side in
+`agent/src/TempMonitorAgent/Fleet/Executors/DeployPackageExecutor.cs`. State lives in the
+same SQLite DB (`packages`, `package_sources`, `deployments`, `deployment_targets`).
+
+**A package is a recipe plus a payload.** The payload is either a file uploaded to the
+hub (stored beside the database under `logs/packages/`, content-addressed by SHA-256 and
+shared between packages built from the same installer) or an external reference — a
+winget id, an `https://` URL, or a UNC path. The recipe is the command line (with
+`{file}` standing in for the resolved payload), a timeout, the accepted exit codes, and a
+detection rule.
+
+**Success is exit code AND detection, both.** An installer exiting 0 is evidence, not
+proof — silent installers routinely return 0 having done nothing, and on a fleet-wide push
+that is the failure you least want reported as success. So every package also carries a
+post-install check: a file exists, a registry value exists (optionally matching exactly),
+or a product appears in Windows' installed-programs list at or above a given version.
+Anything the agent cannot evaluate counts as *not* detected, never as detected.
+
+**Trust.** The hub computes the SHA-256 of an uploaded payload itself, at upload, from the
+bytes it writes — a client-supplied digest is never accepted — and the agent re-verifies
+it before executing, deleting the file on a mismatch. That plus the authenticated HTTPS
+channel is the whole integrity story; there is deliberately no new offline signing key
+(see the command-channel section above for why that model was removed). URL/UNC payloads
+can be hash-pinned too; winget has its own trust chain.
+
+**Scheduling layers on the existing command queue, it does not replace it.** A deployment
+holds one row per target machine; the hub's scheduler thread turns a due target into an
+ordinary `deploy_package` command with the usual TTL, then reads that command's terminal
+status back. A machine that is offline therefore costs one expired command and one
+backoff, using the same expiry the queue already enforces. Retries are per machine
+(default 3 attempts, backoff doubling from 15 minutes), and a deployment can carry a
+window — don't start before X, give up after Y.
+
+**Authorization** is the `deploy_packages` capability plus machine scope, from Permission
+Groups. Targets are checked *before* anything is written and the request is refused whole
+if any single machine is out of scope — a deploy that quietly installs on nine of the ten
+machines you asked for is worse than one that fails. Reads are scoped the other way: an
+operator sees only the target rows they could have created.
+
+**Endpoints.** Console (`deploy_packages`): `GET|POST /api/packages`,
+`GET|PUT|DELETE /api/packages/<id>`, `POST /api/packages/upload`,
+`GET|POST /api/deployments`, `GET /api/deployments/<id>`,
+`POST /api/deployments/<id>/cancel`, `POST /api/deployments/<id>/retry`.
+Agent (token auth): `GET /api/agent/packages/<sha256>`.
+
+> The upload endpoint is the one place that accepts `multipart/form-data` rather than
+> JSON — a file upload cannot be JSON. It is deliberately inert to compensate: it stores
+> bytes and returns a hash, creating no package and touching no machine. Turning that hash
+> into something that runs anywhere requires the JSON-bodied endpoints, which a cross-site
+> form cannot reach. Don't make it create a package as a convenience.
+
+Tunables live in Settings under **Package Deployment**: retry defaults, the upload size
+limit, and the scheduler interval.
+
 ## Signing releases
 
 Two artifacts in this repo are Ed25519-signed so a compromised hub or repo commit

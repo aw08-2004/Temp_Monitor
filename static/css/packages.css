@@ -1,0 +1,68 @@
+/* Packages page. Only what components.css and permissions.css don't already cover:
+   the two-column form rows, the collapsible source/detection panes, and the deployment
+   progress bar. */
+
+.pkg-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+}
+
+@media (max-width: 640px) {
+    .pkg-row { grid-template-columns: 1fr; }
+}
+
+.pkg-source-pane[hidden],
+.pkg-detect-pane[hidden] { display: none; }
+
+.pkg-detect-pane { margin-top: var(--space-3); }
+
+/* The payload's identity, once uploaded. Monospace because the operator's job here is
+   to compare a hash, and a proportional font makes that genuinely harder. */
+.pkg-hash {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    color: var(--muted);
+    word-break: break-all;
+}
+
+/* One bar per deployment, segmented by target status. Colour is never the only signal --
+   every segment is also labelled in the tally beside it -- because "did my rollout
+   work?" must be answerable by someone who can't distinguish red from green. */
+.pkg-progress {
+    display: flex;
+    height: 8px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--card-border);
+    min-width: 120px;
+}
+
+.pkg-progress__seg { height: 100%; }
+/* Not started yet: deliberately the track's own colour, so an untouched deployment
+   reads as an empty bar rather than a full bar of some ambiguous shade. */
+.pkg-progress__seg--pending   { background: var(--card-border); }
+.pkg-progress__seg--succeeded { background: var(--ok, #3fb950); }
+.pkg-progress__seg--failed    { background: var(--danger, #f85149); }
+.pkg-progress__seg--expired   { background: var(--warn, #d29922); }
+.pkg-progress__seg--cancelled { background: var(--muted); }
+.pkg-progress__seg--in_flight { background: var(--accent, #58a6ff); }
+
+.pkg-tally {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--muted);
+}
+
+.pkg-target-error {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    /* Installer output is long and arbitrary; let it wrap rather than stretch the
+       dialog past the viewport. */
+    word-break: break-word;
+    max-width: 46ch;
+}

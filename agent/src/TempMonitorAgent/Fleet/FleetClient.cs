@@ -20,17 +20,32 @@ public interface IOutputSink
     Task<OutputPostResult> PostOutputAsync(string commandId, int seq, string text, CancellationToken ct);
 }
 
+/// <summary>Fetching a package payload, for DeployPackageExecutor. An interface for the
+/// same reason as IOutputSink: the executor's verify/run/detect logic is worth testing
+/// without a live hub behind it.</summary>
+public interface IPackageDownloader
+{
+    /// <summary>Download <paramref name="url"/> to <paramref name="destPath"/> and check
+    /// its sha256. Returns null on success, or a human-readable failure reason.</summary>
+    Task<string?> DownloadPackageAsync(string url, string destPath, string? expectedSha256,
+                                       CancellationToken ct);
+}
+
 /// <summary>
 /// Client for the hub's fleet command channel. Enrolls once (persisting the returned
 /// agent_id/token), then heartbeats, polls+claims commands, streams live output, and
 /// reports results — all authenticated with
 /// "Authorization: Bearer &lt;agent_id&gt;:&lt;token&gt;".
 /// </summary>
-public sealed class FleetClient : IDisposable, IOutputSink
+public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader
 {
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
     private readonly HttpClient _http;
+    // Package payloads are hundreds of megabytes on a slow link, so they cannot share
+    // the 10-second client above — that timeout is a *whole request* budget, not an idle
+    // one, and would abort every large installer mid-download.
+    private readonly HttpClient _downloadHttp;
     private AgentIdentity _identity;
 
     public FleetClient(ILogger<FleetClient> log, AgentState state)
@@ -39,6 +54,7 @@ public sealed class FleetClient : IDisposable, IOutputSink
         _state = state;
         _identity = state.LoadIdentity();
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        _downloadHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
     }
 
     public bool IsEnrolled => _identity.IsEnrolled;
@@ -249,6 +265,83 @@ public sealed class FleetClient : IDisposable, IOutputSink
         }
     }
 
+    /// <summary>
+    /// Fetch a package payload and verify it before anyone is allowed to execute it.
+    ///
+    /// The hash is checked while the bytes are written, against the digest the HUB
+    /// computed at upload time and shipped in the command params. That check is the whole
+    /// integrity story for a hub-hosted payload — there is no signature here, deliberately
+    /// (see fleet.py's docstring on why command signing was removed), so the trust root is
+    /// the authenticated channel plus a hash the hub derived from the bytes it holds.
+    ///
+    /// A mismatch DELETES the file. Leaving a rejected installer on disk with a
+    /// predictable name is how a failed verification turns into something that gets run
+    /// anyway by a retry or a stray hand.
+    ///
+    /// `expectedSha256` may be null for url/unc payloads the operator chose not to pin;
+    /// the download then succeeds unverified, which is the operator's stated intent.
+    /// It is never null for a hub-hosted payload — the hub always has the digest.
+    /// </summary>
+    public async Task<string?> DownloadPackageAsync(
+        string url, string destPath, string? expectedSha256, CancellationToken ct)
+    {
+        // A relative URL from the hub is resolved against the base this agent already
+        // trusts, rather than anything in the payload — the params must not be able to
+        // redirect the fetch to another host.
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = AgentConfig.HubBase + (url.StartsWith('/') ? url : "/" + url);
+        }
+
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            // Only our own hub gets the agent's bearer token. A package pulled from an
+            // arbitrary operator-supplied URL must not have it attached.
+            if (url.StartsWith(AgentConfig.HubBase, StringComparison.OrdinalIgnoreCase))
+                req.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", _identity.BearerValue);
+
+            using var resp = await _downloadHttp.SendAsync(
+                req, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!resp.IsSuccessStatusCode)
+                return $"download failed: HTTP {(int)resp.StatusCode}";
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+            using (var source = await resp.Content.ReadAsStreamAsync(ct))
+            using (var dest = File.Create(destPath))
+            {
+                await source.CopyToAsync(dest, ct);
+            }
+
+            if (!string.IsNullOrEmpty(expectedSha256))
+            {
+                string actual;
+                using (var stream = File.OpenRead(destPath))
+                    actual = Convert.ToHexString(await System.Security.Cryptography.SHA256
+                        .HashDataAsync(stream, ct)).ToLowerInvariant();
+                if (!string.Equals(actual, expectedSha256.Trim().ToLowerInvariant(),
+                                   StringComparison.Ordinal))
+                {
+                    TryDelete(destPath);
+                    return $"sha256 mismatch (got {actual}, expected {expectedSha256})";
+                }
+            }
+            return null;
+        }
+        catch (Exception e)
+        {
+            TryDelete(destPath);
+            return $"download failed: {e.Message}";
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+    }
+
     private HttpRequestMessage Authorized(HttpMethod method, string url)
     {
         var req = new HttpRequestMessage(method, url);
@@ -262,5 +355,9 @@ public sealed class FleetClient : IDisposable, IOutputSink
         public List<FleetCommand>? Commands { get; set; }
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        _http.Dispose();
+        _downloadHttp.Dispose();
+    }
 }

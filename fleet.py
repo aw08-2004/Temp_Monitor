@@ -62,6 +62,14 @@ SESSION_CONTROL_COMMANDS = frozenset({
     "shell_reset",
 })
 
+# Issued by the deployment scheduler rather than by an operator's hand (see packages.py).
+# Its params are a SNAPSHOT of one package recipe plus the deployment id the result rolls
+# up to, so -- like the session-control types -- there is nothing reusable to save as a
+# favorite: replaying yesterday's params would report progress against a finished deploy.
+SCHEDULED_COMMANDS = frozenset({
+    "deploy_package",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -71,7 +79,7 @@ ALL_COMMANDS = frozenset({
     "run_script",
     "install_driver",
     "update_bios",
-}) | SESSION_CONTROL_COMMANDS
+}) | SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -441,6 +449,26 @@ def _expire_stale(conn, machine, now):
     )
 
 
+def expire_stale_commands(db_path, now=None):
+    """Sweep expired commands across EVERY machine. Returns how many were retired.
+
+    _expire_stale above only runs when an agent polls, which means expiry is lazy: a
+    command for a machine that never comes back stays `pending` forever, and the console
+    shows a queued command that will never run. That was survivable while a human read
+    the list, but the deployment scheduler (packages.py) waits on a command reaching a
+    terminal state -- so a target aimed at an offline machine would never fail, never
+    retry, and never give up. This gives expiry a heartbeat of its own.
+    """
+    if now is None:
+        now = int(time.time())
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE commands SET status = ? WHERE status = ? AND expires_at < ?",
+            (STATUS_EXPIRED, STATUS_PENDING, int(now)),
+        )
+        return cur.rowcount or 0
+
+
 def claim_commands(db_path, agent_id, machine):
     """Atomically hand every currently-pending command for `machine` to the
     calling agent and mark them claimed. Returns a list of dicts the agent can
@@ -718,6 +746,10 @@ def _validate_favorite(name, command_type, params):
     if command_type in SESSION_CONTROL_COMMANDS:
         # These steer a live shell session; there is nothing reusable to save.
         raise ValueError(f"{command_type!r} commands cannot be saved as a favorite")
+    if command_type in SCHEDULED_COMMANDS:
+        # The scheduler owns these -- a saved copy would carry a stale deployment id.
+        raise ValueError(f"{command_type!r} commands are issued by the deployment "
+                         f"scheduler and cannot be saved as a favorite")
     if params is None:
         params = {}
     if not isinstance(params, dict):
