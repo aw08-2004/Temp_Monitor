@@ -8,7 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 {% endblock %}
 {% block content %}
-<div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}" data-low-load-threshold="{{ low_load_threshold }}">
+<div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}'>
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
     <div class="tabs" role="tablist" aria-label="Machine views" data-tabs-key="machine">
@@ -80,7 +80,7 @@
     </div>
 
     <div class="card chart-card">
-        <div class="section-title">Temperature History</div>
+        <div class="section-title">Historical</div>
         <div class="toolbar">
             <label for="day-picker">Day:</label>
             <input id="day-picker" class="input" type="date">
@@ -98,9 +98,12 @@
             <button id="zoom-out" type="button" class="btn">Zoom Out</button>
             <button id="reset-zoom" type="button" class="btn">Reset Zoom</button>
         </div>
-        <div class="chart-container">
-            <canvas id="tempChart"></canvas>
+        <div class="history-hint stat-card__meta" style="margin-bottom: var(--space-3);">
+            Wheel or drag to zoom a panel; the time range stays in sync across every chart.
         </div>
+        {# One canvas per enabled metric, built by machine.js from its METRICS config and
+           the machine-config data-enabled-metrics flags. #}
+        <div class="metric-grid" id="metric-grid"></div>
         <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">No readings found for this day.</div>
     </div>
     </div>{# /tab-overview #}

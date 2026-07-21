@@ -79,8 +79,8 @@ def main():
         r = c.get("/api/settings")
         check("GET 200", r.status_code == 200)
         doc = r.get_json()
-        check("all four sections present",
-              [s["name"] for s in doc["sections"]] == ["computer", "hub", "data", "fleet"])
+        check("all sections present in order",
+              [s["name"] for s in doc["sections"]] == ["computer", "hub", "data", "metrics", "fleet"])
         check("every registry key is served",
               sorted(f["key"] for s in doc["sections"] for f in s["fields"]) ==
               sorted(settings.BY_KEY))

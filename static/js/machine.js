@@ -112,13 +112,13 @@ function toChartTimestamp(value) {
 
 function buildHistoryUrl(date, minMs, maxMs, resolution) {
     const params = new URLSearchParams();
-    params.set('machine', MACHINE);
     params.set('date', date);
     params.set('from', formatDateForApi(new Date(minMs)));
     params.set('to', formatDateForApi(new Date(maxMs)));
     params.set('resolution', resolution);
     params.set('limit', 'all');
-    return `/api/history?${params.toString()}`;
+    // One request returns every panel's series: { metrics: { key: [{x, y}], ... } }.
+    return `/api/machines/${encodeURIComponent(MACHINE)}/history?${params.toString()}`;
 }
 
 function scheduleViewportReload() {
@@ -130,87 +130,175 @@ function scheduleViewportReload() {
     }, VIEWPORT_RELOAD_DEBOUNCE_MS);
 }
 
-const chart = new Chart(document.getElementById('tempChart').getContext('2d'), {
-    type: 'line',
-    data: {
-        datasets: [{
-            label: MACHINE,
-            data: [],
-            parsing: false,
-            borderColor: '#3b82f6',
-            backgroundColor: 'transparent',
-            borderWidth: 2,
-            tension: 0.25,
-            pointRadius: 0,
-            pointHoverRadius: 6,
-            pointHitRadius: 20
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        normalized: true,
-        animation: { duration: 0 },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false },
-        scales: {
-            x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, title: { display: true, text: 'Time' }, grid: { color: chartGridColor } },
-            y: { title: { display: true, text: 'Temperature (°C)' }, grid: { color: chartGridColor } }
-        },
-        plugins: {
-            decimation: { enabled: true, algorithm: 'lttb', samples: 400 },
-            legend: { display: false },
-            tooltip: {
-                mode: 'index',
-                intersect: false,
-                callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)} °C` }
-            },
-            zoom: {
-                pan: { enabled: true, mode: 'x' },
-                zoom: {
-                    wheel: { enabled: true },
-                    pinch: { enabled: true },
-                    drag: { enabled: true, backgroundColor: 'rgba(34, 197, 94, 0.15)' },
-                    mode: 'x'
-                },
-                onZoom: () => scheduleViewportReload(),
-                onPan: () => scheduleViewportReload(),
-                onZoomComplete: () => scheduleViewportReload(),
-                onPanComplete: () => scheduleViewportReload()
-            }
-        }
-    }
-});
+// ---- Historical multi-panel dashboard ----------------------------------------
+// One Chart.js line panel per metric, Komodo-style. METRICS is the single source of truth
+// for which panels exist and how each looks; a panel renders only when its collection
+// toggle (data-enabled-metrics, from settings.py's metrics.* knobs) is on. `diag` maps a
+// metric to its key in the live `diagnostics` payload, for real-time appends over the socket.
+const ENABLED_METRICS = (() => {
+    try { return JSON.parse(config.dataset.enabledMetrics || '{}'); }
+    catch (e) { return {}; }
+})();
 
+const METRICS = [
+    { key: 'cpu_load', label: 'CPU Load',    unit: '%',   color: '#10b981', max: 100, diag: 'cpu_load_pct' },
+    { key: 'memory',   label: 'Memory',      unit: '%',   color: '#f59e0b', max: 100, diag: 'memory_load_pct' },
+    { key: 'disk',     label: 'Disk',        unit: '%',   color: '#3b82f6', max: 100, diag: 'disk_load_pct' },
+    { key: 'net_rx',   label: 'Network In',  unit: 'B/s', color: '#22d3ee', diag: 'net_rx_bps' },
+    { key: 'net_tx',   label: 'Network Out', unit: 'B/s', color: '#ec4899', diag: 'net_tx_bps' },
+    { key: 'gpu_temp', label: 'GPU Temp',    unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
+    { key: 'gpu_load', label: 'GPU Load',    unit: '%',   color: '#a855f7', max: 100, diag: 'gpu_load_pct' },
+    { key: 'temp',     label: 'Temperature', unit: '°C',  color: '#f97316' },
+];
+
+const gridEl = document.getElementById('metric-grid');
+const panels = [];              // { metric, chart, emptyEl }
 let selectedDayRange = null;
+let syncingXRange = false;      // guards the cross-panel zoom/pan mirroring below
+
+function metricEnabled(metric) {
+    return ENABLED_METRICS[metric.key] !== false;   // default on for unknown keys
+}
+
+function panelConfig(metric) {
+    const yScale = { title: { display: true, text: metric.unit }, grid: { color: chartGridColor } };
+    if (metric.max !== undefined) { yScale.min = 0; yScale.max = metric.max; }
+    return {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: metric.label, data: [], parsing: false,
+                borderColor: metric.color, backgroundColor: 'transparent',
+                borderWidth: 2, tension: 0.25, pointRadius: 0,
+                pointHoverRadius: 6, pointHitRadius: 20,
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, normalized: true,
+            animation: { duration: 0 },
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+            scales: {
+                x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, grid: { color: chartGridColor } },
+                y: yScale,
+            },
+            plugins: {
+                decimation: { enabled: true, algorithm: 'lttb', samples: 400 },
+                legend: { display: false },
+                tooltip: {
+                    mode: 'index', intersect: false,
+                    callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)} ${metric.unit}` },
+                },
+                zoom: {
+                    pan: { enabled: true, mode: 'x' },
+                    zoom: {
+                        wheel: { enabled: true }, pinch: { enabled: true },
+                        drag: { enabled: true, backgroundColor: 'rgba(34, 197, 94, 0.15)' },
+                        mode: 'x',
+                    },
+                    onZoomComplete: ({ chart }) => onPanelRangeChanged(chart),
+                    onPanComplete: ({ chart }) => onPanelRangeChanged(chart),
+                },
+            },
+        },
+    };
+}
+
+function buildPanels() {
+    gridEl.replaceChildren();
+    panels.length = 0;
+    for (const metric of METRICS) {
+        if (!metricEnabled(metric)) continue;
+
+        const container = document.createElement('div');
+        container.className = 'metric-panel';
+
+        const head = document.createElement('div');
+        head.className = 'metric-panel__head';
+        const title = document.createElement('span');
+        title.className = 'metric-panel__title';
+        title.textContent = metric.label;
+        head.appendChild(title);
+        container.appendChild(head);
+
+        const chartBox = document.createElement('div');
+        chartBox.className = 'metric-panel__chart';
+        const canvas = document.createElement('canvas');
+        chartBox.appendChild(canvas);
+        container.appendChild(chartBox);
+
+        const emptyEl = document.createElement('div');
+        emptyEl.className = 'stat-card__meta metric-panel__empty';
+        emptyEl.textContent = 'No data for this range.';
+        emptyEl.style.display = 'none';
+        container.appendChild(emptyEl);
+
+        gridEl.appendChild(container);
+        const chart = new Chart(canvas.getContext('2d'), panelConfig(metric));
+        panels.push({ metric, chart, emptyEl });
+    }
+}
+
+// Mirror one panel's zoom/pan onto every other panel so the whole grid shares a time axis,
+// then (in dynamic mode) reload the visible window at an appropriate resolution.
+function onPanelRangeChanged(sourceChart) {
+    if (syncingXRange) return;
+    const xs = sourceChart.scales?.x;
+    if (!xs || !Number.isFinite(Number(xs.min)) || !Number.isFinite(Number(xs.max))) return;
+    applyXRangeToAll(Number(xs.min), Number(xs.max), sourceChart);
+    scheduleViewportReload();
+}
+
+function applyXRangeToAll(minMs, maxMs, exceptChart) {
+    syncingXRange = true;
+    try {
+        for (const p of panels) {
+            if (p.chart === exceptChart) continue;
+            p.chart.options.scales.x.min = minMs;
+            p.chart.options.scales.x.max = maxMs;
+            p.chart.update('none');
+        }
+    } finally {
+        syncingXRange = false;
+    }
+}
+
+function applyRange(chart, minMs, maxMs, resetZoom) {
+    if (resetZoom) {
+        chart.options.scales.x.min = undefined;
+        chart.options.scales.x.max = undefined;
+        chart.update('none');
+        if (typeof chart.resetZoom === 'function') chart.resetZoom();
+    } else {
+        chart.options.scales.x.min = minMs;
+        chart.options.scales.x.max = maxMs;
+        chart.update('none');
+    }
+}
 
 async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
-    if (historyLoadInFlight || !dayPicker.value) return;
+    if (historyLoadInFlight || !dayPicker.value || panels.length === 0) return;
     historyLoadInFlight = true;
     try {
         const historyRes = await fetch(buildHistoryUrl(dayPicker.value, minMs, maxMs, resolution));
-        const data = await historyRes.json();
-        const points = data[MACHINE] || [];
-        chart.data.datasets[0].data = points
-            .map((point) => {
-                const x = toChartTimestamp(point.x ?? point.timestamp ?? point.ts_text);
-                const y = Number(point.y);
-                if (x === null || !Number.isFinite(y)) return null;
-                return { x, y };
-            })
-            .filter(Boolean);
-        noDataEl.style.display = chart.data.datasets[0].data.length ? 'none' : 'block';
-        setResolutionInUse(resolution);
-
-        if (resetZoom) {
-            chart.options.scales.x.min = undefined;
-            chart.options.scales.x.max = undefined;
-            chart.update('none');
-            if (typeof chart.resetZoom === 'function') chart.resetZoom();
-        } else {
-            chart.options.scales.x.min = minMs;
-            chart.options.scales.x.max = maxMs;
-            chart.update('none');
+        const body = await historyRes.json();
+        const series = (body && body.metrics) || {};
+        let anyData = false;
+        for (const p of panels) {
+            const points = (series[p.metric.key] || [])
+                .map((point) => {
+                    const x = toChartTimestamp(point.x ?? point.timestamp ?? point.ts_text);
+                    const y = Number(point.y);
+                    if (x === null || !Number.isFinite(y)) return null;
+                    return { x, y };
+                })
+                .filter(Boolean);
+            p.chart.data.datasets[0].data = points;
+            p.emptyEl.style.display = points.length ? 'none' : 'block';
+            if (points.length) anyData = true;
+            applyRange(p.chart, minMs, maxMs, resetZoom);
         }
+        noDataEl.style.display = anyData ? 'none' : 'block';
+        setResolutionInUse(resolution);
         lastHistoryRequest = { minMs, maxMs, resolution };
     } finally {
         historyLoadInFlight = false;
@@ -218,8 +306,8 @@ async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
 }
 
 async function loadVisibleViewport() {
-    if (!selectedDayRange || historyLoadInFlight) return;
-    const xScale = chart.scales?.x;
+    if (!selectedDayRange || historyLoadInFlight || panels.length === 0) return;
+    const xScale = panels[0].chart.scales?.x;
     if (!xScale) return;
     const scaleMin = Number(xScale.min);
     const scaleMax = Number(xScale.max);
@@ -256,11 +344,11 @@ async function loadSelectedDay() {
 }
 
 document.getElementById('zoom-in').addEventListener('click', () => {
-    if (typeof chart.zoom === 'function') chart.zoom(1.2);
+    for (const p of panels) if (typeof p.chart.zoom === 'function') p.chart.zoom(1.2);
     scheduleViewportReload();
 });
 document.getElementById('zoom-out').addEventListener('click', () => {
-    if (typeof chart.zoom === 'function') chart.zoom(0.8);
+    for (const p of panels) if (typeof p.chart.zoom === 'function') p.chart.zoom(0.8);
     scheduleViewportReload();
 });
 document.getElementById('reset-zoom').addEventListener('click', () => {
@@ -282,7 +370,7 @@ dynamicResolutionEl.addEventListener('change', () => {
     lastHistoryRequest = null;
     loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
 });
-document.getElementById('tempChart').addEventListener('wheel', () => {
+gridEl.addEventListener('wheel', () => {
     scheduleViewportReload();
 }, { passive: true });
 
@@ -424,6 +512,7 @@ primarySensorSave.addEventListener('click', async () => {
 
 dayPicker.value = getLocalDateString();
 syncResolutionControl();
+buildPanels();
 loadSelectedDay();
 loadMachineInfo();
 loadPrimarySensor();
@@ -446,8 +535,17 @@ socket.on('new_temp', (msg) => {
 
     const x = toChartTimestamp(msg.timestamp_ms ?? msg.timestamp_epoch ?? msg.timestamp);
     if (x === null) return;
-    chart.data.datasets[0].data.push({ x, y: Number(msg.temp) });
+    // Append this report to every panel: temperature from msg.temp, the rest from the live
+    // diagnostics block (which now carries disk & network alongside cpu/gpu/memory). A metric
+    // the machine doesn't report is simply skipped for that tick.
+    const diagnostics = msg.diagnostics || {};
+    for (const p of panels) {
+        const y = p.metric.key === 'temp' ? Number(msg.temp) : Number(diagnostics[p.metric.diag]);
+        if (!Number.isFinite(y)) continue;
+        p.chart.data.datasets[0].data.push({ x, y });
+        p.emptyEl.style.display = 'none';
+        p.chart.update('none');
+    }
     if (selectedDayRange) selectedDayRange.endMs = Math.max(selectedDayRange.endMs, x);
     noDataEl.style.display = 'none';
-    chart.update('none');
 });

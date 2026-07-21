@@ -70,6 +70,10 @@ def test_defaults_match_the_old_constants():
     check("sensor preference matches SensorReader.cs PreferredSensors",
           settings.get(db, "computer.primary_sensor_preference") ==
           ["cpu package", "core (tctl/tdie)", "core average", "core max", "cpu cores"])
+    check("every history-metric collection toggle defaults on",
+          all(settings.get(db, k) is True for k in (
+              "metrics.collect_cpu_load", "metrics.collect_memory",
+              "metrics.collect_gpu", "metrics.collect_disk", "metrics.collect_network")))
 
 
 def test_init_is_idempotent():
@@ -267,8 +271,8 @@ def test_schema_shape():
     db = fresh_db()
     doc = settings.schema(db)
     names = [s["name"] for s in doc["sections"]]
-    check("all four sections present",
-          names == ["computer", "hub", "data", "fleet"])
+    check("all sections present in order",
+          names == ["computer", "hub", "data", "metrics", "fleet"])
     check("sections carry display labels",
           any(s["label"] == "Data & Retention" for s in doc["sections"]))
 
@@ -292,9 +296,13 @@ def test_agent_config():
     db = fresh_db()
     config = settings.agent_config(db)
     check("only agent=True keys are shipped",
-          set(config) == {"computer.primary_sensor_preference"})
+          set(config) == {"computer.primary_sensor_preference", "metrics.collect_network"})
+    check("the network collection toggle ships to agents",
+          config["metrics.collect_network"] is True)
     check("no hub-internal knob leaks to agents",
           "data.retention_days" not in config)
+    check("a hub-only metric toggle does NOT ship to agents",
+          "metrics.collect_disk" not in config)
 
     version = settings.agent_config_version(db)
     check("version is a short hex string", len(version) == 16)

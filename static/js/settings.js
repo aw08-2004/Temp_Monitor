@@ -15,6 +15,7 @@ const panels = {
     computer: document.getElementById('tab-computer'),
     hub: document.getElementById('tab-hub'),
     data: document.getElementById('tab-data'),
+    metrics: document.getElementById('tab-metrics'),
     fleet: document.getElementById('tab-fleet'),
 };
 
@@ -122,10 +123,29 @@ function renderField(field) {
 }
 
 function buildControl(field) {
-    if (field.type === 'bool') return buildTriStateControl(field);
+    if (field.type === 'bool') {
+        // A bool with a concrete default is a plain on/off toggle -> checkbox. Only a bool
+        // whose default is null needs the third "unset -> follow .env" state, so hub.auto_update
+        // keeps the tri-state select; the metrics.* collection toggles get a real checkbox.
+        return (field.default === null || field.default === undefined)
+            ? buildTriStateControl(field)
+            : buildCheckboxControl(field);
+    }
     if (field.type === 'str_list') return buildPreferenceControl(field);
     if (field.type === 'enum') return buildEnumControl(field);
     return buildNumberControl(field);
+}
+
+function buildCheckboxControl(field) {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'checkbox';
+    input.id = controlId(field.key);
+    // field.value is the effective value (override if set, else the default), never null
+    // for a concrete-default bool.
+    input.checked = Boolean(field.value);
+    input.addEventListener('change', () => markDirty(field.key, input.checked));
+    return input;
 }
 
 function buildNumberControl(field) {

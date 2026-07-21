@@ -27,6 +27,11 @@ public sealed class SensorReader : ISensorSource
             IsMemoryEnabled = true,
             IsMotherboardEnabled = true,
             IsStorageEnabled = true,
+            // Network throughput (in/out B/s) for the History dashboard. Whether it is
+            // actually reported is gated per-read by RuntimeConfig.CollectNetwork so the hub's
+            // metrics.collect_network toggle takes effect without a restart; the category stays
+            // enabled here so toggling it back on is instant.
+            IsNetworkEnabled = true,
         };
     }
 
@@ -41,6 +46,9 @@ public sealed class SensorReader : ISensorSource
     {
         var sensors = new List<SensorReading>();
         var cpuTemps = new List<(string name, double value)>();
+        // Read the toggle once per pass, fresh from the store (same discipline as PickCpuTemp)
+        // so a hub config push takes effect on the next loop tick.
+        var collectNetwork = RuntimeConfigStore.Current.CollectNetwork;
 
         try
         {
@@ -48,7 +56,7 @@ public sealed class SensorReader : ISensorSource
             _computer.Accept(_visitor); // updates every hardware + sub-hardware
 
             foreach (var hw in _computer.Hardware)
-                CollectHardware(hw, sensors, cpuTemps);
+                CollectHardware(hw, sensors, cpuTemps, collectNetwork);
         }
         catch (Exception e)
         {
@@ -60,8 +68,14 @@ public sealed class SensorReader : ISensorSource
     }
 
     private void CollectHardware(IHardware hw, List<SensorReading> sensors,
-                                 List<(string, double)> cpuTemps)
+                                 List<(string, double)> cpuTemps, bool collectNetwork)
     {
+        // Honor the hub's network collection toggle: when off, skip the NIC category entirely
+        // ("what sensor should be read"). Only network hardware is gated -- everything else is
+        // always collected.
+        if (hw.HardwareType == HardwareType.Network && !collectNetwork)
+            return;
+
         var hardwareName = hw.Name;
         var hardwareId = hw.Identifier?.ToString()?.ToLowerInvariant();
         var isCpu = hardwareId is not null && hardwareId.Contains("cpu");
@@ -92,7 +106,7 @@ public sealed class SensorReader : ISensorSource
         }
 
         foreach (var sub in hw.SubHardware)
-            CollectHardware(sub, sensors, cpuTemps);
+            CollectHardware(sub, sensors, cpuTemps, collectNetwork);
     }
 
     /// <summary>

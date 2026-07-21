@@ -36,6 +36,11 @@ public sealed record RuntimeConfig
     /// Matched exactly (case-insensitively), unlike the fuzzy preference list.</summary>
     public string? PrimarySensorName { get; init; }
 
+    /// <summary>Whether to collect and report the network sensor category (throughput in/out).
+    /// Mirrors the hub's metrics.collect_network toggle; off means the NIC category is not
+    /// reported at all. Default true.</summary>
+    public bool CollectNetwork { get; init; } = true;
+
     /// <summary>Content hash of the config the hub last sent. Echoed back on each
     /// heartbeat so the hub can skip re-sending an unchanged payload. Empty means
     /// "never received any", which is what makes the first heartbeat fetch it.</summary>
@@ -67,7 +72,21 @@ public sealed record RuntimeConfig
             if (parsed.Length > 0) preferred = parsed;
         }
 
-        return this with { PreferredSensors = preferred, ConfigVersion = version };
+        // Booleans arrive as the strings "true"/"false" (see FleetClient's payload build,
+        // which ToString()s every non-array value). Anything else leaves the flag untouched.
+        var collectNetwork = CollectNetwork;
+        if (payload.TryGetValue("metrics.collect_network", out var netRaw) && netRaw is not null)
+        {
+            var text = netRaw.ToString()?.Trim().ToLowerInvariant();
+            if (text is "true" or "false") collectNetwork = text == "true";
+        }
+
+        return this with
+        {
+            PreferredSensors = preferred,
+            CollectNetwork = collectNetwork,
+            ConfigVersion = version,
+        };
     }
 }
 

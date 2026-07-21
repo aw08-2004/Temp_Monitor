@@ -28,6 +28,50 @@
     color: var(--muted);
 }
 
+/* ============ Historical metric grid ============ */
+/* Komodo-style multi-panel dashboard: one chart per enabled metric, two-up on desktop and
+   single-column on narrow screens. Each panel's canvas needs an explicitly sized parent
+   because the charts run with maintainAspectRatio:false. */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4);
+}
+
+@media (max-width: 900px) {
+    .metric-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.metric-panel {
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    min-width: 0;   /* let the canvas shrink inside the grid track instead of overflowing */
+}
+
+.metric-panel__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.metric-panel__title {
+    font-weight: 600;
+    font-size: var(--text-sm);
+}
+
+.metric-panel__chart {
+    position: relative;
+    height: 220px;
+}
+
+.metric-panel__empty {
+    margin-top: var(--space-2);
+}
+
 /* ============ Terminal ============ */
 .terminal-card {
     display: flex;

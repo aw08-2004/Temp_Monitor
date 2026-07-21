@@ -42,7 +42,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.24.0"
+HUB_VERSION = "1.25.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -304,6 +304,34 @@ def resolve_primary_temp(machine, reported_temp, sensors):
     return rederived if rederived is not None else reported_temp
 
 
+def _find_sensor_strict(sensors, sensor_type, name_substrs, hardware_substrs=None):
+    """Like _find_sensor_value, but identifies a metric by its sensor NAME rather than
+    by hardware category, and returns None when no name matches -- never a blind
+    first-candidate fallback.
+
+    Used for disk usage and network throughput, where the hardware identifier isn't a
+    single stable substring (storage is "/nvme/","/hdd/","/ssd/"...) but the sensor name
+    is distinctive ("Used Space", "Download Speed"). `hardware_substrs`, when given,
+    additionally requires the hardware to match one of the fragments -- e.g. "nic" to keep
+    disk read/write throughput from being mistaken for network throughput (both are
+    SensorType.Throughput). First match wins; on a multi-NIC host that is whichever adapter
+    LHM lists first."""
+    for s in sensors:
+        if s.get("type") != sensor_type:
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        if hardware_substrs:
+            haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+            if not any(h in haystack for h in hardware_substrs):
+                continue
+        name = str(s.get("name") or "").lower()
+        if any(w in name for w in name_substrs):
+            return value
+    return None
+
+
 def extract_diagnostics(sensors):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
     list (see companion.py's flatten_sensors). Every field is None when not
@@ -313,6 +341,7 @@ def extract_diagnostics(sensors):
             "cpu_load_pct": None, "cpu_clock_mhz": None,
             "gpu_temp": None, "gpu_load_pct": None, "gpu_clock_mhz": None,
             "memory_load_pct": None,
+            "disk_load_pct": None, "net_rx_bps": None, "net_tx_bps": None,
         }
     return {
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
@@ -321,7 +350,92 @@ def extract_diagnostics(sensors):
         "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", ["gpu core", "d3d 3d"]),
         "gpu_clock_mhz": _find_sensor_value(sensors, "gpu", "Clock", ["gpu core", "gpu shader"]),
         "memory_load_pct": _find_sensor_value(sensors, "ram", "Load", ["memory"]),
+        # "Used Space" is unique to storage devices, so name alone identifies it.
+        "disk_load_pct": _find_sensor_strict(sensors, "Load", ["used space"]),
+        # Network throughput shares SensorType.Throughput with disk read/write rate, so
+        # pin to NIC hardware ("/nic/...") to avoid mixing them up.
+        "net_rx_bps": _find_sensor_strict(sensors, "Throughput", ["download"], ["nic"]),
+        "net_tx_bps": _find_sensor_strict(sensors, "Throughput", ["upload"], ["nic"]),
     }
+
+
+# ---- Per-reading metric columns -------------------------------------------------------
+# The chartable numeric metrics promoted out of the sensor blob into their own columns on
+# `readings`, so history bucketing can AVG/MIN/MAX them as cheaply as `temp` (rather than
+# JSON-parsing every row). Single source of truth: the schema migration, the INSERT, and
+# the ingest all key off this tuple. Each entry is BOTH the column name AND the
+# extract_diagnostics() key. Clock metrics are intentionally not stored -- they aren't
+# charted.
+READING_METRIC_COLUMNS = (
+    "cpu_load_pct", "memory_load_pct", "gpu_temp", "gpu_load_pct",
+    "disk_load_pct", "net_rx_bps", "net_tx_bps",
+)
+
+# Which collection toggle (settings.py `metrics.*`) gates each column at ingest. When a
+# toggle is off, the column is stored NULL -- "off" means "not recorded", matching the
+# "what sensor should be read" intent. `metrics.collect_network` also drives the agent.
+METRIC_COLUMN_TOGGLE = {
+    "cpu_load_pct": "metrics.collect_cpu_load",
+    "memory_load_pct": "metrics.collect_memory",
+    "gpu_temp": "metrics.collect_gpu",
+    "gpu_load_pct": "metrics.collect_gpu",
+    "disk_load_pct": "metrics.collect_disk",
+    "net_rx_bps": "metrics.collect_network",
+    "net_tx_bps": "metrics.collect_network",
+}
+
+# Friendly metric keys used by the /api/history `metric` param and the multi-metric
+# per-machine endpoint, mapped to their `readings` column. A whitelist -- callers never
+# choose a raw column name, so nothing user-supplied is interpolated into SQL.
+HISTORY_METRIC_COLUMNS = {
+    "temp": "temp",
+    "cpu_load": "cpu_load_pct",
+    "memory": "memory_load_pct",
+    "gpu_temp": "gpu_temp",
+    "gpu_load": "gpu_load_pct",
+    "disk": "disk_load_pct",
+    "net_rx": "net_rx_bps",
+    "net_tx": "net_tx_bps",
+}
+_ALLOWED_HISTORY_COLUMNS = frozenset(HISTORY_METRIC_COLUMNS.values())
+
+# A readings row is (ts_text, ts_epoch, machine, temp, sensors_json, *metric columns).
+# Built from constants only -- no user input reaches the column list.
+_READINGS_INSERT_SQL = (
+    "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp, sensors_json"
+    + "".join(f", {c}" for c in READING_METRIC_COLUMNS)
+    + ") VALUES (" + ", ".join(["?"] * (5 + len(READING_METRIC_COLUMNS))) + ")"
+)
+
+
+def _metric_values_tuple(metrics):
+    """Metric column values in READING_METRIC_COLUMNS order, for the INSERT. Missing or
+    toggled-off metrics become NULL."""
+    metrics = metrics or {}
+    return tuple(metrics.get(col) for col in READING_METRIC_COLUMNS)
+
+
+def metrics_for_storage(sensors):
+    """The metric-column values to record for a reading: each chartable metric extracted
+    from the sensor block, but only when its collection toggle is on. A toggled-off metric
+    is None so it is stored NULL -- "off" means "not recorded"."""
+    diagnostics = extract_diagnostics(sensors)
+    return {
+        col: (diagnostics.get(col)
+              if settings.get_bool(DB_PATH, METRIC_COLUMN_TOGGLE[col]) else None)
+        for col in READING_METRIC_COLUMNS
+    }
+
+
+def enabled_history_metrics():
+    """Which /api/history metric keys are currently being collected, so the machine
+    dashboard renders a panel only for metrics whose toggle is on. Temperature has no
+    toggle and is always on."""
+    enabled = {}
+    for key, column in HISTORY_METRIC_COLUMNS.items():
+        toggle = METRIC_COLUMN_TOGGLE.get(column)
+        enabled[key] = True if toggle is None else bool(settings.get_bool(DB_PATH, toggle))
+    return enabled
 
 def load_cached_live_status(machine_name):
     """DB-backed fallback for get_latest_temp/get_latest_uptime right after a hub
@@ -977,6 +1091,12 @@ def init_db():
         existing_reading_columns = {row["name"] for row in conn.execute("PRAGMA table_info(readings)")}
         if "sensors_json" not in existing_reading_columns:
             conn.execute("ALTER TABLE readings ADD COLUMN sensors_json TEXT")
+        # Typed metric columns (see READING_METRIC_COLUMNS). Nullable REAL, added the same
+        # ALTER-per-column way as sensors_json/companion_version. Old rows read back NULL;
+        # column names come from a hardcoded constant, so the f-string is injection-safe.
+        for _metric_col in READING_METRIC_COLUMNS:
+            if _metric_col not in existing_reading_columns:
+                conn.execute(f"ALTER TABLE readings ADD COLUMN {_metric_col} REAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS imported_days (
@@ -1013,10 +1133,7 @@ def write_readings_batch(records):
     if not records:
         return
     with get_db_conn() as conn:
-        conn.executemany(
-            "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp, sensors_json) VALUES (?, ?, ?, ?, ?)",
-            records,
-        )
+        conn.executemany(_READINGS_INSERT_SQL, records)
 
 db_write_queue = queue.Queue(maxsize=20000)
 db_writer_thread = None
@@ -1092,17 +1209,21 @@ def ensure_day_loaded_from_csv(date):
                 temp = float(temp_raw)
             except (TypeError, ValueError):
                 continue
+            # CSV archive holds temperature only; the metric columns backfill as NULL.
             records.append(
                 (to_timestamp_str(parsed_ts), to_epoch_seconds(parsed_ts), machine, temp, None)
+                + _metric_values_tuple(None)
             )
 
     write_readings_batch(records)
     with get_db_conn() as conn:
         conn.execute("INSERT OR IGNORE INTO imported_days(day) VALUES (?)", (date,))
 
-def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp, sensors_json=None):
+def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp, sensors_json=None,
+                    metrics=None):
     ensure_db_writer_running()
-    record = (timestamp_str, timestamp_epoch, machine, float(temp), sensors_json)
+    record = ((timestamp_str, timestamp_epoch, machine, float(temp), sensors_json)
+              + _metric_values_tuple(metrics))
     try:
         db_write_queue.put_nowait(record)
     except queue.Full:
@@ -1171,7 +1292,11 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
         append_csv_archive(timestamp_str, machine_name, temp_value)
 
     sensors_json = json.dumps(sensors) if sensors else None
-    enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value, sensors_json)
+    # Promote the chartable metrics from THIS report's sensor block into their own columns,
+    # each gated by its collection toggle -- a toggled-off metric is recorded as NULL.
+    reading_metrics = metrics_for_storage(sensors)
+    enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value, sensors_json,
+                    metrics=reading_metrics)
 
     # Backfilled (historical) readings go into history only; they must not clobber
     # the "current" live-status caches with a stale value.
@@ -1389,11 +1514,23 @@ def resolve_all_duplicate_serials(actor="system:dedup:startup"):
         except Exception as e:
             print(f"[dedup] Failed to resolve duplicates for serial {serial!r}: {e}")
 
-def query_raw_history(start_epoch, end_epoch, machine, limit):
-    sql = """
-        SELECT machine, ts_text, temp
+def _history_column(column):
+    """Guard: only a whitelisted `readings` metric column may be interpolated into the
+    history SQL below. Callers resolve it from HISTORY_METRIC_COLUMNS, but validate here
+    too so a stray caller can never inject a column name."""
+    if column not in _ALLOWED_HISTORY_COLUMNS:
+        raise ValueError(f"Unknown history column: {column!r}")
+    return column
+
+def query_raw_history(start_epoch, end_epoch, machine, limit, column="temp"):
+    column = _history_column(column)
+    # Metric columns are nullable (older readings, or a toggled-off metric); skip NULLs so
+    # a panel shows a gap rather than a fabricated 0. `temp` is NOT NULL, so this is a no-op
+    # for the default.
+    sql = f"""
+        SELECT machine, ts_text, {column} AS value
         FROM readings
-        WHERE ts_epoch >= ? AND ts_epoch <= ?
+        WHERE ts_epoch >= ? AND ts_epoch <= ? AND {column} IS NOT NULL
     """
     params = [start_epoch, end_epoch]
     if machine:
@@ -1412,21 +1549,24 @@ def query_raw_history(start_epoch, end_epoch, machine, limit):
     for row in rows:
         history[row["machine"]].appendleft({
             "x": row["ts_text"],
-            "y": round(float(row["temp"]), 1),
+            "y": round(float(row["value"]), 1),
         })
     return {machine_name: list(points) for machine_name, points in history.items()}
 
-def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_seconds):
-    sql = """
+def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_seconds, column="temp"):
+    column = _history_column(column)
+    # AVG/MIN/MAX ignore NULLs, but a bucket of only NULLs would yield NULL; the IS NOT NULL
+    # filter drops those buckets entirely so they never reach float().
+    sql = f"""
         SELECT
             machine,
             CAST((ts_epoch / ?) AS INTEGER) * ? AS bucket_epoch,
-            AVG(temp) AS avg_temp,
-            MIN(temp) AS min_temp,
-            MAX(temp) AS max_temp,
-            COUNT(*) AS sample_count
+            AVG({column}) AS avg_value,
+            MIN({column}) AS min_value,
+            MAX({column}) AS max_value,
+            COUNT({column}) AS sample_count
         FROM readings
-        WHERE ts_epoch >= ? AND ts_epoch <= ?
+        WHERE ts_epoch >= ? AND ts_epoch <= ? AND {column} IS NOT NULL
     """
     params = [bucket_seconds, bucket_seconds, start_epoch, end_epoch]
     if machine:
@@ -1444,9 +1584,9 @@ def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_second
         bucket_time = datetime.fromtimestamp(int(row["bucket_epoch"]))
         history[row["machine"]].appendleft({
             "x": to_timestamp_str(bucket_time),
-            "y": round(float(row["avg_temp"]), 1),
-            "min": round(float(row["min_temp"]), 1),
-            "max": round(float(row["max_temp"]), 1),
+            "y": round(float(row["avg_value"]), 1),
+            "min": round(float(row["min_value"]), 1),
+            "max": round(float(row["max_value"]), 1),
             "count": int(row["sample_count"]),
         })
     return {machine_name: list(points) for machine_name, points in history.items()}
@@ -1893,21 +2033,20 @@ def dismiss_alert(alert_id):
     fleet.audit(DB_PATH, actor, "alert.dismiss", str(alert_id))
     return jsonify({"status": "dismissed"}), 200
 
-@app.route('/api/history')
-@login_required
-def get_history():
-    """Provide history data with optional range/machine/resolution controls."""
-    date = request.args.get("date")
-    machine = (request.args.get("machine") or "").strip() or None
-    from_raw = request.args.get("from")
-    to_raw = request.args.get("to")
-    limit = parse_history_limit(request.args.get("limit"))
-    requested_resolution = (request.args.get("resolution") or "auto").strip().lower()
+def _resolve_history_window(args):
+    """Parse the shared date/from/to/resolution/limit query params into
+    (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
+    message on a bad date. Shared by /api/history and the per-machine history endpoint."""
+    date = args.get("date")
+    from_raw = args.get("from")
+    to_raw = args.get("to")
+    limit = parse_history_limit(args.get("limit"))
+    requested_resolution = (args.get("resolution") or "auto").strip().lower()
 
     if date:
         day_start = parse_request_datetime(date)
         if day_start is None:
-            return jsonify({"error": "Invalid date format; use YYYY-MM-DD."}), 400
+            raise ValueError("Invalid date format; use YYYY-MM-DD.")
         day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(days=1)
         start_dt = parse_request_datetime(from_raw) or day_start
@@ -1929,18 +2068,68 @@ def get_history():
     end_epoch = to_epoch_seconds(end_dt)
     span_seconds = max(1, end_epoch - start_epoch)
     resolution = pick_resolution(requested_resolution, span_seconds)
+    return start_epoch, end_epoch, resolution, limit
 
+
+def _query_history_series(start_epoch, end_epoch, machine, limit, resolution, column):
+    """Dispatch to the raw or bucketed query for one metric column."""
     if resolution == "raw":
-        history = query_raw_history(start_epoch, end_epoch, machine, limit)
-    else:
-        history = query_bucketed_history(
-            start_epoch,
-            end_epoch,
-            machine,
-            limit,
-            VALID_RESOLUTIONS[resolution],
-        )
+        return query_raw_history(start_epoch, end_epoch, machine, limit, column)
+    return query_bucketed_history(
+        start_epoch, end_epoch, machine, limit, VALID_RESOLUTIONS[resolution], column)
+
+
+@app.route('/api/history')
+@login_required
+def get_history():
+    """Provide history data with optional range/machine/resolution/metric controls.
+    `metric` (default "temp") selects which column to chart; see HISTORY_METRIC_COLUMNS."""
+    machine = (request.args.get("machine") or "").strip() or None
+    metric = (request.args.get("metric") or "temp").strip().lower()
+    column = HISTORY_METRIC_COLUMNS.get(metric)
+    if column is None:
+        return jsonify({"error": f"Unknown metric: {metric}"}), 400
+    try:
+        start_epoch, end_epoch, resolution, limit = _resolve_history_window(request.args)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    history = _query_history_series(start_epoch, end_epoch, machine, limit, resolution, column)
     return jsonify(history)
+
+
+@app.route('/api/machines/<machine>/history')
+@login_required
+def get_machine_history(machine):
+    """Multi-metric history for ONE machine, backing the per-machine dashboard panels.
+
+    Returns {"machine", "resolution", "metrics": {metric_key: [{x, y[, min, max, count]}]}}
+    so the page fetches every panel in a single round trip. `metrics` is an optional
+    comma-separated list of keys (default: all); unknown keys are ignored. Internally this
+    runs one indexed query per metric over the same (machine, ts_epoch) index -- cheap for a
+    single machine; collapse to one GROUP-BY pass if profiling ever shows it matters."""
+    machine_name = str(machine).strip()
+    if not machine_name:
+        return jsonify({"error": "machine required"}), 400
+
+    requested = request.args.get("metrics")
+    if requested:
+        keys = [k.strip().lower() for k in requested.split(",") if k.strip()]
+        keys = [k for k in keys if k in HISTORY_METRIC_COLUMNS]
+    else:
+        keys = list(HISTORY_METRIC_COLUMNS.keys())
+
+    try:
+        start_epoch, end_epoch, resolution, limit = _resolve_history_window(request.args)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    metrics = {}
+    for key in keys:
+        series = _query_history_series(
+            start_epoch, end_epoch, machine_name, limit, resolution, HISTORY_METRIC_COLUMNS[key])
+        metrics[key] = series.get(machine_name, [])
+    return jsonify({"machine": machine_name, "resolution": resolution, "metrics": metrics})
 
 @app.route('/api/daily_summary')
 @login_required
@@ -2053,6 +2242,7 @@ def machine_page(machine):
         "machine.html", machine=machine,
         overheat_threshold=settings.get_int(DB_PATH, "hub.overheat_threshold"),
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
+        enabled_metrics=enabled_history_metrics(),
         hub_version=HUB_VERSION,
         latest_companion_version=get_latest_companion_version(),
         latest_agent_version=get_latest_agent_version()

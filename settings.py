@@ -125,6 +125,27 @@ REGISTRY = (
        help="Live terminal output is kept this long so you can scroll back. The durable "
             "command result is not affected."),
 
+    # ---------------- History metrics: which sensors are recorded to history ----------------
+    # One on/off toggle per chartable metric on the per-machine History dashboard. Off means
+    # the hub stops recording that metric into new readings (stored NULL) -- "what sensor
+    # should be read". collect_network is additionally agent=True: it tells the agent whether
+    # to collect the network sensor category at all (see the agent's RuntimeConfig allow-list).
+    # Temperature has no toggle -- it is the core metric and drives overheat alerts, so it is
+    # always recorded.
+    _s("metrics.collect_cpu_load", "metrics", "Record CPU load", "bool", True,
+       help="Chart CPU load % over time on the machine History dashboard."),
+    _s("metrics.collect_memory", "metrics", "Record memory usage", "bool", True,
+       help="Chart memory usage % over time."),
+    _s("metrics.collect_gpu", "metrics", "Record GPU temperature & load", "bool", True,
+       help="Chart discrete-GPU temperature and load. No effect on machines whose GPU "
+            "reports nothing."),
+    _s("metrics.collect_disk", "metrics", "Record disk usage", "bool", True,
+       help="Chart disk used-space % over time."),
+    _s("metrics.collect_network", "metrics", "Record network throughput", "bool", True,
+       help="Chart network in/out (bytes per second). Also tells the agent whether to "
+            "collect the network sensor category at all.",
+       agent=True),
+
     # ---------------- Fleet: liveness and command timings ----------------
     # These next two are different windows that operators WILL confuse, so the labels
     # describe what you observe rather than what the code does. Keep them adjacent.
@@ -146,7 +167,7 @@ REGISTRY = (
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
-SECTIONS = ("computer", "hub", "data", "fleet")
+SECTIONS = ("computer", "hub", "data", "metrics", "fleet")
 
 
 # ---------------------------------------------------------------- storage
@@ -441,6 +462,7 @@ _SECTION_LABELS = {
     "computer": "Computer",
     "hub": "Hub",
     "data": "Data & Retention",
+    "metrics": "History Metrics",
     "fleet": "Fleet",
 }
 
