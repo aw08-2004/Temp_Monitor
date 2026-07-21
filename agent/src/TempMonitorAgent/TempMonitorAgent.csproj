@@ -21,7 +21,7 @@
 
     <!-- Assembly version drives the self-update version comparison. Keep in
          sync with AgentConfig.Version. -->
-    <Version>3.5.0</Version>
+    <Version>3.6.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
