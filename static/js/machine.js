@@ -152,9 +152,27 @@ const METRICS = [
 ];
 
 const gridEl = document.getElementById('metric-grid');
-const panels = [];              // { metric, chart, emptyEl }
+const panels = [];              // { metric, chart, emptyEl, titleEl }
 let selectedDayRange = null;
 let syncingXRange = false;      // guards the cross-panel zoom/pan mirroring below
+// Total physical RAM (GB) for this machine -- a constant we learn from the latest
+// diagnostics. Lets the Memory panel say what 100% is and convert a % point to GB on hover.
+let memTotalGb = null;
+
+function formatMemTooltip(pct) {
+    if (!Number.isFinite(memTotalGb)) return `${pct.toFixed(1)} %`;
+    const usedGb = (pct / 100) * memTotalGb;
+    return `${usedGb.toFixed(1)} / ${memTotalGb.toFixed(0)} GB  (${pct.toFixed(0)}%)`;
+}
+
+// Reflect the machine's total RAM into the Memory panel: title becomes "Memory (16 GB)"
+// so 100% is unambiguous, and the tooltip (via memTotalGb) starts reporting GB.
+function updateMemoryTotal(totalGb) {
+    if (!Number.isFinite(totalGb)) return;
+    memTotalGb = totalGb;
+    const panel = panels.find((p) => p.metric.key === 'memory');
+    if (panel && panel.titleEl) panel.titleEl.textContent = `Memory (${totalGb.toFixed(0)} GB)`;
+}
 
 function metricEnabled(metric) {
     return ENABLED_METRICS[metric.key] !== false;   // default on for unknown keys
@@ -186,7 +204,11 @@ function panelConfig(metric) {
                 legend: { display: false },
                 tooltip: {
                     mode: 'index', intersect: false,
-                    callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)} ${metric.unit}` },
+                    callbacks: {
+                        label: (ctx) => metric.key === 'memory'
+                            ? formatMemTooltip(ctx.parsed.y)
+                            : `${ctx.parsed.y.toFixed(1)} ${metric.unit}`,
+                    },
                 },
                 zoom: {
                     pan: { enabled: true, mode: 'x' },
@@ -234,8 +256,10 @@ function buildPanels() {
 
         gridEl.appendChild(container);
         const chart = new Chart(canvas.getContext('2d'), panelConfig(metric));
-        panels.push({ metric, chart, emptyEl });
+        panels.push({ metric, chart, emptyEl, titleEl: title });
     }
+    // If diagnostics already told us the RAM size before the panels existed, apply it now.
+    if (Number.isFinite(memTotalGb)) updateMemoryTotal(memTotalGb);
 }
 
 // Mirror one panel's zoom/pan onto every other panel so the whole grid shares a time axis,
@@ -398,6 +422,7 @@ function formatMetric(value, suffix) {
 
 function applyDiagnostics(diagnostics) {
     const d = diagnostics || {};
+    if (typeof d.mem_total_gb === 'number') updateMemoryTotal(d.mem_total_gb);
     lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
     document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');
     document.getElementById('stat-cpu-clock').textContent = formatMetric(d.cpu_clock_mhz, 'MHz');

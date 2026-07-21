@@ -42,7 +42,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.25.0"
+HUB_VERSION = "1.25.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -332,6 +332,38 @@ def _find_sensor_strict(sensors, sensor_type, name_substrs, hardware_substrs=Non
     return None
 
 
+def _find_sensor_exact(sensors, sensor_type, exact_name, hardware_substrs=None):
+    """Match a sensor by its EXACT (lowercased) name. Needed where a substring match would
+    over-reach: "memory used" is a substring of "virtual memory used", so the RAM-in-use
+    reading must be pinned to the exact name."""
+    want = exact_name.strip().lower()
+    for s in sensors:
+        if s.get("type") != sensor_type:
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        if hardware_substrs:
+            haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+            if not any(h in haystack for h in hardware_substrs):
+                continue
+        if str(s.get("name") or "").strip().lower() == want:
+            return value
+    return None
+
+
+def _memory_gb(sensors):
+    """(used_gb, total_gb) for physical RAM, from LHM's "Memory Used"/"Memory Available"
+    Data sensors (GB). total = used + available; both None when the block doesn't carry
+    them. Exact names so virtual-memory sensors don't leak in. total is effectively a
+    machine constant, which is what lets the UI say what 100% of the Memory chart means."""
+    used = _find_sensor_exact(sensors, "Data", "memory used", ["ram"])
+    avail = _find_sensor_exact(sensors, "Data", "memory available", ["ram"])
+    if used is None or avail is None:
+        return None, None
+    return round(float(used), 1), round(float(used) + float(avail), 1)
+
+
 def extract_diagnostics(sensors):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
     list (see companion.py's flatten_sensors). Every field is None when not
@@ -340,9 +372,10 @@ def extract_diagnostics(sensors):
         return {
             "cpu_load_pct": None, "cpu_clock_mhz": None,
             "gpu_temp": None, "gpu_load_pct": None, "gpu_clock_mhz": None,
-            "memory_load_pct": None,
+            "memory_load_pct": None, "mem_used_gb": None, "mem_total_gb": None,
             "disk_load_pct": None, "net_rx_bps": None, "net_tx_bps": None,
         }
+    mem_used_gb, mem_total_gb = _memory_gb(sensors)
     return {
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
@@ -350,6 +383,10 @@ def extract_diagnostics(sensors):
         "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", ["gpu core", "d3d 3d"]),
         "gpu_clock_mhz": _find_sensor_value(sensors, "gpu", "Clock", ["gpu core", "gpu shader"]),
         "memory_load_pct": _find_sensor_value(sensors, "ram", "Load", ["memory"]),
+        # Absolute RAM (GB) so the Memory chart can say what 100% is and show GB-in-use on
+        # hover. total is a machine constant; used is exact at report time.
+        "mem_used_gb": mem_used_gb,
+        "mem_total_gb": mem_total_gb,
         # "Used Space" is unique to storage devices, so name alone identifies it.
         "disk_load_pct": _find_sensor_strict(sensors, "Load", ["used space"]),
         # Network throughput shares SensorType.Throughput with disk read/write rate, so

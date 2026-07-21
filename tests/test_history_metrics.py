@@ -53,6 +53,9 @@ BLOCK = [
     s("CPU Package", 70.0, "Temperature", "/amdcpu/0", "Ryzen 7"),
     s("CPU Total", 12.0, "Load", "/amdcpu/0", "Ryzen 7"),
     s("Memory", 41.0, "Load", "/ram", "Generic Memory"),
+    s("Memory Used", 6.6, "Data", "/ram", "Generic Memory"),
+    s("Memory Available", 9.4, "Data", "/ram", "Generic Memory"),
+    s("Virtual Memory Used", 99.0, "Data", "/ram", "Generic Memory"),
     s("GPU Core", 55.0, "Temperature", "/gpu-nvidia/0", "RTX 3060"),
     s("GPU Core", 30.0, "Load", "/gpu-nvidia/0", "RTX 3060"),
     s("Used Space", 63.0, "Load", "/nvme/0", "Samsung SSD"),
@@ -76,6 +79,9 @@ def test_diagnostics_extracts_all_metrics():
     check("disk used space", d["disk_load_pct"] == 63.0)
     check("network download", d["net_rx_bps"] == 480.0)
     check("network upload", d["net_tx_bps"] == 630.0)
+    check("memory used GB", d["mem_used_gb"] == 6.6)
+    # total = used (6.6) + available (9.4) = 16.0; virtual-memory sensors must NOT leak in.
+    check("memory total GB (used + available, not virtual)", d["mem_total_gb"] == 16.0)
 
 
 def test_network_matcher_ignores_disk():
