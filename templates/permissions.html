@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Permission Groups - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. The group table and the editor's capability checkboxes are rendered
+   by permissions.js from the API -- the capability list in particular comes from
+   GET /api/permissions/capabilities rather than being duplicated here, so adding one
+   to permissions.CAPABILITIES is a single edit.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Permission Groups</h1>
+        <p class="stat-card__meta">
+            A group grants a set of capabilities over a set of machines. A person's
+            effective access is the union of every group they belong to.
+        </p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-group">New group</button>
+</div>
+
+<div class="card" id="breakglass-note" style="margin-bottom: var(--space-5);">
+    <p class="stat-card__meta" id="breakglass-text">
+        Addresses in <code>ALLOWED_EMAILS</code> are break-glass superusers: they hold
+        every capability over every machine regardless of the groups below, and they can
+        always sign in. That is what lets you create the first group here, and what stops
+        a mistake on this page from locking everyone out. Everyone else must be in a
+        group to sign in at all.
+    </p>
+</div>
+
+<div id="groups-host"></div>
+
+<dialog class="modal" id="group-modal">
+    <form method="dialog" id="group-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="group-modal-title">New permission group</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="group-name">Name</label>
+            <input class="input" id="group-name" maxlength="80" autocomplete="off"
+                   placeholder="Hospital IT" style="width: 100%;">
+
+            <label class="setting__label" for="group-description" style="margin-top: var(--space-4);">Description <span class="setting__default">optional</span></label>
+            <input class="input" id="group-description" maxlength="200" autocomplete="off"
+                   placeholder="Manages the clinical PCs" style="width: 100%;">
+
+            <h3 class="perm-subhead">Capabilities</h3>
+            <div id="capability-list"></div>
+
+            <h3 class="perm-subhead">Machines</h3>
+            <div class="perm-scope-modes">
+                <label class="checkbox"><input type="radio" name="scope-mode" value="list" checked> Only the machines listed below</label>
+                <label class="checkbox"><input type="radio" name="scope-mode" value="all"> Every machine in the fleet</label>
+            </div>
+            <div id="machine-picker">
+                <div class="chip-list" id="machine-chips"></div>
+                <div class="chip-add">
+                    <input class="input" id="machine-input" list="machine-options"
+                           placeholder="Add a machine by hostname" autocomplete="off">
+                    <datalist id="machine-options"></datalist>
+                    <button class="btn" type="button" id="machine-add">Add</button>
+                </div>
+            </div>
+
+            <h3 class="perm-subhead">Members</h3>
+            <div class="chip-list" id="member-chips"></div>
+            <div class="chip-add">
+                <input class="input" id="member-input" type="email"
+                       placeholder="person@example.com" autocomplete="off">
+                <button class="btn" type="button" id="member-add">Add</button>
+            </div>
+
+            <p class="setting__error" id="group-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="group-cancel">Cancel</button>
+            <button class="btn btn--primary" type="button" id="group-save">Save group</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/permissions.js') }}"></script>
+{% endblock %}

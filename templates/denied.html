@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Access denied - FleetHub{% endblock %}
+{% block content %}
+{#
+   Rendered for a 403 on a PAGE route (an API route gets JSON -- see
+   permissions_web.Access._deny). It extends base.html deliberately: someone who lands
+   here still has a session and a sidebar, so the useful thing is to leave them
+   somewhere they CAN go, not to dead-end them on a bare error string.
+
+   The message never names a machine the caller can't see -- Access.require_machine
+   phrases it from what they already typed in the URL.
+#}
+<div class="empty-state" style="max-width: 520px; margin: var(--space-8) auto;">
+    <h1 class="section-title" style="font-size: var(--text-lg);">Access denied</h1>
+    <p class="stat-card__meta" style="margin: var(--space-3) 0 var(--space-5);">
+        {{ message or "You do not have permission to view this page." }}
+    </p>
+    <p class="stat-card__meta">
+        Permissions come from the groups you belong to. Ask an administrator to add you
+        to a group that covers this.
+    </p>
+    <a class="btn btn--primary" style="margin-top: var(--space-5);" href="{{ url_for('index') }}">Back to dashboard</a>
+</div>
+{% endblock %}

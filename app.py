@@ -21,7 +21,7 @@ import wmi
 import pythoncom
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, join_room
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
@@ -29,8 +29,10 @@ import requests
 import fleet
 import alerts
 import settings
+import permissions
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
+from permissions_web import create_access, create_permissions_blueprint
 
 # Load .env from next to this file rather than the cwd -- under the Windows service the working
 # directory isn't the hub folder -- and with utf-8-sig so a UTF-8 BOM (which PowerShell and
@@ -42,7 +44,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), en
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.25.1"
+HUB_VERSION = "1.26.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -658,7 +660,8 @@ HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/h
 # MUST stay in sync with $HubRuntimeFiles/$HubRuntimeDirs in install.ps1.
 HUB_RUNTIME_FILES = (
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
-    "settings.py", "settings_web.py", "alerts.py", "requirements.txt",
+    "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
+    "alerts.py", "requirements.txt",
 )
 HUB_RUNTIME_DIRS = ("templates", "static")
 
@@ -861,6 +864,11 @@ def start_hub_update_watcher():
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
+# The BREAK-GLASS SUPERUSER LIST, not the perimeter it once was. Membership grants
+# every capability over every machine, bypassing permission groups entirely -- which
+# is what bootstraps a hub (someone has to create the first group) and what keeps a
+# broken group config from locking everyone out. Everyone else signs in on the
+# strength of their permission-group membership; see permissions.py.
 ALLOWED_EMAILS = {
     email.strip().lower()
     for email in os.environ.get("ALLOWED_EMAILS", "").split(",")
@@ -874,7 +882,7 @@ if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and FLASK_SECRET_KEY):
     )
 if not ALLOWED_EMAILS:
     raise RuntimeError(
-        "ALLOWED_EMAILS must list at least one allowed Google account email (comma-separated)."
+        "ALLOWED_EMAILS must list at least one break-glass superuser email (comma-separated)."
     )
 
 # ================================
@@ -961,13 +969,21 @@ def login_required(view):
     return wrapped
 
 
+# The second enforcement layer. login_required answers "is there a session"; `access`
+# answers "does that session hold this capability, over this machine". One instance,
+# shared by every blueprint, so there is exactly one implementation of the rule --
+# the same reason login_required is passed around rather than re-declared.
+access = create_access(DB_PATH, ALLOWED_EMAILS)
+
 # Fleet command-channel endpoints (agent-facing token auth + console-facing
 # login_required). Registered here, once login_required exists to hand in.
 app.register_blueprint(create_fleet_blueprint(
-    DB_PATH, AGENT_ENROLLMENT_SECRET, login_required
+    DB_PATH, AGENT_ENROLLMENT_SECRET, login_required, access
 ))
 # Settings endpoints (console-facing only). Same reason for being registered here.
-app.register_blueprint(create_settings_blueprint(DB_PATH, login_required))
+app.register_blueprint(create_settings_blueprint(DB_PATH, login_required, access))
+# Permission-group administration.
+app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, access))
 
 
 @app.route("/login")
@@ -995,7 +1011,11 @@ def auth_callback():
 
     if not user_info.get("email_verified", True):
         return "Google account email is not verified.", 403
-    if email not in ALLOWED_EMAILS:
+    # Break-glass superuser, or a member of at least one permission group. A valid
+    # Google account that is in neither is refused outright rather than admitted to an
+    # empty dashboard -- see Access.login_allowed for why, and for where roadmap #4
+    # (Entra) will change it.
+    if not access.login_allowed(email):
         return f"Access denied: {email} is not authorized for this dashboard.", 403
 
     session["user"] = {
@@ -1012,10 +1032,37 @@ def logout():
     return redirect(url_for("login"))
 
 
+# Live telemetry is scoped by socket ROOM, because a broadcast can't be filtered after
+# the fact. Two disjoint audiences, so every reading is emitted exactly once per
+# listener: unrestricted operators sit in FLEET_ROOM, scoped ones sit in one room per
+# machine they can see.
+#
+# Room membership is decided at CONNECT time, so a scope change (added to a group, a
+# machine added to their group) reaches an already-open tab on its next reconnect, not
+# instantly. That is the right trade for a telemetry feed -- the alternative is
+# re-resolving permissions on every emit, i.e. once per machine per few seconds -- but
+# it does mean a REVOKED operator keeps seeing live temperatures on an open tab until
+# they reload. Every actual action they could take is re-checked server-side per
+# request, so this is a stale view, not stale authority.
+FLEET_ROOM = "fleet:all"
+
+
+def machine_room(machine):
+    return f"machine:{str(machine).strip()}"
+
+
 @socketio.on("connect")
 def handle_socket_connect():
     if not session.get("user"):
         return False  # reject the connection; browser falls back to no live updates
+    current = access.current()
+    if not permissions.has_capability(current, permissions.VIEW):
+        return False
+    if current["machines"] is None:
+        join_room(FLEET_ROOM)
+    else:
+        for machine in current["machines"]:
+            join_room(machine_room(machine))
 
 # ================================
 # HELPERS
@@ -1364,7 +1411,10 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     # the UI already knows, same reasoning as the diagnostics cache above.
     if companion_version:
         payload['companion_version'] = str(companion_version)
-    socketio.emit('new_temp', payload)
+    # Two rooms, disjoint by construction (see handle_socket_connect): everyone who
+    # may see the whole fleet, plus everyone scoped to this specific machine.
+    socketio.emit('new_temp', payload, room=FLEET_ROOM)
+    socketio.emit('new_temp', payload, room=machine_room(machine_name))
 
 def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None):
     machine_name = str(machine).strip()
@@ -1483,6 +1533,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
             )
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (dropped,))
     fleet.delete_machine(DB_PATH, dropped)
+    # The survivor IS the dropped box, so a permission group scoped to the old
+    # hostname must keep granting access. Without this, a rename-driven merge would
+    # silently drop machines out of operators' scopes -- a permission change nobody
+    # made, discovered only when someone couldn't reach a PC they'd always managed.
+    permissions.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor})
 
@@ -1559,7 +1614,29 @@ def _history_column(column):
         raise ValueError(f"Unknown history column: {column!r}")
     return column
 
-def query_raw_history(start_epoch, end_epoch, machine, limit, column="temp"):
+def _scope_clause(allowed_machines):
+    """SQL fragment + params restricting a readings query to a caller's machine scope.
+
+    `allowed_machines` is None for an unrestricted caller (no clause at all) and a
+    collection otherwise. An EMPTY collection must still produce a clause -- "IN ()"
+    is not valid SQL, so it becomes a literal 0=1. Getting that wrong would turn "this
+    operator can see nothing" into "this operator can see everything", which is
+    exactly the wrong direction to fail.
+
+    The filter has to be IN THE QUERY rather than applied to its results, because
+    these queries are LIMITed: filtering afterwards would let out-of-scope rows eat
+    the row budget and hand a scoped operator a mysteriously short chart.
+    """
+    if allowed_machines is None:
+        return "", []
+    names = list(allowed_machines)
+    if not names:
+        return " AND 0 = 1", []
+    return f" AND machine IN ({','.join('?' for _ in names)})", names
+
+
+def query_raw_history(start_epoch, end_epoch, machine, limit, column="temp",
+                      allowed_machines=None):
     column = _history_column(column)
     # Metric columns are nullable (older readings, or a toggled-off metric); skip NULLs so
     # a panel shows a gap rather than a fabricated 0. `temp` is NOT NULL, so this is a no-op
@@ -1573,6 +1650,9 @@ def query_raw_history(start_epoch, end_epoch, machine, limit, column="temp"):
     if machine:
         sql += " AND machine = ?"
         params.append(machine)
+    scope_sql, scope_params = _scope_clause(allowed_machines)
+    sql += scope_sql
+    params.extend(scope_params)
 
     sql += " ORDER BY ts_epoch DESC"
     if limit is not None:
@@ -1590,7 +1670,8 @@ def query_raw_history(start_epoch, end_epoch, machine, limit, column="temp"):
         })
     return {machine_name: list(points) for machine_name, points in history.items()}
 
-def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_seconds, column="temp"):
+def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_seconds,
+                           column="temp", allowed_machines=None):
     column = _history_column(column)
     # AVG/MIN/MAX ignore NULLs, but a bucket of only NULLs would yield NULL; the IS NOT NULL
     # filter drops those buckets entirely so they never reach float().
@@ -1609,6 +1690,9 @@ def query_bucketed_history(start_epoch, end_epoch, machine, limit, bucket_second
     if machine:
         sql += " AND machine = ?"
         params.append(machine)
+    scope_sql, scope_params = _scope_clause(allowed_machines)
+    sql += scope_sql
+    params.extend(scope_params)
     sql += " GROUP BY machine, bucket_epoch ORDER BY bucket_epoch DESC"
     if limit is not None:
         sql += " LIMIT ?"
@@ -1703,6 +1787,7 @@ init_db()
 fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
+permissions.init_permissions_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()
@@ -1858,9 +1943,13 @@ def report_temp():
 
 @app.route('/api/machines')
 @login_required
+@access.require(permissions.VIEW)
 def get_machines():
     """Machine identity info (asset tag / serial number / model / companion version)
-    reported by companions, plus their latest known live temp and uptime."""
+    reported by companions, plus their latest known live temp and uptime.
+
+    Filtered to the caller's machine scope: an HR operator must not even SEE Hospital
+    machines here, since this list is what the Dashboard and Asset Inventory render."""
     with get_db_conn() as conn:
         rows = conn.execute(
             "SELECT machine, asset_tag, serial_number, model, companion_version, updated_at "
@@ -1877,6 +1966,9 @@ def get_machines():
                 'model': None, 'companion_version': None, 'updated_at': None,
             })
             known_machines.add(machine)
+    # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
+    # caller will never be shown.
+    result = access.filter_rows(result)
     for row in result:
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
         row['temp'] = get_latest_temp(row['machine'])
@@ -1888,6 +1980,7 @@ def get_machines():
 
 @app.route('/api/machines/<machine>')
 @login_required
+@access.require_machine(permissions.VIEW)
 def get_machine(machine):
     """Single machine's identity info + latest live temp/uptime, for its detail page."""
     machine_name = str(machine).strip()
@@ -1936,6 +2029,7 @@ def _recent_sensors_for(machine_name):
 
 @app.route('/api/machines/<machine>/sensors')
 @login_required
+@access.require_machine(permissions.VIEW)
 def get_machine_sensors(machine):
     """CPU temperature sensors this machine is actually reporting, for the primary-sensor
     picker. Returns current values too, so an operator chooses by recognition ("CPU
@@ -1956,6 +2050,7 @@ def get_machine_sensors(machine):
 
 @app.route('/api/machines/<machine>/primary_sensor', methods=['PUT'])
 @login_required
+@access.require_machine(permissions.MANAGE_SETTINGS)
 def put_machine_primary_sensor(machine):
     """Pin this machine's primary temperature to one named sensor, or clear the pin
     (null/empty) to fall back to the fleet-wide preference order."""
@@ -1980,6 +2075,7 @@ def put_machine_primary_sensor(machine):
 
 @app.route('/api/machines/<machine>', methods=['DELETE'])
 @login_required
+@access.require_machine(permissions.MANAGE_SETTINGS)
 def delete_machine(machine):
     """Hard-delete a decommissioned machine: its identity row, all temperature history,
     and its fleet agent enrollment. Irreversible. If the machine's companion is still
@@ -1992,6 +2088,10 @@ def delete_machine(machine):
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
     fleet.delete_machine(DB_PATH, machine_name)
+    # Drop the hostname from every permission group's scope too. If the name is later
+    # reused by a different physical box, it must not silently inherit this one's
+    # access grants -- a stale grant is invisible until it's abused.
+    permissions.forget_machine(DB_PATH, machine_name)
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")
@@ -2001,6 +2101,7 @@ def delete_machine(machine):
 
 @app.route('/api/alerts')
 @login_required
+@access.require(permissions.VIEW)
 def get_alerts():
     """Open alerts for the Alerts tab. Each duplicate_serial alert is enriched with the
     current status/model of every machine involved, so the UI can show which are still
@@ -2010,9 +2111,16 @@ def get_alerts():
         info = {r["machine"]: r for r in conn.execute(
             "SELECT machine, model, updated_at FROM machine_info"
         ).fetchall()}
+    keep = access.machine_filter()
+    visible = []
     for alert in open_alerts:
+        involved = alert.get("machines", [])
+        in_scope = involved if keep is None else [m for m in involved if keep(m)]
+        # An alert touching none of the caller's machines isn't theirs to see.
+        if involved and not in_scope:
+            continue
         enriched = []
-        for machine in alert.get("machines", []):
+        for machine in in_scope:
             row = info.get(machine)
             enriched.append({
                 "machine": machine,
@@ -2022,11 +2130,18 @@ def get_alerts():
                 "updated_at": (row["updated_at"] if row else None),
             })
         alert["machines"] = enriched
-    return jsonify(open_alerts)
+        # A duplicate-serial alert can straddle a scope boundary (that is rather the
+        # point of a serial collision). Report the count of machines withheld rather
+        # than their names, so the operator understands why the merge control is
+        # unavailable to them without learning hostnames outside their scope.
+        alert["hidden_machines"] = len(involved) - len(in_scope)
+        visible.append(alert)
+    return jsonify(visible)
 
 
 @app.route('/api/machines/merge', methods=['POST'])
 @login_required
+@access.require(permissions.MANAGE_SETTINGS)
 def merge_machines_endpoint():
     """Operator-triggered merge of duplicate machines. Body: {survivor, victims:[...]}.
     Absorbs each victim into the survivor (history preserved) and resolves any open
@@ -2041,6 +2156,12 @@ def merge_machines_endpoint():
         return jsonify({"error": "no valid victims to merge"}), 400
 
     names = [survivor] + victims
+    # EVERY machine involved must be in scope, not just the survivor. A merge destroys
+    # one identity row and re-points its history onto another; being able to do that to
+    # a machine you can't see would be a way to reach outside your scope.
+    out_of_scope = [n for n in names if not access.in_scope(n)]
+    if out_of_scope:
+        return jsonify({"error": "one or more machines are outside your access scope"}), 403
     with get_db_conn() as conn:
         found = {r["machine"]: r["serial_number"] for r in conn.execute(
             f"SELECT machine, serial_number FROM machine_info "
@@ -2063,6 +2184,7 @@ def merge_machines_endpoint():
 
 @app.route('/api/alerts/<int:alert_id>/dismiss', methods=['POST'])
 @login_required
+@access.require(permissions.MANAGE_SETTINGS)
 def dismiss_alert(alert_id):
     if not alerts.dismiss(DB_PATH, alert_id):
         return jsonify({"error": "no open alert with that id"}), 404
@@ -2108,16 +2230,20 @@ def _resolve_history_window(args):
     return start_epoch, end_epoch, resolution, limit
 
 
-def _query_history_series(start_epoch, end_epoch, machine, limit, resolution, column):
+def _query_history_series(start_epoch, end_epoch, machine, limit, resolution, column,
+                          allowed_machines=None):
     """Dispatch to the raw or bucketed query for one metric column."""
     if resolution == "raw":
-        return query_raw_history(start_epoch, end_epoch, machine, limit, column)
+        return query_raw_history(start_epoch, end_epoch, machine, limit, column,
+                                 allowed_machines)
     return query_bucketed_history(
-        start_epoch, end_epoch, machine, limit, VALID_RESOLUTIONS[resolution], column)
+        start_epoch, end_epoch, machine, limit, VALID_RESOLUTIONS[resolution], column,
+        allowed_machines)
 
 
 @app.route('/api/history')
 @login_required
+@access.require(permissions.VIEW)
 def get_history():
     """Provide history data with optional range/machine/resolution/metric controls.
     `metric` (default "temp") selects which column to chart; see HISTORY_METRIC_COLUMNS."""
@@ -2126,17 +2252,23 @@ def get_history():
     column = HISTORY_METRIC_COLUMNS.get(metric)
     if column is None:
         return jsonify({"error": f"Unknown metric: {metric}"}), 400
+    # A named machine outside the caller's scope is refused outright; the fleet-wide
+    # form is narrowed in SQL instead (see _scope_clause).
+    if machine and not access.in_scope(machine):
+        return jsonify({"error": f"You do not have access to {machine!r}."}), 403
     try:
         start_epoch, end_epoch, resolution, limit = _resolve_history_window(request.args)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
-    history = _query_history_series(start_epoch, end_epoch, machine, limit, resolution, column)
+    history = _query_history_series(start_epoch, end_epoch, machine, limit, resolution,
+                                   column, access.current()["machines"])
     return jsonify(history)
 
 
 @app.route('/api/machines/<machine>/history')
 @login_required
+@access.require_machine(permissions.VIEW)
 def get_machine_history(machine):
     """Multi-metric history for ONE machine, backing the per-machine dashboard panels.
 
@@ -2163,6 +2295,8 @@ def get_machine_history(machine):
 
     metrics = {}
     for key in keys:
+        # The route decorator already established machine_name is in scope, so no
+        # allowed_machines filter is needed on top of the machine = ? predicate.
         series = _query_history_series(
             start_epoch, end_epoch, machine_name, limit, resolution, HISTORY_METRIC_COLUMNS[key])
         metrics[key] = series.get(machine_name, [])
@@ -2170,6 +2304,7 @@ def get_machine_history(machine):
 
 @app.route('/api/daily_summary')
 @login_required
+@access.require(permissions.VIEW)
 def get_daily_summary():
     """Provide daily averages and reading counts for selected date."""
     date = request.args.get("date") or today_str()
@@ -2182,15 +2317,18 @@ def get_daily_summary():
     day_end = day_start + timedelta(days=1)
     start_epoch = to_epoch_seconds(day_start)
     end_epoch = to_epoch_seconds(day_end)
+    # Same scope narrowing as the history queries: a fleet-wide average that silently
+    # included machines the caller cannot see would leak their existence.
+    scope_sql, scope_params = _scope_clause(access.current()["machines"])
 
     with get_db_conn() as conn:
         summary = conn.execute(
-            """
+            f"""
             SELECT AVG(temp) AS overall_avg, COUNT(*) AS reading_count
             FROM readings
-            WHERE ts_epoch >= ? AND ts_epoch < ?
+            WHERE ts_epoch >= ? AND ts_epoch < ?{scope_sql}
             """,
-            (start_epoch, end_epoch),
+            (start_epoch, end_epoch, *scope_params),
         ).fetchone()
 
         if not summary or int(summary["reading_count"]) == 0:
@@ -2203,14 +2341,14 @@ def get_daily_summary():
             })
 
         machine_rows = conn.execute(
-            """
+            f"""
             SELECT machine, AVG(temp) AS avg_temp
             FROM readings
-            WHERE ts_epoch >= ? AND ts_epoch < ?
+            WHERE ts_epoch >= ? AND ts_epoch < ?{scope_sql}
             GROUP BY machine
             ORDER BY machine ASC
             """,
-            (start_epoch, end_epoch),
+            (start_epoch, end_epoch, *scope_params),
         ).fetchall()
 
     machine_averages = {
@@ -2227,16 +2365,42 @@ def get_daily_summary():
     })
 
 @app.context_processor
-def inject_open_alert_count():
-    """Feed the sidebar's Alerts badge on every page render. Cheap COUNT on a small
-    table; never let it break a page if the alerts store is momentarily unavailable."""
+def inject_nav_context():
+    """Feed the sidebar on every page render: the Alerts badge, and which nav links the
+    caller may actually follow.
+
+    Hiding a link is presentation, not security -- every route behind it is gated
+    server-side regardless. But a sidebar full of links that 403 is worse than useless,
+    so the template needs the capability set.
+
+    The alert badge is scoped too: a count that included machines the caller cannot see
+    would say "3 alerts" and then show them one. It walks the (small) open-alert list
+    rather than COUNTing, since scoping needs the machine names. Never let any of this
+    break a page -- it renders on login too, where there is no session at all.
+    """
+    context = {"open_alert_count": 0, "user_capabilities": set(),
+               "is_superuser": False, "cap": permissions}
+    if not session.get("user"):
+        return context
     try:
-        return {"open_alert_count": alerts.count_open(DB_PATH)}
+        current = access.current()
+        context["user_capabilities"] = current["capabilities"]
+        context["is_superuser"] = current["superuser"]
+        keep = access.machine_filter()
+        if keep is None:
+            context["open_alert_count"] = alerts.count_open(DB_PATH)
+        else:
+            context["open_alert_count"] = sum(
+                1 for a in alerts.list_open(DB_PATH)
+                if not a.get("machines") or any(keep(m) for m in a["machines"])
+            )
     except Exception:
-        return {"open_alert_count": 0}
+        pass
+    return context
 
 @app.route("/")
 @login_required
+@access.require(permissions.VIEW)
 def index():
     return render_template("index.html", hub_version=HUB_VERSION,
                            overheat_threshold=settings.get_int(DB_PATH, "hub.overheat_threshold"),
@@ -2246,6 +2410,7 @@ def index():
 
 @app.route("/history")
 @login_required
+@access.require(permissions.VIEW)
 def history_page():
     return render_template("history.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
@@ -2253,6 +2418,7 @@ def history_page():
 
 @app.route("/inventory")
 @login_required
+@access.require(permissions.VIEW)
 def inventory_page():
     return render_template("inventory.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
@@ -2260,6 +2426,7 @@ def inventory_page():
 
 @app.route("/alerts")
 @login_required
+@access.require(permissions.VIEW)
 def alerts_page():
     return render_template("alerts.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
@@ -2267,13 +2434,23 @@ def alerts_page():
 
 @app.route("/settings")
 @login_required
+@access.require(permissions.MANAGE_SETTINGS)
 def settings_page():
     return render_template("settings.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
+@app.route("/permissions")
+@login_required
+@access.require(permissions.MANAGE_PERMISSION_GROUPS)
+def permissions_page():
+    return render_template("permissions.html", hub_version=HUB_VERSION,
+                           latest_companion_version=get_latest_companion_version(),
+                           latest_agent_version=get_latest_agent_version())
+
 @app.route("/machine/<machine>")
 @login_required
+@access.require_machine(permissions.VIEW)
 def machine_page(machine):
     return render_template(
         "machine.html", machine=machine,

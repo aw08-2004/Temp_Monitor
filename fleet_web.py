@@ -11,10 +11,13 @@ Two audiences, two auth schemes:
 
   * Console-facing endpoints (/api/fleet/*): gated behind the same Google
     sign-in as the rest of the dashboard, via the login_required passed in from
-    app.py. This is where an operator issues commands and reads status/audit.
-    That session gate is the ONLY authorization on the command path -- commands
-    carry no signature (see fleet.py's module docstring) -- so it is also the
-    perimeter for running code as SYSTEM across the fleet.
+    app.py, AND behind the permission-group layer via the `access` object.
+    Commands carry no signature (see fleet.py's module docstring), so that pair is
+    the entire authorization for running code as SYSTEM: the `issue_commands`
+    capability plus the target machine being in the operator's scope. Reads are
+    gated too, on `view` -- otherwise an operator could watch the streamed output of
+    a command run on a machine outside their scope, which is exactly what the
+    terminal scrollback endpoints below serve.
 
 Note for anyone extending the console endpoints: reading the body with
 request.get_json(silent=True) is load-bearing beyond convenience. It requires
@@ -30,6 +33,7 @@ import functools
 from flask import Blueprint, jsonify, request, session
 
 import fleet
+import permissions
 import settings
 
 
@@ -50,10 +54,29 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
-def create_fleet_blueprint(db_path, enrollment_secret, login_required):
-    """Build the fleet Blueprint. `login_required` is app.py's session gate, passed
-    in to avoid a circular import and to keep one source of truth for auth."""
+def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
+    """Build the fleet Blueprint. `login_required` (app.py's session gate) and `access`
+    (the permission-group layer) are both passed in, to avoid a circular import and to
+    keep one source of truth for each."""
     bp = Blueprint("fleet", __name__)
+    can_view = access.require(permissions.VIEW)
+
+    def scoped_command(view):
+        """Gate a /api/fleet/commands/<id> route on the caller being able to see the
+        machine that command belongs to.
+
+        The machine isn't in the URL -- only the command id is -- so this resolves the
+        command first and checks its machine. An unknown id and an out-of-scope id
+        both answer 404: distinguishing them would turn this into an oracle for which
+        command ids exist on machines the caller cannot see.
+        """
+        @functools.wraps(view)
+        def wrapped(command_id, *args, **kwargs):
+            command = fleet.get_command(db_path, command_id)
+            if command is None or not access.in_scope(command.get("machine")):
+                return jsonify({"error": "unknown command"}), 404
+            return view(command_id, *args, **kwargs)
+        return wrapped
 
     def agent_auth(view):
         @functools.wraps(view)
@@ -152,22 +175,28 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
     # ---------------- Console-facing ----------------
     @bp.route("/api/fleet/status", methods=["GET"])
     @login_required
+    @can_view
     def fleet_status():
         # fleet.py stays settings-free and takes the window as an argument; this HTTP
         # layer is where the operator's configured value gets injected.
-        return jsonify(fleet.list_agent_status(
+        return jsonify(access.filter_rows(fleet.list_agent_status(
             db_path,
             offline_after=settings.get_int(db_path, "fleet.offline_after_seconds"),
-        )), 200
+        ))), 200
 
     @bp.route("/api/fleet/commands", methods=["GET"])
     @login_required
+    @can_view
     def fleet_list_commands():
         machine = (request.args.get("machine") or "").strip() or None
-        return jsonify(fleet.list_commands(db_path, machine)), 200
+        if machine and not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        return jsonify(access.filter_rows(fleet.list_commands(db_path, machine))), 200
 
     @bp.route("/api/fleet/commands/<command_id>", methods=["GET"])
     @login_required
+    @can_view
+    @scoped_command
     def fleet_get_command(command_id):
         command = fleet.get_command(db_path, command_id)
         if command is None:
@@ -176,6 +205,8 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
 
     @bp.route("/api/fleet/commands/<command_id>/output", methods=["GET"])
     @login_required
+    @can_view
+    @scoped_command
     def fleet_get_command_output(command_id):
         """Live scrollback for the terminal. `after_seq` is the client's cursor; pass
         back the `next_seq` from the previous response to fetch only what's new.
@@ -195,13 +226,19 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
         another and the audit trail would be fiction."""
         return (session.get("user") or {}).get("email", "unknown")
 
+    # Favorites are reusable command templates owned by an operator, not machine
+    # state, so they are scoped by ownership (and the `shared` flag) rather than by
+    # machine. `view` is the floor for touching the fleet console at all; actually
+    # RUNNING what a favorite contains goes through the gated issue endpoint below.
     @bp.route("/api/fleet/favorites", methods=["GET"])
     @login_required
+    @can_view
     def fleet_list_favorites():
         return jsonify(fleet.list_favorites(db_path, _current_email())), 200
 
     @bp.route("/api/fleet/favorites", methods=["POST"])
     @login_required
+    @can_view
     def fleet_create_favorite():
         data = request.get_json(silent=True) or {}
         try:
@@ -219,6 +256,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
 
     @bp.route("/api/fleet/favorites/<favorite_id>", methods=["PUT"])
     @login_required
+    @can_view
     def fleet_update_favorite(favorite_id):
         data = request.get_json(silent=True) or {}
         try:
@@ -239,6 +277,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
 
     @bp.route("/api/fleet/favorites/<favorite_id>", methods=["DELETE"])
     @login_required
+    @can_view
     def fleet_delete_favorite(favorite_id):
         try:
             fleet.delete_favorite(db_path, favorite_id, _current_email())
@@ -250,9 +289,16 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required):
 
     @bp.route("/api/fleet/commands", methods=["POST"])
     @login_required
+    @access.require(permissions.ISSUE_COMMANDS)
     def fleet_issue_command():
         data = request.get_json(silent=True) or {}
         issued_by = _current_email()
+        # The sharp end of the whole model: this queues code to run as SYSTEM. The
+        # target arrives in the body rather than the URL, so the scope check is inline
+        # rather than decorated -- and it runs BEFORE fleet.create_command, so nothing
+        # is ever queued for a machine the caller cannot reach.
+        if not access.in_scope(data.get("machine")):
+            return jsonify({"error": "You do not have access to that machine."}), 403
         try:
             command_id = fleet.create_command(
                 db_path,

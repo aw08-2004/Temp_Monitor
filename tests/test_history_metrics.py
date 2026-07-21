@@ -23,6 +23,11 @@ _TMPDIR = tempfile.mkdtemp(prefix="hub-histmetrics-test-")
 # run stays off the real logs/ (see test_sensor_pick.py).
 os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
 os.chdir(_TMPDIR)
+# The session user these tests sign in as has to be a break-glass superuser, or every
+# console endpoint below now 403s on the permission-group layer. Set before importing
+# app, which reads ALLOWED_EMAILS at import time; load_dotenv doesn't override an
+# already-set env var, so this beats the real .env.
+os.environ["ALLOWED_EMAILS"] = "tester@example.com"
 
 import app
 import settings

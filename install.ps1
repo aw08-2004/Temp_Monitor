@@ -84,7 +84,8 @@ $LegacyHubServiceId  = "TempMonitorHub"
 # Keep in sync with the same list in app.py's self-updater.
 $HubRuntimeFiles = @(
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
-    "settings.py", "settings_web.py", "alerts.py", "requirements.txt"
+    "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
+    "alerts.py", "requirements.txt"
 )
 $HubRuntimeDirs  = @("templates", "static")
 # Source archive for both first install and self-update. codeload serves a zip of a branch

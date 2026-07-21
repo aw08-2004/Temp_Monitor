@@ -18,14 +18,22 @@ background thread, so without an audit row "where did last month's data go?" has
 answer.
 """
 import fleet
+import permissions
 import settings
 from flask import Blueprint, jsonify, request, session
 
 
-def create_settings_blueprint(db_path, login_required):
-    """Build the settings Blueprint. `login_required` is app.py's session gate, passed
-    in to avoid a circular import and to keep one source of truth for auth."""
+def create_settings_blueprint(db_path, login_required, access):
+    """Build the settings Blueprint. `login_required` (app.py's session gate) and
+    `access` (the permission-group layer) are both passed in, to avoid a circular
+    import and to keep one source of truth for each."""
     bp = Blueprint("settings", __name__)
+    # Settings are fleet-wide, so there is no machine scope to apply here -- the
+    # capability IS the whole gate. That makes manage_settings a genuinely powerful
+    # grant: data.retention_days deletes history for every machine, including ones
+    # the holder cannot otherwise see, and hub.auto_update turns on execution of code
+    # pulled from main. Do not hand it out as "can tweak the dashboard".
+    manage = access.require(permissions.MANAGE_SETTINGS)
 
     def _current_email():
         """The signed-in operator. Always the source of attribution -- never take an
@@ -40,6 +48,7 @@ def create_settings_blueprint(db_path, login_required):
 
     @bp.route("/api/settings", methods=["GET"])
     @login_required
+    @manage
     def get_settings():
         """Schema + current values + defaults, grouped into sections. The Settings tab
         renders its whole form from this, which is what lets a new registry entry show
@@ -48,6 +57,7 @@ def create_settings_blueprint(db_path, login_required):
 
     @bp.route("/api/settings", methods=["POST"])
     @login_required
+    @manage
     def update_settings():
         # silent=True, never force=True -- see the module docstring.
         data = request.get_json(silent=True) or {}
@@ -71,6 +81,7 @@ def create_settings_blueprint(db_path, login_required):
 
     @bp.route("/api/settings/reset", methods=["POST"])
     @login_required
+    @manage
     def reset_settings():
         """Drop the override rows for `keys` so they fall back to registry defaults."""
         data = request.get_json(silent=True) or {}

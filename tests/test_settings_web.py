@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fleet
 import settings
 from settings_web import create_settings_blueprint
+from permissions_web import create_access
 from flask import Flask
 
 PASS = 0
@@ -66,7 +67,13 @@ def main():
 
         app = Flask(__name__)
         app.secret_key = "test"
-        app.register_blueprint(create_settings_blueprint(db_path, fake_login_required))
+        # This module is about the settings endpoints, not about authorization, so both
+        # operators it signs in as are break-glass superusers and the permission layer
+        # is a pass-through. manage_settings refusals are covered in
+        # test_permissions_web.py.
+        app.register_blueprint(create_settings_blueprint(
+            db_path, fake_login_required,
+            create_access(db_path, {"operator@x.com", "ann@x.com"})))
 
         @app.before_request
         def _seed_session():

@@ -1,0 +1,353 @@
+// Permission Groups admin page.
+//
+// The whole page is one list + one <dialog> editor. Two rules it sticks to:
+//
+//  * Everything is built with textContent / createElement, never innerHTML. Group
+//    names, member emails and machine hostnames are operator- and agent-supplied
+//    strings that get re-rendered on every load; this page is where an XSS would be
+//    worth the most, since its audience is by definition the people who can grant
+//    capabilities.
+//  * The capability vocabulary comes from the server (GET
+//    /api/permissions/capabilities), not a copy here. A hardcoded list would silently
+//    stop offering a new capability, which reads as "the feature doesn't work" rather
+//    than "the UI is stale".
+
+const groupsHost = document.getElementById('groups-host');
+const modal = document.getElementById('group-modal');
+const modalTitle = document.getElementById('group-modal-title');
+const nameInput = document.getElementById('group-name');
+const descriptionInput = document.getElementById('group-description');
+const capabilityList = document.getElementById('capability-list');
+const machinePicker = document.getElementById('machine-picker');
+const machineChips = document.getElementById('machine-chips');
+const machineInput = document.getElementById('machine-input');
+const machineOptions = document.getElementById('machine-options');
+const memberChips = document.getElementById('member-chips');
+const memberInput = document.getElementById('member-input');
+const errorEl = document.getElementById('group-error');
+const saveBtn = document.getElementById('group-save');
+
+let capabilities = [];        // [{name, label, description}]
+let editingId = null;         // null while creating
+let draftMachines = [];
+let draftMembers = [];
+
+async function api(path, options) {
+    const resp = await fetch(path, options);
+    let body = null;
+    try { body = await resp.json(); } catch (e) { /* empty body is fine */ }
+    if (!resp.ok) {
+        throw new Error((body && body.error) || `HTTP ${resp.status}`);
+    }
+    return body;
+}
+
+function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+}
+
+// ---------------------------------------------------------------- the group list
+
+function capabilityLabel(name) {
+    const found = capabilities.find((c) => c.name === name);
+    return found ? found.label : name;
+}
+
+function renderGroups(groups) {
+    groupsHost.replaceChildren();
+    if (!groups.length) {
+        const empty = el('div', 'empty-state');
+        empty.appendChild(el('p', null, 'No permission groups yet.'));
+        empty.appendChild(el('p', 'stat-card__meta',
+            'Until you create one, only the break-glass addresses above can sign in.'));
+        groupsHost.appendChild(empty);
+        return;
+    }
+
+    const card = el('div', 'card');
+    const table = el('table', 'data-table');
+    const head = el('thead');
+    const headRow = el('tr');
+    ['Group', 'Capabilities', 'Machines', 'Members', ''].forEach((label) => {
+        headRow.appendChild(el('th', null, label));
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = el('tbody');
+    groups.forEach((group) => body.appendChild(renderGroupRow(group)));
+    table.appendChild(body);
+    card.appendChild(table);
+    groupsHost.appendChild(card);
+}
+
+function renderGroupRow(group) {
+    const tr = el('tr');
+
+    const nameCell = el('td');
+    nameCell.appendChild(el('div', null, group.name));
+    if (group.description) {
+        nameCell.appendChild(el('div', 'stat-card__meta', group.description));
+    }
+    tr.appendChild(nameCell);
+
+    const capsCell = el('td');
+    if (!group.capabilities.length) {
+        capsCell.appendChild(el('span', 'stat-card__meta', 'None'));
+    }
+    group.capabilities.forEach((name) => {
+        // The one capability worth calling out visually: it lets its holder grant
+        // themselves everything else on this very page.
+        const isAdmin = name === 'manage_permission_groups';
+        capsCell.appendChild(
+            el('span', isAdmin ? 'cap-badge cap-badge--admin' : 'cap-badge',
+               capabilityLabel(name)));
+    });
+    tr.appendChild(capsCell);
+
+    const machinesCell = el('td');
+    if (group.scope_mode === 'all') {
+        machinesCell.appendChild(el('span', 'cap-badge cap-badge--admin', 'Every machine'));
+    } else if (!group.machines.length) {
+        machinesCell.appendChild(el('span', 'stat-card__meta', 'None'));
+    } else {
+        machinesCell.appendChild(el('span', null, String(group.machines.length)));
+        machinesCell.appendChild(el('div', 'stat-card__meta', group.machines.join(', ')));
+    }
+    tr.appendChild(machinesCell);
+
+    const membersCell = el('td');
+    if (!group.members.length) {
+        membersCell.appendChild(el('span', 'stat-card__meta', 'None'));
+    } else {
+        membersCell.appendChild(el('div', 'stat-card__meta', group.members.join(', ')));
+    }
+    tr.appendChild(membersCell);
+
+    const actions = el('td');
+    const wrap = el('div', 'perm-row-actions');
+    const edit = el('button', 'btn', 'Edit');
+    edit.type = 'button';
+    edit.addEventListener('click', () => openEditor(group));
+    const remove = el('button', 'btn', 'Delete');
+    remove.type = 'button';
+    remove.addEventListener('click', () => deleteGroup(group, remove));
+    wrap.append(edit, remove);
+    actions.appendChild(wrap);
+    tr.appendChild(actions);
+
+    return tr;
+}
+
+async function deleteGroup(group, btn) {
+    const warning = `Delete the permission group "${group.name}"?\n\n`
+        + `${group.members.length} member(s) lose the access it granted. `
+        + 'Anyone left with no groups at all can no longer sign in.';
+    if (!window.confirm(warning)) return;
+    btn.disabled = true;
+    try {
+        await api(`/api/permissions/groups/${encodeURIComponent(group.id)}`,
+                  { method: 'DELETE' });
+        await loadGroups();
+    } catch (e) {
+        btn.disabled = false;
+        window.alert(`Could not delete "${group.name}": ${e.message}`);
+    }
+}
+
+async function loadGroups() {
+    try {
+        renderGroups(await api('/api/permissions/groups'));
+    } catch (e) {
+        groupsHost.replaceChildren();
+        const empty = el('div', 'empty-state');
+        empty.appendChild(el('p', null, `Could not load permission groups: ${e.message}`));
+        groupsHost.appendChild(empty);
+    }
+}
+
+// ---------------------------------------------------------------- the editor
+
+function renderChips(host, values, onRemove) {
+    host.replaceChildren();
+    values.forEach((value) => {
+        const chip = el('span', 'chip');
+        chip.appendChild(el('span', 'chip__name', value));
+        const x = el('button', 'chip__remove', '×');
+        x.type = 'button';
+        x.setAttribute('aria-label', `Remove ${value}`);
+        x.addEventListener('click', () => onRemove(value));
+        chip.appendChild(x);
+        host.appendChild(chip);
+    });
+}
+
+function renderMachineChips() {
+    renderChips(machineChips, draftMachines, (value) => {
+        draftMachines = draftMachines.filter((m) => m !== value);
+        renderMachineChips();
+    });
+}
+
+function renderMemberChips() {
+    renderChips(memberChips, draftMembers, (value) => {
+        draftMembers = draftMembers.filter((m) => m !== value);
+        renderMemberChips();
+    });
+}
+
+function renderCapabilities(selected) {
+    capabilityList.replaceChildren();
+    capabilities.forEach((capability) => {
+        const row = el('label', 'perm-capability');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.value = capability.name;
+        box.checked = selected.includes(capability.name);
+        const text = el('span');
+        text.appendChild(el('span', 'perm-capability__label', capability.label));
+        text.appendChild(el('span', 'perm-capability__help', capability.description));
+        row.append(box, text);
+        capabilityList.appendChild(row);
+    });
+}
+
+function selectedCapabilities() {
+    return Array.from(capabilityList.querySelectorAll('input:checked')).map((b) => b.value);
+}
+
+function scopeMode() {
+    const checked = modal.querySelector('input[name="scope-mode"]:checked');
+    return checked ? checked.value : 'list';
+}
+
+function syncScopeMode() {
+    // "Every machine" makes the explicit list meaningless, so hide it rather than
+    // leaving a list that silently has no effect.
+    machinePicker.hidden = scopeMode() === 'all';
+}
+
+function openEditor(group) {
+    editingId = group ? group.id : null;
+    modalTitle.textContent = group ? `Edit ${group.name}` : 'New permission group';
+    nameInput.value = group ? group.name : '';
+    descriptionInput.value = (group && group.description) || '';
+    draftMachines = group ? group.machines.slice() : [];
+    draftMembers = group ? group.members.slice() : [];
+    const mode = group ? group.scope_mode : 'list';
+    modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
+        radio.checked = radio.value === mode;
+    });
+    renderCapabilities(group ? group.capabilities : []);
+    renderMachineChips();
+    renderMemberChips();
+    syncScopeMode();
+    errorEl.textContent = '';
+    saveBtn.disabled = false;
+    modal.showModal();
+    nameInput.focus();
+}
+
+async function saveGroup() {
+    const payload = {
+        name: nameInput.value.trim(),
+        description: descriptionInput.value.trim(),
+        capabilities: selectedCapabilities(),
+        scope_mode: scopeMode(),
+        // Always send machines, even in "all" mode: the server ignores the list for an
+        // "all" group, and keeping it means switching back to "list" doesn't silently
+        // discard what was there.
+        machines: draftMachines,
+        members: draftMembers,
+    };
+    errorEl.textContent = '';
+    saveBtn.disabled = true;
+    try {
+        if (editingId) {
+            await api(`/api/permissions/groups/${encodeURIComponent(editingId)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        } else {
+            await api('/api/permissions/groups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        }
+        modal.close();
+        await loadGroups();
+    } catch (e) {
+        errorEl.textContent = e.message;
+        saveBtn.disabled = false;
+    }
+}
+
+function addFrom(input, list, render, normalize) {
+    const value = normalize(input.value);
+    if (!value) return;
+    if (!list.includes(value)) list.push(value);
+    input.value = '';
+    render();
+    input.focus();
+}
+
+// ---------------------------------------------------------------- wiring
+
+document.getElementById('new-group').addEventListener('click', () => openEditor(null));
+document.getElementById('group-cancel').addEventListener('click', () => modal.close());
+saveBtn.addEventListener('click', saveGroup);
+modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
+    radio.addEventListener('change', syncScopeMode);
+});
+
+document.getElementById('machine-add').addEventListener('click',
+    () => addFrom(machineInput, draftMachines, renderMachineChips, (v) => v.trim()));
+document.getElementById('member-add').addEventListener('click',
+    () => addFrom(memberInput, draftMembers, renderMemberChips, (v) => v.trim().toLowerCase()));
+
+// Enter inside the chip inputs adds the entry rather than submitting the dialog --
+// which would otherwise close the editor and discard everything typed so far.
+[[machineInput, () => document.getElementById('machine-add').click()],
+ [memberInput, () => document.getElementById('member-add').click()]].forEach(([input, add]) => {
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            add();
+        }
+    });
+});
+
+// Clicking the backdrop (the dialog element itself, which covers the viewport) closes
+// the editor -- same convention as the favorites dialog.
+modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.close();
+});
+
+async function init() {
+    try {
+        const doc = await api('/api/permissions/capabilities');
+        capabilities = doc.capabilities || [];
+    } catch (e) {
+        errorEl.textContent = `Could not load capabilities: ${e.message}`;
+    }
+    // Suggestions only -- a hostname that hasn't reported yet can still be typed in,
+    // so a machine can be scoped before it enrolls. /api/machines is itself scope
+    // filtered, so a non-superuser admin is only ever offered machines they can see.
+    try {
+        const machines = await api('/api/machines');
+        machineOptions.replaceChildren();
+        machines.forEach((row) => {
+            const option = document.createElement('option');
+            option.value = row.machine;
+            machineOptions.appendChild(option);
+        });
+    } catch (e) { /* suggestions are optional; typing still works */ }
+    await loadGroups();
+}
+
+init();

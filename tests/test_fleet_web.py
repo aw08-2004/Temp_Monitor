@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fleet
 import settings
 from fleet_web import create_fleet_blueprint
+from permissions_web import create_access
 from flask import Flask, jsonify
 
 PASS = 0
@@ -53,7 +54,14 @@ def main():
 
         app = Flask(__name__)
         app.secret_key = "test"
-        app.register_blueprint(create_fleet_blueprint(db_path, SECRET, fake_login_required))
+        # This module is about the fleet endpoints, not about authorization, so every
+        # operator it signs in as is a break-glass superuser and the permission layer
+        # is a pass-through. Scoped-operator refusals (a wrong capability, an
+        # out-of-scope machine) are covered in test_permissions_web.py.
+        app.register_blueprint(create_fleet_blueprint(
+            db_path, SECRET, fake_login_required,
+            create_access(db_path, {"operator@x.com", "someone.else@x.com",
+                                    "ann@x.com", "bob@x.com"})))
         # session.get("user") is read by issue-command; seed it.
         @app.before_request
         def _seed_session():
