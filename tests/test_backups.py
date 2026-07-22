@@ -1005,6 +1005,159 @@ def main():
         backups.build_client = saved_build
 
         # ============================================================
+        print("\n== Offline machines: catch up rather than lose a night ==")
+        # ============================================================
+        # The property under test is not "offline machines are skipped" -- it is that
+        # skipping them costs nothing. Dispatching to a machine that cannot answer used
+        # to stamp a run row, and because files_due_at anchors on the newest attempt that
+        # PUSHED THE NEXT REAL BACKUP OUT BY A FULL INTERVAL. A laptop closed at 03:00
+        # lost that night and the following one.
+        off_db = os.path.join(workdir, "offline.db")
+        off_log = os.path.join(workdir, "offlinelogs")
+        os.makedirs(off_log, exist_ok=True)
+        fleet.init_fleet_db(off_db)
+        backups.init_backups_db(off_db)
+        off_dest = backups.create_destination(
+            off_db, off_log, master_key, name="Off", kind=backups.KIND_S3,
+            config=good_s3, secret={"access_key_id": "AKID", "secret_access_key": "shh"},
+            actor="root@x.com")
+        off_policy = dict(policy, fleet_destination=off_dest)
+
+        T0 = 1_950_000_000
+        check("an offline machine is not dispatched",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAPTOP", "online": False}],
+                  now=T0, **off_policy) == 0)
+        check("...and no run row was invented for it",
+              backups.list_runs(off_db, limit=5, kind=backups.BACKUP_MACHINE_FILES,
+                                machine="LAPTOP") == [])
+        check("...so its due clock did NOT move (this is the whole bug)",
+              backups.files_due_at(off_db, "LAPTOP", 24) <= T0)
+
+        T1 = T0 + 3 * 86400          # gone for a long weekend
+        check("the moment it comes back it is dispatched",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAPTOP", "online": True}],
+                  now=T1, **off_policy) == 1)
+        caught_up = backups.list_runs(off_db, limit=5,
+                                      kind=backups.BACKUP_MACHINE_FILES,
+                                      machine="LAPTOP")[0]
+        check("...as a normal scheduled run",
+              caught_up["trigger"] == backups.TRIGGER_SCHEDULE)
+        check("...and not again on the next pass",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAPTOP", "online": True}],
+                  now=T1 + 60, **off_policy) == 0)
+        check("a bare machine name still counts as online (old callers keep working)",
+              backups.roster_entry("PC-X") == ("PC-X", True))
+
+        # ============================================================
+        print("\n== Back up now: a request outlives the PC being off ==")
+        # ============================================================
+        backups.request_file_run(off_db, "DESK", actor="op@x.com", now=T1)
+        stored = backups.get_machine_config(off_db, "DESK")
+        check("the request is recorded against the machine",
+              stored["run_requested_at"] == T1 and stored["run_requested_by"] == "op@x.com")
+        check("...without making the machine a policy exception",
+              backups.has_overrides(stored) is False)
+
+        check("a requested backup on an OFFLINE machine does not dispatch",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "DESK", "online": False}],
+                  now=T1 + 10, **off_policy) == 0)
+        check("...and the request survives, waiting for it",
+              backups.get_machine_config(off_db, "DESK")["run_requested_at"] == T1)
+
+        backups.request_file_run(off_db, "DESK", actor="op@x.com", now=T1 + 20)
+        check("pressing the button twice does not queue two backups",
+              backups.get_machine_config(off_db, "DESK")["run_requested_at"] == T1 + 20)
+
+        check("once online, the request becomes a real backup",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "DESK", "online": True}],
+                  now=T1 + 30, **off_policy) == 1)
+        manual = backups.list_runs(off_db, limit=5, kind=backups.BACKUP_MACHINE_FILES,
+                                   machine="DESK")[0]
+        check("...labelled manual, not scheduled",
+              manual["trigger"] == backups.TRIGGER_MANUAL)
+        check("...crediting the operator who asked", manual["actor"] == "op@x.com")
+        check("...and the request is cleared so it runs once, not forever",
+              backups.get_machine_config(off_db, "DESK")["run_requested_at"] is None)
+
+        # A request must beat the interval, or "Back up now" would silently do nothing
+        # on a machine that was backed up an hour ago -- which is exactly when someone
+        # presses it (before a risky change).
+        backups.request_file_run(off_db, "DESK", actor="op@x.com", now=T1 + 40)
+        backups.ingest_file_result(off_db, off_log, manual["id"], {"error": "x"},
+                                   keep_chains=2)
+        check("a manual request overrides 'not due yet'",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "DESK", "online": True}],
+                  now=T1 + 50, **off_policy) == 1)
+
+        # ============================================================
+        print("\n== Catch-up throttle ==")
+        # ============================================================
+        # Catch-up creates the herd this guards against: a fleet of laptops that were off
+        # all weekend comes back within minutes of each other on Monday, and without a
+        # cap every one of them starts pushing at once.
+        herd_db = os.path.join(workdir, "herd.db")
+        herd_log = os.path.join(workdir, "herdlogs")
+        os.makedirs(herd_log, exist_ok=True)
+        fleet.init_fleet_db(herd_db)
+        backups.init_backups_db(herd_db)
+        herd_dest = backups.create_destination(
+            herd_db, herd_log, master_key, name="Herd", kind=backups.KIND_S3,
+            config=good_s3, secret={"access_key_id": "AKID", "secret_access_key": "shh"},
+            actor="root@x.com")
+        herd_policy = dict(policy, fleet_destination=herd_dest)
+        herd = [{"machine": f"M{i:02d}", "online": True} for i in range(10)]
+
+        check("the throttle caps one pass",
+              backups.files_dispatch_once(herd_db, herd_log, machines=herd, now=T1,
+                                          max_concurrent=3, **herd_policy) == 3)
+        check("...counted against what is actually running",
+              backups.running_file_runs(herd_db) == 3)
+        check("a second pass adds nothing while those are still in flight",
+              backups.files_dispatch_once(herd_db, herd_log, machines=herd, now=T1 + 60,
+                                          max_concurrent=3, **herd_policy) == 0)
+        # Retiring an abandoned run must give its slot back, or one dead agent
+        # permanently shrinks the fleet's backup capacity.
+        backups.expire_stale_file_runs(herd_db, now=T1 + 25 * 3600)
+        check("expiring stale runs releases capacity",
+              backups.running_file_runs(herd_db) == 0)
+        check("...and the queue drains on the next pass",
+              backups.files_dispatch_once(herd_db, herd_log, machines=herd,
+                                          now=T1 + 25 * 3600, max_concurrent=3,
+                                          **herd_policy) == 3)
+        check("0 means unlimited",
+              backups.files_dispatch_once(
+                  herd_db, herd_log,
+                  machines=[{"machine": f"U{i}", "online": True} for i in range(6)],
+                  now=T1 + 25 * 3600, max_concurrent=0, **herd_policy) == 6)
+
+        # Manual beats scheduled when the throttle is holding a queue: an operator
+        # standing at a PC should not wait behind thirty laptops that are merely due.
+        pri_db = os.path.join(workdir, "priority.db")
+        pri_log = os.path.join(workdir, "prioritylogs")
+        os.makedirs(pri_log, exist_ok=True)
+        fleet.init_fleet_db(pri_db)
+        backups.init_backups_db(pri_db)
+        pri_dest = backups.create_destination(
+            pri_db, pri_log, master_key, name="Pri", kind=backups.KIND_S3,
+            config=good_s3, secret={"access_key_id": "AKID", "secret_access_key": "shh"},
+            actor="root@x.com")
+        pri_roster = [{"machine": f"P{i}", "online": True} for i in range(5)]
+        backups.request_file_run(pri_db, "P4", actor="op@x.com", now=T1)
+        backups.files_dispatch_once(pri_db, pri_log, machines=pri_roster, now=T1,
+                                    max_concurrent=1,
+                                    **dict(policy, fleet_destination=pri_dest))
+        served = backups.list_runs(pri_db, limit=5,
+                                   kind=backups.BACKUP_MACHINE_FILES)
+        check("the manually-requested machine is served first",
+              len(served) == 1 and served[0]["machine"] == "P4")
+
+        # ============================================================
         print("\n== Restore: browsing the manifest ==")
         # ============================================================
         # The browser has to be honest about what is RECOVERABLE, which is not the same as

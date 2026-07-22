@@ -4,7 +4,9 @@
 
     Interactive menu over the three install paths:
       1) Agent      - C#/.NET Windows Service (recommended for new machines)
-      2) Companion  - legacy Python scheduled-task agent
+      2) Companion  - legacy Python scheduled-task agent (UNSUPPORTED; dimmed in the
+                      menu and gated behind a confirmation, since it migrates itself
+                      to the agent on its first self-update anyway)
       3) Hub        - Flask/Socket.IO server (this machine becomes the fleet hub)
 
     Prompts for whatever each path needs (enrollment secret, hub URL, OAuth
@@ -296,42 +298,71 @@ function Get-LatestAgentAssetUrl {
     return $null
 }
 
+function Confirm-CompanionChoice {
+    <#
+      The companion is the pre-agent Python scheduled task: it only runs inside a logged-on
+      user's session, and from companion 2.10.0 a machine that installs it self-updates
+      straight onto the C# agent anyway. Installing it today is almost always a misclick by
+      someone reaching for "the Python one" out of habit, so it costs a deliberate yes.
+      Returns $true if they mean it, $false to go back to the menu.
+    #>
+    Write-Host ""
+    Warn "The Companion is no longer supported."
+    Say "It runs only while a user is logged on, and from version 2.10.0 it migrates"
+    Say "itself to the C# agent on its first self-update -- so this mostly installs a"
+    Say "detour to option 1. Pick it only for a machine that genuinely can't run the agent."
+    Write-Host ""
+    if (Prompt-YesNo "Do you really want to install the unsupported Companion?" -Default No) { return $true }
+    Say "Cancelled -- back to the menu."
+    return $false
+}
+
 function Show-Menu {
-    Write-Host @"
-
-  FleetHub - Unified Installer
-  =================================
-   1) Install Agent      (C#/.NET Windows Service - recommended)
-   2) Install Companion  (legacy Python scheduled-task agent)
-   3) Install Hub        (Flask/Socket.IO server - this machine becomes the fleet hub)
-   4) Uninstall...
-   0) Exit
-
-"@ -ForegroundColor Cyan
-    $choice = Read-Host "Choose an option"
-    switch ($choice) {
-        "1" { return "Agent" }
-        "2" { return "Companion" }
-        "3" { return "Hub" }
-        "4" { return "UninstallMenu" }
-        "0" { return "Exit" }
-        default { Warn "Invalid choice."; return Show-Menu }
+    # Loops rather than recursing on a rejected answer: every "ask again" used to be another
+    # `return Show-Menu` stack frame, so enough invalid input (or a redirected stdin handing
+    # back an endless stream of empty answers) walked the menu into PowerShell's call-depth
+    # limit instead of just asking again.
+    while ($true) {
+        # Written line by line rather than as one here-string so the deprecated entry can be
+        # dimmed on its own.
+        Write-Host ""
+        Write-Host "  FleetHub - Unified Installer"                                                  -ForegroundColor Cyan
+        Write-Host "  ================================="                                             -ForegroundColor Cyan
+        Write-Host "   1) Install Agent      (C#/.NET Windows Service - recommended)"                 -ForegroundColor Cyan
+        Write-Host "   2) Install Companion  (legacy Python scheduled-task agent - UNSUPPORTED)"      -ForegroundColor DarkGray
+        Write-Host "   3) Install Hub        (Flask/Socket.IO server - this machine becomes the hub)" -ForegroundColor Cyan
+        Write-Host "   4) Uninstall..."                                                               -ForegroundColor Cyan
+        Write-Host "   0) Exit"                                                                       -ForegroundColor Cyan
+        Write-Host ""
+        $choice = Read-Host "Choose an option"
+        switch ($choice) {
+            "1" { return "Agent" }
+            "2" { if (Confirm-CompanionChoice) { return "Companion" } }
+            "3" { return "Hub" }
+            "4" { return "UninstallMenu" }
+            "0" { return "Exit" }
+            default { Warn "Invalid choice." }
+        }
     }
 }
 
 function Show-UninstallMenu {
-    Write-Host "`n  Which component do you want to uninstall?" -ForegroundColor Cyan
-    Write-Host "   1) Agent"
-    Write-Host "   2) Companion"
-    Write-Host "   3) Hub"
-    Write-Host "   0) Cancel"
-    $choice = Read-Host "Choose an option"
-    switch ($choice) {
-        "1" { return "Agent" }
-        "2" { return "Companion" }
-        "3" { return "Hub" }
-        "0" { return "Exit" }
-        default { Warn "Invalid choice."; return Show-UninstallMenu }
+    # Companion is deliberately NOT dimmed here: it's deprecated to install, but removing one
+    # is exactly what an operator should be doing, so that path stays friction-free.
+    while ($true) {
+        Write-Host "`n  Which component do you want to uninstall?" -ForegroundColor Cyan
+        Write-Host "   1) Agent"
+        Write-Host "   2) Companion"
+        Write-Host "   3) Hub"
+        Write-Host "   0) Cancel"
+        $choice = Read-Host "Choose an option"
+        switch ($choice) {
+            "1" { return "Agent" }
+            "2" { return "Companion" }
+            "3" { return "Hub" }
+            "0" { return "Exit" }
+            default { Warn "Invalid choice." }
+        }
     }
 }
 
@@ -398,11 +429,16 @@ function Uninstall-Companion {
 function Install-Companion {
     Write-Host @"
 
-  FleetHub - Companion Agent Installer
+  FleetHub - Companion Agent Installer (UNSUPPORTED)
   Machine: $env:COMPUTERNAME
   Target : $InstallDir
 
 "@ -ForegroundColor Cyan
+
+    # The menu already made an interactive operator confirm this. Repeat it as a plain
+    # warning -- not a prompt -- so `-Component Companion` still runs unattended from a
+    # script while the log says plainly what got installed.
+    Warn "The Companion is legacy and no longer supported; the Agent replaces it."
 
     # ------------------------------------------------------------------
     # 1. Python

@@ -58,7 +58,7 @@ def _bearer_agent(db_path):
 
 
 def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
-                             hub_version="", hub_url=""):
+                             hub_version="", hub_url="", machine_roster=None):
     """Build the backups Blueprint.
 
     `log_dir` is where the encrypted secret store and the scratch space for snapshots
@@ -70,6 +70,13 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     an absolute URL back here (WebDAV has no pre-signed download). Taken as a parameter
     rather than derived from `request`, which behind the TLS terminator reports http and
     the internal bind address.
+
+    `machine_roster` is app.py's backup_machine_roster: a zero-argument callable giving
+    [{"machine", "online"}]. It is needed because "Back up now" dispatches immediately
+    rather than waiting up to a tick for the scheduler, and dispatching needs to know
+    whether the machine can actually answer. Passed in for the same reason the scheduler
+    takes it as an argument -- machine_info is app.py's table, and neither this module
+    nor backups.py should learn to enumerate the fleet.
     """
     bp = Blueprint("backups", __name__)
     can_manage = access.require(permissions.MANAGE_BACKUPS)
@@ -135,7 +142,69 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             "max_file_mb": settings.get_int(db_path, "backup.files_max_file_mb"),
             "max_set_gb": settings.get_int(db_path, "backup.files_max_set_gb"),
             "use_vss": settings.get_bool(db_path, "backup.files_use_vss"),
+            "max_concurrent": settings.get_int(db_path, "backup.files_max_concurrent"),
         }
+
+    def _require_json():
+        """None if the request carried a JSON body, else a 415 response.
+
+        Reading the body with get_json(silent=True) only defends against CSRF if the
+        result is actually CHECKED -- Content-Type: application/json is not CORS-
+        safelisted, so a cross-site HTML form cannot produce one, but it CAN produce a
+        request whose parsed body is None. Routes that then carry on regardless are not
+        protected. These two are, because they start real work on real machines.
+        """
+        if request.get_json(silent=True) is None:
+            return jsonify({"error": "A JSON body is required."}), 415
+        return None
+
+    def _roster(names=None):
+        """The scheduler's roster, optionally narrowed to specific machines."""
+        entries = list(machine_roster() if machine_roster else [])
+        if names is None:
+            return entries
+        wanted = set(names)
+        return [e for e in entries if backups.roster_entry(e)[0] in wanted]
+
+    def _dispatch_files(names):
+        """Run one dispatch pass limited to `names`; return how many were queued.
+
+        Deliberately the SAME call the scheduler makes, not a parallel implementation.
+        A manual backup that took a different code path would be a second place for the
+        chain/plan/upload-minting rules to drift, and the one thing worse than a backup
+        that does not run is two subtly different ones.
+        """
+        return backups.files_dispatch_once(
+            db_path, log_dir, **_fleet_file_defaults(),
+            interval_hours=settings.get_int(db_path, "backup.files_interval_hours"),
+            full_every=settings.get_int(db_path, "backup.files_full_every"),
+            limits={
+                "max_file_mb": settings.get_int(db_path, "backup.files_max_file_mb"),
+                "max_set_gb": settings.get_int(db_path, "backup.files_max_set_gb"),
+                "use_vss": settings.get_bool(db_path, "backup.files_use_vss"),
+            },
+            machines=_roster(names), hub_url=hub_url,
+            max_concurrent=settings.get_int(db_path, "backup.files_max_concurrent"),
+            ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"))
+
+    def _why_not_runnable(machine):
+        """A message explaining why this machine cannot back up, or None if it can.
+
+        Checked BEFORE the request flag is set, so pressing "Back up now" on a machine
+        that is switched off in policy says so immediately instead of parking a request
+        that would never be honoured.
+        """
+        effective = backups.effective_file_config(db_path, machine,
+                                                  **_fleet_file_defaults())
+        if not effective["enabled"]:
+            return "File backups are turned off for this machine."
+        if not effective["destination_id"]:
+            return "No backup destination is set for this machine."
+        if not effective["include"]:
+            return "No paths are selected to back up."
+        if backups.machine_key_for(machine) is None:
+            return "No backup encryption key exists yet. Create one first."
+        return None
 
     def _key_state():
         """Everything the console needs to nag correctly, and nothing that reveals the
@@ -468,10 +537,16 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     @access.require_machine(permissions.MANAGE_BACKUPS)
     def update_machine_backup(machine):
         data = request.get_json(silent=True) or {}
+        # An explicit `"enabled": null` is the console's "Follow the fleet policy", and
+        # is NOT the same as omitting the key (which means "leave it as it is"). Only the
+        # former clears the override -- see backups.FOLLOW_FLEET.
+        enabled = data.get("enabled")
+        if "enabled" in data and enabled is None:
+            enabled = backups.FOLLOW_FLEET
         try:
             backups.set_machine_config(
                 db_path, machine,
-                enabled=data.get("enabled"),
+                enabled=enabled,
                 destination_id=data.get("destination_id"),
                 include=data.get("include"),
                 exclude=data.get("exclude"),
@@ -611,7 +686,83 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                                             data.get("exclude") or [], profiles),
         }), 200
 
-    # ---------------- Console: run a backup now ----------------
+    # ---------------- Console: run a PC backup now ----------------
+    #
+    # "Back up now" records a REQUEST and then tries to dispatch it, rather than talking
+    # to the machine directly. The request is what survives the machine being offline:
+    # a laptop in a bag gets its backup when it reappears, which is the same mechanism
+    # that makes a missed nightly run catch up (see files_dispatch_once). So the button
+    # never fails just because a PC is asleep -- it answers "queued" instead of "started".
+    def _run_state(machine, entry_online):
+        """What actually happened to a request, phrased for the operator."""
+        pending = backups.get_machine_config(db_path, machine)["run_requested_at"]
+        if not pending:
+            return "started", "Backing up now."
+        if not entry_online:
+            return "queued", "This PC is offline. It will back up when it comes online."
+        return "queued", ("Waiting for a free slot -- too many backups are running "
+                          "right now. It will start automatically.")
+
+    @bp.route("/api/backups/machines/<machine>/run", methods=["POST"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def run_machine_backup(machine):
+        """Back up one PC now, or as soon as it is reachable."""
+        bad = _require_json()
+        if bad:
+            return bad
+        problem = _why_not_runnable(machine)
+        if problem:
+            return jsonify({"error": problem}), 400
+
+        online = next((backups.roster_entry(e)[1] for e in _roster([machine])), False)
+        backups.request_file_run(db_path, machine, actor=_current_email())
+        fleet.audit(db_path, actor=_current_email(), action="backup_files_run",
+                    target=machine, detail={"online": online})
+        _dispatch_files([machine])
+        status, message = _run_state(machine, online)
+        payload = _machine_backup_payload(machine)
+        payload.update({"status": status, "message": message})
+        return jsonify(payload), 202
+
+    @bp.route("/api/backups/files/run", methods=["POST"])
+    @login_required
+    @can_manage
+    def run_fleet_backup():
+        """Back up every PC in scope now, or as each one comes online.
+
+        Machines that cannot back up at all (turned off, no destination, no paths) are
+        counted as skipped rather than failing the whole request -- an operator pressing
+        this wants the fleet backed up, not a 400 because one machine is opted out.
+        """
+        bad = _require_json()
+        if bad:
+            return bad
+        actor = _current_email()
+        requested, skipped = [], 0
+        for entry in _roster():
+            machine, _online = backups.roster_entry(entry)
+            if not machine or not access.in_scope(machine):
+                continue
+            if _why_not_runnable(machine):
+                skipped += 1
+                continue
+            backups.request_file_run(db_path, machine, actor=actor)
+            requested.append(machine)
+
+        fleet.audit(db_path, actor=actor, action="backup_files_run_fleet",
+                    detail={"requested": len(requested), "skipped": skipped})
+        started = _dispatch_files(requested) if requested else 0
+        return jsonify({
+            "status": "queued",
+            "requested": len(requested),
+            "started": started,
+            "queued": len(requested) - started,
+            "skipped": skipped,
+            "defaults": _files_state(),
+        }), 202
+
+    # ---------------- Console: run a hub database backup now ----------------
     @bp.route("/api/backups/run", methods=["POST"])
     @login_required
     @can_manage

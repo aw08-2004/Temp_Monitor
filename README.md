@@ -184,8 +184,11 @@ behind Google sign-in, see below):
 - `/` -- a card per machine (live temp, status, uptime); click one to open
   its detail page
 - `/machine/<name>` -- that machine's live temp, uptime, agent version,
-  asset tag/serial number/model, and its own history chart (day picker +
-  live updates for today)
+  asset tag/serial number/model, a Storage card with one % occupied tile per
+  volume (used/total/free), and its own history charts: CPU, memory, disk usage,
+  disk read/write, network in/out, GPU, temperature (day picker + live updates
+  for today). The throughput panels auto-scale their units, so an idle NIC reads
+  in KB/s and a busy NVMe in MB/s on the same axis format.
 - `/history` -- daily summary/average across all machines
 
 Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
@@ -485,6 +488,21 @@ recorded") — before anything runs.
 **Incremental, in chains.** Each run uploads only what changed; a full is forced every
 `backup.files_full_every` runs. Rotation deletes **whole chains** — never an archive
 inside one, because an incremental without its full restores to nothing.
+
+**A PC that was switched off is not skipped — it catches up.** The scheduler only
+dispatches to machines it can currently reach, so a laptop that was closed at 03:00 stays
+*due* rather than being marked as attempted, and backs up within a minute of coming back
+online. (Queuing a backup for an unreachable machine used to move its clock forward, so
+it missed that night *and* the next one.)
+
+**Back up now**, on the machine's **Backup** tab for one PC, or on **Backup Settings** for
+everything in your scope. This also works on a machine that is switched off: the request
+is remembered and answered when the PC reappears, so the button reports *started* or
+*queued* rather than failing. Pressing it twice does not queue two backups.
+
+> A fleet-wide "back up now" can bring a lot of machines back at once, so
+> `backup.files_max_concurrent` (default **3**) limits how many run simultaneously.
+> The rest start automatically as slots free up; set it to 0 to remove the limit.
 
 **Agents never hold the destination credential.** For S3 the hub mints a pre-signed PUT
 scoped to that machine's folder; for WebDAV the agent uploads to the hub, which streams it

@@ -274,6 +274,21 @@ def init_backups_db(db_path):
             )
             """
         )
+        # Added in hub 1.32.0, same ALTER-if-missing reason as backup_runs above.
+        # `run_requested_at` is the manual-backup queue: an operator pressing "Back up
+        # now" sets it, and the next dispatch pass that finds the machine ONLINE clears
+        # it. It lives here rather than in a table of its own because there is at most
+        # one outstanding request per machine -- pressing the button twice while a PC is
+        # offline must not queue two backups.
+        config_columns = {row["name"] for row in
+                          conn.execute("PRAGMA table_info(backup_machine_config)")}
+        for column, ddl in (
+            ("run_requested_at", "INTEGER"),
+            ("run_requested_by", "TEXT"),
+        ):
+            if column not in config_columns:
+                conn.execute(
+                    f"ALTER TABLE backup_machine_config ADD COLUMN {column} {ddl}")
         # One row per uploaded machine archive. `chain_id` groups a full with the
         # incrementals that depend on it, and `sequence` is 0 for that full -- the two
         # together are what makes rotation able to delete a whole chain and never strand
@@ -1490,6 +1505,12 @@ def probe_destination(db_path, log_dir, destination_id, actor="system"):
 # of the fleet list. Making them replace would mean an operator adding one folder for one
 # PC silently drops that PC out of the fleet-wide policy -- the roadmap asks for "per-PC
 # extra paths", and additive is what makes that phrase true.
+# Passed as `enabled` to set_machine_config to CLEAR the override rather than set it.
+# A distinct object rather than a string or -1, so it can never arrive from JSON by
+# accident -- the web layer has to translate an explicit null into it deliberately.
+FOLLOW_FLEET = object()
+
+
 def _machine_config_row(row, machine):
     if row is None:
         return {
@@ -1502,6 +1523,8 @@ def _machine_config_row(row, machine):
             "reported_at": None,
             "updated_at": None,
             "updated_by": None,
+            "run_requested_at": None,
+            "run_requested_by": None,
         }
     return {
         "machine": row["machine"],
@@ -1513,6 +1536,8 @@ def _machine_config_row(row, machine):
         "reported_at": row["reported_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
+        "run_requested_at": row["run_requested_at"],
+        "run_requested_by": row["run_requested_by"],
     }
 
 
@@ -1530,6 +1555,11 @@ def has_overrides(config):
     record_profiles), which is most of the fleet. Those are not exceptions to the fleet
     policy and listing them as such would bury the handful of machines someone really did
     opt out among hundreds that simply checked in.
+
+    `run_requested_at` is deliberately NOT counted either. A pending "Back up now" is a
+    one-shot action, not a policy difference, and an operator who pressed the button on
+    thirty offline laptops should not find all thirty listed as exceptions to the fleet
+    settings for as long as they stay offline.
     """
     return bool(config["enabled"] is not None or config["destination_id"]
                 or config["include"] or config["exclude"])
@@ -1554,6 +1584,12 @@ def set_machine_config(db_path, machine, *, enabled=None, destination_id=None,
     resending the path lists. Clearing an override back to "follow the fleet" is done by
     passing the sentinel `""` for destination_id or an empty list for the path lists --
     both distinguishable from None.
+
+    `enabled` has no such natural empty value: False is a real setting ("never back this
+    machine up"), so FOLLOW_FLEET is the sentinel that clears it. Without one, the
+    console's "Follow the fleet policy" option was unreachable -- it sends JSON null,
+    which arrived here as "leave alone", so a machine that had once been opted out could
+    never be opted back in from the UI.
     """
     machine = str(machine or "").strip()
     if not machine:
@@ -1568,7 +1604,9 @@ def set_machine_config(db_path, machine, *, enabled=None, destination_id=None,
         exclude = backup_paths.validate_patterns(exclude, kind="exclude")
     else:
         exclude = current["exclude"]
-    if enabled is None:
+    if enabled is FOLLOW_FLEET:
+        enabled = None
+    elif enabled is None:
         enabled = current["enabled"]
     if destination_id is None:
         destination_id = current["destination_id"]
@@ -1593,6 +1631,61 @@ def set_machine_config(db_path, machine, *, enabled=None, destination_id=None,
                 detail={"enabled": enabled, "destination_id": destination_id,
                         "include": include, "exclude": exclude})
     return get_machine_config(db_path, machine)
+
+
+def request_file_run(db_path, machine, actor="system", now=None):
+    """Queue a manual "Back up now" for one machine. Returns the stored epoch.
+
+    This does NOT talk to the machine. It records the intent, and the next dispatch pass
+    that finds the machine online turns it into a command. That indirection is the whole
+    point: an operator pressing the button on a laptop that is shut in a bag gets a
+    backup when the laptop next appears, rather than an error or a command that expires
+    unseen fifteen minutes later.
+
+    Re-requesting while one is already pending simply refreshes the timestamp -- there is
+    one flag per machine, so the button is idempotent no matter how many times an anxious
+    operator presses it.
+
+    Like record_profiles, this touches a row without creating an override: a machine that
+    has been asked to back up now has not been configured differently from the fleet.
+    """
+    machine = str(machine or "").strip()
+    if not machine:
+        raise ValueError("A machine name is required.")
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO backup_machine_config(machine, run_requested_at, "
+            "run_requested_by) VALUES (?, ?, ?) "
+            "ON CONFLICT(machine) DO UPDATE SET "
+            "run_requested_at = excluded.run_requested_at, "
+            "run_requested_by = excluded.run_requested_by",
+            (machine, now, actor),
+        )
+    return now
+
+
+def clear_file_run_request(db_path, machine):
+    """Drop a pending manual request. Called once it has become a real command."""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE backup_machine_config SET run_requested_at = NULL, "
+            "run_requested_by = NULL WHERE machine = ?", (machine,))
+
+
+def running_file_runs(db_path):
+    """How many machine file backups are in flight right now.
+
+    The dispatcher's throttle reads this. Counting rows rather than tracking a counter
+    means a hub restart mid-pass cannot leak capacity, and expire_stale_file_runs is
+    already responsible for retiring rows whose agent vanished -- so the number cannot
+    drift upward forever.
+    """
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM backup_runs WHERE kind = ? AND status = ?",
+            (BACKUP_MACHINE_FILES, RUN_RUNNING)).fetchone()
+    return int(row["n"] if row else 0)
 
 
 def record_profiles(db_path, machine, profiles):
@@ -1956,6 +2049,14 @@ COMMAND_RESTORE_FILES = "restore_files"
 # multi-gigabyte archive, short enough that a URL scraped from a log is not a standing
 # grant. The agent requests it at dispatch and uploads immediately.
 UPLOAD_URL_TTL_SECONDS = 6 * 60 * 60
+
+# How many machine backups may be in flight at once, fleet-wide. This exists because of
+# catch-up: forty laptops that were shut all weekend come online within a few minutes of
+# each other on Monday, and without a throttle every one of them starts pushing a full
+# backup up the same office uplink at 09:00. Dispatch is per-tick, so the queue drains
+# steadily instead -- at a 60s tick, a cap of 3 still clears forty machines in about
+# fifteen minutes. 0 means unlimited.
+DEFAULT_MAX_CONCURRENT_FILE_RUNS = 3
 
 MAX_MANIFEST_ROWS = 200_000
 
@@ -2472,27 +2573,65 @@ def mint_upload(db_path, log_dir, destination_id, object_key, hub_url="", run_id
             "expires_in": UPLOAD_URL_TTL_SECONDS}
 
 
+def roster_entry(entry):
+    """Normalise one roster element to (machine, online).
+
+    The roster may be a list of names or of {"machine", "online"} dicts. A bare name
+    counts as online, which keeps every existing caller and test working and means the
+    degenerate case is "behave as before" rather than "silently back nothing up".
+    """
+    if isinstance(entry, dict):
+        return str(entry.get("machine") or "").strip(), bool(entry.get("online", True))
+    return str(entry or "").strip(), True
+
+
 def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                         fleet_include, fleet_exclude, interval_hours, full_every,
                         limits, machines, now=None, hub_url="",
+                        max_concurrent=DEFAULT_MAX_CONCURRENT_FILE_RUNS,
                         ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
-    """Queue a `backup_files` command for every machine that is due. Returns the count.
+    """Queue a `backup_files` command for every ONLINE machine that is due or has been
+    asked to back up now. Returns the count.
 
     `machines` is the roster, passed in -- this module does not know how to enumerate the
-    fleet (that is machine_info, which app.py owns) and should not learn.
+    fleet (that is machine_info, which app.py owns) and should not learn. Entries carry
+    an `online` flag; see roster_entry.
 
-    Per machine, in order: resolve the effective policy, skip if disabled or not due,
-    open the run row, mint an upload, then queue the command. Run-row-before-command is
-    the same claim-then-queue discipline packages.dispatch_once uses -- a crash between
-    the two leaves one visible failed run rather than a backup that ran with nothing
-    recording it.
+    **Offline machines are skipped, and skipping them is the catch-up mechanism.**
+    Dispatching to a machine that cannot answer used to be actively harmful, not merely
+    useless: start_file_run stamps `started_at = now`, files_due_at anchors on the newest
+    attempt, so queuing a command into the void reset the machine's clock and pushed the
+    next real attempt out by a full interval. A laptop that was closed at 03:00 therefore
+    missed that night AND the following one. It also burned the six-hour pre-signed
+    upload URL minted alongside it, so even an agent that reconnected later got an
+    archive it could no longer upload. Because due-ness and the manual-request flag are
+    both persistent state, doing nothing while a machine is unreachable leaves it due --
+    and the first pass after it reappears (within one tick, so a minute) dispatches it.
+
+    Manual requests are served before scheduled ones. During a Monday-morning catch-up
+    the throttle below can hold a queue for several minutes, and an operator who just
+    pressed "Back up now" on the machine in front of them should not wait behind thirty
+    laptops that are merely due.
+
+    Per machine, in order: resolve the effective policy, skip if disabled/not due/not
+    online, open the run row, mint an upload, then queue the command. Run-row-before-
+    command is the same claim-then-queue discipline packages.dispatch_once uses -- a
+    crash between the two leaves one visible failed run rather than a backup that ran
+    with nothing recording it.
 
     One machine's failure never stops the pass: a bad path pattern on PC-3 must not mean
     PC-4 goes unbacked-up tonight.
     """
     now = int(time.time() if now is None else now)
-    dispatched = 0
-    for machine in machines or []:
+
+    # Phase 1 -- decide who wants to run. Cheap reads only; nothing here mints a URL or
+    # writes a run row, so a machine that is skipped by the throttle below is left in
+    # exactly the state it started in and will be picked up by a later pass.
+    candidates = []
+    for entry in machines or []:
+        machine, online = roster_entry(entry)
+        if not machine:
+            continue
         try:
             config = effective_file_config(
                 db_path, machine, fleet_enabled=fleet_enabled,
@@ -2502,9 +2641,24 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                 continue
             if not config["include"]:
                 continue        # nothing selected: not a failure, just nothing to do
-            if now < files_due_at(db_path, machine, interval_hours):
+            stored = get_machine_config(db_path, machine)
+            requested = stored["run_requested_at"]
+            if not requested and now < files_due_at(db_path, machine, interval_hours):
                 continue
+            if not online:
+                continue        # stays due / stays requested -- see the docstring
+            candidates.append((0 if requested else 1, machine, config, stored))
+        except Exception as e:
+            print(f"[backup] Could not evaluate a file backup for {machine}: {e}")
+    candidates.sort(key=lambda c: c[0])
 
+    # Phase 2 -- dispatch as far as the throttle allows.
+    dispatched = 0
+    in_flight = running_file_runs(db_path)
+    for _, machine, config, stored in candidates:
+        if max_concurrent and in_flight >= max_concurrent:
+            break
+        try:
             destination = get_destination(db_path, config["destination_id"])
             if destination is None:
                 continue
@@ -2512,11 +2666,14 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
             if machine_key is None:
                 continue        # no master key yet; the console already says so loudly
 
+            manual = bool(stored["run_requested_at"])
             plan = plan_next_run(db_path, machine, full_every)
             object_key = object_key_for_machine(destination, machine, plan, now)
-            run_id = start_file_run(db_path, machine, config["destination_id"], plan,
-                                    TRIGGER_SCHEDULE, "scheduler", now,
-                                    object_key=object_key)
+            run_id = start_file_run(
+                db_path, machine, config["destination_id"], plan,
+                TRIGGER_MANUAL if manual else TRIGGER_SCHEDULE,
+                (stored["run_requested_by"] or "operator") if manual else "scheduler",
+                now, object_key=object_key)
             upload = mint_upload(db_path, log_dir, config["destination_id"], object_key,
                                  hub_url=hub_url, run_id=run_id)
             params = build_file_command_params(
@@ -2527,6 +2684,12 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                 db_path, machine=machine, command_type=COMMAND_BACKUP_FILES,
                 params=params, issued_by="scheduler", ttl_seconds=ttl_seconds)
             attach_command(db_path, run_id, command_id)
+            # Cleared only now that the request has become a real, recorded command. If
+            # anything above raised, the flag survives and the next pass tries again --
+            # which is what an operator who pressed the button expects.
+            if manual:
+                clear_file_run_request(db_path, machine)
+            in_flight += 1
             dispatched += 1
         except Exception as e:
             print(f"[backup] Could not schedule a file backup for {machine}: {e}")
@@ -2543,7 +2706,9 @@ def object_key_for_machine(destination, machine, plan, now):
 
 def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_include,
                fleet_exclude, interval_hours, full_every, keep_chains, limits, machines,
-               now=None, hub_url="", ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
+               now=None, hub_url="",
+               max_concurrent=DEFAULT_MAX_CONCURRENT_FILE_RUNS,
+               ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
     """One per-PC scheduler pass: retire abandoned runs, then dispatch due ones.
 
     Retire FIRST, for the same reason packages.tick reconciles first: a machine whose
@@ -2551,6 +2716,10 @@ def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_incl
     it would never be retried until something expired it. Abandoned RESTORES are retired
     on the same pass -- they have no schedule of their own, and a restore that hangs
     forever is exactly as misleading as a backup that does.
+
+    Retiring first also releases throttle capacity: `running` rows are what
+    files_dispatch_once counts against max_concurrent, so a machine that died mid-backup
+    must stop occupying a slot before the pass decides who else may start.
     """
     expired = expire_stale_file_runs(db_path, now=now)
     expired += expire_stale_restores(db_path, now=now)
@@ -2559,7 +2728,7 @@ def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_incl
         fleet_destination=fleet_destination, fleet_include=fleet_include,
         fleet_exclude=fleet_exclude, interval_hours=interval_hours,
         full_every=full_every, limits=limits, machines=machines, now=now,
-        hub_url=hub_url, ttl_seconds=ttl_seconds)
+        hub_url=hub_url, max_concurrent=max_concurrent, ttl_seconds=ttl_seconds)
     return expired, dispatched
 
 

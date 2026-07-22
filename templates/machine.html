@@ -67,6 +67,15 @@
         </div>
     </div>
 
+    {# Live per-disk space usage, one tile per volume, built by machine.js from the
+       diagnostics `disks` list. Live state rather than history, so it is a card and not a
+       chart panel -- how many disks a machine has is per-machine and changes over its life. #}
+    <div class="card storage-card">
+        <div class="section-title">Storage</div>
+        <div class="disk-grid" id="disk-grid"></div>
+        <div id="disk-empty" class="stat-card__meta">No disks reported yet.</div>
+    </div>
+
     {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is
        per-machine state, like the asset tag -- Settings holds the fleet-wide preference
        order this overrides. #}

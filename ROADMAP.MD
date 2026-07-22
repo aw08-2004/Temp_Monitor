@@ -7,9 +7,28 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 ## ✅ 6. History page
 
 Done. Per-machine multi-panel dashboard (Komodo-style): CPU load, memory (with total RAM
-shown and used/total GB on hover), disk usage, network in/out, GPU temp/load, temperature.
-Backed by typed `readings` columns, a multi-metric history endpoint, and per-metric
-collection toggles in Settings.
+shown and used/total GB on hover), disk usage, disk read/write, network in/out, GPU
+temp/load, temperature. Backed by typed `readings` columns, a multi-metric history
+endpoint, and per-metric collection toggles in Settings.
+
+**Throughput panels auto-scale (hub 1.31.0)** — network in/out and disk read/write are
+stored in B/s and rendered through `formatRate()`, so each axis tick and tooltip picks its
+own KB/MB/GB. A fixed `B/s` axis made a 400 MB/s NVMe an unreadable nine-digit tick and an
+idle NIC a flat line on the floor. Disk I/O is **summed across every drive**, unlike
+network, which picks the single busiest adapter — LHM reports each disk once, with none of
+the NDIS filter mirrors that would double-count a NIC. Its own toggle
+(`metrics.collect_disk_io`), separate from `collect_disk`, so dropping the noisy per-second
+rates doesn't also stop recording "is C: filling up".
+
+**Storage cards (hub 1.31.0 + agent 3.10.0)** — one live tile per volume on the machine
+page: fill bar, % occupied, used/total/free, amber at 80% and red at 90%. Live state rather
+than a chart panel, because how many disks a machine has is per-machine and changes over
+its life. **The GB has to come from the agent**: LHM reports storage used space only as a
+percentage, with the absolute size nowhere in its sensor set, so `VolumeReader.cs` walks
+`DriveInfo` and appends synthetic `/volume/<letter>` Data sensors to the ordinary sensor
+block — no new `/api/report` field, and an older hub ignores them. A machine that isn't
+sending them (companion.py, or an agent below 3.10.0) falls back to LHM's per-device
+percentage and shows the bar without the GB line.
 
 ## 🚧 3. Settings: which sensors to read, data retention, etc.
 
@@ -17,7 +36,7 @@ Mostly done:
 - `computer.primary_sensor_preference` — ordered CPU-temp sensor preference (+ per-machine
   override).
 - `metrics.collect_cpu_load` / `collect_memory` / `collect_gpu` / `collect_disk` /
-  `collect_network` — per-metric collection on/off toggles.
+  `collect_disk_io` / `collect_network` — per-metric collection on/off toggles.
 - `data.retention_days`, `data.prune_interval_seconds`, `data.ingest_max_backdate_days`,
   `data.command_output_retention_seconds` — retention knobs.
 
@@ -137,7 +156,7 @@ covered by tests rather than eyeballed.
 
 ---
 
-## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0
+## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0, manual runs + offline catch-up hub 1.32.0
 
 **1a. Hub database** — ✅ built. `backups.py` (envelope, destinations, snapshot/rotate
 scheduler — flask-free) + `backups_web.py` (console API), a Backups page, `backup.*`
@@ -234,6 +253,40 @@ archives too (`--list` / `--extract`).
 - **Chains, manifest and scheduler.** `backup_file_sets` + `backup_files` record one row
   per file *version*; `plan_next_run` forces a full every `files_full_every` runs;
   `files_tick` dispatches per machine on the same claim-then-queue discipline as deploys.
+- **Offline machines catch up instead of losing a night** (hub 1.32.0). The roster now
+  carries each machine's online status and `files_dispatch_once` refuses to queue for a
+  machine that cannot answer. That is a *fix*, not a refinement: `start_file_run` stamps
+  `started_at`, and `files_due_at` anchors on the newest attempt — so dispatching into
+  the void reset the machine's clock and pushed the next real attempt out by a whole
+  interval, meaning a laptop closed at 03:00 missed that night **and the following one**.
+  It also burned the six-hour pre-signed upload URL minted alongside it. Because due-ness
+  is persistent state, doing nothing while a machine is unreachable leaves it due, and
+  the first pass after it reappears (≤ 1 tick, so a minute) backs it up.
+- **"Back up now", per PC and fleet-wide** (hub 1.32.0). The button records a *request*
+  (`backup_machine_config.run_requested_at`) and then tries to dispatch it, rather than
+  talking to the machine. The indirection is the feature: pressing it on a laptop that is
+  shut in a bag returns "queued — it will back up when it comes online" instead of an
+  error or a command that expires unseen fifteen minutes later. One flag per machine, so
+  the button is idempotent; cleared only once a real command exists, so a failure retries.
+  Manual requests are dispatched **before** scheduled ones, and beat the interval — the
+  moment someone presses it is usually just before a risky change, which is exactly when
+  "backed up an hour ago, nothing to do" would be the wrong answer.
+- **`backup.files_max_concurrent` (default 3).** Catch-up creates the herd this guards
+  against: forty laptops that were off all weekend return within minutes of each other on
+  Monday and would otherwise all push at once. Counted from `running` run rows rather
+  than a counter, so a hub restart mid-pass cannot leak capacity, and `files_tick`
+  retires abandoned runs *before* dispatching so one dead agent cannot permanently shrink
+  the fleet's backup capacity. 0 disables the limit.
+
+**Fixed here** — the machine Backup tab's **"Follow the fleet policy"** option had never
+worked. `set_machine_config` reads `None` as "leave this field alone" (so a caller can
+toggle one field without resending the path lists), but the console sends exactly that
+for "follow the fleet" — so once a machine had been opted out it could never be opted back
+in from the UI, and the new "Back up now" refused it forever with "file backups are turned
+off for this machine". `False` is a real setting, so there was no natural empty value to
+use: `backups.FOLLOW_FLEET` is now the sentinel that clears the override, and the web
+layer translates an explicit JSON `null` into it while a *missing* key still means "leave
+alone".
 - **`rotate_chains` — the sharp edge.** The hub-DB rotation counts objects, which here
   would happily delete the full that four incrementals depend on. Rotation therefore works
   in whole chains, and orders them by `(created_at, rowid)` — the rowid tiebreak is

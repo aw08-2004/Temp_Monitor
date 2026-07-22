@@ -57,6 +57,12 @@ public sealed class SensorReader : ISensorSource
 
             foreach (var hw in _computer.Hardware)
                 CollectHardware(hw, sensors, cpuTemps, collectNetwork);
+
+            // Per-volume capacity in GB, which LHM does not expose (it reports used space
+            // only as a percentage). Appended after the hardware walk so real hardware keeps
+            // its position in the block -- the hub's disk_load_pct takes the FIRST Load
+            // sensor named "Used Space" and must keep meaning the physical drive.
+            VolumeReader.Append(sensors);
         }
         catch (Exception e)
         {

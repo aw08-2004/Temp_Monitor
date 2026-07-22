@@ -11,8 +11,82 @@
    internal `gap` but no bottom margin, so a sibling card sits flush against the last row
    of stat cards and reads as overlapping them. */
 .chart-card,
-.sensor-card {
+.sensor-card,
+.storage-card {
     margin-top: var(--space-6);
+}
+
+/* ============ Storage (per-disk space) ============ */
+/* auto-fit rather than a fixed column count: a laptop reports one volume and a workstation
+   five, and either should fill the card rather than leaving a half-empty row. */
+.disk-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--space-4);
+}
+
+.disk-grid:empty {
+    display: none;
+}
+
+.disk-tile {
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    min-width: 0;
+}
+
+.disk-tile__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+/* The name can be "C: (Windows-SSD-Volume)"; ellipsize it rather than let it push the
+   percentage out of the tile. min-width:0 is what actually lets it shrink in a flex row. */
+.disk-tile__name {
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.disk-tile__pct {
+    font-weight: 700;
+    font-size: var(--text-md);
+    flex-shrink: 0;
+}
+
+.disk-tile__bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--control-bg);
+    overflow: hidden;
+    margin-bottom: var(--space-2);
+}
+
+.disk-tile__fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.disk-tile__fill--warn {
+    background: var(--warning);
+}
+
+.disk-tile__fill--danger {
+    background: var(--danger);
+}
+
+/* The empty-state line is hidden by machine.js as soon as a disk is rendered. It starts
+   visible so a machine that never reports storage says so instead of showing a blank card. */
+#disk-empty {
+    margin-top: var(--space-2);
 }
 
 /* The select carries long sensor names; without a cap it stretches to fill the toolbar

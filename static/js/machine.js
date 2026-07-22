@@ -140,16 +140,55 @@ const ENABLED_METRICS = (() => {
     catch (e) { return {}; }
 })();
 
+// `rate: true` marks a metric stored in bytes per second. Those panels label their axis
+// and tooltip through formatRate() instead of pinning a fixed "B/s", so a 400 MB/s NVMe
+// and a 2 KB/s idle NIC are both readable -- at a fixed B/s the former is an unreadable
+// nine-digit tick and the latter is a flat line at the bottom of the axis.
 const METRICS = [
-    { key: 'cpu_load', label: 'CPU Load',    unit: '%',   color: '#10b981', max: 100, diag: 'cpu_load_pct' },
-    { key: 'memory',   label: 'Memory',      unit: '%',   color: '#f59e0b', max: 100, diag: 'memory_load_pct' },
-    { key: 'disk',     label: 'Disk',        unit: '%',   color: '#3b82f6', max: 100, diag: 'disk_load_pct' },
-    { key: 'net_rx',   label: 'Network In',  unit: 'B/s', color: '#22d3ee', diag: 'net_rx_bps' },
-    { key: 'net_tx',   label: 'Network Out', unit: 'B/s', color: '#ec4899', diag: 'net_tx_bps' },
-    { key: 'gpu_temp', label: 'GPU Temp',    unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
-    { key: 'gpu_load', label: 'GPU Load',    unit: '%',   color: '#a855f7', max: 100, diag: 'gpu_load_pct' },
-    { key: 'temp',     label: 'Temperature', unit: '°C',  color: '#f97316' },
+    { key: 'cpu_load',   label: 'CPU Load',    unit: '%',   color: '#10b981', max: 100, diag: 'cpu_load_pct' },
+    { key: 'memory',     label: 'Memory',      unit: '%',   color: '#f59e0b', max: 100, diag: 'memory_load_pct' },
+    { key: 'disk',       label: 'Disk',        unit: '%',   color: '#3b82f6', max: 100, diag: 'disk_load_pct' },
+    { key: 'net_rx',     label: 'Network In',  unit: 'B/s', color: '#22d3ee', rate: true, diag: 'net_rx_bps' },
+    { key: 'net_tx',     label: 'Network Out', unit: 'B/s', color: '#ec4899', rate: true, diag: 'net_tx_bps' },
+    { key: 'disk_read',  label: 'Disk Read',   unit: 'B/s', color: '#14b8a6', rate: true, diag: 'disk_read_bps' },
+    { key: 'disk_write', label: 'Disk Write',  unit: 'B/s', color: '#f43f5e', rate: true, diag: 'disk_write_bps' },
+    { key: 'gpu_temp',   label: 'GPU Temp',    unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
+    { key: 'gpu_load',   label: 'GPU Load',    unit: '%',   color: '#a855f7', max: 100, diag: 'gpu_load_pct' },
+    { key: 'temp',       label: 'Temperature', unit: '°C',  color: '#f97316' },
 ];
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+function scaleBytes(bytes, base) {
+    let value = Math.abs(Number(bytes));
+    let step = 0;
+    while (value >= base && step < BYTE_UNITS.length - 1) { value /= base; step += 1; }
+    return { value: Number(bytes) < 0 ? -value : value, unit: BYTE_UNITS[step] };
+}
+
+// Throughput scales in 1000s, capacity in 1024s -- deliberately different, because each
+// matches what the operator is comparing against. Chart.js picks round tick values in raw
+// bytes (400000, 800000...), so a binary axis would label them 390.6 KB/s and 781.3 KB/s;
+// decimal makes those gridlines land on 400 KB/s and 800 KB/s, and it is what network gear
+// reports anyway. Disk capacity stays binary so "476 GB" matches what Explorer shows for
+// the same drive.
+function formatRate(bytesPerSecond) {
+    if (!Number.isFinite(Number(bytesPerSecond))) return '--';
+    const { value, unit } = scaleBytes(bytesPerSecond, 1000);
+    // Whole numbers below 1 KB/s: a "0.0 B/s" axis tick reads as broken. One decimal above
+    // -- enough to tell 1.4 from 1.9 MB/s without noise. Round values keep their integer
+    // form, so an 800 KB/s gridline is labelled "800 KB/s", not "800.0 KB/s".
+    if (unit === 'B' || Number.isInteger(value)) return `${Math.round(value)} ${unit}/s`;
+    return `${value.toFixed(1)} ${unit}/s`;
+}
+
+// Absolute size (GB in, human units out) for the Storage cards. A decimal below 100 only
+// -- "412.0 GB" is false precision next to a number an operator reads as "about 400".
+function formatGb(gb) {
+    if (!Number.isFinite(Number(gb))) return '--';
+    const { value, unit } = scaleBytes(Number(gb) * 1024 * 1024 * 1024, 1024);
+    return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+}
 
 const gridEl = document.getElementById('metric-grid');
 const panels = [];              // { metric, chart, emptyEl, titleEl }
@@ -181,6 +220,13 @@ function metricEnabled(metric) {
 function panelConfig(metric) {
     const yScale = { title: { display: true, text: metric.unit }, grid: { color: chartGridColor } };
     if (metric.max !== undefined) { yScale.min = 0; yScale.max = metric.max; }
+    if (metric.rate) {
+        // Each tick scales on its own value, so the axis stays readable whatever range the
+        // zoom lands on. The axis title drops the unit -- it now lives on every tick.
+        yScale.min = 0;
+        yScale.title.text = 'per second';
+        yScale.ticks = { callback: (value) => formatRate(value) };
+    }
     return {
         type: 'line',
         data: {
@@ -205,9 +251,11 @@ function panelConfig(metric) {
                 tooltip: {
                     mode: 'index', intersect: false,
                     callbacks: {
-                        label: (ctx) => metric.key === 'memory'
-                            ? formatMemTooltip(ctx.parsed.y)
-                            : `${ctx.parsed.y.toFixed(1)} ${metric.unit}`,
+                        label: (ctx) => {
+                            if (metric.key === 'memory') return formatMemTooltip(ctx.parsed.y);
+                            if (metric.rate) return formatRate(ctx.parsed.y);
+                            return `${ctx.parsed.y.toFixed(1)} ${metric.unit}`;
+                        },
                     },
                 },
                 zoom: {
@@ -420,8 +468,75 @@ function formatMetric(value, suffix) {
     return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} ${suffix}` : '--';
 }
 
+// ---- Storage cards ------------------------------------------------------------
+// One tile per volume: fill bar, % occupied, and used/total. Rebuilt on every reading
+// rather than patched in place -- a USB-attached fixed disk or a newly mounted volume
+// changes the LIST, and diffing three text nodes is not worth the state it would need.
+const diskGridEl = document.getElementById('disk-grid');
+const diskEmptyEl = document.getElementById('disk-empty');
+
+// Thresholds an operator acts on: amber at 80% (worth planning for), red at 90% (Windows
+// itself starts complaining, and updates begin failing).
+function diskFillClass(pct) {
+    if (pct >= 90) return 'disk-tile__fill--danger';
+    if (pct >= 80) return 'disk-tile__fill--warn';
+    return '';
+}
+
+function renderDisks(disks) {
+    if (!diskGridEl) return;
+    const list = Array.isArray(disks) ? disks : [];
+    // An empty list from a machine that IS reporting sensors means "no disks seen", but an
+    // absent key means an older hub -- either way the previous tiles are stale, so clear.
+    diskGridEl.replaceChildren();
+    diskEmptyEl.style.display = list.length ? 'none' : 'block';
+
+    for (const disk of list) {
+        const pct = Number(disk.used_pct);
+        const hasPct = Number.isFinite(pct);
+
+        const tile = document.createElement('div');
+        tile.className = 'disk-tile';
+
+        const head = document.createElement('div');
+        head.className = 'disk-tile__head';
+        const name = document.createElement('span');
+        name.className = 'disk-tile__name';
+        // textContent: volume labels come from the agent, and /api/report is unauthenticated.
+        name.textContent = disk.name || 'Disk';
+        name.title = name.textContent;
+        const value = document.createElement('span');
+        value.className = 'disk-tile__pct';
+        value.textContent = hasPct ? `${pct.toFixed(0)}%` : '--';
+        head.append(name, value);
+
+        const bar = document.createElement('div');
+        bar.className = 'disk-tile__bar';
+        const fill = document.createElement('div');
+        fill.className = `disk-tile__fill ${diskFillClass(pct)}`.trim();
+        fill.style.width = `${hasPct ? Math.min(100, Math.max(0, pct)) : 0}%`;
+        bar.appendChild(fill);
+
+        const meta = document.createElement('div');
+        meta.className = 'stat-card__meta';
+        // GB needs the agent's volume sensors (3.10.0+). Without them we still know the
+        // percentage, so show the bar and say what's missing instead of an empty tile.
+        if (Number.isFinite(Number(disk.used_gb)) && Number.isFinite(Number(disk.total_gb))) {
+            const free = Number(disk.total_gb) - Number(disk.used_gb);
+            meta.textContent =
+                `${formatGb(disk.used_gb)} of ${formatGb(disk.total_gb)} used · ${formatGb(free)} free`;
+        } else {
+            meta.textContent = 'Used space only — size needs agent 3.10.0+';
+        }
+
+        tile.append(head, bar, meta);
+        diskGridEl.appendChild(tile);
+    }
+}
+
 function applyDiagnostics(diagnostics) {
     const d = diagnostics || {};
+    renderDisks(d.disks);
     if (typeof d.mem_total_gb === 'number') updateMemoryTotal(d.mem_total_gb);
     lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
     document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');

@@ -48,6 +48,14 @@
     let restoreDir = '';
     let restoreOverwrite = false;
 
+    // ---- "Back up now" state ----
+    // The button reports three outcomes, not two: started, queued-because-offline, and
+    // queued-because-throttled. Collapsing the last two into "started" would be a lie an
+    // operator only discovers when they go looking for an archive that isn't there.
+    let runBusy = false;
+    let runMessage = '';
+    let runError = '';
+
     async function api(path, options) {
         const resp = await fetch(path, options);
         let body = null;
@@ -700,10 +708,60 @@
         return wrap;
     }
 
+    async function backupNow() {
+        if (runBusy) return;
+        runBusy = true;
+        runMessage = '';
+        runError = '';
+        render();
+        try {
+            // The route returns the same body as GET, plus status/message -- so the run
+            // history and the pending-request line below refresh from the same response
+            // rather than needing a second fetch.
+            const body = await api(
+                `/api/backups/machines/${encodeURIComponent(MACHINE)}/run`,
+                json('POST', {}));
+            runMessage = body.message || 'Requested.';
+            data = body;
+        } catch (e) {
+            runError = e.message;
+        } finally {
+            runBusy = false;
+            render();
+        }
+    }
+
     function runsCard() {
         const card = el('div', 'card');
         card.style.marginTop = 'var(--space-5)';
         card.appendChild(el('h2', 'section-title', 'Backup history'));
+
+        const actions = el('div', 'settings-actions');
+        const run = el('button', 'btn btn--primary',
+                       runBusy ? 'Working…' : 'Back up now');
+        run.id = 'backup-run-now';
+        run.disabled = runBusy;
+        run.addEventListener('click', backupNow);
+        actions.appendChild(run);
+        const status = el('span', 'settings-actions__status');
+        if (runError) {
+            status.className = 'setting__error';
+            status.textContent = runError;
+        } else {
+            status.textContent = runMessage;
+        }
+        actions.appendChild(status);
+        card.appendChild(actions);
+
+        // Survives a page reload, unlike runMessage: the request is server state, so an
+        // operator returning to the tab still sees that a backup is waiting on this PC
+        // rather than assuming their earlier click did nothing.
+        const pendingAt = (data.config || {}).run_requested_at;
+        if (pendingAt) {
+            card.appendChild(el('p', 'setting__default',
+                `A backup was requested at ${fmtTime(pendingAt)} and will start as soon `
+                + 'as this PC is online.'));
+        }
 
         const runs = data.runs || [];
         if (!runs.length) {

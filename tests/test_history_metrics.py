@@ -53,7 +53,8 @@ def s(name, value, stype, hardware_id, hardware="Device"):
 
 NIC = "/nic/{6c1f-network}"
 # A realistic block spanning every category the dashboard charts, plus a disk Read Rate
-# throughput sensor that the network matcher must NOT mistake for network traffic.
+# throughput sensor that the network matcher must NOT mistake for network traffic, and the
+# synthetic "/volume/..." capacity sensors the agent appends (VolumeReader.cs).
 BLOCK = [
     s("CPU Package", 70.0, "Temperature", "/amdcpu/0", "Ryzen 7"),
     s("CPU Total", 12.0, "Load", "/amdcpu/0", "Ryzen 7"),
@@ -65,12 +66,16 @@ BLOCK = [
     s("GPU Core", 30.0, "Load", "/gpu-nvidia/0", "RTX 3060"),
     s("Used Space", 63.0, "Load", "/nvme/0", "Samsung SSD"),
     s("Read Rate", 1000.0, "Throughput", "/nvme/0", "Samsung SSD"),
+    s("Write Rate", 250.0, "Throughput", "/nvme/0", "Samsung SSD"),
     s("Download Speed", 480.0, "Throughput", NIC, "Intel Ethernet"),
     s("Upload Speed", 630.0, "Throughput", NIC, "Intel Ethernet"),
+    s("Total Space", 476.0, "Data", "/volume/c", "C: (Windows)"),
+    s("Used Space", 412.0, "Data", "/volume/c", "C: (Windows)"),
 ]
 
 METRIC_COLUMNS = ("cpu_load_pct", "memory_load_pct", "gpu_temp", "gpu_load_pct",
-                  "disk_load_pct", "net_rx_bps", "net_tx_bps")
+                  "disk_load_pct", "net_rx_bps", "net_tx_bps",
+                  "disk_read_bps", "disk_write_bps")
 
 
 # --------------------------------------------------------------------------- diagnostics
@@ -84,6 +89,8 @@ def test_diagnostics_extracts_all_metrics():
     check("disk used space", d["disk_load_pct"] == 63.0)
     check("network download", d["net_rx_bps"] == 480.0)
     check("network upload", d["net_tx_bps"] == 630.0)
+    check("disk read rate", d["disk_read_bps"] == 1000.0)
+    check("disk write rate", d["disk_write_bps"] == 250.0)
     check("memory used GB", d["mem_used_gb"] == 6.6)
     # total = used (6.6) + available (9.4) = 16.0; virtual-memory sensors must NOT leak in.
     check("memory total GB (used + available, not virtual)", d["mem_total_gb"] == 16.0)
@@ -132,6 +139,74 @@ def test_network_picks_the_busiest_adapter():
           d_idle["net_rx_bps"] == 0.0 and d_idle["net_tx_bps"] == 0.0)
 
 
+def test_disk_throughput_sums_every_disk():
+    """Disk I/O is summed across drives, unlike network -- LHM reports each storage device
+    once, with none of the NDIS filter mirrors that force the NIC matcher to pick a single
+    adapter. A two-SSD workstation writing on both must chart the total, not one of them."""
+    print("\n-- disk read/write sums across disks and ignores NIC throughput --")
+    block = [
+        s("Read Rate", 1000.0, "Throughput", "/nvme/0", "Samsung SSD"),
+        s("Write Rate", 250.0, "Throughput", "/nvme/0", "Samsung SSD"),
+        s("Read Rate", 4000.0, "Throughput", "/hdd/1", "Seagate"),
+        s("Write Rate", 750.0, "Throughput", "/hdd/1", "Seagate"),
+        s("Download Speed", 9e9, "Throughput", NIC, "Intel Ethernet"),
+        s("Upload Speed", 9e9, "Throughput", NIC, "Intel Ethernet"),
+    ]
+    d = app.extract_diagnostics(block)
+    check("reads add up across both disks", d["disk_read_bps"] == 5000.0)
+    check("writes add up across both disks", d["disk_write_bps"] == 1000.0)
+
+    net_only = [s("Download Speed", 480.0, "Throughput", NIC, "Intel Ethernet"),
+                s("Upload Speed", 630.0, "Throughput", NIC, "Intel Ethernet")]
+    d_net = app.extract_diagnostics(net_only)
+    check("no disk => disk_read is None", d_net["disk_read_bps"] is None)
+    check("no disk => disk_write is None", d_net["disk_write_bps"] is None)
+
+    idle = [s("Read Rate", 0.0, "Throughput", "/nvme/0", "Samsung SSD"),
+            s("Write Rate", 0.0, "Throughput", "/nvme/0", "Samsung SSD")]
+    d_idle = app.extract_diagnostics(idle)
+    check("an idle disk reports 0, not a gap",
+          d_idle["disk_read_bps"] == 0.0 and d_idle["disk_write_bps"] == 0.0)
+
+
+def test_disk_volumes():
+    """The Storage cards. GB comes from the agent's synthetic /volume/ sensors, because LHM
+    reports used space only as a percentage -- so a machine without them (companion.py, or
+    an agent below 3.10.0) must still get a percentage rather than an empty card."""
+    print("\n-- per-volume space usage, with a percentage-only fallback --")
+    disks = app.extract_diagnostics(BLOCK)["disks"]
+    check("one entry per volume", len(disks) == 1)
+    check("named from the volume label", disks[0]["name"] == "C: (Windows)")
+    check("absolute used GB", disks[0]["used_gb"] == 412.0)
+    check("absolute total GB", disks[0]["total_gb"] == 476.0)
+    check("percentage derived from the pair", disks[0]["used_pct"] == 86.6)
+
+    multi = BLOCK + [s("Total Space", 1000.0, "Data", "/volume/d", "D: (Data)"),
+                     s("Used Space", 250.0, "Data", "/volume/d", "D: (Data)")]
+    names = [v["name"] for v in app.extract_diagnostics(multi)["disks"]]
+    check("every volume is reported, in drive-letter order", names == ["C: (Windows)", "D: (Data)"])
+
+    # An agent that predates VolumeReader sends only LHM's per-device Load sensor.
+    legacy = [s("Used Space", 63.0, "Load", "/nvme/0", "Samsung SSD"),
+              s("Used Space", 12.0, "Load", "/hdd/1", "Seagate")]
+    fb = app.extract_diagnostics(legacy)["disks"]
+    check("fallback yields one entry per storage device", len(fb) == 2)
+    check("fallback carries the percentage", fb[0]["used_pct"] == 63.0)
+    check("fallback has no size to report", fb[0]["total_gb"] is None)
+
+    check("no storage sensors at all => empty list",
+          app.extract_diagnostics([s("CPU Total", 5.0, "Load", "/amdcpu/0")])["disks"] == [])
+
+
+def test_volume_sensors_do_not_displace_disk_load_pct():
+    """The volume block reuses the name "Used Space" (as Data, in GB). disk_load_pct takes
+    the first sensor named "Used Space" of type Load, so the two must not collide -- a
+    regression here would chart 412 on a 0-100 axis."""
+    print("\n-- volume capacity sensors don't hijack the disk usage % metric --")
+    d = app.extract_diagnostics(BLOCK)
+    check("disk_load_pct is still the device percentage", d["disk_load_pct"] == 63.0)
+
+
 def test_diagnostics_empty_has_all_keys():
     print("\n-- an empty/None block returns every key as None --")
     for block in (None, []):
@@ -176,7 +251,7 @@ def _stored_metrics(machine):
 def test_ingest_stores_metric_columns():
     print("\n-- /api/report promotes the sensor block into typed columns --")
     for key in ("metrics.collect_cpu_load", "metrics.collect_memory", "metrics.collect_gpu",
-                "metrics.collect_disk", "metrics.collect_network"):
+                "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network"):
         settings.reset(app.DB_PATH, [key])
     client = _client()
     _report(client, "METRICS-ALL", 70.0, BLOCK)
@@ -189,20 +264,30 @@ def test_ingest_stores_metric_columns():
     check("disk_load_pct column", m["disk_load_pct"] == 63.0)
     check("net_rx_bps column", m["net_rx_bps"] == 480.0)
     check("net_tx_bps column", m["net_tx_bps"] == 630.0)
+    check("disk_read_bps column", m["disk_read_bps"] == 1000.0)
+    check("disk_write_bps column", m["disk_write_bps"] == 250.0)
 
 
 def test_ingest_respects_collection_toggles():
     print("\n-- a toggled-off metric is recorded NULL, not silently kept --")
     client = _client()
     settings.set_many(app.DB_PATH, {"metrics.collect_network": False,
-                                    "metrics.collect_disk": False})
+                                    "metrics.collect_disk_io": False})
     _report(client, "METRICS-GATED", 66.0, BLOCK)
     m = _stored_metrics("METRICS-GATED")
     check("network off => net_rx NULL", m["net_rx_bps"] is None)
     check("network off => net_tx NULL", m["net_tx_bps"] is None)
-    check("disk off => disk_load NULL", m["disk_load_pct"] is None)
+    check("disk I/O off => disk_read NULL", m["disk_read_bps"] is None)
+    check("disk I/O off => disk_write NULL", m["disk_write_bps"] is None)
+    # collect_disk and collect_disk_io are deliberately separate knobs: turning off the
+    # noisy per-second rates must not also stop recording "is C: filling up".
+    check("disk usage is unaffected by the disk I/O toggle", m["disk_load_pct"] == 63.0)
+    settings.set_many(app.DB_PATH, {"metrics.collect_disk": False})
+    _report(client, "METRICS-GATED2", 66.0, BLOCK)
+    check("disk off => disk_load NULL", _stored_metrics("METRICS-GATED2")["disk_load_pct"] is None)
     check("an unaffected metric is still recorded", m["cpu_load_pct"] == 12.0)
-    settings.reset(app.DB_PATH, ["metrics.collect_network", "metrics.collect_disk"])
+    settings.reset(app.DB_PATH, ["metrics.collect_network", "metrics.collect_disk",
+                                 "metrics.collect_disk_io"])
 
 
 def test_sensorless_report_stores_null_metrics():
@@ -219,7 +304,7 @@ def test_machine_history_endpoint():
     print("\n-- the multi-metric per-machine history endpoint --")
     client = _client()
     for key in ("metrics.collect_cpu_load", "metrics.collect_memory", "metrics.collect_gpu",
-                "metrics.collect_disk", "metrics.collect_network"):
+                "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network"):
         settings.reset(app.DB_PATH, [key])
     _report(client, "HIST-1", 71.5, BLOCK)
     today = app.today_str()
@@ -233,6 +318,8 @@ def test_machine_history_endpoint():
     check("temperature series has a point", len(metrics.get("temp", [])) >= 1)
     check("cpu_load series has a point", len(metrics.get("cpu_load", [])) >= 1)
     check("net_rx series has a point", len(metrics.get("net_rx", [])) >= 1)
+    check("disk_read series has a point", len(metrics.get("disk_read", [])) >= 1)
+    check("disk_write series has a point", len(metrics.get("disk_write", [])) >= 1)
     check("a point looks like {x, y}",
           bool(metrics["cpu_load"]) and set(("x", "y")).issubset(metrics["cpu_load"][0]))
 
@@ -271,6 +358,7 @@ def test_enabled_history_metrics():
     en2 = app.enabled_history_metrics()
     check("disabling disk shows up in the map", en2["disk"] is False)
     check("temperature stays enabled regardless", en2["temp"] is True)
+    check("the disk I/O panels have their own toggle", en2["disk_read"] is True)
     settings.reset(app.DB_PATH, ["metrics.collect_disk"])
 
 
@@ -278,6 +366,9 @@ if __name__ == "__main__":
     test_diagnostics_extracts_all_metrics()
     test_network_matcher_ignores_disk()
     test_network_picks_the_busiest_adapter()
+    test_disk_throughput_sums_every_disk()
+    test_disk_volumes()
+    test_volume_sensors_do_not_displace_disk_load_pct()
     test_diagnostics_empty_has_all_keys()
     test_ingest_stores_metric_columns()
     test_ingest_respects_collection_toggles()

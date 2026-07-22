@@ -52,7 +52,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.30.0"
+HUB_VERSION = "1.32.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -388,6 +388,109 @@ def _network_throughput(sensors):
     return rx, tx
 
 
+def _disk_throughput(sensors):
+    """(read_bps, write_bps) summed across every physical disk in this machine.
+
+    The mirror problem that forces _network_throughput to pick a single adapter does not
+    exist here -- LHM reports each storage device once, with no filter pseudo-devices -- so
+    summing is both correct and what an operator means by "disk I/O on this PC": one number
+    per direction covering all drives, matching the single pair of history columns behind it.
+
+    Matched on sensor NAME rather than hardware identifier. Storage identifiers vary
+    ("/nvme/", "/hdd/", "/ssd/"), but disks are the only hardware reporting Throughput
+    sensors called "Read Rate"/"Write Rate" -- NICs call theirs Download/Upload Speed. NIC
+    hardware is excluded anyway, belt and braces, so a future adapter that borrowed the name
+    could not leak into the disk chart.
+
+    (None, None) when the block carries no disk throughput at all. An idle disk reports
+    (0.0, 0.0), which is a real reading and charts as one.
+    """
+    # {hardware_id: [read, write]} -- per disk first, so a block that repeats a sensor
+    # counts that disk once rather than adding the duplicate into the total.
+    per_disk = {}
+    for s in sensors:
+        if s.get("type") != "Throughput":
+            continue
+        hardware_id = str(s.get("hardware_id") or "")
+        if "nic" in hardware_id.lower():
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        name = str(s.get("name") or "").strip().lower()
+        if name == "read rate":
+            slot = 0
+        elif name == "write rate":
+            slot = 1
+        else:
+            continue
+        pair = per_disk.setdefault(hardware_id, [None, None])
+        if pair[slot] is None or float(value) > pair[slot]:
+            pair[slot] = float(value)
+
+    if not per_disk:
+        return None, None
+    read = sum(p[0] for p in per_disk.values() if p[0] is not None)
+    write = sum(p[1] for p in per_disk.values() if p[1] is not None)
+    return read, write
+
+
+def _disk_volumes(sensors):
+    """Per-volume space usage: [{name, used_gb, total_gb, used_pct}, ...], drive letter order.
+
+    Built from the synthetic "/volume/..." sensors the agent appends (VolumeReader.cs) --
+    LHM itself reports used space only as a percentage, with the absolute size nowhere in
+    its sensor set, so GB has to come from the agent's own DriveInfo walk.
+
+    Falls back to LHM's per-device "Used Space" Load sensors for a machine that isn't
+    sending volume sensors (companion.py, or an agent older than 3.10.0). Those carry a
+    percentage and no size, so used_gb/total_gb come back None and the UI shows the bar
+    without the GB line -- degraded, not broken.
+    """
+    volumes = {}
+    for s in sensors:
+        hardware_id = str(s.get("hardware_id") or "")
+        if not hardware_id.lower().startswith("/volume/"):
+            continue
+        if s.get("type") != "Data":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        name = str(s.get("name") or "").strip().lower()
+        if name not in ("total space", "used space"):
+            continue
+        vol = volumes.setdefault(hardware_id, {"name": str(s.get("hardware") or hardware_id),
+                                               "used_gb": None, "total_gb": None})
+        vol["used_gb" if name == "used space" else "total_gb"] = float(value)
+
+    if volumes:
+        result = []
+        for _, vol in sorted(volumes.items()):
+            used, total = vol["used_gb"], vol["total_gb"]
+            # A volume missing either half can't yield a percentage; report what we have
+            # rather than dropping the disk off the page entirely.
+            vol["used_pct"] = round(used / total * 100, 1) if used is not None and total else None
+            result.append(vol)
+        return result
+
+    # Fallback: one entry per storage device reporting a "Used Space" percentage.
+    fallback = []
+    for s in sensors:
+        if s.get("type") != "Load":
+            continue
+        if str(s.get("name") or "").strip().lower() != "used space":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        fallback.append({
+            "name": str(s.get("hardware") or "Disk"),
+            "used_gb": None, "total_gb": None, "used_pct": round(float(value), 1),
+        })
+    return fallback
+
+
 def _find_sensor_exact(sensors, sensor_type, exact_name, hardware_substrs=None):
     """Match a sensor by its EXACT (lowercased) name. Needed where a substring match would
     over-reach: "memory used" is a substring of "virtual memory used", so the RAM-in-use
@@ -430,9 +533,11 @@ def extract_diagnostics(sensors):
             "gpu_temp": None, "gpu_load_pct": None, "gpu_clock_mhz": None,
             "memory_load_pct": None, "mem_used_gb": None, "mem_total_gb": None,
             "disk_load_pct": None, "net_rx_bps": None, "net_tx_bps": None,
+            "disk_read_bps": None, "disk_write_bps": None, "disks": [],
         }
     mem_used_gb, mem_total_gb = _memory_gb(sensors)
     net_rx_bps, net_tx_bps = _network_throughput(sensors)
+    disk_read_bps, disk_write_bps = _disk_throughput(sensors)
     return {
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
@@ -449,6 +554,12 @@ def extract_diagnostics(sensors):
         # Busiest NIC, not the first one listed -- see _network_throughput.
         "net_rx_bps": net_rx_bps,
         "net_tx_bps": net_tx_bps,
+        # Summed across every disk, unlike network -- see _disk_throughput.
+        "disk_read_bps": disk_read_bps,
+        "disk_write_bps": disk_write_bps,
+        # Per-volume space usage for the Storage cards. A list, not a chartable scalar:
+        # it is live state, and how many disks a machine has varies per machine.
+        "disks": _disk_volumes(sensors),
     }
 
 
@@ -462,6 +573,7 @@ def extract_diagnostics(sensors):
 READING_METRIC_COLUMNS = (
     "cpu_load_pct", "memory_load_pct", "gpu_temp", "gpu_load_pct",
     "disk_load_pct", "net_rx_bps", "net_tx_bps",
+    "disk_read_bps", "disk_write_bps",
 )
 
 # Which collection toggle (settings.py `metrics.*`) gates each column at ingest. When a
@@ -475,6 +587,11 @@ METRIC_COLUMN_TOGGLE = {
     "disk_load_pct": "metrics.collect_disk",
     "net_rx_bps": "metrics.collect_network",
     "net_tx_bps": "metrics.collect_network",
+    # Separate from collect_disk: used space is a slow-moving capacity number, disk I/O is
+    # a per-second rate. An operator who finds the I/O panels noisy should be able to drop
+    # them without also losing the "is C: filling up" history.
+    "disk_read_bps": "metrics.collect_disk_io",
+    "disk_write_bps": "metrics.collect_disk_io",
 }
 
 # Friendly metric keys used by the /api/history `metric` param and the multi-metric
@@ -489,6 +606,8 @@ HISTORY_METRIC_COLUMNS = {
     "disk": "disk_load_pct",
     "net_rx": "net_rx_bps",
     "net_tx": "net_tx_bps",
+    "disk_read": "disk_read_bps",
+    "disk_write": "disk_write_bps",
 }
 _ALLOWED_HISTORY_COLUMNS = frozenset(HISTORY_METRIC_COLUMNS.values())
 
@@ -1062,7 +1181,11 @@ app.register_blueprint(create_packages_blueprint(
 # absolute URL back to the hub, since WebDAV has no pre-signed download of its own.
 app.register_blueprint(create_backups_blueprint(
     DB_PATH, LOG_DIR, ENV_PATH, login_required, access, hub_version=HUB_VERSION,
-    hub_url=HUB_URL
+    hub_url=HUB_URL,
+    # Wrapped in a lambda, not passed directly: backup_machine_roster is defined further
+    # down this file, so naming it here would be a NameError at import. The lambda defers
+    # the lookup to request time, when it exists.
+    machine_roster=lambda: backup_machine_roster(),
 ))
 
 
@@ -1912,14 +2035,31 @@ BACKUP_TICK_SECONDS = 60
 
 
 def backup_machine_roster():
-    """Every machine the per-PC scheduler may consider.
+    """Every machine the per-PC scheduler may consider, each with its online status.
 
     backups.py deliberately does not know how to enumerate the fleet -- machine_info is
     app.py's table -- so the roster is passed in, the same way the scheduler's knobs are.
+
+    The `online` flag is load-bearing rather than informational: files_dispatch_once
+    refuses to queue a backup for a machine that cannot answer, which is what makes a
+    missed backup resume when the PC comes back instead of silently sliding a full
+    interval. Online-ness is derived through fleet.derive_status so that "online" means
+    the same thing here as it does on the dashboard -- last contact from a non-revoked
+    agent, within fleet.offline_after_seconds.
     """
+    now = int(time.time())
+    offline_after = settings.get_int(DB_PATH, "fleet.offline_after_seconds")
     with get_db_conn() as conn:
-        return [row["machine"] for row in
-                conn.execute("SELECT machine FROM machine_info ORDER BY machine ASC")]
+        rows = conn.execute(
+            "SELECT mi.machine AS machine, "
+            "       (SELECT MAX(a.last_seen) FROM agents a "
+            "          WHERE a.machine = mi.machine AND a.revoked = 0) AS last_seen "
+            "FROM machine_info mi ORDER BY mi.machine ASC"
+        ).fetchall()
+    return [{"machine": row["machine"],
+             "online": fleet.derive_status(row["last_seen"], now=now,
+                                           offline_after=offline_after) == "online"}
+            for row in rows]
 
 
 def backup_scheduler():
@@ -1974,6 +2114,7 @@ def backup_scheduler():
                 },
                 machines=backup_machine_roster(),
                 hub_url=HUB_URL,
+                max_concurrent=settings.get_int(DB_PATH, "backup.files_max_concurrent"),
                 ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
             )
             if expired or dispatched:

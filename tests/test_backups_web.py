@@ -162,9 +162,15 @@ def main():
                     template_folder=os.path.join(repo_root, "templates"),
                     static_folder=os.path.join(repo_root, "static"))
         app.secret_key = "test"
+        # A roster the tests can steer. app.py derives `online` from agents.last_seen;
+        # here it is a dict so a machine can be taken offline mid-test, which is the only
+        # way to assert that "Back up now" queues rather than fails.
+        roster = {"HOSPITAL-1": True, "HOSPITAL-2": True, "CLINIC-9": True}
         app.register_blueprint(create_backups_blueprint(
             db_path, log_dir, env_path, fake_login_required,
-            create_access(db_path, {"root@x.com"}), hub_version="1.28.0"))
+            create_access(db_path, {"root@x.com"}), hub_version="1.28.0",
+            machine_roster=lambda: [{"machine": m, "online": on}
+                                    for m, on in roster.items()]))
 
         # denied.html extends base.html, whose sidebar/topbar url_for() the app.py routes.
         # Stubbing them is what lets a PAGE route's 403 be asserted here at all -- without
@@ -416,6 +422,93 @@ def main():
         check("a bad pattern on a machine is a 400",
               c.put("/api/backups/machines/HOSPITAL-1",
                     json={"include": ["%Nope%"]}).status_code == 400)
+
+        print("\n== Clearing an override goes back to the fleet policy ==")
+        # HOSPITAL-1 was opted out just above. Selecting "Follow the fleet policy" in the
+        # console sends an explicit null, which used to arrive as "leave it alone" -- so
+        # an opted-out machine could never be opted back IN from the UI, and every later
+        # "Back up now" on it was refused.
+        r = c.put("/api/backups/machines/HOSPITAL-1", json={"enabled": None})
+        check("an explicit null clears the override", r.status_code == 200
+              and r.get_json()["config"]["enabled"] is None)
+        check("...so the machine follows the fleet again",
+              r.get_json()["effective"]["enabled"] is True)
+        check("...while omitting the key still leaves it alone",
+              c.put("/api/backups/machines/HOSPITAL-1",
+                    json={"exclude": []}).get_json()["config"]["enabled"] is None)
+
+        print("\n== Back up one PC now ==")
+        CURRENT_USER = "backup@x.com"
+        r = c.post("/api/backups/machines/HOSPITAL-1/run", json={})
+        check("an in-scope machine can be backed up on demand", r.status_code == 202)
+        body = r.get_json()
+        check("...and it started, because the machine is online",
+              body["status"] == "started")
+        check("...returning the same payload the tab already renders", "runs" in body)
+        started = backups.list_runs(db_path, limit=5,
+                                    kind=backups.BACKUP_MACHINE_FILES,
+                                    machine="HOSPITAL-1")
+        check("...as a manual run credited to the operator",
+              started[0]["trigger"] == backups.TRIGGER_MANUAL
+              and started[0]["actor"] == "backup@x.com")
+        check("...and it is audited",
+              "backup_files_run" in audit_actions(db_path))
+
+        # The case the whole request/dispatch split exists for.
+        roster["HOSPITAL-1"] = False
+        backups.ingest_file_result(db_path, log_dir, started[0]["id"],
+                                   {"error": "done"}, keep_chains=2)
+        r = c.post("/api/backups/machines/HOSPITAL-1/run", json={})
+        body = r.get_json()
+        check("backing up an OFFLINE PC is queued, not refused",
+              r.status_code == 202 and body["status"] == "queued")
+        check("...and says so in words an operator can act on",
+              "comes online" in body["message"])
+        check("...leaving the request pending on the machine",
+              backups.get_machine_config(db_path, "HOSPITAL-1")["run_requested_at"])
+        roster["HOSPITAL-1"] = True
+
+        check("a machine outside the caller's scope is refused",
+              c.post("/api/backups/machines/CLINIC-9/run", json={}).status_code == 403)
+        CURRENT_USER = "viewer@x.com"
+        check("a viewer cannot start a backup",
+              c.post("/api/backups/machines/HOSPITAL-1/run",
+                     json={}).status_code == 403)
+        check("...nor a fleet-wide one",
+              c.post("/api/backups/files/run", json={}).status_code == 403)
+        CURRENT_USER = "backup@x.com"
+        # Not decorative: Content-Type: application/json is not CORS-safelisted, so a
+        # cross-site form cannot produce one -- but only if the route CHECKS.
+        check("a form post cannot trigger a backup",
+              c.post("/api/backups/machines/HOSPITAL-1/run",
+                     data="machine=HOSPITAL-1",
+                     content_type="application/x-www-form-urlencoded"
+                     ).status_code == 415)
+
+        print("\n== Back up the whole fleet now ==")
+        backups.clear_file_run_request(db_path, "HOSPITAL-1")
+        backups.set_machine_config(db_path, "HOSPITAL-2", enabled=False,
+                                   actor="root@x.com")
+        r = c.post("/api/backups/files/run", json={})
+        check("the fleet run is accepted", r.status_code == 202)
+        body = r.get_json()
+        check("...covering only machines in the caller's scope",
+              body["requested"] + body["skipped"] == 1)
+        check("a machine that opted out is skipped, not failed",
+              c.post("/api/backups/files/run", json={}).status_code == 202)
+        CURRENT_USER = "root@x.com"
+        r = c.post("/api/backups/files/run", json={}).get_json()
+        check("a superuser sees the whole fleet",
+              r["requested"] + r["skipped"] == 3)
+        check("...and HOSPITAL-2 is counted as skipped, being switched off",
+              r["skipped"] >= 1)
+        check("a form post cannot trigger a fleet backup",
+              c.post("/api/backups/files/run", data="x=1",
+                     content_type="application/x-www-form-urlencoded"
+                     ).status_code == 415)
+        CURRENT_USER = "backup@x.com"
+        backups.set_machine_config(db_path, "HOSPITAL-2", enabled=None,
+                                   actor="root@x.com")
 
         print("\n== Preview is lenient while you type ==")
         r = c.post("/api/backups/preview",

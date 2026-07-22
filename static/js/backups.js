@@ -482,6 +482,8 @@ function renderSettingsPane() {
                                  files.max_file_mb, 1, 102400));
     grid.appendChild(numberField('files-max-set', 'Abort a run bigger than (GB)',
                                  files.max_set_gb, 1, 10240));
+    grid.appendChild(numberField('files-max-concurrent', 'Back up at most (PCs at once)',
+                                 files.max_concurrent, 0, 100));
 
     const vssWrap = el('div');
     const vssLabel = el('label', 'checkbox');
@@ -527,6 +529,7 @@ function renderSettingsPane() {
     actions.appendChild(status);
     settingsPane.appendChild(actions);
 
+    settingsPane.appendChild(renderRunFleetCard());
     settingsPane.appendChild(renderPreviewCard());
     settingsPane.appendChild(renderExceptionsCard());
 
@@ -629,6 +632,65 @@ function tokenReference() {
     return wrap;
 }
 
+// ---- back up the whole fleet now ----
+
+let fleetRunBusy = false;
+let fleetRunMessage = '';
+let fleetRunError = '';
+
+function renderRunFleetCard() {
+    const card = el('div', 'card');
+    card.style.marginTop = 'var(--space-5)';
+    card.appendChild(el('h2', 'section-title', 'Back up now'));
+    card.appendChild(el('p', 'stat-card__meta',
+        'Asks every PC you can see to back up, without waiting for its next scheduled '
+        + 'run. Machines that are switched off are not skipped — each one backs up the '
+        + 'moment it comes online again.'));
+
+    const actions = el('div', 'settings-actions');
+    const run = el('button', 'btn btn--primary',
+                   fleetRunBusy ? 'Working…' : 'Back up all PCs now');
+    run.id = 'files-run-fleet';
+    run.disabled = fleetRunBusy;
+    run.addEventListener('click', runFleetBackup);
+    actions.appendChild(run);
+    const status = el('span',
+                      fleetRunError ? 'setting__error' : 'settings-actions__status');
+    status.textContent = fleetRunError || fleetRunMessage;
+    actions.appendChild(status);
+    card.appendChild(actions);
+    return card;
+}
+
+async function runFleetBackup() {
+    if (fleetRunBusy) return;
+    fleetRunBusy = true;
+    fleetRunMessage = '';
+    fleetRunError = '';
+    renderSettingsPane();
+    try {
+        const result = await api('/api/backups/files/run', json('POST', {}));
+        // Reported as three separate numbers on purpose. "Queued 40" would read as
+        // success while nothing had actually started, and "skipped" is the number that
+        // tells an operator their policy excludes machines they thought it covered.
+        const parts = [];
+        if (result.started) parts.push(`${result.started} started`);
+        if (result.queued) {
+            parts.push(`${result.queued} queued (offline or waiting for a free slot)`);
+        }
+        if (result.skipped) {
+            parts.push(`${result.skipped} skipped (backups off, or nothing selected)`);
+        }
+        fleetRunMessage = parts.length ? parts.join(', ') + '.'
+                                       : 'No machines are set up to back up yet.';
+    } catch (e) {
+        fleetRunError = e.message;
+    } finally {
+        fleetRunBusy = false;
+        renderSettingsPane();
+    }
+}
+
 async function saveFileSettings(status) {
     status.textContent = '';
     try {
@@ -643,6 +705,8 @@ async function saveFileSettings(status) {
             'backup.files_max_file_mb': Number(document.getElementById('files-max-file').value),
             'backup.files_max_set_gb': Number(document.getElementById('files-max-set').value),
             'backup.files_use_vss': document.getElementById('files-vss').checked,
+            'backup.files_max_concurrent':
+                Number(document.getElementById('files-max-concurrent').value),
         }));
         state.files = result.files;
         // The server normalises patterns (separators, duplicates), so adopt what it

@@ -140,7 +140,11 @@ REGISTRY = (
        help="Chart discrete-GPU temperature and load. No effect on machines whose GPU "
             "reports nothing."),
     _s("metrics.collect_disk", "metrics", "Record disk usage", "bool", True,
-       help="Chart disk used-space % over time."),
+       help="Chart disk used-space % over time. The per-disk Storage cards are live "
+            "readings and stay visible either way."),
+    _s("metrics.collect_disk_io", "metrics", "Record disk read/write", "bool", True,
+       help="Chart disk read/write throughput (bytes per second, summed across all "
+            "drives) over time."),
     _s("metrics.collect_network", "metrics", "Record network throughput", "bool", True,
        help="Chart network in/out (bytes per second). Also tells the agent whether to "
             "collect the network sensor category at all.",
@@ -265,6 +269,12 @@ REGISTRY = (
             "PST, a document someone left up -- are captured consistently. If a snapshot "
             "cannot be created the run continues against the live filesystem and reports "
             "which files were locked."),
+    _s("backup.files_max_concurrent", "backup", "Back up at most this many PCs at once",
+       "int", 3, minimum=0, maximum=100, unit="PCs",
+       help="Machines that were offline are backed up as soon as they return, so a "
+            "Monday morning can bring the whole fleet back at once. This spreads them "
+            "out instead of saturating the connection. Others wait their turn and start "
+            "within a minute of a slot freeing up; 0 removes the limit."),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
