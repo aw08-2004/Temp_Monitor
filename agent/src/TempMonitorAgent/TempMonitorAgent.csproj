@@ -21,7 +21,7 @@
 
     <!-- Assembly version drives the self-update version comparison. Keep in
          sync with AgentConfig.Version. -->
-    <Version>3.7.0</Version>
+    <Version>3.8.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,6 +32,13 @@
     <PackageReference Include="System.Management" Version="10.0.0" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- TarGzipPipe is an implementation detail of the backup executor, but the archive
+         it produces has to be readable by stdlib tar (that is what keeps a machine backup
+         restorable with no hub) - so it is tested directly rather than widened to public. -->
+    <InternalsVisibleTo Include="TempMonitorAgent.Tests" />
   </ItemGroup>
 
 </Project>
