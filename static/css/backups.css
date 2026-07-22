@@ -131,6 +131,92 @@
     white-space: nowrap;
 }
 
+/* ---- restore browser (machine page, Backup tab) ---- */
+
+.bk-browser__bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin: var(--space-4) 0 var(--space-2);
+}
+
+/* Breadcrumbs wrap rather than scroll: a real path is C:\Users\someone\OneDrive - Very
+   Long Company Name\Documents\..., and a single-line trail either truncates the part you
+   need or pushes the Find box off the card. */
+.bk-crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1, 4px);
+    font-size: var(--text-sm);
+    min-width: 0;
+}
+
+.bk-crumb {
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    font: inherit;
+    color: var(--accent, #58a6ff);
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.bk-crumb:hover { text-decoration: underline; }
+
+.bk-crumb--current {
+    color: var(--text);
+    cursor: default;
+    font-weight: 600;
+}
+
+.bk-crumb--current:hover { text-decoration: none; }
+
+.bk-crumb__sep { color: var(--muted); }
+
+/* The listing scrolls inside the card. A folder can hold two thousand rows, and letting
+   that push the restore controls below the fold means ticking files and then hunting for
+   the button that acts on them. */
+.bk-browser {
+    max-height: 26rem;
+    overflow-y: auto;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md, 6px);
+}
+
+.bk-browser .data-table { margin: 0; }
+
+.bk-browser td:first-child,
+.bk-browser th:first-child { width: 2.5rem; }
+
+.bk-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent, #58a6ff);
+    cursor: pointer;
+    text-align: left;
+}
+
+.bk-link:hover { text-decoration: underline; }
+
+.bk-restore {
+    margin-top: var(--space-4);
+    border-top: 1px solid var(--card-border);
+    padding-top: var(--space-4);
+}
+
+.bk-check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+}
+
 /* The preview's machine picker. Needs breathing room from the explanatory paragraph
    above it, which otherwise runs right up against the input. */
 #preview-machine {

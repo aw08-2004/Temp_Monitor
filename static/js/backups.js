@@ -505,9 +505,9 @@ function renderSettingsPane() {
     paths.appendChild(el('h2', 'section-title', 'Paths'));
     paths.appendChild(pathEditor(
         'Include', 'include', draftInclude,
-        'A folder to back up. Use %Users% to cover every profile, or %Desktop% to follow '
+        'A folder to back up. Use %Users% (or %User%) to cover every profile, or %Desktop% to follow '
         + 'each user’s real Desktop even when OneDrive has redirected it.',
-        'e.g. %Desktop% or C:\\Users\\%Users%\\Projects'));
+        'e.g. %Desktop% or %User%\\Scripts'));
     paths.appendChild(pathEditor(
         'Never back up', 'exclude', draftExclude,
         'Matched against the whole path, case-insensitively. A pattern with no backslash '

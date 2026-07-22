@@ -92,6 +92,16 @@ class FakeDestination:
         return [{"key": k, "size": len(v)} for k, v in self.objects.items()
                 if k.startswith(prefix)]
 
+    def presigned_url(self, key, method="PUT", expires_seconds=3600):
+        """Stands in for the SigV4 query-string signer.
+
+        Shaped like the real thing rather than returning a bare key, because what the
+        restore tests assert about it is exactly what matters in production: that the
+        agent is handed a URL scoped to one object, and never the credential.
+        """
+        return (f"https://fake.invalid/{key}?X-Amz-Signature=deadbeef"
+                f"&X-Amz-Expires={int(expires_seconds)}")
+
 
 def audit_actions(db_path):
     with fleet.get_conn(db_path) as conn:
@@ -419,6 +429,136 @@ def main():
               r.status_code == 200 and r.get_json()["has_profiles"] is False)
         check("...and explains that nothing could be resolved",
               r.get_json()["preview"]["problems"] != [])
+
+        print("\n== Browsing a machine's manifest ==")
+        # A manifest to browse. Recorded through backups.py rather than posted as an agent
+        # result, so this file stays a test of the HTTP boundary rather than of ingest.
+        m_plan = backups.plan_next_run(db_path, "HOSPITAL-1", full_every=5)
+        backups.record_file_set(
+            db_path, run_id="run-manifest", machine="HOSPITAL-1",
+            chain_id=m_plan["chain_id"], sequence=0,
+            object_key="machines/HOSPITAL-1/full.fhb", stored_bytes=500, files=[
+                {"path": "C:\\Users\\bob\\Desktop\\a.txt", "size": 10, "mtime": 1,
+                 "sha256": "aa"},
+                {"path": "C:\\Users\\bob\\Documents\\r.docx", "size": 20, "mtime": 1,
+                 "sha256": "rr"},
+            ])
+        # HR-1's own manifest exists so the scope checks below are proving a real refusal
+        # rather than an empty result.
+        hr_plan = backups.plan_next_run(db_path, "HR-1", full_every=5)
+        backups.record_file_set(
+            db_path, run_id="run-hr", machine="HR-1", chain_id=hr_plan["chain_id"],
+            sequence=0, object_key="machines/HR-1/full.fhb", stored_bytes=1,
+            files=[{"path": "C:\\Users\\hr\\salaries.xlsx", "size": 1, "sha256": "ss"}])
+
+        r = c.get("/api/backups/machines/HOSPITAL-1/manifest")
+        check("the manifest root is browsable", r.status_code == 200)
+        check("...counting what is recoverable",
+              r.get_json()["summary"]["file_count"] == 2)
+        check("...and listing the drive as a folder",
+              [d["name"] for d in r.get_json()["result"]["dirs"]] == ["C:"])
+
+        r = c.get("/api/backups/machines/HOSPITAL-1/manifest"
+                  "?path=C:\\Users\\bob\\Desktop")
+        check("a folder lists its files",
+              [f["name"] for f in r.get_json()["result"]["files"]] == ["a.txt"])
+        r = c.get("/api/backups/machines/HOSPITAL-1/manifest?search=docx")
+        check("search answers in search mode", r.get_json()["mode"] == "search")
+        check("...finding the file", len(r.get_json()["result"]["files"]) == 1)
+
+        # The manifest names every file on a machine, which is exactly the kind of
+        # reconnaissance scoping exists to prevent -- reading it must be as gated as
+        # restoring from it.
+        check("another team's manifest is refused",
+              c.get("/api/backups/machines/HR-1/manifest").status_code == 403)
+
+        print("\n== Restore ==")
+        c.put("/api/backups/schedule", json={"backup.files_destination": dest_id})
+        r = c.post("/api/backups/machines/HOSPITAL-1/restore",
+                   json={"paths": ["C:\\Users\\bob\\Desktop"], "target_dir": "C:\\Rest"})
+        check("a restore is accepted", r.status_code == 202)
+        body = r.get_json()
+        check("...reporting what it will fetch",
+              body["file_count"] == 1 and body["archives"] == 1)
+        restore_id = body["restore_id"]
+        queued = fleet.list_commands(db_path, machine="HOSPITAL-1")
+        check("a restore_files command was queued for the target",
+              any(cmd["type"] == "restore_files" for cmd in queued))
+
+        r = c.post("/api/backups/machines/HOSPITAL-1/restore",
+                   json={"paths": ["C:\\Users\\bob", "C:\\Nope"]})
+        check("a selection matching nothing is reported back, not swallowed",
+              r.get_json()["missing"] == ["C:\\Nope"])
+        check("a selection matching nothing AT ALL is a 400",
+              c.post("/api/backups/machines/HOSPITAL-1/restore",
+                     json={"paths": ["D:\\nothing"]}).status_code == 400)
+        check("a bad target folder is a 400",
+              c.post("/api/backups/machines/HOSPITAL-1/restore",
+                     json={"paths": ["C:\\Users\\bob"],
+                           "target_dir": "relative"}).status_code == 400)
+
+        # BOTH ends are checked. Reading HR-1's files and writing files onto an HR machine
+        # are separate things to be allowed to do, and holding scope on one does not imply
+        # the other.
+        check("restoring FROM an out-of-scope machine is refused",
+              c.post("/api/backups/machines/HR-1/restore",
+                     json={"paths": ["C:\\Users\\hr"]}).status_code == 403)
+        check("restoring ONTO an out-of-scope machine is refused",
+              c.post("/api/backups/machines/HOSPITAL-1/restore",
+                     json={"paths": ["C:\\Users\\bob"],
+                           "target": "HR-1"}).status_code == 403)
+        check("restore history is scoped too",
+              c.get("/api/backups/machines/HR-1/restores").status_code == 403)
+        check("...and readable for a machine in scope",
+              len(c.get("/api/backups/machines/HOSPITAL-1/restores")
+                  .get_json()["restores"]) == 2)
+
+        print("\n== Agent restore endpoints ==")
+        # Unauthenticated is the first thing to prove: these hand out a decryption key and
+        # stream archives.
+        check("the plan needs agent auth",
+              c.get(f"/api/agent/backups/restore/{restore_id}/plan").status_code == 401)
+        check("the archive proxy needs agent auth",
+              c.get(f"/api/agent/backups/restore/{restore_id}/archive/0"
+                    ).status_code == 401)
+        check("reporting a result needs agent auth",
+              c.post(f"/api/agent/backups/restore/{restore_id}/result",
+                     json={}).status_code == 401)
+
+        enroll_secret = "enrollment-secret"
+        agent_id, token = fleet.enroll_agent(db_path, "HOSPITAL-1", enroll_secret,
+                                             enroll_secret)
+        other_id, other_token = fleet.enroll_agent(db_path, "HR-1", enroll_secret,
+                                                   enroll_secret)
+        auth = {"Authorization": f"Bearer {agent_id}:{token}"}
+        other_auth = {"Authorization": f"Bearer {other_id}:{other_token}"}
+
+        r = c.get(f"/api/agent/backups/restore/{restore_id}/plan", headers=auth)
+        check("the target machine's agent gets the plan", r.status_code == 200)
+        plan_body = r.get_json()
+        check("...carrying the file list", plan_body["archives"][0]["files"])
+        check("...and the source machine's derived key",
+              plan_body["encryption"]["key"])
+        check("...but never the destination credential",
+              "shh" not in json.dumps(plan_body))
+        # The property the whole brokering design exists for.
+        check("another machine's agent cannot read the plan",
+              c.get(f"/api/agent/backups/restore/{restore_id}/plan",
+                    headers=other_auth).status_code == 404)
+        check("...nor stream its archives",
+              c.get(f"/api/agent/backups/restore/{restore_id}/archive/0",
+                    headers=other_auth).status_code == 404)
+        check("an archive index outside the plan is refused",
+              c.get(f"/api/agent/backups/restore/{restore_id}/archive/99",
+                    headers=auth).status_code == 404)
+
+        r = c.post(f"/api/agent/backups/restore/{restore_id}/result",
+                   headers=auth, json={"restored": 1, "bytes_restored": 10})
+        check("the agent can report a result", r.status_code == 200)
+        check("...closing the restore", r.get_json()["status"] == "succeeded")
+        check("a finished restore no longer hands out its plan",
+              c.get(f"/api/agent/backups/restore/{restore_id}/plan",
+                    headers=auth).status_code == 409)
 
         print("\n== Deleting the scheduled destination disarms the schedule ==")
         check("the schedule still points at it",

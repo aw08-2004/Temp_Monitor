@@ -449,8 +449,10 @@ internal sealed class TarGzipPipe : Stream
                                 readPath, FileMode.Open, FileAccess.Read,
                                 FileShare.ReadWrite | FileShare.Delete, 1024 * 1024);
                             // Stored under its ORIGINAL path (drive colon stripped so tar
-                            // stays portable), which is what a restore maps back from.
-                            var name = entry.Path.Replace(":", "").Replace('\\', '/').TrimStart('/');
+                            // stays portable), which is what a restore maps back from. The
+                            // mapping lives in BackupManifest because the HUB implements it
+                            // too, to name members in a restore plan it never wrote.
+                            var name = BackupManifest.ArchiveMember(entry.Path);
                             var tarEntry = new PaxTarEntry(TarEntryType.RegularFile, name)
                             {
                                 DataStream = source,

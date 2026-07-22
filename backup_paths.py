@@ -43,7 +43,25 @@ import re
 # VOCABULARY
 # ================================
 # The fan-out token: one pattern, one path per real profile on the machine.
+#
+# %User% and %Users% are the SAME token, deliberately. Both expand to one path per real
+# profile -- `%Users%\Scripts` and `%User%\Scripts` each produce C:\Users\bob\Scripts and
+# C:\Users\carol\Scripts. The alias exists because the two spellings read differently to
+# an operator: `%Users%` reads right on its own ("back up the profiles"), while
+# `%User%\Scripts` reads right for a subfolder ("each user's Scripts folder"), and someone
+# who reaches for the singular should not get a "not a known token" error for guessing the
+# more natural phrasing.
+#
+# Note what %User% is NOT: it is not "the currently logged-on user". A backup runs as
+# SYSTEM on a schedule, frequently with nobody signed in at all, so a token meaning "the
+# current user" would resolve to the service profile or to nothing -- and would silently
+# back up one person's folder on a shared PC. Every per-user token here fans out.
 USERS_TOKEN = "users"
+USER_TOKEN = "user"
+
+# Both spellings of the profile-directory token. Anything in here resolves to the user's
+# profile path during fan-out.
+PROFILE_TOKENS = frozenset({USERS_TOKEN, USER_TOKEN})
 
 # Per-user known folders, resolved from that user's shell-folder registry rather than
 # assumed to sit under the profile. These fan out per user exactly like %Users%.
@@ -75,7 +93,7 @@ MACHINE_TOKENS = (
     "systemroot",
 )
 
-ALL_TOKENS = frozenset({USERS_TOKEN} | set(KNOWN_FOLDERS) | set(MACHINE_TOKENS))
+ALL_TOKENS = frozenset(PROFILE_TOKENS | set(KNOWN_FOLDERS) | set(MACHINE_TOKENS))
 
 # Profile directories that are never a person. Windows keeps several profile-shaped
 # folders under C:\Users that would otherwise each get "their" Desktop backed up --
@@ -116,6 +134,48 @@ def normalize(path):
     if len(text) > 3 and text.endswith("\\"):
         text = text.rstrip("\\")
     return text
+
+
+def archive_member(path):
+    """The name a file is stored under INSIDE a backup archive.
+
+    `C:\\Users\\bob\\Desktop\\notes.txt` -> `C/Users/bob/Desktop/notes.txt`. The drive
+    colon is dropped and separators become forward slashes, because tar member names are
+    POSIX-shaped and a literal `C:\\...` unpacks to a mangled name (or is rejected outright)
+    on anything but Windows -- and the whole point of tar here is that stdlib `tarfile`
+    can open the archive anywhere.
+
+    THIS IS A SHARED CONTRACT, implemented twice: here, and in the agent's
+    BackupManifest.ArchiveMember (which is what TarGzipPipe names entries with). The hub
+    builds a restore plan naming members it never wrote, the agent extracts them, and
+    restore_backup.py maps them back to real paths -- so a drift between the two
+    implementations is a restore that silently finds nothing. tests/test_backup_paths.py
+    and the agent's BackupManifestTests both check the vectors in
+    tests/backup_path_vectors.json ("members") for exactly that reason.
+
+    A UNC path loses its leading slashes (`\\\\srv\\share\\f` -> `srv/share/f`), which is
+    the same shape tar gives any absolute path. Two sources could in principle collide
+    (`C:\\Users` and `\\\\C\\Users`), and that is accepted: a restore selects members from
+    ONE machine's manifest, where a path is unique.
+    """
+    return normalize(path).replace(":", "").replace("\\", "/").lstrip("/")
+
+
+def member_to_path(member):
+    """The inverse of archive_member, for a restore that is putting files back.
+
+    `C/Users/bob/notes.txt` -> `C:\\Users\\bob\\notes.txt`. Only the FIRST segment can have
+    been a drive, so only it gets its colon back, and only when it is a single letter --
+    a member from a UNC source (`srv/share/f`) is left as a relative path, which is what a
+    restore-to-a-folder wants and what a restore-to-original-location refuses.
+    """
+    text = str(member or "").strip().replace("\\", "/").lstrip("/")
+    if not text:
+        return ""
+    head, _, tail = text.partition("/")
+    if len(head) == 1 and head.isalpha():
+        head += ":"
+    return normalize(head + ("\\" + tail if tail else "\\"))
 
 
 def _tokens_in(pattern):
@@ -257,14 +317,15 @@ def _expand_with_reasons(pattern, profiles):
     tokens = _tokens_in(text)
     problems = []
 
-    per_user_tokens = [t for t in tokens if t == USERS_TOKEN or t in KNOWN_FOLDERS]
+    per_user_tokens = [t for t in tokens if t in PROFILE_TOKENS or t in KNOWN_FOLDERS]
     if not per_user_tokens:
         resolved = _substitute_machine(text, profiles, problems)
         return ([(resolved, None)] if resolved else []), problems
 
     users = real_users(profiles)
     if not users:
-        problems.append(f"{text}: this machine has no user profiles to expand %Users% to.")
+        problems.append(f"{text}: this machine has no user profiles to expand "
+                        f"%{per_user_tokens[0]}% to.")
         return [], problems
 
     out = []
@@ -272,7 +333,7 @@ def _expand_with_reasons(pattern, profiles):
         current = text
         failed = False
         for token in set(per_user_tokens):
-            if token == USERS_TOKEN:
+            if token in PROFILE_TOKENS:
                 value = normalize(user.get("path"))
             else:
                 value = _known_folder_for(user, token)
@@ -463,6 +524,10 @@ TOKEN_HELP = [
     ("%Users%", "Every real user profile on the machine (skips Public, Default and "
                 "service accounts). One pattern covers everyone, including people who "
                 "sign in for the first time next week."),
+    ("%User%", "The same as %Users% -- one path per real profile. Reads better for a "
+               "custom subfolder: %User%\\Scripts backs up every user's Scripts folder. "
+               "It does NOT mean 'whoever is logged in now'; backups run with nobody "
+               "signed in, so every per-user token covers all of them."),
     ("%Desktop%", "Each user's actual Desktop -- follows OneDrive folder redirection, "
                   "unlike a literal C:\\Users\\name\\Desktop."),
     ("%Documents%", "Each user's actual Documents folder."),

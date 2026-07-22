@@ -52,7 +52,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.29.0"
+HUB_VERSION = "1.30.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1058,8 +1058,11 @@ app.register_blueprint(create_packages_blueprint(
 # Backup destinations, the encryption key, and the hub-database backup itself. LOG_DIR
 # holds the encrypted credential store and the scratch space a snapshot is built in;
 # ENV_PATH is where the master key is written, and must be the same file load_dotenv read.
+# HUB_URL is needed for the same reason packages does: a WebDAV restore hands the agent an
+# absolute URL back to the hub, since WebDAV has no pre-signed download of its own.
 app.register_blueprint(create_backups_blueprint(
-    DB_PATH, LOG_DIR, ENV_PATH, login_required, access, hub_version=HUB_VERSION
+    DB_PATH, LOG_DIR, ENV_PATH, login_required, access, hub_version=HUB_VERSION,
+    hub_url=HUB_URL
 ))
 
 

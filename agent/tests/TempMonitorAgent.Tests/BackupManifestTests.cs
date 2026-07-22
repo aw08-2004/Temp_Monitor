@@ -141,6 +141,49 @@ public class BackupManifestTests
         finally { File.Delete(path); }
     }
 
+    /// <summary>
+    /// The archive-member naming contract, against the SAME vectors the hub's
+    /// backup_paths.archive_member is tested with.
+    ///
+    /// This is the other half of the shared-fixture discipline PathExpanderTests follows.
+    /// The agent writes these names into the tar; the hub names them again when it plans a
+    /// restore of an archive it never wrote. Drift is not a crash — it is a restore that
+    /// downloads the right archive, matches nothing, and reports every file missing.
+    /// </summary>
+    [Fact]
+    public void ArchiveMemberNamesMatchTheSharedVectors()
+    {
+        var vectors = LoadVectors();
+        foreach (var node in vectors["members"]!.AsArray())
+        {
+            var entry = node!.AsObject();
+            Assert.Equal(entry["member"]!.GetValue<string>(),
+                         BackupManifest.ArchiveMember(entry["path"]!.GetValue<string>()));
+        }
+    }
+
+    [Theory]
+    // Where a restore puts a member back. Only the first segment can have been a drive.
+    [InlineData("C/Users/bob/a.txt", "C:\\Users\\bob\\a.txt")]
+    [InlineData("D/Finance/q1.xlsx", "D:\\Finance\\q1.xlsx")]
+    [InlineData("C", "C:\\")]
+    // A UNC source is unreconstructable — \\srv\share\f and srv/share/f are one member —
+    // so it stays relative rather than being guessed onto some drive.
+    [InlineData("srv/share/f.txt", "srv\\share\\f.txt")]
+    public void MemberToPathIsTheInverseOfArchiveMember(string member, string expected)
+        => Assert.Equal(expected, BackupManifest.MemberToPath(member));
+
+    private static JsonObject LoadVectors()
+    {
+        for (var probe = new DirectoryInfo(AppContext.BaseDirectory); probe is not null; probe = probe.Parent)
+        {
+            var candidate = Path.Combine(probe.FullName, "tests", "backup_path_vectors.json");
+            if (File.Exists(candidate))
+                return JsonNode.Parse(File.ReadAllText(candidate))!.AsObject();
+        }
+        throw new FileNotFoundException("tests/backup_path_vectors.json not found");
+    }
+
     [Fact]
     public void ArchiveRoundTripsThroughTheRealTarReader()
     {

@@ -59,6 +59,19 @@ public static class PathExpander
         ["programdata", "systemdrive", "windir", "programfiles", "programfiles(x86)",
          "public", "systemroot"];
 
+    /// <summary>
+    /// Both spellings of the profile-directory token. %User% and %Users% are the SAME
+    /// token — each expands to one path per real profile, so `%User%\Scripts` covers every
+    /// user's Scripts folder. Mirrors backup_paths.PROFILE_TOKENS.
+    ///
+    /// %User% is NOT "the currently logged-on user": a backup runs as SYSTEM on a
+    /// schedule, routinely with nobody signed in, so such a token would resolve to the
+    /// service profile or to nothing — and on a shared PC would silently back up one
+    /// person's folder instead of everyone's.
+    /// </summary>
+    private static readonly HashSet<string> ProfileTokens =
+        new(StringComparer.OrdinalIgnoreCase) { "users", "user" };
+
     /// <summary>Profile folders that are never a person. Mirrors backup_paths.NON_USER_PROFILES.</summary>
     private static readonly HashSet<string> NonUserProfiles = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -228,7 +241,7 @@ public static class PathExpander
         var tokens = TokensIn(text);
         foreach (var token in tokens)
         {
-            if (!KnownFolders.ContainsKey(token) && token != "users"
+            if (!KnownFolders.ContainsKey(token) && !ProfileTokens.Contains(token)
                 && !MachineTokens.Contains(token))
             {
                 // Refused rather than treated as a literal: an unknown token would match
@@ -238,7 +251,7 @@ public static class PathExpander
             }
         }
 
-        var perUser = tokens.Where(t => t == "users" || KnownFolders.ContainsKey(t)).ToList();
+        var perUser = tokens.Where(t => ProfileTokens.Contains(t) || KnownFolders.ContainsKey(t)).ToList();
         if (perUser.Count == 0)
         {
             var resolved = SubstituteMachine(text, profiles, problems);
@@ -260,7 +273,7 @@ public static class PathExpander
             foreach (var token in perUser.Distinct())
             {
                 string? value;
-                if (token == "users")
+                if (ProfileTokens.Contains(token))
                 {
                     value = user.Path;
                 }

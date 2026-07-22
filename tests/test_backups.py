@@ -782,6 +782,73 @@ def main():
         check("rotation with nothing to do is a no-op",
               backups.rotate_chains(bucket2, "p", "PC-B", 5, rot_db) == [])
 
+        print("\n-- rotation survives a delete that fails halfway --")
+        # The bug this replaced: every object was deleted and THEN every row, so a failure
+        # in between left the manifest promising archives that no longer existed. What
+        # makes the fix work is the ORDER -- newest sequence first, the full last -- so a
+        # partial delete leaves a shorter but still-restorable chain rather than orphaned
+        # incrementals.
+        part_db = os.path.join(workdir, "rotate-partial.db")
+        fleet.init_fleet_db(part_db)
+        backups.init_backups_db(part_db)
+
+        class FlakyDestination(FakeDestination):
+            """Refuses to delete one specific key, like a bucket policy change mid-pass."""
+
+            def __init__(self, doomed_key):
+                super().__init__()
+                self.doomed_key = doomed_key
+
+            def delete(self, key):
+                if key == self.doomed_key:
+                    raise backups.BackupError("access denied")
+                super().delete(key)
+
+        part_chains = []
+        for c in range(3):
+            chain_id = None
+            for seq in range(3):
+                p = (backups.plan_next_run(part_db, "PC-P", full_every=3)
+                     if seq == 0 else {"chain_id": chain_id, "sequence": seq, "full": False})
+                chain_id = p["chain_id"]
+                key = f"p/machines/PC-P/{chain_id}-{seq}.fhb"
+                backups.record_file_set(part_db, run_id=uuid_hex(), machine="PC-P",
+                                        chain_id=chain_id, sequence=seq, object_key=key,
+                                        stored_bytes=1,
+                                        files=[{"path": f"C:\\p{c}-{seq}.txt",
+                                                "sha256": f"h{c}{seq}"}])
+            part_chains.append(chain_id)
+
+        oldest = part_chains[0]
+        flaky = FlakyDestination(f"p/machines/PC-P/{oldest}-1.fhb")
+        for c in part_chains:
+            for seq in range(3):
+                flaky.objects[f"p/machines/PC-P/{c}-{seq}.fhb"] = b"x"
+
+        check("a delete failure still propagates to the caller",
+              raises(backups.BackupError, backups.rotate_chains,
+                     flaky, "p", "PC-P", 2, part_db))
+        deleted_order = [k for verb, k in flaky.calls if verb == "delete"]
+        check("archives are deleted newest sequence first, the full LAST",
+              deleted_order[0].endswith("-2.fhb"))
+        check("the full of the failed chain was NOT deleted",
+              f"p/machines/PC-P/{oldest}-0.fhb" in flaky.objects)
+        survivors = {c["chain_id"]: c for c in backups.machine_chains(part_db, "PC-P")}
+        check("the partly-deleted chain is still listed", oldest in survivors)
+        check("...as a SHORTER chain matching what storage actually holds",
+              len(survivors[oldest]["sets"]) == 2)
+        check("...and still restorable, because its full survived",
+              survivors[oldest]["complete"] is True)
+        check("no manifest row points at an archive that was deleted",
+              all(m["object_key"] in flaky.objects
+                  for m in backups.current_manifest(part_db, "PC-P")))
+        # The chain is still over the limit, so the next pass finishes the job -- which is
+        # why no list of pending deletions has to be kept anywhere.
+        flaky.doomed_key = None
+        backups.rotate_chains(flaky, "p", "PC-P", 2, part_db)
+        check("a later pass finishes what the failed one started",
+              len(backups.machine_chains(part_db, "PC-P")) == 2)
+
         print("\n-- run lifecycle --")
         run_plan = backups.plan_next_run(rot_db, "PC-C", full_every=7)
         run_id = backups.start_file_run(rot_db, "PC-C", dest_id, run_plan,
@@ -936,6 +1003,239 @@ def main():
         check("...and records no archive",
               backups.machine_chains(sched_db, "PC-B") == [])
         backups.build_client = saved_build
+
+        # ============================================================
+        print("\n== Restore: browsing the manifest ==")
+        # ============================================================
+        # The browser has to be honest about what is RECOVERABLE, which is not the same as
+        # what was ever backed up: a deleted file and a rotated-away chain both have rows
+        # in backup_files, and offering either as restorable is a 404 an operator only
+        # discovers after they have already deleted the original.
+        br_db = os.path.join(workdir, "browse.db")
+        fleet.init_fleet_db(br_db)
+        backups.init_backups_db(br_db)
+        br_plan = backups.plan_next_run(br_db, "PC-M", full_every=5)
+        backups.record_file_set(
+            br_db, run_id=uuid_hex(), machine="PC-M", chain_id=br_plan["chain_id"],
+            sequence=0, object_key="p/machines/PC-M/full.fhb", stored_bytes=99, files=[
+                {"path": "C:\\Users\\bob\\Desktop\\a.txt", "size": 10, "mtime": 1,
+                 "sha256": "aa"},
+                {"path": "C:\\Users\\bob\\Desktop\\notes\\deep.txt", "size": 5, "mtime": 1,
+                 "sha256": "dd"},
+                {"path": "C:\\Users\\bob\\Documents\\report.docx", "size": 40, "mtime": 1,
+                 "sha256": "rr"},
+                {"path": "C:\\Users\\carol\\Desktop\\c.txt", "size": 7, "mtime": 1,
+                 "sha256": "cc"},
+                {"path": "C:\\Users\\bob\\Desktop\\gone.txt", "size": 3, "mtime": 1,
+                 "sha256": "gg"},
+            ])
+        br_inc = backups.plan_next_run(br_db, "PC-M", full_every=5)
+        backups.record_file_set(
+            br_db, run_id=uuid_hex(), machine="PC-M", chain_id=br_inc["chain_id"],
+            sequence=1, object_key="p/machines/PC-M/inc.fhb", stored_bytes=9, files=[
+                {"path": "C:\\Users\\bob\\Desktop\\a.txt", "size": 12, "mtime": 2,
+                 "sha256": "aa2"},
+                {"path": "C:\\Users\\bob\\Desktop\\gone.txt", "deleted": True},
+            ])
+
+        summary = backups.manifest_summary(br_db, "PC-M")
+        check("the summary counts only recoverable files", summary["file_count"] == 4)
+        check("...and counts the archives behind them", summary["archives"] == 2)
+
+        root = backups.manifest_listing(br_db, "PC-M", "")
+        check("the root listing shows the drive as a folder",
+              [d["name"] for d in root["dirs"]] == ["C:"])
+        check("...with everything under it counted", root["dirs"][0]["file_count"] == 4)
+        check("the root has no files of its own", root["files"] == [])
+
+        desktop = backups.manifest_listing(br_db, "PC-M", "C:\\Users\\bob\\Desktop")
+        check("a folder lists its files",
+              [f["name"] for f in desktop["files"]] == ["a.txt"])
+        check("...at their NEWEST version", desktop["files"][0]["size"] == 12)
+        check("a deleted file is not offered for restore",
+              all(f["name"] != "gone.txt" for f in desktop["files"]))
+        check("subfolders are derived from the paths beneath them",
+              [d["name"] for d in desktop["dirs"]] == ["notes"])
+        check("breadcrumbs walk back to the drive",
+              [p["name"] for p in desktop["parents"]] == ["C:", "Users", "bob"])
+        check("...as usable paths", desktop["parents"][2]["path"] == "C:\\Users\\bob")
+
+        # A folder name containing a LIKE wildcard must not act as one: `%` and `_` are
+        # legal in Windows filenames, and a raw prefix concatenation would hand back files
+        # from a completely different folder.
+        wild_plan = backups.plan_next_run(br_db, "PC-W", full_every=5)
+        backups.record_file_set(
+            br_db, run_id=uuid_hex(), machine="PC-W", chain_id=wild_plan["chain_id"],
+            sequence=0, object_key="p/machines/PC-W/full.fhb", stored_bytes=1, files=[
+                {"path": "C:\\temp%\\inside.txt", "size": 1, "sha256": "x"},
+                {"path": "C:\\tempZ\\outside.txt", "size": 1, "sha256": "y"},
+            ])
+        wild = backups.manifest_listing(br_db, "PC-W", "C:\\temp%")
+        check("a folder named with a LIKE wildcard matches only itself",
+              [f["name"] for f in wild["files"]] == ["inside.txt"])
+
+        found = backups.manifest_search(br_db, "PC-M", "desktop")
+        check("search spans folders",
+              {f["name"] for f in found["files"]} == {"a.txt", "deep.txt", "c.txt"})
+        check("search does not resurrect deleted files",
+              all(f["name"] != "gone.txt" for f in found["files"]))
+        check("an empty search returns nothing rather than everything",
+              backups.manifest_search(br_db, "PC-M", "  ")["files"] == [])
+
+        # ============================================================
+        print("\n== Restore: planning ==")
+        # ============================================================
+        plan_out = backups.plan_restore(br_db, "PC-M", ["C:\\Users\\bob"])
+        check("a folder selection expands to everything under it",
+              plan_out["file_count"] == 3)
+        check("...spanning every archive that holds a wanted version",
+              len(plan_out["archives"]) == 2)
+        check("...and totals the bytes actually being fetched",
+              plan_out["total_bytes"] == 12 + 5 + 40)
+        by_key = {a["object_key"]: a for a in plan_out["archives"]}
+        check("the changed file is taken from the INCREMENTAL",
+              [f["path"] for f in by_key["p/machines/PC-M/inc.fhb"]["files"]]
+              == ["C:\\Users\\bob\\Desktop\\a.txt"])
+        check("...and the untouched ones from the full",
+              len(by_key["p/machines/PC-M/full.fhb"]["files"]) == 2)
+        check("archives are ordered oldest first",
+              [a["index"] for a in plan_out["archives"]] == [0, 1]
+              and plan_out["archives"][0]["object_key"].endswith("full.fhb"))
+        # The shared contract with the agent's tar writer. If these disagree the restore
+        # finds nothing and reports it as missing from the archive.
+        check("every file names the member it lives under inside the archive",
+              by_key["p/machines/PC-M/inc.fhb"]["files"][0]["member"]
+              == "C/Users/bob/Desktop/a.txt")
+
+        exact = backups.plan_restore(br_db, "PC-M",
+                                     ["C:\\Users\\bob\\Documents\\report.docx"])
+        check("a single file can be restored on its own", exact["file_count"] == 1)
+        check("...from just the one archive it lives in", len(exact["archives"]) == 1)
+
+        mixed = backups.plan_restore(br_db, "PC-M",
+                                     ["C:\\Users\\carol", "C:\\Users\\nobody"])
+        check("a selection matching nothing is NAMED, not silently dropped",
+              mixed["missing"] == ["C:\\Users\\nobody"])
+        check("...while the rest of the selection still resolves",
+              mixed["file_count"] == 1)
+        check("a selection that matches nothing at all is refused",
+              raises(ValueError, backups.plan_restore, br_db, "PC-M", ["D:\\nope"]))
+        check("an empty selection is refused",
+              raises(ValueError, backups.plan_restore, br_db, "PC-M", []))
+        # A bare drive root has to match everything on that drive. normalize() keeps the
+        # trailing separator on "C:\" (a root is not the same as the drive-relative "C:"),
+        # but the outermost ancestor of C:\Users\bob\a.txt is "C:" -- so without trimming
+        # it here, "restore this whole drive" would match nothing, silently.
+        whole_drive = backups.plan_restore(br_db, "PC-M", ["C:\\"])
+        check("selecting a drive ROOT matches everything on it",
+              whole_drive["file_count"] == 4)
+        check("...spelled either way", backups.plan_restore(
+            br_db, "PC-M", ["C:"])["file_count"] == 4)
+        check("a selection over the file cap is refused rather than truncated",
+              raises(ValueError, backups.plan_restore, br_db, "PC-M", ["C:\\"],
+                     max_files=1))
+        # A prefix that is not a whole path segment must not match: matching on a raw
+        # string prefix would make selecting C:\Users\bob drag in C:\Users\bobby too.
+        check("folder matching is by path segment, not string prefix",
+              raises(ValueError, backups.plan_restore, br_db, "PC-M",
+                     ["C:\\Users\\bo"]))
+
+        print("\n-- target folder validation --")
+        check("no folder means the original locations",
+              backups.validate_target_dir("") == "")
+        check("a local absolute path is accepted",
+              backups.validate_target_dir("C:/Restored/") == "C:\\Restored")
+        check("a relative path is refused (SYSTEM's cwd is System32)",
+              raises(ValueError, backups.validate_target_dir, "Restored"))
+        check("a UNC path is refused",
+              raises(ValueError, backups.validate_target_dir, "\\\\srv\\share\\x"))
+        check("a path with .. is refused",
+              raises(ValueError, backups.validate_target_dir, "C:\\a\\..\\b"))
+
+        print("\n-- the restore lifecycle --")
+        br_dest = backups.create_destination(
+            br_db, sched_log, master_key, name="Restores", kind=backups.KIND_S3,
+            config=good_s3, secret={"access_key_id": "AKID", "secret_access_key": "shh"},
+            actor="root@x.com")
+        restore_id = backups.create_restore(
+            br_db, machine="PC-NEW", source_machine="PC-M", destination_id=br_dest,
+            plan=plan_out, target_dir="C:\\Restored", overwrite=False,
+            actor="root@x.com", now=1_950_000_000)
+        opened = backups.get_restore(br_db, restore_id)
+        check("a restore opens as running", opened["status"] == backups.RUN_RUNNING)
+        check("...naming both ends of a cross-machine restore",
+              opened["machine"] == "PC-NEW" and opened["source_machine"] == "PC-M")
+        check("...and is audited when it starts",
+              "backup_restore_start" in audit_actions(br_db))
+
+        cmd_params = backups.build_restore_command_params(
+            restore_id=restore_id, source_machine="PC-M", plan=plan_out)
+        # The whole reason the plan is fetched rather than carried: fleet.create_command
+        # audits params verbatim, so a file list here would write a multi-megabyte audit
+        # row -- with the decryption key in it.
+        check("command params carry no file list", "files" not in json.dumps(cmd_params))
+        check("...and no encryption key", "key" not in json.dumps(cmd_params))
+        check("...but do carry the size of the job", cmd_params["file_count"] == 3)
+
+        payload = backups.restore_plan_payload(br_db, sched_log, restore_id,
+                                               hub_url="https://hub.example")
+        check("the plan payload carries the SOURCE machine's derived key",
+              base64.b64decode(payload["encryption"]["key"])
+              == backups.derive_machine_key(master_key, "PC-M"))
+        check("...not the target machine's",
+              base64.b64decode(payload["encryption"]["key"])
+              != backups.derive_machine_key(master_key, "PC-NEW"))
+        check("...and never the master key",
+              base64.b64decode(payload["encryption"]["key"]) != master_key)
+        check("every archive gets a pre-signed download URL",
+              all(a["download"]["kind"] == "s3"
+                  and "X-Amz-Signature=" in a["download"]["url"]
+                  for a in payload["archives"]))
+        check("the S3 secret never reaches the agent", "shh" not in json.dumps(payload))
+        check("the target folder rides along", payload["target_dir"] == "C:\\Restored")
+
+        check("an archive index resolves to the key the hub planned",
+              backups.restore_archive_key(br_db, restore_id, 0)
+              == plan_out["archives"][0]["object_key"])
+        check("an index outside the plan resolves to nothing",
+              backups.restore_archive_key(br_db, restore_id, 99) is None)
+
+        # Partial success is a FAILURE with the numbers, not a green row: "restored 2 of 3"
+        # needs someone to look at the third, and success means nobody ever does.
+        partial = backups.ingest_restore_result(br_db, restore_id,
+                                                {"restored": 2, "bytes_restored": 50,
+                                                 "failures": ["C:\\x: locked"]})
+        check("a short restore is recorded as failed",
+              partial["status"] == backups.RUN_FAILED)
+        check("...saying how many of how many", "2 of 3" in partial["error"])
+        check("...and naming the first problem", "locked" in partial["error"])
+        check("a repeat report is ignored",
+              backups.ingest_restore_result(br_db, restore_id,
+                                            {"restored": 3})["restored_count"] == 2)
+
+        full_restore = backups.create_restore(
+            br_db, machine="PC-M", source_machine="PC-M", destination_id=br_dest,
+            plan=exact, actor="root@x.com", now=1_950_000_100)
+        done = backups.ingest_restore_result(br_db, full_restore,
+                                             {"restored": 1, "bytes_restored": 40})
+        check("restoring everything asked for succeeds",
+              done["status"] == backups.RUN_SUCCEEDED)
+        check("...and is audited", "backup_restore" in audit_actions(br_db))
+        check("history shows a machine's restores from BOTH ends",
+              len(backups.list_restores(br_db, machine="PC-M")) == 2)
+        check("the history view drops the plan rather than shipping it to a browser",
+              "plan" not in backups.list_restores(br_db, machine="PC-M")[0])
+
+        stuck_restore = backups.create_restore(
+            br_db, machine="PC-Z", source_machine="PC-M", destination_id=br_dest,
+            plan=exact, actor="root@x.com", now=1_950_000_200)
+        check("a fresh restore is not expired",
+              backups.expire_stale_restores(br_db, now=1_950_000_300) == 0)
+        check("a restore nobody reported IS expired",
+              backups.expire_stale_restores(
+                  br_db, now=1_950_000_200 + 25 * 3600) == 1)
+        check("...and says why",
+              "never reported" in backups.get_restore(br_db, stuck_restore)["error"])
 
         # ============================================================
         print("\n== Keys and rotation ==")

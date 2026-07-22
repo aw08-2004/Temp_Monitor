@@ -129,7 +129,7 @@ Two implementation-level notes worth carrying forward:
 
 ---
 
-## 🚧 1. Backups via HTTPS   ·   1a done (hub 1.28.0), 1b next
+## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0
 
 **1a. Hub database** — ✅ built. `backups.py` (envelope, destinations, snapshot/rotate
 scheduler — flask-free) + `backups_web.py` (console API), a Backups page, `backup.*`
@@ -188,19 +188,23 @@ never added to `HUB_RUNTIME_FILES`/`$HubRuntimeFiles` in 1.27.x, so a sparse hub
 or self-update fetched neither and the hub died on import at startup. Both lists now carry
 every module `app.py` imports, and both say why.
 
-**1b. Per-PC file backups** — 🚧 **backup path complete (hub 1.29.0 + agent 3.8.0);
-restore is the remaining work.** A machine can now be configured, previewed, scheduled,
-walked, snapshotted, encrypted and uploaded. What is missing is getting the data back
-through the console — until then a restore means `restore_backup.py` by hand, which does
-work (the archive is tar inside the envelope, openable with the master key alone).
+**1b. Per-PC file backups** — ✅ **built, both directions (hub 1.30.0 + agent 3.9.0).** A
+machine is configured, previewed, scheduled, walked, snapshotted, encrypted and uploaded;
+and an operator browses what landed and pushes any of it back — onto the same machine or a
+replacement. `restore_backup.py` remains the hub-independent path and now opens machine
+archives too (`--list` / `--extract`).
 
-**Agent side (3.8.0) — needs a signed release before the fleet gains it.**
+**Agent side (3.9.0) — needs a signed release before the fleet gains it.**
 
 **Built:**
 
 - **`backup_paths.py` — the include/exclude grammar**, and the reason this feature is
-  usable at all. `%Users%` fans out to every real profile (skipping Public/Default/service
-  accounts) so one pattern covers everyone, including whoever signs in next week. Crucially
+  usable at all. `%Users%` — spelled `%User%` if that reads better, the two are the same
+  token — fans out to every real profile (skipping Public/Default/service accounts), so one
+  pattern covers everyone including whoever signs in next week, and `%User%\Scripts` covers
+  a custom per-user folder. Note that `%User%` deliberately does NOT mean "the logged-on
+  user": backups run as SYSTEM on a schedule with nobody signed in, so such a token would
+  resolve to the service profile and silently back up one person's folder on a shared PC. Crucially
   `%Desktop%`/`%Documents%`/… resolve through each user's *User Shell Folders* registry, so
   they follow **OneDrive Known Folder Move** — a literal `C:\Users\bob\Desktop` on a
   KFM-enabled machine is an empty stub, and backing that up nightly while reporting success
@@ -272,19 +276,66 @@ work (the archive is tar inside the envelope, openable with the master key alone
   (content-hashed, hourly rescan, off the heartbeat's code path) so discovery can never
   delay a heartbeat into the hub's 90-second offline window.
 
-**Not yet done** — the whole of **restore**: manifest browsing in the UI, the
-`restore_files` command, `RestoreFilesExecutor.cs`, and `restore_backup.py --list/--extract`.
-Backups run and are restorable by hand; there is no button yet.
+**Restore (hub 1.30.0 + agent 3.9.0):**
 
-**Known bugs to fix:**
+- **A manifest browser, a folder at a time.** `manifest_listing` derives folders from the
+  paths beneath them and returns one level per request, because a profile is 100k–500k
+  files and the shape that works on a demo fleet — fetch everything, filter in the browser
+  — is the shape that times out on a real one. What it lists is what is **recoverable**,
+  not what was ever backed up: deleted files and rotated-away chains are already gone from
+  the answer, so nobody is offered a restore that 404s. `?search=` spans folders for the
+  case where you know the filename and not the path.
+- **`plan_restore` resolves a selection against the manifest, hub-side.** A ticked folder
+  cannot be expanded in the browser (it has only seen the folders someone clicked into)
+  nor by the agent (the folder is usually gone — that is why someone is restoring it).
+  Matching walks each row's ANCESTORS against the selection set rather than testing every
+  selection against every row: with a 400k-row manifest and a few hundred selections the
+  latter is tens of billions of comparisons. **A selection matching nothing is named back
+  to the operator**, never silently dropped.
+- **The plan lives in the database; the command carries an id.** `fleet.create_command`
+  audits its params verbatim, so putting a 40,000-file list in them would write a
+  multi-megabyte audit row per restore — into the database that is itself backed up — with
+  **the decryption key in it**. The agent fetches the plan from an authenticated endpoint
+  instead, which also means download URLs are minted at fetch time rather than dispatch,
+  so a command picked up after a weekend offline does not wake up holding expired
+  pre-signed links.
+- **Download brokering mirrors upload exactly**: S3 → a pre-signed GET per archive;
+  WebDAV → proxied by the hub. The agent names *"archive 2 of restore X"* and the hub
+  resolves it against the stored plan — an agent-supplied object key would let any
+  enrolled machine read any archive in the bucket, which here is a data breach rather than
+  a corrupted manifest.
+- **`RestoreFilesExecutor.cs`** — fetch plan, download one archive, decrypt, unpack only
+  the wanted members, delete it, next. One at a time because a chain can be hundreds of
+  gigabytes and a restore needing space for all of it at once fails on the machine that
+  needed it most. Targets are resolved **before** the download, so an archive whose files
+  all already exist is never fetched — on a re-run of a partly-failed restore that is most
+  of them.
+- **A partial restore is a FAILURE carrying the counts**, not a green row. "Restored 900
+  of 1000 files" needs a human to look at which 100, and success means nobody ever does.
+- **Cross-machine restore** (replacing dead hardware) is authorised at **both ends**:
+  reading PC-3's files and writing them onto PC-9 are separate things to be allowed to do.
+  The target agent is handed the *source* machine's derived key — a deliberate, audited
+  widening of blast radius, and the entire point of "restore to a different machine".
+- **`restore_backup.py --list/--extract`** — the console's restore button minus the
+  console, for when the hub is gone or someone wants one file without pushing it onto a
+  PC. Refuses to extract a hub-database artifact rather than handing it to `tarfile` and
+  reporting a confusing parse error, and refuses any member that would escape the target
+  folder (the classic tar traversal, on a file that came back over the network).
+- **`archive_member()` is a second shared contract**, alongside the path grammar: the
+  agent names tar members, and the hub names them again when planning a restore of an
+  archive it never wrote. Drift there is not a crash — it is a restore that downloads the
+  right archive, matches nothing, and reports every file missing. Both sides are tested
+  against the `"members"` vectors in `tests/backup_path_vectors.json`.
 
-- `rotate_chains()` treats a chain's deletes as atomic when they are not. A
-  `client.delete()` failure partway through leaves some archives gone from storage while
-  the manifest still lists the whole chain as restorable — the operator is offered a
-  restore that 404s halfway. Fix: per-chain try, reconcile the DB rows to what actually
-  survived. Not urgent (a rotation failure is already swallowed so it cannot fail a good
-  backup) but the manifest stays wrong until the next successful pass. See the comment in
-  `backups.rotate_chains`.
+**Fixed here** — `rotate_chains()`'s non-atomic deletes. The old code deleted every object
+in a doomed chain and then every DB row, so a `client.delete()` failure in between left
+archives gone from storage while the manifest still listed the whole chain as restorable.
+The fix is structural rather than transactional: archives are deleted **newest sequence
+first, the full LAST**, so a partial failure leaves a *prefix* of the chain — which is
+still a valid, restorable chain describing an older moment — and each archive's manifest
+rows are dropped immediately after that archive is actually gone. A partly-deleted chain
+is simply still over the limit, so the next pass finishes it; no list of pending deletions
+has to be kept anywhere.
 
 **Considered and deferred — content-addressed blobs instead of chains.** Store each file
 at `blobs/<sha256>` (encrypted) and make a snapshot nothing but a manifest of path → hash,
@@ -351,9 +402,11 @@ to prevent.
   decrypt key over the authenticated channel; the agent pulls the files, decrypts, and
   writes them to the original or an operator-chosen path.
 
-**Still to decide during implementation**: offsite retention/rotation policy (how many
-generations to keep); resumable-upload chunking specifics; exact VSS invocation and its
-failure fallback (skip-and-report if a snapshot can't be created).
+*(The three parameters this spec left open were resolved as described above: count-based
+retention — generations for the hub DB, whole chains for machine files; no resumable
+upload, because a partial object in the bucket is indistinguishable from a good one, so
+the artifact is built locally and PUT in one shot; and VSS via `Win32_ShadowCopy.Create`
+with skip-and-report on failure.)*
 
 ---
 
@@ -439,9 +492,10 @@ present.
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
 2. ~~**#5 Deploy packages**~~ — done, hub 1.27.0 (pending an agent release)
-3. **#1 Backups** — ~~hub DB~~ done (1.28.0); per-PC files: ~~hub side~~ (1.29.0) and
-   ~~agent executor~~ (3.8.0) done — **console-driven restore ← next**
-4. **#4 Active Directory** — Entra login + group mapping first, then LDAP sync
+3. ~~**#1 Backups**~~ — done: hub DB (1.28.0), per-PC files (1.29.0 / agent 3.8.0),
+   console-driven restore (1.30.0 / agent 3.9.0). Both agent halves are pending a signed
+   agent release.
+4. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
 5. **#2 Remote view & control** — spike first, then build
 
 Each item above has a decided approach; only small, implementation-level parameters

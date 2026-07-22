@@ -117,6 +117,43 @@ public sealed class BackupManifest
         return entry.Size != size || entry.Mtime != mtime;
     }
 
+    /// <summary>
+    /// The name a file is stored under INSIDE a backup archive.
+    ///
+    /// <c>C:\Users\bob\Desktop\notes.txt</c> → <c>C/Users/bob/Desktop/notes.txt</c>. The
+    /// drive colon goes and separators become forward slashes, because tar member names
+    /// are POSIX-shaped — and the whole reason this feature packs tar is that stdlib
+    /// <c>tarfile</c> can open the archive on any machine, with no hub and no agent.
+    ///
+    /// **A SHARED CONTRACT with the hub's backup_paths.archive_member().** The hub builds
+    /// restore plans naming members it never wrote; this is what wrote them. A drift
+    /// between the two is a restore that silently finds nothing, so both sides are tested
+    /// against the "members" vectors in tests/backup_path_vectors.json.
+    /// </summary>
+    public static string ArchiveMember(string path) =>
+        (path ?? "").Replace(":", "").Replace('\\', '/').TrimStart('/');
+
+    /// <summary>
+    /// The inverse, for a restore putting files back where they came from.
+    ///
+    /// Only the FIRST segment can have been a drive, and only when it is a single letter:
+    /// a member from a UNC source (<c>srv/share/f</c>) stays relative, which is what a
+    /// restore-into-a-folder wants and what a restore-to-original-location must refuse
+    /// rather than guess a drive for.
+    /// </summary>
+    public static string MemberToPath(string member)
+    {
+        var text = (member ?? "").Replace('\\', '/').TrimStart('/');
+        if (text.Length == 0) return "";
+        var cut = text.IndexOf('/');
+        var head = cut < 0 ? text : text[..cut];
+        var tail = cut < 0 ? "" : text[(cut + 1)..];
+        if (head.Length == 1 && char.IsLetter(head[0])) head += ":";
+        // A bare drive keeps its root separator ("C:" alone means "the current directory
+        // on C:", which is not what a restore means by it); anything deeper does not.
+        return tail.Length == 0 ? head + "\\" : head + "\\" + tail.Replace('/', '\\');
+    }
+
     public static string HashFile(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,

@@ -61,6 +61,7 @@ try
     // testable parts (path expansion, the envelope) are separate classes with their own
     // tests, and what remains here is I/O against a real filesystem.
     builder.Services.AddSingleton<ICommandExecutor, BackupFilesExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, RestoreFilesExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellInputExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellSignalExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();

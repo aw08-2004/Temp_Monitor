@@ -319,6 +319,42 @@ def init_backups_db(db_path):
             "CREATE INDEX IF NOT EXISTS idx_backup_files_machine "
             "ON backup_files(machine, path)"
         )
+        # One row per restore an operator asked for. Separate from `backup_runs` because
+        # a restore is not a backup with the arrow reversed: it carries a PLAN (which
+        # archives, which members inside them) that the hub must be able to re-read later
+        # -- the WebDAV download proxy resolves `(restore_id, index)` against it, so an
+        # agent can never name an object key of its own choosing. That plan has nowhere to
+        # live on a run row.
+        #
+        # `machine` is where the files are being WRITTEN and `source_machine` is whose
+        # backup they came from. The two differ on the case this feature exists for:
+        # replacing dead hardware, where yesterday's PC-3 is restored onto a new PC-9.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backup_restores (
+                id             TEXT PRIMARY KEY,
+                machine        TEXT NOT NULL,   -- target: where files are written
+                source_machine TEXT NOT NULL,   -- whose archives these are
+                destination_id TEXT,
+                target_dir     TEXT,            -- "" = back to the original locations
+                overwrite      INTEGER NOT NULL DEFAULT 0,
+                status         TEXT NOT NULL,   -- RUN_STATUSES
+                plan_json      TEXT NOT NULL,   -- [{object_key, files:[...]}]
+                file_count     INTEGER NOT NULL,
+                restored_count INTEGER,
+                bytes_restored INTEGER,
+                error          TEXT,
+                actor          TEXT,
+                command_id     TEXT,
+                started_at     INTEGER NOT NULL,
+                finished_at    INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_backup_restores_machine "
+            "ON backup_restores(machine, started_at DESC)"
+        )
 
 
 def get_state(db_path, key, default=None):
@@ -2039,23 +2075,173 @@ def record_file_set(db_path, *, run_id, machine, chain_id, sequence, object_key,
     return set_id
 
 
-def current_manifest(db_path, machine):
-    """The machine's current state: newest version of each path, deletions removed.
+# The newest surviving version of every path a machine has backed up.
+#
+# Done in SQL rather than by loading every row and de-duplicating in Python, because the
+# restore browser calls it per folder click on a manifest that is legitimately hundreds of
+# thousands of rows -- one row per file VERSION, not per file.
+#
+# "Newest" is (created_at, sequence, rowid) DESCENDING. The rowid tiebreak is the same
+# load-bearing one machine_chains explains: created_at has one-second granularity, so two
+# sets written in the same second would otherwise resolve arbitrarily and a file could
+# read back its older version.
+_LATEST_VERSIONS_SQL = """
+    SELECT path, size, mtime, sha256, deleted, set_id, chain_id, sequence,
+           created_at, object_key
+    FROM (
+        SELECT f.path, f.size, f.mtime, f.sha256, f.deleted, f.set_id,
+               s.chain_id, s.sequence, s.created_at, s.object_key,
+               ROW_NUMBER() OVER (
+                   PARTITION BY LOWER(f.path)
+                   ORDER BY s.created_at DESC, s.sequence DESC, s.rowid DESC
+               ) AS rank
+        FROM backup_files f JOIN backup_file_sets s ON s.id = f.set_id
+        WHERE f.machine = ? {extra}
+    )
+    WHERE rank = 1 AND deleted = 0
+"""
 
-    Ordered by (created_at, sequence) rather than by set id: a chain's archives are
-    written in sequence order, and a later chain always supersedes an earlier one.
+
+def _like_prefix(prefix):
+    """A LIKE pattern matching everything UNDER a folder, with the wildcards escaped.
+
+    `%` and `_` are legal in Windows filenames (`%TEMP%.log`, `my_notes`), so a raw
+    concatenation would turn a folder name into a wildcard and hand back files from
+    somewhere else. `!` is the escape character rather than the usual `\\`, which is the
+    path separator here and would need escaping itself on every single segment.
     """
+    escaped = (str(prefix).replace("!", "!!").replace("%", "!%").replace("_", "!_"))
+    return escaped + "\\%"
+
+
+def _latest_versions(db_path, machine, under=None, contains=None):
+    """Newest surviving version of each path, optionally filtered.
+
+    Both filters are applied INSIDE the window query rather than to its output. That is
+    not just speed: filtering afterwards would be identical here (a path's versions all
+    share the path), and doing it in SQL keeps the row set that reaches Python bounded by
+    what was asked for rather than by the size of the whole manifest.
+    """
+    params = [machine]
+    clauses = []
+    if under:
+        # The folder ITSELF is never a manifest row (only files are), so this is a pure
+        # "starts with <folder>\" test -- no need to also match the bare prefix.
+        clauses.append("AND f.path LIKE ? ESCAPE '!'")
+        params.append(_like_prefix(under))
+    if contains:
+        clauses.append("AND LOWER(f.path) LIKE ? ESCAPE '!'")
+        params.append("%" + str(contains).replace("!", "!!").replace("%", "!%")
+                      .replace("_", "!_") + "%")
     with get_conn(db_path) as conn:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT f.path, f.size, f.mtime, f.sha256, f.deleted, f.set_id, "
-            "       s.chain_id, s.sequence, s.created_at, s.object_key "
-            "FROM backup_files f JOIN backup_file_sets s ON s.id = f.set_id "
-            "WHERE f.machine = ? "
-            "ORDER BY s.created_at ASC, s.sequence ASC", (machine,))]
-    latest = {}
+        return [dict(r) for r in conn.execute(
+            _LATEST_VERSIONS_SQL.format(extra=" ".join(clauses)), params)]
+
+
+def current_manifest(db_path, machine):
+    """The machine's current state: newest version of each path, deletions removed."""
+    return _latest_versions(db_path, machine)
+
+
+def manifest_summary(db_path, machine):
+    """Totals for the restore browser's header: how much is actually recoverable."""
+    rows = _latest_versions(db_path, machine)
+    chains = machine_chains(db_path, machine)
+    return {
+        "file_count": len(rows),
+        "total_bytes": sum(int(r["size"] or 0) for r in rows),
+        "latest_at": max((int(r["created_at"] or 0) for r in rows), default=None),
+        "chains": len(chains),
+        "archives": sum(len(c["sets"]) for c in chains),
+    }
+
+
+def manifest_listing(db_path, machine, prefix="", limit=2000):
+    """One folder of the manifest: its subfolders and its files.
+
+    A folder at a time rather than the whole manifest, because a profile is 100k-500k
+    files and no browser wants that in one response -- and an operator restoring a
+    Documents folder does not want to scroll it either.
+
+    Folders are DERIVED, not stored: only files have manifest rows, so a directory exists
+    exactly when something under it does. That is the honest definition here -- an empty
+    folder was never backed up (tar carries no directory entries from this feature), so
+    offering it as restorable would be a lie.
+    """
+    prefix = backup_paths.normalize(prefix)
+    rows = _latest_versions(db_path, machine, under=prefix or None)
+
+    dirs, files = {}, []
+    head_len = len(prefix) + 1 if prefix else 0
     for row in rows:
-        latest[row["path"].lower()] = row
-    return [row for row in latest.values() if not row["deleted"]]
+        remainder = row["path"][head_len:] if prefix else row["path"]
+        name, sep, _ = remainder.partition("\\")
+        if not name:
+            continue
+        if sep:
+            folder = dirs.setdefault(name.lower(), {
+                "name": name,
+                "path": f"{prefix}\\{name}" if prefix else name,
+                "file_count": 0,
+                "total_bytes": 0,
+            })
+            folder["file_count"] += 1
+            folder["total_bytes"] += int(row["size"] or 0)
+        else:
+            files.append({
+                "name": name,
+                "path": row["path"],
+                "size": int(row["size"] or 0),
+                "mtime": row["mtime"],
+                "sha256": row["sha256"],
+                "created_at": row["created_at"],
+                "chain_id": row["chain_id"],
+                "sequence": row["sequence"],
+            })
+
+    files.sort(key=lambda f: f["name"].lower())
+    return {
+        "path": prefix,
+        "parents": _parents_of(prefix),
+        "dirs": sorted(dirs.values(), key=lambda d: d["name"].lower()),
+        "files": files[:limit],
+        "truncated": len(files) > limit,
+        "file_count": len(files),
+    }
+
+
+def _parents_of(prefix):
+    """Breadcrumbs for a folder: every ancestor, outermost first, excluding itself."""
+    if not prefix:
+        return []
+    parts = prefix.split("\\")
+    out, walked = [], ""
+    for part in parts[:-1]:
+        walked = f"{walked}\\{part}" if walked else part
+        out.append({"name": part, "path": walked})
+    return out
+
+
+def manifest_search(db_path, machine, query, limit=500):
+    """Files whose path contains `query`. Capped -- this is a finder, not a dump.
+
+    Sorted before the cap is applied, so "the first 500" is a stable answer rather than
+    whichever 500 the query planner happened to emit first -- an operator who searches
+    twice and gets two different lists stops trusting the browser.
+    """
+    needle = str(query or "").strip().lower()
+    if not needle:
+        return {"query": "", "files": [], "truncated": False}
+    hits = [{
+        "name": row["path"].rsplit("\\", 1)[-1],
+        "path": row["path"],
+        "size": int(row["size"] or 0),
+        "mtime": row["mtime"],
+        "sha256": row["sha256"],
+        "created_at": row["created_at"],
+    } for row in _latest_versions(db_path, machine, contains=needle)]
+    hits.sort(key=lambda f: f["path"].lower())
+    return {"query": needle, "files": hits[:limit], "truncated": len(hits) > limit}
 
 
 def rotate_chains(client, prefix, machine, keep_chains, db_path):
@@ -2070,6 +2256,23 @@ def rotate_chains(client, prefix, machine, keep_chains, db_path):
     chain membership is hub-side knowledge -- an object key alone does not say which full
     an incremental belongs to. The remote is still the source of truth for what EXISTS; a
     key already gone deletes as a no-op.
+
+    A partial delete is survivable BY CONSTRUCTION, in two steps:
+
+      * a chain's archives are deleted **newest sequence first, the full LAST**, so a
+        failure partway through leaves a PREFIX of the chain -- full plus incrementals
+        0..k -- which is still a valid, restorable chain describing an older moment. The
+        obvious order (full first) leaves the exact state this whole module exists to
+        prevent: orphaned incrementals whose base is gone.
+      * the manifest rows are dropped **per archive, immediately after that archive is
+        actually gone**, so the database always describes what storage really holds. The
+        old code deleted every object and then every row, and an exception in between left
+        the console offering a restore that 404s halfway.
+
+    A chain that only partly deleted is simply still over the limit, so the next pass
+    retries the rest -- no bookkeeping of pending deletions is needed. The last error is
+    re-raised once every chain has been reconciled, so the caller still logs the failure
+    (ingest_file_result does) rather than a rotation silently degrading.
     """
     keep_chains = int(keep_chains)
     if keep_chains < 1:
@@ -2079,33 +2282,28 @@ def rotate_chains(client, prefix, machine, keep_chains, db_path):
     if not doomed:
         return []
 
-    # KNOWN BUG -- partial delete failure leaves the manifest lying.
-    #
-    # If client.delete() raises partway through a chain (a network blip, a permissions
-    # change on the bucket), this propagates out and the DELETE of the DB rows below
-    # never runs. Two of the chain's three archives are then gone from storage while the
-    # manifest still lists the whole chain as intact and restorable -- an operator is
-    # offered a restore that 404s halfway through.
-    #
-    # The fix is to delete per chain in its own try, and drop that chain's rows to match
-    # whatever actually survived (or mark the chain unusable) rather than treating the
-    # whole pass as atomic. Not done here yet; ingest_file_result already swallows a
-    # BackupError from this call so a rotation failure does not turn a successful backup
-    # red, which is what keeps this from being urgent -- but the manifest is wrong until
-    # the next successful pass.
     removed = []
+    failure = None
     for chain in doomed:
-        for file_set in chain["sets"]:
-            client.delete(file_set["object_key"])
+        for file_set in sorted(chain["sets"], key=lambda s: s["sequence"], reverse=True):
+            try:
+                client.delete(file_set["object_key"])
+            except BackupError as e:
+                # Stop THIS chain here: everything below this archive is its base, and
+                # deleting a base while this one survives is the orphan state above.
+                failure = e
+                break
             removed.append(file_set["object_key"])
-        # The manifest rows go with the archives: a path whose only surviving version
-        # lived in a deleted chain is genuinely no longer restorable, and leaving it
-        # listed would offer the operator a restore that 404s.
-        with get_conn(db_path) as conn:
-            ids = [s["id"] for s in chain["sets"]]
-            marks = ",".join("?" for _ in ids)
-            conn.execute(f"DELETE FROM backup_files WHERE set_id IN ({marks})", ids)
-            conn.execute(f"DELETE FROM backup_file_sets WHERE id IN ({marks})", ids)
+            # The manifest rows go with the archive: a path whose only surviving version
+            # lived in a deleted set is genuinely no longer restorable, and leaving it
+            # listed would offer the operator a restore that 404s.
+            with get_conn(db_path) as conn:
+                conn.execute("DELETE FROM backup_files WHERE set_id = ?",
+                             (file_set["id"],))
+                conn.execute("DELETE FROM backup_file_sets WHERE id = ?",
+                             (file_set["id"],))
+    if failure is not None:
+        raise failure
     return removed
 
 
@@ -2350,9 +2548,12 @@ def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_incl
 
     Retire FIRST, for the same reason packages.tick reconciles first: a machine whose
     last run is stuck `running` is never due (due-ness anchors on the last attempt), so
-    it would never be retried until something expired it.
+    it would never be retried until something expired it. Abandoned RESTORES are retired
+    on the same pass -- they have no schedule of their own, and a restore that hangs
+    forever is exactly as misleading as a backup that does.
     """
     expired = expire_stale_file_runs(db_path, now=now)
+    expired += expire_stale_restores(db_path, now=now)
     dispatched = files_dispatch_once(
         db_path, log_dir, fleet_enabled=fleet_enabled,
         fleet_destination=fleet_destination, fleet_include=fleet_include,
@@ -2409,6 +2610,405 @@ def ingest_file_result(db_path, log_dir, run_id, result, *, keep_chains=4):
                         "stored_bytes": stored_bytes, "chain": run["chain_id"],
                         "sequence": run["sequence"]})
     return finished
+
+
+# ================================
+# RESTORE
+# ================================
+# Getting the data back, which is the only reason any of the above exists.
+#
+# Three ideas shape this half, and each is the opposite of what the backup path does:
+#
+#   * **The plan lives in the database, not in the command.** A `backup_files` command
+#     carries its whole policy in `params`, which is right for a few dozen patterns. A
+#     restore names FILES -- tens of thousands of them -- and fleet.create_command audits
+#     its params verbatim, so the same shape would write a multi-megabyte audit row (into
+#     the very database that then gets backed up) for every restore. The command carries
+#     only a restore id; the agent fetches the plan from an authenticated endpoint.
+#
+#   * **The decrypt key travels with the plan, not with the command,** for the same
+#     reason: the command's params are audit-logged, and a key in the audit log is a key
+#     in every subsequent hub-database backup.
+#
+#   * **The hub names every object, always.** The agent is told "archive 0, archive 1",
+#     and download URLs are resolved from the STORED plan. An agent can no more choose
+#     which archive it reads than it can choose where its backup is written -- which
+#     matters more here, because a read of another machine's archive is a data breach
+#     rather than a corrupted manifest.
+#
+# Cross-machine restore (replacing dead hardware) is the case the whole design bends
+# around: the archives were sealed with the SOURCE machine's derived key, so the target
+# machine is handed a key that is not its own. That is a deliberate, audited widening of
+# blast radius -- and it is the entire point of "restore to a different machine".
+MAX_RESTORE_FILES = 200_000
+MAX_RESTORE_SELECTIONS = 500
+MAX_TARGET_DIR_CHARS = 200
+
+# How long a minted download URL is good for. Shorter than the upload TTL: a restore is
+# started by a human who is watching, so the agent picks the command up within a poll
+# interval, whereas a backup can be dispatched to a machine that is asleep.
+DOWNLOAD_URL_TTL_SECONDS = 2 * 60 * 60
+
+# How long a queued `restore_files` command stays valid -- much longer than the fleet
+# default of 15 minutes, because the machine an operator wants to restore onto is very
+# often the machine that is currently being rebuilt, and expiring the command while it
+# boots would mean the restore has to be started again from the browser.
+#
+# Deliberately shorter than expire_stale_restores' 24 hours: the command dies first, so a
+# machine that never came back leaves a restore row that is expired by the scheduler with
+# a real explanation rather than one that is picked up a day later and restores files onto
+# a PC nobody is expecting it on.
+RESTORE_COMMAND_TTL_SECONDS = 4 * 60 * 60
+
+
+def validate_target_dir(target_dir):
+    """Where a restore writes. "" means "back where the files came from".
+
+    An absolute local path or nothing -- no relative paths, because "relative to what" on
+    a service running as SYSTEM is `C:\\Windows\\System32`, and no UNC, because writing a
+    restore to a network share means the agent's SYSTEM account authenticating to it,
+    which it generally cannot.
+    """
+    text = backup_paths.normalize(target_dir)
+    if not text:
+        return ""
+    if len(text) > MAX_TARGET_DIR_CHARS:
+        raise ValueError(f"The restore folder is limited to {MAX_TARGET_DIR_CHARS} "
+                         f"characters.")
+    if not re.match(r"^[A-Za-z]:\\", text):
+        raise ValueError("The restore folder must be an absolute local path, like "
+                         "C:\\Restored.")
+    if ".." in text.split("\\"):
+        raise ValueError("The restore folder may not contain '..'.")
+    return text
+
+
+def _ancestors(path_lower):
+    """`c:\\a\\b\\c.txt` -> `c:\\a\\b`, `c:\\a`, `c:`. Used to test folder selection."""
+    parts = path_lower.split("\\")
+    for cut in range(len(parts) - 1, 0, -1):
+        yield "\\".join(parts[:cut])
+
+
+def plan_restore(db_path, machine, paths, *, max_files=MAX_RESTORE_FILES):
+    """Work out which archives hold the selected files, and what to pull from each.
+
+    `paths` are what the operator ticked: files, folders, or both -- a folder means
+    everything under it, resolved HERE rather than by the agent, because the agent has no
+    manifest and the folder may no longer exist on disk (which is usually why someone is
+    restoring it).
+
+    Matching walks each manifest row's ANCESTORS against the selection set rather than
+    testing every selection against every row. With a 400k-row manifest and a few hundred
+    selections the second shape is tens of billions of comparisons; this one is a handful
+    of set lookups per row, because a Windows path is not deep.
+
+    Returns {archives, file_count, total_bytes, missing}. `missing` names selections that
+    matched nothing -- a restore that silently drops a folder the operator asked for is
+    the failure mode this feature cannot have.
+    """
+    selections = []
+    for raw in (paths or [])[:MAX_RESTORE_SELECTIONS]:
+        # rstrip on top of normalize, which deliberately KEEPS the separator on a bare
+        # drive ("C:\" is a root, "C:" is a drive-relative path). Selections are matched
+        # against the ancestors of a path, and the outermost ancestor of
+        # `C:\Users\bob\a.txt` is `C:` -- so a selection of `C:\` would otherwise match
+        # nothing at all, silently, which for "restore this whole drive" is the worst
+        # possible way to be wrong.
+        clean = backup_paths.normalize(raw).rstrip("\\")
+        if clean and clean not in selections:
+            selections.append(clean)
+    if not selections:
+        raise ValueError("Choose at least one file or folder to restore.")
+
+    wanted = {s.lower() for s in selections}
+    matched = set()
+    chosen = []
+    for row in _latest_versions(db_path, machine):
+        lowered = row["path"].lower()
+        hit = lowered if lowered in wanted else next(
+            (a for a in _ancestors(lowered) if a in wanted), None)
+        if hit is None:
+            continue
+        matched.add(hit)
+        chosen.append(row)
+        if len(chosen) > max_files:
+            raise ValueError(
+                f"That selection covers more than {max_files:,} files. Restore a folder "
+                f"at a time, or narrow it.")
+
+    if not chosen:
+        raise ValueError("Nothing in this machine's backups matches that selection.")
+
+    # Grouped by archive, oldest first: the agent opens each archive exactly once, and a
+    # progress line that walks forward in time reads the way an operator expects.
+    archives = {}
+    for row in sorted(chosen, key=lambda r: (r["created_at"], r["sequence"])):
+        archive = archives.setdefault(row["object_key"], {
+            "object_key": row["object_key"],
+            "chain_id": row["chain_id"],
+            "sequence": row["sequence"],
+            "created_at": row["created_at"],
+            "files": [],
+        })
+        archive["files"].append({
+            "path": row["path"],
+            "member": backup_paths.archive_member(row["path"]),
+            "size": int(row["size"] or 0),
+            "sha256": row["sha256"] or "",
+        })
+    ordered = list(archives.values())
+    for index, archive in enumerate(ordered):
+        archive["index"] = index
+
+    return {
+        "archives": ordered,
+        "file_count": len(chosen),
+        "total_bytes": sum(int(r["size"] or 0) for r in chosen),
+        "missing": [s for s in selections if s.lower() not in matched],
+    }
+
+
+def _restore_row(row):
+    record = dict(row)
+    record["plan"] = json.loads(record.pop("plan_json") or "{}")
+    record["overwrite"] = bool(record["overwrite"])
+    record["archive_count"] = len(record["plan"].get("archives") or [])
+    return record
+
+
+def get_restore(db_path, restore_id):
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT * FROM backup_restores WHERE id = ?",
+                           (restore_id,)).fetchone()
+    return _restore_row(row) if row else None
+
+
+def list_restores(db_path, machine=None, limit=20):
+    """Restore history. `machine` matches EITHER end of a cross-machine restore, so a
+    machine's page shows both "restored onto this box" and "this box's data was pulled
+    back onto another" -- both are things an operator looking at PC-3 needs to know."""
+    query = "SELECT * FROM backup_restores"
+    params = []
+    if machine:
+        query += " WHERE machine = ? OR source_machine = ?"
+        params += [machine, machine]
+    query += " ORDER BY started_at DESC LIMIT ?"
+    params.append(int(limit))
+    with get_conn(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    # The plan is megabytes and the list view shows counts, so it is dropped here rather
+    # than shipped to a browser that would only measure its length.
+    out = []
+    for row in rows:
+        record = _restore_row(row)
+        record.pop("plan", None)
+        out.append(record)
+    return out
+
+
+def create_restore(db_path, *, machine, source_machine, destination_id, plan,
+                   target_dir="", overwrite=False, actor="system", now=None):
+    """Open a restore row. Written BEFORE the command is queued, like every other
+    dispatch here -- a crash between the two costs one visible failed restore rather than
+    an agent writing files nobody recorded asking for."""
+    now = int(time.time() if now is None else now)
+    restore_id = uuid.uuid4().hex
+    target_dir = validate_target_dir(target_dir)
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO backup_restores(id, machine, source_machine, destination_id, "
+            "target_dir, overwrite, status, plan_json, file_count, actor, started_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (restore_id, machine, source_machine, destination_id,
+             target_dir, 1 if overwrite else 0, RUN_RUNNING,
+             json.dumps(plan), int(plan.get("file_count") or 0), actor, now),
+        )
+    # Audited with the SHAPE of the restore, never the file list: the point of the record
+    # is "who pulled whose data onto which machine", and a 40,000-path audit row would
+    # bury exactly that.
+    fleet.audit(db_path, actor=actor, action="backup_restore_start", target=machine,
+                detail={"restore_id": restore_id, "source_machine": source_machine,
+                        "files": plan.get("file_count"),
+                        "archives": len(plan.get("archives") or []),
+                        "target_dir": target_dir or "(original locations)",
+                        "overwrite": bool(overwrite)})
+    return restore_id
+
+
+def attach_restore_command(db_path, restore_id, command_id):
+    with get_conn(db_path) as conn:
+        conn.execute("UPDATE backup_restores SET command_id = ? WHERE id = ?",
+                     (command_id, restore_id))
+
+
+def build_restore_command_params(*, restore_id, source_machine, plan):
+    """The `restore_files` command params: an id and the size of the job, nothing more.
+
+    Deliberately tiny. The file list and the decryption key are fetched by the agent from
+    the plan endpoint -- see the section comment for why neither belongs in something
+    fleet.create_command writes verbatim into the audit log.
+
+    The counts ARE here so the agent can refuse an obviously wrong job (and so an operator
+    reading the command list sees the size of what they started) without a second request.
+    """
+    return {
+        "restore_id": restore_id,
+        "source_machine": source_machine,
+        "file_count": int(plan.get("file_count") or 0),
+        "total_bytes": int(plan.get("total_bytes") or 0),
+        "archive_count": len(plan.get("archives") or []),
+    }
+
+
+def mint_download(db_path, log_dir, destination_id, object_key, *, hub_url="",
+                  restore_id="", index=0):
+    """Where the agent should GET one archive from -- the mirror of mint_upload.
+
+    S3 gets a pre-signed GET scoped to this exact object; WebDAV, which has no such
+    concept, is proxied by the hub. Same split, same reason: the shared credential never
+    reaches a machine.
+    """
+    record = get_destination(db_path, destination_id)
+    if record is None:
+        raise ValueError("That backup destination no longer exists.")
+    if record["kind"] == KIND_S3:
+        master_key = load_master_key()
+        if master_key is None:
+            raise ValueError("No backup master key is configured on this hub.")
+        client = build_client(record, load_secret(log_dir, master_key, destination_id))
+        return {"kind": "s3",
+                "url": client.presigned_url(object_key, method="GET",
+                                            expires_seconds=DOWNLOAD_URL_TTL_SECONDS),
+                "expires_in": DOWNLOAD_URL_TTL_SECONDS}
+    return {"kind": "hub",
+            "url": f"{hub_url.rstrip('/')}/api/agent/backups/restore/{restore_id}"
+                   f"/archive/{int(index)}",
+            "expires_in": DOWNLOAD_URL_TTL_SECONDS}
+
+
+def restore_plan_payload(db_path, log_dir, restore_id, *, hub_url=""):
+    """The full plan, with a download URL per archive and the decryption key.
+
+    Built fresh on every fetch rather than stored: pre-signed URLs expire, and a command
+    that sat in the queue while a laptop was shut for the weekend would otherwise wake up
+    holding a set of dead links. The plan itself -- which archives, which members -- comes
+    from the row and never from the request.
+    """
+    restore = get_restore(db_path, restore_id)
+    if restore is None:
+        raise ValueError("unknown restore")
+    machine_key = machine_key_for(restore["source_machine"])
+    if machine_key is None:
+        raise ValueError("No backup master key is configured on this hub.")
+
+    archives = []
+    for archive in restore["plan"].get("archives") or []:
+        archives.append({
+            "index": archive["index"],
+            "object_key": archive["object_key"],
+            "download": mint_download(db_path, log_dir, restore["destination_id"],
+                                      archive["object_key"], hub_url=hub_url,
+                                      restore_id=restore_id, index=archive["index"]),
+            "files": archive["files"],
+        })
+    return {
+        "restore_id": restore_id,
+        "source_machine": restore["source_machine"],
+        "machine": restore["machine"],
+        "target_dir": restore["target_dir"] or "",
+        "overwrite": bool(restore["overwrite"]),
+        "file_count": restore["file_count"],
+        "total_bytes": int(restore["plan"].get("total_bytes") or 0),
+        "encryption": {
+            "algorithm": "AES-256-GCM",
+            "key": base64.b64encode(machine_key).decode("ascii"),
+            "key_id": key_id(machine_key),
+        },
+        "archives": archives,
+    }
+
+
+def restore_archive_key(db_path, restore_id, index):
+    """The object key for one archive of a restore, or None.
+
+    The WebDAV proxy's whole safety property: the agent asks for "archive 2 of restore X"
+    and the hub decides what that means. An agent-supplied object key would let any
+    enrolled machine read any archive in the bucket.
+    """
+    restore = get_restore(db_path, restore_id)
+    if restore is None:
+        return None
+    for archive in restore["plan"].get("archives") or []:
+        if int(archive["index"]) == int(index):
+            return archive["object_key"]
+    return None
+
+
+def complete_restore(db_path, restore_id, *, restored=None, bytes_restored=None,
+                     error=None, actor="agent"):
+    """Close a restore row. `error` set means failed, absent means succeeded."""
+    status = RUN_FAILED if error else RUN_SUCCEEDED
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE backup_restores SET status = ?, restored_count = ?, "
+            "bytes_restored = ?, error = ?, finished_at = ? WHERE id = ?",
+            (status, None if restored is None else int(restored),
+             None if bytes_restored is None else int(bytes_restored),
+             str(error)[:MAX_ERROR_CHARS] if error else None,
+             int(time.time()), restore_id),
+        )
+    restore = get_restore(db_path, restore_id)
+    if restore is not None:
+        fleet.audit(db_path, actor=actor,
+                    action="backup_restore_failed" if error else "backup_restore",
+                    target=restore["machine"],
+                    detail={"restore_id": restore_id,
+                            "source_machine": restore["source_machine"],
+                            "restored": restored, "requested": restore["file_count"],
+                            "error": str(error)[:MAX_ERROR_CHARS] if error else None})
+    return restore
+
+
+def ingest_restore_result(db_path, restore_id, result):
+    """Record what an agent reported for one `restore_files` command.
+
+    A restore that wrote SOME files is reported as a failure carrying the count, not as a
+    success: "restored 900 of 1000 files" needs a human to look at which 100, and a green
+    row would mean nobody ever does.
+    """
+    restore = get_restore(db_path, restore_id)
+    if restore is None:
+        raise ValueError("unknown restore")
+    if restore["status"] != RUN_RUNNING:
+        return restore          # already reported; a retry of a POST that landed
+
+    result = result or {}
+    restored = int(result.get("restored") or 0)
+    bytes_restored = int(result.get("bytes_restored") or 0)
+    error = result.get("error")
+    if not error and restored < restore["file_count"]:
+        failures = [str(f)[:200] for f in (result.get("failures") or [])][:5]
+        error = (f"Restored {restored:,} of {restore['file_count']:,} files."
+                 + (" First problems: " + "; ".join(failures) if failures else ""))
+    return complete_restore(db_path, restore_id, restored=restored,
+                            bytes_restored=bytes_restored, error=error)
+
+
+def expire_stale_restores(db_path, now=None, max_seconds=24 * 60 * 60):
+    """Fail restores whose agent never reported back -- the mirror of
+    expire_stale_file_runs, and needed for the same reason: a restore stuck `running`
+    forever tells an operator neither that it worked nor that it did not."""
+    now = int(time.time() if now is None else now)
+    cutoff = now - int(max_seconds)
+    with get_conn(db_path) as conn:
+        stale = [r["id"] for r in conn.execute(
+            "SELECT id FROM backup_restores WHERE status = ? AND started_at < ?",
+            (RUN_RUNNING, cutoff))]
+    for restore_id in stale:
+        complete_restore(db_path, restore_id, actor="scheduler",
+                         error="The machine never reported a result for this restore.")
+    return len(stale)
 
 
 def tick(db_path, log_dir, *, enabled, destination_id, interval_hours, keep,

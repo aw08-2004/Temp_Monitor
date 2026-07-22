@@ -226,7 +226,8 @@ REGISTRY = (
             "Backups page; each machine gets its own folder under it."),
     _s("backup.files_include", "backup", "Include these paths", "path_list",
        ["%Desktop%", "%Documents%", "%Pictures%", "%Favorites%"],
-       help="Tokens expand on each machine: %Users% covers every real profile, and "
+       help="Tokens expand on each machine: %Users% (or %User%) covers every real "
+            "profile -- %User%\\Scripts backs up everyone's Scripts folder -- and "
             "%Desktop%/%Documents% follow OneDrive folder redirection -- which a literal "
             "C:\\Users\\name\\Desktop does not, so it would back up an empty stub on any "
             "PC using Known Folder Move."),

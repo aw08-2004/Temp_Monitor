@@ -1,17 +1,18 @@
 """Flask HTTP surface for backups -- a thin layer over backups.py, in the same shape as
 packages_web.py and permissions_web.py.
 
-One audience and one gate: the console, behind the `manage_backups` capability. There is
-deliberately no agent-facing endpoint yet -- roadmap #1b (per-PC file backups) adds one,
-and it will be the place `backups.S3Destination.presigned_url` is finally called.
+Two audiences and two gates. The console sits behind the `manage_backups` capability;
+the `/api/agent/backups/*` routes sit behind agent bearer auth and, on every single one,
+a check that the run or restore being touched belongs to the CALLING machine.
 
 Backups are NOT machine-scoped. A hub database backup is the whole hub -- permission
 groups, every machine's history, the audit log -- so there is no coherent way to hand it
 to an operator who may only see nine machines out of forty. `manage_backups` is therefore
-an all-or-nothing capability here, and an Admin granting it should read it as "can read
-everything in the hub, eventually, via a restore". When #1b lands, per-machine file
-backups DO get the usual `access.in_scope()` treatment; this module's routes are the
-hub-wide half.
+an all-or-nothing capability for the hub-database half, and an Admin granting it should
+read it as "can read everything in the hub, eventually, via a restore". The per-machine
+file-backup routes DO get the usual `access.in_scope()` treatment -- and a restore is
+checked at BOTH ends, since reading PC-3's files and writing them onto PC-9 are two
+separate things to be allowed to do.
 
 Two rules inherited from the rest of the codebase, both load-bearing:
 
@@ -32,7 +33,7 @@ page polls the run list, exactly as the packages page polls a deployment.
 import threading
 import time
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, Response, jsonify, render_template, request, session
 
 import backup_paths
 import backups
@@ -57,13 +58,18 @@ def _bearer_agent(db_path):
 
 
 def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
-                             hub_version=""):
+                             hub_version="", hub_url=""):
     """Build the backups Blueprint.
 
     `log_dir` is where the encrypted secret store and the scratch space for snapshots
     live (beside the database, like the package blob store); `env_path` is the `.env` the
     master key is written to. Both are passed in rather than imported from app.py, to
     avoid a circular import and because the test suite re-points them.
+
+    `hub_url` is the hub's PUBLIC origin, needed because a WebDAV restore hands the agent
+    an absolute URL back here (WebDAV has no pre-signed download). Taken as a parameter
+    rather than derived from `request`, which behind the TLS terminator reports http and
+    the internal bind address.
     """
     bp = Blueprint("backups", __name__)
     can_manage = access.require(permissions.MANAGE_BACKUPS)
@@ -445,6 +451,10 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             "runs": backups.list_runs(db_path, limit=20,
                                       kind=backups.BACKUP_MACHINE_FILES,
                                       machine=machine),
+            "restores": backups.list_restores(db_path, machine=machine),
+            # Counts only -- enough for the tab to say "4,102 files recoverable" without
+            # the browser fetching a manifest nobody has asked to browse yet.
+            "manifest": backups.manifest_summary(db_path, machine),
         }
 
     @bp.route("/api/backups/machines/<machine>", methods=["GET"])
@@ -470,6 +480,110 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify(_machine_backup_payload(machine)), 200
+
+    # ---------------- Console: browsing a machine's manifest ----------------
+    #
+    # A folder at a time, not the whole manifest. A single user profile is 100k-500k
+    # files; shipping that to a browser so it can render forty of them is the kind of
+    # endpoint that works on the test fleet and times out on the real one.
+    @bp.route("/api/backups/machines/<machine>/manifest", methods=["GET"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def machine_manifest(machine):
+        """List one folder of what `machine` has backed up, or search across all of it.
+
+        `?search=` wins over `?path=` when both are present: a search is what someone
+        types when they do not know the path, so honouring the stale path alongside it
+        would answer a question nobody asked.
+        """
+        search = (request.args.get("search") or "").strip()
+        if search:
+            return jsonify({
+                "machine": machine,
+                "mode": "search",
+                "summary": backups.manifest_summary(db_path, machine),
+                "result": backups.manifest_search(db_path, machine, search),
+            }), 200
+        return jsonify({
+            "machine": machine,
+            "mode": "browse",
+            "summary": backups.manifest_summary(db_path, machine),
+            "result": backups.manifest_listing(db_path, machine,
+                                               request.args.get("path") or ""),
+        }), 200
+
+    # ---------------- Console: starting a restore ----------------
+    @bp.route("/api/backups/machines/<machine>/restore", methods=["POST"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def start_restore(machine):
+        """Restore files from `machine`'s backups, onto it or onto another machine.
+
+        `machine` in the route is the SOURCE -- whose archives these are -- and the
+        capability check above is against it, because reading another machine's files is
+        what needs authorising. A `target` naming a different machine is checked
+        SEPARATELY and just as hard: writing files onto a PC is at least as sensitive as
+        reading them, and an operator scoped to Hospital PCs must not be able to drop
+        HR's Documents onto one of theirs (or the reverse).
+        """
+        data = request.get_json(silent=True) or {}
+        target = (data.get("target") or machine).strip() or machine
+        if target != machine and not access.in_scope(target):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+
+        # Which destination the archives are IN -- resolved from the source machine's
+        # effective policy, never from the request, since that is where the run that wrote
+        # them uploaded to.
+        source_config = backups.effective_file_config(db_path, machine,
+                                                      **_fleet_file_defaults())
+        destination_id = source_config["destination_id"]
+        if not destination_id:
+            return jsonify({"error": "This machine has no backup destination "
+                                     "configured, so its archives cannot be read."}), 400
+
+        try:
+            target_dir = backups.validate_target_dir(data.get("target_dir"))
+            plan = backups.plan_restore(db_path, machine, data.get("paths") or [])
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        # A restore to the ORIGINAL locations that is not allowed to overwrite is a
+        # restore that does nothing on the common case (the file is still there but
+        # wrong), so the choice is put in front of the operator rather than defaulted.
+        overwrite = bool(data.get("overwrite"))
+        actor = _current_email()
+        restore_id = backups.create_restore(
+            db_path, machine=target, source_machine=machine,
+            destination_id=destination_id, plan=plan, target_dir=target_dir,
+            overwrite=overwrite, actor=actor)
+        try:
+            command_id = fleet.create_command(
+                db_path, machine=target, command_type=backups.COMMAND_RESTORE_FILES,
+                params=backups.build_restore_command_params(
+                    restore_id=restore_id, source_machine=machine, plan=plan),
+                issued_by=actor, ttl_seconds=backups.RESTORE_COMMAND_TTL_SECONDS)
+        except ValueError as e:
+            backups.complete_restore(db_path, restore_id, actor=actor, error=str(e))
+            return jsonify({"error": str(e)}), 400
+        backups.attach_restore_command(db_path, restore_id, command_id)
+
+        return jsonify({
+            "restore_id": restore_id,
+            "command_id": command_id,
+            "file_count": plan["file_count"],
+            "total_bytes": plan["total_bytes"],
+            "archives": len(plan["archives"]),
+            # Surfaced rather than swallowed: a folder the operator ticked that matched
+            # nothing is usually a typo or a rotated-away chain, and finding out at the
+            # end of a two-hour restore is too late.
+            "missing": plan["missing"],
+        }), 202
+
+    @bp.route("/api/backups/machines/<machine>/restores", methods=["GET"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def list_machine_restores(machine):
+        return jsonify({"restores": backups.list_restores(db_path, machine=machine)}), 200
 
     @bp.route("/api/backups/preview", methods=["POST"])
     @login_required
@@ -609,6 +723,108 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             finished = backups.ingest_file_result(
                 db_path, log_dir, run_id, data,
                 keep_chains=settings.get_int(db_path, "backup.files_keep_chains"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"status": finished["status"]}), 200
+
+    # ---------------- Agent: restore ----------------
+    #
+    # The restore's TARGET machine is the one authorised here -- it is the machine doing
+    # the work and the machine the files land on. That it may be fetching ANOTHER
+    # machine's archives is the point of a cross-machine restore, and it is safe only
+    # because the hub decided that when the restore row was written (behind
+    # `manage_backups` plus scope on both ends), not because the agent asked nicely.
+    def _agent_restore(restore_id, machine):
+        restore = backups.get_restore(db_path, restore_id)
+        if restore is None or restore["machine"] != machine:
+            return None
+        return restore
+
+    @bp.route("/api/agent/backups/restore/<restore_id>/plan", methods=["GET"])
+    def agent_restore_plan(restore_id):
+        """The file list, the download URLs and the decryption key for one restore.
+
+        Fetched rather than carried in the command's params, for two reasons that both
+        matter: fleet.create_command audits params verbatim, so a plan of 40,000 files
+        would write a multi-megabyte audit row (into the database that is itself backed
+        up), and the decryption key would be sitting in that same log. See the RESTORE
+        section comment in backups.py.
+
+        Minted fresh on each fetch, so a command an agent only picks up after a weekend
+        offline does not wake up holding expired pre-signed URLs.
+        """
+        agent_id, machine = _bearer_agent(db_path)
+        if agent_id is None:
+            return jsonify({"error": "agent authentication required"}), 401
+        restore = _agent_restore(restore_id, machine)
+        if restore is None:
+            return jsonify({"error": "unknown restore"}), 404
+        if restore["status"] != backups.RUN_RUNNING:
+            return jsonify({"error": "that restore is already finished"}), 409
+        try:
+            payload = backups.restore_plan_payload(db_path, log_dir, restore_id,
+                                                   hub_url=hub_url)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify(payload), 200
+
+    @bp.route("/api/agent/backups/restore/<restore_id>/archive/<int:index>",
+              methods=["GET"])
+    def agent_restore_archive(restore_id, index):
+        """Stream one archive from a WebDAV destination through the hub.
+
+        The mirror of agent_upload_backup, and unused for S3 (which hands out a pre-signed
+        GET instead). The object key comes from the STORED PLAN by index -- an agent names
+        "archive 2", never a key, so no enrolled machine can read an archive that is not
+        part of a restore the hub authorised for it.
+
+        Streamed in chunks rather than buffered: these are the same gigabyte archives the
+        upload path refuses to hold in memory, and the reasoning has not changed because
+        the arrow reversed.
+        """
+        agent_id, machine = _bearer_agent(db_path)
+        if agent_id is None:
+            return jsonify({"error": "agent authentication required"}), 401
+        restore = _agent_restore(restore_id, machine)
+        if restore is None:
+            return jsonify({"error": "unknown restore"}), 404
+        object_key = backups.restore_archive_key(db_path, restore_id, index)
+        if object_key is None:
+            return jsonify({"error": "unknown archive"}), 404
+
+        try:
+            client, _ = backups.open_client(db_path, log_dir, restore["destination_id"])
+            upstream = client.open(object_key)
+        except (backups.BackupError, ValueError) as e:
+            return jsonify({"error": str(e)}), 502
+
+        def relay():
+            try:
+                for chunk in upstream.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
+
+        headers = {"Content-Type": "application/octet-stream"}
+        length = upstream.headers.get("Content-Length")
+        if length:
+            # Passed through when the store reported one: the agent checks the archive is
+            # whole before spending minutes decrypting it. Absent is fine -- the envelope's
+            # final-chunk flag catches a truncated download regardless.
+            headers["Content-Length"] = length
+        return Response(relay(), headers=headers), 200
+
+    @bp.route("/api/agent/backups/restore/<restore_id>/result", methods=["POST"])
+    def agent_restore_result(restore_id):
+        agent_id, machine = _bearer_agent(db_path)
+        if agent_id is None:
+            return jsonify({"error": "agent authentication required"}), 401
+        if _agent_restore(restore_id, machine) is None:
+            return jsonify({"error": "unknown restore"}), 404
+        try:
+            finished = backups.ingest_restore_result(db_path, restore_id,
+                                                     request.get_json(silent=True) or {})
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"status": finished["status"]}), 200

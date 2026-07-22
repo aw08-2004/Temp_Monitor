@@ -69,6 +69,32 @@ def main():
         for path in case["kept"]:
             check(f"{case['patterns']} keeps {path}", not matcher.matches(path))
 
+    print("\n== Shared archive-member vectors ==")
+    # The other cross-implementation contract in this file. The AGENT names tar members
+    # this way; the HUB names them again when planning a restore of an archive it never
+    # wrote. If the two disagree the restore downloads the right archive, finds none of
+    # the members it asked for, and reports every file as missing.
+    for case in vectors["members"]:
+        got = backup_paths.archive_member(case["path"])
+        check(f"{case['path']} -> {case['member']} -- {case['why']}",
+              got == case["member"])
+        if got != case["member"]:
+            print(f"        got      {got}")
+
+    print("\n== archive_member round-trips back to a Windows path ==")
+    # Needed by a restore writing files back to where they came from: the member is what
+    # the archive holds, and the original path is where it has to land.
+    check("a drive path survives the round trip",
+          backup_paths.member_to_path(
+              backup_paths.archive_member("C:\\Users\\bob\\a.txt"))
+          == "C:\\Users\\bob\\a.txt")
+    check("a bare drive keeps its root separator",
+          backup_paths.member_to_path("C") == "C:\\")
+    # A UNC source cannot be reconstructed -- \\srv\share\f and srv/share/f are the same
+    # member -- so it stays relative rather than being guessed into a drive path.
+    check("a UNC member stays relative rather than inventing a drive",
+          backup_paths.member_to_path("srv/share/f.txt") == "srv\\share\\f.txt")
+
     print("\n== Unknown tokens are refused, never treated as literals ==")
     # The single most valuable rule in the module: a typo'd token that expanded to nothing
     # would produce a backup that runs green every night and contains nothing.

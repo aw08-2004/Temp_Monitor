@@ -432,6 +432,108 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader
         return false;
     }
 
+    /// <summary>
+    /// Fetch a restore's plan: which archives, which files inside them, and the key.
+    ///
+    /// A separate request rather than command params, and deliberately so — the hub audits
+    /// command params verbatim, and a plan is tens of thousands of file names plus a
+    /// decryption key. Returns null if the hub will not hand it over (a finished restore,
+    /// or one belonging to another machine), which the caller reports as a failed run.
+    /// </summary>
+    public async Task<JsonObject?> FetchRestorePlanAsync(string restoreId, CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/backups/restore/"
+                  + $"{Uri.EscapeDataString(restoreId)}/plan";
+        try
+        {
+            using var req = Authorized(HttpMethod.Get, url);
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _log.LogWarning("Hub refused the restore plan ({Status})", (int)resp.StatusCode);
+                return null;
+            }
+            return JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))?.AsObject();
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            _log.LogWarning("Could not fetch the restore plan: {Msg}", e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Download one backup archive to <paramref name="targetPath"/>. Returns null on
+    /// success, or a reason.
+    ///
+    /// The mirror of UploadBackupAsync, with the same split: a pre-signed S3 URL carries
+    /// its own signature and must NOT be sent our bearer header, while a hub-proxied
+    /// WebDAV download is on the hub and does need it.
+    /// </summary>
+    public async Task<string?> DownloadBackupAsync(string url, string targetPath,
+                                                   bool viaHub, CancellationToken ct)
+    {
+        try
+        {
+            using var req = viaHub
+                ? Authorized(HttpMethod.Get, url)
+                : new HttpRequestMessage(HttpMethod.Get, url);
+            using var resp = await _downloadHttp.SendAsync(
+                req, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var text = await resp.Content.ReadAsStringAsync(ct);
+                var message = $"Download failed: HTTP {(int)resp.StatusCode} {text}".Trim();
+                return message[..Math.Min(300, message.Length)];
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            await using (var file = new FileStream(targetPath, FileMode.Create, FileAccess.Write,
+                                                   FileShare.None, 1024 * 1024, useAsync: true))
+            {
+                await resp.Content.CopyToAsync(file, ct);
+            }
+            return null;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        {
+            return $"Download failed: {e.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Report a restore's outcome. Retried like ReportBackupAsync and for the same reason:
+    /// the files are already written by this point, and losing the report to one dropped
+    /// connection leaves an operator watching a restore that finished an hour ago.
+    /// </summary>
+    public async Task<bool> ReportRestoreAsync(string restoreId, JsonNode payload,
+                                               CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/backups/restore/"
+                  + $"{Uri.EscapeDataString(restoreId)}/result";
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var req = Authorized(HttpMethod.Post, url);
+                req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                                "application/json");
+                using var resp = await _downloadHttp.SendAsync(req, ct);
+                if (resp.IsSuccessStatusCode) return true;
+                if ((int)resp.StatusCode is >= 400 and < 500)
+                {
+                    _log.LogWarning("Hub refused restore result ({Status})", (int)resp.StatusCode);
+                    return false;
+                }
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+            {
+                _log.LogDebug("Restore result POST failed: {Msg}", e.Message);
+            }
+            if (attempt < 2) await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), ct);
+        }
+        return false;
+    }
+
     private sealed class CommandsResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("commands")]

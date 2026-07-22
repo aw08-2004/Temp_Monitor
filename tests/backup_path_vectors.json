@@ -10,7 +10,13 @@
     "",
     "The profile set is deliberately awkward on purpose: bob has OneDrive Known Folder",
     "Move (so his Desktop is NOT under his profile), carol has no Documents recorded at",
-    "all, and the machine carries the usual crop of non-user profile folders."
+    "all, and the machine carries the usual crop of non-user profile folders.",
+    "",
+    "\"members\" is a SECOND shared contract in this file, and a different one: the name a",
+    "file is stored under INSIDE a backup archive. The AGENT writes those names",
+    "(BackupManifest.ArchiveMember) and the HUB names them again when it builds a restore",
+    "plan for members it never wrote (backup_paths.archive_member). Drift there is a",
+    "restore that finds nothing and reports every file as missing from the archive."
   ],
 
   "profiles": {
@@ -90,6 +96,34 @@
       "expect": ["C:\\Users\\bob\\Desktop", "C:\\Users\\carol\\Desktop"]
     },
     {
+      "why": "%User% is an ALIAS of %Users% -- singular reads better for a custom subfolder, and must fan out identically",
+      "pattern": "%User%\\Scripts",
+      "expect": ["C:\\Users\\bob\\Scripts", "C:\\Users\\carol\\Scripts"]
+    },
+    {
+      "why": "the two spellings are interchangeable, so this must equal the %Users% case above",
+      "pattern": "%User%\\Desktop",
+      "expect": ["C:\\Users\\bob\\Desktop", "C:\\Users\\carol\\Desktop"]
+    },
+    {
+      "why": "%User% alone is the profile directory, exactly like %Users% alone",
+      "pattern": "%User%",
+      "expect": ["C:\\Users\\bob", "C:\\Users\\carol"]
+    },
+    {
+      "why": "the alias is case-insensitive like every other token",
+      "pattern": "%USER%\\Scripts",
+      "expect": ["C:\\Users\\bob\\Scripts", "C:\\Users\\carol\\Scripts"]
+    },
+    {
+      "why": "mixing the alias with a known-folder token stays on the SAME user",
+      "pattern": "%User%\\Scripts\\from\\%Desktop%",
+      "expect": [
+        "C:\\Users\\bob\\Scripts\\from\\C:\\Users\\bob\\OneDrive - Contoso\\Desktop",
+        "C:\\Users\\carol\\Scripts\\from\\C:\\Users\\carol\\Desktop"
+      ]
+    },
+    {
       "why": "forward slashes normalise to backslashes",
       "pattern": "%Users%/Documents/Tax",
       "expect": ["C:\\Users\\bob\\Documents\\Tax", "C:\\Users\\carol\\Documents\\Tax"]
@@ -156,6 +190,29 @@
       "patterns": ["C:\\Users\\BOB\\Desktop\\secret.txt"],
       "excluded": ["c:\\users\\bob\\desktop\\SECRET.TXT"],
       "kept": ["C:\\Users\\carol\\Desktop\\secret.txt"]
+    }
+  ],
+
+  "members": [
+    {
+      "why": "a drive letter loses its colon and separators become POSIX",
+      "path": "C:\\Users\\bob\\Desktop\\notes.txt",
+      "member": "C/Users/bob/Desktop/notes.txt"
+    },
+    {
+      "why": "a non-C drive is no different",
+      "path": "D:\\Finance\\2026\\q1.xlsx",
+      "member": "D/Finance/2026/q1.xlsx"
+    },
+    {
+      "why": "spaces and dots survive untouched -- only the separators change",
+      "path": "C:\\Users\\bob\\OneDrive - Contoso\\My Notes.v2.txt",
+      "member": "C/Users/bob/OneDrive - Contoso/My Notes.v2.txt"
+    },
+    {
+      "why": "a UNC path loses its leading slashes, like any absolute path in tar",
+      "path": "\\\\srv\\share\\report.docx",
+      "member": "srv/share/report.docx"
     }
   ]
 }

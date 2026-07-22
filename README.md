@@ -356,7 +356,8 @@ A consistent snapshot of the hub database, compressed, encrypted **on the hub** 
 offsite on a schedule. Core logic in [backups.py](backups.py), HTTP surface in
 [backups_web.py](backups_web.py), UI at `/backups`, and the restore tool at
 [restore_backup.py](restore_backup.py). State lives in the same SQLite DB
-(`backup_destinations`, `backup_runs`, `backup_state`).
+(`backup_destinations`, `backup_runs`, `backup_state`, plus `backup_machine_config`,
+`backup_file_sets`, `backup_files` and `backup_restores` for the per-PC half below).
 
 **`VACUUM INTO`, never a file copy.** The database is opened WAL and written live by the
 ingest path and the `db_writer` thread. Copying `temp_v2.db` while that is happening gives
@@ -428,6 +429,11 @@ capability.
 `PUT|DELETE /api/backups/destinations/<id>`, `POST /api/backups/destinations/<id>/test`,
 `PUT /api/backups/schedule`, `POST /api/backups/run`.
 
+The per-machine routes need `manage_backups` **and** that machine in scope:
+`GET|PUT /api/backups/machines/<machine>`, `GET /api/backups/machines/<machine>/manifest`,
+`POST /api/backups/machines/<machine>/restore`,
+`GET /api/backups/machines/<machine>/restores`.
+
 > Revealing the key is a **POST with a JSON body**, not a GET — so it cannot be triggered
 > by a link, an `<img src>`, or anything else a browser fetches on someone's behalf. Keep
 > it that way.
@@ -445,15 +451,21 @@ on each PC at backup time, so it keeps being right as people come and go:
 
 | Token | Expands to |
 |---|---|
-| `%Users%` | every real profile (skips Public, Default, service accounts) |
+| `%Users%` or `%User%` | every real profile (skips Public, Default, service accounts) |
 | `%Desktop%` `%Documents%` `%Downloads%` `%Pictures%` `%Favorites%` `%AppData%` `%LocalAppData%` | that user's **actual** folder, per user |
 | `%ProgramData%` `%SystemDrive%` `%windir%` `%ProgramFiles%` | machine-wide, no fan-out |
 
 ```
 %Desktop%                      →  C:\Users\bob\OneDrive - Contoso\Desktop
                                   C:\Users\carol\Desktop
+%User%\Scripts                 →  C:\Users\bob\Scripts, C:\Users\carol\Scripts
 C:\Users\%Users%\Projects      →  C:\Users\bob\Projects, C:\Users\carol\Projects
 ```
+
+`%User%` and `%Users%` are the same token — use whichever reads better. `%Users%` suits a
+pattern on its own; `%User%\Scripts` suits a custom subfolder. Note that `%User%` does
+**not** mean "whoever is logged in now": backups run as SYSTEM on a schedule, routinely
+with nobody signed in, so every per-user token covers every profile.
 
 > **Use `%Desktop%`, not `C:\Users\%Users%\Desktop`, for the standard folders.** With
 > OneDrive Known Folder Move — common in orgs — the literal path is an empty stub and the
@@ -489,13 +501,48 @@ and reports which files it could not read, rather than failing.
 **Junctions are never followed.** A Windows profile contains junctions pointing at their
 own ancestors; following them is an infinite walk.
 
-> **Status:** the backup path is complete — hub 1.29.0 (configuration, preview,
-> scheduling, chains, manifest, upload brokering) and agent 3.8.0 (path expansion, VSS,
-> walk, encrypt, upload). **Console-driven restore is not built yet**: recovering a file
-> today means `restore_backup.py` by hand, which works — the archive is a tar inside the
-> envelope and opens with the master key alone. The agent needs a signed release
-> (`sign_release.py --sign-agent`) before the fleet gains any of this, and the hub should
-> be deployed first. See [features.md](features.md).
+### Restoring a PC's files
+
+The **Backup** tab on a machine's page browses what that machine has backed up — a folder
+at a time, with a search box for when you know the filename but not the path. What it
+lists is what is actually **recoverable**: files the user has since deleted, and chains
+that have rotated away, are already gone from the answer, so you are never offered a
+restore that fails halfway.
+
+Tick files or folders, then choose:
+
+- **Restore onto** — this machine, or another one. Restoring PC-3's data onto a brand-new
+  PC-9 is the hardware-replacement case, and it needs you to have access to *both*
+  machines: reading one PC's files and writing files onto another are separately checked.
+- **Write to** — a folder like `C:\Restored` (files land under it in their original tree,
+  and nothing live is touched), or blank to put them back where they came from.
+- **Overwrite** — off by default, so a restore alongside surviving files is the safe path.
+
+A ticked **folder** restores everything that was ever under it, including files that are
+no longer in the folder you are looking at. The hub works out which archives hold which
+version of each file and hands the agent a scoped, short-lived download per archive — the
+same brokering as the upload path, so no machine ever holds the destination credential.
+
+A restore that writes fewer files than you asked for is reported as **failed**, with the
+counts and the first few reasons. "Restored 900 of 1000" needs someone to look at the
+other 100, and a green row means nobody does.
+
+> **Recovering without the hub.** The archive is a tar inside the same encrypted envelope,
+> so the standalone tool opens it with the master key alone — useful when the hub is gone,
+> or when you want one file without pushing anything onto a PC:
+>
+> ```bash
+> python restore_backup.py --in 20260721T030000Z-a1b2c3-000-full.fhb --list
+> python restore_backup.py --in <file>.fhb --extract C:\Recovered
+> python restore_backup.py --in <file>.fhb --extract C:\Recovered --match "*/Desktop/*"
+> ```
+>
+> One master key opens every machine: the per-machine key is derived from it, and the
+> envelope header says which machine to derive for.
+
+> **Status:** built end to end — hub 1.30.0 and agent 3.9.0. The agent needs a signed
+> release (`sign_release.py --sign-agent`) before the fleet gains any of this, and the hub
+> should be deployed first. See [features.md](features.md).
 
 ## Signing releases
 
