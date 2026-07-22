@@ -87,6 +87,9 @@
 .bk-dot--succeeded { background: var(--success, #3fb950); }
 .bk-dot--failed    { background: var(--danger, #f85149); }
 .bk-dot--running   { background: var(--accent, #58a6ff); }
+/* Cancelled is not failed -- muted, because it is an expected outcome someone chose,
+   not an outage to investigate. */
+.bk-dot--cancelled { background: var(--muted, #8b949e); }
 
 .bk-schedule-grid {
     display: grid;

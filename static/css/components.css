@@ -229,6 +229,21 @@
     justify-content: center;
 }
 
+/* Destructive actions -- cancel a backup, and anything else that stops or removes.
+   Outlined rather than filled: it sits BESIDE a filled primary button (Back up now),
+   and two solid buttons compete for the eye where the danger one should only assert
+   itself on hover, when the pointer is already committed to it. */
+.btn--danger {
+    border-color: var(--danger, #f85149);
+    color: var(--danger, #f85149);
+}
+
+.btn--danger:hover {
+    background: var(--danger, #f85149);
+    border-color: var(--danger, #f85149);
+    color: #fff;
+}
+
 /* ============ Theme toggle ============ */
 .theme-toggle {
     display: inline-flex;

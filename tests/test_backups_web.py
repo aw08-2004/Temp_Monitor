@@ -510,6 +510,60 @@ def main():
         backups.set_machine_config(db_path, "HOSPITAL-2", enabled=None,
                                    actor="root@x.com")
 
+        print("\n== Cancel a PC backup ==")
+        # Queue one on an offline machine, then cancel it: the request-only case.
+        roster["HOSPITAL-1"] = False
+        c.post("/api/backups/machines/HOSPITAL-1/run", json={})
+        check("a queued backup is pending before cancel",
+              backups.get_machine_config(db_path, "HOSPITAL-1")["run_requested_at"])
+        r = c.post("/api/backups/machines/HOSPITAL-1/cancel", json={})
+        check("cancel is accepted", r.status_code == 200)
+        body = r.get_json()
+        check("...reporting the queued request was cleared",
+              body["cancelled"]["request_cleared"] is True)
+        check("...in words for the operator", "cancelled" in body["message"].lower())
+        check("...and the request is gone",
+              backups.get_machine_config(db_path, "HOSPITAL-1")["run_requested_at"]
+              is None)
+        check("...and it is audited",
+              "backup_files_cancel" in audit_actions(db_path))
+        roster["HOSPITAL-1"] = True
+
+        # Earlier fleet-run tests left running rows on HOSPITAL-1; drain to a clean state
+        # (one cancel stops the running run) before asserting the empty case.
+        c.post("/api/backups/machines/HOSPITAL-1/cancel", json={})
+        check("cancelling with nothing running is a calm no-op",
+              c.post("/api/backups/machines/HOSPITAL-1/cancel",
+                     json={}).get_json()["cancelled"]["nothing_to_cancel"] is True)
+        check("a machine outside scope cannot be cancelled",
+              c.post("/api/backups/machines/CLINIC-9/cancel",
+                     json={}).status_code == 403)
+        check("a form post cannot cancel a backup",
+              c.post("/api/backups/machines/HOSPITAL-1/cancel", data="x=1",
+                     content_type="application/x-www-form-urlencoded"
+                     ).status_code == 415)
+        CURRENT_USER = "viewer@x.com"
+        check("a viewer cannot cancel",
+              c.post("/api/backups/machines/HOSPITAL-1/cancel",
+                     json={}).status_code == 403)
+        check("...nor cancel fleet-wide",
+              c.post("/api/backups/files/cancel", json={}).status_code == 403)
+        CURRENT_USER = "backup@x.com"
+
+        print("\n== Cancel the whole fleet ==")
+        roster["HOSPITAL-1"] = False
+        c.post("/api/backups/machines/HOSPITAL-1/run", json={})
+        r = c.post("/api/backups/files/cancel", json={})
+        check("the fleet cancel is accepted", r.status_code == 200)
+        cbody = r.get_json()
+        check("...and reports at least the one queued request it cleared",
+              cbody["requests_cleared"] >= 1)
+        check("a form post cannot cancel the fleet",
+              c.post("/api/backups/files/cancel", data="x=1",
+                     content_type="application/x-www-form-urlencoded"
+                     ).status_code == 415)
+        roster["HOSPITAL-1"] = True
+
         print("\n== Preview is lenient while you type ==")
         r = c.post("/api/backups/preview",
                    json={"machine": "HOSPITAL-1", "include": ["%Deskt"], "exclude": []})

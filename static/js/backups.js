@@ -654,12 +654,52 @@ function renderRunFleetCard() {
     run.disabled = fleetRunBusy;
     run.addEventListener('click', runFleetBackup);
     actions.appendChild(run);
+
+    // Always offered, not gated on "is anything running" — the console does not track
+    // live per-machine state on this page, and a cancel with nothing to stop is a
+    // harmless no-op that says so. The counterpart to "Back up all PCs now".
+    const cancel = el('button', 'btn btn--danger',
+                      fleetRunBusy ? 'Working…' : 'Cancel all backups');
+    cancel.id = 'files-cancel-fleet';
+    cancel.disabled = fleetRunBusy;
+    cancel.addEventListener('click', cancelFleetBackup);
+    actions.appendChild(cancel);
+
     const status = el('span',
                       fleetRunError ? 'setting__error' : 'settings-actions__status');
     status.textContent = fleetRunError || fleetRunMessage;
     actions.appendChild(status);
     card.appendChild(actions);
     return card;
+}
+
+async function cancelFleetBackup() {
+    if (fleetRunBusy) return;
+    fleetRunBusy = true;
+    fleetRunMessage = '';
+    fleetRunError = '';
+    renderSettingsPane();
+    try {
+        const result = await api('/api/backups/files/cancel', json('POST', {}));
+        const parts = [];
+        if (result.requests_cleared) parts.push(`${result.requests_cleared} queued dropped`);
+        if (result.stopped_before_start) {
+            parts.push(`${result.stopped_before_start} stopped before starting`);
+        }
+        // Named separately because these are the ones cancel cannot fully stop: the PC
+        // is already uploading and will finish, with its result discarded.
+        if (result.stopped_in_flight) {
+            parts.push(`${result.stopped_in_flight} already uploading (will finish, `
+                       + `then be discarded)`);
+        }
+        fleetRunMessage = parts.length ? parts.join(', ') + '.'
+                                       : 'Nothing was running to cancel.';
+    } catch (e) {
+        fleetRunError = e.message;
+    } finally {
+        fleetRunBusy = false;
+        renderSettingsPane();
+    }
 }
 
 async function runFleetBackup() {

@@ -117,7 +117,12 @@ BACKUP_MACHINE_FILES = "machine_files"
 RUN_RUNNING = "running"
 RUN_SUCCEEDED = "succeeded"
 RUN_FAILED = "failed"
-RUN_STATUSES = (RUN_RUNNING, RUN_SUCCEEDED, RUN_FAILED)
+# Cancelled by an operator, as distinct from failed: a failure is something to look at, a
+# cancellation is something someone chose. Terminal like the other two, so it stops
+# counting against the concurrency throttle and anchors the due clock the same way -- a
+# cancelled machine waits for its next cycle rather than re-dispatching on the next tick.
+RUN_CANCELLED = "cancelled"
+RUN_STATUSES = (RUN_RUNNING, RUN_SUCCEEDED, RUN_FAILED, RUN_CANCELLED)
 
 # How a run was started. Worth distinguishing in the UI: a failing schedule is an
 # outage, a failing manual run is usually someone testing a new destination.
@@ -1673,6 +1678,65 @@ def clear_file_run_request(db_path, machine):
             "run_requested_by = NULL WHERE machine = ?", (machine,))
 
 
+def current_running_file_run(db_path, machine):
+    """The machine's in-flight file backup, or None. There is at most one -- dispatch
+    refuses to start a second while one is RUNNING."""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM backup_runs WHERE kind = ? AND machine = ? AND status = ? "
+            "ORDER BY started_at DESC LIMIT 1",
+            (BACKUP_MACHINE_FILES, machine, RUN_RUNNING)).fetchone()
+    return dict(row) if row else None
+
+
+def cancel_file_run(db_path, machine, actor="system"):
+    """Cancel this machine's pending or in-flight file backup.
+
+    Returns a dict saying what actually happened, because the guarantee genuinely differs
+    by how far the backup had got, and an operator who cancels deserves to know which:
+
+      * `request_cleared` -- a queued "Back up now" (the machine was offline or waiting
+        for a throttle slot) was dropped before it ever became a command. Nothing ran.
+      * `stopped_before_start` -- a dispatched run whose command the agent had not yet
+        claimed. The command is expired first, so the PC never begins the backup.
+      * `stopped_in_flight` -- the agent had already claimed the command and may be part
+        way through reading or uploading. There is no channel to recall a claimed command,
+        so the PC finishes its current pass; the run is marked cancelled here so it stops
+        holding a throttle slot and its eventual result is discarded (any object it does
+        upload is cleaned up when that result arrives -- see ingest_file_result).
+
+    `nothing_to_cancel` is set when there was neither a request nor a running run: the
+    backup already finished, or there was never one. Not an error -- an operator clicking
+    cancel a second time should get a calm "nothing running", not a 404.
+    """
+    out = {"request_cleared": False, "stopped_before_start": False,
+           "stopped_in_flight": False, "nothing_to_cancel": False}
+
+    config = get_machine_config(db_path, machine)
+    if config["run_requested_at"]:
+        clear_file_run_request(db_path, machine)
+        out["request_cleared"] = True
+
+    run = current_running_file_run(db_path, machine)
+    if run:
+        # If the command is still pending we win the race and the PC never starts; if the
+        # agent already claimed it, we cannot recall it and only mark the run cancelled.
+        recalled = bool(run["command_id"]) and \
+            fleet.cancel_command_if_pending(db_path, run["command_id"])
+        _finish_run(db_path, run["id"], RUN_CANCELLED, error="Cancelled by operator.")
+        if recalled:
+            out["stopped_before_start"] = True
+        else:
+            out["stopped_in_flight"] = True
+
+    if not any(out.values()):
+        out["nothing_to_cancel"] = True
+    else:
+        fleet.audit(db_path, actor=actor, action="backup_files_cancel", target=machine,
+                    detail={k: v for k, v in out.items() if v})
+    return out
+
+
 def running_file_runs(db_path):
     """How many machine file backups are in flight right now.
 
@@ -2345,6 +2409,24 @@ def manifest_search(db_path, machine, query, limit=500):
     return {"query": needle, "files": hits[:limit], "truncated": len(hits) > limit}
 
 
+def _discard_cancelled_object(db_path, log_dir, run):
+    """Best-effort delete of the archive a cancelled run uploaded after being cancelled.
+
+    Strictly best-effort: it runs inside ingest_file_result's idempotent early-return, so
+    a destination that is unreachable, a credential that has since been rotated, or a
+    missing master key must never raise -- the worst case is one orphaned object, which is
+    exactly the state before this feature existed and is not made worse by trying.
+    """
+    try:
+        client, _record = open_client(db_path, log_dir, run["destination_id"])
+        client.delete(run["object_key"])
+        fleet.audit(db_path, actor="hub", action="backup_files_discard",
+                    target=run["machine"], detail={"object_key": run["object_key"]})
+    except Exception as e:                      # noqa: BLE001 -- see docstring
+        print(f"[backup] Could not discard cancelled archive "
+              f"{run.get('object_key')}: {e}")
+
+
 def rotate_chains(client, prefix, machine, keep_chains, db_path):
     """Delete the oldest chains beyond `keep_chains`. Returns the object keys removed.
 
@@ -2641,6 +2723,14 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                 continue
             if not config["include"]:
                 continue        # nothing selected: not a failure, just nothing to do
+            # One backup per machine at a time. Without this a manual request that lands
+            # while a run is in flight would dispatch a SECOND concurrent backup -- the
+            # request bypasses the due check by design, and "already running" is not a due
+            # question. Two at once means two VSS snapshots and two archives racing into
+            # the same chain. The request is left pending and served once the current run
+            # finishes (or is cancelled), which the next tick picks up.
+            if current_running_file_run(db_path, machine):
+                continue
             stored = get_machine_config(db_path, machine)
             requested = stored["run_requested_at"]
             if not requested and now < files_due_at(db_path, machine, interval_hours):
@@ -2748,7 +2838,16 @@ def ingest_file_result(db_path, log_dir, run_id, result, *, keep_chains=4):
     if run is None:
         raise ValueError("unknown backup run")
     if run["status"] != RUN_RUNNING:
-        return run          # already reported; a retry of a POST that landed
+        # Normally this is a retry of a POST that already landed. The one case that needs
+        # action is a CANCELLED run whose agent finished its pass anyway and uploaded an
+        # archive: nothing will ever reference it in backup_file_sets, so rotation (which
+        # reads the DB) would never reap it. Delete it here so a cancel does not leak an
+        # object into the bucket forever. Best-effort -- a failed cleanup must not turn an
+        # idempotent report into an error.
+        if (run["status"] == RUN_CANCELLED and not (result or {}).get("error")
+                and run["object_key"] and run["destination_id"]):
+            _discard_cancelled_object(db_path, log_dir, run)
+        return run
 
     error = (result or {}).get("error")
     if error:

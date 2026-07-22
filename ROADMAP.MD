@@ -156,7 +156,7 @@ covered by tests rather than eyeballed.
 
 ---
 
-## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0, manual runs + offline catch-up hub 1.32.0
+## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0, manual runs + offline catch-up hub 1.32.0, cancel hub 1.33.0
 
 **1a. Hub database** — ✅ built. `backups.py` (envelope, destinations, snapshot/rotate
 scheduler — flask-free) + `backups_web.py` (console API), a Backups page, `backup.*`
@@ -277,6 +277,31 @@ archives too (`--list` / `--extract`).
   than a counter, so a hub restart mid-pass cannot leak capacity, and `files_tick`
   retires abandoned runs *before* dispatching so one dead agent cannot permanently shrink
   the fleet's backup capacity. 0 disables the limit.
+- **Cancel, per PC and fleet-wide** (hub 1.33.0). The honest part of the design is that
+  cancel means three different things depending on how far the backup got, and the API
+  says which happened rather than pretending it is one thing: a *queued request* is
+  dropped; a *dispatched-but-unclaimed* command is expired via
+  `fleet.cancel_command_if_pending` — a conditional `UPDATE ... WHERE status='pending'`
+  that closes the race with `claim_commands` — so the PC never starts; a run the agent
+  has **already claimed cannot be recalled** (claiming is at-most-once, there is no back-
+  channel), so the run is marked `RUN_CANCELLED` to free its throttle slot and discard
+  its result, but the PC finishes the pass it is in. A cancelled run stays terminal, so
+  it stops counting against the throttle and anchors the due clock the same way a
+  finished one does — a cancelled machine waits for its next cycle instead of
+  re-dispatching on the next tick. The eventual late result is dropped by
+  `ingest_file_result`, which also **best-effort deletes any object the cancelled run
+  uploaded** — nothing in `backup_file_sets` would ever reference it, so rotation (which
+  reads the DB) would never reap it, and a cancel that leaked one orphan per use is not a
+  cancel anyone should trust.
+
+**Fixed here** — `files_dispatch_once` could start a **second concurrent backup** on a
+machine already running one. A manual request deliberately bypasses the interval check
+(that is what makes "Back up now" work an hour after the last run), but "already running"
+is not a due question, so a request landing mid-run slipped straight through and
+dispatched again — two VSS snapshots and two archives racing into the same chain. Dispatch
+now skips any machine with a `RUN_RUNNING` file run and leaves the request pending, so it
+is served on the next tick after the current run ends. Found by the cancel tests, which
+accumulated the duplicate runs the old path allowed.
 
 **Fixed here** — the machine Backup tab's **"Follow the fleet policy"** option had never
 worked. `set_machine_config` reads `None` as "leave this field alone" (so a caller can

@@ -475,6 +475,28 @@ def expire_stale_commands(db_path, now=None):
         return cur.rowcount or 0
 
 
+def cancel_command_if_pending(db_path, command_id):
+    """Retire a command, but ONLY while it is still pending (unclaimed). Returns True if
+    it was pending and is now expired, False if an agent had already claimed it.
+
+    This is the honest half of "cancel". Claiming is at-most-once and there is no channel
+    to recall a command an agent already holds -- so a caller that wants to stop work must
+    know whether it actually prevented the work or merely arrived too late. The conditional
+    UPDATE is the whole point: it closes the race with claim_commands (which flips pending
+    -> claimed in its own transaction) rather than reading-then-writing.
+    """
+    now = int(time.time())
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE commands SET status = ? WHERE id = ? AND status = ?",
+            (STATUS_EXPIRED, str(command_id), STATUS_PENDING),
+        )
+        pending = (cur.rowcount or 0) == 1
+    if pending:
+        audit(db_path, actor="hub", action="cancel_command", target=str(command_id))
+    return pending
+
+
 def claim_commands(db_path, agent_id, machine):
     """Atomically hand every currently-pending command for `machine` to the
     calling agent and mark them claimed. Returns a list of dicts the agent can

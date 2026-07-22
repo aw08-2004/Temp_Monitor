@@ -731,6 +731,35 @@
         }
     }
 
+    // A backup is cancellable if it is queued (a request is pending) or in flight (the
+    // most recent run is still running). Both facts are already in the machine payload,
+    // so the button appears without a second fetch.
+    function cancellable() {
+        if ((data.config || {}).run_requested_at) return true;
+        const runs = data.runs || [];
+        return runs.length > 0 && runs[0].status === 'running';
+    }
+
+    async function cancelBackup() {
+        if (runBusy) return;
+        runBusy = true;
+        runMessage = '';
+        runError = '';
+        render();
+        try {
+            const body = await api(
+                `/api/backups/machines/${encodeURIComponent(MACHINE)}/cancel`,
+                json('POST', {}));
+            runMessage = body.message || 'Cancelled.';
+            data = body;
+        } catch (e) {
+            runError = e.message;
+        } finally {
+            runBusy = false;
+            render();
+        }
+    }
+
     function runsCard() {
         const card = el('div', 'card');
         card.style.marginTop = 'var(--space-5)';
@@ -743,6 +772,13 @@
         run.disabled = runBusy;
         run.addEventListener('click', backupNow);
         actions.appendChild(run);
+        if (cancellable()) {
+            const cancel = el('button', 'btn btn--danger', 'Cancel backup');
+            cancel.id = 'backup-cancel';
+            cancel.disabled = runBusy;
+            cancel.addEventListener('click', cancelBackup);
+            actions.appendChild(cancel);
+        }
         const status = el('span', 'settings-actions__status');
         if (runError) {
             status.className = 'setting__error';

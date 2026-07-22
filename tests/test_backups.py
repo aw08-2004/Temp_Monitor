@@ -1158,6 +1158,140 @@ def main():
               len(served) == 1 and served[0]["machine"] == "P4")
 
         # ============================================================
+        print("\n== Cancel: three states, three guarantees ==")
+        # ============================================================
+        can_db = os.path.join(workdir, "cancel.db")
+        can_log = os.path.join(workdir, "cancellogs")
+        os.makedirs(can_log, exist_ok=True)
+        fleet.init_fleet_db(can_db)
+        backups.init_backups_db(can_db)
+        can_dest = backups.create_destination(
+            can_db, can_log, master_key, name="Cancel", kind=backups.KIND_S3,
+            config=good_s3, secret={"access_key_id": "AKID", "secret_access_key": "shh"},
+            actor="root@x.com")
+        can_policy = dict(policy, fleet_destination=can_dest)
+        Tc = 1_960_000_000
+
+        # State A -- a queued request, the PC never online. Cancel just drops it.
+        backups.request_file_run(can_db, "A", actor="op@x.com", now=Tc)
+        backups.files_dispatch_once(
+            can_db, can_log, machines=[{"machine": "A", "online": False}],
+            now=Tc, **can_policy)
+        a = backups.cancel_file_run(can_db, "A", actor="op@x.com")
+        check("cancelling a queued request clears it", a["request_cleared"] is True)
+        check("...and reports nothing was actually running",
+              a["stopped_in_flight"] is False and a["stopped_before_start"] is False)
+        check("...so the machine has no pending request left",
+              backups.get_machine_config(can_db, "A")["run_requested_at"] is None)
+
+        # State B -- dispatched, command still pending (agent has not polled). Cancel
+        # expires the command so the PC never starts.
+        backups.files_dispatch_once(
+            can_db, can_log, machines=[{"machine": "B", "online": True}],
+            now=Tc, **can_policy)
+        b = backups.cancel_file_run(can_db, "B", actor="op@x.com")
+        check("cancelling before the agent claims it stops it clean",
+              b["stopped_before_start"] is True and b["stopped_in_flight"] is False)
+        b_run = backups.list_runs(can_db, kind=backups.BACKUP_MACHINE_FILES,
+                                  machine="B")[0]
+        check("...the run is marked cancelled, not failed",
+              b_run["status"] == backups.RUN_CANCELLED)
+        check("...the throttle slot is freed", backups.running_file_runs(can_db) == 0)
+        b_cmd = fleet.list_commands(can_db, machine="B")[0]
+        check("...and the command is expired so the agent never runs it",
+              b_cmd["status"] == fleet.STATUS_EXPIRED)
+        # An agent that DID claim it can no longer report against it -- proving the recall
+        # actually closed the window rather than just relabelling.
+        conn = sqlite3.connect(can_db)
+        conn.execute("INSERT INTO agents(agent_id,machine,token_hash,enrolled_at,"
+                     "last_seen,revoked) VALUES ('ag-b','B','h',?,?,0)", (Tc, Tc))
+        conn.commit(); conn.close()
+        check("...an expired command is not handed out on the next poll",
+              fleet.claim_commands(can_db, "ag-b", "B") == [])
+
+        # A cancelled machine is not immediately re-dispatched: its cancelled run stamped
+        # started_at, so it is no longer "due" until the interval passes.
+        check("a cancelled machine is not re-dispatched on the next tick",
+              backups.files_dispatch_once(
+                  can_db, can_log, machines=[{"machine": "B", "online": True}],
+                  now=Tc + 120, **can_policy) == 0)
+
+        # A manual request that lands while a run is in flight must NOT start a second
+        # concurrent backup -- it waits for the current one. (The request bypasses the
+        # due check, so without an explicit "already running" guard it would double up.)
+        backups.files_dispatch_once(
+            can_db, can_log, machines=[{"machine": "R", "online": True}],
+            now=Tc, **can_policy)
+        backups.request_file_run(can_db, "R", actor="op@x.com", now=Tc + 5)
+        check("a request while a run is in flight does not double-dispatch",
+              backups.files_dispatch_once(
+                  can_db, can_log, machines=[{"machine": "R", "online": True}],
+                  now=Tc + 10, **can_policy) == 0)
+        check("...and the request is still pending, waiting its turn",
+              backups.get_machine_config(can_db, "R")["run_requested_at"] == Tc + 5)
+        r_runs = [r for r in backups.list_runs(can_db, limit=10,
+                                               kind=backups.BACKUP_MACHINE_FILES)
+                  if r["machine"] == "R"]
+        check("...so only one run exists for it", len(r_runs) == 1)
+
+        # State C -- the agent has claimed the command; it cannot be recalled.
+        backups.files_dispatch_once(
+            can_db, can_log, machines=[{"machine": "C", "online": True}],
+            now=Tc, **can_policy)
+        conn = sqlite3.connect(can_db)
+        conn.execute("INSERT INTO agents(agent_id,machine,token_hash,enrolled_at,"
+                     "last_seen,revoked) VALUES ('ag-c','C','h',?,?,0)", (Tc, Tc))
+        conn.commit(); conn.close()
+        claimed = fleet.claim_commands(can_db, "ag-c", "C")
+        check("the agent claimed the backup command", len(claimed) == 1)
+        c = backups.cancel_file_run(can_db, "C", actor="op@x.com")
+        check("cancelling a claimed run is honest that the PC is already going",
+              c["stopped_in_flight"] is True and c["stopped_before_start"] is False)
+        c_run = backups.list_runs(can_db, kind=backups.BACKUP_MACHINE_FILES,
+                                  machine="C")[0]
+        check("...the run is cancelled and its slot freed",
+              c_run["status"] == backups.RUN_CANCELLED
+              and backups.current_running_file_run(can_db, "C") is None)
+
+        # The orphan: the agent finishes its pass and uploads AFTER the cancel. The result
+        # must be discarded, and the object it uploaded cleaned up -- nothing in
+        # backup_file_sets will ever reference it, so rotation would never reap it.
+        can_bucket = FakeDestination()
+        can_bucket.objects[c_run["object_key"]] = b"already uploaded"
+        saved_build = backups.build_client
+        backups.build_client = lambda record, secret: can_bucket
+        late = backups.ingest_file_result(can_db, can_log, c_run["id"], {
+            "stored_bytes": 16,
+            "files": [{"path": "C:\\x.txt", "size": 1, "mtime": 1, "sha256": "aa"}]},
+            keep_chains=2)
+        backups.build_client = saved_build
+        check("a late result for a cancelled run is ignored",
+              late["status"] == backups.RUN_CANCELLED)
+        check("...it does not populate the manifest",
+              backups.current_manifest(can_db, "C") == [])
+        check("...and the orphaned object is deleted from the destination",
+              c_run["object_key"] not in can_bucket.objects
+              and ("delete", c_run["object_key"]) in can_bucket.calls)
+
+        # Idempotent: a second cancel, or a cancel with nothing running, is a calm no-op.
+        none = backups.cancel_file_run(can_db, "C", actor="op@x.com")
+        check("cancelling with nothing running says so",
+              none["nothing_to_cancel"] is True)
+
+        # Fleet-wide cancel is just the per-machine one across the roster; assert it clears
+        # a mix of states in one pass.
+        backups.request_file_run(can_db, "F1", actor="op@x.com", now=Tc)
+        backups.files_dispatch_once(
+            can_db, can_log,
+            machines=[{"machine": "F1", "online": False},
+                      {"machine": "F2", "online": True}],
+            now=Tc, **can_policy)
+        f1 = backups.cancel_file_run(can_db, "F1", actor="op@x.com")
+        f2 = backups.cancel_file_run(can_db, "F2", actor="op@x.com")
+        check("a fleet cancel drops F1's queued request", f1["request_cleared"])
+        check("...and stops F2's pending run", f2["stopped_before_start"])
+
+        # ============================================================
         print("\n== Restore: browsing the manifest ==")
         # ============================================================
         # The browser has to be honest about what is RECOVERABLE, which is not the same as

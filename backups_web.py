@@ -762,6 +762,72 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             "defaults": _files_state(),
         }), 202
 
+    # ---------------- Console: cancel a PC backup ----------------
+    #
+    # Cancel is honest about a hard limit: a command an agent has already CLAIMED cannot
+    # be recalled (claiming is at-most-once, there is no back-channel), so the PC finishes
+    # its current pass. The hub stops everything up to that point -- the queued request,
+    # the not-yet-claimed command -- and marks a claimed run cancelled so it frees its
+    # throttle slot and its result is discarded. The response says which happened.
+    def _cancel_message(outcome):
+        if outcome.get("stopped_in_flight"):
+            return ("Cancelled. This PC had already started, so it will finish its "
+                    "current upload — the result is then discarded.")
+        if outcome.get("stopped_before_start"):
+            return "Cancelled before the PC started."
+        if outcome.get("request_cleared"):
+            return "The queued backup was cancelled."
+        return "Nothing was running to cancel."
+
+    @bp.route("/api/backups/machines/<machine>/cancel", methods=["POST"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def cancel_machine_backup(machine):
+        """Cancel this PC's pending or in-flight backup."""
+        bad = _require_json()
+        if bad:
+            return bad
+        outcome = backups.cancel_file_run(db_path, machine, actor=_current_email())
+        # A freed throttle slot should be filled now rather than a tick later -- the whole
+        # point of cancelling one machine is often to let another proceed.
+        if outcome.get("stopped_before_start") or outcome.get("stopped_in_flight"):
+            _dispatch_files(None)
+        payload = _machine_backup_payload(machine)
+        payload.update({"cancelled": outcome, "message": _cancel_message(outcome)})
+        return jsonify(payload), 200
+
+    @bp.route("/api/backups/files/cancel", methods=["POST"])
+    @login_required
+    @can_manage
+    def cancel_fleet_backup():
+        """Cancel every pending or in-flight PC backup in the caller's scope.
+
+        The counterpart to "Back up all PCs now": pressed when a fleet-wide run was
+        started by mistake, or is saturating the link and needs to stop.
+        """
+        bad = _require_json()
+        if bad:
+            return bad
+        actor = _current_email()
+        cleared = before = in_flight = 0
+        for entry in _roster():
+            machine, _online = backups.roster_entry(entry)
+            if not machine or not access.in_scope(machine):
+                continue
+            outcome = backups.cancel_file_run(db_path, machine, actor=actor)
+            cleared += 1 if outcome["request_cleared"] else 0
+            before += 1 if outcome["stopped_before_start"] else 0
+            in_flight += 1 if outcome["stopped_in_flight"] else 0
+        fleet.audit(db_path, actor=actor, action="backup_files_cancel_fleet",
+                    detail={"requests_cleared": cleared, "stopped_before_start": before,
+                            "stopped_in_flight": in_flight})
+        return jsonify({
+            "requests_cleared": cleared,
+            "stopped_before_start": before,
+            "stopped_in_flight": in_flight,
+            "defaults": _files_state(),
+        }), 200
+
     # ---------------- Console: run a hub database backup now ----------------
     @bp.route("/api/backups/run", methods=["POST"])
     @login_required

@@ -498,7 +498,17 @@ it missed that night *and* the next one.)
 **Back up now**, on the machine's **Backup** tab for one PC, or on **Backup Settings** for
 everything in your scope. This also works on a machine that is switched off: the request
 is remembered and answered when the PC reappears, so the button reports *started* or
-*queued* rather than failing. Pressing it twice does not queue two backups.
+*queued* rather than failing. Pressing it twice does not queue two backups, and a machine
+already backing up will not start a second run — the request waits its turn.
+
+**Cancel**, in the same two places. What it can stop depends on how far the backup got:
+a *queued* request is dropped; a backup that has been sent to the PC but not yet started
+is stopped before it begins; and one the PC has **already started** is marked cancelled —
+it stops holding a concurrency slot and its result is discarded, but the PC finishes the
+transfer it is in the middle of, because there is no way to recall a job an agent has
+already picked up. The response says which of these happened. Any archive a cancelled
+backup manages to upload is deleted automatically, so a cancel never leaves junk in the
+bucket.
 
 > A fleet-wide "back up now" can bring a lot of machines back at once, so
 > `backup.files_max_concurrent` (default **3**) limits how many run simultaneously.
