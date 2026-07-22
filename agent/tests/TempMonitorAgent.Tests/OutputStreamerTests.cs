@@ -8,6 +8,14 @@ namespace TempMonitorAgent.Tests;
 /// Covers OutputStreamer's contract with the hub. These are the properties the hub's
 /// idempotency relies on, and every one of them is silently breakable by a plausible
 /// refactor, so they're pinned here rather than left to review.
+///
+/// NOTE ON NEWLINES. Add() appends its argument VERBATIM and adds nothing. The interactive
+/// shell emits partial lines on purpose — a prompt with no trailing newline is the whole
+/// point of it — so a newline added per call would corrupt them. Line-oriented producers
+/// (ProcessRunner, and every executor's Say helper) append their own '\n' before calling.
+/// These tests therefore call Add the way real producers do, with the newline included;
+/// writing `Add("one")` and expecting `"one\n"` is testing a contract that no longer
+/// exists.
 /// </summary>
 public class OutputStreamerTests
 {
@@ -43,9 +51,10 @@ public class OutputStreamerTests
     {
         var sink = new FakeSink();
         var s = NewStreamer(sink);
-        s.Add("one");
-        s.Add("two");
-        s.Add("three");
+        // Newlines supplied by the caller, exactly as ProcessRunner does it.
+        s.Add("one\n");
+        s.Add("two\n");
+        s.Add("three\n");
         await s.CompleteAsync(CancellationToken.None);
 
         // Coalescing is the point: three lines inside one flush window must not become
@@ -53,6 +62,28 @@ public class OutputStreamerTests
         Assert.Single(sink.Posts);
         Assert.Equal(0, sink.Posts[0].Seq);
         Assert.Equal("one\ntwo\nthree\n", sink.Posts[0].Text);
+    }
+
+    [Fact]
+    public async Task Add_AppendsVerbatim_AndNeverInventsANewline()
+    {
+        // THE property the interactive terminal depends on, and the one nothing guarded
+        // until now: a shell prompt arrives as a partial line with no trailing newline
+        // (ShellSession emits its residual buffer exactly as read). If Add ever goes back
+        // to appending '\n' per call, every prompt lands on its own line and continuation
+        // output is pushed onto the next — the terminal stops looking like a terminal.
+        //
+        // This is not hypothetical: Add DID append a newline before the shell feature, and
+        // the three tests that assumed it kept passing for months by asserting the old
+        // contract in both the input and the expectation.
+        var sink = new FakeSink();
+        var s = NewStreamer(sink);
+        s.Add("PS C:\\> ");          // a prompt: deliberately unterminated
+        s.Add("dir\n");              // the echoed command, terminated by its producer
+        s.Add("partial");            // and output that has not finished a line yet
+        await s.CompleteAsync(CancellationToken.None);
+
+        Assert.Equal("PS C:\\> dir\npartial", sink.AllText());
     }
 
     [Fact]
@@ -91,13 +122,16 @@ public class OutputStreamerTests
             new OutputPostResult(Ok: attempt > 1, Truncated: false);
 
         var s = NewStreamer(sink);
-        s.Add("hello");
+        s.Add("hello\n");
         await s.CompleteAsync(CancellationToken.None);
 
         // Reusing the seq is what makes the hub's INSERT OR IGNORE dedupe a retry of a
         // POST that actually landed. A fresh seq would duplicate the chunk instead.
         Assert.True(sink.Posts.Count >= 2);
         Assert.All(sink.Posts, p => Assert.Equal(0, p.Seq));
+        // The payload must be byte-identical across attempts too: the hub dedupes on
+        // (command_id, seq) alone, so a retry carrying different text would silently
+        // discard whichever copy arrived second.
         Assert.All(sink.Posts, p => Assert.Equal("hello\n", p.Text));
     }
 
@@ -144,7 +178,7 @@ public class OutputStreamerTests
         // is genuinely concurrent in production.
         await Task.WhenAll(Enumerable.Range(0, 8).Select(t => Task.Run(() =>
         {
-            for (var i = 0; i < 50; i++) s.Add($"t{t}-line{i}");
+            for (var i = 0; i < 50; i++) s.Add($"t{t}-line{i}\n");
         })));
         await s.CompleteAsync(CancellationToken.None);
 

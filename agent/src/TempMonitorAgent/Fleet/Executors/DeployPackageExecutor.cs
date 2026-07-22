@@ -73,10 +73,20 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         }
 
         var log = new StringBuilder();
-        void Say(string line)
+
+        // Say() is for OUR OWN messages: a bare line that still needs terminating.
+        void Say(string line) => Emit(line + "\n");
+
+        // Emit() is for text that ALREADY ends in a newline -- which is what
+        // ProcessRunner hands its onLine callback (it re-adds the newline the line-event
+        // API strips). The two are separate functions rather than one because passing Say
+        // straight to onLine appends a SECOND newline, double-spacing every line of
+        // installer output in both the live console and the stored result log. That is
+        // exactly what happened here until this was split.
+        void Emit(string text)
         {
-            log.Append(line).Append('\n');
-            onOutput?.Invoke(line + "\n");
+            log.Append(text);
+            onOutput?.Invoke(text);
         }
 
         Say($"[deploy] {packageName} ({kind})");
@@ -99,7 +109,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
 
             Say($"[deploy] running: {file} {args}");
             var outcome = await ProcessRunner.RunAsync(
-                file, args, ct, timeoutSeconds: timeout, onLine: onOutput is null ? null : Say);
+                file, args, ct, timeoutSeconds: timeout, onLine: Emit);
 
             if (outcome.TimedOut)
                 return new CommandResult(false, log + $"\n[deploy] FAILED: timed out after {timeout}s");

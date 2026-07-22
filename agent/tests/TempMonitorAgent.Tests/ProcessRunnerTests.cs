@@ -35,6 +35,29 @@ public class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task OnLine_DeliversTextAlreadyTerminatedByExactlyOneNewline()
+    {
+        // The contract every onLine caller depends on, and which nothing pinned until a
+        // real bug came of it: OutputStreamer.Add appends text VERBATIM, so ProcessRunner
+        // re-adds the newline the line-event API strips. A caller that adds its own on top
+        // double-spaces every line of output — which is precisely what DeployPackageExecutor
+        // did by passing its line-oriented Say() straight in here.
+        //
+        // Asserted on the exact string rather than with Contains(), because Contains() is
+        // what let the defect sit unnoticed in the tests that already existed.
+        var streamed = new List<string>();
+        var gate = new object();
+
+        await ProcessRunner.RunAsync(
+            "cmd.exe", "/c echo hello", CancellationToken.None,
+            timeoutSeconds: 30, onLine: l => { lock (gate) streamed.Add(l); });
+
+        Assert.Contains("hello\n", streamed);
+        Assert.All(streamed, l => Assert.False(l.EndsWith("\n\n"),
+            $"onLine delivered a double-terminated chunk: {l.Replace("\n", "\\n")}"));
+    }
+
+    [Fact]
     public async Task OnLine_DoesNotCannibalizeTheBufferedOutput()
     {
         var streamed = new List<string>();

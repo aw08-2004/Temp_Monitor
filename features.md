@@ -127,6 +127,14 @@ Two implementation-level notes worth carrying forward:
 **Not yet done**: the agent-side executor ships in source but needs an agent release
 (version bump + `sign_release.py --sign-agent`) before the fleet actually gains it.
 
+**Fixed in 3.9.0**: `DeployPackageExecutor` passed its line-oriented `Say()` straight to
+`ProcessRunner`'s `onLine`, which already hands back newline-terminated text — so every
+line of installer output was double-spaced in both the live console and the stored result
+log, and when no live sink was attached (`onOutput == null`, so `onLine` was null) the
+installer's output was dropped from the result entirely. `Say()` (our own messages, needs
+terminating) and `Emit()` (already terminated) are now separate, and the deploy log is
+covered by tests rather than eyeballed.
+
 ---
 
 ## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0

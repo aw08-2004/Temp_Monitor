@@ -47,6 +47,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Invoke-WebRequest renders a progress bar on PowerShell 5.1 that costs more time than the
+# transfer itself on the bigger downloads here (the ~25 MB Python installer, the LHM zip).
+# Silencing it keeps the run moving and the log readable.
+$ProgressPreference = "SilentlyContinue"
 
 $Repo           = "aw08-2004/Temp_Monitor"
 $InstallerUrl   = "https://raw.githubusercontent.com/$Repo/main/install.ps1"
@@ -141,6 +145,20 @@ function Prompt-Value([string]$Label, [string]$Default = "", [switch]$Secret,
     }
 }
 
+function Prompt-YesNo([string]$Question, [ValidateSet("Yes", "No")][string]$Default = "Yes") {
+    # Reprompts on anything that isn't a yes/no. The ad-hoc `Read-Host "... (Y/n)"` calls this
+    # replaces treated every typo as the default, so a fat-fingered answer silently installed
+    # (or skipped) something the operator was asked about on purpose.
+    $hint = if ($Default -eq "Yes") { "(Y/n)" } else { "(y/N)" }
+    while ($true) {
+        $ans = "$(Read-Host "  $Question $hint")".Trim()
+        if (-not $ans) { return ($Default -eq "Yes") }
+        if ($ans -match '^(y|yes)$') { return $true }
+        if ($ans -match '^(n|no)$')  { return $false }
+        Warn "Please answer y or n."
+    }
+}
+
 function New-RandomSecret([int]$Bytes = 24) {
     # RandomNumberGenerator.Fill() is .NET Core / 5+ only -- Windows PowerShell 5.1 runs on
     # .NET Framework 4.x, so use the Create()/GetBytes() API that exists on both.
@@ -162,17 +180,108 @@ function Read-DotEnv([string]$Path) {
     return $result
 }
 
+function Update-ProcessPath {
+    # A just-installed Python is only on PATH for processes started afterwards -- this console
+    # inherited its copy at launch. Re-read both scopes from the registry so the interpreter
+    # is usable in this same run instead of needing a reboot or a second pass.
+    $parts = @([Environment]::GetEnvironmentVariable("Path", "Machine"),
+               [Environment]::GetEnvironmentVariable("Path", "User")) | Where-Object { $_ }
+    $env:Path = $parts -join ";"
+}
+
 function Resolve-Python {
+    # PATH first: the py launcher knows about every installed version, so ask it before python.exe.
     foreach ($cmd in @("py -3", "python")) {
-        $exe, $args = $cmd -split " ", 2
-        if (Get-Command $exe -ErrorAction SilentlyContinue) {
-            try {
-                $v = & $exe $args --version 2>&1
-                if ($v -match "Python 3") { return @{ Exe = (Get-Command $exe).Source; Args = $args; Version = "$v" } }
-            } catch { }
-        }
+        $exe, $rest = $cmd -split " ", 2
+        $found = Get-Command $exe -ErrorAction SilentlyContinue
+        if (-not $found) { continue }
+        try {
+            # Requiring a "Python 3" banner also rejects the Microsoft Store app-execution alias,
+            # which sits on PATH as python.exe but only opens the Store when run.
+            $v = & $exe $rest --version 2>&1
+            if ("$v" -match "Python 3") { return @{ Exe = $found.Source; Args = $rest; Version = "$v".Trim() } }
+        } catch { }
+    }
+    # Nothing usable on PATH. Look where the installers actually put it: a machine-wide install
+    # done seconds ago can still be missing from PATH if the registry broadcast hasn't landed,
+    # and giving up there would send the operator away for a reboot they don't need.
+    foreach ($glob in @("$env:ProgramFiles\Python3*\python.exe",
+                        "${env:ProgramFiles(x86)}\Python3*\python.exe",
+                        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
+                        "$env:SystemDrive\Python3*\python.exe")) {
+        $cand = Get-ChildItem $glob -ErrorAction SilentlyContinue |
+                    Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $cand) { continue }
+        try {
+            $v = & $cand.FullName --version 2>&1
+            if ("$v" -match "Python 3") { return @{ Exe = $cand.FullName; Args = $null; Version = "$v".Trim() } }
+        } catch { }
     }
     return $null
+}
+
+function Install-Python {
+    <#
+      Install Python 3 unattended and return the resolved interpreter (or $null if every
+      route failed). winget first so the machine stays on a serviceable package; python.org's
+      own installer covers the boxes where winget is missing (Server SKUs, older Windows 10
+      builds) or blocked by policy.
+    #>
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Say "Installing Python 3.12 via winget -- this takes a minute, leave it running..."
+        # Pin --source winget: without it, winget also probes the msstore source, and a
+        # bad msstore cert/network on the machine aborts the whole install even though
+        # the winget source works fine.
+        winget install --id Python.Python.3.12 --source winget --scope machine `
+            --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { Warn "winget install failed (exit $LASTEXITCODE). Trying python.org instead." }
+        Update-ProcessPath
+        $py = Resolve-Python
+        if ($py) { return $py }
+    } else {
+        Warn "winget is unavailable on this machine -- using python.org instead."
+    }
+
+    Say "Downloading the Python installer from python.org..."
+    $pyInstaller = Join-Path $env:TEMP "python-installer.exe"
+    try {
+        Invoke-WebRequest -Uri $PythonFallback -OutFile $pyInstaller -UseBasicParsing
+        Say "Running it silently (no prompts, this takes a minute)..."
+        $proc = Start-Process -FilePath $pyInstaller -Wait -PassThru -ArgumentList `
+            "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0"
+        if ($proc.ExitCode -ne 0) { Warn "python.org installer exited with code $($proc.ExitCode)." }
+    } catch {
+        Warn "Direct download failed: $($_.Exception.Message)"
+    } finally {
+        Remove-Item $pyInstaller -Force -ErrorAction SilentlyContinue
+    }
+
+    Update-ProcessPath
+    return Resolve-Python
+}
+
+function Ensure-Python {
+    <#
+      Resolve a Python 3 interpreter, offering to install one when the machine hasn't got it.
+      A missing prerequisite is a question, not a dead end: both Python paths (hub and
+      companion) go through here so neither aborts the run on a bare machine.
+    #>
+    Step "Checking Python"
+    $py = Resolve-Python
+    if ($py) { Ok "Found $($py.Version)"; return $py }
+
+    Warn "Python not detected."
+    if (-not (Prompt-YesNo "Do you want to install it now?" -Default Yes)) {
+        Die "Python 3 is required. Install it from python.org (tick 'Add python.exe to PATH'), then re-run this installer."
+    }
+
+    $py = Install-Python
+    if (-not $py) {
+        Die ("Python still isn't available after the install attempt. Install Python 3 manually from " +
+             "python.org (tick 'Add python.exe to PATH'), reboot if the installer asked for one, then re-run this installer.")
+    }
+    Ok "Installed $($py.Version)"
+    return $py
 }
 
 function Get-LatestAgentAssetUrl {
@@ -298,52 +407,7 @@ function Install-Companion {
     # ------------------------------------------------------------------
     # 1. Python
     # ------------------------------------------------------------------
-    Step "Checking Python"
-
-    $py = Resolve-Python
-    if (-not $py) {
-        Warn "Python not found."
-
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Say "Installing via winget..."
-            # Pin --source winget: without it, winget also probes the msstore
-            # source, and a bad msstore cert/network on the machine aborts the
-            # whole install even though the winget source works fine.
-            winget install --id Python.Python.3.12 --source winget --scope machine `
-                --silent --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -ne 0) { Warn "winget install failed (exit $LASTEXITCODE)." }
-
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
-                        [Environment]::GetEnvironmentVariable("Path", "User")
-            $py = Resolve-Python
-        } else {
-            Warn "winget is unavailable."
-        }
-
-        if (-not $py) {
-            Say "Falling back to direct download from python.org..."
-            $pyInstaller = Join-Path $env:TEMP "python-installer.exe"
-            try {
-                Invoke-WebRequest -Uri $PythonFallback -OutFile $pyInstaller -UseBasicParsing
-                $proc = Start-Process -FilePath $pyInstaller -Wait -PassThru -ArgumentList `
-                    "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0"
-                if ($proc.ExitCode -ne 0) { Warn "python.org installer exited with code $($proc.ExitCode)." }
-            } catch {
-                Warn "Direct download failed: $_"
-            } finally {
-                Remove-Item $pyInstaller -Force -ErrorAction SilentlyContinue
-            }
-
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
-                        [Environment]::GetEnvironmentVariable("Path", "User")
-            $py = Resolve-Python
-        }
-
-        if (-not $py) {
-            Die "Python still not on PATH. Reboot and re-run the installer, or install Python 3 manually from python.org (tick 'Add to PATH')."
-        }
-    }
-    Ok "Found $($py.Version)"
+    $py = Ensure-Python
 
     # Resolve the real interpreter path (so scheduled tasks don't depend on PATH)
     $pythonExe = & $py.Exe $py.Args -c "import sys; print(sys.executable)"
@@ -618,8 +682,9 @@ function Install-Agent {
         }
 
         if ($localExeDefault) {
-            $useLocal = Read-Host "Found a built exe at $localExeDefault. Use it? (Y/n)"
-            if ($useLocal -notmatch '^[Nn]') { $resolvedExe = $localExeDefault }
+            if (Prompt-YesNo "Found a built exe at $localExeDefault. Use it?" -Default Yes) {
+                $resolvedExe = $localExeDefault
+            }
         }
 
         if (-not $resolvedExe) {
@@ -787,8 +852,10 @@ function Move-LegacyHubInstall {
     if ($NewDir -eq $LegacyHubDir) { return }
 
     Warn "Found an existing hub at $LegacyHubDir (pre-FleetHub layout)."
-    $ans = Read-Host "  Move its config and data to $NewDir ? (Y/n)"
-    if ($ans -match '^[Nn]') { Say "Leaving it alone. Note both hubs would bind port $HubPort -- only one can run."; return }
+    if (-not (Prompt-YesNo "Move its config and data to $NewDir ?" -Default Yes)) {
+        Say "Leaving it alone. Note both hubs would bind port $HubPort -- only one can run."
+        return
+    }
 
     if (Get-Service -Name $LegacyHubServiceId -ErrorAction SilentlyContinue) {
         Say "Stopping the old $LegacyHubServiceId service..."
@@ -823,6 +890,12 @@ function Install-Hub {
 
 "@ -ForegroundColor Cyan
 
+    # Before anything touches disk: an operator who declines the Python install shouldn't be
+    # left with a half-laid-down hub directory to clean up.
+    $py = Ensure-Python
+    $pythonExe = & $py.Exe $py.Args -c "import sys; print(sys.executable)"
+    Ok "Interpreter: $pythonExe"
+
     Step "Preparing hub files at $hubDir"
     Move-LegacyHubInstall -NewDir $hubDir
 
@@ -837,12 +910,6 @@ function Install-Hub {
 
     $envPath  = Join-Path $hubDir ".env"
     $existing = Read-DotEnv $envPath
-
-    Step "Checking Python"
-    $py = Resolve-Python
-    if (-not $py) { Die "Python 3 not found. Install Python 3 first (python.org, tick 'Add to PATH'), then re-run." }
-    $pythonExe = & $py.Exe $py.Args -c "import sys; print(sys.executable)"
-    Ok "Interpreter: $pythonExe"
 
     Step "Installing Python packages"
     & $pythonExe -m pip install --upgrade pip --quiet
@@ -873,8 +940,9 @@ function Install-Hub {
     Say "Fleet command channel (optional -- leave blank to keep telemetry-only):"
     $enrollSecretDefault = $existing["AGENT_ENROLLMENT_SECRET"]
     if (-not $enrollSecretDefault) {
-        $gen = Read-Host "  No AGENT_ENROLLMENT_SECRET set. Auto-generate one? (Y/n)"
-        if ($gen -notmatch '^[Nn]') { $enrollSecretDefault = New-RandomSecret }
+        if (Prompt-YesNo "No AGENT_ENROLLMENT_SECRET set. Auto-generate one?" -Default Yes) {
+            $enrollSecretDefault = New-RandomSecret
+        }
     }
     $enrollSecret  = Prompt-Value "  Agent enrollment secret" $enrollSecretDefault -Secret
 
@@ -883,8 +951,9 @@ function Install-Hub {
     # and replaces the runtime file set; a clone still uses git. See perform_hub_update().
     $autoUpdateDefault = $existing["HUB_AUTO_UPDATE"]
     if (-not $autoUpdateDefault) {
-        $au = Read-Host "  Enable hub self-update from main (downloads and replaces hub files)? (y/N)"
-        if ($au -match '^[Yy]') { $autoUpdateDefault = "1" }
+        if (Prompt-YesNo "Enable hub self-update from main (downloads and replaces hub files)?" -Default No) {
+            $autoUpdateDefault = "1"
+        }
     }
 
     $lines = @(
