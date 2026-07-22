@@ -168,6 +168,12 @@ public sealed class Worker : BackgroundService
 
         if (!_fleet.IsEnrolled) return;
 
+        // Re-scan user profiles if the interval has elapsed (roadmap #1b). Deliberately
+        // BEFORE the heartbeat and off its code path: discovery reads the registry and may
+        // mount a logged-off user's hive, which must never be able to delay a heartbeat
+        // into the hub's 90-second offline window. It self-throttles to hourly.
+        TempMonitorAgent.Backup.BackupProfileReporter.RefreshIfDue();
+
         await _fleet.HeartbeatAsync(ct);
 
         var commands = await _fleet.PollCommandsAsync(ct);

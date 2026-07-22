@@ -32,6 +32,7 @@ import functools
 
 from flask import Blueprint, jsonify, request, session
 
+import backups
 import fleet
 import permissions
 import settings
@@ -115,6 +116,13 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
 
         The agent sends the config_version it currently holds and the hub replies with
         config only when that differs, so the steady-state heartbeat stays two fields.
+
+        It may also send `profiles` -- the user profiles and resolved known folders on
+        that machine. That is how the Backup Settings tab can show what `%Users%\\Desktop`
+        ACTUALLY expands to on a given PC rather than echoing the pattern back. The agent
+        sends it only when it changes (a new user signs in, OneDrive redirects a folder),
+        so this is not per-heartbeat traffic. Never fatal: a malformed payload costs a
+        stale preview, not a heartbeat.
         """
         # authenticate_agent already refreshed last_seen.
         data = request.get_json(silent=True) or {}
@@ -123,6 +131,11 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         if data.get("config_version") != current_version:
             payload["config"] = settings.agent_config(db_path)
             payload["config_version"] = current_version
+        if data.get("profiles"):
+            try:
+                backups.record_profiles(db_path, machine, data["profiles"])
+            except Exception as e:
+                print(f"[backup] Could not record profiles for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])

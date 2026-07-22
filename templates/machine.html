@@ -2,6 +2,10 @@
 {% block title %}{{ machine }} - FleetHub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
+{% endif %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
@@ -16,6 +20,12 @@
                 aria-controls="tab-overview" aria-selected="true">Overview</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-terminal"
                 aria-controls="tab-terminal" aria-selected="false" tabindex="-1">Terminal</button>
+        {# Hidden without the capability, like the sidebar links -- the routes behind it
+           are gated server-side on manage_backups AND this machine being in scope. #}
+        {% if cap.MANAGE_BACKUPS in user_capabilities %}
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-backup"
+                aria-controls="tab-backup" aria-selected="false" tabindex="-1">Backup</button>
+        {% endif %}
     </div>
 
     {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
@@ -148,6 +158,13 @@
             <div id="terminal-hint" class="terminal__hint"></div>
         </div>
     </div>{# /tab-terminal #}
+
+    {% if cap.MANAGE_BACKUPS in user_capabilities %}
+    {# Structure only -- backup-tab.js builds everything from
+       GET /api/backups/machines/<machine>, including the resolved path preview, so the
+       token grammar has exactly one renderer shared with the Backups page. #}
+    <div class="tab-panel" id="tab-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden></div>
+    {% endif %}
 </div>
 
 {# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
@@ -168,5 +185,8 @@
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 {% endblock %}

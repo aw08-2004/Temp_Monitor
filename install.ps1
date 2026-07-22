@@ -89,7 +89,7 @@ $HubRuntimeFiles = @(
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
     "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
     "packages.py", "packages_web.py", "backups.py", "backups_web.py",
-    "alerts.py", "restore_backup.py", "requirements.txt"
+    "backup_paths.py", "alerts.py", "restore_backup.py", "requirements.txt"
 )
 $HubRuntimeDirs  = @("templates", "static")
 # Source archive for both first install and self-update. codeload serves a zip of a branch

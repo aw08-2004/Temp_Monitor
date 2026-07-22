@@ -188,10 +188,138 @@ never added to `HUB_RUNTIME_FILES`/`$HubRuntimeFiles` in 1.27.x, so a sparse hub
 or self-update fetched neither and the hub died on import at startup. Both lists now carry
 every module `app.py` imports, and both say why.
 
-**1b. Per-PC file backups** — 📋 next. Configured user folders (e.g. Desktop, Documents),
-with defaults in Settings and per-PC extra paths in a new machine-page **Backup tab**.
-Everything below still stands; `backup_runs.machine`, `object_key(..., machine=)` and
-`sigv4_presign()` already exist for it.
+**1b. Per-PC file backups** — 🚧 **backup path complete (hub 1.29.0 + agent 3.8.0);
+restore is the remaining work.** A machine can now be configured, previewed, scheduled,
+walked, snapshotted, encrypted and uploaded. What is missing is getting the data back
+through the console — until then a restore means `restore_backup.py` by hand, which does
+work (the archive is tar inside the envelope, openable with the master key alone).
+
+**Agent side (3.8.0) — needs a signed release before the fleet gains it.**
+
+**Built:**
+
+- **`backup_paths.py` — the include/exclude grammar**, and the reason this feature is
+  usable at all. `%Users%` fans out to every real profile (skipping Public/Default/service
+  accounts) so one pattern covers everyone, including whoever signs in next week. Crucially
+  `%Desktop%`/`%Documents%`/… resolve through each user's *User Shell Folders* registry, so
+  they follow **OneDrive Known Folder Move** — a literal `C:\Users\bob\Desktop` on a
+  KFM-enabled machine is an empty stub, and backing that up nightly while reporting success
+  is exactly the failure this feature exists to prevent. **An unknown token is refused, not
+  treated as a literal**: `%Userss%` would otherwise match nothing, forever, with a green
+  run beside it. Excludes take the same tokens plus globs (`**` crosses folders); excluding
+  a folder excludes its contents.
+- **A `path_list` settings type.** `str_list` was wrong twice here — it rejects an empty
+  list (a legitimate exclude list) and *lowercases every entry*, which would hand back
+  `c:\users\%users%\desktop` after you typed it.
+- **Backup Settings tab** (third tab on the Backups page): the fleet policy, the token
+  reference, and a **live preview against a real machine** using the profiles its agent
+  reported over the heartbeat. A pattern you cannot see the effect of is one you cannot
+  trust, so the preview also names the problems — "carol has no %Documents% folder
+  recorded" beats an empty list.
+- **Per-machine overrides** (`backup_machine_config`) and a machine-page **Backup tab**.
+  Path lists are **additive** to the fleet policy; only enabled/destination override.
+  A machine that has merely *reported profiles* is not treated as an exception.
+- **Chains, manifest and scheduler.** `backup_file_sets` + `backup_files` record one row
+  per file *version*; `plan_next_run` forces a full every `files_full_every` runs;
+  `files_tick` dispatches per machine on the same claim-then-queue discipline as deploys.
+- **`rotate_chains` — the sharp edge.** The hub-DB rotation counts objects, which here
+  would happily delete the full that four incrementals depend on. Rotation therefore works
+  in whole chains, and orders them by `(created_at, rowid)` — the rowid tiebreak is
+  load-bearing, since two chains written in the same second would otherwise order
+  arbitrarily and rotation could delete the newer one.
+- **Upload brokering without giving agents the credential.** S3 → a hub-minted pre-signed
+  PUT scoped to `<prefix>/machines/<machine>/…`; WebDAV → the agent PUTs to the hub, which
+  streams it onward (minting a scoped WebDAV credential needs provider-specific admin APIs
+  that do not generalise). The object key comes from the run row, never the agent's report.
+- **Per-machine derived keys** — `HKDF-SHA256(master, "fleethub-backup-machine:<name>")`.
+  An agent must hold the key it encrypts with, so handing over the *master* would mean one
+  stolen laptop decrypts the hub-database backup and every other machine's files. Restore
+  stays one argument because the envelope header names the machine and the master
+  re-derives.
+- **`BackupEnvelope.cs`** — FHBK1 in C#, verified against Python-sealed fixtures **in both
+  directions** (the agent tests read `tests/fixtures/*.fhb`; `test_backups.py` reads the
+  `from-agent.fhb` they write). Two crypto implementations of one format drift silently,
+  and the way you find out is a backup that will not restore.
+- **`PathExpander.cs`** — the grammar against real registry data, driven by the same
+  `backup_path_vectors.json` the Python tests use, so the console's preview and the
+  machine's actual walk cannot disagree. Reads each user's *User Shell Folders*, and for
+  users who are not signed in **temporarily mounts their NTUSER.DAT** (`HiveMount.cs`,
+  SeRestorePrivilege as SYSTEM) — without that, every logged-off user's redirected folders
+  would be unresolvable, which on a shared PC is most of them. A folder that cannot be
+  resolved is reported MISSING, never defaulted to `<profile>\Desktop`, because the guess
+  is what produces the empty-stub backup.
+- **`VssSnapshot.cs`** — `Win32_ShadowCopy.Create(volume, "ClientAccessible")` via WMI.
+  **`vssadmin create shadow` is deliberately not used: it is Server-only.** Snapshot
+  failure is skip-and-report — the run continues against the live filesystem and names
+  what it could not read, because a machine that backs up 99% and says so beats one that
+  backs up nothing and explains why. Snapshots are deleted on dispose; a leaked one eats
+  the volume's shadow storage and silently destroys the user's own restore points.
+- **`BackupFilesExecutor.cs`** — expand, snapshot, walk, pack, upload, report.
+  **Reparse points are never followed**: a profile contains junctions pointing at their own
+  ancestors, so following them is an infinite walk that fills the disk — not hypothetical,
+  it is the first thing that happens on a real profile. Change detection is size+mtime
+  against a local per-chain manifest cache (hashing every file nightly would read the whole
+  profile off disk to learn that nothing changed); the hash is computed only for files
+  being uploaded. **A missing or mismatched cache forces a full and says so**, because an
+  "incremental" against a chain the agent cannot see would be recorded by the hub as
+  complete and discovered at restore.
+- **tar → gzip → envelope, streamed through a pipe** rather than staged twice on disk.
+  Tar specifically so `restore_backup.py` unpacks it with stdlib `tarfile` — a machine's
+  backup stays recoverable with no hub and no agent, the same property #1a insisted on.
+  Verified end to end: the C# tests write an archive, `test_backups.py` decrypts it with
+  the master key and unpacks it with `tarfile`.
+- **`BackupProfileReporter.cs`** — profiles ride the heartbeat, but only on change
+  (content-hashed, hourly rescan, off the heartbeat's code path) so discovery can never
+  delay a heartbeat into the hub's 90-second offline window.
+
+**Not yet done** — the whole of **restore**: manifest browsing in the UI, the
+`restore_files` command, `RestoreFilesExecutor.cs`, and `restore_backup.py --list/--extract`.
+Backups run and are restorable by hand; there is no button yet.
+
+**Known bugs to fix:**
+
+- `rotate_chains()` treats a chain's deletes as atomic when they are not. A
+  `client.delete()` failure partway through leaves some archives gone from storage while
+  the manifest still lists the whole chain as restorable — the operator is offered a
+  restore that 404s halfway. Fix: per-chain try, reconcile the DB rows to what actually
+  survived. Not urgent (a rotation failure is already swallowed so it cannot fail a good
+  backup) but the manifest stays wrong until the next successful pass. See the comment in
+  `backups.rotate_chains`.
+
+**Considered and deferred — content-addressed blobs instead of chains.** Store each file
+at `blobs/<sha256>` (encrypted) and make a snapshot nothing but a manifest of path → hash,
+refcounting blobs exactly as `packages.py` already does for installer payloads. This
+removes the full/incremental distinction entirely: every snapshot is independently
+restorable because a "full" costs nothing extra when the unchanged blobs already exist, so
+chains — and `rotate_chains` with its whole class of bugs — disappear. Static data would be
+stored once ever rather than once per chain (in the worked example above, the 200 GB static
+column becomes 50 GB), retention stays hub-side (delete a snapshot, GC unreferenced blobs),
+and it needs no provider features so WebDAV behaves identically. It does *not* help a large
+file that rewrites daily — that needs block-level chunking, a much bigger jump. Deferred
+because it is a genuine rearchitecture plus a GC pass, and the chain design is built and
+tested; revisit if chain fragility or static-data duplication becomes the real cost driver
+in the field.
+
+A related idea was rejected outright: **per-file objects at stable keys, letting S3
+versioning be the retention mechanism.** It collapses on object count (100k–500k files per
+profile, billed per PUT), per-file envelope overhead (~400 bytes of header on a 2 KB file),
+Windows paths not mapping cleanly to S3 keys (case sensitivity, backslashes, the 1024-byte
+limit — you end up hashing the path and still needing the manifest, so none of the
+complexity is actually saved), and being S3-only, which would mean two backup engines
+split by destination kind and retention moving out of the FleetHub console into the
+provider's. If the storage model ever changes it should be a migration with a cutover, not
+a user-selectable mode — two engines would mean every restore path supports both forever.
+
+**Bucket versioning (S3/MinIO), if you enable it:** every archive gets a unique
+timestamped key and is never overwritten, so versioning has no history to track and does
+not protect the archives. What it *does* change is rotation — a `DELETE` on a versioned
+bucket writes a delete marker instead of freeing bytes, so `files_keep_chains` becomes
+"N chains visible, unbounded chains billed". **Pair versioning with a lifecycle rule
+expiring noncurrent versions**, or storage grows forever while the console reports steady
+state. Versioning is worth having only as a short (2–3 day) undo window against a
+hub-side rotation mistake — never as the retention mechanism, since lifecycle rules
+delete by count or age and are chain-blind, which is the exact bug `rotate_chains` exists
+to prevent.
 
 - **Storage: both S3-compatible and WebDAV, Admin's choice per destination.** An Admin can
   configure more than one destination, each typed `s3` or `webdav`. Credentials live in
@@ -311,7 +439,8 @@ present.
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
 2. ~~**#5 Deploy packages**~~ — done, hub 1.27.0 (pending an agent release)
-3. **#1 Backups** — ~~hub DB~~ done, hub 1.28.0; **per-PC files ← next**
+3. **#1 Backups** — ~~hub DB~~ done (1.28.0); per-PC files: ~~hub side~~ (1.29.0) and
+   ~~agent executor~~ (3.8.0) done — **console-driven restore ← next**
 4. **#4 Active Directory** — Entra login + group mapping first, then LDAP sync
 5. **#2 Remote view & control** — spike first, then build
 

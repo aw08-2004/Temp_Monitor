@@ -1,0 +1,161 @@
+{
+  "_comment": [
+    "Shared expansion fixture for the backup path grammar (roadmap #1b).",
+    "",
+    "READ BY TWO TEST SUITES: tests/test_backup_paths.py (backup_paths.py) and the",
+    "agent's PathExpander tests (agent/tests/TempMonitorAgent.Tests). The grammar is",
+    "implemented twice, and two implementations drift apart silently -- the symptom is a",
+    "folder that quietly stops being backed up, discovered at restore time. Add a case",
+    "here BEFORE changing behaviour on either side.",
+    "",
+    "The profile set is deliberately awkward on purpose: bob has OneDrive Known Folder",
+    "Move (so his Desktop is NOT under his profile), carol has no Documents recorded at",
+    "all, and the machine carries the usual crop of non-user profile folders."
+  ],
+
+  "profiles": {
+    "profile_root": "C:\\Users",
+    "env": {
+      "ProgramData": "C:\\ProgramData",
+      "SystemDrive": "C:",
+      "windir": "C:\\Windows",
+      "ProgramFiles": "C:\\Program Files",
+      "Public": "C:\\Users\\Public"
+    },
+    "users": [
+      {
+        "name": "bob",
+        "sid": "S-1-5-21-1111111111-2222222222-3333333333-1001",
+        "path": "C:\\Users\\bob",
+        "folders": {
+          "desktop": "C:\\Users\\bob\\OneDrive - Contoso\\Desktop",
+          "documents": "C:\\Users\\bob\\OneDrive - Contoso\\Documents",
+          "downloads": "C:\\Users\\bob\\Downloads",
+          "pictures": "C:\\Users\\bob\\OneDrive - Contoso\\Pictures",
+          "favorites": "C:\\Users\\bob\\Favorites",
+          "appdata": "C:\\Users\\bob\\AppData\\Roaming",
+          "localappdata": "C:\\Users\\bob\\AppData\\Local"
+        }
+      },
+      {
+        "name": "carol",
+        "sid": "S-1-5-21-1111111111-2222222222-3333333333-1002",
+        "path": "C:\\Users\\carol",
+        "folders": {
+          "desktop": "C:\\Users\\carol\\Desktop",
+          "downloads": "C:\\Users\\carol\\Downloads",
+          "favorites": "C:\\Users\\carol\\Favorites",
+          "appdata": "C:\\Users\\carol\\AppData\\Roaming",
+          "localappdata": "C:\\Users\\carol\\AppData\\Local"
+        }
+      },
+      { "name": "Public", "sid": "", "path": "C:\\Users\\Public", "folders": {} },
+      { "name": "Default", "sid": "", "path": "C:\\Users\\Default", "folders": {} },
+      { "name": "defaultuser0", "sid": "", "path": "C:\\Users\\defaultuser0", "folders": {} }
+    ]
+  },
+
+  "expansions": [
+    {
+      "why": "%Users% fans out to real profiles only -- Public/Default/defaultuser0 are not people",
+      "pattern": "%Users%\\Desktop",
+      "expect": ["C:\\Users\\bob\\Desktop", "C:\\Users\\carol\\Desktop"]
+    },
+    {
+      "why": "THE case this grammar exists for: %Desktop% follows OneDrive redirection, the literal path above does not",
+      "pattern": "%Desktop%",
+      "expect": [
+        "C:\\Users\\bob\\OneDrive - Contoso\\Desktop",
+        "C:\\Users\\carol\\Desktop"
+      ]
+    },
+    {
+      "why": "a user with no recorded folder contributes nothing rather than a guessed default",
+      "pattern": "%Documents%",
+      "expect": ["C:\\Users\\bob\\OneDrive - Contoso\\Documents"]
+    },
+    {
+      "why": "machine tokens do not fan out",
+      "pattern": "%ProgramData%\\Contoso\\config",
+      "expect": ["C:\\ProgramData\\Contoso\\config"]
+    },
+    {
+      "why": "a literal absolute path passes through untouched",
+      "pattern": "D:\\Shared\\Finance",
+      "expect": ["D:\\Shared\\Finance"]
+    },
+    {
+      "why": "tokens are case-insensitive",
+      "pattern": "%USERS%\\Desktop",
+      "expect": ["C:\\Users\\bob\\Desktop", "C:\\Users\\carol\\Desktop"]
+    },
+    {
+      "why": "forward slashes normalise to backslashes",
+      "pattern": "%Users%/Documents/Tax",
+      "expect": ["C:\\Users\\bob\\Documents\\Tax", "C:\\Users\\carol\\Documents\\Tax"]
+    },
+    {
+      "why": "two per-user tokens in one pattern stay on the SAME user, never cross-product",
+      "pattern": "%Users%\\backup-of\\%Desktop%",
+      "expect": [
+        "C:\\Users\\bob\\backup-of\\C:\\Users\\bob\\OneDrive - Contoso\\Desktop",
+        "C:\\Users\\carol\\backup-of\\C:\\Users\\carol\\Desktop"
+      ]
+    },
+    {
+      "why": "a machine token combined with a per-user one resolves both",
+      "pattern": "%Users%\\%SystemDrive%-notes",
+      "expect": ["C:\\Users\\bob\\C:-notes", "C:\\Users\\carol\\C:-notes"]
+    }
+  ],
+
+  "invalid": [
+    {
+      "why": "an unknown token would silently match nothing forever -- the most valuable rule here",
+      "pattern": "%Userss%\\Desktop",
+      "kind": "include"
+    },
+    { "why": "unbalanced % is a typo for a token", "pattern": "%Users\\Desktop", "kind": "include" },
+    { "why": "traversal is never legitimate in a backup root", "pattern": "C:\\Users\\..\\Windows", "kind": "include" },
+    { "why": "an include must be absolute or token-led", "pattern": "Desktop", "kind": "include" },
+    { "why": "wildcards belong in excludes, not includes", "pattern": "C:\\Users\\*\\Desktop", "kind": "include" },
+    { "why": "empty is not a pattern", "pattern": "   ", "kind": "include" }
+  ],
+
+  "excludes": [
+    {
+      "why": "a bare glob matches on basename anywhere",
+      "patterns": ["*.tmp"],
+      "excluded": ["C:\\Users\\bob\\Desktop\\notes.tmp", "D:\\x\\y\\z.TMP"],
+      "kept": ["C:\\Users\\bob\\Desktop\\notes.txt", "C:\\tmp\\real.docx"]
+    },
+    {
+      "why": "excluding a folder excludes everything under it, without needing a trailing \\**",
+      "patterns": ["%LocalAppData%\\Temp"],
+      "excluded": [
+        "C:\\Users\\bob\\AppData\\Local\\Temp",
+        "C:\\Users\\bob\\AppData\\Local\\Temp\\deep\\file.dat",
+        "C:\\Users\\carol\\AppData\\Local\\Temp\\x"
+      ],
+      "kept": ["C:\\Users\\bob\\AppData\\Local\\Packages\\a.dat"]
+    },
+    {
+      "why": "** crosses separators",
+      "patterns": ["**\\node_modules\\**"],
+      "excluded": ["C:\\src\\app\\node_modules\\pkg\\index.js"],
+      "kept": ["C:\\src\\app\\src\\index.js"]
+    },
+    {
+      "why": "* does not cross separators",
+      "patterns": ["C:\\a\\*\\c"],
+      "excluded": ["C:\\a\\b\\c"],
+      "kept": ["C:\\a\\b\\x\\c"]
+    },
+    {
+      "why": "matching is case-insensitive, like the filesystem",
+      "patterns": ["C:\\Users\\BOB\\Desktop\\secret.txt"],
+      "excluded": ["c:\\users\\bob\\desktop\\SECRET.TXT"],
+      "kept": ["C:\\Users\\carol\\Desktop\\secret.txt"]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 using Serilog;
 using TempMonitorAgent;
+using TempMonitorAgent.Backup;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
@@ -55,6 +56,11 @@ try
     builder.Services.AddSingleton<ICommandExecutor, InstallAppExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, DeployPackageExecutor>();
+    // Per-PC file backups (roadmap #1b). Takes FleetClient directly rather than through an
+    // interface: unlike the package downloader there is nothing to fake usefully — the
+    // testable parts (path expansion, the envelope) are separate classes with their own
+    // tests, and what remains here is I/O against a real filesystem.
+    builder.Services.AddSingleton<ICommandExecutor, BackupFilesExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellInputExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellSignalExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();

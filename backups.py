@@ -73,6 +73,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import requests
 
+import backup_paths
 import fleet
 
 # AES-GCM comes from `cryptography`, which Authlib already pulls in -- so this is not a
@@ -233,6 +234,19 @@ def init_backups_db(db_path):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_backup_runs_machine ON backup_runs(machine)"
         )
+        # Columns added after backup_runs first shipped (hub 1.28.0). CREATE TABLE IF NOT
+        # EXISTS does nothing to a table that already exists, so a hub upgrading from
+        # 1.28.0 needs these added explicitly -- the same pattern app.init_db() uses for
+        # machine_info. Every one is nullable, so old rows simply read NULL.
+        run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(backup_runs)")}
+        for column, ddl in (
+            ("file_count", "INTEGER"),        # files in this run's archive (#1b)
+            ("chain_id", "TEXT"),             # which chain a machine run belongs to
+            ("sequence", "INTEGER"),          # 0 = the full that starts the chain
+            ("command_id", "TEXT"),           # the fleet command carrying it to the agent
+        ):
+            if column not in run_columns:
+                conn.execute(f"ALTER TABLE backup_runs ADD COLUMN {column} {ddl}")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS backup_state (
@@ -241,6 +255,69 @@ def init_backups_db(db_path):
                 updated_at INTEGER NOT NULL
             )
             """
+        )
+        # Per-machine file-backup overrides. Every column but `machine` is nullable
+        # because a row's ABSENCE is the common case and means "follow fleet defaults" --
+        # see the PER-MACHINE FILE BACKUP CONFIG section.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backup_machine_config (
+                machine        TEXT PRIMARY KEY,
+                enabled        INTEGER,   -- NULL = follow the fleet setting
+                destination_id TEXT,      -- NULL = follow the fleet setting
+                include_json   TEXT,      -- EXTRA includes, added to the fleet list
+                exclude_json   TEXT,      -- EXTRA excludes
+                profiles_json  TEXT,      -- what the agent last reported (for preview)
+                reported_at    INTEGER,
+                updated_at     INTEGER,
+                updated_by     TEXT
+            )
+            """
+        )
+        # One row per uploaded machine archive. `chain_id` groups a full with the
+        # incrementals that depend on it, and `sequence` is 0 for that full -- the two
+        # together are what makes rotation able to delete a whole chain and never strand
+        # an incremental whose base is gone.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backup_file_sets (
+                id           TEXT PRIMARY KEY,
+                machine      TEXT NOT NULL,
+                run_id       TEXT NOT NULL,
+                chain_id     TEXT NOT NULL,
+                sequence     INTEGER NOT NULL,   -- 0 = the full this chain starts with
+                object_key   TEXT NOT NULL,
+                stored_bytes INTEGER,
+                file_count   INTEGER,
+                created_at   INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_backup_file_sets_machine "
+            "ON backup_file_sets(machine, chain_id, sequence)"
+        )
+        # The manifest: one row per file VERSION, not per file. The current state of a
+        # machine is the newest row per path across its live chain, minus deletions --
+        # which is what lets a restore fetch only the archives it actually needs instead
+        # of unpacking the whole chain.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backup_files (
+                set_id  TEXT NOT NULL,
+                machine TEXT NOT NULL,
+                path    TEXT NOT NULL,      -- the original absolute path on the PC
+                size    INTEGER,
+                mtime   INTEGER,
+                sha256  TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (set_id, path)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_backup_files_machine "
+            "ON backup_files(machine, path)"
         )
 
 
@@ -315,6 +392,39 @@ def key_id(key):
     label leaks nothing usable about the key itself.
     """
     return hmac.new(key, b"fleethub-backup-key-id", hashlib.sha256).hexdigest()[:16]
+
+
+def derive_machine_key(master_key, machine):
+    """The key ONE machine's file backups are encrypted with. HKDF-SHA256, 32 bytes.
+
+    An agent is given this and never the master key. That distinction is the whole
+    blast-radius story for roadmap #1b: a machine has to hold the key it encrypts with,
+    so a stolen laptop's key is readable by whoever stole it -- and if that key were the
+    master, they would then be able to decrypt the HUB DATABASE backup and every other
+    machine's files. Derived, they get exactly what they already had access to.
+
+    Keyed on the lowercased machine name because that is what the rest of the hub treats
+    as the machine's identity (see fleet.py's hostname-primary-key model). A machine
+    renamed after a backup therefore needs the OLD name to decrypt the old archives,
+    which is why the envelope header records the name it derived from rather than
+    expecting the reader to know it.
+
+    Written out rather than taking hkdf from `cryptography`: it is nine lines, it is
+    exercised by the test suite against a fixed vector, and the C# side has to reimplement
+    it anyway (see the agent's BackupEnvelope).
+    """
+    info = b"fleethub-backup-machine:" + str(machine or "").strip().lower().encode("utf-8")
+    # HKDF-Extract with a fixed salt, then one Expand block -- 32 bytes needs exactly one.
+    prk = hmac.new(b"fleethub-backup-hkdf-salt", master_key, hashlib.sha256).digest()
+    return hmac.new(prk, info + b"\x01", hashlib.sha256).digest()
+
+
+def machine_key_for(machine, master_key=None):
+    """derive_machine_key against the configured master key, or None if there isn't one."""
+    master_key = master_key if master_key is not None else load_master_key()
+    if master_key is None:
+        return None
+    return derive_machine_key(master_key, machine)
 
 
 def ensure_master_key(env_path):
@@ -605,6 +715,12 @@ def read_envelope(src, master_key):
     """Return (header, chunk generator) for an artifact. Raises ValueError on anything
     that isn't a decryptable FHBK1 file.
 
+    `master_key` is always the MASTER key, even for a machine-file archive: if the header
+    names a machine, the per-machine key is re-derived here. That is what keeps restore a
+    one-argument operation -- `restore_backup.py` never has to be told which machine a
+    file came from, because the file says so, and the master key can produce every
+    derived key.
+
     The generator is lazy, so nothing large is held in memory -- but it also means a
     corrupt tail raises while the caller is writing output, which is why restore_backup.py
     writes to a temp file and renames only on success.
@@ -622,8 +738,16 @@ def read_envelope(src, master_key):
         raise ValueError("Corrupt backup header.")
     if header.get("v") != ENVELOPE_VERSION:
         raise ValueError(f"Unsupported backup format version {header.get('v')!r}.")
-    if header.get("key_id") and header["key_id"] != key_id(master_key):
+
+    # A machine archive is sealed with a derived key. Deriving from the master here means
+    # the caller passes one key for every artifact type; passing an already-derived key
+    # also works, since key_id then already matches.
+    unwrap_key = master_key
+    if header.get("machine") and header.get("key_id") != key_id(master_key):
+        unwrap_key = derive_machine_key(master_key, header["machine"])
+    if header.get("key_id") and header["key_id"] != key_id(unwrap_key):
         raise ValueError("This backup was encrypted with a different master key.")
+    master_key = unwrap_key
 
     try:
         data_key = AESGCM(master_key).decrypt(
@@ -1319,6 +1443,225 @@ def probe_destination(db_path, log_dir, destination_id, actor="system"):
 
 
 # ================================
+# PER-MACHINE FILE BACKUP CONFIG
+# ================================
+# A machine's row is entirely OPTIONAL -- absent means "follow the fleet defaults", which
+# is why every override column is nullable and why nothing here creates rows eagerly. A
+# fleet of 400 machines with no per-machine tweaks has an empty table, and the effective
+# config is computed rather than materialised.
+#
+# The two list columns are ADDITIVE, not overriding: `include_json` is EXTRA paths on top
+# of the fleet list. Making them replace would mean an operator adding one folder for one
+# PC silently drops that PC out of the fleet-wide policy -- the roadmap asks for "per-PC
+# extra paths", and additive is what makes that phrase true.
+def _machine_config_row(row, machine):
+    if row is None:
+        return {
+            "machine": machine,
+            "enabled": None,
+            "destination_id": None,
+            "include": [],
+            "exclude": [],
+            "profiles": None,
+            "reported_at": None,
+            "updated_at": None,
+            "updated_by": None,
+        }
+    return {
+        "machine": row["machine"],
+        "enabled": None if row["enabled"] is None else bool(row["enabled"]),
+        "destination_id": row["destination_id"] or None,
+        "include": json.loads(row["include_json"] or "[]"),
+        "exclude": json.loads(row["exclude_json"] or "[]"),
+        "profiles": json.loads(row["profiles_json"]) if row["profiles_json"] else None,
+        "reported_at": row["reported_at"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def get_machine_config(db_path, machine):
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT * FROM backup_machine_config WHERE machine = ?",
+                           (machine,)).fetchone()
+    return _machine_config_row(row, machine)
+
+
+def has_overrides(config):
+    """Has an operator actually configured this machine, or is the row incidental?
+
+    A row exists for any machine that has merely REPORTED its profiles (see
+    record_profiles), which is most of the fleet. Those are not exceptions to the fleet
+    policy and listing them as such would bury the handful of machines someone really did
+    opt out among hundreds that simply checked in.
+    """
+    return bool(config["enabled"] is not None or config["destination_id"]
+                or config["include"] or config["exclude"])
+
+
+def list_machine_configs(db_path, overrides_only=True):
+    """Machines with a config row. `overrides_only` drops the profile-only rows -- see
+    has_overrides for why that is the useful default."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM backup_machine_config ORDER BY machine COLLATE NOCASE"
+        ).fetchall()
+    configs = [_machine_config_row(row, row["machine"]) for row in rows]
+    return [c for c in configs if has_overrides(c)] if overrides_only else configs
+
+
+def set_machine_config(db_path, machine, *, enabled=None, destination_id=None,
+                       include=None, exclude=None, actor="system"):
+    """Upsert one machine's overrides. Returns the stored row.
+
+    `None` means "leave alone" for every field, so a caller can toggle `enabled` without
+    resending the path lists. Clearing an override back to "follow the fleet" is done by
+    passing the sentinel `""` for destination_id or an empty list for the path lists --
+    both distinguishable from None.
+    """
+    machine = str(machine or "").strip()
+    if not machine:
+        raise ValueError("A machine name is required.")
+
+    current = get_machine_config(db_path, machine)
+    if include is not None:
+        include = backup_paths.validate_patterns(include, kind="include")
+    else:
+        include = current["include"]
+    if exclude is not None:
+        exclude = backup_paths.validate_patterns(exclude, kind="exclude")
+    else:
+        exclude = current["exclude"]
+    if enabled is None:
+        enabled = current["enabled"]
+    if destination_id is None:
+        destination_id = current["destination_id"]
+    destination_id = (destination_id or "").strip() or None
+    if destination_id and get_destination(db_path, destination_id) is None:
+        raise ValueError("That backup destination no longer exists.")
+
+    now = int(time.time())
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO backup_machine_config(machine, enabled, destination_id, "
+            "include_json, exclude_json, updated_at, updated_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(machine) DO UPDATE SET enabled = excluded.enabled, "
+            "destination_id = excluded.destination_id, "
+            "include_json = excluded.include_json, exclude_json = excluded.exclude_json, "
+            "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (machine, None if enabled is None else int(enabled), destination_id,
+             json.dumps(include), json.dumps(exclude), now, actor),
+        )
+    fleet.audit(db_path, actor=actor, action="backup_machine_config", target=machine,
+                detail={"enabled": enabled, "destination_id": destination_id,
+                        "include": include, "exclude": exclude})
+    return get_machine_config(db_path, machine)
+
+
+def record_profiles(db_path, machine, profiles):
+    """Store what the agent says its user profiles and known folders are.
+
+    Written from the heartbeat, so it is the one thing in this table that is not operator
+    input. Its only job is to make the console's path preview honest -- without it the UI
+    can only show the pattern back, never what it resolves to on that box.
+
+    Deliberately does NOT create the row's override columns: a machine that has merely
+    reported its profiles has not been configured, and must keep following fleet defaults.
+    """
+    if not isinstance(profiles, dict) or not profiles.get("users"):
+        return False
+    # Cap what we keep: this is agent-supplied and lands in the database. A machine with
+    # a genuinely huge profile list is a machine with a problem, not a machine that needs
+    # all of it recorded.
+    users = list(profiles.get("users") or [])[:64]
+    trimmed = {
+        "profile_root": str(profiles.get("profile_root") or "")[:260],
+        "env": {str(k)[:64]: str(v)[:260]
+                for k, v in list((profiles.get("env") or {}).items())[:32]},
+        "users": [{
+            "name": str(u.get("name") or "")[:128],
+            "sid": str(u.get("sid") or "")[:128],
+            "path": str(u.get("path") or "")[:260],
+            "folders": {str(k)[:32].lower(): str(v)[:260]
+                        for k, v in list((u.get("folders") or {}).items())[:16]},
+        } for u in users],
+    }
+    now = int(time.time())
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO backup_machine_config(machine, profiles_json, reported_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(machine) DO UPDATE SET profiles_json = excluded.profiles_json, "
+            "reported_at = excluded.reported_at",
+            (machine, json.dumps(trimmed), now),
+        )
+    return True
+
+
+def effective_file_config(db_path, machine, *, fleet_enabled, fleet_destination,
+                          fleet_include, fleet_exclude):
+    """What this machine will actually back up, fleet defaults merged with its overrides.
+
+    The fleet-level values are passed in rather than read from settings.py, keeping this
+    module settings-free like the rest of it (and testable by handing it four values).
+    """
+    config = get_machine_config(db_path, machine)
+    return {
+        "machine": machine,
+        "enabled": fleet_enabled if config["enabled"] is None else config["enabled"],
+        "destination_id": config["destination_id"] or fleet_destination,
+        # Additive, and de-duplicated: a per-machine entry that repeats a fleet one is a
+        # no-op rather than a doubled walk of the same tree.
+        "include": backup_paths.validate_patterns(
+            list(fleet_include or []) + config["include"], kind="include"),
+        "exclude": backup_paths.validate_patterns(
+            list(fleet_exclude or []) + config["exclude"], kind="exclude"),
+        "profiles": config["profiles"],
+        "overridden": {
+            "enabled": config["enabled"] is not None,
+            "destination_id": bool(config["destination_id"]),
+        },
+    }
+
+
+def forget_machine(db_path, machine):
+    """Drop a deleted machine's backup configuration.
+
+    Its RUN HISTORY and manifest are deliberately left alone -- see delete_destination for
+    the same reasoning. A machine record being removed from the console does not mean the
+    archives it produced stopped existing, and those are exactly what someone will want
+    when they discover the deletion was a mistake.
+    """
+    with get_conn(db_path) as conn:
+        conn.execute("DELETE FROM backup_machine_config WHERE machine = ?", (machine,))
+
+
+def rename_machine(db_path, old_name, new_name):
+    """Carry configuration across a duplicate-serial merge.
+
+    Mirrors packages.rename_machine and permissions.rename_machine. Note the archives
+    themselves stay under the OLD name's folder and derived key -- the envelope header
+    records which machine it was sealed for, so they remain restorable; only future runs
+    land under the new name.
+    """
+    with get_conn(db_path) as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM backup_machine_config WHERE machine = ?", (new_name,)
+        ).fetchone()
+        if existing:
+            # The survivor already has its own configuration; the merged-away machine's
+            # is dropped rather than silently overwriting a row an operator chose.
+            conn.execute("DELETE FROM backup_machine_config WHERE machine = ?",
+                         (old_name,))
+        else:
+            conn.execute("UPDATE backup_machine_config SET machine = ? WHERE machine = ?",
+                         (new_name, old_name))
+        conn.execute("UPDATE backup_runs SET machine = ? WHERE machine = ?",
+                     (new_name, old_name))
+
+
+# ================================
 # RUNS
 # ================================
 def _run_row(row, names=None):
@@ -1553,6 +1896,334 @@ def _backup_hub_database(db_path, log_dir, destination_id, *, keep, trigger, act
 
 
 # ================================
+# PER-PC FILE BACKUPS: CHAINS, MANIFEST, SCHEDULER
+# ================================
+# A CHAIN is one full backup plus the incrementals that follow it. Every archive is a set
+# row; `sequence` 0 is the full. This shape exists because user folders are large and
+# re-uploading Documents every night is not viable, but it buys that with the one genuinely
+# dangerous property in this feature: an incremental is USELESS without its full.
+#
+# So two rules are enforced here rather than left to the caller:
+#
+#   * rotation deletes WHOLE CHAINS, never an archive within one (rotate_chains), and
+#   * the agent decides full-vs-incremental, but the hub refuses to record an incremental
+#     whose chain has no full (record_file_set), because a manifest that references a set
+#     that was never uploaded restores to a hole.
+#
+# The manifest is one row per file VERSION. A machine's current state is the newest row
+# per path across its live chains, minus deletions -- which is what lets a restore fetch
+# only the archives it actually needs instead of unpacking every generation.
+COMMAND_BACKUP_FILES = "backup_files"
+COMMAND_RESTORE_FILES = "restore_files"
+
+# How long a minted upload URL is good for. Long enough for a slow link to finish a
+# multi-gigabyte archive, short enough that a URL scraped from a log is not a standing
+# grant. The agent requests it at dispatch and uploads immediately.
+UPLOAD_URL_TTL_SECONDS = 6 * 60 * 60
+
+MAX_MANIFEST_ROWS = 200_000
+
+
+def new_chain_id():
+    return uuid.uuid4().hex
+
+
+def machine_chains(db_path, machine):
+    """This machine's chains, newest first: [{chain_id, sets, started_at, complete}].
+
+    Ordering is (newest archive time, then insertion order). The rowid tiebreak is
+    load-bearing rather than tidiness: `created_at` has one-second granularity, and
+    rotation deletes whichever chains sort last. Two chains written in the same second --
+    a manual backup right after a scheduled one, or any test -- would otherwise order
+    arbitrarily, and rotation would be free to delete the NEWER of the two. rowid is
+    monotonic per insert, so it breaks the tie the way wall-clock time meant to.
+    """
+    with get_conn(db_path) as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT *, rowid AS _rowid FROM backup_file_sets WHERE machine = ? "
+            "ORDER BY created_at DESC, rowid DESC", (machine,))]
+    chains = {}
+    for row in rows:
+        chain = chains.setdefault(row["chain_id"], {
+            "chain_id": row["chain_id"], "sets": [], "started_at": row["created_at"],
+        })
+        chain["sets"].append(row)
+        chain["started_at"] = min(chain["started_at"], row["created_at"])
+    out = []
+    for chain in chains.values():
+        chain["sets"].sort(key=lambda s: s["sequence"])
+        # A chain missing its sequence-0 full cannot be restored from. record_file_set
+        # refuses to create that state, so this is a consistency check rather than an
+        # expected case -- but rotation must know about it either way, since deleting the
+        # "newest N" chains while one of them is unusable would keep a chain that restores
+        # to nothing.
+        chain["complete"] = bool(chain["sets"]) and chain["sets"][0]["sequence"] == 0
+        chain["latest_at"] = max(s["created_at"] for s in chain["sets"])
+        chain["_order"] = max(s["_rowid"] for s in chain["sets"])
+        out.append(chain)
+    out.sort(key=lambda c: (c["latest_at"], c["_order"]), reverse=True)
+    return out
+
+
+def latest_chain(db_path, machine):
+    """The chain a new incremental would extend, or None if a full is needed."""
+    chains = machine_chains(db_path, machine)
+    return chains[0] if chains and chains[0]["complete"] else None
+
+
+def plan_next_run(db_path, machine, full_every):
+    """Decide whether the next run is a full or an incremental.
+
+    Returns {chain_id, sequence, full}. A full is forced when there is no usable chain,
+    or when the current one has reached `full_every` archives -- a long chain restores
+    slowly and is more exposed to a single damaged archive, so the cap is a reliability
+    knob rather than a bandwidth one.
+    """
+    full_every = max(1, int(full_every))
+    chain = latest_chain(db_path, machine)
+    if chain is None or len(chain["sets"]) >= full_every:
+        return {"chain_id": new_chain_id(), "sequence": 0, "full": True}
+    return {
+        "chain_id": chain["chain_id"],
+        "sequence": max(s["sequence"] for s in chain["sets"]) + 1,
+        "full": False,
+    }
+
+
+def record_file_set(db_path, *, run_id, machine, chain_id, sequence, object_key,
+                    stored_bytes, files):
+    """Record one uploaded archive and the file versions inside it.
+
+    `files` is the agent's manifest: [{path, size, mtime, sha256, deleted}]. Written in
+    one transaction with the set row, so there is never a set the manifest does not
+    describe or a manifest row pointing at a set that was not recorded.
+
+    Refuses an incremental whose chain has no full -- see the section comment. That is a
+    "the agent and the hub disagree about state" condition, and recording it would produce
+    a manifest that restores to a hole.
+    """
+    sequence = int(sequence)
+    if sequence > 0:
+        with get_conn(db_path) as conn:
+            base = conn.execute(
+                "SELECT 1 FROM backup_file_sets WHERE chain_id = ? AND sequence = 0",
+                (chain_id,)).fetchone()
+        if base is None:
+            raise ValueError(
+                f"Refusing to record incremental {sequence} for chain {chain_id}: its "
+                f"full backup was never recorded, so nothing in it could be restored.")
+
+    set_id = uuid.uuid4().hex
+    now = int(time.time())
+    rows = []
+    for entry in (files or [])[:MAX_MANIFEST_ROWS]:
+        path = backup_paths.normalize(entry.get("path"))
+        if not path:
+            continue
+        rows.append((set_id, machine, path,
+                     int(entry.get("size") or 0), int(entry.get("mtime") or 0),
+                     str(entry.get("sha256") or "")[:64],
+                     1 if entry.get("deleted") else 0))
+
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO backup_file_sets(id, machine, run_id, chain_id, sequence, "
+            "object_key, stored_bytes, file_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (set_id, machine, run_id, chain_id, sequence, object_key,
+             int(stored_bytes or 0), len(rows), now),
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO backup_files(set_id, machine, path, size, mtime, "
+            "sha256, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    return set_id
+
+
+def current_manifest(db_path, machine):
+    """The machine's current state: newest version of each path, deletions removed.
+
+    Ordered by (created_at, sequence) rather than by set id: a chain's archives are
+    written in sequence order, and a later chain always supersedes an earlier one.
+    """
+    with get_conn(db_path) as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT f.path, f.size, f.mtime, f.sha256, f.deleted, f.set_id, "
+            "       s.chain_id, s.sequence, s.created_at, s.object_key "
+            "FROM backup_files f JOIN backup_file_sets s ON s.id = f.set_id "
+            "WHERE f.machine = ? "
+            "ORDER BY s.created_at ASC, s.sequence ASC", (machine,))]
+    latest = {}
+    for row in rows:
+        latest[row["path"].lower()] = row
+    return [row for row in latest.values() if not row["deleted"]]
+
+
+def rotate_chains(client, prefix, machine, keep_chains, db_path):
+    """Delete the oldest chains beyond `keep_chains`. Returns the object keys removed.
+
+    THE sharp edge of the whole feature. The hub-database rotation counts objects, which
+    would here happily delete a chain's full backup and leave four incrementals that can
+    never be restored -- worse than deleting all five, because the console would still
+    list them. So this works in units of chains: whole chains go, or nothing does.
+
+    Reads the DATABASE rather than the remote listing (unlike the hub-DB rotate) because
+    chain membership is hub-side knowledge -- an object key alone does not say which full
+    an incremental belongs to. The remote is still the source of truth for what EXISTS; a
+    key already gone deletes as a no-op.
+    """
+    keep_chains = int(keep_chains)
+    if keep_chains < 1:
+        raise ValueError("Keep at least one backup chain.")
+    chains = machine_chains(db_path, machine)
+    doomed = chains[keep_chains:]
+    if not doomed:
+        return []
+
+    # KNOWN BUG -- partial delete failure leaves the manifest lying.
+    #
+    # If client.delete() raises partway through a chain (a network blip, a permissions
+    # change on the bucket), this propagates out and the DELETE of the DB rows below
+    # never runs. Two of the chain's three archives are then gone from storage while the
+    # manifest still lists the whole chain as intact and restorable -- an operator is
+    # offered a restore that 404s halfway through.
+    #
+    # The fix is to delete per chain in its own try, and drop that chain's rows to match
+    # whatever actually survived (or mark the chain unusable) rather than treating the
+    # whole pass as atomic. Not done here yet; ingest_file_result already swallows a
+    # BackupError from this call so a rotation failure does not turn a successful backup
+    # red, which is what keeps this from being urgent -- but the manifest is wrong until
+    # the next successful pass.
+    removed = []
+    for chain in doomed:
+        for file_set in chain["sets"]:
+            client.delete(file_set["object_key"])
+            removed.append(file_set["object_key"])
+        # The manifest rows go with the archives: a path whose only surviving version
+        # lived in a deleted chain is genuinely no longer restorable, and leaving it
+        # listed would offer the operator a restore that 404s.
+        with get_conn(db_path) as conn:
+            ids = [s["id"] for s in chain["sets"]]
+            marks = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM backup_files WHERE set_id IN ({marks})", ids)
+            conn.execute(f"DELETE FROM backup_file_sets WHERE id IN ({marks})", ids)
+    return removed
+
+
+def build_file_command_params(*, machine, run_id, plan, config, destination, machine_key,
+                              object_key, upload, limits):
+    """The `backup_files` command params: everything the agent needs, and nothing else.
+
+    A SNAPSHOT of the policy at dispatch, not a pointer to it -- the same reasoning as
+    packages.build_command_params. An operator editing the include list mid-run must not
+    give one machine a half-old, half-new definition of what was backed up, because the
+    manifest recorded afterwards would then describe neither.
+
+    `run_id` is what the agent POSTs its manifest back against. It is carried explicitly
+    rather than left to be parsed out of the upload URL: that only works for the WebDAV
+    (hub-proxied) shape, and an S3 pre-signed URL contains no run id at all.
+
+    `machine_key` is this machine's DERIVED key, never the master. See derive_machine_key.
+    """
+    return {
+        "machine": machine,
+        "run_id": run_id,
+        "chain_id": plan["chain_id"],
+        "sequence": plan["sequence"],
+        "full": plan["full"],
+        "include": list(config["include"]),
+        "exclude": list(config["exclude"]),
+        "object_key": object_key,
+        "upload": upload,           # {"kind": "s3"|"hub", "url": ...}
+        "encryption": {
+            "algorithm": "AES-256-GCM",
+            "key": base64.b64encode(machine_key).decode("ascii"),
+            "key_id": key_id(machine_key),
+        },
+        "destination_kind": destination["kind"],
+        "limits": limits,
+    }
+
+
+def files_due_at(db_path, machine, interval_hours):
+    """When this machine's next file backup is due, as an epoch.
+
+    Anchored on the last ATTEMPT for the same reason the hub-DB schedule is: a machine
+    that has been failing for a week should not be retried every tick. A machine that has
+    never run is due immediately.
+    """
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT MAX(started_at) AS last FROM backup_runs "
+            "WHERE kind = ? AND machine = ?",
+            (BACKUP_MACHINE_FILES, machine)).fetchone()
+    last = row["last"] if row else None
+    return 0 if not last else int(last) + int(interval_hours) * 3600
+
+
+def start_file_run(db_path, machine, destination_id, plan, trigger, actor, now,
+                   object_key=None, command_id=None):
+    """Open a `running` row for a machine backup, before the command is queued.
+
+    Written BEFORE dispatch, like packages' claim-then-queue: a crash between the two
+    then costs one visible failed run rather than a second backup nobody expected.
+
+    The `object_key` is stored HERE, at dispatch, because it is the key the hub minted an
+    upload URL for. ingest_file_result reads it back from this row rather than believing
+    the agent's report -- otherwise a compromised agent could have its archive recorded
+    under another machine's key and quietly poison that machine's manifest.
+    """
+    run_id = uuid.uuid4().hex
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO backup_runs(id, kind, machine, destination_id, status, trigger, "
+            "actor, started_at, chain_id, sequence, object_key, command_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, BACKUP_MACHINE_FILES, machine, destination_id, RUN_RUNNING, trigger,
+             actor, now, plan["chain_id"], plan["sequence"], object_key, command_id),
+        )
+    return run_id
+
+
+def attach_command(db_path, run_id, command_id):
+    with get_conn(db_path) as conn:
+        conn.execute("UPDATE backup_runs SET command_id = ? WHERE id = ?",
+                     (command_id, run_id))
+
+
+def complete_file_run(db_path, run_id, *, object_key=None, stored_bytes=None,
+                      file_count=None, error=None):
+    """Close a machine run. `error` set means failed, absent means succeeded."""
+    status = RUN_FAILED if error else RUN_SUCCEEDED
+    _finish_run(db_path, run_id, status, object_key=object_key,
+                stored_bytes=stored_bytes, error=error)
+    if file_count is not None:
+        with get_conn(db_path) as conn:
+            conn.execute("UPDATE backup_runs SET file_count = ? WHERE id = ?",
+                         (int(file_count), run_id))
+    return get_run(db_path, run_id)
+
+
+def expire_stale_file_runs(db_path, now=None, max_seconds=24 * 60 * 60):
+    """Fail runs whose agent never reported back.
+
+    Without this a machine that goes offline mid-backup stays `running` forever, and
+    because files_due_at anchors on the last ATTEMPT it would also never be retried --
+    the machine would silently stop being backed up, which is precisely the failure this
+    feature must not have. Returns how many were retired.
+    """
+    now = int(time.time() if now is None else now)
+    cutoff = now - int(max_seconds)
+    with get_conn(db_path) as conn:
+        stale = [r["id"] for r in conn.execute(
+            "SELECT id FROM backup_runs WHERE kind = ? AND status = ? AND started_at < ?",
+            (BACKUP_MACHINE_FILES, RUN_RUNNING, cutoff))]
+    for run_id in stale:
+        _finish_run(db_path, run_id, RUN_FAILED,
+                    error="The machine never reported a result for this backup.")
+    return len(stale)
+
+
+# ================================
 # SCHEDULER
 # ================================
 def next_due_at(db_path, interval_hours):
@@ -1567,6 +2238,177 @@ def next_due_at(db_path, interval_hours):
     if last is None:
         return 0        # never run: due immediately
     return int(last) + int(interval_hours) * 3600
+
+
+def mint_upload(db_path, log_dir, destination_id, object_key, hub_url="", run_id=""):
+    """Where the agent should PUT its archive, without ever holding the shared credential.
+
+    Two shapes, because the two destination kinds genuinely differ:
+
+      * **S3** -- a pre-signed PUT URL scoped to this exact object key. The agent can
+        upload and do nothing else: it cannot list the bucket, cannot read another
+        machine's archive, and cannot write outside its own folder. This is the whole
+        reason the SigV4 signer was written out by hand in #1a.
+
+      * **WebDAV** -- there is no pre-signed-URL concept, and minting a scoped credential
+        needs provider-specific admin APIs (Nextcloud app passwords and friends) that do
+        not generalise. So the agent PUTs to the HUB, authenticated with the bearer token
+        it already has, and the hub streams it onward. Slower and it costs hub bandwidth,
+        but the alternative -- handing every agent the share's real password -- is exactly
+        the thing this design exists to avoid.
+    """
+    record = get_destination(db_path, destination_id)
+    if record is None:
+        raise ValueError("That backup destination no longer exists.")
+    if record["kind"] == KIND_S3:
+        master_key = load_master_key()
+        if master_key is None:
+            raise ValueError("No backup master key is configured on this hub.")
+        client = build_client(record, load_secret(log_dir, master_key, destination_id))
+        return {"kind": "s3",
+                "url": client.presigned_url(object_key, method="PUT",
+                                            expires_seconds=UPLOAD_URL_TTL_SECONDS),
+                "expires_in": UPLOAD_URL_TTL_SECONDS}
+    return {"kind": "hub",
+            "url": f"{hub_url.rstrip('/')}/api/agent/backups/upload/{run_id}",
+            "expires_in": UPLOAD_URL_TTL_SECONDS}
+
+
+def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
+                        fleet_include, fleet_exclude, interval_hours, full_every,
+                        limits, machines, now=None, hub_url="",
+                        ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
+    """Queue a `backup_files` command for every machine that is due. Returns the count.
+
+    `machines` is the roster, passed in -- this module does not know how to enumerate the
+    fleet (that is machine_info, which app.py owns) and should not learn.
+
+    Per machine, in order: resolve the effective policy, skip if disabled or not due,
+    open the run row, mint an upload, then queue the command. Run-row-before-command is
+    the same claim-then-queue discipline packages.dispatch_once uses -- a crash between
+    the two leaves one visible failed run rather than a backup that ran with nothing
+    recording it.
+
+    One machine's failure never stops the pass: a bad path pattern on PC-3 must not mean
+    PC-4 goes unbacked-up tonight.
+    """
+    now = int(time.time() if now is None else now)
+    dispatched = 0
+    for machine in machines or []:
+        try:
+            config = effective_file_config(
+                db_path, machine, fleet_enabled=fleet_enabled,
+                fleet_destination=fleet_destination, fleet_include=fleet_include,
+                fleet_exclude=fleet_exclude)
+            if not config["enabled"] or not config["destination_id"]:
+                continue
+            if not config["include"]:
+                continue        # nothing selected: not a failure, just nothing to do
+            if now < files_due_at(db_path, machine, interval_hours):
+                continue
+
+            destination = get_destination(db_path, config["destination_id"])
+            if destination is None:
+                continue
+            machine_key = machine_key_for(machine)
+            if machine_key is None:
+                continue        # no master key yet; the console already says so loudly
+
+            plan = plan_next_run(db_path, machine, full_every)
+            object_key = object_key_for_machine(destination, machine, plan, now)
+            run_id = start_file_run(db_path, machine, config["destination_id"], plan,
+                                    TRIGGER_SCHEDULE, "scheduler", now,
+                                    object_key=object_key)
+            upload = mint_upload(db_path, log_dir, config["destination_id"], object_key,
+                                 hub_url=hub_url, run_id=run_id)
+            params = build_file_command_params(
+                machine=machine, run_id=run_id, plan=plan, config=config,
+                destination=destination, machine_key=machine_key,
+                object_key=object_key, upload=upload, limits=limits)
+            command_id = fleet.create_command(
+                db_path, machine=machine, command_type=COMMAND_BACKUP_FILES,
+                params=params, issued_by="scheduler", ttl_seconds=ttl_seconds)
+            attach_command(db_path, run_id, command_id)
+            dispatched += 1
+        except Exception as e:
+            print(f"[backup] Could not schedule a file backup for {machine}: {e}")
+    return dispatched
+
+
+def object_key_for_machine(destination, machine, plan, now):
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+    kind = "full" if plan["full"] else "inc"
+    name = f"{stamp}-{plan['chain_id'][:12]}-{plan['sequence']:03d}-{kind}{FILE_EXTENSION}"
+    return object_key(destination["config"].get("prefix"), BACKUP_MACHINE_FILES, name,
+                      machine=machine)
+
+
+def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_include,
+               fleet_exclude, interval_hours, full_every, keep_chains, limits, machines,
+               now=None, hub_url="", ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
+    """One per-PC scheduler pass: retire abandoned runs, then dispatch due ones.
+
+    Retire FIRST, for the same reason packages.tick reconciles first: a machine whose
+    last run is stuck `running` is never due (due-ness anchors on the last attempt), so
+    it would never be retried until something expired it.
+    """
+    expired = expire_stale_file_runs(db_path, now=now)
+    dispatched = files_dispatch_once(
+        db_path, log_dir, fleet_enabled=fleet_enabled,
+        fleet_destination=fleet_destination, fleet_include=fleet_include,
+        fleet_exclude=fleet_exclude, interval_hours=interval_hours,
+        full_every=full_every, limits=limits, machines=machines, now=now,
+        hub_url=hub_url, ttl_seconds=ttl_seconds)
+    return expired, dispatched
+
+
+def ingest_file_result(db_path, log_dir, run_id, result, *, keep_chains=4):
+    """Record what an agent reported for one `backup_files` command.
+
+    Called from the agent-facing endpoint. Everything in `result` is agent-supplied, so
+    the manifest is size-capped and every path normalised; the object key is NOT taken
+    from the agent -- it is the one the hub minted the upload for, so a compromised agent
+    cannot make the hub record its archive under another machine's key.
+
+    Rotation runs here rather than on the scheduler tick: it needs the chain that was
+    just added, and doing it at dispatch would delete an old chain before the new one
+    landed -- briefly leaving fewer generations than the operator asked for.
+    """
+    run = get_run(db_path, run_id)
+    if run is None:
+        raise ValueError("unknown backup run")
+    if run["status"] != RUN_RUNNING:
+        return run          # already reported; a retry of a POST that landed
+
+    error = (result or {}).get("error")
+    if error:
+        return complete_file_run(db_path, run_id, error=str(error))
+
+    files = (result or {}).get("files") or []
+    stored_bytes = int((result or {}).get("stored_bytes") or 0)
+    try:
+        record_file_set(db_path, run_id=run_id, machine=run["machine"],
+                        chain_id=run["chain_id"], sequence=run["sequence"],
+                        object_key=run["object_key"],
+                        stored_bytes=stored_bytes, files=files)
+    except ValueError as e:
+        return complete_file_run(db_path, run_id, error=str(e))
+
+    finished = complete_file_run(db_path, run_id, stored_bytes=stored_bytes,
+                                 file_count=len(files))
+    try:
+        client, record = open_client(db_path, log_dir, run["destination_id"])
+        rotate_chains(client, record["config"].get("prefix"), run["machine"],
+                      keep_chains, db_path)
+    except (BackupError, ValueError) as e:
+        # A rotation failure must not turn a successful backup red -- the archive IS
+        # uploaded and IS restorable. Logged, and the next run tries again.
+        print(f"[backup] Rotation for {run['machine']} failed: {e}")
+    fleet.audit(db_path, actor="agent", action="backup_files", target=run["machine"],
+                detail={"run_id": run_id, "files": len(files),
+                        "stored_bytes": stored_bytes, "chain": run["chain_id"],
+                        "sequence": run["sequence"]})
+    return finished
 
 
 def tick(db_path, log_dir, *, enabled, destination_id, interval_hours, keep,

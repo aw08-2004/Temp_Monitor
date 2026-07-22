@@ -19,7 +19,9 @@ The end-to-end test runs a real backup against an in-memory destination and then
 restores it through read_envelope, because "the bytes we uploaded can be turned back
 into the database" is the only assertion that actually matters here.
 """
+import base64
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -64,6 +66,26 @@ def error_of(fn, *args, **kwargs):
     except Exception as e:
         return str(e)
     return ""
+
+
+def audit_actions(db_path):
+    with fleet.get_conn(db_path) as conn:
+        return [r["action"] for r in conn.execute("SELECT action FROM audit_log")]
+
+
+def uuid_hex():
+    import uuid
+    return uuid.uuid4().hex
+
+
+def command_params(db_path, machine, command_type):
+    """The params of the newest queued command of a type. fleet.list_commands
+    deliberately omits params_json (it feeds a list view), so read it directly."""
+    with fleet.get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT params_json FROM commands WHERE machine = ? AND type = ? "
+            "ORDER BY created_at DESC LIMIT 1", (machine, command_type)).fetchone()
+    return json.loads(row["params_json"]) if row else None
 
 
 class FakeDestination:
@@ -426,6 +448,494 @@ def main():
               {"backup_destination_create", "backup_destination_update"} <=
               set(r["action"] for r in
                   fleet.get_conn(db_path).execute("SELECT action FROM audit_log")))
+
+        # ============================================================
+        print("\n== Cross-implementation envelope fixture ==")
+        # ============================================================
+        # The FHBK1 format has two implementations: this one and the agent's
+        # BackupEnvelope.cs. Each suite decrypting only its own output would pass happily
+        # if both were wrong in the same way, so the fixture is exchanged BOTH ways --
+        # the C# tests read the artifacts generated here, and this reads the one they
+        # write. Neither can drift alone.
+        fixture_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+        fixture_meta = os.path.join(fixture_dir, "envelope.json")
+        if os.path.exists(fixture_meta):
+            with open(fixture_meta, "r", encoding="utf-8") as fh:
+                fx = json.load(fh)
+            fx_master = backups.decode_master_key(fx["master_key_b64"])
+            fx_plain = base64.b64decode(fx["plaintext_b64"])
+
+            for name in ("envelope-hub", "envelope-machine"):
+                path = os.path.join(fixture_dir, name + backups.FILE_EXTENSION)
+                with open(path, "rb") as fh:
+                    _, chunks = backups.read_envelope(fh, fx_master)
+                    check(f"{name} fixture still round-trips",
+                          b"".join(backups.iter_gunzip(chunks)) == fx_plain)
+
+            check("the fixture's machine key matches this module's derivation",
+                  base64.b64decode(fx["machine_key_b64"])
+                  == backups.derive_machine_key(fx_master, fx["machine"]))
+
+            # Written by the agent's BackupEnvelopeTests. Absent until `dotnet test` has
+            # run, which is normal on a Python-only check-out -- reported rather than
+            # failed, because a missing file here means "not run", not "broken".
+            from_agent = os.path.join(fixture_dir, "from-agent.fhb")
+            if os.path.exists(from_agent):
+                with open(from_agent, "rb") as fh:
+                    header, chunks = backups.read_envelope(fh, fx_master)
+                    body = b"".join(backups.iter_gunzip(chunks))
+                check("an artifact sealed BY THE AGENT decrypts here",
+                      body.startswith(b"sealed by the agent"))
+                check("...and names the machine it was sealed for",
+                      header["machine"] == fx["machine"])
+                check("...and was written by the agent's implementation",
+                      header.get("written_by") == "agent-tests")
+            else:
+                print("  [--] from-agent.fhb absent; run `dotnet test` in agent/ to "
+                      "verify the C# writer")
+
+            # THE restore contract: a machine archive is tar inside the envelope, so
+            # restore_backup.py can unpack it with stdlib tarfile and no hub, no agent.
+            # A C#-only assertion cannot catch a tar Python refuses to read.
+            agent_archive = os.path.join(fixture_dir, "from-agent-archive.fhb")
+            if os.path.exists(agent_archive):
+                import tarfile
+                with open(agent_archive, "rb") as fh:
+                    _, chunks = backups.read_envelope(fh, fx_master)
+                    tar_bytes = io.BytesIO(b"".join(backups.iter_gunzip(chunks)))
+                with tarfile.open(fileobj=tar_bytes, mode="r:") as tar:
+                    names = tar.getnames()
+                    manifest_member = tar.extractfile("manifest.json")
+                    manifest_json = json.loads(manifest_member.read().decode("utf-8"))
+                check("an agent-written ARCHIVE unpacks with stdlib tarfile",
+                      len(names) == 4)
+                check("...with manifest.json first, so it can be listed without unpacking",
+                      names[0] == "manifest.json")
+                check("...and the manifest describes the files inside",
+                      len(manifest_json["files"]) == 3)
+                check("...stored under portable names (no drive colon, no backslash)",
+                      all(":" not in n and "\\" not in n for n in names[1:]))
+        else:
+            print("  [--] tests/fixtures absent; run tests/make_envelope_fixture.py")
+
+        # ============================================================
+        print("\n== Per-machine key derivation ==")
+        # ============================================================
+        # The blast-radius rule for roadmap #1b: an agent holds the key it encrypts with,
+        # so that key must NOT be the one that also opens the hub database backup.
+        pc1 = backups.derive_machine_key(master_key, "PC-1")
+        pc2 = backups.derive_machine_key(master_key, "PC-2")
+        check("a derived key is 32 bytes", len(pc1) == 32)
+        check("a derived key is NOT the master key", pc1 != master_key)
+        check("different machines get different keys", pc1 != pc2)
+        check("derivation is deterministic",
+              pc1 == backups.derive_machine_key(master_key, "PC-1"))
+        check("machine names are matched case-insensitively",
+              pc1 == backups.derive_machine_key(master_key, "pc-1"))
+        check("a different master key derives differently",
+              pc1 != backups.derive_machine_key(other_key, "PC-1"))
+        check("machine_key_for uses the configured master key",
+              backups.machine_key_for("PC-1") == pc1)
+
+        # A machine archive must open with the MASTER key alone -- restore_backup.py is
+        # never told which machine a file came from, it reads that from the header.
+        machine_artifact = io.BytesIO()
+        backups.write_envelope(
+            backups.iter_gzip(backups.iter_file(io.BytesIO(b"bob's documents"))),
+            machine_artifact, pc1,
+            header_extra={"kind": backups.BACKUP_MACHINE_FILES, "machine": "PC-1"})
+        header, chunks = backups.read_envelope(io.BytesIO(machine_artifact.getvalue()),
+                                               master_key)
+        check("the master key opens a machine archive by re-deriving",
+              b"".join(backups.iter_gunzip(chunks)) == b"bob's documents")
+        check("the header names the machine it was sealed for",
+              header["machine"] == "PC-1")
+        header2, chunks2 = backups.read_envelope(
+            io.BytesIO(machine_artifact.getvalue()), pc1)
+        check("...and the derived key still opens it directly",
+              b"".join(backups.iter_gunzip(chunks2)) == b"bob's documents")
+        check("PC-2's key does NOT open PC-1's archive",
+              raises(ValueError, backups.read_envelope,
+                     io.BytesIO(machine_artifact.getvalue()), pc2))
+
+        # ============================================================
+        print("\n== Per-machine file backup config ==")
+        # ============================================================
+        absent = backups.get_machine_config(db_path, "PC-1")
+        check("a machine with no row follows the fleet", absent["enabled"] is None)
+        check("...and has no extra paths", absent["include"] == [])
+        check("...and is not listed as an exception",
+              backups.list_machine_configs(db_path) == [])
+
+        fleet_defaults = dict(fleet_enabled=True, fleet_destination=dest_id,
+                              fleet_include=["%Desktop%"], fleet_exclude=["*.tmp"])
+        eff = backups.effective_file_config(db_path, "PC-1", **fleet_defaults)
+        check("an unconfigured machine inherits the fleet policy",
+              eff["enabled"] is True and eff["include"] == ["%Desktop%"])
+        check("...and the fleet destination", eff["destination_id"] == dest_id)
+        check("nothing is marked overridden", eff["overridden"] == {
+            "enabled": False, "destination_id": False})
+
+        backups.set_machine_config(db_path, "PC-1", include=["%Users%\\Projects"],
+                                   exclude=["*.iso"], actor="root@x.com")
+        eff = backups.effective_file_config(db_path, "PC-1", **fleet_defaults)
+        check("per-machine paths are ADDED to the fleet list, not replacing it",
+              eff["include"] == ["%Desktop%", "%Users%\\Projects"])
+        check("...and the same for excludes",
+              eff["exclude"] == ["*.tmp", "*.iso"])
+        check("a machine with overrides IS listed as an exception",
+              [c["machine"] for c in backups.list_machine_configs(db_path)] == ["PC-1"])
+
+        # A per-machine entry duplicating a fleet one must not double the walk.
+        backups.set_machine_config(db_path, "PC-1", include=["%Desktop%"],
+                                   actor="root@x.com")
+        check("a duplicate of a fleet path collapses to one",
+              backups.effective_file_config(
+                  db_path, "PC-1", **fleet_defaults)["include"] == ["%Desktop%"])
+
+        backups.set_machine_config(db_path, "PC-1", enabled=False, actor="root@x.com")
+        eff = backups.effective_file_config(db_path, "PC-1", **fleet_defaults)
+        check("a machine can opt out of a fleet-enabled policy", eff["enabled"] is False)
+        check("...and that reads as an override", eff["overridden"]["enabled"] is True)
+        check("toggling enabled leaves the path lists alone",
+              backups.get_machine_config(db_path, "PC-1")["include"] == ["%Desktop%"])
+
+        check("a bad path pattern is refused at the machine level",
+              raises(ValueError, backups.set_machine_config, db_path, "PC-1",
+                     include=["%Nonsense%"], actor="root@x.com"))
+        check("a destination that does not exist is refused",
+              raises(ValueError, backups.set_machine_config, db_path, "PC-1",
+                     destination_id="no-such", actor="root@x.com"))
+        check("machine config changes are audited",
+              "backup_machine_config" in audit_actions(db_path))
+
+        print("\n-- reported profiles --")
+        vectors_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "backup_path_vectors.json")
+        with open(vectors_path, "r", encoding="utf-8") as fh:
+            sample_profiles = json.load(fh)["profiles"]
+        check("profiles are recorded",
+              backups.record_profiles(db_path, "PC-1", sample_profiles) is True)
+        stored = backups.get_machine_config(db_path, "PC-1")["profiles"]
+        check("...and read back", [u["name"] for u in stored["users"]][:2]
+              == ["bob", "carol"])
+        check("recording profiles does NOT disturb the operator's overrides",
+              backups.get_machine_config(db_path, "PC-1")["include"] == ["%Desktop%"])
+        check("an empty profile payload is ignored rather than stored",
+              backups.record_profiles(db_path, "PC-9", {}) is False)
+        check("...and creates no row for that machine",
+              backups.get_machine_config(db_path, "PC-9")["profiles"] is None)
+
+        # Reporting profiles CREATES a row, which must not make a machine look like it
+        # has been deliberately configured -- otherwise the "machines with their own
+        # settings" list is every machine in the fleet, and the handful that really are
+        # exceptions are invisible in it.
+        backups.record_profiles(db_path, "PC-REPORTED", sample_profiles)
+        listed = [c["machine"] for c in backups.list_machine_configs(db_path)]
+        check("a machine that only reported profiles is NOT an exception",
+              "PC-REPORTED" not in listed)
+        check("...but a machine with a real override still is", "PC-1" in listed)
+        check("its row does exist when asked for all of them",
+              "PC-REPORTED" in [c["machine"] for c in
+                                backups.list_machine_configs(db_path,
+                                                             overrides_only=False)])
+        check("has_overrides is False for a profile-only row",
+              backups.has_overrides(
+                  backups.get_machine_config(db_path, "PC-REPORTED")) is False)
+
+        # Agent-supplied and lands in the database, so it is capped.
+        huge = {"users": [{"name": f"u{i}", "path": f"C:\\Users\\u{i}", "folders": {}}
+                          for i in range(500)]}
+        backups.record_profiles(db_path, "PC-CAP", huge)
+        check("an implausible profile list is truncated, not stored whole",
+              len(backups.get_machine_config(db_path, "PC-CAP")["profiles"]["users"])
+              == 64)
+
+        print("\n-- machine lifecycle --")
+        backups.set_machine_config(db_path, "OLD-PC", include=["%Users%\\Legacy"],
+                                   actor="root@x.com")
+        backups.rename_machine(db_path, "OLD-PC", "NEW-PC")
+        check("a renamed machine keeps its backup config",
+              backups.get_machine_config(db_path, "NEW-PC")["include"]
+              == ["%Users%\\Legacy"])
+        check("...and the old name is gone",
+              backups.get_machine_config(db_path, "OLD-PC")["include"] == [])
+
+        # A merge into a machine that already has its own config must not clobber it.
+        backups.set_machine_config(db_path, "MERGE-SRC", include=["%Users%\\Src"],
+                                   actor="root@x.com")
+        backups.rename_machine(db_path, "MERGE-SRC", "NEW-PC")
+        check("a merge does not overwrite the survivor's own config",
+              backups.get_machine_config(db_path, "NEW-PC")["include"]
+              == ["%Users%\\Legacy"])
+        check("...and drops the merged-away row",
+              backups.get_machine_config(db_path, "MERGE-SRC")["include"] == [])
+
+        backups.forget_machine(db_path, "NEW-PC")
+        check("a deleted machine's config is dropped",
+              backups.get_machine_config(db_path, "NEW-PC")["include"] == [])
+
+        # ============================================================
+        print("\n== File-backup chains and the manifest ==")
+        # ============================================================
+        # The dangerous property of incrementals: one is useless without its full. These
+        # checks exist because "rotation deleted the base of a chain" is a failure nobody
+        # notices until a restore, and by then the data is gone.
+        chain_db = os.path.join(workdir, "chains.db")
+        fleet.init_fleet_db(chain_db)
+        backups.init_backups_db(chain_db)
+
+        plan = backups.plan_next_run(chain_db, "PC-A", full_every=3)
+        check("the first run of a machine is a full", plan["full"] is True)
+        check("...at sequence 0", plan["sequence"] == 0)
+
+        def record(machine, plan, files, key_suffix=""):
+            return backups.record_file_set(
+                chain_db, run_id=uuid_hex(), machine=machine,
+                chain_id=plan["chain_id"], sequence=plan["sequence"],
+                object_key=f"p/machines/{machine}/{plan['chain_id']}-{plan['sequence']}{key_suffix}.fhb",
+                stored_bytes=1000 + plan["sequence"], files=files)
+
+        record("PC-A", plan, [
+            {"path": "C:\\Users\\bob\\a.txt", "size": 10, "mtime": 1, "sha256": "aa"},
+            {"path": "C:\\Users\\bob\\b.txt", "size": 20, "mtime": 1, "sha256": "bb"},
+        ])
+        plan2 = backups.plan_next_run(chain_db, "PC-A", full_every=3)
+        check("the second run extends the same chain",
+              plan2["chain_id"] == plan["chain_id"] and plan2["full"] is False)
+        check("...at sequence 1", plan2["sequence"] == 1)
+
+        # b.txt changes, c.txt appears, a.txt is untouched (so absent from the increment).
+        record("PC-A", plan2, [
+            {"path": "C:\\Users\\bob\\b.txt", "size": 25, "mtime": 2, "sha256": "bb2"},
+            {"path": "C:\\Users\\bob\\c.txt", "size": 30, "mtime": 2, "sha256": "cc"},
+        ])
+        manifest = {m["path"]: m for m in backups.current_manifest(chain_db, "PC-A")}
+        check("the manifest carries files from across the chain", len(manifest) == 3)
+        check("an unchanged file resolves to the FULL's archive",
+              manifest["C:\\Users\\bob\\a.txt"]["sequence"] == 0)
+        check("a changed file resolves to the NEWEST version",
+              manifest["C:\\Users\\bob\\b.txt"]["sha256"] == "bb2")
+        check("...from the incremental that holds it",
+              manifest["C:\\Users\\bob\\b.txt"]["sequence"] == 1)
+        check("the manifest names the archive each file lives in",
+              all(m["object_key"] for m in manifest.values()))
+
+        plan3 = backups.plan_next_run(chain_db, "PC-A", full_every=3)
+        record("PC-A", plan3, [
+            {"path": "C:\\Users\\bob\\a.txt", "deleted": True},
+        ])
+        manifest = {m["path"]: m for m in backups.current_manifest(chain_db, "PC-A")}
+        check("a deleted file drops out of the current manifest",
+              "C:\\Users\\bob\\a.txt" not in manifest)
+        check("...without disturbing the others", len(manifest) == 2)
+
+        plan4 = backups.plan_next_run(chain_db, "PC-A", full_every=3)
+        check("a chain at full_every forces a new full", plan4["full"] is True)
+        check("...under a NEW chain id", plan4["chain_id"] != plan["chain_id"])
+        check("...at sequence 0 again", plan4["sequence"] == 0)
+
+        check("an incremental whose full was never recorded is REFUSED",
+              raises(ValueError, backups.record_file_set, chain_db,
+                     run_id=uuid_hex(), machine="PC-A", chain_id="orphan-chain",
+                     sequence=1, object_key="p/x.fhb", stored_bytes=1, files=[]))
+
+        print("\n-- chain-aware rotation --")
+        rot_db = os.path.join(workdir, "rotate.db")
+        fleet.init_fleet_db(rot_db)
+        backups.init_backups_db(rot_db)
+        bucket2 = FakeDestination()
+        chain_ids = []
+        for c in range(4):                       # four chains, each a full + 2 increments
+            chain_id = None
+            for seq in range(3):
+                p = (backups.plan_next_run(rot_db, "PC-B", full_every=3)
+                     if seq == 0 else {"chain_id": chain_id, "sequence": seq, "full": False})
+                chain_id = p["chain_id"]
+                key = f"p/machines/PC-B/{chain_id}-{seq}.fhb"
+                bucket2.objects[key] = b"x"
+                backups.record_file_set(rot_db, run_id=uuid_hex(), machine="PC-B",
+                                        chain_id=chain_id, sequence=seq, object_key=key,
+                                        stored_bytes=1,
+                                        files=[{"path": f"C:\\f{c}-{seq}.txt",
+                                                "sha256": f"h{c}{seq}"}])
+            chain_ids.append(chain_id)
+
+        check("four chains exist", len(backups.machine_chains(rot_db, "PC-B")) == 4)
+        removed = backups.rotate_chains(bucket2, "p", "PC-B", keep_chains=2, db_path=rot_db)
+        check("rotation removed two WHOLE chains", len(removed) == 6)
+        surviving = backups.machine_chains(rot_db, "PC-B")
+        check("two chains survive", len(surviving) == 2)
+        check("every surviving chain still has its full",
+              all(c["complete"] for c in surviving))
+        check("every surviving chain kept all three archives",
+              all(len(c["sets"]) == 3 for c in surviving))
+        check("the NEWEST chains are the ones kept",
+              {c["chain_id"] for c in surviving} == set(chain_ids[2:]))
+        check("the deleted chains' objects are gone from the bucket",
+              not any(chain_ids[0] in k for k in bucket2.objects))
+        check("the deleted chains' manifest rows are gone too",
+              all(chain_ids[0] not in m["object_key"]
+                  for m in backups.current_manifest(rot_db, "PC-B")))
+        check("keep_chains=0 is refused rather than deleting everything",
+              raises(ValueError, backups.rotate_chains, bucket2, "p", "PC-B", 0, rot_db))
+        check("rotation with nothing to do is a no-op",
+              backups.rotate_chains(bucket2, "p", "PC-B", 5, rot_db) == [])
+
+        print("\n-- run lifecycle --")
+        run_plan = backups.plan_next_run(rot_db, "PC-C", full_every=7)
+        run_id = backups.start_file_run(rot_db, "PC-C", dest_id, run_plan,
+                                        backups.TRIGGER_SCHEDULE, "scheduler",
+                                        1_800_000_000)
+        opened = backups.get_run(rot_db, run_id)
+        check("a machine run opens as running",
+              opened["status"] == backups.RUN_RUNNING)
+        check("...recording its chain and sequence",
+              opened["chain_id"] == run_plan["chain_id"] and opened["sequence"] == 0)
+        check("...and is machine-scoped", opened["machine"] == "PC-C")
+        check("it is due immediately when never run",
+              backups.files_due_at(rot_db, "PC-NEVER", 24) == 0)
+        check("...and not due again right after an attempt",
+              backups.files_due_at(rot_db, "PC-C", 24) == 1_800_000_000 + 24 * 3600)
+
+        backups.complete_file_run(rot_db, run_id, object_key="p/x.fhb",
+                                  stored_bytes=500, file_count=42)
+        done = backups.get_run(rot_db, run_id)
+        check("completing marks it succeeded", done["status"] == backups.RUN_SUCCEEDED)
+        check("...with the file count", done["file_count"] == 42)
+
+        # A machine that goes offline mid-backup must not sit `running` forever: because
+        # due-ness anchors on the last ATTEMPT, that machine would silently never be
+        # backed up again.
+        stuck = backups.start_file_run(rot_db, "PC-D", dest_id, run_plan,
+                                       backups.TRIGGER_SCHEDULE, "scheduler",
+                                       1_800_000_000)
+        check("a fresh run is not expired",
+              backups.expire_stale_file_runs(rot_db, now=1_800_000_100) == 0)
+        check("a run older than the limit IS expired",
+              backups.expire_stale_file_runs(
+                  rot_db, now=1_800_000_000 + 25 * 3600) == 1)
+        check("...and says why",
+              "never reported" in backups.get_run(rot_db, stuck)["error"])
+
+        # ============================================================
+        print("\n== Per-PC scheduler, end to end ==")
+        # ============================================================
+        sched_db = os.path.join(workdir, "sched.db")
+        sched_log = os.path.join(workdir, "schedlogs")
+        os.makedirs(sched_log, exist_ok=True)
+        fleet.init_fleet_db(sched_db)
+        backups.init_backups_db(sched_db)
+        sched_dest = backups.create_destination(
+            sched_db, sched_log, master_key, name="Files", kind=backups.KIND_S3,
+            config=good_s3, secret={"access_key_id": "AKID", "secret_access_key": "shh"},
+            actor="root@x.com")
+
+        policy = dict(fleet_enabled=True, fleet_destination=sched_dest,
+                      fleet_include=["%Desktop%"], fleet_exclude=["*.tmp"],
+                      interval_hours=24, full_every=3,
+                      limits={"max_file_mb": 2048, "max_set_gb": 100, "use_vss": True})
+
+        check("a machine with the fleet policy off is not dispatched",
+              backups.files_dispatch_once(
+                  sched_db, sched_log, machines=["PC-A"], now=1_900_000_000,
+                  **dict(policy, fleet_enabled=False)) == 0)
+        backups.set_machine_config(sched_db, "PC-OUT", enabled=False, actor="root@x.com")
+        check("a machine that opted out is not dispatched",
+              backups.files_dispatch_once(sched_db, sched_log, machines=["PC-OUT"],
+                                          now=1_900_000_000, **policy) == 0)
+
+        dispatched = backups.files_dispatch_once(
+            sched_db, sched_log, machines=["PC-A", "PC-B"], now=1_900_000_000, **policy)
+        check("due machines are dispatched", dispatched == 2)
+
+        queued = fleet.list_commands(sched_db, machine="PC-A")
+        check("a backup_files command was queued",
+              any(cmd["type"] == "backup_files" for cmd in queued))
+        params = command_params(sched_db, "PC-A", "backup_files")
+        check("the command carries the resolved include list",
+              params["include"] == ["%Desktop%"])
+        check("...and the first run is a full",
+              params["full"] is True and params["sequence"] == 0)
+        check("...and the machine's own object key",
+              params["object_key"].startswith("hub-a/machines/PC-A/"))
+        check("...and a pre-signed S3 upload URL, not a credential",
+              params["upload"]["kind"] == "s3"
+              and "X-Amz-Signature=" in params["upload"]["url"])
+        check("the upload URL is scoped to THIS machine's object",
+              "/machines/PC-A/" in params["upload"]["url"])
+        check("the S3 secret key never appears in the params",
+              "shh" not in json.dumps(params))
+        # Without this the agent has nowhere to POST its manifest: an S3 pre-signed URL
+        # carries no run id, so it cannot be recovered from the upload target.
+        check("the params carry the run id the agent reports against",
+              params["run_id"] == [r for r in backups.list_runs(
+                  sched_db, limit=10, kind=backups.BACKUP_MACHINE_FILES)
+                  if r["machine"] == "PC-A"][0]["id"])
+
+        # THE blast-radius property: the agent gets a derived key, never the master.
+        agent_key = base64.b64decode(params["encryption"]["key"])
+        check("the agent is given a DERIVED key",
+              agent_key == backups.derive_machine_key(master_key, "PC-A"))
+        check("...which is not the master key", agent_key != master_key)
+        check("...and does not open another machine's archive",
+              agent_key != backups.derive_machine_key(master_key, "PC-B"))
+
+        check("a second pass does not re-dispatch a machine already running",
+              backups.files_dispatch_once(sched_db, sched_log,
+                                          machines=["PC-A"], now=1_900_000_060,
+                                          **policy) == 0)
+
+        run = [r for r in backups.list_runs(sched_db, limit=10,
+                                            kind=backups.BACKUP_MACHINE_FILES)
+               if r["machine"] == "PC-A"][0]
+        check("the run row is open before the command is queued",
+              run["status"] == backups.RUN_RUNNING)
+        check("...and remembers the command carrying it", run["command_id"])
+
+        files_bucket = FakeDestination()
+        saved_build = backups.build_client
+        backups.build_client = lambda record, secret: files_bucket
+        finished = backups.ingest_file_result(sched_db, sched_log, run["id"], {
+            "stored_bytes": 4096,
+            "files": [
+                {"path": "C:\\Users\\bob\\Desktop\\a.txt", "size": 10, "mtime": 1,
+                 "sha256": "aa"},
+                {"path": "C:\\Users\\bob\\Desktop\\b.txt", "size": 20, "mtime": 1,
+                 "sha256": "bb"},
+            ],
+        }, keep_chains=2)
+        check("reporting a result closes the run",
+              finished["status"] == backups.RUN_SUCCEEDED)
+        check("...with the file count", finished["file_count"] == 2)
+        check("the manifest is populated",
+              len(backups.current_manifest(sched_db, "PC-A")) == 2)
+        check("the archive is recorded under the key the HUB minted",
+              backups.machine_chains(sched_db, "PC-A")[0]["sets"][0]["object_key"]
+              == run["object_key"])
+        check("the machine is now due later, not immediately",
+              backups.files_due_at(sched_db, "PC-A", 24) > 1_900_000_000)
+        check("the ingest is audited", "backup_files" in audit_actions(sched_db))
+
+        check("a repeat report is ignored rather than double-recording",
+              backups.ingest_file_result(sched_db, sched_log, run["id"],
+                                         {"stored_bytes": 1, "files": []},
+                                         keep_chains=2)["file_count"] == 2)
+
+        # An agent that reports a failure must close the run, or the machine is never
+        # due again and silently stops being backed up.
+        run_b = [r for r in backups.list_runs(sched_db, limit=10,
+                                              kind=backups.BACKUP_MACHINE_FILES)
+                 if r["machine"] == "PC-B"][0]
+        failed_run = backups.ingest_file_result(
+            sched_db, sched_log, run_b["id"], {"error": "VSS snapshot failed"},
+            keep_chains=2)
+        check("an agent-reported failure closes the run",
+              failed_run["status"] == backups.RUN_FAILED)
+        check("...keeping the agent's own words", failed_run["error"] == "VSS snapshot failed")
+        check("...and records no archive",
+              backups.machine_chains(sched_db, "PC-B") == [])
+        backups.build_client = saved_build
 
         # ============================================================
         print("\n== Keys and rotation ==")

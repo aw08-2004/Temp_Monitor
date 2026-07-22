@@ -46,7 +46,7 @@ Setting = namedtuple("Setting", [
     "key",       # "data.retention_days" -- the section is the prefix, by convention
     "section",   # "computer" | "hub" | "data" | "fleet"
     "label",     # human label in the form
-    "type",      # "int" | "float" | "bool" | "str" | "enum" | "str_list"
+    "type",      # "int" | "float" | "bool" | "str" | "enum" | "str_list" | "path_list"
     "default",   # MUST equal the constant this replaced
     "minimum",   # numeric bounds; None for non-numeric types
     "maximum",
@@ -212,17 +212,70 @@ REGISTRY = (
             "from the destination. At the default daily cadence this is two weeks of "
             "history. Counted from what the destination actually holds, so a file you "
             "delete by hand is not silently replaced."),
+
+    # ---------------- Backups: per-PC files ----------------
+    # Edited on the Backups page's "Backup Settings" tab, which offers the token
+    # reference and a live preview against a real machine. They live in the registry all
+    # the same, so they get the same validation, audit trail and reset behaviour as
+    # everything else -- the tab is a better editor, not a second store.
+    _s("backup.files_enabled", "backup", "Back up files on managed PCs", "bool", False,
+       help="Off until you have chosen a destination and reviewed the included paths. "
+            "Individual machines can opt out (or in) on their own Backup tab."),
+    _s("backup.files_destination", "backup", "Back up PC files to", "str", "",
+       help="The id of the destination per-PC backups are written to. Set this from the "
+            "Backups page; each machine gets its own folder under it."),
+    _s("backup.files_include", "backup", "Include these paths", "path_list",
+       ["%Desktop%", "%Documents%", "%Pictures%", "%Favorites%"],
+       help="Tokens expand on each machine: %Users% covers every real profile, and "
+            "%Desktop%/%Documents% follow OneDrive folder redirection -- which a literal "
+            "C:\\Users\\name\\Desktop does not, so it would back up an empty stub on any "
+            "PC using Known Folder Move."),
+    _s("backup.files_exclude", "backup", "Never back up these", "path_list",
+       ["*.tmp", "~$*", "thumbs.db", "**\\AppData\\Local\\Temp\\**",
+        "**\\node_modules\\**", "**\\.git\\**", "*.iso", "*.vhdx", "*.vmdk"],
+       help="Matched against the full path, case-insensitively. A pattern with no "
+            "backslash matches on filename anywhere; ** crosses folders. Excluding a "
+            "folder also excludes everything inside it."),
+    _s("backup.files_interval_hours", "backup", "Back up PC files every", "int", 24,
+       minimum=1, maximum=720, unit="hours",
+       help="Measured from the last attempt on each machine, so a laptop that was off "
+            "is picked up when it returns rather than skipped."),
+    _s("backup.files_full_every", "backup", "Take a full backup every", "int", 7,
+       minimum=1, maximum=90, unit="runs",
+       help="Runs in between upload only files that changed. A shorter chain restores "
+            "faster and survives a damaged archive better; a longer one uses less "
+            "bandwidth."),
+    _s("backup.files_keep_chains", "backup", "Keep this many backup chains", "int", 4,
+       minimum=1, maximum=52, unit="chains",
+       help="A chain is one full backup plus the incrementals that follow it. Whole "
+            "chains are deleted together -- never a full on its own, which would strand "
+            "every incremental depending on it."),
+    _s("backup.files_max_file_mb", "backup", "Skip files larger than", "int", 2048,
+       minimum=1, maximum=102400, unit="MB",
+       help="Skipped files are named in the run result rather than failing the run. "
+            "Stops one forgotten disk image from consuming a night's upload."),
+    _s("backup.files_max_set_gb", "backup", "Abort a run larger than", "int", 100,
+       minimum=1, maximum=10240, unit="GB",
+       help="A safety stop: if the selected paths add up to more than this, the run "
+            "fails with a message instead of uploading for two days. Raise it "
+            "deliberately rather than by accident."),
+    _s("backup.files_use_vss", "backup", "Use a shadow copy (VSS)", "bool", True,
+       help="Reads from a point-in-time snapshot so files that are open -- an Outlook "
+            "PST, a document someone left up -- are captured consistently. If a snapshot "
+            "cannot be created the run continues against the live filesystem and reports "
+            "which files were locked."),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
-# who does not also hold `manage_settings`. Configuring the backup schedule IS managing
-# backups; requiring the broader capability to turn one on would make the narrow one
-# useless. Declared here, next to the registry, so it cannot drift from the keys above.
-BACKUP_SCHEDULE_KEYS = ("backup.hub_enabled", "backup.hub_destination",
-                        "backup.hub_interval_hours", "backup.hub_keep_generations")
+# who does not also hold `manage_settings`. Configuring backups IS managing backups;
+# requiring the broader capability to turn one on would make the narrow one useless.
+# Derived from the registry rather than typed out again, so a new backup.* key cannot be
+# added to the Backups page and silently stay unwritable -- but still an explicit
+# allow-list at the point of use, so this can never become a general settings-write path.
+BACKUP_SETTING_KEYS = tuple(s.key for s in REGISTRY if s.section == "backup")
 
 
 # ---------------------------------------------------------------- storage
@@ -319,6 +372,27 @@ def coerce_and_validate(setting, raw):
         # what is stored is what is matched, and a stray "CPU Package" can't look
         # different from "cpu package" in the UI while behaving identically.
         return [v.lower() for v in items]
+
+    if setting.type == "path_list":
+        # Backup include/exclude patterns. Deliberately NOT str_list, which is wrong here
+        # twice: it refuses an empty list (an empty exclude list is a perfectly good
+        # answer) and it lowercases every entry (right for sensor names, but it would
+        # hand the operator back `c:\users\%users%\desktop` after they typed
+        # `C:\Users\%Users%\Desktop` -- and a settings page that visibly mangles what you
+        # typed is one you stop trusting).
+        #
+        # Each entry is validated through the shared grammar, so a typo'd token is
+        # refused HERE rather than silently expanding to nothing on every machine in the
+        # fleet. Imported lazily: settings.py is imported by nearly everything, and
+        # backup_paths.py is only needed on this one path.
+        if not isinstance(raw, (list, tuple)):
+            raise ValueError(f"{label}: expected a list of paths")
+        import backup_paths
+        kind = "exclude" if setting.key.endswith("_exclude") else "include"
+        try:
+            return backup_paths.validate_patterns(raw, kind=kind)
+        except ValueError as e:
+            raise ValueError(f"{label}: {e}")
 
     raise ValueError(f"{label}: unsupported setting type {setting.type!r}")
 

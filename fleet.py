@@ -68,6 +68,12 @@ SESSION_CONTROL_COMMANDS = frozenset({
 # favorite: replaying yesterday's params would report progress against a finished deploy.
 SCHEDULED_COMMANDS = frozenset({
     "deploy_package",
+    # Per-PC file backups (roadmap #1b). Same reasoning as deploy_package: the params are
+    # a SNAPSHOT of the backup policy plus a one-shot upload URL and this machine's
+    # derived encryption key, so replaying yesterday's params as a favorite would upload
+    # to a dead URL against a finished run.
+    "backup_files",
+    "restore_files",
 })
 
 ALL_COMMANDS = frozenset({

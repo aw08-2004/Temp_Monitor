@@ -20,7 +20,7 @@ module docstring). The scoped operator in this run is therefore testing that the
 capability is required, not that a subset of machines is visible.
 """
 import functools
-import io
+import json
 import os
 import shutil
 import sys
@@ -41,6 +41,13 @@ FAIL = 0
 
 # Which operator the fake session gate reports. Mutable so a test can switch identity.
 CURRENT_USER = "root@x.com"
+
+# The same awkward machine the path-grammar tests use: bob has OneDrive Known Folder
+# Move, carol is missing folders. Read from the shared fixture rather than duplicated so
+# the HTTP layer and the grammar agree about what a machine looks like.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "backup_path_vectors.json"), encoding="utf-8") as _fh:
+    SAMPLE_PROFILES = json.load(_fh)["profiles"]
 
 
 def check(name, cond):
@@ -321,6 +328,97 @@ def main():
         check("the run appears in the run list",
               any(x["id"] == run["id"] for x in
                   c.get("/api/backups/runs").get_json()["runs"]))
+
+        print("\n== Per-PC backup settings ==")
+        r = c.put("/api/backups/schedule", json={
+            "backup.files_enabled": True,
+            "backup.files_destination": dest_id,
+            "backup.files_include": ["%Desktop%", "%Documents%",
+                                     "C:\\Users\\%Users%\\Projects"],
+            "backup.files_exclude": ["*.tmp", "**\\node_modules\\**"],
+        })
+        check("per-PC settings save through the same capability", r.status_code == 200)
+        files = r.get_json()["files"]
+        check("include list reads back in the case it was typed",
+              files["include"] == ["%Desktop%", "%Documents%",
+                                   "C:\\Users\\%Users%\\Projects"])
+        check("...which is the point of path_list over str_list",
+              "%Users%" in files["include"][2])
+        check("exclude list reads back", files["exclude"][0] == "*.tmp")
+
+        check("a typo'd token is refused rather than silently matching nothing",
+              c.put("/api/backups/schedule",
+                    json={"backup.files_include": ["%Userss%\\Desktop"]}
+                    ).status_code == 400)
+        check("...and the error names the bad token",
+              "%userss%" in c.put("/api/backups/schedule",
+                                  json={"backup.files_include": ["%Userss%\\Desktop"]}
+                                  ).get_json()["error"].lower())
+        check("an empty exclude list is allowed",
+              c.put("/api/backups/schedule",
+                    json={"backup.files_exclude": []}).status_code == 200)
+        check("arming per-PC backups with no destination is refused",
+              c.put("/api/backups/schedule",
+                    json={"backup.files_enabled": True,
+                          "backup.files_destination": ""}).status_code == 400)
+        # Put the destination back for the machine tests below.
+        c.put("/api/backups/schedule", json={"backup.files_destination": dest_id,
+                                             "backup.files_exclude": ["*.tmp"]})
+
+        check("the overview carries the token reference for the UI",
+              len(c.get("/api/backups").get_json()["path_tokens"]) >= 8)
+
+        print("\n== Per-machine overrides are machine-SCOPED ==")
+        backups.record_profiles(db_path, "HOSPITAL-1", SAMPLE_PROFILES)
+        r = c.get("/api/backups/machines/HOSPITAL-1")
+        check("an in-scope machine is readable", r.status_code == 200)
+        body = r.get_json()
+        check("the effective policy merges the fleet list",
+              "%Desktop%" in body["effective"]["include"])
+        check("the preview resolves against reported profiles",
+              any("OneDrive" in root["path"] for root in body["preview"]["roots"]))
+        check("...and names a user whose folder is missing",
+              any("carol" in p for p in body["preview"]["problems"]))
+
+        # This is the difference from the hub-DB routes: manage_backups is not enough on
+        # its own, the machine has to be in scope too.
+        check("an out-of-scope machine is refused on read",
+              c.get("/api/backups/machines/HR-1").status_code == 403)
+        check("an out-of-scope machine is refused on write",
+              c.put("/api/backups/machines/HR-1",
+                    json={"enabled": False}).status_code == 403)
+        check("an out-of-scope machine cannot be previewed either",
+              c.post("/api/backups/preview",
+                     json={"machine": "HR-1", "include": ["%Desktop%"]}
+                     ).status_code == 403)
+
+        r = c.put("/api/backups/machines/HOSPITAL-1",
+                  json={"include": ["%Users%\\Projects"], "enabled": False})
+        check("an override saves", r.status_code == 200)
+        check("extra paths are ADDED to the fleet list",
+              r.get_json()["effective"]["include"][-1] == "%Users%\\Projects")
+        check("a machine can opt out of the fleet policy",
+              r.get_json()["effective"]["enabled"] is False)
+        check("the machine appears in the exceptions list",
+              [m["machine"] for m in
+               c.get("/api/backups/machines").get_json()["machines"]]
+              == ["HOSPITAL-1"])
+        check("a bad pattern on a machine is a 400",
+              c.put("/api/backups/machines/HOSPITAL-1",
+                    json={"include": ["%Nope%"]}).status_code == 400)
+
+        print("\n== Preview is lenient while you type ==")
+        r = c.post("/api/backups/preview",
+                   json={"machine": "HOSPITAL-1", "include": ["%Deskt"], "exclude": []})
+        check("a half-typed token is a problem, not a 500", r.status_code == 200)
+        check("...reported as something an operator can act on",
+              "%" in r.get_json()["preview"]["problems"][0])
+        r = c.post("/api/backups/preview",
+                   json={"include": ["%Desktop%"], "exclude": []})
+        check("preview with no machine still answers",
+              r.status_code == 200 and r.get_json()["has_profiles"] is False)
+        check("...and explains that nothing could be resolved",
+              r.get_json()["preview"]["problems"] != [])
 
         print("\n== Deleting the scheduled destination disarms the schedule ==")
         check("the schedule still points at it",

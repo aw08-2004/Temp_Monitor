@@ -101,3 +101,47 @@
     word-break: break-word;
     max-width: 52ch;
 }
+
+/* The token reference, collapsed by default. Someone writing their first pattern needs
+   it open; someone editing an existing list does not, and an eight-row table above the
+   thing you came to change is noise. <details> rather than a JS toggle so it keeps
+   working with no script and stays keyboard-accessible for free. */
+.bk-tokens {
+    margin-top: var(--space-5);
+    border-top: 1px solid var(--card-border);
+    padding-top: var(--space-3);
+}
+
+.bk-tokens > summary {
+    cursor: pointer;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+    padding: var(--space-2) 0;
+}
+
+.bk-tokens .data-table {
+    margin-top: var(--space-2);
+}
+
+.bk-tokens code {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    color: var(--accent, #58a6ff);
+    white-space: nowrap;
+}
+
+/* The preview's machine picker. Needs breathing room from the explanatory paragraph
+   above it, which otherwise runs right up against the input. */
+#preview-machine {
+    margin-top: var(--space-3);
+}
+
+/* Resolved paths in the preview. Monospace because the operator is comparing them
+   against what they expected, and a proportional font makes a wrong folder harder to
+   spot. */
+#preview-body .data-table td:first-child {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    word-break: break-all;
+}

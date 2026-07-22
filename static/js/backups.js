@@ -16,6 +16,7 @@
 // not stop or start anything.
 
 const hubPane = document.getElementById('hub-pane');
+const settingsPane = document.getElementById('settings-pane');
 const destinationsPane = document.getElementById('destinations-pane');
 const keyBanner = document.getElementById('key-banner');
 
@@ -26,10 +27,19 @@ const keyModal = document.getElementById('key-modal');
 const keyError = document.getElementById('key-error');
 const keyValue = document.getElementById('key-value');
 
-let state = { destinations: [], runs: [], schedule: {}, key: {}, destination_kinds: [] };
+let state = { destinations: [], runs: [], schedule: {}, key: {}, destination_kinds: [],
+              files: {}, path_tokens: [] };
 let editingDestinationId = null;
 let draftKind = 's3';
 let pollTimer = null;
+
+// Working copies of the two path lists, edited as chips before being saved. Kept out of
+// `state` because they are the operator's unsaved intent — a background poll refreshing
+// `state` must not silently discard paths someone is halfway through typing.
+let draftInclude = [];
+let draftExclude = [];
+let previewMachine = '';
+let previewTimer = null;
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -76,9 +86,19 @@ function fmtDuration(from, to) {
 
 async function load() {
     state = await api('/api/backups');
+    // Seed the editors from what was saved, but only when they are untouched — see the
+    // comment on draftInclude.
+    if (!draftDirty) {
+        draftInclude = (state.files.include || []).slice();
+        draftExclude = (state.files.exclude || []).slice();
+    }
     render();
     schedulePoll();
 }
+
+// Set the moment a chip is added or removed, cleared on a successful save. Guards the
+// reseed above.
+let draftDirty = false;
 
 // Only poll while something is actually moving. A backup takes minutes and the page is
 // otherwise static, so a fixed interval would be almost entirely wasted requests.
@@ -100,6 +120,7 @@ function schedulePoll() {
 function render() {
     renderKeyBanner();
     renderHubPane();
+    renderSettingsPane();
     renderDestinations();
 }
 
@@ -403,6 +424,416 @@ document.getElementById('run-now').addEventListener('click', async () => {
     }
 });
 
+// ---------------------------------------------------------------- backup settings
+//
+// The per-PC policy: which folders are backed up on every managed machine. The whole
+// point of the token grammar is that this is written ONCE and keeps being right as people
+// come and go, so the editor leads with the token reference and a live preview against a
+// real machine — a pattern you cannot see the effect of is a pattern you cannot trust.
+
+settingsPane.addEventListener('tab:shown', () => { renderSettingsPane(); refreshPreview(); });
+
+function renderSettingsPane() {
+    // Preserve focus across the re-render: this pane redraws on every chip add, and
+    // yanking focus out of the text field after each one makes it unusable.
+    const active = document.activeElement;
+    const focusId = active && active.id ? active.id : null;
+    const caret = active && active.selectionStart;
+
+    settingsPane.replaceChildren();
+    const files = state.files || {};
+
+    // ---- policy card ----
+    const policy = el('div', 'card');
+    policy.appendChild(el('h2', 'section-title', 'What gets backed up on managed PCs'));
+    policy.appendChild(el('p', 'stat-card__meta',
+        'Applies to every machine unless that machine overrides it on its own Backup tab. '
+        + 'Paths are expanded on each PC, so one pattern covers everyone — including '
+        + 'people who sign in for the first time next week.'));
+
+    const grid = el('div', 'bk-schedule-grid');
+
+    const enabledWrap = el('div');
+    const enabledLabel = el('label', 'checkbox');
+    const enabled = el('input');
+    enabled.type = 'checkbox';
+    enabled.id = 'files-enabled';
+    enabled.checked = !!files.enabled;
+    enabledLabel.appendChild(enabled);
+    enabledLabel.appendChild(document.createTextNode(' Back up files on managed PCs'));
+    enabledWrap.appendChild(enabledLabel);
+    enabledWrap.appendChild(el('p', 'setting__default',
+        files.enabled ? 'Machines are backed up on the schedule below.'
+                      : 'Nothing on any PC is backed up while this is off.'));
+    grid.appendChild(enabledWrap);
+
+    const destWrap = el('div');
+    destWrap.appendChild(el('label', 'setting__label', 'Destination'));
+    destWrap.appendChild(destinationSelect('files-destination', files.destination_id));
+    grid.appendChild(destWrap);
+
+    grid.appendChild(numberField('files-interval', 'Back up every (hours)',
+                                 files.interval_hours, 1, 720));
+    grid.appendChild(numberField('files-full-every', 'Full backup every (runs)',
+                                 files.full_every, 1, 90));
+    grid.appendChild(numberField('files-keep-chains', 'Keep this many chains',
+                                 files.keep_chains, 1, 52));
+    grid.appendChild(numberField('files-max-file', 'Skip files bigger than (MB)',
+                                 files.max_file_mb, 1, 102400));
+    grid.appendChild(numberField('files-max-set', 'Abort a run bigger than (GB)',
+                                 files.max_set_gb, 1, 10240));
+
+    const vssWrap = el('div');
+    const vssLabel = el('label', 'checkbox');
+    const vss = el('input');
+    vss.type = 'checkbox';
+    vss.id = 'files-vss';
+    vss.checked = files.use_vss !== false;
+    vssLabel.appendChild(vss);
+    vssLabel.appendChild(document.createTextNode(' Use a shadow copy (VSS)'));
+    vssWrap.appendChild(vssLabel);
+    vssWrap.appendChild(el('p', 'setting__default',
+        'Captures files that are open, like an Outlook PST.'));
+    grid.appendChild(vssWrap);
+
+    policy.appendChild(grid);
+    settingsPane.appendChild(policy);
+
+    // ---- path editors ----
+    const paths = el('div', 'card');
+    paths.style.marginTop = 'var(--space-5)';
+    paths.appendChild(el('h2', 'section-title', 'Paths'));
+    paths.appendChild(pathEditor(
+        'Include', 'include', draftInclude,
+        'A folder to back up. Use %Users% to cover every profile, or %Desktop% to follow '
+        + 'each user’s real Desktop even when OneDrive has redirected it.',
+        'e.g. %Desktop% or C:\\Users\\%Users%\\Projects'));
+    paths.appendChild(pathEditor(
+        'Never back up', 'exclude', draftExclude,
+        'Matched against the whole path, case-insensitively. A pattern with no backslash '
+        + 'matches on filename anywhere; ** crosses folders. Excluding a folder also '
+        + 'excludes everything inside it.',
+        'e.g. *.tmp or **\\node_modules\\**'));
+    paths.appendChild(tokenReference());
+    settingsPane.appendChild(paths);
+
+    // ---- save ----
+    const actions = el('div', 'settings-actions');
+    const save = el('button', 'btn btn--primary', 'Save backup settings');
+    const status = el('span', 'settings-actions__status');
+    status.id = 'files-save-status';
+    save.addEventListener('click', () => saveFileSettings(status));
+    actions.appendChild(save);
+    actions.appendChild(status);
+    settingsPane.appendChild(actions);
+
+    settingsPane.appendChild(renderPreviewCard());
+    settingsPane.appendChild(renderExceptionsCard());
+
+    if (focusId) {
+        const restored = document.getElementById(focusId);
+        if (restored) {
+            restored.focus();
+            if (caret !== null && caret !== undefined && restored.setSelectionRange) {
+                try { restored.setSelectionRange(caret, caret); } catch (e) { /* not a text input */ }
+            }
+        }
+    }
+}
+
+function destinationSelect(id, selected) {
+    const select = el('select', 'input');
+    select.id = id;
+    select.style.width = '100%';
+    const blank = el('option', null, 'Choose a destination…');
+    blank.value = '';
+    select.appendChild(blank);
+    state.destinations.forEach((d) => {
+        const option = el('option', null, d.name);
+        option.value = d.id;
+        if (d.id === selected) option.selected = true;
+        select.appendChild(option);
+    });
+    return select;
+}
+
+// One chip list per path list. Built with createElement throughout — these strings are
+// operator input echoed straight back, and a path is a perfectly good place to hide
+// markup.
+function pathEditor(title, kind, values, help, placeholder) {
+    const wrap = el('div');
+    wrap.appendChild(el('h3', 'perm-subhead', title));
+    wrap.appendChild(el('p', 'setting__default', help));
+
+    const chips = el('div', 'chip-list');
+    values.forEach((value, index) => {
+        const chip = el('span', 'chip');
+        chip.appendChild(el('span', 'chip__name', value));
+        const remove = el('button', 'chip__remove');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', `Remove ${value}`);
+        remove.addEventListener('click', () => {
+            values.splice(index, 1);
+            draftDirty = true;
+            renderSettingsPane();
+            refreshPreview();
+        });
+        chip.appendChild(remove);
+        chips.appendChild(chip);
+    });
+    wrap.appendChild(chips);
+
+    const adder = el('div', 'chip-add');
+    const input = el('input', 'input');
+    input.id = `path-input-${kind}`;
+    input.placeholder = placeholder;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    const add = el('button', 'btn', 'Add');
+    const commit = () => {
+        const value = input.value.trim();
+        if (!value) return;
+        values.push(value);
+        input.value = '';
+        draftDirty = true;
+        renderSettingsPane();
+        refreshPreview();
+    };
+    add.addEventListener('click', commit);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    });
+    adder.appendChild(input);
+    adder.appendChild(add);
+    wrap.appendChild(adder);
+    return wrap;
+}
+
+function tokenReference() {
+    const wrap = el('details', 'bk-tokens');
+    const summary = el('summary', null, 'Available tokens');
+    wrap.appendChild(summary);
+    const table = el('table', 'data-table');
+    const body = el('tbody');
+    (state.path_tokens || []).forEach((entry) => {
+        const row = el('tr');
+        const name = el('td');
+        name.appendChild(el('code', null, entry.token));
+        row.appendChild(name);
+        row.appendChild(el('td', null, entry.help));
+        body.appendChild(row);
+    });
+    table.appendChild(body);
+    wrap.appendChild(table);
+    return wrap;
+}
+
+async function saveFileSettings(status) {
+    status.textContent = '';
+    try {
+        const result = await api('/api/backups/schedule', json('PUT', {
+            'backup.files_enabled': document.getElementById('files-enabled').checked,
+            'backup.files_destination': document.getElementById('files-destination').value,
+            'backup.files_include': draftInclude,
+            'backup.files_exclude': draftExclude,
+            'backup.files_interval_hours': Number(document.getElementById('files-interval').value),
+            'backup.files_full_every': Number(document.getElementById('files-full-every').value),
+            'backup.files_keep_chains': Number(document.getElementById('files-keep-chains').value),
+            'backup.files_max_file_mb': Number(document.getElementById('files-max-file').value),
+            'backup.files_max_set_gb': Number(document.getElementById('files-max-set').value),
+            'backup.files_use_vss': document.getElementById('files-vss').checked,
+        }));
+        state.files = result.files;
+        // The server normalises patterns (separators, duplicates), so adopt what it
+        // stored rather than what was typed — otherwise the editor and the policy
+        // disagree until the next reload.
+        draftInclude = (result.files.include || []).slice();
+        draftExclude = (result.files.exclude || []).slice();
+        draftDirty = false;
+        renderSettingsPane();
+        refreshPreview();
+        document.getElementById('files-save-status').textContent = 'Saved.';
+    } catch (e) {
+        status.textContent = e.message;
+    }
+}
+
+// ---- preview ----
+
+function renderPreviewCard() {
+    const card = el('div', 'card');
+    card.style.marginTop = 'var(--space-5)';
+    card.appendChild(el('h2', 'section-title', 'Preview'));
+    card.appendChild(el('p', 'stat-card__meta',
+        'What these patterns resolve to on a real machine, using the profiles its agent '
+        + 'last reported. This is the only way to see that a folder is redirected into '
+        + 'OneDrive before a restore comes up empty.'));
+
+    const picker = el('div', 'chip-add');
+    const input = el('input', 'input');
+    input.id = 'preview-machine';
+    input.placeholder = 'Machine name';
+    input.setAttribute('list', 'preview-machine-options');
+    input.autocomplete = 'off';
+    input.value = previewMachine;
+    const list = el('datalist');
+    list.id = 'preview-machine-options';
+    machineOptions.forEach((name) => {
+        const option = el('option');
+        option.value = name;
+        list.appendChild(option);
+    });
+    input.addEventListener('change', () => {
+        previewMachine = input.value.trim();
+        refreshPreview();
+    });
+    picker.appendChild(input);
+    picker.appendChild(list);
+    card.appendChild(picker);
+
+    const body = el('div');
+    body.id = 'preview-body';
+    card.appendChild(body);
+    return card;
+}
+
+// Debounced: the pane re-renders on every chip change, and each one would otherwise be a
+// request.
+function refreshPreview() {
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+        const body = document.getElementById('preview-body');
+        if (!body) return;
+        try {
+            const result = await api('/api/backups/preview', json('POST', {
+                machine: previewMachine,
+                include: draftInclude,
+                exclude: draftExclude,
+            }));
+            renderPreview(body, result);
+        } catch (e) {
+            body.replaceChildren(el('p', 'setting__error', e.message));
+        }
+    }, 350);
+}
+
+function renderPreview(body, result) {
+    body.replaceChildren();
+    if (!previewMachine) {
+        body.appendChild(el('p', 'setting__default',
+            'Choose a machine to see what these patterns actually cover on it.'));
+        return;
+    }
+    if (!result.has_profiles) {
+        body.appendChild(el('p', 'setting__default',
+            `${previewMachine} has not reported its user profiles yet — its agent sends `
+            + 'them on the next heartbeat after an upgrade. Until then these patterns '
+            + 'cannot be resolved here; they will still expand correctly on the machine.'));
+        return;
+    }
+
+    const preview = result.preview || {};
+    if (preview.roots && preview.roots.length) {
+        const table = el('table', 'data-table');
+        const head = el('thead');
+        const headRow = el('tr');
+        ['Folder', 'User', 'From'].forEach((label) => headRow.appendChild(el('th', null, label)));
+        head.appendChild(headRow);
+        table.appendChild(head);
+        const tbody = el('tbody');
+        preview.roots.forEach((root) => {
+            const row = el('tr');
+            row.appendChild(el('td', null, root.path));
+            row.appendChild(el('td', null, root.user || '—'));
+            row.appendChild(el('td', null, root.pattern));
+            tbody.appendChild(row);
+        });
+        table.appendChild(tbody);
+        body.appendChild(table);
+    } else {
+        body.appendChild(el('p', 'setting__default',
+            'These patterns cover nothing on this machine.'));
+    }
+
+    (preview.problems || []).forEach((problem) => {
+        body.appendChild(el('p', 'setting__error', problem));
+    });
+}
+
+// ---- machines that differ from the fleet policy ----
+
+function renderExceptionsCard() {
+    const card = el('div', 'card');
+    card.style.marginTop = 'var(--space-5)';
+    card.appendChild(el('h2', 'section-title', 'Machines with their own settings'));
+    const body = el('div');
+    body.id = 'exceptions-body';
+    body.appendChild(el('p', 'setting__default', 'Loading…'));
+    card.appendChild(body);
+    loadExceptions();
+    return card;
+}
+
+async function loadExceptions() {
+    let result;
+    try {
+        result = await api('/api/backups/machines');
+    } catch (e) {
+        return;
+    }
+    const body = document.getElementById('exceptions-body');
+    if (!body) return;
+    body.replaceChildren();
+    if (!result.machines.length) {
+        body.appendChild(el('p', 'setting__default',
+            'Every machine follows the settings above. Override one from its own Backup tab.'));
+        return;
+    }
+    const table = el('table', 'data-table');
+    const head = el('thead');
+    const headRow = el('tr');
+    ['Machine', 'Backups', 'Destination', 'Extra paths'].forEach(
+        (label) => headRow.appendChild(el('th', null, label)));
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const tbody = el('tbody');
+    result.machines.forEach((m) => {
+        const row = el('tr');
+        const nameCell = el('td');
+        const link = el('a', null, m.machine);
+        link.href = `/machine/${encodeURIComponent(m.machine)}#backup`;
+        nameCell.appendChild(link);
+        row.appendChild(nameCell);
+        row.appendChild(el('td', null,
+            m.overridden.enabled ? (m.enabled ? 'on (override)' : 'OFF (override)')
+                                 : (m.enabled ? 'on' : 'off')));
+        row.appendChild(el('td', null, m.overridden.destination_id
+            ? destinationName(m.destination_id) : 'fleet default'));
+        const extra = (m.extra_include || []).concat(m.extra_exclude || []);
+        row.appendChild(el('td', null, extra.length ? extra.join(', ') : '—'));
+        tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    body.appendChild(table);
+}
+
+function destinationName(id) {
+    const found = state.destinations.find((d) => d.id === id);
+    return found ? found.name : '(deleted destination)';
+}
+
+// Populated from /api/machines, which is already scope-filtered — the same source the
+// packages page uses for its target picker, rather than a second roster query.
+let machineOptions = [];
+
+async function loadMachineOptions() {
+    try {
+        const machines = await api('/api/machines');
+        machineOptions = (machines || []).map((m) => m.machine || m.name).filter(Boolean);
+    } catch (e) { /* the picker just stays empty */ }
+}
+
 // ---------------------------------------------------------------- destinations
 
 destinationsPane.addEventListener('tab:shown', () => renderDestinations());
@@ -609,6 +1040,7 @@ document.getElementById('destination-cancel').addEventListener('click', () => {
     destinationModal.close();
 });
 
+loadMachineOptions();
 load().catch((e) => {
     keyBanner.replaceChildren();
     const banner = el('div', 'bk-banner bk-banner--danger');

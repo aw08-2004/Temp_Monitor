@@ -31,11 +31,14 @@
 <div class="tabs" role="tablist" aria-label="Backup views" data-tabs-key="backups">
     <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-hub"
             aria-controls="hub-pane" aria-selected="true">Hub database</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-settings"
+            aria-controls="settings-pane" aria-selected="false" tabindex="-1">Backup Settings</button>
     <button class="tabs__tab" type="button" role="tab" id="tab-btn-destinations"
             aria-controls="destinations-pane" aria-selected="false" tabindex="-1">Destinations</button>
 </div>
 
 <div class="tab-panel" id="hub-pane" role="tabpanel" aria-labelledby="tab-btn-hub"></div>
+<div class="tab-panel" id="settings-pane" role="tabpanel" aria-labelledby="tab-btn-settings" hidden></div>
 <div class="tab-panel" id="destinations-pane" role="tabpanel" aria-labelledby="tab-btn-destinations" hidden></div>
 
 <!-- ------------------------------------------------------ destination editor -->

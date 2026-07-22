@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
+using TempMonitorAgent.Backup;
 using TempMonitorAgent.State;
 
 namespace TempMonitorAgent.Fleet;
@@ -124,9 +125,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader
         {
             using var req = Authorized(HttpMethod.Post, AgentConfig.HeartbeatUrl);
             var known = RuntimeConfigStore.Current.ConfigVersion;
-            req.Content = new StringContent(
-                JsonSerializer.Serialize(new Dictionary<string, string> { ["config_version"] = known }),
-                Encoding.UTF8, "application/json");
+            var body = new JsonObject { ["config_version"] = known };
+            // Only when it has actually changed -- see BackupProfileReporter. Sending a
+            // profile block on every 10-second heartbeat would be pure noise.
+            var profiles = BackupProfileReporter.TakeIfChanged();
+            if (profiles is not null) body["profiles"] = profiles;
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode) return false;
@@ -347,6 +352,84 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader
         var req = new HttpRequestMessage(method, url);
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _identity.BearerValue);
         return req;
+    }
+
+    // ---------------------------------------------------------------- backups (#1b)
+
+    /// <summary>
+    /// PUT a finished backup archive. Returns null on success, or a reason.
+    ///
+    /// Two shapes, because the two destination kinds differ. An S3 destination gives a
+    /// PRE-SIGNED url that carries its own signature in the query string — it must be sent
+    /// WITHOUT our bearer header, since an extra Authorization header is not part of what
+    /// was signed and S3 rejects the request. A WebDAV destination has no pre-signed
+    /// concept, so the hub proxies: that URL is on the hub and does need the bearer.
+    ///
+    /// Streamed from disk with the long-timeout client — these are gigabytes on a link
+    /// that may be a home DSL line, and the 10-second client would abort instantly.
+    /// </summary>
+    public async Task<string?> UploadBackupAsync(string url, string archivePath,
+                                                 bool viaHub, CancellationToken ct)
+    {
+        try
+        {
+            var length = new FileInfo(archivePath).Length;
+            using var body = new FileStream(archivePath, FileMode.Open, FileAccess.Read,
+                                            FileShare.Read, 1024 * 1024, useAsync: true);
+            using var req = viaHub
+                ? Authorized(HttpMethod.Put, url)
+                : new HttpRequestMessage(HttpMethod.Put, url);
+            req.Content = new StreamContent(body);
+            req.Content.Headers.ContentLength = length;
+            req.Content.Headers.ContentType =
+                new MediaTypeHeaderValue("application/octet-stream");
+
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return null;
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            return $"Upload failed: HTTP {(int)resp.StatusCode} {text}"
+                .Trim()[..Math.Min(300, $"Upload failed: HTTP {(int)resp.StatusCode} {text}".Trim().Length)];
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        {
+            return $"Upload failed: {e.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Report a backup run's outcome and manifest. Returns true if the hub accepted it.
+    ///
+    /// Retried a few times: the archive is already uploaded at this point, and losing the
+    /// manifest to one dropped connection would leave the hub believing the run never
+    /// finished while the bytes sit in the bucket unreferenced.
+    /// </summary>
+    public async Task<bool> ReportBackupAsync(string runId, JsonNode payload,
+                                              CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/backups/{Uri.EscapeDataString(runId)}/result";
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var req = Authorized(HttpMethod.Post, url);
+                req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                                "application/json");
+                using var resp = await _downloadHttp.SendAsync(req, ct);
+                if (resp.IsSuccessStatusCode) return true;
+                // A 4xx is the hub refusing this payload; retrying will not change its mind.
+                if ((int)resp.StatusCode is >= 400 and < 500)
+                {
+                    _log.LogWarning("Hub refused backup result ({Status})", (int)resp.StatusCode);
+                    return false;
+                }
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+            {
+                _log.LogDebug("Backup result POST failed: {Msg}", e.Message);
+            }
+            if (attempt < 2) await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), ct);
+        }
+        return false;
     }
 
     private sealed class CommandsResponse

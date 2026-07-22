@@ -433,8 +433,69 @@ capability.
 > it that way.
 
 Tunables live in Settings under **Backups**, or on the Backups page itself: on/off,
-destination, interval, and generations to keep. Per-PC file backups are the next piece of
-this feature and are not built yet.
+destination, interval, and generations to keep.
+
+### Per-PC file backups
+
+Configured on the Backups page's **Backup Settings** tab, per machine on that machine's
+**Backup** tab. Path selection lives in [backup_paths.py](backup_paths.py).
+
+**You never enumerate user profiles.** A pattern is written once with tokens and expanded
+on each PC at backup time, so it keeps being right as people come and go:
+
+| Token | Expands to |
+|---|---|
+| `%Users%` | every real profile (skips Public, Default, service accounts) |
+| `%Desktop%` `%Documents%` `%Downloads%` `%Pictures%` `%Favorites%` `%AppData%` `%LocalAppData%` | that user's **actual** folder, per user |
+| `%ProgramData%` `%SystemDrive%` `%windir%` `%ProgramFiles%` | machine-wide, no fan-out |
+
+```
+%Desktop%                      →  C:\Users\bob\OneDrive - Contoso\Desktop
+                                  C:\Users\carol\Desktop
+C:\Users\%Users%\Projects      →  C:\Users\bob\Projects, C:\Users\carol\Projects
+```
+
+> **Use `%Desktop%`, not `C:\Users\%Users%\Desktop`, for the standard folders.** With
+> OneDrive Known Folder Move — common in orgs — the literal path is an empty stub and the
+> real data lives under the OneDrive folder. The token reads each user's shell-folder
+> registry and follows the redirection; the literal path does not, and would back up
+> nothing while reporting success every night.
+
+**An unknown token is refused, never treated as a literal.** `%Userss%` would otherwise
+match nothing forever, with a green run beside it. Excludes take the same tokens plus
+globs (`*.tmp`, `**\node_modules\**`); a pattern with no backslash matches on filename
+anywhere, and excluding a folder excludes everything in it.
+
+The **Preview** panel resolves your patterns against a real machine's reported profiles,
+so you can see the actual folders — and the problems ("carol has no %Documents% folder
+recorded") — before anything runs.
+
+**Incremental, in chains.** Each run uploads only what changed; a full is forced every
+`backup.files_full_every` runs. Rotation deletes **whole chains** — never an archive
+inside one, because an incremental without its full restores to nothing.
+
+**Agents never hold the destination credential.** For S3 the hub mints a pre-signed PUT
+scoped to that machine's folder; for WebDAV the agent uploads to the hub, which streams it
+onward. And each machine gets a **derived** key, `HKDF(master, machine)`, not the master —
+so a stolen laptop's key opens that laptop's backups and nothing else. Restore is still
+one argument: the envelope header names the machine, and the master re-derives.
+
+**Open files are captured via VSS.** The agent creates a Volume Shadow Copy
+(`Win32_ShadowCopy`, the client-SKU route — `vssadmin create shadow` is Server-only) and
+reads from the snapshot, so an Outlook PST or a document someone left open is still
+backed up. If a snapshot cannot be created the run continues against the live filesystem
+and reports which files it could not read, rather than failing.
+
+**Junctions are never followed.** A Windows profile contains junctions pointing at their
+own ancestors; following them is an infinite walk.
+
+> **Status:** the backup path is complete — hub 1.29.0 (configuration, preview,
+> scheduling, chains, manifest, upload brokering) and agent 3.8.0 (path expansion, VSS,
+> walk, encrypt, upload). **Console-driven restore is not built yet**: recovering a file
+> today means `restore_backup.py` by hand, which works — the archive is a tar inside the
+> envelope and opens with the master key alone. The agent needs a signed release
+> (`sign_release.py --sign-agent`) before the fleet gains any of this, and the hub should
+> be deployed first. See [features.md](features.md).
 
 ## Signing releases
 

@@ -52,7 +52,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.28.0"
+HUB_VERSION = "1.29.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -726,7 +726,7 @@ HUB_RUNTIME_FILES = (
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
     "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
     "packages.py", "packages_web.py", "backups.py", "backups_web.py",
-    "alerts.py", "restore_backup.py", "requirements.txt",
+    "backup_paths.py", "alerts.py", "restore_backup.py", "requirements.txt",
 )
 HUB_RUNTIME_DIRS = ("templates", "static")
 
@@ -1619,6 +1619,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # a deploy aimed at the old name must follow it rather than stall forever on a
     # machine that no longer exists.
     packages.rename_machine(DB_PATH, dropped, survivor)
+    # And its backup configuration + run history, so a merged machine keeps backing up
+    # under the surviving name instead of silently dropping off the schedule. Existing
+    # archives stay under the old name's folder and key -- the envelope header records
+    # which machine it was sealed for, so they remain restorable.
+    backups.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor})
 
@@ -1903,12 +1908,28 @@ def start_deploy_scheduler():
 BACKUP_TICK_SECONDS = 60
 
 
-def backup_scheduler():
-    """Take the scheduled hub-database backup when one is due.
+def backup_machine_roster():
+    """Every machine the per-PC scheduler may consider.
 
-    Every knob is read fresh each pass and handed to backups.tick() as a value, so a
-    schedule change takes effect within a minute without a restart -- and so the whole
-    scheduler stays testable by calling tick() with an explicit clock.
+    backups.py deliberately does not know how to enumerate the fleet -- machine_info is
+    app.py's table -- so the roster is passed in, the same way the scheduler's knobs are.
+    """
+    with get_db_conn() as conn:
+        return [row["machine"] for row in
+                conn.execute("SELECT machine FROM machine_info ORDER BY machine ASC")]
+
+
+def backup_scheduler():
+    """Take the scheduled backups when they are due: the hub database, then PC files.
+
+    Every knob is read fresh each pass and handed to backups as a value, so a schedule
+    change takes effect within a minute without a restart -- and so the whole scheduler
+    stays testable by calling tick() with an explicit clock.
+
+    The two are in separate try blocks on purpose: a per-PC pass that raises must not stop
+    the hub database being backed up, and vice versa. That is the same reasoning as the
+    retention pruner's two blocks, and it matters more here -- these are the two halves of
+    "is anything backed up at all".
 
     Errors are caught and logged, never allowed to kill the thread. backups.tick() already
     turns an unreachable destination into a `failed` run row; what this catches is the
@@ -1931,7 +1952,33 @@ def backup_scheduler():
                 else:
                     print(f"[backup] Scheduled backup FAILED: {run['error']}")
         except Exception as e:
-            print(f"[backup] Scheduler pass failed: {e}")
+            print(f"[backup] Hub-database pass failed: {e}")
+
+        try:
+            expired, dispatched = backups.files_tick(
+                DB_PATH, LOG_DIR,
+                fleet_enabled=settings.get_bool(DB_PATH, "backup.files_enabled"),
+                fleet_destination=settings.get(DB_PATH, "backup.files_destination"),
+                fleet_include=settings.get_list(DB_PATH, "backup.files_include"),
+                fleet_exclude=settings.get_list(DB_PATH, "backup.files_exclude"),
+                interval_hours=settings.get_int(DB_PATH, "backup.files_interval_hours"),
+                full_every=settings.get_int(DB_PATH, "backup.files_full_every"),
+                keep_chains=settings.get_int(DB_PATH, "backup.files_keep_chains"),
+                limits={
+                    "max_file_mb": settings.get_int(DB_PATH, "backup.files_max_file_mb"),
+                    "max_set_gb": settings.get_int(DB_PATH, "backup.files_max_set_gb"),
+                    "use_vss": settings.get_bool(DB_PATH, "backup.files_use_vss"),
+                },
+                machines=backup_machine_roster(),
+                hub_url=HUB_URL,
+                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+            )
+            if expired or dispatched:
+                print(f"[backup] PC files: dispatched {dispatched}, "
+                      f"retired {expired} abandoned.")
+        except Exception as e:
+            print(f"[backup] PC-files pass failed: {e}")
+
         time.sleep(BACKUP_TICK_SECONDS)
 
 
@@ -2255,6 +2302,10 @@ def delete_machine(machine):
     # And drop its deployment targets, so a deploy isn't left stuck at 9/10 waiting on a
     # machine whose command rows fleet.delete_machine has just removed.
     packages.forget_machine(DB_PATH, machine_name)
+    # Drop its backup configuration too. Run history and the file manifest deliberately
+    # SURVIVE -- deleting a machine record does not mean its archives stopped existing,
+    # and those are exactly what someone wants when the deletion turns out to be a mistake.
+    backups.forget_machine(DB_PATH, machine_name)
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")
