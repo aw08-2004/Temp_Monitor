@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Backups - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. The key banner, schedule form, destination list and run history are
+   all built by backups.js from GET /api/backups -- including the destination-kind
+   vocabulary, so adding a kind to backups.DESTINATION_KINDS is a single edit.
+
+   The key banner sits ABOVE the tabs rather than inside one, because "the key that
+   decrypts every backup has never been written down" is not a detail of one view. It is
+   the thing that decides whether any of this is a backup at all.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Backups</h1>
+        <p class="stat-card__meta">
+            A consistent snapshot of the hub database, compressed, encrypted here, and
+            pushed offsite on a schedule. The storage provider only ever sees ciphertext.
+        </p>
+    </div>
+    <button class="btn btn--primary" type="button" id="run-now">Back up now</button>
+</div>
+
+<div id="key-banner"></div>
+
+<div class="tabs" role="tablist" aria-label="Backup views" data-tabs-key="backups">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-hub"
+            aria-controls="hub-pane" aria-selected="true">Hub database</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-destinations"
+            aria-controls="destinations-pane" aria-selected="false" tabindex="-1">Destinations</button>
+</div>
+
+<div class="tab-panel" id="hub-pane" role="tabpanel" aria-labelledby="tab-btn-hub"></div>
+<div class="tab-panel" id="destinations-pane" role="tabpanel" aria-labelledby="tab-btn-destinations" hidden></div>
+
+<!-- ------------------------------------------------------ destination editor -->
+<dialog class="modal" id="destination-modal">
+    <form method="dialog" id="destination-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="destination-modal-title">New destination</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="dest-name">Name</label>
+            <input class="input" id="dest-name" maxlength="80" autocomplete="off"
+                   placeholder="Offsite S3" style="width: 100%;">
+
+            <h3 class="perm-subhead">Storage</h3>
+            <div class="perm-scope-modes" id="dest-kinds"></div>
+
+            <div id="dest-s3" class="bk-pane">
+                <div class="pkg-row" style="margin-top: 0;">
+                    <div>
+                        <label class="setting__label" for="dest-endpoint">Endpoint</label>
+                        <input class="input" id="dest-endpoint" autocomplete="off" spellcheck="false"
+                               placeholder="https://s3.eu-west-1.amazonaws.com" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label class="setting__label" for="dest-region">Region</label>
+                        <input class="input" id="dest-region" autocomplete="off" spellcheck="false"
+                               placeholder="eu-west-1" style="width: 100%;">
+                    </div>
+                </div>
+                <div class="pkg-row">
+                    <div>
+                        <label class="setting__label" for="dest-bucket">Bucket</label>
+                        <input class="input" id="dest-bucket" autocomplete="off" spellcheck="false"
+                               placeholder="fleethub-backups" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label class="setting__label" for="dest-s3-prefix">Prefix <span class="setting__default">optional</span></label>
+                        <input class="input" id="dest-s3-prefix" autocomplete="off" spellcheck="false"
+                               placeholder="hub-a" style="width: 100%;">
+                    </div>
+                </div>
+                <label class="checkbox" style="margin-top: var(--space-3);">
+                    <input type="checkbox" id="dest-path-style" checked> Path-style addressing
+                </label>
+                <p class="setting__default">
+                    On for MinIO and most self-hosted gateways
+                    (<code>host/bucket/key</code>); off for AWS
+                    (<code>bucket.host/key</code>). Getting it wrong shows up as a
+                    signature error, not a 404.
+                </p>
+            </div>
+
+            <div id="dest-webdav" class="bk-pane" hidden>
+                <label class="setting__label" for="dest-base-url">Base URL</label>
+                <input class="input" id="dest-base-url" autocomplete="off" spellcheck="false"
+                       placeholder="https://cloud.example.org/remote.php/dav/files/backup"
+                       style="width: 100%;">
+                <label class="setting__label" for="dest-dav-prefix" style="margin-top: var(--space-3);">
+                    Prefix <span class="setting__default">optional</span>
+                </label>
+                <input class="input" id="dest-dav-prefix" autocomplete="off" spellcheck="false"
+                       placeholder="fleethub" style="width: 100%;">
+            </div>
+
+            <h3 class="perm-subhead">Credentials</h3>
+            <p class="setting__default" id="dest-secret-help" style="margin-bottom: var(--space-3);"></p>
+            <div class="pkg-row" style="margin-top: 0;">
+                <div>
+                    <label class="setting__label" for="dest-user" id="dest-user-label">Access key id</label>
+                    <input class="input" id="dest-user" autocomplete="off" spellcheck="false"
+                           style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="dest-secret" id="dest-secret-label">Secret access key</label>
+                    <input class="input" id="dest-secret" type="password" autocomplete="new-password"
+                           style="width: 100%;">
+                </div>
+            </div>
+
+            <p class="setting__error" id="destination-error"></p>
+            <p class="setting__default" id="destination-status"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="destination-cancel">Cancel</button>
+            <button class="btn" type="button" id="destination-test">Test connection</button>
+            <button class="btn btn--primary" type="button" id="destination-save">Save destination</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- ------------------------------------------------------ the master key -->
+<dialog class="modal" id="key-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title" id="key-modal-title">Backup encryption key</h2>
+        </div>
+        <div class="modal__body">
+            <p class="setting__help">
+                This key is the only thing that can decrypt your backups. It is not stored
+                in the hub database, and it is not recoverable &mdash; if this server is
+                lost and you have not written this down somewhere else, every backup ever
+                taken becomes unreadable.
+            </p>
+            <div class="bk-key" id="key-value"></div>
+            <p class="setting__default">
+                Store it in a password manager or a sealed envelope &mdash; somewhere that
+                does not depend on this machine. To restore, you need this key and the
+                backup file, and nothing else:
+            </p>
+            <div class="bk-key bk-key--command">python restore_backup.py --in &lt;file&gt;.fhb --out temp_v2.db --verify</div>
+            <p class="setting__error" id="key-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="key-copy">Copy key</button>
+            <button class="btn btn--primary" type="button" id="key-ack">I have stored it safely</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/backups.js') }}"></script>
+{% endblock %}

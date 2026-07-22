@@ -186,10 +186,43 @@ REGISTRY = (
        "int", 30, minimum=10, maximum=3600, unit="seconds",
        help="How often the hub checks for deployments that are due and reads finished "
             "attempts back. Also the floor on how quickly a scheduled window starts."),
+
+    # ---------------- Backups: the hub's own database, offsite ----------------
+    # Credentials are deliberately ABSENT from this registry -- they live encrypted in a
+    # sidecar file (see backups.py's secret store). Settings are rendered into a form,
+    # returned wholesale by as_dict(), and partly shipped to agents by agent_config();
+    # an S3 secret key belongs in none of those places. What lives here is only the
+    # schedule, and which destination it aims at.
+    _s("backup.hub_enabled", "backup", "Back up the hub database on a schedule", "bool",
+       False,
+       help="Off until you have created a destination and stored the encryption key "
+            "somewhere other than this server. Nothing is uploaded while this is off."),
+    _s("backup.hub_destination", "backup", "Back up to", "str", "",
+       help="The id of the destination scheduled backups are written to. Set this from "
+            "the Backups page, which offers the configured destinations by name -- this "
+            "field is the raw id it writes."),
+    _s("backup.hub_interval_hours", "backup", "Back up every", "int", 24,
+       minimum=1, maximum=720, unit="hours",
+       help="Measured from the last ATTEMPT, not the last success -- a destination "
+            "that has been down for a week is retried on this cadence rather than on "
+            "every scheduler tick."),
+    _s("backup.hub_keep_generations", "backup", "Keep this many backups", "int", 14,
+       minimum=1, maximum=365, unit="generations",
+       help="After a successful upload, older backups beyond this count are DELETED "
+            "from the destination. At the default daily cadence this is two weeks of "
+            "history. Counted from what the destination actually holds, so a file you "
+            "delete by hand is not silently replaced."),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
-SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy")
+SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup")
+
+# The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
+# who does not also hold `manage_settings`. Configuring the backup schedule IS managing
+# backups; requiring the broader capability to turn one on would make the narrow one
+# useless. Declared here, next to the registry, so it cannot drift from the keys above.
+BACKUP_SCHEDULE_KEYS = ("backup.hub_enabled", "backup.hub_destination",
+                        "backup.hub_interval_hours", "backup.hub_keep_generations")
 
 
 # ---------------------------------------------------------------- storage
@@ -487,6 +520,7 @@ _SECTION_LABELS = {
     "metrics": "History Metrics",
     "fleet": "Fleet",
     "deploy": "Package Deployment",
+    "backup": "Backups",
 }
 
 

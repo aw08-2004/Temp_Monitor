@@ -272,7 +272,7 @@ def test_schema_shape():
     doc = settings.schema(db)
     names = [s["name"] for s in doc["sections"]]
     check("all sections present in order",
-          names == ["computer", "hub", "data", "metrics", "fleet", "deploy"])
+          names == ["computer", "hub", "data", "metrics", "fleet", "deploy", "backup"])
     check("sections carry display labels",
           any(s["label"] == "Data & Retention" for s in doc["sections"]))
 

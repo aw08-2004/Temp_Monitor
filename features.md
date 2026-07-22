@@ -129,11 +129,69 @@ Two implementation-level notes worth carrying forward:
 
 ---
 
-## 📋 1. Backups via HTTPS   ·   build next — two subjects
+## 🚧 1. Backups via HTTPS   ·   1a done (hub 1.28.0), 1b next
 
-**1a. Hub database** — scheduled, compressed, offsite.
-**1b. Per-PC file backups** — configured user folders (e.g. Desktop, Documents), with
-defaults in Settings and per-PC extra paths in a new machine-page **Backup tab**.
+**1a. Hub database** — ✅ built. `backups.py` (envelope, destinations, snapshot/rotate
+scheduler — flask-free) + `backups_web.py` (console API), a Backups page, `backup.*`
+settings, and `restore_backup.py`. Delivered as specified below; the open parameters were
+resolved as:
+
+- **Retention/rotation**: count-based, `backup.hub_keep_generations` (14 default = two
+  weeks at the default daily cadence). Rotation reads the **remote listing**, not a local
+  record, and orders by object key — every key is timestamp-prefixed, so "newest N" is a
+  lexicographic sort and never depends on S3's and WebDAV's disagreeing mtime formats. A
+  generation deleted by hand stays deleted; `keep < 1` is refused rather than treated as
+  "empty the bucket".
+- **Chunking**: 4 MiB AES-256-GCM chunks, nonce = per-artifact random prefix ‖ counter.
+  The AAD binds `sha256(header) ‖ counter ‖ final-flag`, so header edits, reordering and —
+  the likely one — **truncated uploads** all fail closed. No resumable upload in 1a: the
+  artifact is built to a temp file and PUT in one shot, because a partial object in the
+  bucket looks exactly like a good one to the next rotation pass. Resumability is a #1b
+  concern, where files are per-machine and links are worse.
+- **S3 signing**: SigV4 written out in ~100 lines of stdlib `hmac` rather than taking
+  botocore (~80 MB) onto a hub whose whole sparse install is 0.3 MB. Verified in
+  `tests/test_backups.py` against AWS's own published vectors. `sigv4_presign()` is the
+  same signer in query-string form — unused by 1a, and there precisely so #1b can hand a
+  machine a PUT URL scoped to `<prefix>/machines/<machine>/` without it ever holding the
+  master credential.
+
+**The key-custody story, designed explicitly** (the roadmap flagged it as the sharpest
+edge, so it is not left implicit):
+
+- `BACKUP_MASTER_KEY` lives in `.env` — generated once, never in the `settings` table,
+  never in the database it protects. Each artifact carries its own random data key wrapped
+  by it, so no two artifacts share a key stream.
+- Destination **credentials** are encrypted with that master key into a sidecar file
+  (`backup_secrets.json`), keyed by destination id (which is the AAD, so a credential blob
+  copied between destinations fails rather than authenticating somewhere unintended).
+- **`restore_backup.py` needs the key and the file, and nothing else** — no hub, no
+  database, no network. That is the only form of "we can restore" that survives losing the
+  server, and it is why the tool ships in `HUB_RUNTIME_FILES`.
+- The console **nags until a human confirms the key is stored off the machine**
+  (`master_key.escrowed_at`), because a hub happily uploading backups nobody can decrypt
+  looks identical to a hub that is working. Every reveal is audited.
+
+Two implementation-level notes worth carrying forward:
+
+- `manage_backups` gets its own narrow write path to the four `backup.*` settings
+  (`PUT /api/backups/schedule`, allow-listed from `settings.BACKUP_SCHEDULE_KEYS`).
+  Otherwise arming a schedule would have required `manage_settings` — i.e. the whole
+  point of a narrow capability, undone.
+- Backups are **not machine-scoped**, deliberately: a hub database backup is the entire
+  hub, so there is no coherent way to hand it to an operator who sees nine machines out
+  of forty. `manage_backups` should be read as "can eventually read everything, via a
+  restore". #1b's per-machine file backups *do* get the usual `access.in_scope()`
+  treatment.
+
+**Also fixed here** (found while wiring this up): `packages.py` and `packages_web.py` were
+never added to `HUB_RUNTIME_FILES`/`$HubRuntimeFiles` in 1.27.x, so a sparse hub install
+or self-update fetched neither and the hub died on import at startup. Both lists now carry
+every module `app.py` imports, and both say why.
+
+**1b. Per-PC file backups** — 📋 next. Configured user folders (e.g. Desktop, Documents),
+with defaults in Settings and per-PC extra paths in a new machine-page **Backup tab**.
+Everything below still stands; `backup_runs.machine`, `object_key(..., machine=)` and
+`sigv4_presign()` already exist for it.
 
 - **Storage: both S3-compatible and WebDAV, Admin's choice per destination.** An Admin can
   configure more than one destination, each typed `s3` or `webdav`. Credentials live in
@@ -253,7 +311,7 @@ present.
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
 2. ~~**#5 Deploy packages**~~ — done, hub 1.27.0 (pending an agent release)
-3. **#1 Backups** — hub DB first, then per-PC files  ← next
+3. **#1 Backups** — ~~hub DB~~ done, hub 1.28.0; **per-PC files ← next**
 4. **#4 Active Directory** — Entra login + group mapping first, then LDAP sync
 5. **#2 Remote view & control** — spike first, then build
 

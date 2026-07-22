@@ -350,6 +350,92 @@ Agent (token auth): `GET /api/agent/packages/<sha256>`.
 Tunables live in Settings under **Package Deployment**: retry defaults, the upload size
 limit, and the scheduler interval.
 
+## Backups
+
+A consistent snapshot of the hub database, compressed, encrypted **on the hub** and pushed
+offsite on a schedule. Core logic in [backups.py](backups.py), HTTP surface in
+[backups_web.py](backups_web.py), UI at `/backups`, and the restore tool at
+[restore_backup.py](restore_backup.py). State lives in the same SQLite DB
+(`backup_destinations`, `backup_runs`, `backup_state`).
+
+**`VACUUM INTO`, never a file copy.** The database is opened WAL and written live by the
+ingest path and the `db_writer` thread. Copying `temp_v2.db` while that is happening gives
+you a torn file plus a `-wal` sidecar you didn't copy — a backup that restores to
+"database disk image is malformed", discovered on the day you need it. `VACUUM INTO` asks
+SQLite for a transactionally consistent, already-compacted snapshot instead.
+
+**The provider only ever sees ciphertext.** Snapshot → gzip → AES-256-GCM in 4 MiB chunks
+→ HTTPS PUT. Each artifact gets its own random data key, wrapped by the master key. Chunk
+AAD binds `sha256(header) ‖ counter ‖ final-flag`, so a tampered header, a reordered chunk
+and — the one that actually happens — a **truncated upload** all fail to decrypt rather
+than restoring as a plausible-looking corrupt database.
+
+> ### ⚠️ The master key is not recoverable
+>
+> `BACKUP_MASTER_KEY` in `.env` is the only thing that can decrypt your backups. It is
+> deliberately **not** in the hub database — a key stored inside the thing it protects
+> protects nothing. If this server is lost and the key was never written down elsewhere,
+> every backup ever taken is permanently unreadable.
+>
+> The hub generates it once, shows it once, and nags on the Backups page until an operator
+> confirms it is stored somewhere else. Every reveal is written to the audit log.
+>
+> To restore, you need the key and the file — **nothing else**. No hub, no database, no
+> network:
+>
+> ```
+> python restore_backup.py --in 20260721T030000Z-temp_v2.db.gz.fhb --out temp_v2.db --verify
+> python restore_backup.py --in <file>.fhb --info     # just read the header
+> ```
+>
+> Then stop the hub service, move the old `logs/temp_v2.db` aside (with its `-wal`/`-shm`),
+> drop the restored file in, and start the service. `--verify` runs
+> `PRAGMA integrity_check` first, which is worth the seconds.
+
+**Destinations: S3-compatible or WebDAV, your choice per destination.** S3 covers AWS,
+MinIO, Backblaze B2 and Wasabi — signed with SigV4 implemented in ~100 lines of stdlib
+`hmac` rather than pulling ~80 MB of botocore onto a hub whose sparse install is 0.3 MB,
+and checked against AWS's published test vectors in the suite. WebDAV covers Nextcloud,
+ownCloud and IIS, with Basic auth over TLS. Plain `http://` is refused for anything but a
+loopback host, so a typo cannot ship your credentials in clear.
+
+**Credentials never touch the `settings` table.** Settings get rendered into a form,
+returned wholesale by `as_dict()`, and partly shipped to agents in `agent_config()` — an
+S3 secret key belongs in none of those. They live encrypted with the master key in
+`logs/backup_secrets.json`, addressed by destination id (which is the AAD, so a credential
+blob copied between destinations fails rather than authenticating somewhere unintended).
+They go in and are never returned — the edit form's empty credential field means
+"unchanged".
+
+**Rotation reads the bucket, not a local record.** After each successful upload, artifacts
+beyond `backup.hub_keep_generations` are deleted from the destination. Ordering comes from
+the object key, which is timestamp-prefixed, so "newest N" is a lexicographic sort with no
+dependence on remote mtime (S3 and WebDAV report it differently, from different clocks). A
+generation you delete by hand stays deleted; `keep < 1` is refused rather than emptying the
+bucket.
+
+**Authorization** is the `manage_backups` capability — and it is deliberately *not*
+machine-scoped. A hub database backup is the whole hub, so there is no coherent way to
+hand it to an operator who sees nine machines out of forty. Read `manage_backups` as "can
+eventually read everything, via a restore". The same capability also writes the four
+`backup.*` schedule settings through `PUT /api/backups/schedule`; without that, arming a
+backup would need `manage_settings` too, which would defeat the point of a narrow
+capability.
+
+**Endpoints** (all `manage_backups`): `GET /api/backups`, `GET /api/backups/runs`,
+`POST /api/backups/key`, `POST /api/backups/key/reveal`,
+`POST /api/backups/key/escrowed`, `POST /api/backups/destinations`,
+`PUT|DELETE /api/backups/destinations/<id>`, `POST /api/backups/destinations/<id>/test`,
+`PUT /api/backups/schedule`, `POST /api/backups/run`.
+
+> Revealing the key is a **POST with a JSON body**, not a GET — so it cannot be triggered
+> by a link, an `<img src>`, or anything else a browser fetches on someone's behalf. Keep
+> it that way.
+
+Tunables live in Settings under **Backups**, or on the Backups page itself: on/off,
+destination, interval, and generations to keep. Per-PC file backups are the next piece of
+this feature and are not built yet.
+
 ## Signing releases
 
 Two artifacts in this repo are Ed25519-signed so a compromised hub or repo commit

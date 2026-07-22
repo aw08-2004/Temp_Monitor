@@ -31,22 +31,28 @@ import alerts
 import settings
 import permissions
 import packages
+import backups
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
 from packages_web import create_packages_blueprint
+from backups_web import create_backups_blueprint
 
 # Load .env from next to this file rather than the cwd -- under the Windows service the working
 # directory isn't the hub folder -- and with utf-8-sig so a UTF-8 BOM (which PowerShell and
 # Windows editors happily prepend) doesn't corrupt the first key and blank out the config.
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), encoding="utf-8-sig")
+# The path is kept: backups.py appends BACKUP_MASTER_KEY to this exact file, and guessing
+# it a second time from a different base is how the key ends up written somewhere the next
+# restart doesn't read.
+ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(ENV_PATH, encoding="utf-8-sig")
 
 # ================================
 # CONFIG
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.27.1"
+HUB_VERSION = "1.28.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -308,32 +314,78 @@ def resolve_primary_temp(machine, reported_temp, sensors):
     return rederived if rederived is not None else reported_temp
 
 
-def _find_sensor_strict(sensors, sensor_type, name_substrs, hardware_substrs=None):
+def _find_sensor_strict(sensors, sensor_type, name_substrs):
     """Like _find_sensor_value, but identifies a metric by its sensor NAME rather than
     by hardware category, and returns None when no name matches -- never a blind
     first-candidate fallback.
 
-    Used for disk usage and network throughput, where the hardware identifier isn't a
-    single stable substring (storage is "/nvme/","/hdd/","/ssd/"...) but the sensor name
-    is distinctive ("Used Space", "Download Speed"). `hardware_substrs`, when given,
-    additionally requires the hardware to match one of the fragments -- e.g. "nic" to keep
-    disk read/write throughput from being mistaken for network throughput (both are
-    SensorType.Throughput). First match wins; on a multi-NIC host that is whichever adapter
-    LHM lists first."""
+    Used for disk usage, where the hardware identifier isn't a single stable substring
+    (storage is "/nvme/","/hdd/","/ssd/"...) but the sensor name is distinctive
+    ("Used Space"). First match wins. Network throughput does NOT go through here --
+    picking the first match is exactly the bug _network_throughput exists to avoid."""
     for s in sensors:
         if s.get("type") != sensor_type:
             continue
         value = s.get("value")
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             continue
-        if hardware_substrs:
-            haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
-            if not any(h in haystack for h in hardware_substrs):
-                continue
         name = str(s.get("name") or "").lower()
         if any(w in name for w in name_substrs):
             return value
     return None
+
+
+def _network_throughput(sensors):
+    """(download_bps, upload_bps) for this machine's busiest network adapter.
+
+    Windows exposes a LOT of NICs, and LHM reports every one of them: Bluetooth,
+    disconnected Wi-Fi, Hyper-V/WSL virtual switches, and one pseudo-adapter per NDIS
+    filter bound to a real NIC ("Ethernet", "Ethernet-QoS Packet Scheduler-0000",
+    "Ethernet-WFP Native MAC Layer LightWeight Filter-0000"...). Fleet machines routinely
+    report 20-60 adapters, and the idle ones are enumerated ahead of the live one -- so
+    taking the first NIC in the block charted a flat 0 on every machine whose real adapter
+    didn't happen to come first. That is the bug this function exists to fix.
+
+    Summing is not the answer either: those filter pseudo-adapters mirror their parent's
+    counters, so a sum reports the same traffic four or five times over. Instead pick the
+    single busiest adapter by rx+tx and report ITS pair. The mirrors tie with their parent
+    on the same value, so the winner is the real number counted exactly once, and both
+    directions come from one adapter rather than being mixed across two.
+
+    (None, None) when the block carries no NIC throughput at all -- no NIC hardware, or an
+    agent with network collection switched off. A genuinely idle machine reports (0.0, 0.0),
+    which is a real reading and charts as such, not as a gap.
+    """
+    # {hardware_id: [download, upload]} -- grouped per adapter so the pair stays coherent.
+    per_nic = {}
+    for s in sensors:
+        # Disk read/write rate shares SensorType.Throughput with network, so pin to NIC
+        # hardware ("/nic/...") to avoid mixing them up.
+        if s.get("type") != "Throughput":
+            continue
+        hardware_id = str(s.get("hardware_id") or "")
+        if "nic" not in hardware_id.lower():
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        name = str(s.get("name") or "").lower()
+        if "download" in name:
+            slot = 0
+        elif "upload" in name:
+            slot = 1
+        else:
+            continue
+        pair = per_nic.setdefault(hardware_id, [None, None])
+        # An adapter reports each direction once; keep the larger if a block ever repeats
+        # one, so a stray 0 can't displace a real reading.
+        if pair[slot] is None or float(value) > pair[slot]:
+            pair[slot] = float(value)
+
+    if not per_nic:
+        return None, None
+    rx, tx = max(per_nic.values(), key=lambda p: (p[0] or 0.0) + (p[1] or 0.0))
+    return rx, tx
 
 
 def _find_sensor_exact(sensors, sensor_type, exact_name, hardware_substrs=None):
@@ -380,6 +432,7 @@ def extract_diagnostics(sensors):
             "disk_load_pct": None, "net_rx_bps": None, "net_tx_bps": None,
         }
     mem_used_gb, mem_total_gb = _memory_gb(sensors)
+    net_rx_bps, net_tx_bps = _network_throughput(sensors)
     return {
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
@@ -393,10 +446,9 @@ def extract_diagnostics(sensors):
         "mem_total_gb": mem_total_gb,
         # "Used Space" is unique to storage devices, so name alone identifies it.
         "disk_load_pct": _find_sensor_strict(sensors, "Load", ["used space"]),
-        # Network throughput shares SensorType.Throughput with disk read/write rate, so
-        # pin to NIC hardware ("/nic/...") to avoid mixing them up.
-        "net_rx_bps": _find_sensor_strict(sensors, "Throughput", ["download"], ["nic"]),
-        "net_tx_bps": _find_sensor_strict(sensors, "Throughput", ["upload"], ["nic"]),
+        # Busiest NIC, not the first one listed -- see _network_throughput.
+        "net_rx_bps": net_rx_bps,
+        "net_tx_bps": net_tx_bps,
     }
 
 
@@ -659,11 +711,22 @@ HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/h
 
 # The files that constitute a hub install. Anything outside this set (the agent tree,
 # tests, docs) is deliberately not shipped to a server.
+#
+# EVERY module app.py imports has to be listed here. A missing one is not a degraded
+# feature, it is an ImportError at startup that takes the whole console down -- which is
+# exactly what happened to packages.py/packages_web.py in 1.27.x, where a sparse install
+# fetched neither and the hub could not boot. If you add a module, add it here and to
+# $HubRuntimeFiles in install.ps1 in the same commit.
+#
+# restore_backup.py is not imported by anything -- it is here because it is the tool you
+# need ON the replacement server, and the one moment you need it is the moment this file
+# list is the only thing that ever put it there.
 # MUST stay in sync with $HubRuntimeFiles/$HubRuntimeDirs in install.ps1.
 HUB_RUNTIME_FILES = (
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
     "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
-    "alerts.py", "requirements.txt",
+    "packages.py", "packages_web.py", "backups.py", "backups_web.py",
+    "alerts.py", "restore_backup.py", "requirements.txt",
 )
 HUB_RUNTIME_DIRS = ("templates", "static")
 
@@ -991,6 +1054,12 @@ app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, acc
 # and HUB_URL because the agent's download URL has to be absolute.
 app.register_blueprint(create_packages_blueprint(
     DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
+))
+# Backup destinations, the encryption key, and the hub-database backup itself. LOG_DIR
+# holds the encrypted credential store and the scratch space a snapshot is built in;
+# ENV_PATH is where the master key is written, and must be the same file load_dotenv read.
+app.register_blueprint(create_backups_blueprint(
+    DB_PATH, LOG_DIR, ENV_PATH, login_required, access, hub_version=HUB_VERSION
 ))
 
 
@@ -1827,12 +1896,56 @@ def start_deploy_scheduler():
     threading.Thread(target=deploy_scheduler, daemon=True, name="deploy_scheduler").start()
 
 
+# How often the backup scheduler wakes to ask whether a backup is due. Same reasoning as
+# PRUNE_TICK_SECONDS: sleeping the whole interval would mean an operator who shortens
+# "back up every" from weekly to daily sees no effect for up to a week, which reads as
+# "the setting doesn't work". A minute of granularity on a job measured in hours is free.
+BACKUP_TICK_SECONDS = 60
+
+
+def backup_scheduler():
+    """Take the scheduled hub-database backup when one is due.
+
+    Every knob is read fresh each pass and handed to backups.tick() as a value, so a
+    schedule change takes effect within a minute without a restart -- and so the whole
+    scheduler stays testable by calling tick() with an explicit clock.
+
+    Errors are caught and logged, never allowed to kill the thread. backups.tick() already
+    turns an unreachable destination into a `failed` run row; what this catches is the
+    unexpected, and a backup thread that died silently in March is discovered in July.
+    """
+    while True:
+        try:
+            run = backups.tick(
+                DB_PATH, LOG_DIR,
+                enabled=settings.get_bool(DB_PATH, "backup.hub_enabled"),
+                destination_id=settings.get(DB_PATH, "backup.hub_destination"),
+                interval_hours=settings.get_int(DB_PATH, "backup.hub_interval_hours"),
+                keep=settings.get_int(DB_PATH, "backup.hub_keep_generations"),
+                hub_version=HUB_VERSION,
+            )
+            if run is not None:
+                if run["status"] == backups.RUN_SUCCEEDED:
+                    print(f"[backup] Uploaded {run['object_key']} "
+                          f"({run['stored_bytes']} bytes).")
+                else:
+                    print(f"[backup] Scheduled backup FAILED: {run['error']}")
+        except Exception as e:
+            print(f"[backup] Scheduler pass failed: {e}")
+        time.sleep(BACKUP_TICK_SECONDS)
+
+
+def start_backup_scheduler():
+    threading.Thread(target=backup_scheduler, daemon=True, name="backup_scheduler").start()
+
+
 init_db()
 fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
 permissions.init_permissions_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
+backups.init_backups_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()
@@ -1842,6 +1955,7 @@ start_companion_version_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
+start_backup_scheduler()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD

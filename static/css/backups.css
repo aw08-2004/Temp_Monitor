@@ -1,0 +1,103 @@
+/* Backups page. Only what components.css, permissions.css and packages.css don't
+   already cover: the key banner, the key display, and the run-status dot. */
+
+/* The banner is the page's conscience. It is styled as a warning -- not a neutral
+   note -- whenever the key has never been written down, because a hub happily uploading
+   encrypted backups nobody can decrypt looks exactly like a hub that is working. */
+.bk-banner {
+    display: flex;
+    gap: var(--space-3);
+    align-items: flex-start;
+    padding: var(--space-4);
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    margin-bottom: var(--space-5);
+}
+
+.bk-banner--warn {
+    border-color: var(--warning, #d29922);
+    /* color-mix keeps the tint honest in both themes rather than hardcoding a light
+       yellow that turns unreadable on the dark one. */
+    background: color-mix(in srgb, var(--warning, #d29922) 12%, var(--card-bg));
+}
+
+.bk-banner--danger {
+    border-color: var(--danger, #f85149);
+    background: color-mix(in srgb, var(--danger, #f85149) 12%, var(--card-bg));
+}
+
+.bk-banner__body { flex: 1; }
+
+.bk-banner__title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: var(--space-1, 4px);
+}
+
+.bk-banner__text {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    max-width: 78ch;
+}
+
+.bk-banner__actions {
+    display: flex;
+    gap: var(--space-2);
+    flex: none;
+}
+
+/* The key itself, and the restore command. Monospace and selectable-looking, because
+   the operator's job here is to copy a string exactly. Wraps rather than scrolls: a key
+   you have to scroll sideways to read is a key that gets copied wrong. */
+.bk-key {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-sm);
+    color: var(--text);
+    background: var(--console-bg, rgba(127, 127, 127, 0.12));
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm, 6px);
+    padding: var(--space-3);
+    margin: var(--space-3) 0;
+    word-break: break-all;
+    user-select: all;
+}
+
+.bk-key--command {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    user-select: all;
+}
+
+.bk-pane[hidden] { display: none; }
+
+/* Run status. Colour is never the only signal -- every row also carries the status word
+   -- so this reads correctly without colour vision. */
+.bk-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    margin-right: var(--space-2);
+    vertical-align: middle;
+    background: var(--muted);
+}
+
+.bk-dot--succeeded { background: var(--success, #3fb950); }
+.bk-dot--failed    { background: var(--danger, #f85149); }
+.bk-dot--running   { background: var(--accent, #58a6ff); }
+
+.bk-schedule-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+}
+
+.bk-error {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    word-break: break-word;
+    max-width: 52ch;
+}

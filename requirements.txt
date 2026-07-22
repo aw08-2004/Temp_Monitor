@@ -6,3 +6,7 @@ Flask-SocketIO
 wmi
 pywin32
 waitress
+# Backup encryption (AES-256-GCM). Authlib already depends on it, so this is a newly
+# explicit requirement rather than a new download -- but backups.py must not be at the
+# mercy of another package's dependency tree for the thing that encrypts them.
+cryptography

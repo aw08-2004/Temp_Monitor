@@ -98,6 +98,40 @@ def test_network_matcher_ignores_disk():
     check("no NIC => net_tx is None", d["net_tx_bps"] is None)
 
 
+def test_network_picks_the_busiest_adapter():
+    """The regression that made the Network In/Out panels useless: a real Windows box
+    reports dozens of NICs, the idle ones (Bluetooth, disconnected Wi-Fi, Hyper-V/WSL
+    switches) sort ahead of the live one, and taking the first NIC charted a flat 0 on
+    every machine whose real adapter didn't happen to come first. Block below mirrors
+    what the fleet actually reports, including the NDIS filter pseudo-adapters that
+    duplicate the parent NIC's counters -- summing those would multiply the traffic."""
+    print("\n-- the busiest NIC wins, and mirrored filter adapters aren't double-counted --")
+    real, mirror = "/nic/{eth-real}", "/nic/{eth-wfp-filter}"
+    block = [
+        s("Download Speed", 0.0, "Throughput", "/nic/{bt}", "Bluetooth Network Connection"),
+        s("Upload Speed", 0.0, "Throughput", "/nic/{bt}", "Bluetooth Network Connection"),
+        s("Download Speed", 0.0, "Throughput", "/nic/{lac1}", "Local Area Connection* 1"),
+        s("Upload Speed", 0.0, "Throughput", "/nic/{lac1}", "Local Area Connection* 1"),
+        s("Download Speed", 2679.8, "Throughput", real, "Ethernet"),
+        s("Upload Speed", 1057.3, "Throughput", real, "Ethernet"),
+        # Same physical NIC seen through an NDIS filter: near-identical, must not add.
+        s("Download Speed", 2679.7, "Throughput", mirror, "Ethernet-WFP Native MAC Layer"),
+        s("Upload Speed", 1057.3, "Throughput", mirror, "Ethernet-WFP Native MAC Layer"),
+        s("Download Speed", 0.0, "Throughput", "/nic/{wifi}", "Wi-Fi"),
+        s("Upload Speed", 0.0, "Throughput", "/nic/{wifi}", "Wi-Fi"),
+        s("Read Rate", 999999.0, "Throughput", "/nvme/0", "Samsung SSD"),
+    ]
+    d = app.extract_diagnostics(block)
+    check("an idle adapter listed first does not win", d["net_rx_bps"] == 2679.8)
+    check("upload comes from that same adapter", d["net_tx_bps"] == 1057.3)
+
+    idle = [s("Download Speed", 0.0, "Throughput", "/nic/{bt}", "Bluetooth"),
+            s("Upload Speed", 0.0, "Throughput", "/nic/{bt}", "Bluetooth")]
+    d_idle = app.extract_diagnostics(idle)
+    check("a genuinely idle machine reports 0, not a gap",
+          d_idle["net_rx_bps"] == 0.0 and d_idle["net_tx_bps"] == 0.0)
+
+
 def test_diagnostics_empty_has_all_keys():
     print("\n-- an empty/None block returns every key as None --")
     for block in (None, []):
@@ -243,6 +277,7 @@ def test_enabled_history_metrics():
 if __name__ == "__main__":
     test_diagnostics_extracts_all_metrics()
     test_network_matcher_ignores_disk()
+    test_network_picks_the_busiest_adapter()
     test_diagnostics_empty_has_all_keys()
     test_ingest_stores_metric_columns()
     test_ingest_respects_collection_toggles()

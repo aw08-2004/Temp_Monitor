@@ -82,10 +82,14 @@ $LegacyHubServiceId  = "TempMonitorHub"
 # The hub only needs these; the repo also carries the 85 MB agent/ tree, tests and docs
 # that have no business on a server. Anything not listed here is not installed.
 # Keep in sync with the same list in app.py's self-updater.
+# EVERY module app.py imports must be listed. A missing one is an ImportError at startup,
+# not a missing feature -- which is what happened to packages.py/packages_web.py in
+# 1.27.x, where a sparse install could not boot at all.
 $HubRuntimeFiles = @(
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
     "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
-    "alerts.py", "requirements.txt"
+    "packages.py", "packages_web.py", "backups.py", "backups_web.py",
+    "alerts.py", "restore_backup.py", "requirements.txt"
 )
 $HubRuntimeDirs  = @("templates", "static")
 # Source archive for both first install and self-update. codeload serves a zip of a branch
