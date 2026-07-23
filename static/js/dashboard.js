@@ -1,13 +1,8 @@
-// Thresholds come from the server (they're operator-settable in Settings), via data
-// attributes on #dashboard-config -- same idiom as machine.js. These used to be
-// hardcoded 40/85 here, which meant the Dashboard and the machine page could disagree
-// about whether the same reading was overheating once the setting moved.
-const dashboardConfig = document.getElementById('dashboard-config');
-const OVERHEAT_THRESHOLD = Number(dashboardConfig.dataset.overheatThreshold);
-const LOW_LOAD_THRESHOLD = Number(dashboardConfig.dataset.lowLoadThreshold);
-
-requestNotificationPermission();
-
+// The Dashboard is a live temperature + online-status view and deliberately does NOT flag
+// overheating. Overheating is evaluated server-side from a rolling AVERAGE (a momentary
+// spike is not an alert) and surfaced in the Alerts tab, so a red card here -- based on a
+// single instantaneous reading -- would both contradict the average and duplicate the
+// alert. See app.evaluate_overheat_once and the Alerts tab.
 const socket = connectSocketWithStatus();
 const machineCards = document.getElementById('machine-cards');
 const emptyStateEl = document.getElementById('empty-state');
@@ -25,7 +20,7 @@ function goToMachine(machine) {
     window.location.href = '/machine/' + encodeURIComponent(machine);
 }
 
-function updateMachineCard(machine, temp, threshold, uptimeSeconds, info, diagnostics) {
+function updateMachineCard(machine, temp, uptimeSeconds, info) {
     let card = document.getElementById('card-' + machine);
     if (!card) {
         card = document.createElement('div');
@@ -86,26 +81,9 @@ function updateMachineCard(machine, temp, threshold, uptimeSeconds, info, diagno
     if (temp === undefined || temp === null) return;
 
     document.getElementById('temp-' + machine).innerText = Number(temp).toFixed(1) + ' °C';
-
-    const cpuLoadPct = diagnostics && typeof diagnostics.cpu_load_pct === 'number' ? diagnostics.cpu_load_pct : null;
-    const status = classifyOverheatStatus(temp, threshold, cpuLoadPct, LOW_LOAD_THRESHOLD);
-
-    if (status === 'normal') {
-        card.classList.remove('stat-card--overheat');
-        setStatusPill(statusEl, 'ok', 'Normal');
-        return;
-    }
-
-    const wasOverheating = card.classList.contains('stat-card--overheat');
-    card.classList.add('stat-card--overheat');
-    if (status === 'overheat-expected') {
-        setStatusPill(statusEl, 'warn', '🔥 Overheating (high load)');
-    } else {
-        setStatusPill(statusEl, 'danger', '🔥 Overheating (low load — investigate)');
-    }
-    if (!wasOverheating) {
-        notifyOverheat(machine, temp);
-    }
+    // A card on the live Dashboard is, by construction, a machine currently reporting.
+    // Overheating is not flagged here (see the top of this file).
+    setStatusPill(statusEl, 'ok', 'Online');
 }
 
 async function refreshMachineInfo() {
@@ -124,7 +102,7 @@ async function refreshMachineInfo() {
         }
         emptyStateEl.style.display = online.length ? 'none' : 'block';
         for (const row of online) {
-            updateMachineCard(row.machine, row.temp, OVERHEAT_THRESHOLD, row.uptime_seconds, row, row.diagnostics);
+            updateMachineCard(row.machine, row.temp, row.uptime_seconds, row);
         }
     } catch (e) { /* non-critical, dashboard still works without it */ }
 }
@@ -134,5 +112,5 @@ refreshMachineInfo();
 setInterval(refreshMachineInfo, 30000);
 
 socket.on('new_temp', (msg) => {
-    updateMachineCard(msg.machine, msg.temp, msg.threshold, msg.uptime_seconds, undefined, msg.diagnostics);
+    updateMachineCard(msg.machine, msg.temp, msg.uptime_seconds, undefined);
 });

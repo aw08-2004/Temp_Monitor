@@ -1,14 +1,23 @@
-// Alerts: operator-facing conflicts. Today that's duplicate machines sharing a serial
-// number while both are online -- the hub refuses to auto-merge live machines, so the
-// operator picks a survivor here and the rest are merged into it. Reads /api/alerts,
-// acts via POST /api/machines/merge and /api/alerts/<id>/dismiss. Mirrors inventory.js:
-// build DOM with textContent (never innerHTML from data), poll to stay fresh.
+// Alerts: operator-facing conditions that want attention. Two kinds:
+//   * duplicate_serial -- two machines sharing a serial while both online. The hub refuses
+//     to auto-merge live machines, so the operator picks a survivor here and the rest are
+//     merged into it (POST /api/machines/merge).
+//   * overheat -- a machine whose AVERAGE temperature over the configured window is at or
+//     above the overheat threshold. Raised/resolved server-side; the operator can Dismiss.
+// Reads /api/alerts, acts via /api/machines/merge and /api/alerts/<id>/dismiss. Mirrors
+// inventory.js: build DOM with textContent (never innerHTML from data), poll to stay fresh.
 
 const alertsList = document.getElementById('alerts-list');
 const alertsEmpty = document.getElementById('alerts-empty');
 
 function formatLastSeen(updatedAt) {
     return updatedAt || '--';
+}
+
+// alerts.created_at/updated_at are epoch SECONDS (unlike machine_info's timestamp strings),
+// so overheat alerts format them into a readable local time rather than showing a raw int.
+function formatEpoch(epoch) {
+    return epoch ? new Date(epoch * 1000).toLocaleString() : '--';
 }
 
 async function mergeAlert(survivor, victims, cardEl, btnEl) {
@@ -50,6 +59,61 @@ async function dismissAlert(alertId, cardEl, btnEl) {
 }
 
 function renderAlert(alert) {
+    if (alert.kind === 'overheat') return renderOverheat(alert);
+    return renderDuplicateSerial(alert);
+}
+
+// A temperature alert: one machine whose windowed AVERAGE crossed the threshold. There is
+// nothing to decide (unlike a merge), so the card just states the condition, links to the
+// machine, and offers Dismiss -- it also auto-resolves server-side once the machine cools.
+function renderOverheat(alert) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.marginBottom = 'var(--space-5)';
+
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.style.marginBottom = 'var(--space-2)';
+    title.textContent = `🔥 Overheating: ${alert.machine || '(unknown machine)'}`;
+    card.appendChild(title);
+
+    const detail = alert.detail || {};
+    const meta = document.createElement('p');
+    meta.className = 'stat-card__meta';
+    meta.style.marginBottom = 'var(--space-4)';
+    const windowMins = detail.window_seconds ? Math.round(detail.window_seconds / 60) : null;
+    const avg = typeof detail.avg_temp === 'number' ? detail.avg_temp.toFixed(1) : '?';
+    const threshold = detail.threshold != null ? detail.threshold : '?';
+    meta.textContent =
+        `${windowMins ? windowMins + '-min' : 'Windowed'} average ${avg} °C `
+        + `is at or above the ${threshold} °C threshold. Since ${formatEpoch(alert.created_at)}.`;
+    card.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.style.marginTop = 'var(--space-4)';
+    actions.style.display = 'flex';
+    actions.style.gap = 'var(--space-3)';
+
+    if (alert.machine) {
+        const view = document.createElement('a');
+        view.className = 'btn btn--primary';
+        view.textContent = 'View machine';
+        view.href = '/machine/' + encodeURIComponent(alert.machine);
+        actions.appendChild(view);
+    }
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.type = 'button';
+    dismissBtn.className = 'btn btn--ghost';
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.addEventListener('click', () => dismissAlert(alert.id, card, dismissBtn));
+    actions.appendChild(dismissBtn);
+
+    card.appendChild(actions);
+    return card;
+}
+
+function renderDuplicateSerial(alert) {
     const card = document.createElement('div');
     card.className = 'card';
     card.style.marginBottom = 'var(--space-5)';

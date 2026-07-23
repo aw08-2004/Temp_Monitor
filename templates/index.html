@@ -5,12 +5,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 {% endblock %}
 {% block content %}
-{# Thresholds are operator-settable, so they have to reach the initial /api/machines
-   render too -- the socket payload carries them, but the first paint happens before any
-   socket event. Same data-attribute idiom as machine.html. #}
-<div id="dashboard-config"
-     data-overheat-threshold="{{ overheat_threshold }}"
-     data-low-load-threshold="{{ low_load_threshold }}"></div>
+{# The Dashboard no longer flags overheating (that moved to the Alerts tab, evaluated from
+   a rolling average server-side), so it needs no threshold data here. #}
 <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">Live CPU Monitor</h1>
 <div class="machine-grid" id="machine-cards"></div>
 <div class="empty-state" id="empty-state" style="display:none;">No machines have reported in yet.</div>

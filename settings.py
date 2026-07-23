@@ -87,8 +87,14 @@ REGISTRY = (
     # ---------------- Hub: thresholds and internals ----------------
     _s("hub.overheat_threshold", "hub", "Overheat threshold", "int", 85,
        minimum=40, maximum=120, unit="°C",
-       help="At or above this, a reading is flagged as overheating on the dashboard "
-            "and the machine page."),
+       help="When a machine's AVERAGE temperature over the window below is at or above "
+            "this, a temperature alert is raised in the Alerts tab. The machine page "
+            "also highlights a live reading at or above it."),
+    _s("hub.overheat_avg_window_seconds", "hub", "Overheat averaging window", "int", 300,
+       minimum=60, maximum=3600, unit="seconds",
+       help="A machine is flagged as overheating only when its AVERAGE temperature over "
+            "this window is at or above the overheat threshold, so a brief spike doesn't "
+            "raise an alert. 300 = five minutes."),
     _s("hub.low_load_threshold", "hub", "Low-load threshold", "int", 40,
        minimum=0, maximum=100, unit="%",
        help="A high temperature recorded below this CPU load reads 'investigate' rather "

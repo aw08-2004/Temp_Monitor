@@ -96,6 +96,31 @@ def test_store_lifecycle():
         check("dismiss returns True and closes it", alerts.dismiss(db_path, aid3) is True)
         check("dismiss again returns False (already closed)", alerts.dismiss(db_path, aid3) is False)
         check("count_open back to 0", alerts.count_open(db_path) == 0)
+
+        print("  -- overheat kind --")
+        oid = alerts.upsert_overheat(db_path, "PC-HOT", 91.4, 85, 300)
+        check("overheat upsert opens an alert", oid is not None
+              and alerts.count_open(db_path) == 1)
+        got = alerts.get(db_path, oid)
+        check("overheat carries its machine and decoded detail",
+              got["machine"] == "PC-HOT" and got["detail"]["avg_temp"] == 91.4
+              and got["detail"]["threshold"] == 85 and got["detail"]["window_seconds"] == 300)
+        oid2 = alerts.upsert_overheat(db_path, "PC-HOT", 88.0, 85, 300)
+        check("re-upsert refreshes the SAME row", oid2 == oid
+              and alerts.count_open(db_path) == 1)
+        check("...and updates the detail", alerts.get(db_path, oid)["detail"]["avg_temp"] == 88.0)
+        # A different machine is a separate subject -> its own open row.
+        alerts.upsert_overheat(db_path, "PC-HOT-2", 90.0, 85, 300)
+        check("a second hot machine gets its own alert", alerts.count_open(db_path) == 2)
+        # Overheat and duplicate_serial share the table but not the open-per-subject index.
+        alerts.upsert_duplicate(db_path, "S-COEXIST", ["x", "y"])
+        check("overheat and duplicate_serial coexist", alerts.count_open(db_path) == 3)
+        alerts.resolve_overheat(db_path, "PC-HOT")
+        check("resolve_overheat closes only that machine", alerts.count_open(db_path) == 2
+              and alerts.get(db_path, oid)["status"] == "resolved")
+        listed = [a for a in alerts.list_open(db_path) if a["kind"] == "overheat"]
+        check("list_open surfaces machine + detail on overheat rows",
+              all(a.get("machine") and a.get("detail") for a in listed))
     finally:
         # Best-effort: on Windows the WAL connections sqlite3 leaves open (a `with conn`
         # block commits but doesn't close) can still hold the temp file. It's in TEMP.
@@ -193,6 +218,92 @@ def test_auth_required():
                     json={"survivor": "a", "victims": ["b"]}).status_code == 401)
 
 
+def _seed_readings(machine, temps, base, step=5):
+    """Insert `temps` for `machine`, one every `step`s ending at epoch `base` (newest
+    first). Uses the same readings table the evaluator averages over."""
+    with app.get_db_conn() as conn:
+        for i, t in enumerate(temps):
+            ts = base - i * step
+            conn.execute(
+                "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp) "
+                "VALUES (?, ?, ?, ?)", (str(ts), ts, machine, t))
+
+
+def _open_overheat(machine):
+    return next((a for a in alerts.list_open(app.DB_PATH)
+                 if a["kind"] == "overheat" and a.get("machine") == machine), None)
+
+
+def test_overheat_evaluator():
+    print("\n-- overheat evaluator: average, spike immunity, resolve, offline --")
+    settings.set_many(app.DB_PATH, {
+        "hub.overheat_threshold": 80,
+        "hub.overheat_avg_window_seconds": 300,
+        "fleet.dashboard_online_window_seconds": 120,
+    })
+    now = 1_950_000_000
+
+    # Sustained: 40 readings at 90 over ~200s -> average 90 -> alert.
+    _seed_readings("ovHot", [90] * 40, base=now)
+    app.evaluate_overheat_once(app.DB_PATH, now=now)
+    a = _open_overheat("ovHot")
+    check("a sustained hot average raises exactly one alert",
+          a is not None and a["detail"]["avg_temp"] == 90.0)
+    check("...carrying the threshold and window it was judged against",
+          a["detail"]["threshold"] == 80 and a["detail"]["window_seconds"] == 300)
+
+    # A single 120 spike in an otherwise-50 window averages ~51.8 -> NO alert. This is the
+    # whole point of the feature over the old instantaneous flag.
+    _seed_readings("ovSpike", [50] * 39 + [120], base=now)
+    app.evaluate_overheat_once(app.DB_PATH, now=now)
+    check("a lone spike inside a cool window does NOT raise",
+          _open_overheat("ovSpike") is None)
+
+    # Newer cool readings pull the average down -> the open alert resolves.
+    _seed_readings("ovHot", [50] * 40, base=now + 1000)
+    app.evaluate_overheat_once(app.DB_PATH, now=now + 1000)
+    check("cooling back down resolves the alert", _open_overheat("ovHot") is None)
+
+    # Hot but last reading older than the online window -> not currently online, no alert.
+    _seed_readings("ovGone", [95] * 40, base=now - 10_000)
+    app.evaluate_overheat_once(app.DB_PATH, now=now)
+    check("a hot machine that stopped reporting is not alerted",
+          _open_overheat("ovGone") is None)
+
+    # A machine that was hot and then goes offline entirely (drops out of the window) has
+    # its open alert resolved, not left dangling.
+    _seed_readings("ovDrop", [95] * 40, base=now + 2000)
+    app.evaluate_overheat_once(app.DB_PATH, now=now + 2000)
+    check("hot machine alerts while online", _open_overheat("ovDrop") is not None)
+    # Evaluate far in the future: ovDrop's readings are now well outside the window.
+    app.evaluate_overheat_once(app.DB_PATH, now=now + 2000 + 100_000)
+    check("...and resolves once it drops out of the window entirely",
+          _open_overheat("ovDrop") is None)
+
+
+def test_overheat_api_and_scope():
+    print("\n-- overheat alerts over /api/alerts, with scope --")
+    settings.set_many(app.DB_PATH, {
+        "hub.overheat_threshold": 80,
+        "hub.overheat_avg_window_seconds": 300,
+        "fleet.dashboard_online_window_seconds": 120,
+    })
+    now = 1_960_000_000
+    _seed_readings("apiHot", [88] * 40, base=now)
+    app.evaluate_overheat_once(app.DB_PATH, now=now)
+
+    resp = client.get("/api/alerts")
+    check("GET /api/alerts 200", resp.status_code == 200)
+    row = next((x for x in resp.get_json()
+                if x["kind"] == "overheat" and x["machine"] == "apiHot"), None)
+    check("overheat alert is returned with its detail",
+          row is not None and row["detail"]["avg_temp"] == 88.0)
+
+    resp = client.post(f"/api/alerts/{row['id']}/dismiss")
+    check("an overheat alert can be dismissed", resp.status_code == 200
+          and _open_overheat("apiHot") is None)
+
+
 def test_sidebar_badge_renders():
     print("\n-- sidebar shows the open-alert badge --")
     report("badgeA", "SER-AL-6")
@@ -212,6 +323,8 @@ if __name__ == "__main__":
     test_dismiss_endpoint()
     test_merge_endpoint_validation()
     test_auth_required()
+    test_overheat_evaluator()
+    test_overheat_api_and_scope()
     test_sidebar_badge_renders()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

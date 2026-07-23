@@ -51,6 +51,7 @@ def test_defaults_match_the_old_constants():
     # Literals on purpose -- see the module docstring.
     expected = {
         "hub.overheat_threshold": 85,             # was app.OVERHEAT_THRESHOLD
+        "hub.overheat_avg_window_seconds": 300,   # 5-minute averaging window for alerts
         "hub.low_load_threshold": 40,             # was app.LOW_LOAD_THRESHOLD
         "hub.live_status_cache_seconds": 600,     # was app.LIVE_STATUS_CACHE_SECONDS
         "hub.live_default_window_hours": 3,       # was app.LIVE_DEFAULT_WINDOW_HOURS
@@ -154,6 +155,16 @@ def test_range_validation():
     check("maximum is accepted", _accepts(db, {"hub.overheat_threshold": 120}))
     check("below minimum is rejected", _rejects(db, {"hub.overheat_threshold": 39}))
     check("above maximum is rejected", _rejects(db, {"hub.overheat_threshold": 121}))
+
+    # hub.overheat_avg_window_seconds is min=60 max=3600.
+    check("window minimum is accepted",
+          _accepts(db, {"hub.overheat_avg_window_seconds": 60}))
+    check("window maximum is accepted",
+          _accepts(db, {"hub.overheat_avg_window_seconds": 3600}))
+    check("window below minimum is rejected",
+          _rejects(db, {"hub.overheat_avg_window_seconds": 59}))
+    check("window above maximum is rejected",
+          _rejects(db, {"hub.overheat_avg_window_seconds": 3601}))
 
     try:
         settings.set_many(db, {"hub.overheat_threshold": 5})

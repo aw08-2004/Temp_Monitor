@@ -190,6 +190,23 @@ behind Google sign-in, see below):
   for today). The throughput panels auto-scale their units, so an idle NIC reads
   in KB/s and a busy NVMe in MB/s on the same axis format.
 - `/history` -- daily summary/average across all machines
+- `/alerts` -- conditions that want attention: machines running hot, and
+  duplicate machines that share a serial while both online (see below)
+
+### Temperature alerts
+
+A machine is flagged as overheating when its **average** temperature over a
+window (default **5 minutes**, `hub.overheat_avg_window_seconds` in Settings) is
+at or above the overheat threshold (`hub.overheat_threshold`). Averaging is the
+point: a momentary spike no longer raises an alert, only a sustained condition
+does.
+
+The check runs on the hub every ~30 s (`evaluate_overheat_once`), so alerts are
+independent of any browser being open. An overheat alert appears in the **Alerts
+tab**, not on the Dashboard -- the Dashboard is a live temp/status view. It
+**auto-resolves** once the average drops back below the threshold (or the machine
+goes offline), and can be dismissed manually. Alerts are machine-scoped: an
+operator only sees, and is only badge-counted for, machines within their scope.
 
 Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
 rotated log files also live under `logs/`. Run it via `wsgi.py`, or directly

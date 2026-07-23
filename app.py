@@ -52,7 +52,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.33.0"
+HUB_VERSION = "1.34.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2027,6 +2027,83 @@ def start_deploy_scheduler():
     threading.Thread(target=deploy_scheduler, daemon=True, name="deploy_scheduler").start()
 
 
+# How often the temperature-alert evaluator wakes. A machine reports every few seconds and
+# the average is over minutes, so a 30-second cadence surfaces an overheat within a tick of
+# the average crossing without churning the alerts table.
+OVERHEAT_TICK_SECONDS = 30
+
+
+def evaluate_overheat_once(db_path=None, now=None):
+    """One pass of the temperature-alert evaluator. Returns (raised, resolved).
+
+    Raises an overheat alert for every ONLINE machine whose AVERAGE temperature over the
+    configured window is at or above the overheat threshold, and resolves it for every
+    machine that has cooled, gone offline, or stopped reporting. The average is what makes
+    a brief spike NOT an alert -- the whole point of the feature.
+
+    Pure except for the database; `now` is injectable so tests drive it deterministically
+    without sleeping. Scope-agnostic like the duplicate_serial hook -- an operator's
+    machine scope is applied when the Alerts tab reads, never when the alert is raised.
+    """
+    db_path = db_path or DB_PATH
+    now = int(time.time() if now is None else now)
+    threshold = settings.get_int(db_path, "hub.overheat_threshold")
+    window = settings.get_int(db_path, "hub.overheat_avg_window_seconds")
+    online_window = settings.get_int(db_path, "fleet.dashboard_online_window_seconds")
+    cutoff = now - window
+    online_cutoff = now - online_window
+
+    conn = sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT machine, AVG(temp) AS avg_temp, MAX(ts_epoch) AS last "
+            "FROM readings WHERE ts_epoch >= ? GROUP BY machine",
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    hot = {}       # machine -> windowed average, for machines online AND at/above threshold
+    for row in rows:
+        # A machine whose most recent reading is older than the online window is not
+        # "currently hot" -- its average is stale, and an alert held open on it would
+        # linger after the machine was shut down or decommissioned.
+        if row["last"] is None or row["last"] < online_cutoff:
+            continue
+        if row["avg_temp"] is not None and row["avg_temp"] >= threshold:
+            hot[row["machine"]] = row["avg_temp"]
+
+    # Reconcile against what is currently open: raise the still/newly hot, resolve every
+    # open overheat alert whose machine is no longer hot (cooled, offline, or gone). This
+    # covers machines that dropped out of the window entirely, which the query above can't
+    # return.
+    open_machines = {a.get("machine") for a in alerts.list_open(db_path)
+                     if a["kind"] == alerts.KIND_OVERHEAT and a.get("machine")}
+    for machine, avg_temp in hot.items():
+        alerts.upsert_overheat(db_path, machine, avg_temp, threshold, window)
+    for machine in open_machines - set(hot):
+        alerts.resolve_overheat(db_path, machine)
+    return len(hot), len(open_machines - set(hot))
+
+
+def overheat_evaluator():
+    """Wake on a fixed cadence and raise/resolve temperature alerts. Same shape and
+    failure discipline as retention_pruner: errors are logged, never fatal -- an
+    evaluator thread that died in March must not silently stop alerting in July."""
+    while True:
+        try:
+            evaluate_overheat_once()
+        except Exception as e:
+            print(f"[overheat] Evaluation pass failed: {e}")
+        time.sleep(OVERHEAT_TICK_SECONDS)
+
+
+def start_overheat_evaluator():
+    threading.Thread(target=overheat_evaluator, daemon=True,
+                     name="overheat_evaluator").start()
+
+
 # How often the backup scheduler wakes to ask whether a backup is due. Same reasoning as
 # PRUNE_TICK_SECONDS: sleeping the whole interval would mean an operator who shortens
 # "back up every" from weekly to daily sees no effect for up to a week, which reads as
@@ -2147,6 +2224,7 @@ start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
 start_backup_scheduler()
+start_overheat_evaluator()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -2472,6 +2550,15 @@ def get_alerts():
     keep = access.machine_filter()
     visible = []
     for alert in open_alerts:
+        # A per-machine alert (overheat) is scoped on its single subject machine; there is
+        # nothing to enrich or let the operator merge, so it passes straight through with
+        # its `detail` payload once scope allows.
+        if alert["kind"] == alerts.KIND_OVERHEAT:
+            machine = alert.get("machine")
+            if machine and keep is not None and not keep(machine):
+                continue
+            visible.append(alert)
+            continue
         involved = alert.get("machines", [])
         in_scope = involved if keep is None else [m for m in involved if keep(m)]
         # An alert touching none of the caller's machines isn't theirs to see.
@@ -2748,10 +2835,17 @@ def inject_nav_context():
         if keep is None:
             context["open_alert_count"] = alerts.count_open(DB_PATH)
         else:
+            def _in_scope(a):
+                # Per-machine alerts (overheat) scope on their single subject; the
+                # duplicate_serial `machines` list scopes if it touches any kept machine.
+                # An overheat alert carries an empty `machines`, so it must be checked on
+                # `machine` first -- otherwise "no machines" would read as fleet-wide and
+                # leak the count across a scope boundary.
+                if a["kind"] == alerts.KIND_OVERHEAT:
+                    return bool(a.get("machine")) and keep(a["machine"])
+                return not a.get("machines") or any(keep(m) for m in a["machines"])
             context["open_alert_count"] = sum(
-                1 for a in alerts.list_open(DB_PATH)
-                if not a.get("machines") or any(keep(m) for m in a["machines"])
-            )
+                1 for a in alerts.list_open(DB_PATH) if _in_scope(a))
     except Exception:
         pass
     return context
@@ -2760,9 +2854,9 @@ def inject_nav_context():
 @login_required
 @access.require(permissions.VIEW)
 def index():
+    # The Dashboard no longer classifies overheating (that is the Alerts tab now, from a
+    # server-side average), so the threshold values it used to embed are gone.
     return render_template("index.html", hub_version=HUB_VERSION,
-                           overheat_threshold=settings.get_int(DB_PATH, "hub.overheat_threshold"),
-                           low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
                            latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 

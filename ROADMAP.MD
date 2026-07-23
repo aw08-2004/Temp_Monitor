@@ -40,11 +40,17 @@ Mostly done:
 - `data.retention_days`, `data.prune_interval_seconds`, `data.ingest_max_backdate_days`,
   `data.command_output_retention_seconds` — retention knobs.
 
+Temperature alerts (hub 1.34.0): overheating is evaluated hub-side from a rolling **average**
+over `hub.overheat_avg_window_seconds` (default 300 s) against `hub.overheat_threshold`, so a
+momentary spike no longer flags a machine. It surfaces as a real, auto-resolving alert in the
+Alerts tab (`alerts.KIND_OVERHEAT`, raised/resolved by `app.evaluate_overheat_once` on a 30 s
+thread) — not on the Dashboard, which is now a plain live temp/status view. See below.
+
 Remaining gaps: no per-metric retention (one global window for all readings), no
-sampling/reporting-cadence setting, no per-metric or per-machine alert thresholds beyond a
-single global overheat threshold, no sensor *preference* list for GPU/disk/network (only
-CPU temp has one — the others are on/off only). Fold these in opportunistically; no
-dedicated feature push planned.
+sampling/reporting-cadence setting, no per-metric or **per-machine** alert thresholds (the
+overheat threshold and window are still global), no sensor *preference* list for
+GPU/disk/network (only CPU temp has one — the others are on/off only). Fold these in
+opportunistically; no dedicated feature push planned.
 
 ---
 
