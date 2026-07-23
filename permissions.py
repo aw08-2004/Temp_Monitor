@@ -55,6 +55,7 @@ REMOTE_CONTROL = "remote_control"
 DEPLOY_PACKAGES = "deploy_packages"
 MANAGE_BACKUPS = "manage_backups"
 MANAGE_SETTINGS = "manage_settings"
+MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
 
 CAPABILITIES = (
@@ -64,6 +65,7 @@ CAPABILITIES = (
     DEPLOY_PACKAGES,
     MANAGE_BACKUPS,
     MANAGE_SETTINGS,
+    MANAGE_USERS,
     MANAGE_PERMISSION_GROUPS,
 )
 
@@ -80,6 +82,10 @@ CAPABILITY_LABELS = {
     MANAGE_SETTINGS: ("Manage settings",
                       "Change hub settings, and administer machine records "
                       "(delete, merge, pin a sensor, dismiss alerts)."),
+    MANAGE_USERS: ("Manage users",
+                   "Add, edit, and remove entries in the registered-users directory. "
+                   "This is a profile directory, not access -- membership in a "
+                   "permission group is what grants what someone can do."),
     MANAGE_PERMISSION_GROUPS: ("Manage permission groups",
                                "Create and edit permission groups -- i.e. grant "
                                "anyone, including themselves, any of the above."),

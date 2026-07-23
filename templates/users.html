@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Users - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. The user table and the editor are rendered by users.js from
+   GET /api/users. This is a profile directory, not an access-control surface --
+   membership in a Permission Group is what grants what someone can do.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Users</h1>
+        <p class="stat-card__meta">
+            The people who use this console. Anyone who signs in is added automatically;
+            you can also add someone ahead of their first login. Editing a profile here
+            does not change what they can do -- that is set by their Permission Groups.
+        </p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-user">Add user</button>
+</div>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <input class="input" id="user-search" type="search" autocomplete="off"
+           placeholder="Search by name, username, or email" style="max-width: 24rem; width: 100%;">
+</div>
+
+<div id="users-host"></div>
+
+<dialog class="modal" id="user-modal">
+    <form method="dialog" id="user-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="user-modal-title">Add user</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="user-email">Email</label>
+            <input class="input" id="user-email" type="email" maxlength="200" autocomplete="off"
+                   placeholder="person@example.com" style="width: 100%;">
+            {# Email is the primary key, so it cannot change once created. The field is
+               disabled when editing, and the id lives in editingEmail. #}
+
+            <label class="setting__label" for="user-full-name" style="margin-top: var(--space-4);">Full name <span class="setting__default">optional</span></label>
+            <input class="input" id="user-full-name" maxlength="200" autocomplete="off" style="width: 100%;">
+
+            <label class="setting__label" for="user-username" style="margin-top: var(--space-4);">Username <span class="setting__default">optional</span></label>
+            <input class="input" id="user-username" maxlength="200" autocomplete="off" style="width: 100%;">
+
+            <label class="setting__label" for="user-title" style="margin-top: var(--space-4);">Title <span class="setting__default">optional</span></label>
+            <input class="input" id="user-title" maxlength="200" autocomplete="off" style="width: 100%;">
+
+            <label class="setting__label" for="user-department" style="margin-top: var(--space-4);">Department <span class="setting__default">optional</span></label>
+            <input class="input" id="user-department" maxlength="200" autocomplete="off" style="width: 100%;">
+
+            <label class="setting__label" for="user-phone" style="margin-top: var(--space-4);">Phone <span class="setting__default">optional</span></label>
+            <input class="input" id="user-phone" maxlength="200" autocomplete="off" style="width: 100%;">
+
+            <label class="setting__label" for="user-notes" style="margin-top: var(--space-4);">Notes <span class="setting__default">optional</span></label>
+            <textarea class="input" id="user-notes" maxlength="2000" rows="3" style="width: 100%;"></textarea>
+
+            <p class="setting__error" id="user-error"></p>
+        </div>
+        <div class="modal__foot">
+            <span class="autosave" id="user-status"></span>
+            <button class="btn" type="button" id="user-cancel">Close</button>
+            <button class="btn btn--primary" type="button" id="user-save">Save</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/users.js') }}"></script>
+{% endblock %}

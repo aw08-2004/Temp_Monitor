@@ -30,11 +30,13 @@ import fleet
 import alerts
 import settings
 import permissions
+import users
 import packages
 import backups
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
+from users_web import create_users_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 
@@ -52,7 +54,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.34.0"
+HUB_VERSION = "1.35.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -844,6 +846,7 @@ HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/h
 HUB_RUNTIME_FILES = (
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
     "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
+    "users.py", "users_web.py",
     "packages.py", "packages_web.py", "backups.py", "backups_web.py",
     "backup_paths.py", "alerts.py", "restore_backup.py", "requirements.txt",
 )
@@ -1168,6 +1171,9 @@ app.register_blueprint(create_fleet_blueprint(
 app.register_blueprint(create_settings_blueprint(DB_PATH, login_required, access))
 # Permission-group administration.
 app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, access))
+# Registered-users directory (roadmap #8). Gated by manage_users, kept separate from
+# permission-group administration so a profile edit isn't the same trust as a grant.
+app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
 # Package definitions, deployments, and the agent-facing payload download. LOG_DIR is
 # handed in because the blob store lives beside the database (see packages.blob_root),
 # and HUB_URL because the agent's download URL has to be absolute.
@@ -1226,6 +1232,13 @@ def auth_callback():
         "name": user_info.get("name") or email,
         "picture": user_info.get("picture"),
     }
+    # Auto-register / stamp the last login in the users directory (roadmap #8). Never
+    # let a directory write break sign-in: the session is already established above, so
+    # a failure here must not turn a valid login into an error page.
+    try:
+        users.upsert_from_login(DB_PATH, email, user_info.get("name"))
+    except Exception as e:
+        print(f"[users] upsert_from_login failed for {email}: {e}")
     return redirect(url_for("index"))
 
 
@@ -2212,6 +2225,7 @@ fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
 permissions.init_permissions_db(DB_PATH)
+users.init_users_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.

@@ -587,7 +587,38 @@ turns out to be *more* primitive still:
 
 ---
 
-## 📋 8. Registered Users directory   ·   build before #6 — prerequisite for its member picker
+## ✅ 8. Registered Users directory   ·   hub 1.35.0
+
+Built. `users.py` (model, flask-free) + `users_web.py` (admin API + page), a `users` table,
+a Users page and nav link, and a new `manage_users` capability. Delivered as specified below,
+with these decisions worth carrying forward:
+
+- **`upsert_from_login` does NOT overwrite an existing `full_name`.** A repeat login carrying
+  a different display name (Google claims drift — "C. Carr (Contractor)" one day) must not
+  silently stomp an admin's or the user's own edit. It always re-stamps `last_login_at`, and
+  fills in a name only when the row has none (a manually-added user's first sign-in). Not
+  audited — a login is not a config change, and one audit row per sign-in would bury the
+  admin edits the trail exists for.
+- **Whole-record update semantics**, deliberately unlike `update_group`'s "None means leave
+  alone". The editor always sends every field, so there is no ambiguous "unchanged" state and
+  no sentinel-value trap like the backup Follow-Fleet `None` bug — a field cleared in the form
+  is actually cleared.
+- **Delete is a profile delete, not an access change.** `delete_user` never touches
+  `permission_group_members`; membership stays keyed on email independently, so removing a
+  directory entry cannot revoke anyone's access (a test asserts exactly this). This is a
+  profile store, not a second authorization layer.
+- **`manage_users` is separate from `manage_permission_groups`** so the two delegate
+  independently — editing a phone number is not the same trust as granting capabilities. A
+  member of a group holding every capability *except* `manage_users` is still refused the whole
+  Users API (tested).
+
+The optional field set landed as `phone`, `title`, `department`, `notes` (real columns, not a
+JSON blob). The open question about a manually-added email that never matches a real Google
+account resolved to "nothing special happens" — membership is keyed on email regardless, so a
+never-logged-in row simply shows `last_login_at` = Never.
+
+<details>
+<summary>Original spec</summary>
 
 A real user directory — full name, username, email, plus room for more — instead of today's bare
 email strings threaded through the app. No `users` table exists anywhere today: identity is a
@@ -621,6 +652,8 @@ when a manually-added user's email doesn't match any real Google account (typo, 
 never sign in) — likely nothing, since membership is keyed on email today regardless of whether a
 `users` row exists; whether editing a user's `full_name`/`username` after auto-registration should
 be admin-only or self-service.
+
+</details>
 
 ---
 
@@ -699,8 +732,8 @@ hardcoded enum.
 3. ~~**#1 Backups**~~ — done: hub DB (1.28.0), per-PC files (1.29.0 / agent 3.8.0),
    console-driven restore (1.30.0 / agent 3.9.0). Both agent halves are pending a signed
    agent release.
-4. **#8 Registered Users directory ← next** — prerequisite for #6's member picker
-5. **#6 Search & pickers across the console** — small, low-risk, immediately useful
+4. ~~**#8 Registered Users directory**~~ — done, hub 1.35.0 (prerequisite for #6's member picker)
+5. **#6 Search & pickers across the console ← next** — small, low-risk, immediately useful
 6. **#4 Active Directory** — Entra login + group mapping first, then LDAP sync
 7. **#2 Remote view & control** — spike first, then build
 8. **#7 Localization** — lowest priority, most mechanical; do last

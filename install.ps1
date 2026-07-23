@@ -94,6 +94,7 @@ $LegacyHubServiceId  = "TempMonitorHub"
 $HubRuntimeFiles = @(
     "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
     "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
+    "users.py", "users_web.py",
     "packages.py", "packages_web.py", "backups.py", "backups_web.py",
     "backup_paths.py", "alerts.py", "restore_backup.py", "requirements.txt"
 )
