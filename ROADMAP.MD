@@ -537,6 +537,93 @@ hub→DC network reachability plus a service-account secret in `.env`.
 
 ---
 
+## 📋 6. Search & pickers across the console   ·   build after #8 — small, low-risk, immediately useful
+
+Search box and sortable columns on the Asset Inventory page, generalized into a shared
+search-as-you-type widget reused everywhere else the console currently makes you type a raw
+value with no help. Today (`templates\inventory.html` + `static\js\inventory.js`, backed by
+`GET /api/machines` in `app.py`) the Inventory table shows Machine, Status, Model, Serial, Asset
+Tag, Last Temp, Last Seen with **no search box and no user-facing sort** — the only ordering is a
+hardcoded JS `.sort()` (online machines first, then alphabetical by name), not exposed as UI or
+toggleable. The Permission Groups page (`templates\permissions.html`, `static\js\permissions.js`)
+turns out to be *more* primitive still:
+
+- **Machine picker** (`permissions.html:58-66`, `permissions.js:341-349`) is a text input wired to
+  a native HTML `<datalist>` populated from `GET /api/machines` on page load — browser-native
+  suggestion of every hostname, no fuzzy match, no query-as-you-type against the server, and free
+  text is accepted unvalidated.
+- **Member picker** (`permissions.html:70-74`) is a plain `<input type="email">` with **zero**
+  suggestions — validation is just "contains `@`" (`permissions.py:239-249`). A function
+  `permissions.known_emails()` already exists with a docstring saying it's "for the admin UI's
+  picker" (`permissions.py:588-590`) but is never called anywhere — dead code today.
+- The one real precedent for a proper search-as-you-type widget already in the app is the Backups
+  restore browser (`static\js\backup-tab.js:370-441`, `#restore-search` hitting a `search=` query
+  param server-side) — generalize that pattern into a shared component rather than writing a
+  fourth one-off implementation.
+
+**Scope:**
+- **Inventory search**: by Name, Asset Tag, Serial Number, Service Tag (and similar identifiers).
+  Whether this filters server-side (extend `/api/machines` with a `q` param) or client-side over
+  already-loaded rows is an open parameter — the fleet sizes seen so far are small enough that
+  either works; server-side is the safer default if that changes.
+- **Inventory sort**: by Name, Status, Model, Serial, Asset Tag, Service Tag, Last Seen — click a
+  column header to sort asc/desc, replacing today's hardcoded order. Persisted (`localStorage` or
+  a query param) so it survives a page refresh.
+- **New `service_tag` field.** `machine_info` currently has `asset_tag` and `serial_number` but no
+  separate Service Tag column. Add `service_tag` alongside `asset_tag`, collected in `companion.py`
+  the same way `asset_tag` already is (BIOS/WMI), and surfaced in `inventory.html` next to Asset
+  Tag.
+- **Permission Groups machine picker** gets the same widget as Inventory search, replacing the
+  native `<datalist>` — same field set (Name, Asset Tag, Serial, Service Tag).
+- **Permission Groups member picker** gets a search-as-you-type dropdown against the Registered
+  Users directory (**#8**, below) instead of the bare email input — typing a name, username, or
+  email pops up matching registered users to pick as a member. **Hard dependency on #8**:
+  there's nothing to search until the Users directory exists. `permissions.known_emails()` is the
+  likely starting point for the backend query, once it's driven by the `users` table instead of
+  scanning existing group membership.
+- **No permission-model changes for Inventory/machine-picker** — read/display only, already
+  covered by existing view scoping. The member-picker change reads from #8's new `manage_users`
+  data but doesn't require it to add someone as a member.
+
+---
+
+## 📋 8. Registered Users directory   ·   build before #6 — prerequisite for its member picker
+
+A real user directory — full name, username, email, plus room for more — instead of today's bare
+email strings threaded through the app. No `users` table exists anywhere today: identity is a
+lowercased email string (`permission_group_members.email`, `fleet_favorites.owner_email`,
+`audit_log.actor`), and login is pure Google OAuth (`app.py:1199-1229`) — the session holds
+`{"email", "name", "picture"}` straight from Google's claims, nothing persisted.
+`permissions.normalize_email()` is the only "profile" concept that exists today (strip/lowercase).
+
+- **New `users` table**: `email` (normalized, unique key — same normalization as
+  `permissions.normalize_email()`), `full_name`, `username`, plus fixed optional columns —
+  `phone`, `title`, `department`, `notes` (open parameter: confirm the exact optional set when
+  this becomes a full implementation plan). Real columns, not a JSON blob, matching the rest of
+  the schema's style; more columns can be added later via an ordinary migration.
+- **Populated two ways**: (a) auto-upserted from Google OAuth claims (`email`, `name`) on every
+  successful login, so anyone who's ever signed in appears automatically; (b) an admin can
+  manually add a user via the new Users tab (full name + username + email, optional fields) ahead
+  of their first login — mirrors how `permission_group_members` already lets you add someone by
+  email before they've ever logged in.
+- **New Users tab** in the left nav (`templates\partials\_sidebar.html`, after Permission
+  Groups, same capability-gated-`<a>`-with-active-class pattern as the rest of the sidebar) —
+  list/search/add/edit registered users.
+- **New `manage_users` capability**, added to the existing vocabulary (`view`, `issue_commands`,
+  `remote_control`, `deploy_packages`, `manage_backups`, `manage_settings`,
+  `manage_permission_groups`) — gates the Users tab, kept separate from
+  `manage_permission_groups` so the two can be delegated independently.
+- **Feeds #6's Permission Groups member picker**: this directory is what makes "a registered user
+  pops up while you're typing" possible at all.
+
+**Still to decide during implementation**: what happens to a Permission Group membership row
+when a manually-added user's email doesn't match any real Google account (typo, or they simply
+never sign in) — likely nothing, since membership is keyed on email today regardless of whether a
+`users` row exists; whether editing a user's `full_name`/`username` after auto-registration should
+be admin-only or self-service.
+
+---
+
 ## 📋 2. Remote view & control   ·   build last — highest technical risk, spike first
 
 Live remote view of a managed PC's screen and input control from the console, with true
@@ -580,6 +667,31 @@ present.
 
 ---
 
+## 📋 7. Localization / multi-language UI   ·   build last — lowest priority, most mechanical
+
+Default shipped languages **English, Spanish, German**, with the ability to add more later
+without a schema/code shape change — a language is data (a translation file/table), not a
+hardcoded enum.
+
+- **No i18n infrastructure exists today.** The hub is Flask + server-rendered Jinja2 templates
+  (`templates\*.html`) plus vanilla JS (`static\js\*.js`) — every UI string is hardcoded English in
+  both layers, no `flask-babel` dependency, no translation files. This is a from-scratch addition,
+  not an extension of existing scaffolding.
+- **Server-side strings** (Jinja2 templates): open parameter — `flask-babel` + `.po`/`.mo` files
+  (mature, standard, one more dependency) vs. a minimal in-house JSON string-table loader (fits the
+  hub's established "keep it light" pattern — same reasoning as hand-rolling the S3 SigV4 signer
+  instead of taking botocore onto a 0.3 MB sparse install — at the cost of more code to maintain).
+- **Client-side strings** (`static\js\*.js`, not server-rendered) need a parallel JS-side string
+  table — the server-side mechanism alone doesn't cover these.
+- **Language selection**: open parameter — per-user preference (stored with the account/session)
+  vs. a fleet-wide default with per-user override.
+- **Scope note**: this touches every template and every hardcoded JS string in the app — the
+  highest-effort, most mechanical item on the roadmap, closer in shape to the Permission Groups
+  rollout's "ripple effect" than to a typical feature. Budget accordingly when this becomes a full
+  implementation plan.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
@@ -587,8 +699,11 @@ present.
 3. ~~**#1 Backups**~~ — done: hub DB (1.28.0), per-PC files (1.29.0 / agent 3.8.0),
    console-driven restore (1.30.0 / agent 3.9.0). Both agent halves are pending a signed
    agent release.
-4. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
-5. **#2 Remote view & control** — spike first, then build
+4. **#8 Registered Users directory ← next** — prerequisite for #6's member picker
+5. **#6 Search & pickers across the console** — small, low-risk, immediately useful
+6. **#4 Active Directory** — Entra login + group mapping first, then LDAP sync
+7. **#2 Remote view & control** — spike first, then build
+8. **#7 Localization** — lowest priority, most mechanical; do last
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full

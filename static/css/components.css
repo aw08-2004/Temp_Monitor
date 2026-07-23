@@ -523,6 +523,36 @@
     font-size: var(--text-sm);
 }
 
+/* In-card action buttons (Back up now / Cancel backup / Restore selected …). Unlike
+   .settings-actions this is NOT a sticky page footer: it lives INSIDE a card, so it stays
+   transparent and borderless. .settings-actions paints a var(--bg) bar with a top border,
+   which inside a lighter card read as a dark box floating in the middle of the card -- the
+   "black square" behind the buttons. This container just lays the buttons out. */
+.card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+}
+
+/* Auto-save status line. Replaces the old explicit Save button + status span now that
+   forms save on change: it sits quietly at the end of a form and speaks up only while a
+   save is in flight, just after one lands, or when one fails. Reserve its height so the
+   text appearing does not nudge the layout. */
+.autosave {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    min-height: 1.2em;
+    transition: color 0.15s ease;
+}
+.autosave--saved { color: var(--accent); }
+.autosave--error { color: var(--danger, #f85149); }
+
+/* In a modal footer (right-aligned) the status belongs on the far left, opposite the
+   Close button, not crammed up against it. */
+.modal__foot .autosave { margin-right: auto; }
+
 /* ============ Modal ============ */
 /* Built on native <dialog>.showModal(), which gives focus trapping, background
    inertness, Esc-to-close and top-layer stacking for free -- hand-rolling those is

@@ -201,28 +201,72 @@
         sharedField.append(sharedInput, sharedLabel);
         bodyEl.appendChild(sharedField);
 
-        async function save() {
+        // Auto-save: no Save button. Same discipline as the permission-group editor --
+        // saves are serialised, an edit made mid-request is written straight after, the
+        // whole favorite goes every time, and nothing is created until there is a name.
+        // From the first successful create we hold the id and update it in place, so a
+        // second keystroke doesn't make a duplicate.
+        let current = existing || null;
+        let favSaving = false;
+        let favPending = false;
+        let favDebounce = null;
+
+        const status = document.createElement('span');
+        status.className = 'autosave';
+        if (!current) status.textContent = 'Enter a name to save this favorite.';
+
+        function setStatus(text, cls) {
+            status.textContent = text;
+            status.className = cls ? `autosave ${cls}` : 'autosave';
+        }
+        function scheduleSave() {           // text fields: debounce
+            if (favDebounce) clearTimeout(favDebounce);
+            favDebounce = setTimeout(autoSave, 500);
+        }
+        function autoSave() {               // discrete change, or the debounce firing
+            if (favDebounce) { clearTimeout(favDebounce); favDebounce = null; }
+            if (favSaving) { favPending = true; return; }
+            flush();
+        }
+        async function flush() {
+            const name = nameInput.value.trim();
+            if (!current && !name) {
+                setStatus('Enter a name to save this favorite.', '');
+                return;
+            }
             const payload = {
-                name: nameInput.value.trim(),
+                name,
                 type,
-                params: scriptInput
-                    ? { ...params, script: scriptInput.value }
-                    : params,
+                params: scriptInput ? { ...params, script: scriptInput.value } : params,
                 shared: sharedInput.checked
             };
+            favSaving = true;
+            favPending = false;
+            setStatus('Saving…', '');
             try {
-                if (existing) await FleetApi.favorites.update(existing.id, payload);
-                else await FleetApi.favorites.create(payload);
-                await renderList();
+                if (current) {
+                    await FleetApi.favorites.update(current.id, payload);
+                } else {
+                    const created = await FleetApi.favorites.create(payload);
+                    current = { id: created.favorite_id };
+                    titleEl.textContent = 'Edit favorite';
+                }
+                setStatus('Saved', 'autosave--saved');
             } catch (e) {
-                showError(e.message);   // duplicate name, blank name, bad type
+                setStatus(e.message, 'autosave--error');   // duplicate name, blank name, bad type
+            } finally {
+                favSaving = false;
+                if (favPending) flush();
             }
         }
 
-        footEl.append(
-            button('Cancel', 'ghost', () => (existing ? renderList() : dialog.close())),
-            button(existing ? 'Save changes' : 'Save favorite', 'primary', save)
-        );
+        nameInput.addEventListener('input', scheduleSave);
+        if (scriptInput) scriptInput.addEventListener('input', scheduleSave);
+        sharedInput.addEventListener('change', autoSave);
+
+        // "Done" just returns to the list -- the favorite is already saved. The dialog's
+        // own header close button (favorites-close) still dismisses the whole thing.
+        footEl.append(status, button('Done', 'ghost', () => renderList()));
         nameInput.focus();
     }
 

@@ -264,6 +264,7 @@ function renderScheduleCard() {
     enabled.type = 'checkbox';
     enabled.id = 'schedule-enabled';
     enabled.checked = !!schedule.enabled;
+    enabled.addEventListener('change', saveSchedule);
     enabledLabel.appendChild(enabled);
     enabledLabel.appendChild(document.createTextNode(' Back up automatically'));
     enabledWrap.appendChild(enabledLabel);
@@ -294,44 +295,64 @@ function renderScheduleCard() {
         if (d.id === schedule.destination_id) option.selected = true;
         select.appendChild(option);
     });
+    select.addEventListener('change', saveSchedule);
     destWrap.appendChild(select);
     grid.appendChild(destWrap);
 
     grid.appendChild(numberField('schedule-interval', 'Back up every (hours)',
-                                 schedule.interval_hours, 1, 720));
+                                 schedule.interval_hours, 1, 720, saveSchedule));
     grid.appendChild(numberField('schedule-keep', 'Keep this many backups',
-                                 schedule.keep_generations, 1, 365));
+                                 schedule.keep_generations, 1, 365, saveSchedule));
     card.appendChild(grid);
 
     card.appendChild(el('p', 'setting__default',
         'Older backups beyond that count are deleted from the destination after each '
         + 'successful upload.'));
 
-    const actions = el('div', 'settings-actions');
-    const save = el('button', 'btn btn--primary', 'Save schedule');
-    const status = el('span', 'settings-actions__status');
-    save.addEventListener('click', async () => {
-        status.textContent = '';
-        try {
-            const result = await api('/api/backups/schedule', json('PUT', {
-                'backup.hub_enabled': enabled.checked,
-                'backup.hub_destination': select.value,
-                'backup.hub_interval_hours': Number(document.getElementById('schedule-interval').value),
-                'backup.hub_keep_generations': Number(document.getElementById('schedule-keep').value),
-            }));
-            state.schedule = result.schedule;
-            render();
-        } catch (e) {
-            status.textContent = e.message;
-        }
-    });
-    actions.appendChild(save);
-    actions.appendChild(status);
-    card.appendChild(actions);
+    // No Save button -- the checkbox, destination and numbers above save themselves. This
+    // span is the feedback.
+    const status = el('span', 'autosave', scheduleStatus.text);
+    status.id = 'schedule-save-status';
+    if (scheduleStatus.cls) status.className = `autosave ${scheduleStatus.cls}`;
+    card.appendChild(status);
     return card;
 }
 
-function numberField(id, label, value, min, max) {
+// Persisted outside render() so a "Saved"/error message survives the re-render that a save
+// triggers. The seq guard drops a slow response a newer edit has already superseded.
+let scheduleStatus = { text: '', cls: '' };
+let scheduleSaveSeq = 0;
+
+function setScheduleStatus(text, cls) {
+    scheduleStatus = { text, cls: cls || '' };
+    const node = document.getElementById('schedule-save-status');
+    if (node) {
+        node.textContent = text;
+        node.className = cls ? `autosave ${cls}` : 'autosave';
+    }
+}
+
+async function saveSchedule() {
+    const seq = ++scheduleSaveSeq;
+    setScheduleStatus('Saving…', '');
+    try {
+        const result = await api('/api/backups/schedule', json('PUT', {
+            'backup.hub_enabled': document.getElementById('schedule-enabled').checked,
+            'backup.hub_destination': document.getElementById('schedule-destination').value,
+            'backup.hub_interval_hours': Number(document.getElementById('schedule-interval').value),
+            'backup.hub_keep_generations': Number(document.getElementById('schedule-keep').value),
+        }));
+        if (seq !== scheduleSaveSeq) return;
+        state.schedule = result.schedule;
+        scheduleStatus = { text: 'Saved', cls: 'autosave--saved' };
+        render();
+    } catch (e) {
+        if (seq !== scheduleSaveSeq) return;
+        setScheduleStatus(e.message, 'autosave--error');
+    }
+}
+
+function numberField(id, label, value, min, max, onCommit) {
     const wrap = el('div');
     const labelEl = el('label', 'setting__label', label);
     labelEl.htmlFor = id;
@@ -343,6 +364,9 @@ function numberField(id, label, value, min, max) {
     input.max = String(max);
     input.value = value === undefined || value === null ? '' : String(value);
     input.style.width = '100%';
+    // Save on `change` (blur / Enter), not on every keystroke, so a half-typed number is
+    // not sent and bounced against its min on the way to a valid one.
+    if (onCommit) input.addEventListener('change', onCommit);
     wrap.appendChild(input);
     return wrap;
 }
@@ -459,6 +483,7 @@ function renderSettingsPane() {
     enabled.type = 'checkbox';
     enabled.id = 'files-enabled';
     enabled.checked = !!files.enabled;
+    enabled.addEventListener('change', saveFileSettings);
     enabledLabel.appendChild(enabled);
     enabledLabel.appendChild(document.createTextNode(' Back up files on managed PCs'));
     enabledWrap.appendChild(enabledLabel);
@@ -469,21 +494,23 @@ function renderSettingsPane() {
 
     const destWrap = el('div');
     destWrap.appendChild(el('label', 'setting__label', 'Destination'));
-    destWrap.appendChild(destinationSelect('files-destination', files.destination_id));
+    const filesDest = destinationSelect('files-destination', files.destination_id);
+    filesDest.addEventListener('change', saveFileSettings);
+    destWrap.appendChild(filesDest);
     grid.appendChild(destWrap);
 
     grid.appendChild(numberField('files-interval', 'Back up every (hours)',
-                                 files.interval_hours, 1, 720));
+                                 files.interval_hours, 1, 720, saveFileSettings));
     grid.appendChild(numberField('files-full-every', 'Full backup every (runs)',
-                                 files.full_every, 1, 90));
+                                 files.full_every, 1, 90, saveFileSettings));
     grid.appendChild(numberField('files-keep-chains', 'Keep this many chains',
-                                 files.keep_chains, 1, 52));
+                                 files.keep_chains, 1, 52, saveFileSettings));
     grid.appendChild(numberField('files-max-file', 'Skip files bigger than (MB)',
-                                 files.max_file_mb, 1, 102400));
+                                 files.max_file_mb, 1, 102400, saveFileSettings));
     grid.appendChild(numberField('files-max-set', 'Abort a run bigger than (GB)',
-                                 files.max_set_gb, 1, 10240));
+                                 files.max_set_gb, 1, 10240, saveFileSettings));
     grid.appendChild(numberField('files-max-concurrent', 'Back up at most (PCs at once)',
-                                 files.max_concurrent, 0, 100));
+                                 files.max_concurrent, 0, 100, saveFileSettings));
 
     const vssWrap = el('div');
     const vssLabel = el('label', 'checkbox');
@@ -491,6 +518,7 @@ function renderSettingsPane() {
     vss.type = 'checkbox';
     vss.id = 'files-vss';
     vss.checked = files.use_vss !== false;
+    vss.addEventListener('change', saveFileSettings);
     vssLabel.appendChild(vss);
     vssLabel.appendChild(document.createTextNode(' Use a shadow copy (VSS)'));
     vssWrap.appendChild(vssLabel);
@@ -519,15 +547,13 @@ function renderSettingsPane() {
     paths.appendChild(tokenReference());
     settingsPane.appendChild(paths);
 
-    // ---- save ----
-    const actions = el('div', 'settings-actions');
-    const save = el('button', 'btn btn--primary', 'Save backup settings');
-    const status = el('span', 'settings-actions__status');
+    // ---- auto-save status ----
+    // No Save button: every control above (and the path chips) saves itself. This is the
+    // only feedback.
+    const status = el('span', 'autosave', filesStatus.text);
     status.id = 'files-save-status';
-    save.addEventListener('click', () => saveFileSettings(status));
-    actions.appendChild(save);
-    actions.appendChild(status);
-    settingsPane.appendChild(actions);
+    if (filesStatus.cls) status.className = `autosave ${filesStatus.cls}`;
+    settingsPane.appendChild(status);
 
     settingsPane.appendChild(renderRunFleetCard());
     settingsPane.appendChild(renderPreviewCard());
@@ -581,6 +607,7 @@ function pathEditor(title, kind, values, help, placeholder) {
             draftDirty = true;
             renderSettingsPane();
             refreshPreview();
+            saveFileSettings();
         });
         chip.appendChild(remove);
         chips.appendChild(chip);
@@ -602,6 +629,7 @@ function pathEditor(title, kind, values, help, placeholder) {
         draftDirty = true;
         renderSettingsPane();
         refreshPreview();
+        saveFileSettings();
     };
     add.addEventListener('click', commit);
     input.addEventListener('keydown', (e) => {
@@ -647,7 +675,7 @@ function renderRunFleetCard() {
         + 'run. Machines that are switched off are not skipped — each one backs up the '
         + 'moment it comes online again.'));
 
-    const actions = el('div', 'settings-actions');
+    const actions = el('div', 'card-actions');
     const run = el('button', 'btn btn--primary',
                    fleetRunBusy ? 'Working…' : 'Back up all PCs now');
     run.id = 'files-run-fleet';
@@ -731,8 +759,22 @@ async function runFleetBackup() {
     }
 }
 
-async function saveFileSettings(status) {
-    status.textContent = '';
+// Persisted outside render() so the message survives the re-render a save triggers.
+let filesStatus = { text: '', cls: '' };
+let filesSaveSeq = 0;
+
+function setFilesStatus(text, cls) {
+    filesStatus = { text, cls: cls || '' };
+    const node = document.getElementById('files-save-status');
+    if (node) {
+        node.textContent = text;
+        node.className = cls ? `autosave ${cls}` : 'autosave';
+    }
+}
+
+async function saveFileSettings() {
+    const seq = ++filesSaveSeq;
+    setFilesStatus('Saving…', '');
     try {
         const result = await api('/api/backups/schedule', json('PUT', {
             'backup.files_enabled': document.getElementById('files-enabled').checked,
@@ -748,6 +790,7 @@ async function saveFileSettings(status) {
             'backup.files_max_concurrent':
                 Number(document.getElementById('files-max-concurrent').value),
         }));
+        if (seq !== filesSaveSeq) return;   // a later save is already in flight
         state.files = result.files;
         // The server normalises patterns (separators, duplicates), so adopt what it
         // stored rather than what was typed — otherwise the editor and the policy
@@ -755,11 +798,12 @@ async function saveFileSettings(status) {
         draftInclude = (result.files.include || []).slice();
         draftExclude = (result.files.exclude || []).slice();
         draftDirty = false;
+        filesStatus = { text: 'Saved', cls: 'autosave--saved' };
         renderSettingsPane();
         refreshPreview();
-        document.getElementById('files-save-status').textContent = 'Saved.';
     } catch (e) {
-        status.textContent = e.message;
+        if (seq !== filesSaveSeq) return;
+        setFilesStatus(e.message, 'autosave--error');
     }
 }
 

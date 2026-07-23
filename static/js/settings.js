@@ -93,6 +93,7 @@ function renderField(field) {
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.className = 'btn btn--ghost';
+    reset.dataset.role = 'reset';   // so an in-place save can toggle its visibility
     reset.textContent = 'Reset';
     // Only offered when there is something to reset -- a Reset next to an untouched
     // field is a button that does nothing.
@@ -144,7 +145,7 @@ function buildCheckboxControl(field) {
     // field.value is the effective value (override if set, else the default), never null
     // for a concrete-default bool.
     input.checked = Boolean(field.value);
-    input.addEventListener('change', () => markDirty(field.key, input.checked));
+    input.addEventListener('change', () => { markDirty(field.key, input.checked); requestSave(); });
     return input;
 }
 
@@ -157,10 +158,14 @@ function buildNumberControl(field) {
     if (field.max !== null && field.max !== undefined) input.max = String(field.max);
     if (field.type === 'float') input.step = 'any';
     input.value = field.value === null || field.value === undefined ? '' : String(field.value);
+    // input keeps the dirty state live (so Reset appears as you type); the save waits for
+    // `change` -- i.e. blur or Enter -- so a half-typed number like "1" on the way to "120"
+    // is not sent and rejected against its minimum mid-keystroke.
     input.addEventListener('input', () => {
         const raw = input.value.trim();
         markDirty(field.key, raw === '' ? null : Number(raw));
     });
+    input.addEventListener('change', requestSave);
     return input;
 }
 
@@ -179,6 +184,7 @@ function buildTriStateControl(field) {
     select.value = field.value === null || field.value === undefined ? '' : String(field.value);
     select.addEventListener('change', () => {
         markDirty(field.key, select.value === '' ? null : select.value === 'true');
+        requestSave();
     });
     return select;
 }
@@ -194,7 +200,7 @@ function buildEnumControl(field) {
         select.appendChild(opt);
     }
     select.value = field.value == null ? '' : String(field.value);
-    select.addEventListener('change', () => markDirty(field.key, select.value));
+    select.addEventListener('change', () => { markDirty(field.key, select.value); requestSave(); });
     return select;
 }
 
@@ -248,6 +254,7 @@ function buildPreferenceControl(field) {
     const commit = () => {
         redraw();
         markDirty(field.key, items.slice());
+        requestSave();
     };
 
     box.appendChild(list);
@@ -319,7 +326,6 @@ function markDirty(key, value) {
         dirty.set(key, value);
     }
     clearError(key);
-    refreshActions();
 }
 
 function same(a, b) {
@@ -329,66 +335,52 @@ function same(a, b) {
     return a === b;
 }
 
+// The old Save/Discard bar is gone: every control saves itself the moment it is committed
+// (see requestSave below). All that is left is a status line that shows "Saving…", then
+// "Saved" or an error.
 function renderActions(section) {
     const bar = document.createElement('div');
-    bar.className = 'settings-actions';
+    bar.className = 'card-actions';
     bar.dataset.section = section.name;
-    bar.hidden = true;
 
     const status = document.createElement('span');
-    status.className = 'settings-actions__status';
+    status.className = 'autosave';
+    status.dataset.role = 'autosave-status';
     bar.appendChild(status);
-
-    const discard = document.createElement('button');
-    discard.type = 'button';
-    discard.className = 'btn btn--ghost';
-    discard.textContent = 'Discard';
-    discard.addEventListener('click', () => loadSettings());
-    bar.appendChild(discard);
-
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'btn btn--primary';
-    save.textContent = 'Save changes';
-    save.addEventListener('click', () => saveSection(section.name, save));
-    bar.appendChild(save);
 
     return bar;
 }
 
-function refreshActions() {
-    for (const [name, panel] of Object.entries(panels)) {
-        if (!panel) continue;
-        const bar = panel.querySelector('.settings-actions');
-        if (!bar) continue;
-        const count = keysInPanel(panel).filter((k) => dirty.has(k)).length;
-        bar.hidden = count === 0;
-        const status = bar.querySelector('.settings-actions__status');
-        if (status) {
-            status.textContent = count === 1 ? '1 unsaved change' : `${count} unsaved changes`;
-        }
-    }
-}
-
-function keysInPanel(panel) {
-    return Array.from(panel.querySelectorAll('.setting')).map((el) => el.dataset.key);
+function setStatus(text, cls) {
+    document.querySelectorAll('[data-role="autosave-status"]').forEach((node) => {
+        node.textContent = text;
+        node.className = cls ? `autosave ${cls}` : 'autosave';
+    });
 }
 
 // --------------------------------------------------------------------------- saving
 
-async function saveSection(sectionName, btn) {
-    const panel = panels[sectionName];
-    if (!panel) return;
+let saving = false;      // a POST is in flight
+let pending = false;     // a control was committed while that POST was in flight
 
+// Commit points (a select changed, a number field blurred, a preference reordered) call
+// this rather than fetching directly. It serialises saves -- one request at a time -- and
+// remembers if another edit landed mid-flight so nothing is dropped, WITHOUT auto-retrying
+// a value the server just rejected (that would loop on a bad input).
+function requestSave() {
+    if (saving) { pending = true; return; }
+    flushDirty();
+}
+
+async function flushDirty() {
+    const keys = [...dirty.keys()];
+    if (!keys.length) return;
     const updates = {};
-    for (const key of keysInPanel(panel)) {
-        if (dirty.has(key)) updates[key] = dirty.get(key);
-    }
-    if (Object.keys(updates).length === 0) return;
-    if (!confirmDestructive(updates)) return;
+    keys.forEach((key) => { updates[key] = dirty.get(key); });
 
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
+    saving = true;
+    pending = false;
+    setStatus('Saving…', '');
     try {
         const resp = await fetch('/api/settings', {
             method: 'POST',
@@ -397,36 +389,55 @@ async function saveSection(sectionName, btn) {
         });
         const body = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-            // A 400 means the server rejected a value and wrote nothing. Its message
-            // names the field, so show it inline rather than in an alert box -- a
-            // settings form is exactly where inline errors earn their keep.
+            // A 400 means the server rejected a value and wrote nothing. Its message names
+            // the field, so show it inline against that control; the value stays dirty so
+            // the next commit retries it -- but we do NOT auto-retry here, or a permanently
+            // invalid entry would spin.
             showValidationError(body.error || `HTTP ${resp.status}`, updates);
+            setStatus(body.error || `HTTP ${resp.status}`, 'autosave--error');
             return;
         }
-        applySchema(body.settings);
-        refreshActions();
+        adoptSaved(body.settings, keys);
+        setStatus('Saved', 'autosave--saved');
     } catch (e) {
-        // Transport failure, not validation -- matches alerts.js.
-        window.alert(`Could not save settings: ${e.message}`);
+        // Transport failure, not validation. Leave the value dirty and let the operator
+        // re-commit; a background retry loop on a dropped network is worse than silence.
+        setStatus(`Could not save: ${e.message}`, 'autosave--error');
     } finally {
-        btn.disabled = false;
-        btn.textContent = 'Save changes';
+        saving = false;
+        if (pending) flushDirty();     // a genuine new edit arrived mid-request
     }
 }
 
-// Retention is the one knob whose save destroys data, and it does so later, in a
-// background thread. Without this the operator finds out from a graph that has silently
-// gone empty.
-function confirmDestructive(updates) {
-    const key = 'data.retention_days';
-    if (!(key in updates)) return true;
+// Adopt the server's post-save view for JUST the keys we wrote, instead of rebuilding the
+// whole panel the way an explicit Save used to. Rebuilding on every auto-save would yank
+// focus out of the control being edited and, worse, discard a change the operator made
+// while the request was in flight. So we update the saved baseline and the Reset button
+// in place and leave every live control alone.
+function adoptSaved(doc, savedKeys) {
+    const map = new Map();
+    for (const section of doc.sections) {
+        for (const field of section.fields) map.set(field.key, field);
+    }
+    savedKeys.forEach((key) => {
+        const field = map.get(key);
+        if (!field) { dirty.delete(key); return; }
+        fields.set(key, field);
+        // If the control still shows exactly what we saved, it is no longer pending. If the
+        // operator changed it again mid-request it stays dirty and requestSave's pending
+        // pass will write it.
+        if (dirty.has(key) && same(dirty.get(key), field.value)) dirty.delete(key);
+        updateResetVisibility(key);
+    });
+}
+
+function updateResetVisibility(key) {
     const field = fields.get(key);
-    const next = Number(updates[key]);
-    if (!field || !Number.isFinite(next) || next >= Number(field.value)) return true;
-    return window.confirm(
-        `Shorten retention from ${field.value} to ${next} days?\n\n` +
-        `Readings older than ${next} days will be PERMANENTLY DELETED on the next prune. ` +
-        `This cannot be undone.`);
+    if (!field) return;
+    const row = document.querySelector(`.setting[data-key="${key}"]`);
+    if (!row) return;
+    const reset = row.querySelector('[data-role="reset"]');
+    if (reset) reset.hidden = field.is_default;
 }
 
 function showValidationError(message, updates) {
@@ -459,7 +470,6 @@ async function resetField(key, btn) {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const body = await resp.json();
         applySchema(body.settings);
-        refreshActions();
     } catch (e) {
         btn.disabled = false;
         window.alert(`Could not reset: ${e.message}`);

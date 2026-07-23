@@ -25,7 +25,7 @@ const machineOptions = document.getElementById('machine-options');
 const memberChips = document.getElementById('member-chips');
 const memberInput = document.getElementById('member-input');
 const errorEl = document.getElementById('group-error');
-const saveBtn = document.getElementById('group-save');
+const groupStatusEl = document.getElementById('group-status');
 
 let capabilities = [];        // [{name, label, description}]
 let editingId = null;         // null while creating
@@ -189,6 +189,7 @@ function renderMachineChips() {
     renderChips(machineChips, draftMachines, (value) => {
         draftMachines = draftMachines.filter((m) => m !== value);
         renderMachineChips();
+        autoSaveGroup();
     });
 }
 
@@ -196,6 +197,7 @@ function renderMemberChips() {
     renderChips(memberChips, draftMembers, (value) => {
         draftMembers = draftMembers.filter((m) => m !== value);
         renderMemberChips();
+        autoSaveGroup();
     });
 }
 
@@ -246,14 +248,59 @@ function openEditor(group) {
     renderMemberChips();
     syncScopeMode();
     errorEl.textContent = '';
-    saveBtn.disabled = false;
+    // Reset the auto-save machinery for the new editing session.
+    groupSaving = false;
+    groupPending = false;
+    if (groupDebounce) { clearTimeout(groupDebounce); groupDebounce = null; }
+    setGroupStatus(group ? '' : 'Enter a name to create this group.', '');
     modal.showModal();
     nameInput.focus();
 }
 
-async function saveGroup() {
+// ---------------------------------------------------------------- auto-save
+//
+// The editor saves as you go instead of on a Save button. Two guards make that safe on a
+// page that grants sign-in access: (1) saves are serialised -- one request at a time, with
+// a `pending` flag so an edit made mid-request is written straight after, never dropped;
+// (2) every save sends the WHOLE group (name, capabilities, scope, machines, members), so
+// there is no window where a half-applied group is live. A brand-new group cannot be
+// created without a name, so nothing is written until one is typed; from the first
+// successful create we hold its id and switch to updating it in place.
+
+let groupSaving = false;
+let groupPending = false;
+let groupDebounce = null;
+
+function setGroupStatus(text, cls) {
+    if (!groupStatusEl) return;
+    groupStatusEl.textContent = text;
+    groupStatusEl.className = cls ? `autosave ${cls}` : 'autosave';
+}
+
+// Text fields debounce so a name is not POSTed letter by letter; discrete changes
+// (a capability ticked, a chip added, the scope mode switched) save at once.
+function autoSaveGroupDebounced() {
+    if (groupDebounce) clearTimeout(groupDebounce);
+    groupDebounce = setTimeout(autoSaveGroup, 500);
+}
+
+function autoSaveGroup() {
+    if (groupDebounce) { clearTimeout(groupDebounce); groupDebounce = null; }
+    if (groupSaving) { groupPending = true; return; }
+    flushGroup();
+}
+
+async function flushGroup() {
+    const name = nameInput.value.trim();
+    // A group cannot exist without a name; don't create one until there is something to
+    // call it. Editing an existing group with the name cleared is a real (rejected) edit,
+    // so only short-circuit while still creating.
+    if (!editingId && !name) {
+        setGroupStatus('Enter a name to create this group.', '');
+        return;
+    }
     const payload = {
-        name: nameInput.value.trim(),
+        name,
         description: descriptionInput.value.trim(),
         capabilities: selectedCapabilities(),
         scope_mode: scopeMode(),
@@ -263,27 +310,39 @@ async function saveGroup() {
         machines: draftMachines,
         members: draftMembers,
     };
+    groupSaving = true;
+    groupPending = false;
     errorEl.textContent = '';
-    saveBtn.disabled = true;
+    setGroupStatus('Saving…', '');
     try {
+        let group;
         if (editingId) {
-            await api(`/api/permissions/groups/${encodeURIComponent(editingId)}`, {
+            group = await api(`/api/permissions/groups/${encodeURIComponent(editingId)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
         } else {
-            await api('/api/permissions/groups', {
+            group = await api('/api/permissions/groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
+            // From here on this is an existing group: hold its id and update in place, so a
+            // second change doesn't create a duplicate.
+            editingId = group.id;
+            modalTitle.textContent = `Edit ${group.name}`;
         }
-        modal.close();
-        await loadGroups();
+        setGroupStatus('Saved', 'autosave--saved');
+        await loadGroups();      // refresh the list behind the modal
     } catch (e) {
+        // Validation failure (e.g. a duplicate name) writes nothing; show it and leave the
+        // editor open. We do NOT auto-retry -- only a genuine new edit (groupPending) does.
         errorEl.textContent = e.message;
-        saveBtn.disabled = false;
+        setGroupStatus('', '');
+    } finally {
+        groupSaving = false;
+        if (groupPending) flushGroup();
     }
 }
 
@@ -294,15 +353,22 @@ function addFrom(input, list, render, normalize) {
     input.value = '';
     render();
     input.focus();
+    autoSaveGroup();
 }
 
 // ---------------------------------------------------------------- wiring
 
 document.getElementById('new-group').addEventListener('click', () => openEditor(null));
 document.getElementById('group-cancel').addEventListener('click', () => modal.close());
-saveBtn.addEventListener('click', saveGroup);
+
+// Auto-save wiring. Text fields debounce; everything else saves on change. Capabilities
+// are caught by delegation on their container, so a checkbox added by a future capability
+// is covered without extra wiring.
+nameInput.addEventListener('input', autoSaveGroupDebounced);
+descriptionInput.addEventListener('input', autoSaveGroupDebounced);
+capabilityList.addEventListener('change', autoSaveGroup);
 modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
-    radio.addEventListener('change', syncScopeMode);
+    radio.addEventListener('change', () => { syncScopeMode(); autoSaveGroup(); });
 });
 
 document.getElementById('machine-add').addEventListener('click',

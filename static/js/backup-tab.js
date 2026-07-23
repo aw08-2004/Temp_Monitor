@@ -166,6 +166,7 @@
             }
             mode.appendChild(option);
         });
+        mode.addEventListener('change', savePolicy);
         modeWrap.appendChild(mode);
         grid.appendChild(modeWrap);
         card.appendChild(grid);
@@ -193,33 +194,57 @@
         inherited.appendChild(list);
         card.appendChild(inherited);
 
-        const actions = el('div', 'settings-actions');
-        const save = el('button', 'btn btn--primary', 'Save');
-        const status = el('span', 'settings-actions__status');
+        // No Save button: changes to the mode select or the path lists above save
+        // themselves (savePolicy). This span is the only feedback -- it shows "Saving…"
+        // while a write is in flight and "Saved" or the error once it lands.
+        const status = el('span', 'autosave', policyStatus.text);
         status.id = 'backup-save-status';
-        save.addEventListener('click', async () => {
-            status.textContent = '';
-            const value = document.getElementById('backup-mode').value;
-            try {
-                data = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`,
-                                 json('PUT', {
-                                     enabled: value === '' ? null : value === 'on',
-                                     include: draftInclude,
-                                     exclude: draftExclude,
-                                 }));
-                draftInclude = (data.config.include || []).slice();
-                draftExclude = (data.config.exclude || []).slice();
-                dirty = false;
-                render();
-                document.getElementById('backup-save-status').textContent = 'Saved.';
-            } catch (e) {
-                status.textContent = e.message;
-            }
-        });
-        actions.appendChild(save);
-        actions.appendChild(status);
-        card.appendChild(actions);
+        if (policyStatus.cls) status.className = `autosave ${policyStatus.cls}`;
+        card.appendChild(status);
         return card;
+    }
+
+    // Held outside render() so the "Saved"/error message survives the re-render that
+    // savePolicy triggers on success -- a status span rebuilt every render would blank
+    // the moment it had something to say.
+    let policyStatus = { text: '', cls: '' };
+    let policySaveSeq = 0;
+
+    function setPolicyStatus(text, cls) {
+        policyStatus = { text, cls: cls || '' };
+        const node = document.getElementById('backup-save-status');
+        if (node) {
+            node.textContent = text;
+            node.className = cls ? `autosave ${cls}` : 'autosave';
+        }
+    }
+
+    // Auto-save the backup policy. Sends the whole form every time (mode + both path
+    // lists), so there is never a partially-applied state, and a sequence guard drops a
+    // slow response that a newer edit has already superseded.
+    async function savePolicy() {
+        const modeEl = document.getElementById('backup-mode');
+        const value = modeEl ? modeEl.value : '';
+        const seq = ++policySaveSeq;
+        setPolicyStatus('Saving…', '');
+        try {
+            const body = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`,
+                             json('PUT', {
+                                 enabled: value === '' ? null : value === 'on',
+                                 include: draftInclude,
+                                 exclude: draftExclude,
+                             }));
+            if (seq !== policySaveSeq) return;   // a later save is already in flight
+            data = body;
+            draftInclude = (data.config.include || []).slice();
+            draftExclude = (data.config.exclude || []).slice();
+            dirty = false;
+            policyStatus = { text: 'Saved', cls: 'autosave--saved' };
+            render();
+        } catch (e) {
+            if (seq !== policySaveSeq) return;
+            setPolicyStatus(e.message, 'autosave--error');
+        }
     }
 
     function pathEditor(title, kind, values, help, placeholder) {
@@ -239,6 +264,7 @@
                 values.splice(index, 1);
                 dirty = true;
                 render();
+                savePolicy();
             });
             chip.appendChild(remove);
             chips.appendChild(chip);
@@ -259,6 +285,7 @@
             input.value = '';
             dirty = true;
             render();
+            savePolicy();
         };
         add.addEventListener('click', commit);
         input.addEventListener('keydown', (e) => {
@@ -613,7 +640,7 @@
             ' Overwrite files that already exist'));
         wrap.appendChild(overwriteLabel);
 
-        const actions = el('div', 'settings-actions');
+        const actions = el('div', 'card-actions');
         const start = el('button', 'btn btn--primary',
                          restoreBusy ? 'Starting…' : 'Restore selected');
         start.disabled = restoreBusy;
@@ -765,7 +792,7 @@
         card.style.marginTop = 'var(--space-5)';
         card.appendChild(el('h2', 'section-title', 'Backup history'));
 
-        const actions = el('div', 'settings-actions');
+        const actions = el('div', 'card-actions');
         const run = el('button', 'btn btn--primary',
                        runBusy ? 'Working…' : 'Back up now');
         run.id = 'backup-run-now';

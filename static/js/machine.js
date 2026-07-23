@@ -622,14 +622,16 @@ async function loadPrimarySensor() {
         : '';
 }
 
-primarySensorSelect.addEventListener('change', () => {
-    primarySensorSave.hidden = primarySensorSelect.value === savedPrimarySensor;
-    primarySensorStatus.textContent = '';
-});
+// Picking a sensor saves it immediately -- no Save button (it stays hidden). A seq guard
+// drops a slow response that a newer pick has already superseded.
+let primarySensorSaveSeq = 0;
 
-primarySensorSave.addEventListener('click', async () => {
-    primarySensorSave.disabled = true;
-    primarySensorSave.textContent = 'Saving…';
+primarySensorSelect.addEventListener('change', savePrimarySensor);
+
+async function savePrimarySensor() {
+    if (primarySensorSelect.value === savedPrimarySensor) return;   // nothing changed
+    const seq = ++primarySensorSaveSeq;
+    primarySensorStatus.textContent = 'Saving…';
     try {
         const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/primary_sensor`, {
             method: 'PUT',
@@ -640,15 +642,14 @@ primarySensorSave.addEventListener('click', async () => {
             const body = await resp.json().catch(() => ({}));
             throw new Error(body.error || `HTTP ${resp.status}`);
         }
+        if (seq !== primarySensorSaveSeq) return;
         await loadPrimarySensor();
         primarySensorStatus.textContent = 'Saved. Applies from the next reading.';
     } catch (e) {
-        window.alert(`Could not save the primary sensor: ${e.message}`);
-    } finally {
-        primarySensorSave.disabled = false;
-        primarySensorSave.textContent = 'Save';
+        if (seq !== primarySensorSaveSeq) return;
+        primarySensorStatus.textContent = `Could not save: ${e.message}`;
     }
-});
+}
 
 dayPicker.value = getLocalDateString();
 syncResolutionControl();
