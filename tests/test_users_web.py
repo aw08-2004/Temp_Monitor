@@ -13,7 +13,7 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import fleet
 import permissions
 import users as users_model
@@ -47,7 +47,7 @@ def fake_login_required(view):
 
 def build_app(db_path):
     app = Flask(__name__, template_folder=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"))
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub", "templates"))
     app.secret_key = "test"
     access = create_access(db_path, SUPERUSERS)
     app.register_blueprint(create_users_blueprint(db_path, fake_login_required, access))

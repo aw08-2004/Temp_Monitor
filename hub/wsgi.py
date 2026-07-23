@@ -8,11 +8,16 @@ where app.py (and everything it pulls in) cannot be.
 import os
 import sys
 
+# This file lives in the hub/ code dir; the worktree root (where a dev checkout's .git sits)
+# and the operator state are one level up. See app.py's HUB_CODE_DIR / STATE_ROOT.
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_WORKTREE_ROOT = os.path.dirname(_HERE)
 
-# Branch archive, duplicated from app.py's HUB_ARCHIVE_URL rather than imported -- see the
-# module docstring for why this file must not depend on app.py.
+# Branch archive + the subdir the hub's code lives under, both duplicated from app.py's
+# HUB_ARCHIVE_URL / HUB_ARCHIVE_SUBDIR rather than imported -- see the module docstring for
+# why this file must not depend on app.py.
 HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/heads/main"
+HUB_ARCHIVE_SUBDIR = "hub"
 
 
 def _copy_missing_pyfiles(src_dir, dst_dir):
@@ -55,8 +60,9 @@ def _self_heal_missing_modules(exc):
     Never raises: a self-heal that itself fails must not replace one traceback with another.
     """
     # A dev checkout manages its own files: a missing module there is a real bug, not a
-    # half-delivered update, so don't reach out to the network and mask it.
-    if os.path.isdir(os.path.join(_HERE, ".git")):
+    # half-delivered update, so don't reach out to the network and mask it. The .git lives
+    # at the worktree root, one level up from this hub/ code dir.
+    if os.path.isdir(os.path.join(_WORKTREE_ROOT, ".git")):
         return False
     print(f"[wsgi] '{exc}' on startup import; attempting one-shot self-heal from the archive.",
           file=sys.stderr)
@@ -77,7 +83,9 @@ def _self_heal_missing_modules(exc):
             print(f"[wsgi] self-heal: unexpected archive layout ({len(roots)} top-level dirs);"
                   " giving up.", file=sys.stderr)
             return False
-        copied = _copy_missing_pyfiles(os.path.join(staging, roots[0]), _HERE)
+        # The hub's modules live under hub/ in the archive; _HERE is that same dir locally.
+        copied = _copy_missing_pyfiles(
+            os.path.join(staging, roots[0], HUB_ARCHIVE_SUBDIR), _HERE)
         if copied:
             print(f"[wsgi] self-heal: added {', '.join(copied)} -- retrying startup.",
                   file=sys.stderr)

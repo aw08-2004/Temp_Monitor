@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
 _TMPDIR = tempfile.mkdtemp(prefix="hub-histmetrics-test-")
 # app resolves its DB from HUB_LOG_DIR; declare it before importing app so a standalone

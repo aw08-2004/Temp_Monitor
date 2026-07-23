@@ -12,7 +12,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
 _TMPDIR = tempfile.mkdtemp(prefix="hub-alerts-test-")
 # Point app.py's database at this module's own dir before importing it. app resolves its

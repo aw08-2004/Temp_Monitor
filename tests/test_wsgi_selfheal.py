@@ -15,7 +15,7 @@ import types
 import shutil
 import tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub")
 sys.path.insert(0, ROOT)
 
 _saved_app = sys.modules.get("app")
@@ -89,8 +89,9 @@ def main():
               wsgi._copy_missing_pyfiles(src, dst) == [])
 
         print("\n== dev-checkout guard ==")
-        # wsgi._HERE is the repo root, which is a .git checkout in dev/CI -- so the heal
-        # must refuse to phone home and mask what is a real bug there. No network hit.
+        # wsgi._WORKTREE_ROOT is the repo root (parent of the hub/ code dir), a .git checkout
+        # in dev/CI -- so the heal must refuse to phone home and mask what is a real bug
+        # there. No network hit.
         check("self-heal is a no-op inside a .git checkout",
               wsgi._self_heal_missing_modules(ModuleNotFoundError("boom")) is False)
     finally:

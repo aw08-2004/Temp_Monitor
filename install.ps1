@@ -84,21 +84,15 @@ $HubServiceId        = "FleetHub"
 $HubServiceName      = "FleetHub - Hub"
 $LegacyHubServiceId  = "TempMonitorHub"
 
-# --- Hub runtime file set ---
-# The hub only needs these; the repo also carries the 85 MB agent/ tree, tests and docs
-# that have no business on a server. Anything not listed here is not installed.
-# Keep in sync with the same list in app.py's self-updater.
-# EVERY module app.py imports must be listed. A missing one is an ImportError at startup,
-# not a missing feature -- which is what happened to packages.py/packages_web.py in
-# 1.27.x, where a sparse install could not boot at all.
-$HubRuntimeFiles = @(
-    "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
-    "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
-    "users.py", "users_web.py",
-    "packages.py", "packages_web.py", "backups.py", "backups_web.py",
-    "backup_paths.py", "alerts.py", "restore_backup.py", "requirements.txt"
-)
-$HubRuntimeDirs  = @("templates", "static")
+# --- Hub code layout ---
+# All of the hub's code + assets live under this one subdirectory of the repo. The installer
+# copies that whole subtree wholesale into <install root>\hub, and the hub's self-updater
+# mirrors the same subtree -- so there is no hand-kept file list to drift out of sync. That
+# drift is exactly what broke 1.35.0: a module added upstream (users.py) wasn't in the
+# running version's list, so the update shipped app.py without it and the hub crash-looped.
+# The install root itself holds only operator state (.env, logs\, the WinSW wrapper), which a
+# code refresh never touches. The agent/ tree, tests and docs stay in the repo, never shipped.
+$HubCodeSubdir = "hub"
 # Source archive for both first install and self-update. codeload serves a zip of a branch
 # without needing git on the box -- Expand-Archive is native to PowerShell 5.1, so this
 # adds no dependency (the old path required Git for Windows to be installed).
@@ -771,11 +765,17 @@ function Install-Agent {
 # for uninstall -- an existing clone next to install.ps1. Kept in one place so install and
 # uninstall agree on the location.
 function Resolve-HubDir {
+    # The install root holds state (.env, logs\, the wrapper); the code lives under hub\.
+    # An install root is recognised by either the current hub\app.py or the pre-subfolder
+    # flat app.py, so this keeps finding hubs deployed before the move (e.g. for -Uninstall).
+    function Test-HubRoot([string]$dir) {
+        return (Test-Path (Join-Path $dir "$HubCodeSubdir\app.py")) -or (Test-Path (Join-Path $dir "app.py"))
+    }
     if ($HubInstallDir) { return $HubInstallDir.TrimEnd('\') }
-    if (Test-Path (Join-Path $HubInstallDefault "app.py")) { return $HubInstallDefault }
+    if (Test-HubRoot $HubInstallDefault) { return $HubInstallDefault }
     # Pre-rename layout, so `-Uninstall` still finds a hub installed before the rename.
-    if (Test-Path (Join-Path $LegacyHubDir "app.py")) { return $LegacyHubDir }
-    if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "app.py"))) { return $PSScriptRoot }
+    if (Test-HubRoot $LegacyHubDir) { return $LegacyHubDir }
+    if ($PSScriptRoot -and (Test-HubRoot $PSScriptRoot)) { return $PSScriptRoot }
     return $HubInstallDefault
 }
 
@@ -817,36 +817,30 @@ function Uninstall-Hub {
     Write-Host "`nDone.`n" -ForegroundColor Green
 }
 
-function Copy-HubRuntimeFiles {
+function Copy-HubTree {
     <#
-      Copy just the hub's runtime file set from an extracted repo tree into $Dest.
-      Everything outside $HubRuntimeFiles/$HubRuntimeDirs -- the agent tree, tests, docs
-      -- is deliberately left behind.
-
-      Directories are mirrored rather than merged: a template or static asset deleted
-      upstream must disappear here too, otherwise a stale .html lingers forever. The
-      operator's own files (.env, logs/, the WinSW wrapper) live outside these dirs and
-      are never touched.
+      Mirror the hub's whole code subtree ($Source\hub) into $Dest\hub. The subtree is
+      authoritative about its own file set -- there is no allowlist to keep in sync -- so a
+      module or asset added or removed upstream is picked up automatically. The code dir is
+      mirrored (removed first) so an upstream deletion propagates; the operator's state
+      (.env, logs\, the WinSW wrapper) lives in $Dest itself, outside the code dir, untouched.
     #>
     param([string]$Source, [string]$Dest)
 
-    foreach ($f in $HubRuntimeFiles) {
-        $src = Join-Path $Source $f
-        if (-not (Test-Path $src)) { Die "Source archive is missing $f -- refusing to install a partial hub." }
-        Copy-Item $src (Join-Path $Dest $f) -Force
+    $srcCode = Join-Path $Source $HubCodeSubdir
+    foreach ($essential in @("app.py", "wsgi.py", "requirements.txt")) {
+        if (-not (Test-Path (Join-Path $srcCode $essential))) {
+            Die "Source archive $HubCodeSubdir\ is missing $essential -- refusing to install a partial hub."
+        }
     }
-    foreach ($d in $HubRuntimeDirs) {
-        $src = Join-Path $Source $d
-        if (-not (Test-Path $src)) { Die "Source archive is missing $d\ -- refusing to install a partial hub." }
-        $target = Join-Path $Dest $d
-        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
-        Copy-Item $src $target -Recurse -Force
-    }
+    $destCode = Join-Path $Dest $HubCodeSubdir
+    if (Test-Path $destCode) { Remove-Item $destCode -Recurse -Force }
+    Copy-Item $srcCode $destCode -Recurse -Force
 }
 
 function Get-HubFiles {
     <#
-      Download main as a zip and lay down only the hub runtime files at $Dest.
+      Download main as a zip and lay down the hub's code subtree at $Dest\hub.
       Replaces the previous `git clone` of the whole repo: no Git dependency, and
       ~2 MB on disk instead of ~85 MB.
     #>
@@ -868,8 +862,8 @@ function Get-HubFiles {
         if (-not $root) { Die "Source archive looked empty." }
 
         if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Force -Path $Dest | Out-Null }
-        Copy-HubRuntimeFiles -Source $root.FullName -Dest $Dest
-        Ok "Installed hub runtime files to $Dest"
+        Copy-HubTree -Source $root.FullName -Dest $Dest
+        Ok "Installed hub code to $(Join-Path $Dest $HubCodeSubdir)"
     }
     finally {
         Remove-Item $zip -Force -ErrorAction SilentlyContinue
@@ -950,7 +944,7 @@ function Install-Hub {
 
     Step "Installing Python packages"
     & $pythonExe -m pip install --upgrade pip --quiet
-    & $pythonExe -m pip install -r (Join-Path $hubDir "requirements.txt") --quiet
+    & $pythonExe -m pip install -r (Join-Path $hubDir "$HubCodeSubdir\requirements.txt") --quiet
     if ($LASTEXITCODE -ne 0) { Die "pip install failed." }
     Ok "Dependencies installed"
 
@@ -1038,10 +1032,11 @@ function Install-Hub {
         Ok "Wrapper: $wrapperExe"
     }
 
-    # WinSW runs as LocalSystem by default (matches the old SYSTEM task). The service inherits
-    # config from .env because waitress runs with <workingdirectory>=$hubDir and app.py calls
-    # load_dotenv() from cwd. onfailure=restart is also what the hub self-update relies on:
-    # restart_hub() exits non-zero, WinSW relaunches within ~5s.
+    # WinSW runs as LocalSystem by default (matches the old SYSTEM task). waitress runs with
+    # <workingdirectory> at the code dir ($hubDir\hub) so `wsgi:application` imports; app.py then
+    # resolves .env and logs\ from the install root one level up (STATE_ROOT), which is $hubDir --
+    # exactly where this installer writes them. onfailure=restart is also what the hub self-update
+    # relies on: restart_hub() exits non-zero, WinSW relaunches within ~5s.
     $xml = @"
 <service>
   <id>$HubServiceId</id>
@@ -1049,7 +1044,7 @@ function Install-Hub {
   <description>FleetHub hub (Flask/Socket.IO via waitress).</description>
   <executable>$([System.Security.SecurityElement]::Escape($hubExec))</executable>
   <arguments>$([System.Security.SecurityElement]::Escape($hubArgs))</arguments>
-  <workingdirectory>$([System.Security.SecurityElement]::Escape($hubDir))</workingdirectory>
+  <workingdirectory>$([System.Security.SecurityElement]::Escape((Join-Path $hubDir $HubCodeSubdir)))</workingdirectory>
   <startmode>Automatic</startmode>
   <onfailure action="restart" delay="5 sec"/>
   <resetfailure>1 hour</resetfailure>

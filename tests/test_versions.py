@@ -12,7 +12,7 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
 # app.py resolves LOG_DIR/DB_PATH relative to the cwd at import time, so run it
 # against a throwaway directory rather than the real logs/temp_v2.db.
@@ -193,7 +193,9 @@ def test_hub_self_update():
     finally:
         app.fetch_remote_hub_version = orig_fetch
 
-    print("\n-- hub self-update: perform_hub_update pulls a clone up to origin/main --")
+    print("\n-- hub self-update: perform_hub_update resets a checkout to origin/main --")
+    # The hub's code lives under hub/ now; the .git that selects the git strategy sits at the
+    # worktree root, one level up from the code dir passed to perform_hub_update.
     import subprocess as _sp
 
     def _git(cwd, *args):
@@ -202,24 +204,24 @@ def test_hub_self_update():
     try:
         base = tempfile.mkdtemp(prefix="hub-selfupdate-")
         origin = os.path.join(base, "origin")
-        os.makedirs(origin)
+        os.makedirs(os.path.join(origin, "hub"))
         _git(origin, "init", "-b", "main")
-        with open(os.path.join(origin, "app.py"), "w") as f:
+        with open(os.path.join(origin, "hub", "app.py"), "w") as f:
             f.write('HUB_VERSION = "1.0.0"\n')
-        open(os.path.join(origin, "requirements.txt"), "w").close()
+        open(os.path.join(origin, "hub", "requirements.txt"), "w").close()
         _git(origin, "add", "-A")
         _git(origin, "commit", "-m", "v1")
         work = os.path.join(base, "work")
         _sp.run(["git", "clone", origin, work], capture_output=True, text=True, check=True)
-        # origin advances; the hub's clone must fast-follow via reset --hard.
-        with open(os.path.join(origin, "app.py"), "w") as f:
+        # origin advances; the hub's checkout must fast-follow via reset --hard.
+        with open(os.path.join(origin, "hub", "app.py"), "w") as f:
             f.write('HUB_VERSION = "2.0.0"\n')
         _git(origin, "commit", "-am", "v2")
-        ok = app.perform_hub_update(work)
-        with open(os.path.join(work, "app.py")) as f:
+        ok = app.perform_hub_update(os.path.join(work, "hub"))
+        with open(os.path.join(work, "hub", "app.py")) as f:
             pulled = f.read()
         check("perform_hub_update returned True", ok is True)
-        check("clone advanced to origin/main (2.0.0)", app.parse_hub_version(pulled) == "2.0.0")
+        check("checkout advanced to origin/main (2.0.0)", app.parse_hub_version(pulled) == "2.0.0")
     except Exception as e:
         check(f"perform_hub_update dry run (unexpected error: {e})", False)
 
@@ -229,17 +231,21 @@ def test_hub_self_update():
     import io as _io, zipfile as _zf
 
     def _make_archive(version="2.0.0", omit=()):
+        # The archive lays the hub's code + assets under a hub/ subdir of the single
+        # <repo>-<branch>/ root -- there is no allowlist anymore, so this is just a small
+        # representative set (the entrypoints the sanity floor checks, plus mirrored dirs).
+        files = {"app.py": f'HUB_VERSION = "{version}"\n', "wsgi.py": "", "requirements.txt": ""}
+        dirs = ("templates", "static")
         buf = _io.BytesIO()
         with _zf.ZipFile(buf, "w") as z:
-            for name in app.HUB_RUNTIME_FILES:
+            for name, body in files.items():
                 if name in omit:
                     continue
-                body = f'HUB_VERSION = "{version}"\n' if name == "app.py" else ""
-                z.writestr(f"Temp_Monitor-main/{name}", body)
-            for d in app.HUB_RUNTIME_DIRS:
+                z.writestr(f"Temp_Monitor-main/hub/{name}", body)
+            for d in dirs:
                 if d in omit:
                     continue
-                z.writestr(f"Temp_Monitor-main/{d}/keep.txt", "x")
+                z.writestr(f"Temp_Monitor-main/hub/{d}/keep.txt", "x")
         return buf.getvalue()
 
     class _Resp:
@@ -249,58 +255,73 @@ def test_hub_self_update():
     orig_get = app.requests.get
     orig_install = app._install_requirements
     try:
-        # Happy path: files replaced, and a stale file inside a mirrored dir is removed.
-        work = tempfile.mkdtemp(prefix="hub-archive-")
-        with open(os.path.join(work, "app.py"), "w") as f:
+        # Happy path: the archive's hub/ is mirrored into the code dir -- files replaced,
+        # a stale file inside a mirrored dir removed, a stale top-level module pruned -- while
+        # operator state one level up in the install root is left untouched.
+        state_root = tempfile.mkdtemp(prefix="hub-archive-state-")
+        code_dir = os.path.join(state_root, "hub")
+        os.makedirs(code_dir)
+        with open(os.path.join(code_dir, "app.py"), "w") as f:
             f.write('HUB_VERSION = "1.0.0"\n')
-        os.makedirs(os.path.join(work, "templates"))
-        with open(os.path.join(work, "templates", "gone.html"), "w") as f:
+        with open(os.path.join(code_dir, "gone.py"), "w") as f:
+            f.write("# removed upstream -- must be pruned")
+        os.makedirs(os.path.join(code_dir, "templates"))
+        with open(os.path.join(code_dir, "templates", "gone.html"), "w") as f:
             f.write("stale")
-        # Operator data that must survive the update.
-        with open(os.path.join(work, ".env"), "w") as f:
+        # Operator data lives in the install root, one level above the code dir.
+        with open(os.path.join(state_root, ".env"), "w") as f:
             f.write("HUB_URL=https://example.test\n")
-        os.makedirs(os.path.join(work, "logs"))
-        with open(os.path.join(work, "logs", "temp_v2.db"), "w") as f:
+        os.makedirs(os.path.join(state_root, "logs"))
+        with open(os.path.join(state_root, "logs", "temp_v2.db"), "w") as f:
             f.write("dbcontents")
 
         app.requests.get = lambda *a, **k: _Resp(_make_archive())
-        app._install_requirements = lambda root: None
-        ok = app.perform_hub_update(work)
-        with open(os.path.join(work, "app.py")) as f:
+        app._install_requirements = lambda d: None
+        ok = app.perform_hub_update(code_dir)
+        with open(os.path.join(code_dir, "app.py")) as f:
             pulled = f.read()
 
         check("archive update returned True", ok is True)
         check("app.py advanced to 2.0.0", app.parse_hub_version(pulled) == "2.0.0")
         check("stale template removed by dir mirror",
-              not os.path.exists(os.path.join(work, "templates", "gone.html")))
-        check(".env preserved", os.path.exists(os.path.join(work, ".env")))
-        check("logs/ preserved",
-              open(os.path.join(work, "logs", "temp_v2.db")).read() == "dbcontents")
+              not os.path.exists(os.path.join(code_dir, "templates", "gone.html")))
+        check("stale top-level module pruned",
+              not os.path.exists(os.path.join(code_dir, "gone.py")))
+        check(".env in install root preserved", os.path.exists(os.path.join(state_root, ".env")))
+        check("logs/ in install root preserved",
+              open(os.path.join(state_root, "logs", "temp_v2.db")).read() == "dbcontents")
 
-        # Fail-closed: an archive missing part of the runtime set must not be applied,
-        # or the hub loses templates and crash-loops on restart.
-        work2 = tempfile.mkdtemp(prefix="hub-archive-bad-")
-        with open(os.path.join(work2, "app.py"), "w") as f:
+        # Fail-closed: an archive whose hub/ is missing an entrypoint must not be applied,
+        # or the hub loses a module and crash-loops on restart.
+        state2 = tempfile.mkdtemp(prefix="hub-archive-bad-")
+        code2 = os.path.join(state2, "hub")
+        os.makedirs(code2)
+        with open(os.path.join(code2, "app.py"), "w") as f:
             f.write('HUB_VERSION = "1.0.0"\n')
-        app.requests.get = lambda *a, **k: _Resp(_make_archive(omit=("templates",)))
-        ok_bad = app.perform_hub_update(work2)
-        with open(os.path.join(work2, "app.py")) as f:
+        app.requests.get = lambda *a, **k: _Resp(_make_archive(omit=("app.py",)))
+        ok_bad = app.perform_hub_update(code2)
+        with open(os.path.join(code2, "app.py")) as f:
             untouched = f.read()
         check("incomplete archive refused", ok_bad is False)
         check("live tree untouched after refusal",
               app.parse_hub_version(untouched) == "1.0.0")
 
-        # Dispatch: presence of .git alone decides which strategy runs. A developer's
-        # checkout must never be overwritten by the archive.
+        # Dispatch: a .git at the worktree root (the parent of the code dir) alone decides
+        # which strategy runs. A developer's checkout must never be overwritten by the archive.
         orig_git_fn, orig_archive_fn = app._perform_hub_update_git, app._perform_hub_update_archive
         try:
             app._perform_hub_update_git = lambda root: "git"
-            app._perform_hub_update_archive = lambda root: "archive"
-            clone_dir = tempfile.mkdtemp(prefix="hub-dispatch-clone-")
-            os.makedirs(os.path.join(clone_dir, ".git"))
-            sparse_dir = tempfile.mkdtemp(prefix="hub-dispatch-sparse-")
-            check("clone routes to git", app.perform_hub_update(clone_dir) == "git")
-            check("non-clone routes to archive", app.perform_hub_update(sparse_dir) == "archive")
+            app._perform_hub_update_archive = lambda d: "archive"
+            clone_root = tempfile.mkdtemp(prefix="hub-dispatch-clone-")
+            os.makedirs(os.path.join(clone_root, ".git"))
+            clone_code = os.path.join(clone_root, "hub")
+            os.makedirs(clone_code)
+            sparse_code = os.path.join(tempfile.mkdtemp(prefix="hub-dispatch-sparse-"), "hub")
+            os.makedirs(sparse_code)
+            check("code dir under a .git worktree routes to git",
+                  app.perform_hub_update(clone_code) == "git")
+            check("code dir with no .git parent routes to archive",
+                  app.perform_hub_update(sparse_code) == "archive")
         finally:
             app._perform_hub_update_git = orig_git_fn
             app._perform_hub_update_archive = orig_archive_fn

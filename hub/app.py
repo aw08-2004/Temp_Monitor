@@ -40,13 +40,24 @@ from users_web import create_users_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 
-# Load .env from next to this file rather than the cwd -- under the Windows service the working
-# directory isn't the hub folder -- and with utf-8-sig so a UTF-8 BOM (which PowerShell and
-# Windows editors happily prepend) doesn't corrupt the first key and blank out the config.
-# The path is kept: backups.py appends BACKUP_MASTER_KEY to this exact file, and guessing
-# it a second time from a different base is how the key ends up written somewhere the next
-# restart doesn't read.
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+# The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
+# telemetry DB) lives one level up in the install root. Keeping the two apart is what lets
+# the self-updater mirror the whole code dir wholesale without an allowlist -- a code
+# refresh never has to step around operator data, because none of it is in the code dir.
+HUB_CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+# The install/repo root: the parent of the code dir. Overridable via HUB_STATE_DIR for odd
+# deployments, but the default matches both what install.ps1 lays down (…\Hub\hub -> …\Hub)
+# and a dev checkout (repo/hub -> repo), so .env and logs/ resolve exactly where they always
+# did before the move -- behaviour-preserving for an in-place upgrade.
+STATE_ROOT = os.path.abspath(os.environ.get("HUB_STATE_DIR") or os.path.dirname(HUB_CODE_DIR))
+
+# Load .env from the install root rather than the cwd -- under the Windows service the working
+# directory is the code dir, not where the config lives -- and with utf-8-sig so a UTF-8 BOM
+# (which PowerShell and Windows editors happily prepend) doesn't corrupt the first key and
+# blank out the config. The path must stay stable: backups.py appends BACKUP_MASTER_KEY to
+# this exact file, and guessing it a second time from a different base is how the key ends up
+# written somewhere the next restart doesn't read.
+ENV_PATH = os.path.join(STATE_ROOT, ".env")
 load_dotenv(ENV_PATH, encoding="utf-8-sig")
 
 # ================================
@@ -54,7 +65,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.37.0"
+HUB_VERSION = "1.38.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -69,11 +80,12 @@ HUB_AUTO_UPDATE_ENV = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in (
 # every connect, and the db_writer runs on a daemon thread -- so a background write that
 # resolves the path while another thread has changed cwd is a data race. It never bites
 # in production (the service's cwd is fixed), but it makes the test suite flaky. The
-# default sits next to this file, which under the WinSW service is the hub install dir --
-# exactly where the old cwd-relative "logs" resolved to, so this is behaviour-preserving.
+# default sits in the install root (STATE_ROOT), which under the WinSW service is the hub
+# install dir -- exactly where the old cwd-relative "logs" resolved to, and unchanged by the
+# move of the code into hub/, so an in-place upgrade keeps reading the same logs/temp_v2.db.
 LOG_DIR = os.path.abspath(
     os.environ.get("HUB_LOG_DIR")
-    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    or os.path.join(STATE_ROOT, "logs")
 )
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -704,7 +716,7 @@ COMPANION_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor
 AGENT_MANIFEST_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
 # The hub reads its own latest version straight out of app.py on main -- same source-of-truth
 # and raw-GitHub trust as the client version hints above. Used only by the opt-in self-updater.
-HUB_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/app.py"
+HUB_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/hub/app.py"
 HUB_UPDATE_CHECK_INTERVAL = 15 * 60  # 15 minutes
 COMPANION_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
 # First version of the C# agent. A client reporting >= this is on the agent train
@@ -825,32 +837,15 @@ def start_companion_version_watcher():
 # Both trust GitHub over HTTPS plus push access to main; NEITHER touches the separate
 # Ed25519 fleet-update trust root that gates agent binaries.
 # ================================
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-
 # Source archive for the no-git path. codeload serves a branch zip directly.
 HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/heads/main"
-
-# The files that constitute a hub install. Anything outside this set (the agent tree,
-# tests, docs) is deliberately not shipped to a server.
-#
-# EVERY module app.py imports has to be listed here. A missing one is not a degraded
-# feature, it is an ImportError at startup that takes the whole console down -- which is
-# exactly what happened to packages.py/packages_web.py in 1.27.x, where a sparse install
-# fetched neither and the hub could not boot. If you add a module, add it here and to
-# $HubRuntimeFiles in install.ps1 in the same commit.
-#
-# restore_backup.py is not imported by anything -- it is here because it is the tool you
-# need ON the replacement server, and the one moment you need it is the moment this file
-# list is the only thing that ever put it there.
-# MUST stay in sync with $HubRuntimeFiles/$HubRuntimeDirs in install.ps1.
-HUB_RUNTIME_FILES = (
-    "app.py", "wsgi.py", "fleet.py", "fleet_web.py",
-    "settings.py", "settings_web.py", "permissions.py", "permissions_web.py",
-    "users.py", "users_web.py",
-    "packages.py", "packages_web.py", "backups.py", "backups_web.py",
-    "backup_paths.py", "alerts.py", "restore_backup.py", "requirements.txt",
-)
-HUB_RUNTIME_DIRS = ("templates", "static")
+# Within the repo (and so within that archive), all of the hub's code and assets live under
+# this one directory. The self-updater mirrors it wholesale into HUB_CODE_DIR -- there is
+# deliberately no per-file allowlist anymore. That list was decided by the *running* version,
+# so a release that added a module (users.py/users_web.py in 1.35.0) shipped app.py without
+# it and crash-looped on the next boot; the whole hub/ layout exists to kill that failure
+# mode by making the archive, not a hand-kept tuple, authoritative about the file set.
+HUB_ARCHIVE_SUBDIR = "hub"
 
 def parse_hub_version(text):
     """Pull the HUB_VERSION string out of an app.py source blob, or None. Pure; mirrors
@@ -880,43 +875,46 @@ def _run_git(args, cwd):
     except Exception as e:
         return False, str(e)
 
-def _install_requirements(repo_root):
+def _install_requirements(code_dir):
     """Best-effort dependency install after an update: a release that adds a dependency
-    shouldn't crash-loop the restart, so failure here is logged and tolerated."""
+    shouldn't crash-loop the restart, so failure here is logged and tolerated. `code_dir`
+    is the hub code directory -- requirements.txt lives beside the modules, under hub/."""
     try:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r",
-             os.path.join(repo_root, "requirements.txt"), "--quiet"],
-            cwd=repo_root, capture_output=True, text=True, timeout=300,
+             os.path.join(code_dir, "requirements.txt"), "--quiet"],
+            cwd=code_dir, capture_output=True, text=True, timeout=300,
         )
     except Exception as e:
         print(f"[hub-update] pip install after update failed (continuing): {e}")
 
 
-def _perform_hub_update_git(repo_root):
-    """Bring the clone at repo_root up to origin/main via fetch + hard reset. Returns
-    True only if fetch AND reset succeeded -- the caller restarts only then. Discards
-    local drift by design (operator-confirmed)."""
-    ok, out = _run_git(["fetch", "origin", "main"], repo_root)
+def _perform_hub_update_git(worktree_root):
+    """Bring the checkout at worktree_root up to origin/main via fetch + hard reset. The
+    reset covers the whole tree, so the hub/ code dir comes along with it. Returns True only
+    if fetch AND reset succeeded -- the caller restarts only then. Discards local drift by
+    design (operator-confirmed)."""
+    ok, out = _run_git(["fetch", "origin", "main"], worktree_root)
     if not ok:
         print(f"[hub-update] git fetch failed, skipping: {out}")
         return False
-    ok, out = _run_git(["reset", "--hard", "origin/main"], repo_root)
+    ok, out = _run_git(["reset", "--hard", "origin/main"], worktree_root)
     if not ok:
         print(f"[hub-update] git reset failed, skipping: {out}")
         return False
     print(f"[hub-update] Updated working tree to origin/main: {out}")
-    _install_requirements(repo_root)
+    _install_requirements(os.path.join(worktree_root, HUB_ARCHIVE_SUBDIR))
     return True
 
 
 def _stage_hub_archive(staging):
     """Download and unpack the branch archive into `staging`, returning the path to the
-    unpacked tree, or None on any failure (logged, never raises).
+    archive's hub/ directory, or None on any failure (logged, never raises).
 
-    Everything lands in staging and is checked for completeness BEFORE the caller
-    touches the live install -- a truncated download or a moved file upstream must fail
-    the update, not leave a hub with half its templates."""
+    Everything lands in staging and is sanity-checked BEFORE the caller touches the live
+    install -- a truncated download or a moved layout upstream must fail the update, not
+    leave a hub with half its files. The check is a sanity floor (the entrypoints exist),
+    not the old per-file allowlist: the archive's hub/ is authoritative about the rest."""
     try:
         resp = requests.get(HUB_ARCHIVE_URL, timeout=120)
         resp.raise_for_status()
@@ -931,58 +929,75 @@ def _stage_hub_archive(staging):
     if len(roots) != 1:
         print(f"[hub-update] unexpected archive layout ({len(roots)} top-level dirs), skipping")
         return None
-    src = os.path.join(staging, roots[0])
+    src_hub = os.path.join(staging, roots[0], HUB_ARCHIVE_SUBDIR)
 
-    missing = [n for n in HUB_RUNTIME_FILES + HUB_RUNTIME_DIRS
-               if not os.path.exists(os.path.join(src, n))]
-    if missing:
-        print(f"[hub-update] archive is missing {', '.join(missing)} -- refusing to update")
+    essentials = ("app.py", "wsgi.py", "requirements.txt")
+    missing = [n for n in essentials if not os.path.isfile(os.path.join(src_hub, n))]
+    if not os.path.isdir(src_hub) or missing:
+        print(f"[hub-update] archive {HUB_ARCHIVE_SUBDIR}/ missing "
+              f"{', '.join(missing) or HUB_ARCHIVE_SUBDIR + '/'} -- refusing to update")
         return None
-    return src
+    return src_hub
 
 
-def _perform_hub_update_archive(repo_root):
-    """Replace the hub runtime file set from the branch archive. Used when there's no
-    git clone to reset (the layout install.ps1 now produces)."""
+def _perform_hub_update_archive(code_dir):
+    """Mirror the archive's hub/ directory into the live code dir. Used when there's no git
+    checkout to reset (the layout install.ps1 produces). Files are overwritten in place and
+    subdirectories are mirrored; entries the archive dropped are pruned, so a deleted module
+    can't linger and shadow. Operator state (.env, logs/, the service wrapper) lives one
+    level up in STATE_ROOT and is never in code_dir, so the mirror can't touch it."""
     staging = tempfile.mkdtemp(prefix="hub-update-")
     try:
-        src = _stage_hub_archive(staging)
-        if src is None:
+        src_hub = _stage_hub_archive(staging)
+        if src_hub is None:
             return False
 
-        # Swap only once everything is staged and verified. Directories are mirrored
-        # rather than merged so a template deleted upstream disappears here too;
-        # .env, logs/ and the service wrapper live outside this set and are untouched.
-        for name in HUB_RUNTIME_FILES:
-            shutil.copy2(os.path.join(src, name), os.path.join(repo_root, name))
-        for name in HUB_RUNTIME_DIRS:
-            target = os.path.join(repo_root, name)
-            if os.path.isdir(target):
-                shutil.rmtree(target)
-            shutil.copytree(os.path.join(src, name), target)
+        wanted = set(os.listdir(src_hub))
+        for name in wanted:
+            src = os.path.join(src_hub, name)
+            dst = os.path.join(code_dir, name)
+            if os.path.isdir(src):
+                if os.path.isdir(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
 
-        print(f"[hub-update] Replaced hub files in {repo_root} from {HUB_ARCHIVE_URL}")
-        _install_requirements(repo_root)
+        # Prune what upstream removed. Guarded to a dedicated code dir that is NOT the state
+        # root, so a misconfigured flat install can never have its .env/logs/db pruned.
+        if os.path.abspath(code_dir) != os.path.abspath(STATE_ROOT):
+            for name in os.listdir(code_dir):
+                if name in wanted or name == "__pycache__":
+                    continue
+                victim = os.path.join(code_dir, name)
+                if os.path.isdir(victim):
+                    shutil.rmtree(victim, ignore_errors=True)
+                else:
+                    os.remove(victim)
+
+        print(f"[hub-update] Mirrored {HUB_ARCHIVE_SUBDIR}/ into {code_dir} from {HUB_ARCHIVE_URL}")
+        _install_requirements(code_dir)
         return True
     except Exception as e:
-        # A failure part-way through the swap leaves the tree inconsistent, so say so
-        # loudly -- but still don't restart, since restarting is what would turn a
-        # broken tree into a crash-loop.
-        print(f"[hub-update] update failed while replacing files ({e}); hub left as-is")
+        # A failure part-way through the mirror leaves the tree inconsistent, so say so
+        # loudly -- but still don't restart, since restarting is what would turn a broken
+        # tree into a crash-loop.
+        print(f"[hub-update] update failed while mirroring {HUB_ARCHIVE_SUBDIR}/ ({e}); hub left as-is")
         return False
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def perform_hub_update(repo_root):
+def perform_hub_update(code_dir):
     """Update the hub in place. Returns True only if the caller should now restart.
 
-    Prefers git when the install is a clone: a developer running from a checkout should
-    not have their working tree overwritten by an archive, and pre-sparse-install hubs
-    keep the behaviour they were deployed with."""
-    if os.path.isdir(os.path.join(repo_root, ".git")):
-        return _perform_hub_update_git(repo_root)
-    return _perform_hub_update_archive(repo_root)
+    Prefers git when the install is a checkout: a developer running from a clone should not
+    have their working tree overwritten by an archive. The .git that decides this lives at
+    the worktree root, one level up from the code dir (the hub/ subdirectory)."""
+    worktree_root = os.path.dirname(os.path.abspath(code_dir))
+    if os.path.isdir(os.path.join(worktree_root, ".git")):
+        return _perform_hub_update_git(worktree_root)
+    return _perform_hub_update_archive(code_dir)
 
 def restart_hub():
     """Exit non-zero so the supervisor treats it as a failure and relaunches waitress with
@@ -1017,7 +1032,7 @@ def hub_update_watcher():
                 remote = fetch_remote_hub_version()
                 if remote and cmp_versions(remote, HUB_VERSION) > 0:
                     print(f"[hub-update] main is {remote} (running {HUB_VERSION}); updating.")
-                    if perform_hub_update(REPO_ROOT):
+                    if perform_hub_update(HUB_CODE_DIR):
                         restart_hub()
         except Exception as e:
             print(f"[hub-update] watcher error (continuing): {e}")

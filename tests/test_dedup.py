@@ -13,7 +13,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
 # app.py resolves LOG_DIR/DB_PATH relative to the cwd at import time, so run it
 # against a throwaway directory rather than the real logs/temp_v2.db.

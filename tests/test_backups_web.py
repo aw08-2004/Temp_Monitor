@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import backups
 import fleet
 import permissions
@@ -157,10 +157,11 @@ def main():
         # browser navigation rather than returning JSON, so without it a 403 on a PAGE
         # route surfaces as a 500 (TemplateNotFound) and the gate looks like it failed
         # for the wrong reason.
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        hub_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub")
         app = Flask(__name__,
-                    template_folder=os.path.join(repo_root, "templates"),
-                    static_folder=os.path.join(repo_root, "static"))
+                    template_folder=os.path.join(hub_dir, "templates"),
+                    static_folder=os.path.join(hub_dir, "static"))
         app.secret_key = "test"
         # A roster the tests can steer. app.py derives `online` from agents.last_seen;
         # here it is a dict so a machine can be taken offline mid-test, which is the only
