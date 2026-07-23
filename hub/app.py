@@ -54,7 +54,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.35.0"
+HUB_VERSION = "1.37.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1428,6 +1428,11 @@ def init_db():
         # key/value store stops being one the moment it holds per-machine rows.
         if "primary_sensor_name" not in existing_columns:
             conn.execute("ALTER TABLE machine_info ADD COLUMN primary_sensor_name TEXT")
+        # Service Tag -- a second BIOS/chassis identifier alongside serial_number, added
+        # for the Inventory search/sort work (roadmap #6). Reported by the agent the same
+        # way asset_tag/serial_number are; old rows read back NULL.
+        if "service_tag" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN service_tag TEXT")
 
 def write_readings_batch(records):
     if not records:
@@ -1632,28 +1637,32 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     socketio.emit('new_temp', payload, room=FLEET_ROOM)
     socketio.emit('new_temp', payload, room=machine_room(machine_name))
 
-def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None):
+def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None,
+                      service_tag=None):
     machine_name = str(machine).strip()
     asset_tag = (str(asset_tag).strip() or None) if asset_tag else None
     serial_number = (str(serial_number).strip() or None) if serial_number else None
     model = (str(model).strip() or None) if model else None
     companion_version = (str(companion_version).strip() or None) if companion_version else None
-    if not machine_name or not any([asset_tag, serial_number, model, companion_version]):
+    service_tag = (str(service_tag).strip() or None) if service_tag else None
+    if not machine_name or not any([asset_tag, serial_number, model, companion_version, service_tag]):
         return
 
     with get_db_conn() as conn:
         conn.execute(
             """
-            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, service_tag, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 asset_tag = COALESCE(excluded.asset_tag, machine_info.asset_tag),
                 serial_number = COALESCE(excluded.serial_number, machine_info.serial_number),
                 model = COALESCE(excluded.model, machine_info.model),
                 companion_version = COALESCE(excluded.companion_version, machine_info.companion_version),
+                service_tag = COALESCE(excluded.service_tag, machine_info.service_tag),
                 updated_at = excluded.updated_at
             """,
-            (machine_name, asset_tag, serial_number, model, companion_version, to_timestamp_str(datetime.now())),
+            (machine_name, asset_tag, serial_number, model, companion_version, service_tag,
+             to_timestamp_str(datetime.now())),
         )
 
 # ================================
@@ -1731,7 +1740,7 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
         # Preserve history: the dropped hostname's readings belong to the same box.
         conn.execute("UPDATE readings SET machine = ? WHERE machine = ?", (survivor, dropped))
         d = conn.execute(
-            "SELECT asset_tag, serial_number, model, companion_version "
+            "SELECT asset_tag, serial_number, service_tag, model, companion_version "
             "FROM machine_info WHERE machine = ?",
             (dropped,),
         ).fetchone()
@@ -1741,11 +1750,13 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
                 UPDATE machine_info SET
                     asset_tag = COALESCE(asset_tag, ?),
                     serial_number = COALESCE(serial_number, ?),
+                    service_tag = COALESCE(service_tag, ?),
                     model = COALESCE(model, ?),
                     companion_version = COALESCE(companion_version, ?)
                 WHERE machine = ?
                 """,
-                (d["asset_tag"], d["serial_number"], d["model"], d["companion_version"], survivor),
+                (d["asset_tag"], d["serial_number"], d["service_tag"], d["model"],
+                 d["companion_version"], survivor),
             )
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (dropped,))
     fleet.delete_machine(DB_PATH, dropped)
@@ -2367,6 +2378,7 @@ def report_temp():
         data.get('serial_number'),
         data.get('model'),
         reported_version,
+        service_tag=data.get('service_tag'),
     )
     # Now that this machine's identity is fresh (and online), collapse any offline
     # duplicate reporting the same BIOS serial -- the OpenClaw -> OPENCLAW rename case.
@@ -2395,7 +2407,7 @@ def get_machines():
     machines here, since this list is what the Dashboard and Asset Inventory render."""
     with get_db_conn() as conn:
         rows = conn.execute(
-            "SELECT machine, asset_tag, serial_number, model, companion_version, updated_at "
+            "SELECT machine, asset_tag, serial_number, service_tag, model, companion_version, updated_at "
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     result = [dict(row) for row in rows]
@@ -2406,7 +2418,8 @@ def get_machines():
         if machine not in known_machines:
             result.append({
                 'machine': machine, 'asset_tag': None, 'serial_number': None,
-                'model': None, 'companion_version': None, 'updated_at': None,
+                'service_tag': None, 'model': None, 'companion_version': None,
+                'updated_at': None,
             })
             known_machines.add(machine)
     # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
@@ -2429,7 +2442,7 @@ def get_machine(machine):
     machine_name = str(machine).strip()
     with get_db_conn() as conn:
         row = conn.execute(
-            "SELECT machine, asset_tag, serial_number, model, companion_version, updated_at "
+            "SELECT machine, asset_tag, serial_number, service_tag, model, companion_version, updated_at "
             "FROM machine_info WHERE machine = ?",
             (machine_name,),
         ).fetchone()
@@ -2440,7 +2453,7 @@ def get_machine(machine):
 
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
-        'model': None, 'companion_version': None, 'updated_at': None,
+        'service_tag': None, 'model': None, 'companion_version': None, 'updated_at': None,
     }
     result['uptime_seconds'] = uptime_seconds
     result['temp'] = temp

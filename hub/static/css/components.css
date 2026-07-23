@@ -764,6 +764,30 @@ label.checkbox input {
     font-size: var(--text-sm);
 }
 
+/* Sortable headers: click to sort, click again to reverse. The active column shows a
+   ▲/▼ glyph via ::after so no layout shifts as the arrow appears. */
+.data-table--sortable th[data-sort] {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.data-table--sortable th[data-sort]:hover {
+    color: var(--text);
+}
+
+.data-table--sortable th[data-sort]::after {
+    content: '';
+    display: inline-block;
+    width: 0.9em;
+    text-align: right;
+    color: var(--accent, var(--text));
+}
+
+.data-table--sortable th.is-sorted[data-dir="asc"]::after { content: '▲'; }
+.data-table--sortable th.is-sorted[data-dir="desc"]::after { content: '▼'; }
+.data-table--sortable th.is-sorted { color: var(--text); }
+
 /* ============ Chart ============ */
 .chart-container {
     position: relative;
@@ -775,4 +799,63 @@ label.checkbox input {
     font-size: var(--text-md);
     font-weight: 600;
     margin-bottom: var(--space-3);
+}
+
+/* ============ Autocomplete combobox (autocomplete.js) ============ */
+/* The listbox is absolutely positioned inside the input's parent -- see the module
+   comment for why it can't live at document body level (dialog top-layer clipping). */
+.ac-list {
+    position: absolute;
+    z-index: 40;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--card-bg, var(--control-bg));
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.28));
+}
+
+.ac-option {
+    display: flex;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm, 6px);
+    cursor: pointer;
+}
+
+.ac-option.is-active,
+.ac-option:hover {
+    background: var(--control-hover, var(--card-border));
+}
+
+.ac-option__body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.ac-option__label {
+    color: var(--text);
+    font-size: var(--text-base);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ac-option__sub {
+    color: var(--muted);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ac-empty {
+    padding: var(--space-2) var(--space-3);
+    color: var(--muted);
+    font-size: var(--text-sm);
 }

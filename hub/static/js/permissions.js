@@ -21,7 +21,6 @@ const capabilityList = document.getElementById('capability-list');
 const machinePicker = document.getElementById('machine-picker');
 const machineChips = document.getElementById('machine-chips');
 const machineInput = document.getElementById('machine-input');
-const machineOptions = document.getElementById('machine-options');
 const memberChips = document.getElementById('member-chips');
 const memberInput = document.getElementById('member-input');
 const errorEl = document.getElementById('group-error');
@@ -31,6 +30,7 @@ let capabilities = [];        // [{name, label, description}]
 let editingId = null;         // null while creating
 let draftMachines = [];
 let draftMembers = [];
+let machineDirectory = [];    // full /api/machines rows, for the machine picker's search
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -347,13 +347,76 @@ async function flushGroup() {
 }
 
 function addFrom(input, list, render, normalize) {
-    const value = normalize(input.value);
+    addValue(list, normalize(input.value), render);
+    input.value = '';
+    input.focus();
+}
+
+// Add one already-normalized value to a draft list (machines or members), re-render its
+// chips and save. Shared by the Add button, the Enter key, and an autocomplete pick.
+function addValue(list, value, render) {
     if (!value) return;
     if (!list.includes(value)) list.push(value);
-    input.value = '';
     render();
-    input.focus();
     autoSaveGroup();
+}
+
+// ---------------------------------------------------------------- pickers
+//
+// Both fields are search-as-you-type comboboxes (autocomplete.js). The machine picker
+// filters the already-loaded fleet client-side across name + the three identifiers; the
+// member picker queries the Registered Users directory server-side. Both still accept
+// free text on Enter/Add -- a machine can be scoped before it enrolls, and a member added
+// by an email that has never signed in -- so the dropdown assists without gating.
+
+function machineSublabel(row) {
+    // Show whichever identifiers the row has, so a search hit on serial/asset/service is
+    // visible in the suggestion rather than looking like a bare name match.
+    return [
+        row.asset_tag && `Asset ${row.asset_tag}`,
+        row.serial_number && `Serial ${row.serial_number}`,
+        row.service_tag && `Service ${row.service_tag}`,
+    ].filter(Boolean).join('  ·  ');
+}
+
+function machineMatches(query) {
+    const q = query.toLowerCase();
+    const fields = ['machine', 'asset_tag', 'serial_number', 'service_tag'];
+    return machineDirectory
+        .filter((row) => !draftMachines.includes(row.machine))
+        .filter((row) => fields.some((f) => row[f] && String(row[f]).toLowerCase().includes(q)))
+        .slice(0, 20)
+        .map((row) => ({ value: row.machine, label: row.machine, sublabel: machineSublabel(row) }));
+}
+
+function attachPickers() {
+    attachAutocomplete(machineInput, {
+        minChars: 0,
+        emptyText: 'No matching machines — press Add to scope one that has not enrolled yet.',
+        source: (query) => machineMatches(query),
+        onSelect: (item) => {
+            addValue(draftMachines, item.value, renderMachineChips);
+            machineInput.value = '';
+            machineInput.focus();
+        },
+    });
+    attachAutocomplete(memberInput, {
+        minChars: 1,
+        emptyText: 'No matching users — press Add to invite this email.',
+        source: async (query) => {
+            const body = await api(`/api/permissions/directory?q=${encodeURIComponent(query)}`);
+            return (body.users || []).map((u) => ({
+                value: u.email,
+                label: u.full_name || u.email,
+                sublabel: u.username ? `${u.username}  ·  ${u.email}` : u.email,
+            }));
+        },
+        onSelect: (item) => {
+            addValue(draftMembers, String(item.value).toLowerCase(), renderMemberChips);
+            memberInput.value = '';
+            memberInput.focus();
+        },
+    });
 }
 
 // ---------------------------------------------------------------- wiring
@@ -405,14 +468,9 @@ async function init() {
     // so a machine can be scoped before it enrolls. /api/machines is itself scope
     // filtered, so a non-superuser admin is only ever offered machines they can see.
     try {
-        const machines = await api('/api/machines');
-        machineOptions.replaceChildren();
-        machines.forEach((row) => {
-            const option = document.createElement('option');
-            option.value = row.machine;
-            machineOptions.appendChild(option);
-        });
+        machineDirectory = await api('/api/machines');
     } catch (e) { /* suggestions are optional; typing still works */ }
+    attachPickers();
     await loadGroups();
 }
 

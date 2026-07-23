@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Asset Inventory - FleetHub{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">Asset Inventory</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">
+    Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard;
+    offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history,
+    and fleet enrollment.
+</p>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <input class="input" id="inventory-search" type="search" autocomplete="off"
+           placeholder="Search name, asset tag, serial, service tag…" style="min-width: 320px; max-width: 100%;">
+    <span class="stat-card__meta" id="inventory-count"></span>
+</div>
+
+<div class="card">
+    {# Click a header to sort by it; click again to reverse. The sorted column carries
+       aria-sort and a ▲/▼ glyph. inventory.js owns the sort state and persists it. #}
+    <table class="data-table data-table--sortable">
+        <thead>
+            <tr id="inventory-head">
+                <th data-sort="machine">Machine</th>
+                <th data-sort="status">Status</th>
+                <th data-sort="model">Model</th>
+                <th data-sort="serial_number">Serial</th>
+                <th data-sort="service_tag">Service tag</th>
+                <th data-sort="asset_tag">Asset tag</th>
+                <th data-sort="temp">Last temp</th>
+                <th data-sort="updated_at">Last seen</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="inventory-body">
+            <tr><td colspan="9" class="stat-card__meta">Loading…</td></tr>
+        </tbody>
+    </table>
+</div>
+<div class="empty-state" id="inventory-empty" style="display:none;">No machines have reported in yet.</div>
+<div class="empty-state" id="inventory-no-match" style="display:none;">No machines match your search.</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/inventory.js') }}"></script>
+{% endblock %}

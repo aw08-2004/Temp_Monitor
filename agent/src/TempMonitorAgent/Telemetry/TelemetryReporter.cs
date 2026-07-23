@@ -74,6 +74,7 @@ public sealed class TelemetryReporter : IDisposable
             ["serial_number"] = _identity.SerialNumber,
             ["model"] = _identity.Model,
             ["asset_tag"] = _identity.AssetTag,
+            ["service_tag"] = _identity.ServiceTag,
         };
         if (sensors is not null) payload["sensors"] = sensors;
         if (uptime is not null) payload["uptime_seconds"] = uptime;

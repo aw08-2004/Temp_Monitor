@@ -6,8 +6,10 @@ namespace TempMonitorAgent.Telemetry;
 /// <summary>
 /// Reads BIOS/chassis identity via WMI once at startup (values don't change at
 /// runtime). Mirrors companion.py get_system_info: serial (Win32_BIOS), model
-/// (Win32_ComputerSystem), asset tag (Win32_SystemEnclosure.SMBIOSAssetTag) with the
-/// same placeholder filtering. Also exposes system uptime.
+/// (Win32_ComputerSystem), asset tag (Win32_SystemEnclosure.SMBIOSAssetTag), and
+/// service tag (Win32_SystemEnclosure.SerialNumber -- the chassis serial, distinct from
+/// the BIOS serial, and where Dell's Service Tag lives) with the same placeholder
+/// filtering. Also exposes system uptime.
 /// </summary>
 public static class SystemInfo
 {
@@ -27,6 +29,13 @@ public static class SystemInfo
                 !PlaceholderAssetTags.Any(p => assetTag.ToLowerInvariant().Contains(p)))
             {
                 info.AssetTag = assetTag;
+            }
+
+            var serviceTag = (QueryFirst("Win32_SystemEnclosure", "SerialNumber") ?? "").Trim();
+            if (serviceTag.Length > 0 &&
+                !PlaceholderAssetTags.Any(p => serviceTag.ToLowerInvariant().Contains(p)))
+            {
+                info.ServiceTag = serviceTag;
             }
         }
         catch (Exception e)

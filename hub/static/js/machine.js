@@ -561,6 +561,7 @@ async function loadMachineInfo() {
         document.getElementById('stat-version').textContent = info.companion_version || '--';
         document.getElementById('stat-model').textContent = 'Model: ' + (info.model || '--');
         document.getElementById('stat-serial').textContent = 'Serial: ' + (info.serial_number || '--');
+        document.getElementById('stat-service').textContent = 'Service tag: ' + (info.service_tag || '--');
         document.getElementById('stat-asset').textContent = 'Asset tag: ' + (info.asset_tag || '--');
     } catch (e) { /* non-critical */ }
 }

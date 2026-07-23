@@ -537,7 +537,51 @@ hub→DC network reachability plus a service-account secret in `.env`.
 
 ---
 
-## 📋 6. Search & pickers across the console   ·   build after #8 — small, low-risk, immediately useful
+## ✅ 6. Search & pickers across the console   ·   hub 1.36.0 + agent 3.11.0 / companion 2.11.0
+
+Built. The Asset Inventory page gained a search box and click-to-sort columns; the
+Permission Groups editor's two pickers became real search-as-you-type comboboxes over a
+single shared widget; and a new **Service Tag** identifier was added end to end. The open
+parameters were resolved as:
+
+- **Inventory search & sort are client-side**, over the rows `/api/machines` already
+  returns (itself scope-filtered). The roadmap left server-vs-client open and preferred
+  client-side until fleet size demands otherwise: filtering in the browser is instant and
+  costs no round-trip per keystroke, and the roster is small. Search spans Name, Asset Tag,
+  Serial and Service Tag; sort covers every column (name is the stable tiebreak, online
+  sorts before offline, missing temps sink). **Sort persists in `localStorage`**
+  (`fleethub.inventory.sort`) so it survives the 30 s auto-refresh and a reload.
+- **The shared widget is `static\js\autocomplete.js`** — one combobox behind both pickers
+  (and available to any future field). It builds options with `textContent`, race-guards
+  async sources by request id, and — the load-bearing detail — mounts its listbox inside
+  the input's own parent rather than `document.body`, because these pickers live in a
+  `<dialog>` whose top layer paints over any page-level `position:fixed` dropdown. Keyboard
+  nav (↑/↓/Enter/Esc), and Enter with nothing highlighted still falls through to the
+  field's own "add exactly what I typed" so free text is never blocked.
+- **The machine picker** filters the loaded fleet across name + all three identifiers,
+  showing the matched identifier as the option's sublabel; it replaces the native
+  `<datalist>`. **The member picker** queries the Registered Users directory (#8) through a
+  new **`GET /api/permissions/directory?q=`**, deliberately gated on
+  `manage_permission_groups`, not `manage_users`: choosing who to add to a group is part of
+  managing groups, and the endpoint returns only email/name/username — never the
+  phone/title/department/notes the Users API guards. Both pickers still accept free text, so
+  a machine can be scoped before it enrolls and a member added by an email that has never
+  signed in.
+- **New `service_tag`** — the chassis/enclosure serial (`Win32_SystemEnclosure.SerialNumber`,
+  where Dell's Service Tag lives), distinct from the BIOS serial we already store as
+  `serial_number`. Collected by **both** agents (companion.py and the C# agent) with the
+  same placeholder filtering as `asset_tag`, stored on a new `machine_info.service_tag`
+  column (COALESCE-updated like the others, and backfilled by the duplicate-serial merge),
+  surfaced on the machine page's Identity card and as an Inventory column, and searchable.
+  An older agent that never reports it simply leaves the column null.
+
+**Agent halves pending a signed release**: the C# agent's `service_tag` reporting ships in
+source (3.11.0) but needs the usual build + `sign_release.py --sign-agent` + asset upload
+before the fleet gains it; companion.py 2.11.0 is re-signed and ready. Until then, machines
+show a blank Service Tag, which is exactly the older-agent fallback above.
+
+<details>
+<summary>Original spec</summary>
 
 Search box and sortable columns on the Asset Inventory page, generalized into a shared
 search-as-you-type widget reused everywhere else the console currently makes you type a raw
@@ -584,6 +628,8 @@ turns out to be *more* primitive still:
 - **No permission-model changes for Inventory/machine-picker** — read/display only, already
   covered by existing view scoping. The member-picker change reads from #8's new `manage_users`
   data but doesn't require it to add someone as a member.
+
+</details>
 
 ---
 
@@ -733,8 +779,9 @@ hardcoded enum.
    console-driven restore (1.30.0 / agent 3.9.0). Both agent halves are pending a signed
    agent release.
 4. ~~**#8 Registered Users directory**~~ — done, hub 1.35.0 (prerequisite for #6's member picker)
-5. **#6 Search & pickers across the console ← next** — small, low-risk, immediately useful
-6. **#4 Active Directory** — Entra login + group mapping first, then LDAP sync
+5. ~~**#6 Search & pickers across the console**~~ — done, hub 1.36.0 (+ agent 3.11.0 /
+   companion 2.11.0 for the new Service Tag; agent half pending a signed release)
+6. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
 7. **#2 Remote view & control** — spike first, then build
 8. **#7 Localization** — lowest priority, most mechanical; do last
 

@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fleet
 import permissions
 import settings
+import users
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
@@ -73,6 +74,7 @@ def main():
         permissions.init_permissions_db(db_path)
         fleet.init_fleet_db(db_path)
         settings.init_settings_db(db_path)
+        users.init_users_db(db_path)
         settings.invalidate()
         permissions.invalidate()
 
@@ -247,6 +249,42 @@ def main():
               all(item["label"] and item["description"] for item in doc["capabilities"]))
         check("scope modes are served too",
               doc["scope_modes"] == list(permissions.SCOPE_MODES))
+
+        print("\n== Member picker directory search ==")
+        # Seed a couple of registered users to search against.
+        users.create_user(db_path, "ann@x.com", full_name="Ann Adams", username="aadams",
+                           phone="555-0100", notes="secret note", actor="root@x.com")
+        users.create_user(db_path, "zoe@x.com", full_name="Zoe Zhang", username="zzhang",
+                           actor="root@x.com")
+        # A group holding manage_permission_groups but NOT manage_users -- to prove the
+        # picker is gated on the former, so an admin who can't edit profiles can still pick.
+        c.post("/api/permissions/groups", json={
+            "name": "Group Admins",
+            "capabilities": [permissions.MANAGE_PERMISSION_GROUPS],
+            "machines": [], "members": ["carol@x.com"],
+        })
+
+        CURRENT_USER = "root@x.com"
+        r = c.get("/api/permissions/directory?q=ann")
+        check("directory search 200 for an admin", r.status_code == 200)
+        found = r.get_json()["users"]
+        check("search matches by name", [u["email"] for u in found] == ["ann@x.com"])
+        check("picker returns only email/name/username",
+              set(found[0].keys()) == {"email", "full_name", "username"})
+        check("picker does NOT leak profile fields like phone/notes",
+              "phone" not in found[0] and "notes" not in found[0])
+        check("empty query returns the whole directory",
+              {u["email"] for u in c.get("/api/permissions/directory").get_json()["users"]}
+              == {"ann@x.com", "zoe@x.com"})
+
+        CURRENT_USER = "carol@x.com"    # manage_permission_groups, but not manage_users
+        check("a group-admin without manage_users can still use the picker",
+              c.get("/api/permissions/directory?q=zoe").status_code == 200)
+
+        CURRENT_USER = "bob@x.com"      # view + manage_settings, but not manage_permission_groups
+        check("someone without manage_permission_groups is refused the picker",
+              c.get("/api/permissions/directory").status_code == 403)
+        CURRENT_USER = "root@x.com"     # the 404 checks below need an admin
 
         print("\n== 404s ==")
         check("unknown group GET 404",

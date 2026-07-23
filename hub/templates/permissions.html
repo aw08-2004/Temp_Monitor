@@ -58,9 +58,8 @@
             <div id="machine-picker">
                 <div class="chip-list" id="machine-chips"></div>
                 <div class="chip-add">
-                    <input class="input" id="machine-input" list="machine-options"
-                           placeholder="Add a machine by hostname" autocomplete="off">
-                    <datalist id="machine-options"></datalist>
+                    <input class="input" id="machine-input"
+                           placeholder="Search by name, asset tag, serial, service tag" autocomplete="off">
                     <button class="btn" type="button" id="machine-add">Add</button>
                 </div>
             </div>
@@ -69,7 +68,7 @@
             <div class="chip-list" id="member-chips"></div>
             <div class="chip-add">
                 <input class="input" id="member-input" type="email"
-                       placeholder="person@example.com" autocomplete="off">
+                       placeholder="Search registered users, or type an email" autocomplete="off">
                 <button class="btn" type="button" id="member-add">Add</button>
             </div>
 
@@ -83,5 +82,6 @@
 </dialog>
 {% endblock %}
 {% block page_scripts %}
+<script src="{{ url_for('static', filename='js/autocomplete.js') }}"></script>
 <script src="{{ url_for('static', filename='js/permissions.js') }}"></script>
 {% endblock %}

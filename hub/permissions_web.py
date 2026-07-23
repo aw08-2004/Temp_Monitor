@@ -25,6 +25,11 @@ import functools
 from flask import Blueprint, g, jsonify, render_template, request, session
 
 import permissions
+import users
+
+# The member picker shows at most this many matches -- enough to choose from, few enough
+# that a broad query can't stream the whole directory into the dropdown.
+DIRECTORY_PICKER_LIMIT = 20
 
 
 def _current_email():
@@ -178,6 +183,27 @@ def create_permissions_blueprint(db_path, login_required, access):
                          else sorted(current["machines"])),
             "groups": [{"id": grp["id"], "name": grp["name"]}
                        for grp in current["groups"]],
+        }), 200
+
+    @bp.route("/api/permissions/directory", methods=["GET"])
+    @login_required
+    @manage
+    def permissions_directory():
+        """A narrow search over the Registered Users directory, for this page's member
+        picker (roadmap #6). Deliberately gated on MANAGE_PERMISSION_GROUPS, not
+        MANAGE_USERS: choosing who to add to a group is part of managing groups, and it
+        returns only the three fields a picker shows (email, name, username) -- never the
+        phone/title/department/notes that the Users API guards. An admin who can grant
+        capabilities but not edit profiles can still pick a member by name.
+        """
+        q = request.args.get("q")
+        matches = users.list_users(db_path, q=q)[:DIRECTORY_PICKER_LIMIT]
+        return jsonify({
+            "users": [
+                {"email": u["email"], "full_name": u["full_name"],
+                 "username": u["username"]}
+                for u in matches
+            ]
         }), 200
 
     @bp.route("/api/permissions/capabilities", methods=["GET"])
