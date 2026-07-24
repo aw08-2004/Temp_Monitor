@@ -751,7 +751,7 @@ function Install-Agent {
                 New-Item -ItemType Directory -Force -Path $AgentInstallDir | Out-Null
                 Ok "Created $AgentInstallDir (so it can be excluded)"
             } catch {
-                Warn "Could not create $AgentInstallDir: $($_.Exception.Message)"
+                Warn "Could not create ${AgentInstallDir}: $($_.Exception.Message)"
             }
         }
     
