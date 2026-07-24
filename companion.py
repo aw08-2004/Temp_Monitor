@@ -34,7 +34,7 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 # ================================
 # CONFIG
 # ================================
-HUB_URL = "https://temp.arkeanos.net/api/report"
+HUB_URL = "https://your.domain.com/api/report"
 LHM_URL = "http://localhost:8085/data.json"   # LibreHardwareMonitor's built-in web server
 INTERVAL = 5                                   # seconds between temp reports
 SENSOR_INTERVAL = 10                           # seconds between full sensor-block reports
