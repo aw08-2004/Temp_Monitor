@@ -727,7 +727,7 @@ function Install-Agent {
     }
 
     $hubUrlDefault = $envDefaults["HUB_URL"]
-    if (-not $hubUrlDefault) { $hubUrlDefault = "https://temp.arkeanos.net" }
+    if (-not $hubUrlDefault) { $hubUrlDefault = "https://your.domain.com" }
     if ($HubUrl) { $hubUrlDefault = $HubUrl }
     $resolvedHubUrl = Prompt-Value "Hub URL" $hubUrlDefault
 
@@ -962,7 +962,7 @@ function Install-Hub {
                         -ValidateHint "Enter at least one email address (must contain '@')."
 
     $hubUrlDefault = $existing["HUB_URL"]
-    if (-not $hubUrlDefault) { $hubUrlDefault = "https://temp.arkeanos.net" }
+    if (-not $hubUrlDefault) { $hubUrlDefault = "https://your.domain.com" }
     $hubUrlValue   = Prompt-Value "Public hub URL" $hubUrlDefault `
                         -Required -Validate { param($v) $v -match '^https?://' } `
                         -ValidateHint "Enter a full URL starting with http:// or https://."
