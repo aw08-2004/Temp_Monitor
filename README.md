@@ -46,7 +46,7 @@ not already run as admin.
 **From the web:**
 
 ```powershell
-irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1)))
 ```
 
 **Non-interactive**, pass `-Component` plus the relevant parameters (`iex`
