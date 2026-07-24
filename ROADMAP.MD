@@ -703,11 +703,21 @@ be admin-only or self-service.
 
 ---
 
-## ✅ 2. Remote view & control   ·   hub 1.39.0 (+ agent, pending a signed release)
+## ✅ 2. Remote view & control   ·   hub 1.40.0 (+ agent, pending a signed release)
 
 Built. Live remote view **and control** of a managed PC over **true H.264/WebRTC** from v1.
 The user chose to go straight for the full pipeline (no throwaway spike) and to make **the hub
 itself the TURN server**. Delivered as specified below; the decisions and their resolutions:
+
+**Live-test follow-up (hub 1.40.0):** the first on-hardware test connected everything except
+media — the agent logged `ice_servers=0` because TURN wasn't configured yet. So TURN is now
+**provisioned by the hub installer** (generates `REMOTE_TURN_SECRET`, writes `turn/.env`,
+optionally runs `docker compose` via a new `docker-compose.windows.yml`, seeds the STUN/TURN
+URLs into Settings, and prints generated secrets once) and **fully manageable in the UI**: a new
+**Settings → Remote Control** tab (the section previously had no panel and never rendered) with a
+TURN status card — secret set?, URL counts, and the live **ICE-servers-per-session** count — plus
+set/rotate of `REMOTE_TURN_SECRET` (`manage_settings`; writes `.env` + applies live; coturn's
+`--static-auth-secret` synced by hand).
 
 - **Session injection (agent, `Remote/SessionInjector.cs`)** — the service duplicates its own
   SYSTEM token, retargets `TokenSessionId` to the active console session (enabling `SeTcb`),
@@ -829,8 +839,9 @@ hardcoded enum.
 4. ~~**#8 Registered Users directory**~~ — done, hub 1.35.0 (prerequisite for #6's member picker)
 5. ~~**#6 Search & pickers across the console**~~ — done, hub 1.36.0 (+ agent 3.11.0 /
    companion 2.11.0 for the new Service Tag; agent half pending a signed release)
-6. ~~**#2 Remote view & control**~~ — done, hub 1.39.0 (built ahead of #4 at the user's
-   request; agent half pending a signed release; TURN server in `turn/`)
+6. ~~**#2 Remote view & control**~~ — done, hub 1.40.0 (built ahead of #4 at the user's
+   request; agent half pending a signed release; TURN server in `turn/`, installer-provisioned
+   and managed from Settings → Remote Control)
 7. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
 8. **#7 Localization** — lowest priority, most mechanical; do last
 

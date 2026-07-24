@@ -26,6 +26,8 @@
                 aria-controls="tab-metrics" aria-selected="false" tabindex="-1">History Metrics</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-fleet"
                 aria-controls="tab-fleet" aria-selected="false" tabindex="-1">Fleet</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
+                aria-controls="tab-remote" aria-selected="false" tabindex="-1">Remote Control</button>
     </div>
     <div class="settings-layout__panels">
         <div class="tab-panel" id="tab-computer" role="tabpanel" aria-labelledby="tab-btn-computer"></div>
@@ -33,6 +35,7 @@
         <div class="tab-panel" id="tab-data" role="tabpanel" aria-labelledby="tab-btn-data"></div>
         <div class="tab-panel" id="tab-metrics" role="tabpanel" aria-labelledby="tab-btn-metrics"></div>
         <div class="tab-panel" id="tab-fleet" role="tabpanel" aria-labelledby="tab-btn-fleet"></div>
+        <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote"></div>
     </div>
 </div>
 {% endblock %}
@@ -42,4 +45,7 @@
    without it every panel renders at once. #}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+{# settings-remote.js adds the TURN status/secret card on top of the schema-rendered
+   remote.* fields; it re-injects on the 'settings:rendered' event settings.js fires. #}
+<script src="{{ url_for('static', filename='js/settings-remote.js') }}"></script>
 {% endblock %}

@@ -65,7 +65,12 @@ def main():
         agent_id, token = fleet.enroll_agent(db_path, "PC-01", SECRET, SECRET)
         other_id, other_token = fleet.enroll_agent(db_path, "PC-09", SECRET, SECRET)
 
-        app.register_blueprint(create_remote_blueprint(db_path, fake_login_required, access))
+        env_fd, env_path = tempfile.mkstemp(suffix=".env")
+        os.close(env_fd)
+        with open(env_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("HUB_URL=https://h\n")
+        app.register_blueprint(
+            create_remote_blueprint(db_path, fake_login_required, access, env_path=env_path))
 
         @app.before_request
         def _seed_session():
@@ -179,9 +184,51 @@ def main():
               any("username" in s and s.get("urls") == ["turn:hub.example:3478"] for s in ice))
         del os.environ["REMOTE_TURN_SECRET"]
 
+        print("\n== TURN status + secret management (manage_settings) ==")
+        os.environ.pop("REMOTE_TURN_SECRET", None)
+        # str_list fields reject an empty list on save; you clear them via reset (drop overrides).
+        settings.reset(db_path, ["remote.stun_urls", "remote.turn_urls"])
+        r = c.get("/api/remote/turn/status")
+        st = r.get_json()
+        check("status -> 200 for a settings manager", r.status_code == 200)
+        check("status: nothing configured -> secret unset, ice_count 0, writable",
+              st["secret_set"] is False and st["ice_count"] == 0 and st["can_write_secret"] is True)
+
+        # Rotate (empty body) mints a secret, writes it to .env AND the live env, returns it once.
+        r = c.post("/api/remote/turn/secret", json={})
+        body = r.get_json()
+        check("rotate -> 200 with a fresh secret", r.status_code == 200 and len(body["secret"]) >= 32)
+        check("rotated secret is written to .env",
+              ("REMOTE_TURN_SECRET=" + body["secret"]) in open(env_path, encoding="utf-8").read())
+        check("rotated secret is applied to the live process env",
+              os.environ.get("REMOTE_TURN_SECRET") == body["secret"])
+
+        settings.set_many(db_path, {"remote.turn_urls": ["turn:hub.example:3478"]})
+        st = c.get("/api/remote/turn/status").get_json()
+        check("status: with secret + a TURN url, a session yields >=1 ICE server",
+              st["secret_set"] is True and st["turn_count"] == 1 and st["ice_count"] >= 1)
+
+        # An explicit value is stored verbatim -- how you match an already-running coturn.
+        r = c.post("/api/remote/turn/secret", json={"secret": "explicit-match"})
+        check("explicit set stores the given value verbatim",
+              r.get_json()["secret"] == "explicit-match"
+              and os.environ.get("REMOTE_TURN_SECRET") == "explicit-match")
+
+        CURRENT_USER = "tech@x.com"     # remote_control but NOT manage_settings
+        check("status blocked without manage_settings -> 403",
+              c.get("/api/remote/turn/status").status_code == 403)
+        check("secret blocked without manage_settings -> 403",
+              c.post("/api/remote/turn/secret", json={}).status_code == 403)
+        CURRENT_USER = "super@x.com"
+        os.environ.pop("REMOTE_TURN_SECRET", None)
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:
+        try:
+            os.remove(env_path)
+        except (OSError, NameError):
+            pass
         for suffix in ("", "-wal", "-shm"):
             try:
                 os.remove(db_path + suffix)

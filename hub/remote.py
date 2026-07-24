@@ -28,6 +28,9 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+import re
+import secrets
 import sqlite3
 import time
 import uuid
@@ -320,6 +323,44 @@ def mint_turn_credentials(secret, session_id, ttl_seconds=600):
     digest = hmac.new(secret.encode("utf-8"), username.encode("utf-8"), hashlib.sha1).digest()
     password = base64.b64encode(digest).decode("ascii")
     return {"username": username, "password": password, "expiry": expiry}
+
+
+def generate_turn_secret(nbytes=24):
+    """A fresh, strong TURN shared secret (hex). Matches the installer's New-RandomSecret shape
+    so a secret minted here and one minted by the installer are interchangeable."""
+    return secrets.token_hex(nbytes)
+
+
+_ENV_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def set_env_var(env_path, key, value):
+    """Upsert `KEY=value` in a dotenv file, preserving every other line and adding no BOM.
+
+    This is how the console lets an operator set/rotate REMOTE_TURN_SECRET without shell access
+    on the hub host. It writes UTF-8 without a BOM and with LF newlines for the same reason the
+    installer does (python-dotenv folds a leading BOM into the first key, so a BOM here would
+    silently break the hub's config on the next restart). Returns the value written.
+    """
+    key = str(key)
+    value = str(value)
+    lines, found = [], False
+    if os.path.exists(env_path):
+        # utf-8-sig tolerates an existing BOM (e.g. one a prior tool wrote) without carrying it
+        # forward; splitlines() drops the trailing newline so we re-add exactly one at the end.
+        with open(env_path, "r", encoding="utf-8-sig") as fh:
+            for line in fh.read().splitlines():
+                m = _ENV_KEY_RE.match(line)
+                if m and m.group(1) == key:
+                    lines.append(f"{key}={value}")
+                    found = True
+                else:
+                    lines.append(line)
+    if not found:
+        lines.append(f"{key}={value}")
+    with open(env_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return value
 
 
 def ice_servers(session_id, stun_urls=None, turn_urls=None, turn_secret=None, turn_ttl=600):

@@ -67,7 +67,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.39.0"
+HUB_VERSION = "1.40.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1213,7 +1213,7 @@ app.register_blueprint(create_backups_blueprint(
 # Remote view/control (roadmap #2): agent-facing WebRTC signaling (bearer token) + console-
 # facing session control (remote_control capability + machine scope). Same login_required and
 # access seam as every other blueprint.
-app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access))
+app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access, env_path=ENV_PATH))
 
 
 @app.route("/login")

@@ -17,6 +17,7 @@ const panels = {
     data: document.getElementById('tab-data'),
     metrics: document.getElementById('tab-metrics'),
     fleet: document.getElementById('tab-fleet'),
+    remote: document.getElementById('tab-remote'),
 };
 
 // key -> pending value. An entry exists only while the control differs from what the
@@ -50,6 +51,9 @@ function applySchema(doc) {
         if (!panel) continue;      // a new section needs a panel div in settings.html
         panel.replaceChildren(renderSection(section));
     }
+    // Let feature scripts (settings-remote.js) decorate a panel after it is (re)rendered.
+    // Fired on load and after every save, since replaceChildren above wipes any injected card.
+    document.dispatchEvent(new CustomEvent('settings:rendered'));
 }
 
 function renderSection(section) {

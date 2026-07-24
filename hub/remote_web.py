@@ -49,10 +49,15 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
-def create_remote_blueprint(db_path, login_required, access):
+def create_remote_blueprint(db_path, login_required, access, env_path=None):
     bp = Blueprint("remote", __name__)
     can_view = access.require(permissions.VIEW)
     can_remote = access.require(permissions.REMOTE_CONTROL)
+    # TURN configuration is fleet-wide plumbing, not a per-machine control, so it sits behind
+    # manage_settings like the rest of Settings rather than remote_control. env_path is the same
+    # .env load_dotenv read at boot; without it the secret is read-only from the UI (still shown,
+    # just not settable) so a misconfigured deploy degrades instead of 500ing.
+    can_manage_settings = access.require(permissions.MANAGE_SETTINGS)
 
     def _current_email():
         return (session.get("user") or {}).get("email", "unknown")
@@ -236,5 +241,56 @@ def create_remote_blueprint(db_path, login_required, access):
         if machine and not access.in_scope(machine):
             return jsonify({"error": "You do not have access to that machine."}), 403
         return jsonify(remote.list_sessions(db_path, machine, active_only=True)), 200
+
+    # ---------------- TURN configuration (manage_settings) ----------------
+    @bp.route("/api/remote/turn/status", methods=["GET"])
+    @login_required
+    @can_manage_settings
+    def turn_status():
+        """What the Remote settings tab needs to diagnose 'ice_servers=0' without shell access:
+        whether the secret is set, how many STUN/TURN URLs are configured, and -- the number
+        that actually predicts a working session -- how many ICE servers a session would hand a
+        peer right now."""
+        secret = os.environ.get(TURN_SECRET_ENV, "")
+        stun = settings.get_list(db_path, "remote.stun_urls")
+        turn = settings.get_list(db_path, "remote.turn_urls")
+        preview = remote.ice_servers(
+            "preview", stun_urls=stun, turn_urls=turn, turn_secret=secret,
+            turn_ttl=settings.get_int(db_path, "remote.turn_ttl_seconds"),
+        )
+        return jsonify({
+            "enabled": bool(settings.get_bool(db_path, "remote.enabled")),
+            "secret_set": bool(secret),
+            "can_write_secret": bool(env_path),
+            "stun_count": len(stun),
+            "turn_count": len(turn),
+            "ice_count": len(preview),
+        }), 200
+
+    @bp.route("/api/remote/turn/secret", methods=["POST"])
+    @login_required
+    @can_manage_settings
+    def turn_secret():
+        """Set or rotate REMOTE_TURN_SECRET from the console. An explicit value is stored as-is
+        (use this to match an existing coturn's static-auth-secret); an empty value mints a fresh
+        random one (rotation). The secret is written to .env AND to the live process environment,
+        so minting picks it up immediately with no restart -- but coturn still validates against
+        its own copy, so the response returns the value once for the operator to sync to coturn.
+        """
+        if not env_path:
+            return jsonify({"error": "The hub cannot write .env in this deployment; set "
+                                     "REMOTE_TURN_SECRET on the host instead."}), 400
+        data = request.get_json(silent=True) or {}
+        provided = str(data.get("secret") or "").strip()
+        value = provided or remote.generate_turn_secret()
+        try:
+            remote.set_env_var(env_path, TURN_SECRET_ENV, value)
+        except OSError as e:
+            return jsonify({"error": f"Could not write .env: {e}"}), 500
+        os.environ[TURN_SECRET_ENV] = value
+        # Never put the secret itself in the audit detail -- only that it changed and how.
+        fleet.audit(db_path, actor=_current_email(), action="remote_turn_secret_set",
+                    target="hub", detail={"rotated": not provided})
+        return jsonify({"secret_set": True, "secret": value}), 200
 
     return bp

@@ -970,12 +970,18 @@ function Install-Hub {
     Say ""
     Say "Fleet command channel (optional -- leave blank to keep telemetry-only):"
     $enrollSecretDefault = $existing["AGENT_ENROLLMENT_SECRET"]
+    $enrollGen = $false
     if (-not $enrollSecretDefault) {
         if (Prompt-YesNo "No AGENT_ENROLLMENT_SECRET set. Auto-generate one?" -Default Yes) {
             $enrollSecretDefault = New-RandomSecret
+            $enrollGen = $true
         }
     }
     $enrollSecret  = Prompt-Value "  Agent enrollment secret" $enrollSecretDefault -Secret
+
+    # Was this run the one that generated the enrollment secret (vs. reused/typed)? Only a
+    # freshly generated secret gets shown in the "save these now" box at the end.
+    $enrollGenerated = ($enrollGen -and $enrollSecret -and $enrollSecret -eq $enrollSecretDefault)
 
     Say ""
     # Self-update works in both layouts: a files-only install pulls the branch archive
@@ -987,6 +993,29 @@ function Install-Hub {
         }
     }
 
+    # ---- Remote view/control TURN server (roadmap #2) ----
+    # WebRTC needs a relay when agent and browser sit behind different NATs; the hub is that
+    # relay (coturn), and the hub app mints its credentials from REMOTE_TURN_SECRET. Opting in
+    # here generates/keeps the shared secret and, after the service is up, writes turn\.env,
+    # optionally brings coturn up with Docker, and seeds the STUN/TURN URLs into Settings.
+    Say ""
+    Say "Remote view/control (optional -- this hub can be the WebRTC TURN relay):"
+    $configureTurn = Prompt-YesNo "Configure this hub as the TURN/STUN server for remote control?" -Default Yes
+    $turnSecret = ""; $turnGenerated = $false; $turnHost = ""; $turnControlUrl = ""; $stunControlUrl = ""
+    if ($configureTurn) {
+        $turnSecretDefault = $existing["REMOTE_TURN_SECRET"]
+        $turnGen = $false
+        if (-not $turnSecretDefault) { $turnSecretDefault = New-RandomSecret; $turnGen = $true }
+        $turnSecret = Prompt-Value "  TURN shared secret (blank = keep generated; paste an existing coturn secret to match it)" $turnSecretDefault -Secret
+        $turnGenerated = ($turnGen -and $turnSecret -eq $turnSecretDefault)
+
+        $turnHostDefault = try { ([System.Uri]$hubUrlValue).Host } catch { "" }
+        $turnHost = Prompt-Value "  Public IP (or hostname) clients reach the TURN server on" $turnHostDefault `
+                        -Required -ValidateHint "Enter the hub's public IP address (preferred) or a resolvable hostname."
+        $turnControlUrl = "turn:$($turnHost):3478"
+        $stunControlUrl = "stun:$($turnHost):3478"
+    }
+
     $lines = @(
         "GOOGLE_CLIENT_ID=$googleId"
         "GOOGLE_CLIENT_SECRET=$googleSecret"
@@ -996,11 +1025,44 @@ function Install-Hub {
     )
     if ($enrollSecret)      { $lines += "AGENT_ENROLLMENT_SECRET=$enrollSecret" }
     if ($autoUpdateDefault) { $lines += "HUB_AUTO_UPDATE=$autoUpdateDefault" }
+    if ($turnSecret)        { $lines += "REMOTE_TURN_SECRET=$turnSecret" }
     # Write WITHOUT a BOM: PowerShell 5.1's `Set-Content -Encoding UTF8` prepends a UTF-8 BOM,
     # which python-dotenv folds into the first key (﻿GOOGLE_CLIENT_ID) so the hub reads its
     # config as unset and crash-loops. UTF8Encoding($false) = no BOM.
     [System.IO.File]::WriteAllLines($envPath, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
     Ok "Wrote $envPath"
+
+    if ($turnControlUrl) {
+        # Seed the STUN/TURN URLs into the settings DB BEFORE the service starts. The hub's
+        # settings cache is per-process and has no cross-process versioning, so a seed written
+        # while it runs would stay invisible until a restart -- seeding first means the fresh
+        # process reads it on boot. Idempotent: settings.init_settings_db + set_many just upsert.
+        Step "Seeding remote-control TURN/STUN URLs into Settings"
+        $codeDir = Join-Path $hubDir $HubCodeSubdir
+        $logDir  = Join-Path $hubDir "logs"
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+        $dbPath  = Join-Path $logDir "temp_v2.db"
+        $seedPy  = Join-Path $env:TEMP "fleethub_seed_turn.py"
+        $seedSrc = @'
+import sys
+code_dir, db_path, turn_url, stun_url = sys.argv[1:5]
+sys.path.insert(0, code_dir)
+import settings
+settings.init_settings_db(db_path)
+settings.set_many(db_path, {"remote.turn_urls": [turn_url], "remote.stun_urls": [stun_url]})
+print("ok")
+'@
+        [System.IO.File]::WriteAllText($seedPy, $seedSrc, (New-Object System.Text.UTF8Encoding($false)))
+        try {
+            & $pythonExe $seedPy $codeDir $dbPath $turnControlUrl $stunControlUrl | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "Settings -> Remote Control: TURN=$turnControlUrl  STUN=$stunControlUrl" }
+            else { Warn "Could not seed TURN URLs (exit $LASTEXITCODE) -- set them in Settings -> Remote Control." }
+        } catch {
+            Warn "Could not seed TURN URLs ($($_.Exception.Message)) -- set them in Settings -> Remote Control."
+        } finally {
+            Remove-Item $seedPy -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     Step "Installing the $HubServiceName service"
     # Serve via waitress; prefer its console script, fall back to `python -m waitress`.
@@ -1078,6 +1140,50 @@ function Install-Hub {
     if ($live) { Ok "Hub responding on http://localhost:$HubPort/" }
     else { Warn "No response yet on port $HubPort -- check 'Get-Service $HubServiceId' and $hubDir\$HubServiceId.wrapper.log." }
 
+    # ---- Bring up the coturn TURN server (roadmap #2) ----
+    if ($configureTurn) {
+        Step "Configuring the TURN server (coturn)"
+        $turnDir = if ($PSScriptRoot) { Join-Path $PSScriptRoot "turn" } else { $null }
+        if ($turnDir -and (Test-Path $turnDir)) {
+            # coturn validates against its OWN copy of the secret, so it must match the hub's.
+            $turnEnv   = Join-Path $turnDir ".env"
+            $turnLines = @("REMOTE_TURN_SECRET=$turnSecret", "TURN_EXTERNAL_IP=$turnHost")
+            [System.IO.File]::WriteAllLines($turnEnv, [string[]]$turnLines, (New-Object System.Text.UTF8Encoding($false)))
+            Ok "Wrote $turnEnv"
+
+            # Windows Docker Desktop has no Linux host networking, so use the published-ports
+            # compose variant (see turn\README.md).
+            $composeFile = "docker-compose.windows.yml"
+            $dockerCmd   = Get-Command docker -ErrorAction SilentlyContinue
+            $composeOk   = $false
+            if ($dockerCmd) {
+                & docker compose version *> $null
+                if ($LASTEXITCODE -eq 0) { $composeOk = $true }
+            }
+            $startCmd = "cd `"$turnDir`"; docker compose -f $composeFile up -d"
+            if ($composeOk -and (Test-Path (Join-Path $turnDir $composeFile))) {
+                if (Prompt-YesNo "Docker found. Start the coturn TURN server now?" -Default Yes) {
+                    Push-Location $turnDir
+                    try {
+                        & docker compose -f $composeFile up -d
+                        if ($LASTEXITCODE -eq 0) { Ok "coturn is up (docker compose -f $composeFile up -d)" }
+                        else { Warn "docker compose exited $LASTEXITCODE -- start it manually:  $startCmd" }
+                    } finally { Pop-Location }
+                } else {
+                    Say "Skipped. Start it later with:  $startCmd"
+                }
+                Say "Open UDP/TCP 3478 and UDP 49160-49200 to this host so relayed media can flow."
+            } else {
+                Warn "Docker (with the 'compose' plugin) was not found on this host."
+                Say  "Install Docker Desktop / WSL2, or run coturn on a small Linux VM, then:  $startCmd"
+                Say  "(turn\.env is already written with the matching secret and external IP.)"
+            }
+        } else {
+            Warn "A 'turn' folder was not found next to this installer -- coturn was not set up."
+            Say  "From the repo's turn\ folder: set turn\.env (REMOTE_TURN_SECRET + TURN_EXTERNAL_IP), then 'docker compose -f docker-compose.windows.yml up -d'."
+        }
+    }
+
     Write-Host @"
 
   Done.
@@ -1091,6 +1197,22 @@ function Install-Hub {
   Uninstall: powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub -Uninstall
 
 "@ -ForegroundColor Green
+
+    # Show any secret this run GENERATED, exactly once. They live in .env (masked on re-run), so
+    # this is the operator's only chance to copy them somewhere durable -- the enrollment secret
+    # is needed to enrol agents, and the TURN secret must be set as coturn's --static-auth-secret.
+    $generated = @()
+    if ($enrollGenerated -and $enrollSecret) { $generated += ,@("AGENT_ENROLLMENT_SECRET", $enrollSecret, "enrol agents with this") }
+    if ($turnGenerated   -and $turnSecret)   { $generated += ,@("REMOTE_TURN_SECRET",      $turnSecret,   "coturn --static-auth-secret must match this") }
+    if ($generated.Count) {
+        Write-Host "  Save these now -- generated this run, shown only once:" -ForegroundColor Yellow
+        Write-Host "  (also stored in $envPath; masked on any re-run)" -ForegroundColor DarkGray
+        foreach ($g in $generated) {
+            Write-Host ("    {0} = {1}" -f $g[0], $g[1]) -ForegroundColor Yellow
+            Write-Host ("      -> {0}" -f $g[2]) -ForegroundColor DarkGray
+        }
+        Write-Host ""
+    }
 }
 
 # ----------------------------------------------------------------------

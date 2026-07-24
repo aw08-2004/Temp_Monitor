@@ -1,0 +1,27 @@
+# coturn for a WINDOWS hub host (roadmap #2). Docker Desktop on Windows has no Linux host
+# networking, so unlike docker-compose.yml this variant has NO `network_mode: host` and relies
+# entirely on published ports. This is the file the installer uses, and the one to use by hand
+# on a Windows host:  docker compose -f docker-compose.windows.yml up -d
+#
+# It reads the same two variables from a .env beside it (the installer writes them):
+#   REMOTE_TURN_SECRET  -- the SAME value as the hub's .env; coturn validates minted creds against it.
+#   TURN_EXTERNAL_IP    -- the PUBLIC IP clients reach this host on (relay candidates advertise it).
+#
+# Open UDP+TCP 3478 and UDP 49160-49200 to this host, or allocations succeed but media never flows.
+# See README.md for the Linux (host-networking) variant, firewall notes, and optional TLS.
+services:
+  turn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    ports:
+      - "${TURN_PORT:-3478}:3478/udp"
+      - "${TURN_PORT:-3478}:3478/tcp"
+      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:49160-49200/udp"
+    command: >
+      -n --log-file=stdout --no-cli --no-tls --no-dtls
+      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET}
+      --realm=${TURN_REALM:-fleethub}
+      --listening-port=3478
+      --min-port=${TURN_MIN_PORT:-49160} --max-port=${TURN_MAX_PORT:-49200}
+      --external-ip=${TURN_EXTERNAL_IP}
+      --fingerprint

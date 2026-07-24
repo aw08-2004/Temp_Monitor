@@ -140,6 +140,35 @@ def main():
         check("turn is skipped when no secret is set",
               all("turn:" not in str(s.get("urls")) for s in remote.ice_servers("s1", turn_urls=["turn:x:3478"])))
 
+        print("\n== TURN secret generation ==")
+        s1, s2 = remote.generate_turn_secret(), remote.generate_turn_secret()
+        check("generate_turn_secret returns a long hex string", len(s1) >= 32 and all(c in "0123456789abcdef" for c in s1))
+        check("generate_turn_secret is not constant", s1 != s2)
+
+        print("\n== set_env_var upserts a dotenv key without a BOM ==")
+        env_fd, env_path = tempfile.mkstemp(suffix=".env")
+        os.close(env_fd)
+        try:
+            with open(env_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("GOOGLE_CLIENT_ID=abc\nHUB_URL=https://h\n")
+            remote.set_env_var(env_path, "REMOTE_TURN_SECRET", "s3cr3t")
+            raw = open(env_path, "rb").read()
+            check("no BOM is written", not raw.startswith(b"\xef\xbb\xbf"))
+            check("appends a new key", b"REMOTE_TURN_SECRET=s3cr3t\n" in raw)
+            check("preserves existing keys", b"GOOGLE_CLIENT_ID=abc" in raw and b"HUB_URL=https://h" in raw)
+            # A second write updates in place rather than appending a duplicate.
+            remote.set_env_var(env_path, "REMOTE_TURN_SECRET", "rotated")
+            text = open(env_path, encoding="utf-8").read()
+            check("updates in place (no duplicate key)", text.count("REMOTE_TURN_SECRET=") == 1)
+            check("holds the rotated value", "REMOTE_TURN_SECRET=rotated" in text)
+            # Creating the file from scratch works too.
+            fresh = env_path + ".fresh"
+            remote.set_env_var(fresh, "REMOTE_TURN_SECRET", "x")
+            check("creates the file when absent", open(fresh, encoding="utf-8").read() == "REMOTE_TURN_SECRET=x\n")
+            os.remove(fresh)
+        finally:
+            os.remove(env_path)
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:

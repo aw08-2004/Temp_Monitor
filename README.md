@@ -603,20 +603,25 @@ the operator's scope; every session start/stop is in the audit log.
 - **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
   (the logged-in user must approve first). Set it in **Settings → Remote Control**.
 - **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
-  **The hub is the TURN server**: run [coturn from `turn/`](turn/README.md) on the hub host
-  and set a shared secret in the hub's `.env`:
+  **The hub is the TURN server** (coturn from [`turn/`](turn/README.md)). The **hub installer
+  sets this up for you**: choose *Install Hub*, answer yes to "Configure this hub as the
+  TURN/STUN server", and it generates `REMOTE_TURN_SECRET`, writes `turn/.env`, optionally
+  runs `docker compose up` (Windows uses `docker-compose.windows.yml`), and seeds
+  **Settings → Remote Control → TURN/STUN servers** to `turn:<host>:3478` / `stun:<host>:3478`.
+  Any secret it generates is printed **once** at the end — save it. The hub mints short-lived
+  per-session TURN credentials from the secret (nothing per-user to manage).
+- **Managing TURN from the UI.** The whole config lives in **Settings → Remote Control**: the
+  STUN/TURN URLs, consent mode, TTLs, and a **TURN status card** that shows whether
+  `REMOTE_TURN_SECRET` is set and — the number that predicts a working session — how many ICE
+  servers a session hands a peer right now (`0` is the "agent logs `ice_servers=0` → peer
+  failed" case). From that card an admin (`manage_settings`) can **set or rotate the secret**
+  without shell access; it writes `.env` and applies live. Because coturn validates against
+  its own copy, the new value is shown once so you can set the same `--static-auth-secret`
+  (`turn/.env`) and restart coturn. Leaving the secret unset simply omits TURN (STUN/direct
+  paths only — fine on a LAN). See [turn/README.md](turn/README.md) for ports, the public-IP
+  requirement, and the Windows-host notes.
 
-  ```
-  REMOTE_TURN_SECRET=a-long-random-shared-secret
-  ```
-
-  The hub mints short-lived per-session TURN credentials from it (nothing to manage
-  per-user). Then set **Settings → Remote Control → TURN servers** to `turn:<hub-host>:3478`.
-  Leaving `REMOTE_TURN_SECRET` unset simply omits TURN (STUN/direct paths only — fine on a
-  LAN). See [turn/README.md](turn/README.md) for ports, the public-IP requirement, and the
-  Windows-host notes.
-
-> **Status:** built — hub 1.39.0. The agent half needs a signed release
+> **Status:** built — hub 1.40.0. The agent half needs a signed release
 > (`sign_release.py --sign-agent`), and the hub should be deployed first. On-hardware
 > follow-ups (tune together): secure-desktop capture during UAC, hardware H.264 encode, and
 > per-machine consent override.
