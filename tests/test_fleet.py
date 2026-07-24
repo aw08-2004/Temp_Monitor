@@ -117,6 +117,26 @@ def main():
                          lambda ct=ctype: fleet.create_favorite(
                              db_path, "op1@x.com", "bad", ct, {}))
 
+        print("\n== Remote view/control commands (roadmap #2) ==")
+        check("start_remote_session is a valid command type",
+              "start_remote_session" in fleet.ALL_COMMANDS)
+        # Queued by an operator's hand from the Remote tab; params carry the hub-minted
+        # session id (and later single-use TURN creds).
+        rsid = fleet.create_command(db_path, "PC-01", "start_remote_session",
+                                    {"session_id": "abc123", "monitor": 0},
+                                    issued_by="op1@x.com")
+        check("start_remote_session command created", bool(rsid))
+        rs_claim = [c for c in fleet.claim_commands(db_path, agent_id, "PC-01")
+                    if c["id"] == rsid][0]
+        check("claim carries issued_by for session attribution",
+              rs_claim["issued_by"] == "op1@x.com")
+        # Transient like the session-control types -- a saved copy would point at a dead
+        # session with expired credentials.
+        expect_raise("start_remote_session rejected as a favorite", ValueError,
+                     lambda: fleet.create_favorite(
+                         db_path, "op1@x.com", "bad", "start_remote_session",
+                         {"session_id": "abc123"}))
+
         print("\n== run_script reports cwd ==")
         # A persistent shell reports the directory it was left in, so the console can render a
         # real prompt. It rides on the result and surfaces in both output and command views.

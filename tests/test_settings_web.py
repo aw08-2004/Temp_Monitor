@@ -88,7 +88,7 @@ def main():
         doc = r.get_json()
         check("all sections present in order",
               [s["name"] for s in doc["sections"]]
-              == ["computer", "hub", "data", "metrics", "fleet", "deploy", "backup"])
+              == ["computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote"])
         check("every registry key is served",
               sorted(f["key"] for s in doc["sections"] for f in s["fields"]) ==
               sorted(settings.BY_KEY))

@@ -26,6 +26,12 @@
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-backup"
                 aria-controls="tab-backup" aria-selected="false" tabindex="-1">Backup</button>
         {% endif %}
+        {# Gated on remote_control, like the sidebar links -- the start/signal routes behind
+           it are gated server-side on remote_control AND this machine being in scope. #}
+        {% if cap.REMOTE_CONTROL in user_capabilities %}
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
+                aria-controls="tab-remote" aria-selected="false" tabindex="-1">Remote</button>
+        {% endif %}
     </div>
 
     {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
@@ -175,6 +181,30 @@
        token grammar has exactly one renderer shared with the Backups page. #}
     <div class="tab-panel" id="tab-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden></div>
     {% endif %}
+
+    {% if cap.REMOTE_CONTROL in user_capabilities %}
+    {# Remote view/control (roadmap #2). remote.js wires the WebRTC viewer; input control
+       (mouse/keyboard, Ctrl+Alt+Del) lands in phase 5. #}
+    <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote" hidden>
+        <div class="card remote-card" id="remote-card">
+            <div class="terminal__head">
+                <div class="section-title" style="margin-bottom: 0;">Remote view</div>
+                <span class="status-pill status-pill--muted" id="remote-status"><span class="status-pill__dot"></span>Idle</span>
+                <div class="terminal__head-actions">
+                    <button id="remote-cad" type="button" class="btn btn--ghost" disabled
+                            title="Send Ctrl+Alt+Del to the remote machine">Ctrl+Alt+Del</button>
+                    <button id="remote-start" type="button" class="btn btn--primary">Start</button>
+                    <button id="remote-stop" type="button" class="btn btn--ghost" disabled>Stop</button>
+                </div>
+            </div>
+            {# Rendered from the WebRTC media stream; muted so autoplay is allowed with no
+               user gesture. #}
+            <video id="remote-video" playsinline autoplay muted
+                   style="width: 100%; max-height: 70vh; background: #000; border-radius: var(--radius, 8px); margin-top: var(--space-3, 12px);"></video>
+            <div id="remote-hint" class="terminal__hint"></div>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 {# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
@@ -197,6 +227,9 @@
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
 <script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
+{% endif %}
+{% if cap.REMOTE_CONTROL in user_capabilities %}
+<script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 {% endblock %}

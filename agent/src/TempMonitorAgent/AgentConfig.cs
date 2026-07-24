@@ -181,6 +181,19 @@ public static class AgentConfig
         }
     }
 
+    // --- Remote view/control (roadmap #2) ---------------------------------
+    // The service session-injects a helper running THIS SAME BINARY with this switch,
+    // as SYSTEM inside the interactive console session (session 0 has no desktop to
+    // capture). One binary, one signature -- the helper reuses the self-update trust root.
+    public const string RemoteHelperArg = "--remote-helper";
+    // Session parameters (id, monitor, later TURN creds) are handed to the helper via a
+    // file rather than the command line, so single-use secrets never show up in the
+    // process list. Written by the executor, read-then-deleted by the helper.
+    public static string RemoteStateDir => Path.Combine(ProgramDataDir, "remote");
+    // The helper logs to its own file rather than companion.log: it runs in a different
+    // session, and keeping its diagnostics separate makes a field capture issue legible.
+    public static string RemoteHelperLogPath => Path.Combine(ProgramDataDir, "remote-helper.log");
+
     public static string AgentIdentityPath => Path.Combine(ProgramDataDir, "agent.json");
     /// <summary>Hub-delivered operational config (see RuntimeConfig). Persisted so a
     /// restart or self-update doesn't fall back to compiled defaults until the next

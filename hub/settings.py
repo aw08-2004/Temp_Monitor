@@ -281,10 +281,38 @@ REGISTRY = (
             "Monday morning can bring the whole fleet back at once. This spreads them "
             "out instead of saturating the connection. Others wait their turn and start "
             "within a minute of a slot freeing up; 0 removes the limit."),
+
+    # ---------------- Remote view/control (roadmap #2) ----------------
+    _s("remote.enabled", "remote", "Allow remote view/control", "bool", True,
+       help="Master switch for starting remote sessions from a machine's Remote tab. Off "
+            "means the Start button is refused fleet-wide, regardless of who holds the "
+            "remote_control capability."),
+    _s("remote.consent_mode", "remote", "Consent mode", "enum", "unattended",
+       choices=["unattended", "attended"],
+       help="Unattended connects immediately (standard RMM). Attended prompts the logged-in "
+            "user to approve first, and does nothing if no one is signed in. A per-machine "
+            "override lives on the machine's Remote tab."),
+    _s("remote.session_ttl_seconds", "remote", "End a session automatically after", "int",
+       4 * 60 * 60, minimum=300, maximum=86400, unit="seconds",
+       help="A remote session is force-ended past this age even if the tab is still open, "
+            "which also bounds how long a minted TURN credential stays valid. Four hours "
+            "by default."),
+    _s("remote.turn_ttl_seconds", "remote", "TURN credential lifetime", "int", 600,
+       minimum=60, maximum=86400, unit="seconds",
+       help="How long the short-lived TURN credentials handed to each peer stay valid. "
+            "Only needs to cover connection setup; media keeps flowing once ICE completes."),
+    _s("remote.stun_urls", "remote", "STUN servers", "str_list", [],
+       help="STUN URLs offered to both peers for NAT discovery, e.g. "
+            "stun:stun.l.google.com:19302. Optional; leave empty on a LAN."),
+    _s("remote.turn_urls", "remote", "TURN servers", "str_list", [],
+       help="TURN relay URLs (e.g. turn:your-hub:3478). Required for peers behind NATs that "
+            "block direct connections -- point these at the hub's TURN server. Credentials "
+            "are minted per session from REMOTE_TURN_SECRET in .env; TURN is skipped if that "
+            "secret is unset."),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
-SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup")
+SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;
@@ -612,6 +640,7 @@ _SECTION_LABELS = {
     "fleet": "Fleet",
     "deploy": "Package Deployment",
     "backup": "Backups",
+    "remote": "Remote Control",
 }
 
 

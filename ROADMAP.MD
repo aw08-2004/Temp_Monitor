@@ -703,7 +703,53 @@ be admin-only or self-service.
 
 ---
 
-## 📋 2. Remote view & control   ·   build last — highest technical risk, spike first
+## ✅ 2. Remote view & control   ·   hub 1.39.0 (+ agent, pending a signed release)
+
+Built. Live remote view **and control** of a managed PC over **true H.264/WebRTC** from v1.
+The user chose to go straight for the full pipeline (no throwaway spike) and to make **the hub
+itself the TURN server**. Delivered as specified below; the decisions and their resolutions:
+
+- **Session injection (agent, `Remote/SessionInjector.cs`)** — the service duplicates its own
+  SYSTEM token, retargets `TokenSessionId` to the active console session (enabling `SeTcb`),
+  and `CreateProcessAsUser`s the **same binary** with `--remote-helper` onto `winsta0\default`
+  as **SYSTEM-in-session**. One binary, one signature; the helper reuses the self-update trust
+  root and the agent's enrollment identity to authenticate its signaling.
+- **Capture + encode (`ScreenCapture.cs` + `H264Encoder.cs`, via Vortice)** — DXGI Desktop
+  Duplication (GDI `BitBlt` fallback) → BGRA→NV12 (`ColorConvert.cs`) → a Media Foundation
+  H.264 encoder → Annex-B. The software encoder path is the shipped baseline; hardware/async-MFT
+  is the on-hardware tuning follow-up. **The whole capture→encode path was validated on real
+  hardware** (a standalone `--remote-capture-test` produced a valid H.264 stream: SPS/PPS/IDR
+  with inline parameter sets per keyframe).
+- **WebRTC (`RemotePeer.cs`, SIPSorcery)** — pure-managed `RTCPeerConnection` (so the
+  single-file agent is unaffected): an H.264 send track fed by the encoder, a `control`
+  DataChannel for input, offer/answer + trickle ICE. The agent is the offerer.
+- **Signaling relay (`remote.py` + `remote_web.py`)** — HTTP polling, not a WebSocket: the
+  agent has no listening port and the hub's Socket.IO is polling-only, so both sides poll with
+  an `after_seq` cursor (the fleet-terminal model). Agent side is bearer-auth + machine-owned;
+  console side is `remote_control` + machine scope; every start/stop is audited. New tables
+  `remote_sessions` / `remote_signals`; session TTL swept on the 30 s housekeeping heartbeat.
+- **Hub as TURN (`turn/`)** — coturn on the hub host, credentials **minted by the hub app**
+  via the standard TURN REST scheme (HMAC of `REMOTE_TURN_SECRET` in `.env`), so there is one
+  secret and no per-user database. **The credential interop was validated against real coturn**
+  via Docker (`tests/test_turn_interop.py`): a hub-minted credential authenticates and
+  allocates; a wrong one is refused.
+- **Input control (`InputInjector.cs`)** — browser input over the DataChannel → `SendInput`
+  (mouse move/buttons/wheel, keyboard via a `KeyboardEvent.code`→VK map with a Unicode
+  fallback), coordinates mapped from normalised capture space to the monitor's virtual-desktop
+  rectangle. Ctrl+Alt+Del via `SendSAS`.
+- **Consent (`ConsentBanner.cs`)** — `remote.consent_mode`: **unattended** default (connects
+  immediately) vs **attended** (a fail-closed, auto-denying prompt to the logged-in user via
+  `MessageBoxTimeout`).
+- **Viewer** — a **Remote** tab on the machine page (`remote.js`), gated on `remote_control`.
+
+**Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
+(capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the
+DXGI re-duplication + SendInput-to-Winlogon is the piece to confirm); **hardware H.264** encode
+(async MFT + shared D3D11); **per-machine consent override** (global setting works today);
+multi-monitor UX; and the software-encode fallback threshold.
+
+<details>
+<summary>Original spec</summary>
 
 Live remote view of a managed PC's screen and input control from the console, with true
 video from v1 and full secure-desktop (UAC/Ctrl+Alt+Del) support.
@@ -744,6 +790,8 @@ STUN/TURN hosting (a self-hosted TURN server is likely needed, since agents sit 
 arbitrary NATs); the software-encode fallback threshold when no hardware encoder is
 present.
 
+</details>
+
 ---
 
 ## 📋 7. Localization / multi-language UI   ·   build last — lowest priority, most mechanical
@@ -781,8 +829,9 @@ hardcoded enum.
 4. ~~**#8 Registered Users directory**~~ — done, hub 1.35.0 (prerequisite for #6's member picker)
 5. ~~**#6 Search & pickers across the console**~~ — done, hub 1.36.0 (+ agent 3.11.0 /
    companion 2.11.0 for the new Service Tag; agent half pending a signed release)
-6. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
-7. **#2 Remote view & control** — spike first, then build
+6. ~~**#2 Remote view & control**~~ — done, hub 1.39.0 (built ahead of #4 at the user's
+   request; agent half pending a signed release; TURN server in `turn/`)
+7. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
 8. **#7 Localization** — lowest priority, most mechanical; do last
 
 Each item above has a decided approach; only small, implementation-level parameters

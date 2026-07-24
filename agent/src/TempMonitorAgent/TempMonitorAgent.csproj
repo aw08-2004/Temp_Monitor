@@ -28,10 +28,20 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.6" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
+    <!-- 2.6.2 floor is SIPSorcery's (below); the Ed25519 API we use for self-update
+         verification is unchanged from 2.5.1. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="System.Management" Version="10.0.0" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <!-- Remote view/control (roadmap #2). DXGI Desktop Duplication + a Media Foundation H.264
+         encoder for screen capture; SIPSorcery for the WebRTC transport. All managed wrappers
+         over in-box Windows DLLs (d3d11/dxgi/mfplat) or pure managed (SIPSorcery), so the
+         self-contained single-file publish is unaffected. -->
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
+    <PackageReference Include="SIPSorcery" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

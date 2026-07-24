@@ -4,9 +4,22 @@ using TempMonitorAgent.Backup;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
+using TempMonitorAgent.Remote;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
+
+// Remote view/control (roadmap #2): the service session-injects THIS SAME BINARY with
+// --remote-helper <session-file> into the interactive desktop. That process is not a service
+// -- it must not build the Windows Service host or start the telemetry loop -- so branch to
+// the helper before anything else touches the service's logger or host.
+if (RemoteHelper.TryGetSessionFileArg(args) is { } remoteSessionFile)
+    return RemoteHelper.Run(remoteSessionFile);
+
+// Standalone capture+encode self-test (roadmap #2, phase 2): writes an Annex-B .h264 file so
+// the DXGI/GDI capture and H.264 encoder can be validated on real hardware with no hub.
+if (RemoteHelper.TryGetCaptureTestArgs(args) is { } captureTestArgs)
+    return RemoteHelper.RunCaptureSelfTest(captureTestArgs);
 
 // Rotating file log under %ProgramData% so field issues on client machines are
 // diagnosable (parity with companion.py's RotatingFileHandler). Console sink too,
@@ -65,6 +78,8 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShellInputExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellSignalExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();
+    // Remote view/control (roadmap #2): session-injects the capture/control helper.
+    builder.Services.AddSingleton<ICommandExecutor, StartRemoteSessionExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
 
@@ -84,3 +99,7 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+// The helper branch above returns its own exit code; the service path ends here. (host.Run
+// blocks until the service stops, so reaching this is the normal, clean shutdown.)
+return 0;

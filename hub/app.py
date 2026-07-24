@@ -33,12 +33,14 @@ import permissions
 import users
 import packages
 import backups
+import remote
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
 from users_web import create_users_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
+from remote_web import create_remote_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
 # telemetry DB) lives one level up in the install root. Keeping the two apart is what lets
@@ -65,7 +67,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.38.0"
+HUB_VERSION = "1.39.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1208,6 +1210,10 @@ app.register_blueprint(create_backups_blueprint(
     # the lookup to request time, when it exists.
     machine_roster=lambda: backup_machine_roster(),
 ))
+# Remote view/control (roadmap #2): agent-facing WebRTC signaling (bearer token) + console-
+# facing session control (remote_control capability + machine scope). Same login_required and
+# access seam as every other blueprint.
+app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access))
 
 
 @app.route("/login")
@@ -2135,6 +2141,13 @@ def overheat_evaluator():
             evaluate_overheat_once()
         except Exception as e:
             print(f"[overheat] Evaluation pass failed: {e}")
+        # Remote sessions expire on the same heartbeat (roadmap #2), same reasoning as
+        # fleet.expire_stale_commands: a browser tab that vanished without a clean stop must
+        # not leave a session -- and its minted TURN credential -- live forever.
+        try:
+            remote.expire_sessions(DB_PATH)
+        except Exception as e:
+            print(f"[remote] Session expiry sweep failed: {e}")
         time.sleep(OVERHEAT_TICK_SECONDS)
 
 
@@ -2254,6 +2267,7 @@ permissions.init_permissions_db(DB_PATH)
 users.init_users_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
+remote.init_remote_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()

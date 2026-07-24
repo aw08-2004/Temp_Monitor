@@ -1,0 +1,39 @@
+# Hub-hosted TURN server for remote view/control (roadmap #2).
+#
+# The hub is the TURN server: this coturn runs on the hub host and validates the short-lived
+# credentials the hub app mints (remote.mint_turn_credentials) via the standard TURN REST
+# scheme -- so there is ONE secret (REMOTE_TURN_SECRET in the hub's .env) and no per-user
+# database. Agents behind arbitrary NATs relay their WebRTC media through here to the operator's
+# browser.
+#
+# Usage:
+#   1. Set REMOTE_TURN_SECRET (same value as the hub's .env) and TURN_EXTERNAL_IP (this host's
+#      PUBLIC IP) in a .env file beside this compose file, or export them.
+#   2. docker compose up -d
+#   3. In the FleetHub console: Settings -> Remote Control -> TURN servers =
+#      turn:<this-host-public-hostname>:3478
+#
+# See README.md for the Windows-host notes, the firewall ports, and TLS.
+services:
+  turn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    # host networking is by far the simplest correct setup on a LINUX host: TURN hands clients
+    # relay ports from the range below and must be reachable on the host's real IP. On a Windows
+    # host (Docker Desktop has no Linux host networking), delete this line and use the published
+    # port ranges below instead -- see README.md.
+    network_mode: host
+    # Only used when network_mode: host is removed (Windows). The whole relay range must be
+    # published or allocations succeed but media never flows.
+    ports:
+      - "${TURN_PORT:-3478}:3478/udp"
+      - "${TURN_PORT:-3478}:3478/tcp"
+      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:49160-49200/udp"
+    command: >
+      -n --log-file=stdout --no-cli --no-tls --no-dtls
+      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET}
+      --realm=${TURN_REALM:-fleethub}
+      --listening-port=3478
+      --min-port=${TURN_MIN_PORT:-49160} --max-port=${TURN_MAX_PORT:-49200}
+      --external-ip=${TURN_EXTERNAL_IP}
+      --fingerprint

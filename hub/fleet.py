@@ -76,6 +76,15 @@ SCHEDULED_COMMANDS = frozenset({
     "restore_files",
 })
 
+# Remote view/control (roadmap #2). Like the session-control types these steer a live,
+# one-shot session rather than carrying reusable work: the params hold a session id and
+# short-lived, single-use TURN credentials, so a saved copy would point at a dead session.
+# Not favoritable for the same reason. Issued by an operator's hand from the Remote tab,
+# gated on the remote_control capability at the console session (see remote_web.py).
+REMOTE_CONTROL_COMMANDS = frozenset({
+    "start_remote_session",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -85,7 +94,7 @@ ALL_COMMANDS = frozenset({
     "run_script",
     "install_driver",
     "update_bios",
-}) | SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS
+}) | SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -778,6 +787,11 @@ def _validate_favorite(name, command_type, params):
         # The scheduler owns these -- a saved copy would carry a stale deployment id.
         raise ValueError(f"{command_type!r} commands are issued by the deployment "
                          f"scheduler and cannot be saved as a favorite")
+    if command_type in REMOTE_CONTROL_COMMANDS:
+        # These carry a one-shot session id + single-use TURN credentials; a saved copy
+        # would point at a dead session.
+        raise ValueError(f"{command_type!r} commands start a live remote session and "
+                         f"cannot be saved as a favorite")
     if params is None:
         params = {}
     if not isinstance(params, dict):

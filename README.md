@@ -589,6 +589,38 @@ other 100, and a green row means nobody does.
 > release (`sign_release.py --sign-agent`) before the fleet gains any of this, and the hub
 > should be deployed first. See [features.md](features.md).
 
+## Remote view & control
+
+Live remote view **and control** of a managed PC over WebRTC (H.264), from the machine
+page's **Remote** tab. Gated on the `remote_control` capability plus the machine being in
+the operator's scope; every session start/stop is in the audit log.
+
+- **How it works.** The agent runs as SYSTEM in session 0, which has no desktop to capture,
+  so on session start it injects a helper (the same signed agent binary, `--remote-helper`)
+  as SYSTEM into the interactive session. The helper captures the screen (DXGI), encodes
+  H.264, and streams it to the operator's browser over WebRTC; the browser sends mouse and
+  keyboard back over a data channel (`SendInput`). Ctrl+Alt+Del is supported.
+- **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
+  (the logged-in user must approve first). Set it in **Settings → Remote Control**.
+- **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
+  **The hub is the TURN server**: run [coturn from `turn/`](turn/README.md) on the hub host
+  and set a shared secret in the hub's `.env`:
+
+  ```
+  REMOTE_TURN_SECRET=a-long-random-shared-secret
+  ```
+
+  The hub mints short-lived per-session TURN credentials from it (nothing to manage
+  per-user). Then set **Settings → Remote Control → TURN servers** to `turn:<hub-host>:3478`.
+  Leaving `REMOTE_TURN_SECRET` unset simply omits TURN (STUN/direct paths only — fine on a
+  LAN). See [turn/README.md](turn/README.md) for ports, the public-IP requirement, and the
+  Windows-host notes.
+
+> **Status:** built — hub 1.39.0. The agent half needs a signed release
+> (`sign_release.py --sign-agent`), and the hub should be deployed first. On-hardware
+> follow-ups (tune together): secure-desktop capture during UAC, hardware H.264 encode, and
+> per-machine consent override.
+
 ## Signing releases
 
 Two artifacts in this repo are Ed25519-signed so a compromised hub or repo commit
