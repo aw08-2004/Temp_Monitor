@@ -743,6 +743,34 @@ function Install-Agent {
     # (whose own default could be an older release's) still lands where this installer says.
     $agentArgs.InstallDir = $AgentInstallDir
 
+    # Prompt to add the Agent install directory to Windows Defender exclusions
+    if (Prompt-YesNo "Add agent install directory '$AgentInstallDir' to Windows Defender exclusion?" -Default No) {
+        # Ensure the path exists so the exclusion is meaningful
+        if (-not (Test-Path $AgentInstallDir)) {
+            try {
+                New-Item -ItemType Directory -Force -Path $AgentInstallDir | Out-Null
+                Ok "Created $AgentInstallDir (so it can be excluded)"
+            } catch {
+                Warn "Could not create ${AgentInstallDir}: $($_.Exception.Message)"
+            }
+        }
+    
+        # Add the exclusion if the cmdlet is available
+        if (Get-Command Add-MpPreference -ErrorAction SilentlyContinue) {
+            try {
+                Write-Host "  Adding Windows Defender exclusion for $AgentInstallDir ..."
+                Add-MpPreference -ExclusionPath $AgentInstallDir
+                Ok "Added Windows Defender exclusion: $AgentInstallDir"
+            } catch {
+                Warn "Failed to add Defender exclusion: $($_.Exception.Message)"
+                Warn "You may need to add an exclusion manually or via your AV vendor's management tools."
+            }
+        } else {
+            Warn "Add-MpPreference not available on this system (Windows Defender cmdlets missing)."
+            Warn "Add the exclusion manually or use your AV management tooling."
+        }
+    }
+
     $localInstaller = $null
     if ($PSScriptRoot) {
         $p = Join-Path $PSScriptRoot "agent\install\agent-install.ps1"
