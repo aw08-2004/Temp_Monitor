@@ -57,7 +57,7 @@ These are features, not bugs. The above controls + source code review + signing 
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in FleetHub, **please report it responsibly** by emailing security@example.com with the following details:
+If you discover a security vulnerability in FleetHub, **please report it responsibly** by emailing wiensfriesena@gmail.com with the following details:
 
 - **Vulnerability title and description**
 - **Affected component(s)** (e.g., agent, hub, fleet command channel)
@@ -78,11 +78,7 @@ We will treat your report in confidence and work with you to resolve it before p
 
 1. **Acknowledgment:** We will confirm receipt within **3 business days**
 2. **Assessment:** We will investigate and determine severity
-3. **Fix Timeline:** 
-   - **Critical** (RCE, auth bypass, data exfiltration): fix within **7 days**
-   - **High** (privilege escalation, confidentiality breach): fix within **14 days**
-   - **Medium** (denial of service, audit log bypass): fix within **30 days**
-   - **Low** (informational, best-practice improvements): fix within **60 days**
+3. **Fixing:** Depending on severity we will fix it as soon as possible.
 4. **Disclosure:** We will coordinate with you on the timing and wording of a public advisory
 5. **Credit:** You will be credited by name (or anonymously, if you prefer) in release notes
 
@@ -129,7 +125,7 @@ This project applies the following security principles:
 
 ## Security Contact
 
-- **Email:** security@example.com (replace with your actual email or security team)
+- **Email:** wiensfriesena@gmail.com
 - **GPG Key:** (Optional — provide if you have one; see [GitHub docs](https://docs.github.com/en/code-security/repository-security-advisories/publishing-a-repository-security-advisory) for guidance)
 
 ## Acknowledgments
