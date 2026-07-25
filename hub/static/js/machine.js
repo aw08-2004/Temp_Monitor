@@ -18,7 +18,6 @@ const resolutionInUseEl = document.getElementById('resolution-in-use');
 const dynamicResolutionEl = document.getElementById('dynamic-resolution');
 const noDataEl = document.getElementById('no-data');
 const tempCard = document.getElementById('temp-card');
-const statusEl = document.getElementById('stat-status');
 const uptimeLabelEl = document.getElementById('stat-uptime-label');
 const uptimeValueEl = document.getElementById('stat-uptime');
 
@@ -451,17 +450,7 @@ let lastCpuLoadPct = null;
 function applyTemp(temp) {
     if (temp === undefined || temp === null) return;
     document.getElementById('stat-temp').textContent = Number(temp).toFixed(1) + ' °C';
-    const status = classifyOverheatStatus(temp, OVERHEAT_THRESHOLD, lastCpuLoadPct, LOW_LOAD_THRESHOLD);
-    if (status === 'normal') {
-        tempCard.classList.remove('stat-card--overheat');
-        setStatusPill(statusEl, 'ok', 'Normal');
-    } else if (status === 'overheat-expected') {
-        tempCard.classList.add('stat-card--overheat');
-        setStatusPill(statusEl, 'warn', '🔥 Overheating (high load)');
-    } else {
-        tempCard.classList.add('stat-card--overheat');
-        setStatusPill(statusEl, 'danger', '🔥 Overheating (low load — investigate)');
-    }
+    tempCard.classList.remove('stat-card--overheat');
 }
 
 function formatMetric(value, suffix) {

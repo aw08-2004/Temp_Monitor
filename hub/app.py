@@ -1,4 +1,4 @@
-﻿import ctypes
+import ctypes
 import io
 import json
 import os
@@ -67,7 +67,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.40.0"
+HUB_VERSION = "1.40.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2127,8 +2127,10 @@ def evaluate_overheat_once(db_path=None, now=None):
                      if a["kind"] == alerts.KIND_OVERHEAT and a.get("machine")}
     for machine, avg_temp in hot.items():
         alerts.upsert_overheat(db_path, machine, avg_temp, threshold, window)
-    for machine in open_machines - set(hot):
-        alerts.resolve_overheat(db_path, machine)
+    # Do not auto-resolve alerts when the machine cools, so they remain visible on the Alerts tab
+    # until the operator dismisses them.
+    # for machine in open_machines - set(hot):
+    #     alerts.resolve_overheat(db_path, machine)
     return len(hot), len(open_machines - set(hot))
 
 
@@ -2880,7 +2882,10 @@ def inject_nav_context():
     break a page -- it renders on login too, where there is no session at all.
     """
     context = {"open_alert_count": 0, "user_capabilities": set(),
-               "is_superuser": False, "cap": permissions}
+               "is_superuser": False, "cap": permissions,
+               "hub_version": HUB_VERSION,
+               "latest_companion_version": get_latest_companion_version(),
+               "latest_agent_version": get_latest_agent_version()}
     if not session.get("user"):
         return context
     try:

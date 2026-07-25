@@ -3,7 +3,8 @@
 //     to auto-merge live machines, so the operator picks a survivor here and the rest are
 //     merged into it (POST /api/machines/merge).
 //   * overheat -- a machine whose AVERAGE temperature over the configured window is at or
-//     above the overheat threshold. Raised/resolved server-side; the operator can Dismiss.
+//     above the overheat threshold. Raised server-side; the operator must Dismiss it (it
+//     no longer auto-resolves, to ensure the operator sees it).
 // Reads /api/alerts, acts via /api/machines/merge and /api/alerts/<id>/dismiss. Mirrors
 // inventory.js: build DOM with textContent (never innerHTML from data), poll to stay fresh.
 
@@ -65,7 +66,7 @@ function renderAlert(alert) {
 
 // A temperature alert: one machine whose windowed AVERAGE crossed the threshold. There is
 // nothing to decide (unlike a merge), so the card just states the condition, links to the
-// machine, and offers Dismiss -- it also auto-resolves server-side once the machine cools.
+// machine, and offers Dismiss. It remains open until the operator dismisses it.
 function renderOverheat(alert) {
     const card = document.createElement('div');
     card.className = 'card';
