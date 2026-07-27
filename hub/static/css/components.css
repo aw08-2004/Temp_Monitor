@@ -23,12 +23,83 @@
 }
 
 /* Below the layout breakpoint the grid collapses to one column (see base.css
-   .app-shell) and the sidebar is hidden. This lives HERE rather than in base.css's
-   media query because components.css loads afterwards: media queries add no
-   specificity, so the `.sidebar { display: flex }` above would win on source order and
-   the sidebar would never actually hide. */
+   .app-shell) and the sidebar turns into an off-canvas drawer opened by the topbar
+   hamburger. This lives HERE rather than in base.css's media query because
+   components.css loads afterwards: media queries add no specificity, so the
+   `.sidebar { position: sticky }` above would win on source order and the drawer would
+   never actually slide. Same reasoning for every other mobile rule in this file. */
 @media (max-width: 900px) {
-    .sidebar { display: none; }
+    .sidebar {
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: min(var(--sidebar-width), 82vw);
+        height: 100%;
+        z-index: 60;
+        transform: translateX(-100%);
+        /* visibility, not just the offscreen transform: a translated element is still in
+           the tab order, so without it the closed drawer swallows ten tab stops before the
+           page content ever gets one.
+           The 0.22s DELAY (closed state only) holds it visible for the length of the
+           slide-out, so closing animates instead of vanishing. Opening carries no delay --
+           common.js focuses the first link the moment the class lands, and focus() is a
+           no-op on a visibility:hidden element, so any delay here silently breaks it. */
+        transition: transform 0.22s ease, visibility 0s linear 0.22s;
+        visibility: hidden;
+    }
+
+    .sidebar--open {
+        transform: none;
+        visibility: visible;
+        transition: transform 0.22s ease;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sidebar { transition: none; }
+}
+
+/* Dimmer behind the open drawer. `hidden` is the closed state (common.js toggles it),
+   so this only needs to describe the visible one. */
+.nav-scrim:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: var(--overlay-scrim);
+}
+
+.sidebar__close {
+    display: none;
+    margin-left: auto;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.sidebar__close:hover {
+    color: var(--text);
+    background: var(--card);
+}
+
+.sidebar__close svg {
+    width: 18px;
+    height: 18px;
+}
+
+@media (max-width: 900px) {
+    .sidebar__close { display: inline-flex; }
+
+    /* 8px/12px is fine for a mouse and too small for a thumb -- 44px is the usual
+       minimum touch target. */
+    .sidebar__link {
+        padding: var(--space-3);
+        min-height: 44px;
+    }
 }
 
 .sidebar__brand {
@@ -126,6 +197,8 @@
     border-bottom: 1px solid var(--card-border);
     background: var(--surface);
     flex-wrap: wrap;
+    /* Anchors the mobile overflow panel, which hangs off the bottom edge. */
+    position: relative;
 }
 
 .topbar__title {
@@ -138,6 +211,24 @@
     font-size: var(--text-sm);
     color: var(--muted);
 }
+
+/* Desktop: the wrapper isn't a box at all, its children are flex items of .topbar
+   directly, so the bar renders exactly as it did before the wrapper existed. The
+   nesting only earns its keep below the breakpoint, where it becomes a real panel. */
+.topbar__meta {
+    display: contents;
+}
+
+/* display:contents costs the wrapper its DOM position, so the ordering it used to
+   provide is restored explicitly: badges (default 0), then the theme toggle, then the
+   user. Without this the toggle would jump to the far right on desktop. */
+.theme-toggle { order: 1; }
+.topbar__email,
+.topbar__signout { order: 2; }
+
+/* The mobile-only topbar controls (.nav-toggle, .topbar__more, .topbar__brand) and the
+   overflow panel's mobile layout live at the END of this file, not here -- see the
+   comment there. */
 
 /* ============ Badge ============ */
 .badge {
@@ -924,4 +1015,61 @@ label.checkbox input {
 .turn-secret__code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: var(--text-sm);
+}
+
+/* ============ Mobile topbar controls ============ */
+/* Deliberately the last thing in the file. The hamburger and the overflow button are
+   `.btn .btn--icon` so they inherit the icon-button sizing, and `.btn { display: inline-flex }`
+   is a single class -- exactly the same specificity as `.nav-toggle`. Placed up in the
+   Topbar section these rules lost to .btn on source order and both buttons showed on
+   DESKTOP, where there is nothing for them to do. Keep them after .btn. */
+.nav-toggle,
+.topbar__more {
+    display: none;
+}
+
+.topbar__brand {
+    display: none;
+    margin-right: auto;
+    font-weight: 600;
+    font-size: var(--text-md);
+    letter-spacing: -0.01em;
+}
+
+@media (max-width: 900px) {
+    .topbar {
+        /* nowrap: the whole point of the overflow panel is that the header is one row.
+           If anything still overflows we'd rather it clip than push the page down. */
+        flex-wrap: nowrap;
+        padding: var(--space-3) var(--space-4);
+    }
+
+    .nav-toggle,
+    .topbar__more {
+        display: inline-flex;
+        flex-shrink: 0;
+    }
+
+    .topbar__brand { display: block; }
+
+    .nav-toggle { order: -1; }
+    .topbar__more { order: 2; }
+
+    .topbar__meta {
+        display: none;
+        position: absolute;
+        top: 100%;
+        right: var(--space-4);
+        z-index: 40;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3);
+        padding: var(--space-4);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+        box-shadow: var(--shadow-card);
+    }
+
+    .topbar__meta--open { display: flex; }
 }

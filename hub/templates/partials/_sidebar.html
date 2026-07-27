@@ -1,7 +1,13 @@
-<aside class="sidebar">
+{# Below the layout breakpoint this same element becomes the slide-in drawer -- there is
+   no second copy of the nav, so the capability gating and active state below serve both.
+   common.js initMobileNav() owns .sidebar--open / .nav-scrim[hidden]. #}
+<aside class="sidebar" id="app-sidebar">
     <div class="sidebar__brand">
         <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
         <span class="sidebar__brand-name">FleetHub</span>
+        <button type="button" id="nav-close" class="sidebar__close" aria-label="Close navigation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
     </div>
     <nav class="sidebar__nav">
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" href="{{ url_for('index') }}">
@@ -63,3 +69,4 @@
         {% endif %}
     </nav>
 </aside>
+<div class="nav-scrim" id="nav-scrim" hidden></div>

@@ -74,4 +74,89 @@ function initThemeToggle() {
     });
 }
 
-document.addEventListener('DOMContentLoaded', initThemeToggle);
+// Below the CSS breakpoint the sidebar is an off-canvas drawer (components.css) and this
+// owns its open/closed state. Same element, same links -- there is no separate mobile nav.
+function initMobileNav() {
+    const toggle = document.getElementById('nav-toggle');
+    const sidebar = document.getElementById('app-sidebar');
+    const scrim = document.getElementById('nav-scrim');
+    if (!toggle || !sidebar || !scrim) return;
+
+    const closeBtn = document.getElementById('nav-close');
+    const isOpen = () => sidebar.classList.contains('sidebar--open');
+
+    function setOpen(open) {
+        sidebar.classList.toggle('sidebar--open', open);
+        scrim.hidden = !open;
+        toggle.setAttribute('aria-expanded', String(open));
+        // The drawer scrolls itself; letting the page scroll underneath it is disorienting.
+        document.body.style.overflow = open ? 'hidden' : '';
+        if (open) {
+            const first = sidebar.querySelector('.sidebar__link');
+            if (first) first.focus();
+        }
+    }
+
+    function close({ restoreFocus = false } = {}) {
+        if (!isOpen()) return;
+        setOpen(false);
+        if (restoreFocus) toggle.focus();
+    }
+
+    toggle.addEventListener('click', () => setOpen(!isOpen()));
+    scrim.addEventListener('click', () => close());
+    if (closeBtn) closeBtn.addEventListener('click', () => close({ restoreFocus: true }));
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close({ restoreFocus: true });
+    });
+
+    // Navigating is a full page load, so this only matters for a link that no-ops --
+    // but a drawer that stays open after a tap reads as broken.
+    sidebar.addEventListener('click', (e) => {
+        if (e.target.closest('.sidebar__link')) close();
+    });
+
+    // Rotating or resizing past the breakpoint puts the sidebar back in the layout; an
+    // --open class left behind would strand the scrim and the body scroll lock.
+    const narrow = window.matchMedia('(max-width: 900px)');
+    const onChange = () => { if (!narrow.matches) close(); };
+    if (narrow.addEventListener) narrow.addEventListener('change', onChange);
+    else narrow.addListener(onChange);  // Safari < 14
+}
+
+// Mobile overflow menu holding the version badges, the signed-in email and Sign out.
+function initTopbarMore() {
+    const toggle = document.getElementById('topbar-more');
+    const menu = document.getElementById('topbar-meta');
+    if (!toggle || !menu) return;
+
+    const isOpen = () => menu.classList.contains('topbar__meta--open');
+
+    function setOpen(open) {
+        menu.classList.toggle('topbar__meta--open', open);
+        toggle.setAttribute('aria-expanded', String(open));
+    }
+
+    toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setOpen(!isOpen());
+    });
+
+    document.addEventListener('click', (e) => {
+        if (isOpen() && !menu.contains(e.target)) setOpen(false);
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && isOpen()) {
+            setOpen(false);
+            toggle.focus();
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initThemeToggle();
+    initMobileNav();
+    initTopbarMore();
+});
