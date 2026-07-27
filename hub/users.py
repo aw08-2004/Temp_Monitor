@@ -187,7 +187,8 @@ def create_user(db_path, email, full_name=None, username=None, phone=None, title
             )
     except sqlite3.IntegrityError:
         raise ValueError(f"{email} is already registered.")
-    fleet.audit(db_path, actor, "user.create", email, dict(fields))
+    fleet.audit(db_path, actor, "user.create", email, dict(fields),
+                level=fleet.LEVEL_NOTICE)
     return get_user(db_path, email)
 
 
@@ -222,7 +223,8 @@ def update_user(db_path, email, full_name=None, username=None, phone=None, title
     changes = {f: {"from": before.get(f), "to": after.get(f)} for f in _EDITABLE_FIELDS
                if before.get(f) != after.get(f)}
     if changes:
-        fleet.audit(db_path, actor, "user.update", email, {"changes": changes})
+        fleet.audit(db_path, actor, "user.update", email, {"changes": changes},
+                    level=fleet.LEVEL_NOTICE)
     return after
 
 
@@ -239,7 +241,8 @@ def delete_user(db_path, email, actor="unknown"):
         raise KeyError(email)
     with get_conn(db_path) as conn:
         conn.execute("DELETE FROM users WHERE email = ?", (email,))
-    fleet.audit(db_path, actor, "user.delete", email, None)
+    fleet.audit(db_path, actor, "user.delete", email, None,
+                level=fleet.LEVEL_NOTICE)
     return True
 
 

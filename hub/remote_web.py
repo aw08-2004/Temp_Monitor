@@ -290,6 +290,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         os.environ[TURN_SECRET_ENV] = value
         # Never put the secret itself in the audit detail -- only that it changed and how.
         fleet.audit(db_path, actor=_current_email(), action="remote_turn_secret_set",
+                    level=fleet.LEVEL_SECURITY,
                     target="hub", detail={"rotated": not provided})
         return jsonify({"secret_set": True, "secret": value}), 200
 

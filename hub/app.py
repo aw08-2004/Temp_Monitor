@@ -38,6 +38,7 @@ from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
 from users_web import create_users_blueprint
+from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
@@ -67,7 +68,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.40.1"
+HUB_VERSION = "1.42.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -233,7 +234,7 @@ def pick_primary_temp(sensors, preferred=None, explicit=None):
     is wrong here, because the hub has something the agent doesn't: the agent's own
     considered answer, already in the payload. Falling back to an arbitrary sensor would
     let a renamed or missing sensor silently swap a real 91 °C package reading for a
-    28 °C board probe, and every overheat alert on that machine would quietly stop
+    28 °C board probe, and every high-temperature alert on that machine would quietly stop
     firing. Degrade to today's behaviour instead.
 
     `explicit` (a per-machine override chosen from a dropdown of real sensor names) is
@@ -1191,6 +1192,10 @@ app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, acc
 # Registered-users directory (roadmap #8). Gated by manage_users, kept separate from
 # permission-group administration so a profile edit isn't the same trust as a grant.
 app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
+# The Audit Log tab -- the read path over the trail every other blueprint writes to.
+# view_audit_log is the perimeter; view_security_audit widens which LEVELS come back, and
+# that widening is applied in SQL, never in the page (see audit_web.py).
+app.register_blueprint(create_audit_blueprint(DB_PATH, login_required, access))
 # Package definitions, deployments, and the agent-facing payload download. LOG_DIR is
 # handed in because the blob store lives beside the database (see packages.blob_root),
 # and HUB_URL because the agent's download URL has to be absolute.
@@ -1642,7 +1647,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
         'timestamp': timestamp_str,
         'timestamp_epoch': timestamp_epoch,
         'temp': temp_value,
-        'threshold': settings.get_int(DB_PATH, "hub.overheat_threshold"),
+        'threshold': settings.get_int(DB_PATH, "hub.high_temp_threshold"),
         'low_load_threshold': settings.get_int(DB_PATH, "hub.low_load_threshold"),
         'uptime_seconds': get_latest_uptime(machine_name),
         'diagnostics': extract_diagnostics(get_latest_sensors(machine_name)),
@@ -1796,7 +1801,8 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # which machine it was sealed for, so they remain restorable.
     backups.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
-    fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor})
+    fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
+                level=fleet.LEVEL_NOTICE)
 
 
 def resolve_serial_group(serial, actor="system:dedup"):
@@ -2073,18 +2079,22 @@ def start_deploy_scheduler():
 
 
 # How often the temperature-alert evaluator wakes. A machine reports every few seconds and
-# the average is over minutes, so a 30-second cadence surfaces an overheat within a tick of
+# the average is over minutes, so a 30-second cadence surfaces a hot machine within a tick of
 # the average crossing without churning the alerts table.
-OVERHEAT_TICK_SECONDS = 30
+HIGH_TEMP_TICK_SECONDS = 30
 
 
-def evaluate_overheat_once(db_path=None, now=None):
-    """One pass of the temperature-alert evaluator. Returns (raised, resolved).
+def evaluate_high_temp_once(db_path=None, now=None):
+    """One pass of the temperature-alert evaluator. Returns (raised, episodes_ended).
 
-    Raises an overheat alert for every ONLINE machine whose AVERAGE temperature over the
-    configured window is at or above the overheat threshold, and resolves it for every
-    machine that has cooled, gone offline, or stopped reporting. The average is what makes
-    a brief spike NOT an alert -- the whole point of the feature.
+    Raises a high-temperature alert for every ONLINE machine whose AVERAGE temperature
+    over the configured window is at or above the threshold. The average is what makes a
+    brief spike NOT an alert -- the whole point of the feature.
+
+    A machine that has cooled, gone offline or stopped reporting does not have its alert
+    resolved -- alerts stay on the tab until an operator dismisses them -- but its EPISODE
+    is ended, so the next time it runs hot it accumulates a new alert beside the old one
+    instead of overwriting it.
 
     Pure except for the database; `now` is injectable so tests drive it deterministically
     without sleeping. Scope-agnostic like the duplicate_serial hook -- an operator's
@@ -2092,8 +2102,8 @@ def evaluate_overheat_once(db_path=None, now=None):
     """
     db_path = db_path or DB_PATH
     now = int(time.time() if now is None else now)
-    threshold = settings.get_int(db_path, "hub.overheat_threshold")
-    window = settings.get_int(db_path, "hub.overheat_avg_window_seconds")
+    threshold = settings.get_int(db_path, "hub.high_temp_threshold")
+    window = settings.get_int(db_path, "hub.high_temp_avg_window_seconds")
     online_window = settings.get_int(db_path, "fleet.dashboard_online_window_seconds")
     cutoff = now - window
     online_cutoff = now - online_window
@@ -2119,30 +2129,32 @@ def evaluate_overheat_once(db_path=None, now=None):
         if row["avg_temp"] is not None and row["avg_temp"] >= threshold:
             hot[row["machine"]] = row["avg_temp"]
 
-    # Reconcile against what is currently open: raise the still/newly hot, resolve every
-    # open overheat alert whose machine is no longer hot (cooled, offline, or gone). This
-    # covers machines that dropped out of the window entirely, which the query above can't
-    # return.
-    open_machines = {a.get("machine") for a in alerts.list_open(db_path)
-                     if a["kind"] == alerts.KIND_OVERHEAT and a.get("machine")}
+    # Reconcile against the episodes currently running: refresh the still/newly hot, and
+    # end the episode of every machine that is no longer hot (cooled, offline, or gone).
+    # This covers machines that dropped out of the window entirely, which the query above
+    # can't return. Ending an episode does NOT resolve the alert -- it stays on the Alerts
+    # tab until an operator dismisses it -- it only means the next heat-up starts a new one.
+    active_machines = {a.get("machine") for a in alerts.list_open(db_path)
+                       if a["kind"] == alerts.KIND_HIGH_TEMP and a.get("machine")
+                       and not a.get("episode_ended_at")}
     for machine, avg_temp in hot.items():
-        alerts.upsert_overheat(db_path, machine, avg_temp, threshold, window)
-    # Do not auto-resolve alerts when the machine cools, so they remain visible on the Alerts tab
-    # until the operator dismisses them.
-    # for machine in open_machines - set(hot):
-    #     alerts.resolve_overheat(db_path, machine)
-    return len(hot), len(open_machines - set(hot))
+        alerts.upsert_high_temp(db_path, machine, avg_temp, threshold, window, now=now)
+    ended = 0
+    for machine in active_machines - set(hot):
+        if alerts.end_high_temp_episode(db_path, machine, now=now):
+            ended += 1
+    return len(hot), ended
 
 
-def overheat_evaluator():
+def high_temp_evaluator():
     """Wake on a fixed cadence and raise/resolve temperature alerts. Same shape and
     failure discipline as retention_pruner: errors are logged, never fatal -- an
     evaluator thread that died in March must not silently stop alerting in July."""
     while True:
         try:
-            evaluate_overheat_once()
+            evaluate_high_temp_once()
         except Exception as e:
-            print(f"[overheat] Evaluation pass failed: {e}")
+            print(f"[high-temp] Evaluation pass failed: {e}")
         # Remote sessions expire on the same heartbeat (roadmap #2), same reasoning as
         # fleet.expire_stale_commands: a browser tab that vanished without a clean stop must
         # not leave a session -- and its minted TURN credential -- live forever.
@@ -2150,12 +2162,12 @@ def overheat_evaluator():
             remote.expire_sessions(DB_PATH)
         except Exception as e:
             print(f"[remote] Session expiry sweep failed: {e}")
-        time.sleep(OVERHEAT_TICK_SECONDS)
+        time.sleep(HIGH_TEMP_TICK_SECONDS)
 
 
-def start_overheat_evaluator():
-    threading.Thread(target=overheat_evaluator, daemon=True,
-                     name="overheat_evaluator").start()
+def start_high_temp_evaluator():
+    threading.Thread(target=high_temp_evaluator, daemon=True,
+                     name="high_temp_evaluator").start()
 
 
 # How often the backup scheduler wakes to ask whether a backup is due. Same reasoning as
@@ -2280,7 +2292,7 @@ start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
 start_backup_scheduler()
-start_overheat_evaluator()
+start_high_temp_evaluator()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -2335,8 +2347,8 @@ def local_logger():
             if temp is not None:
                 if last_temp and abs(temp - last_temp) >= SPIKE_THRESHOLD:
                     print(f"WARNING SPIKE: {last_temp} -> {temp}")
-                if temp >= settings.get_int(DB_PATH, "hub.overheat_threshold"):
-                    print(f"OVERHEATING: {temp}°C")
+                if temp >= settings.get_int(DB_PATH, "hub.high_temp_threshold"):
+                    print(f"HIGH TEMPERATURE: {temp}°C")
                 
                 save_and_emit_temp(LOCAL_MACHINE, temp, get_uptime_seconds())
                 last_temp = temp
@@ -2556,7 +2568,8 @@ def put_machine_primary_sensor(machine):
 
     applied = set_primary_sensor_override(machine_name, name)
     fleet.audit(DB_PATH, (session.get("user") or {}).get("email", "unknown"),
-                "machine.primary_sensor", machine_name, {"to": applied})
+                "machine.primary_sensor", machine_name, {"to": applied},
+                level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "saved", "primary_sensor_name": applied})
 
 
@@ -2589,7 +2602,8 @@ def delete_machine(machine):
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")
-    fleet.audit(DB_PATH, actor, "machine.delete", machine_name)
+    fleet.audit(DB_PATH, actor, "machine.delete", machine_name,
+                level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "deleted"}), 200
 
 
@@ -2608,10 +2622,10 @@ def get_alerts():
     keep = access.machine_filter()
     visible = []
     for alert in open_alerts:
-        # A per-machine alert (overheat) is scoped on its single subject machine; there is
+        # A per-machine alert (high temperature) is scoped on its single subject machine; there is
         # nothing to enrich or let the operator merge, so it passes straight through with
         # its `detail` payload once scope allows.
-        if alert["kind"] == alerts.KIND_OVERHEAT:
+        if alert["kind"] == alerts.KIND_HIGH_TEMP:
             machine = alert.get("machine")
             if machine and keep is not None and not keep(machine):
                 continue
@@ -2692,7 +2706,8 @@ def dismiss_alert(alert_id):
     if not alerts.dismiss(DB_PATH, alert_id):
         return jsonify({"error": "no open alert with that id"}), 404
     actor = (session.get("user") or {}).get("email", "unknown")
-    fleet.audit(DB_PATH, actor, "alert.dismiss", str(alert_id))
+    fleet.audit(DB_PATH, actor, "alert.dismiss", str(alert_id),
+                level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "dismissed"}), 200
 
 def _resolve_history_window(args):
@@ -2811,11 +2826,16 @@ def get_machine_history(machine):
 def get_daily_summary():
     """Provide daily averages and reading counts for selected date."""
     date = request.args.get("date") or today_str()
-    ensure_day_loaded_from_csv(date)
 
+    # Parse before touching the filesystem: ensure_day_loaded_from_csv interpolates the
+    # value straight into the archive filename, so an unvalidated arg is a traversal
+    # primitive. parse_request_datetime is strict (fromisoformat/strptime), which is what
+    # rules out separators -- the ordering is the whole guarantee here.
     day_start = parse_request_datetime(date)
     if day_start is None:
         return jsonify({"error": "Invalid date format; use YYYY-MM-DD."}), 400
+    ensure_day_loaded_from_csv(date)
+
     day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
     start_epoch = to_epoch_seconds(day_start)
@@ -2897,12 +2917,12 @@ def inject_nav_context():
             context["open_alert_count"] = alerts.count_open(DB_PATH)
         else:
             def _in_scope(a):
-                # Per-machine alerts (overheat) scope on their single subject; the
+                # Per-machine alerts (high temperature) scope on their single subject; the
                 # duplicate_serial `machines` list scopes if it touches any kept machine.
-                # An overheat alert carries an empty `machines`, so it must be checked on
+                # Such an alert carries an empty `machines`, so it must be checked on
                 # `machine` first -- otherwise "no machines" would read as fleet-wide and
                 # leak the count across a scope boundary.
-                if a["kind"] == alerts.KIND_OVERHEAT:
+                if a["kind"] == alerts.KIND_HIGH_TEMP:
                     return bool(a.get("machine")) and keep(a["machine"])
                 return not a.get("machines") or any(keep(m) for m in a["machines"])
             context["open_alert_count"] = sum(
@@ -2915,7 +2935,7 @@ def inject_nav_context():
 @login_required
 @access.require(permissions.VIEW)
 def index():
-    # The Dashboard no longer classifies overheating (that is the Alerts tab now, from a
+    # The Dashboard no longer classifies high temperatures (that is the Alerts tab now, from a
     # server-side average), so the threshold values it used to embed are gone.
     return render_template("index.html", hub_version=HUB_VERSION,
                            latest_companion_version=get_latest_companion_version(),
@@ -2967,7 +2987,7 @@ def permissions_page():
 def machine_page(machine):
     return render_template(
         "machine.html", machine=machine,
-        overheat_threshold=settings.get_int(DB_PATH, "hub.overheat_threshold"),
+        high_temp_threshold=settings.get_int(DB_PATH, "hub.high_temp_threshold"),
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
         enabled_metrics=enabled_history_metrics(),
         hub_version=HUB_VERSION,

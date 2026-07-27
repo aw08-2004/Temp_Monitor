@@ -2,9 +2,12 @@
 //   * duplicate_serial -- two machines sharing a serial while both online. The hub refuses
 //     to auto-merge live machines, so the operator picks a survivor here and the rest are
 //     merged into it (POST /api/machines/merge).
-//   * overheat -- a machine whose AVERAGE temperature over the configured window is at or
-//     above the overheat threshold. Raised server-side; the operator must Dismiss it (it
-//     no longer auto-resolves, to ensure the operator sees it).
+//   * high_temperature -- a machine whose AVERAGE temperature over the configured window
+//     is at or above the threshold. Raised server-side; the operator must Dismiss it (it
+//     no longer auto-resolves, to ensure the operator sees it). One card per EPISODE, so a
+//     machine that runs hot repeatedly stacks up several cards rather than having the older
+//     ones overwritten -- `episode_ended_at` says whether the machine is still hot right
+//     now or this card is a past episode.
 // Reads /api/alerts, acts via /api/machines/merge and /api/alerts/<id>/dismiss. Mirrors
 // inventory.js: build DOM with textContent (never innerHTML from data), poll to stay fresh.
 
@@ -16,7 +19,7 @@ function formatLastSeen(updatedAt) {
 }
 
 // alerts.created_at/updated_at are epoch SECONDS (unlike machine_info's timestamp strings),
-// so overheat alerts format them into a readable local time rather than showing a raw int.
+// so temperature alerts format them into a readable local time rather than showing a raw int.
 function formatEpoch(epoch) {
     return epoch ? new Date(epoch * 1000).toLocaleString() : '--';
 }
@@ -60,22 +63,25 @@ async function dismissAlert(alertId, cardEl, btnEl) {
 }
 
 function renderAlert(alert) {
-    if (alert.kind === 'overheat') return renderOverheat(alert);
+    if (alert.kind === 'high_temperature') return renderHighTemp(alert);
     return renderDuplicateSerial(alert);
 }
 
-// A temperature alert: one machine whose windowed AVERAGE crossed the threshold. There is
-// nothing to decide (unlike a merge), so the card just states the condition, links to the
-// machine, and offers Dismiss. It remains open until the operator dismisses it.
-function renderOverheat(alert) {
+// A temperature alert: one episode of a machine's windowed AVERAGE crossing the threshold.
+// There is nothing to decide (unlike a merge), so the card just states the condition, links
+// to the machine, and offers Dismiss. It remains open until the operator dismisses it, and
+// a later hot spell on the same machine arrives as its own card.
+function renderHighTemp(alert) {
     const card = document.createElement('div');
     card.className = 'card';
     card.style.marginBottom = 'var(--space-5)';
 
+    const ongoing = !alert.episode_ended_at;
+
     const title = document.createElement('div');
     title.style.fontWeight = '600';
     title.style.marginBottom = 'var(--space-2)';
-    title.textContent = `🔥 Overheating: ${alert.machine || '(unknown machine)'}`;
+    title.textContent = `High temperature${ongoing ? '' : ' (ended)'}: ${alert.machine || '(unknown machine)'}`;
     card.appendChild(title);
 
     const detail = alert.detail || {};
@@ -84,10 +90,17 @@ function renderOverheat(alert) {
     meta.style.marginBottom = 'var(--space-4)';
     const windowMins = detail.window_seconds ? Math.round(detail.window_seconds / 60) : null;
     const avg = typeof detail.avg_temp === 'number' ? detail.avg_temp.toFixed(1) : '?';
+    const peak = typeof detail.peak_temp === 'number' ? detail.peak_temp.toFixed(1) : null;
     const threshold = detail.threshold != null ? detail.threshold : '?';
-    meta.textContent =
-        `${windowMins ? windowMins + '-min' : 'Windowed'} average ${avg} °C `
-        + `is at or above the ${threshold} °C threshold. Since ${formatEpoch(alert.created_at)}.`;
+    // Past episodes lead with the peak: the last average before it cooled is the least
+    // interesting number on a card about something that already happened.
+    meta.textContent = ongoing
+        ? `${windowMins ? windowMins + '-min' : 'Windowed'} average ${avg} °C is at or above `
+          + `the ${threshold} °C threshold${peak && peak !== avg ? ` (peak ${peak} °C)` : ''}. `
+          + `Hot since ${formatEpoch(alert.created_at)}.`
+        : `Ran at or above the ${threshold} °C threshold`
+          + `${peak ? `, peaking at ${peak} °C ${windowMins ? `(${windowMins}-min average)` : ''}` : ''}. `
+          + `From ${formatEpoch(alert.created_at)} until ${formatEpoch(alert.episode_ended_at)}.`;
     card.appendChild(meta);
 
     const actions = document.createElement('div');

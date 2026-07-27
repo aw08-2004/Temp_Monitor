@@ -146,7 +146,8 @@ def create_session(db_path, machine, issued_by, consent_mode,
             (session_id, machine, str(issued_by), consent_mode, STATUS_PENDING,
              now, now + int(ttl_seconds)),
         )
-    fleet.audit(db_path, actor=issued_by, action="remote_session_start", target=machine,
+    fleet.audit(db_path, actor=issued_by, action="remote_session_start",
+                level=fleet.LEVEL_SECURITY, target=machine,
                 detail={"session_id": session_id, "consent_mode": consent_mode})
     return session_id
 
@@ -214,6 +215,7 @@ def end_session(db_path, session_id, reason, actor="hub"):
             ).fetchone()
     if ended:
         fleet.audit(db_path, actor=actor, action="remote_session_end",
+                    level=fleet.LEVEL_SECURITY,
                     target=row["machine"] if row else str(session_id),
                     detail={"session_id": str(session_id), "reason": str(reason)[:200]})
     return ended

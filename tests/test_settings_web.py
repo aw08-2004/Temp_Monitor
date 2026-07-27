@@ -107,17 +107,17 @@ def main():
               find_field(r.get_json()["settings"], "data.retention_days")["is_default"] is False)
 
         print("\n== POST /api/settings: validation ==")
-        r = c.post("/api/settings", json={"updates": {"hub.overheat_threshold": 9999}})
+        r = c.post("/api/settings", json={"updates": {"hub.high_temp_threshold": 9999}})
         check("out-of-range POST 400", r.status_code == 400)
         check("error message names the field",
-              "Overheat threshold" in r.get_json()["error"])
+              "High temperature threshold" in r.get_json()["error"])
         check("nothing persisted on rejection",
-              settings.get(db_path, "hub.overheat_threshold") == 85)
+              settings.get(db_path, "hub.high_temp_threshold") == 85)
 
         # The whole batch must be rejected, not partly applied.
         r = c.post("/api/settings", json={"updates": {
             "data.retention_days": 90,
-            "hub.overheat_threshold": 9999,
+            "hub.high_temp_threshold": 9999,
         }})
         check("mixed batch 400", r.status_code == 400)
         check("the valid field in a rejected batch is NOT applied",

@@ -85,15 +85,15 @@ REGISTRY = (
        agent=True),
 
     # ---------------- Hub: thresholds and internals ----------------
-    _s("hub.overheat_threshold", "hub", "Overheat threshold", "int", 85,
+    _s("hub.high_temp_threshold", "hub", "High temperature threshold", "int", 85,
        minimum=40, maximum=120, unit="°C",
        help="When a machine's AVERAGE temperature over the window below is at or above "
             "this, a temperature alert is raised in the Alerts tab. The machine page "
             "also highlights a live reading at or above it."),
-    _s("hub.overheat_avg_window_seconds", "hub", "Overheat averaging window", "int", 300,
-       minimum=60, maximum=3600, unit="seconds",
-       help="A machine is flagged as overheating only when its AVERAGE temperature over "
-            "this window is at or above the overheat threshold, so a brief spike doesn't "
+    _s("hub.high_temp_avg_window_seconds", "hub", "High temperature averaging window",
+       "int", 300, minimum=60, maximum=3600, unit="seconds",
+       help="A machine is flagged as running hot only when its AVERAGE temperature over "
+            "this window is at or above the threshold above, so a brief spike doesn't "
             "raise an alert. 300 = five minutes."),
     _s("hub.low_load_threshold", "hub", "Low-load threshold", "int", 40,
        minimum=0, maximum=100, unit="%",
@@ -136,8 +136,8 @@ REGISTRY = (
     # the hub stops recording that metric into new readings (stored NULL) -- "what sensor
     # should be read". collect_network is additionally agent=True: it tells the agent whether
     # to collect the network sensor category at all (see the agent's RuntimeConfig allow-list).
-    # Temperature has no toggle -- it is the core metric and drives overheat alerts, so it is
-    # always recorded.
+    # Temperature has no toggle -- it is the core metric and drives high-temperature alerts,
+    # so it is always recorded.
     _s("metrics.collect_cpu_load", "metrics", "Record CPU load", "bool", True,
        help="Chart CPU load % over time on the machine History dashboard."),
     _s("metrics.collect_memory", "metrics", "Record memory usage", "bool", True,
@@ -331,6 +331,34 @@ def get_conn(db_path):
     return conn
 
 
+# Registry keys that have been renamed, as (old key, new key). Only overridden settings are
+# stored as rows, and _build() SKIPS a row whose key is not in the registry -- so without
+# this an upgrade would silently revert a customised value to the shipped default while the
+# operator's real choice sat unreachable in the table.
+RENAMED_KEYS = (
+    ("hub.overheat_threshold", "hub.high_temp_threshold"),
+    ("hub.overheat_avg_window_seconds", "hub.high_temp_avg_window_seconds"),
+)
+
+
+def _migrate_renamed_keys(conn):
+    """Move override rows onto their current key. Returns True if anything moved.
+
+    Idempotent: there are no old rows on a fresh DB or on a second run. UPDATE OR IGNORE
+    then DELETE, so if a row already exists under the NEW key (an operator who saved the
+    setting after upgrading) their newer value wins and the stale row is dropped rather
+    than colliding on the primary key.
+    """
+    moved = False
+    for old_key, new_key in RENAMED_KEYS:
+        cur = conn.execute("UPDATE OR IGNORE settings SET key=? WHERE key=?",
+                           (new_key, old_key))
+        moved = moved or cur.rowcount > 0
+        cur = conn.execute("DELETE FROM settings WHERE key=?", (old_key,))
+        moved = moved or cur.rowcount > 0
+    return moved
+
+
 def init_settings_db(db_path):
     """Create the settings table if absent. Idempotent -- safe to call next to
     app.init_db()/fleet.init_fleet_db()/alerts.init_alerts_db() on every hub start."""
@@ -346,6 +374,12 @@ def init_settings_db(db_path):
             )
             """
         )
+        moved = _migrate_renamed_keys(conn)
+    # Outside the connection block: the cache may already have been built from the
+    # pre-migration rows in this process (tests re-init per case), and invalidate() takes
+    # its own lock.
+    if moved:
+        invalidate()
 
 
 # ---------------------------------------------------------------- coercion & validation

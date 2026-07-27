@@ -46,6 +46,12 @@ def main():
 
         superusers = {"root@x.com"}
 
+        print("\n== The capability registry is self-consistent ==")
+        # permissions_web.permissions_capabilities indexes CAPABILITY_LABELS by name, so a
+        # capability added without a label is a 500 on the group editor, not a missing row.
+        check("every capability has a label",
+              set(permissions.CAPABILITY_LABELS) == set(permissions.CAPABILITIES))
+
         print("\n== Break-glass ==")
         p = permissions.effective_permissions(db_path, "root@x.com", superusers)
         check("superuser holds every capability",

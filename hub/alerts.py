@@ -8,14 +8,23 @@ Two kinds today:
   That is a genuine collision only a human should resolve, so it lands here for an
   operator to pick a survivor and merge manually. Keyed on the serial; `machines` holds
   the colliding hostnames.
-* `overheat` -- a machine whose AVERAGE temperature over the configured window is at or
-  above the overheat threshold (app.evaluate_overheat_once). Keyed on the single
-  `machine`; `detail` holds {avg_temp, threshold, window_seconds}.
+* `high_temperature` -- a machine whose AVERAGE temperature over the configured window is
+  at or above the high-temperature threshold (app.evaluate_high_temp_once). Keyed on the
+  single `machine`; `detail` holds {avg_temp, peak_temp, threshold, window_seconds}.
 
-There is at most one OPEN alert per subject -- (kind, serial) for duplicate_serial,
-(kind, machine) for overheat. It is refreshed while the condition persists and moved to
-`resolved` once it clears (the collision is gone; the average dropped back below
-threshold), or to `dismissed` if an operator waves it off.
+There is at most one OPEN duplicate_serial alert per serial: it is refreshed while the
+collision persists and moved to `resolved` once it clears, or `dismissed` if an operator
+waves it off.
+
+High-temperature alerts instead ACCUMULATE, one row per EPISODE. An open alert stays
+visible after the machine cools (operators must see that it happened), so a single open
+row per machine would mean the next heat-up silently overwrote the previous one's numbers.
+Instead an episode is the unit: while the machine stays hot the same row is refreshed
+(`episode_ended_at` NULL, `updated_at` tracking the latest evaluation, `detail.peak_temp`
+the hottest average seen); once it cools the episode is ended (`episode_ended_at` set) but
+the alert stays open, and the next heat-up opens a NEW row alongside it. The partial unique
+index still allows only ONE ACTIVE episode per machine, so a machine that stays hot for a
+week is one alert, not 20 000.
 
 Kept free of Flask so it can be unit-tested in isolation, exactly like fleet.py; app.py
 wires thin HTTP endpoints on top of these functions.
@@ -25,7 +34,10 @@ import sqlite3
 import time
 
 KIND_DUPLICATE_SERIAL = "duplicate_serial"
-KIND_OVERHEAT = "overheat"
+KIND_HIGH_TEMP = "high_temperature"
+# What KIND_HIGH_TEMP was called before the rename. Only init_alerts_db()'s migration reads
+# it -- no other code path should ever match on it again.
+_LEGACY_KIND_HIGH_TEMP = "overheat"
 
 STATUS_OPEN = "open"
 STATUS_RESOLVED = "resolved"
@@ -59,12 +71,28 @@ def init_alerts_db(db_path):
         # Columns added after alerts first shipped. CREATE TABLE IF NOT EXISTS does
         # nothing to a table that already exists, so a hub upgrading needs these added
         # explicitly -- the same ALTER-if-missing pattern app.init_db() uses for readings.
-        # `machine` is the subject of a per-machine alert (overheat); `detail` is a JSON
+        # `machine` is the subject of a per-machine alert (high temperature); `detail` is a JSON
         # payload for kind-specific numbers. Both nullable, so old rows read NULL.
         alert_columns = {row["name"] for row in conn.execute("PRAGMA table_info(alerts)")}
         for column in ("machine", "detail"):
             if column not in alert_columns:
                 conn.execute(f"ALTER TABLE alerts ADD COLUMN {column} TEXT")
+        # `episode_ended_at` (epoch seconds) marks a high-temperature alert whose machine
+        # has cooled again. The alert stays OPEN and visible; ending the episode is what
+        # lets the next heat-up accumulate as a new row instead of overwriting this one.
+        # NULL on every pre-existing row, which reads as "still the active episode" --
+        # correct, as that is exactly what those rows were.
+        if "episode_ended_at" not in alert_columns:
+            conn.execute("ALTER TABLE alerts ADD COLUMN episode_ended_at INTEGER")
+        # The per-machine temperature alert used to be stored as kind='overheat'. Rename
+        # the rows in place so an upgrading hub keeps showing the alerts it already raised.
+        # Idempotent: matches nothing on a fresh DB or a second run. A plain UPDATE, not
+        # UPDATE OR IGNORE -- a row left behind under the old kind would be one no code
+        # path reads any more, i.e. an alert that silently disappeared. The mapping is
+        # one-to-one and nothing writes KIND_HIGH_TEMP before this runs, so the partial
+        # unique indexes below cannot be violated by it.
+        conn.execute("UPDATE alerts SET kind=? WHERE kind=?",
+                     (KIND_HIGH_TEMP, _LEGACY_KIND_HIGH_TEMP))
         # At most one OPEN alert per (kind, serial). A partial unique index lets the
         # conflict be upserted without piling up duplicate rows, while still keeping the
         # history of resolved/dismissed ones for the record.
@@ -72,11 +100,17 @@ def init_alerts_db(db_path):
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_serial "
             "ON alerts(kind, serial_number) WHERE status = 'open'"
         )
-        # The equivalent for per-machine alerts (overheat). Separate index so it does not
-        # disturb the serial one and so a duplicate_serial row (machine IS NULL) is exempt.
+        # The equivalent for per-machine alerts (high temperature), scoped to the ACTIVE episode.
+        # The older index (one open row per machine, dropped here) is what made a second
+        # heat-up overwrite the first; uniqueness on the active episode keeps the same
+        # runaway-row protection while letting ended episodes pile up beside it. Separate
+        # index so it does not disturb the serial one and so a duplicate_serial row
+        # (machine IS NULL) is exempt.
+        conn.execute("DROP INDEX IF EXISTS idx_alerts_open_kind_machine")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_machine "
-            "ON alerts(kind, machine) WHERE status = 'open' AND machine IS NOT NULL"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_machine_active "
+            "ON alerts(kind, machine) "
+            "WHERE status = 'open' AND machine IS NOT NULL AND episode_ended_at IS NULL"
         )
 
 
@@ -135,25 +169,40 @@ def resolve_for_serial(db_path, serial):
         )
 
 
-def upsert_overheat(db_path, machine, avg_temp, threshold, window_seconds):
-    """Raise or refresh the open overheat alert for `machine`. Returns the alert id.
+def upsert_high_temp(db_path, machine, avg_temp, threshold, window_seconds, now=None):
+    """Raise or refresh the ACTIVE high-temperature episode for `machine`. Returns the id.
 
-    Mirrors upsert_duplicate: at most one open row per machine, refreshed while the
-    machine stays hot so `updated_at` tracks the latest evaluation and `detail` carries
-    the current average. `detail` is the kind-specific payload the Alerts tab renders.
+    While the machine stays hot the same row is refreshed, so `updated_at` tracks the
+    latest evaluation, `detail.avg_temp` the current average and `detail.peak_temp` the
+    hottest average this episode has seen. Once the episode has been ended (the machine
+    cooled -- see end_high_temp_episode) this opens a NEW alert instead, which is how
+    repeated hot spells accumulate rather than overwriting each other.
     """
     machine = str(machine).strip()
-    detail = json.dumps({
-        "avg_temp": round(float(avg_temp), 1),
-        "threshold": int(threshold),
-        "window_seconds": int(window_seconds),
-    })
-    now = int(time.time())
+    avg_temp = round(float(avg_temp), 1)
+    now = int(time.time() if now is None else now)
     with get_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT id FROM alerts WHERE kind=? AND machine=? AND status=?",
-            (KIND_OVERHEAT, machine, STATUS_OPEN),
+            "SELECT id, detail FROM alerts "
+            "WHERE kind=? AND machine=? AND status=? AND episode_ended_at IS NULL",
+            (KIND_HIGH_TEMP, machine, STATUS_OPEN),
         ).fetchone()
+        # The peak carries across refreshes: an operator reading the card after the fact
+        # cares how hot it actually got, not what the average happened to be on the last
+        # tick before they looked.
+        peak = avg_temp
+        if row:
+            try:
+                previous = json.loads(row["detail"]) if row["detail"] else {}
+            except (TypeError, ValueError):
+                previous = {}
+            peak = max(peak, float(previous.get("peak_temp") or previous.get("avg_temp") or avg_temp))
+        detail = json.dumps({
+            "avg_temp": avg_temp,
+            "peak_temp": round(peak, 1),
+            "threshold": int(threshold),
+            "window_seconds": int(window_seconds),
+        })
         if row:
             conn.execute(
                 "UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
@@ -163,19 +212,36 @@ def upsert_overheat(db_path, machine, avg_temp, threshold, window_seconds):
         cur = conn.execute(
             "INSERT INTO alerts(kind, machine, detail, status, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (KIND_OVERHEAT, machine, detail, STATUS_OPEN, now, now),
+            (KIND_HIGH_TEMP, machine, detail, STATUS_OPEN, now, now),
         )
         return cur.lastrowid
 
 
-def resolve_overheat(db_path, machine):
-    """Mark any open overheat alert for `machine` resolved (it cooled back down)."""
+def end_high_temp_episode(db_path, machine, now=None):
+    """The machine cooled: close the ACTIVE episode without closing the alert.
+
+    The row stays `open` (and so stays on the Alerts tab until an operator dismisses it),
+    but stops being refreshed, and the next time the machine runs hot upsert_high_temp
+    raises a fresh alert beside it. Returns True if an active episode was ended.
+    """
+    machine = str(machine).strip()
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE alerts SET episode_ended_at=? "
+            "WHERE kind=? AND machine=? AND status=? AND episode_ended_at IS NULL",
+            (int(time.time() if now is None else now), KIND_HIGH_TEMP, machine, STATUS_OPEN),
+        )
+        return cur.rowcount > 0
+
+
+def resolve_high_temp(db_path, machine):
+    """Mark any open high-temperature alert for `machine` resolved (it cooled down)."""
     machine = str(machine).strip()
     with get_conn(db_path) as conn:
         conn.execute(
             "UPDATE alerts SET status=?, updated_at=? "
             "WHERE kind=? AND machine=? AND status=?",
-            (STATUS_RESOLVED, int(time.time()), KIND_OVERHEAT, machine, STATUS_OPEN),
+            (STATUS_RESOLVED, int(time.time()), KIND_HIGH_TEMP, machine, STATUS_OPEN),
         )
 
 
@@ -194,7 +260,7 @@ def list_open(db_path):
     with get_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT id, kind, serial_number, machines, machine, detail, status, "
-            "created_at, updated_at "
+            "episode_ended_at, created_at, updated_at "
             "FROM alerts WHERE status=? ORDER BY updated_at DESC, id DESC",
             (STATUS_OPEN,),
         ).fetchall()

@@ -286,6 +286,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         if not created:
             return jsonify({"error": "A backup encryption key already exists."}), 409
         fleet.audit(db_path, actor=_current_email(), action="backup_key_create",
+                    level=fleet.LEVEL_SECURITY,
                     detail={"key_id": backups.key_id(backups.decode_master_key(key_b64))})
         return jsonify({"key": key_b64, "state": _key_state()}), 201
 
@@ -304,6 +305,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         if not key_b64:
             return jsonify({"error": "No backup encryption key exists yet."}), 409
         fleet.audit(db_path, actor=_current_email(), action="backup_key_reveal",
+                    level=fleet.LEVEL_SECURITY,
                     detail={"key_id": backups.key_id(
                         backups.decode_master_key(key_b64))})
         return jsonify({"key": key_b64}), 200
@@ -325,6 +327,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             return error
         backups.set_state(db_path, backups.KEY_ESCROW_STATE_KEY, int(time.time()))
         fleet.audit(db_path, actor=_current_email(), action="backup_key_escrowed",
+                    level=fleet.LEVEL_SECURITY,
                     detail={"key_id": backups.key_id(key)})
         return jsonify({"key": _key_state()}), 200
 
@@ -457,6 +460,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         fleet.audit(db_path, actor=_current_email(), action="backup_schedule_update",
+                    level=fleet.LEVEL_NOTICE,
                     detail=updates)
         return jsonify({"schedule": _schedule_state(), "files": _files_state()}), 200
 
@@ -718,6 +722,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         online = next((backups.roster_entry(e)[1] for e in _roster([machine])), False)
         backups.request_file_run(db_path, machine, actor=_current_email())
         fleet.audit(db_path, actor=_current_email(), action="backup_files_run",
+                    level=fleet.LEVEL_NOTICE,
                     target=machine, detail={"online": online})
         _dispatch_files([machine])
         status, message = _run_state(machine, online)
@@ -751,6 +756,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             requested.append(machine)
 
         fleet.audit(db_path, actor=actor, action="backup_files_run_fleet",
+                    level=fleet.LEVEL_NOTICE,
                     detail={"requested": len(requested), "skipped": skipped})
         started = _dispatch_files(requested) if requested else 0
         return jsonify({
@@ -819,6 +825,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             before += 1 if outcome["stopped_before_start"] else 0
             in_flight += 1 if outcome["stopped_in_flight"] else 0
         fleet.audit(db_path, actor=actor, action="backup_files_cancel_fleet",
+                    level=fleet.LEVEL_NOTICE,
                     detail={"requests_cleared": cleared, "stopped_before_start": before,
                             "stopped_in_flight": in_flight})
         return jsonify({

@@ -670,13 +670,13 @@
     transform: translateY(-2px);
 }
 
-.stat-card--overheat {
+.stat-card--high-temp {
     background: var(--danger-bg);
     border-color: var(--danger);
     animation: pulse 1.6s infinite;
 }
 
-.stat-card--overheat .stat-card__value {
+.stat-card--high-temp .stat-card__value {
     color: var(--danger);
 }
 
@@ -787,6 +787,19 @@ label.checkbox input {
 .data-table--sortable th.is-sorted[data-dir="asc"]::after { content: '▲'; }
 .data-table--sortable th.is-sorted[data-dir="desc"]::after { content: '▼'; }
 .data-table--sortable th.is-sorted { color: var(--text); }
+
+/* The expanded detail payload of one audit entry. pre-wrap so a long JSON value wraps
+   instead of stretching the table, and its own scroll so an unbroken token can't push the
+   page sideways. */
+.audit-detail pre {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-sm);
+    color: var(--muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+}
 
 /* ============ Chart ============ */
 .chart-container {

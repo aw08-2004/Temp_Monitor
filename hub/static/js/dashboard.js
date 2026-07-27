@@ -1,8 +1,8 @@
 // The Dashboard is a live temperature + online-status view and deliberately does NOT flag
-// overheating. Overheating is evaluated server-side from a rolling AVERAGE (a momentary
+// high temperatures. A hot machine is evaluated server-side from a rolling AVERAGE (a momentary
 // spike is not an alert) and surfaced in the Alerts tab, so a red card here -- based on a
 // single instantaneous reading -- would both contradict the average and duplicate the
-// alert. See app.evaluate_overheat_once and the Alerts tab.
+// alert. See app.evaluate_high_temp_once and the Alerts tab.
 const socket = connectSocketWithStatus();
 const machineCards = document.getElementById('machine-cards');
 const emptyStateEl = document.getElementById('empty-state');
@@ -82,7 +82,7 @@ function updateMachineCard(machine, temp, uptimeSeconds, info) {
 
     document.getElementById('temp-' + machine).innerText = Number(temp).toFixed(1) + ' °C';
     // A card on the live Dashboard is, by construction, a machine currently reporting.
-    // Overheating is not flagged here (see the top of this file).
+    // High temperature is not flagged here (see the top of this file).
     setStatusPill(statusEl, 'ok', 'Online');
 }
 

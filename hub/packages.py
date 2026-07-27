@@ -613,7 +613,8 @@ def create_package(db_path, *, name, source, install_command=None, install_args=
     except sqlite3.IntegrityError:
         raise ValueError(f"a package named {name!r} already exists")
 
-    fleet.audit(db_path, actor=actor, action="create_package", target=name,
+    fleet.audit(db_path, actor=actor, action="create_package",
+                level=fleet.LEVEL_NOTICE, target=name,
                 detail={"package_id": package_id, "source": source["kind"]})
     return package_id
 
@@ -694,7 +695,8 @@ def update_package(db_path, package_id, *, name=None, source=None, install_comma
         if old_source.get("sha256") != new_source.get("sha256"):
             delete_blob_if_orphaned(db_path, blob_root_dir, old_source["sha256"])
 
-    fleet.audit(db_path, actor=actor, action="update_package", target=new_name,
+    fleet.audit(db_path, actor=actor, action="update_package",
+                level=fleet.LEVEL_NOTICE, target=new_name,
                 detail={"package_id": package_id})
     return get_package(db_path, package_id)
 
@@ -719,7 +721,8 @@ def delete_package(db_path, package_id, *, actor="system", blob_root_dir=None):
     if blob_root_dir and source.get("sha256"):
         delete_blob_if_orphaned(db_path, blob_root_dir, source["sha256"])
 
-    fleet.audit(db_path, actor=actor, action="delete_package", target=existing["name"],
+    fleet.audit(db_path, actor=actor, action="delete_package",
+                level=fleet.LEVEL_NOTICE, target=existing["name"],
                 detail={"package_id": package_id})
 
 
@@ -805,6 +808,7 @@ def create_deployment(db_path, *, package_id, machines, created_by, note=None,
         )
 
     fleet.audit(db_path, actor=created_by, action="create_deployment",
+                level=fleet.LEVEL_SECURITY,
                 target=package["name"],
                 detail={"deployment_id": deployment_id, "package_id": package_id,
                         "machines": targets, "window_start": window_start,
@@ -915,7 +919,8 @@ def cancel_deployment(db_path, deployment_id, actor="system"):
             "UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?",
             (DEPLOY_CANCELLED, now, str(deployment_id)),
         )
-    fleet.audit(db_path, actor=actor, action="cancel_deployment", target=deployment_id)
+    fleet.audit(db_path, actor=actor, action="cancel_deployment",
+                level=fleet.LEVEL_NOTICE, target=deployment_id)
 
 
 def retry_deployment_failures(db_path, deployment_id, actor="system"):
@@ -946,7 +951,8 @@ def retry_deployment_failures(db_path, deployment_id, actor="system"):
                 (DEPLOY_RUNNING, now, str(deployment_id)),
             )
     if requeued:
-        fleet.audit(db_path, actor=actor, action="retry_deployment", target=deployment_id,
+        fleet.audit(db_path, actor=actor, action="retry_deployment",
+                    level=fleet.LEVEL_SECURITY, target=deployment_id,
                     detail={"requeued": requeued})
     return requeued
 

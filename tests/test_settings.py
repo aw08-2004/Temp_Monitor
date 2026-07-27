@@ -50,8 +50,8 @@ def test_defaults_match_the_old_constants():
     db = fresh_db()
     # Literals on purpose -- see the module docstring.
     expected = {
-        "hub.overheat_threshold": 85,             # was app.OVERHEAT_THRESHOLD
-        "hub.overheat_avg_window_seconds": 300,   # 5-minute averaging window for alerts
+        "hub.high_temp_threshold": 85,             # was app.HIGH_TEMP_THRESHOLD
+        "hub.high_temp_avg_window_seconds": 300,   # 5-minute averaging window for alerts
         "hub.low_load_threshold": 40,             # was app.LOW_LOAD_THRESHOLD
         "hub.live_status_cache_seconds": 600,     # was app.LIVE_STATUS_CACHE_SECONDS
         "hub.live_default_window_hours": 3,       # was app.LIVE_DEFAULT_WINDOW_HOURS
@@ -86,6 +86,48 @@ def test_init_is_idempotent():
         check("second and third init do not raise", True)
     except Exception as e:
         check(f"second init raised: {e}", False)
+
+
+def test_renamed_key_migration():
+    print("\n-- an override stored under a renamed key survives the rename --")
+    db = fresh_db()
+    # As a pre-rename hub stored a customised threshold. Raw SQL: nothing can write the
+    # old key any more, which is exactly why the row would otherwise be unreachable --
+    # _build() skips keys that are not in the registry, so the operator's 95 would
+    # silently revert to the shipped 85.
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO settings(key, value_json, updated_at, updated_by) "
+                     "VALUES ('hub.overheat_threshold', '95', 1, 'op@x.com')")
+    settings.init_settings_db(db)
+    settings.invalidate()
+    check("the customised value now resolves under the new key",
+          settings.get(db, "hub.high_temp_threshold") == 95)
+    with sqlite3.connect(db) as conn:
+        left = conn.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'hub.overheat%'"
+                            ).fetchone()[0]
+    check("no row left under the old key", left == 0)
+
+    settings.init_settings_db(db)
+    settings.invalidate()
+    check("re-running the migration is a no-op",
+          settings.get(db, "hub.high_temp_threshold") == 95)
+
+    # Both rows present: an operator who saved the setting after upgrading, on a DB that
+    # still carried the old row. The value they chose most recently -- the new key -- wins.
+    db2 = fresh_db()
+    with sqlite3.connect(db2) as conn:
+        conn.execute("INSERT INTO settings(key, value_json, updated_at, updated_by) "
+                     "VALUES ('hub.overheat_threshold', '95', 1, 'op@x.com')")
+        conn.execute("INSERT INTO settings(key, value_json, updated_at, updated_by) "
+                     "VALUES ('hub.high_temp_threshold', '70', 2, 'op@x.com')")
+    settings.init_settings_db(db2)
+    settings.invalidate()
+    check("a value already saved under the new key wins",
+          settings.get(db2, "hub.high_temp_threshold") == 70)
+    with sqlite3.connect(db2) as conn:
+        left = conn.execute("SELECT COUNT(*) FROM settings WHERE key='hub.overheat_threshold'"
+                            ).fetchone()[0]
+    check("...and the stale row is dropped, not left to collide", left == 0)
 
 
 def test_table_is_sparse():
@@ -125,8 +167,8 @@ def test_set_and_reset():
 def test_coercion():
     print("\n-- JSON type sloppiness is coerced, garbage is rejected --")
     db = fresh_db()
-    settings.set_many(db, {"hub.overheat_threshold": "95"})
-    check('"95" coerces to int 95', settings.get(db, "hub.overheat_threshold") == 95)
+    settings.set_many(db, {"hub.high_temp_threshold": "95"})
+    check('"95" coerces to int 95', settings.get(db, "hub.high_temp_threshold") == 95)
 
     settings.set_many(db, {"hub.auto_update": 1})
     check("1 coerces to True", settings.get(db, "hub.auto_update") is True)
@@ -139,7 +181,7 @@ def test_coercion():
     check("sensor names are lowercased and trimmed",
           settings.get(db, "computer.primary_sensor_preference") == ["cpu package", "core max"])
 
-    check("non-numeric int is rejected", _rejects(db, {"hub.overheat_threshold": "hot"}))
+    check("non-numeric int is rejected", _rejects(db, {"hub.high_temp_threshold": "hot"}))
     check("non-list for a str_list is rejected",
           _rejects(db, {"computer.primary_sensor_preference": "cpu package"}))
     check("empty str_list is rejected",
@@ -150,27 +192,27 @@ def test_coercion():
 def test_range_validation():
     print("\n-- bounds are enforced at the edges --")
     db = fresh_db()
-    # hub.overheat_threshold is min=40 max=120.
-    check("minimum is accepted", _accepts(db, {"hub.overheat_threshold": 40}))
-    check("maximum is accepted", _accepts(db, {"hub.overheat_threshold": 120}))
-    check("below minimum is rejected", _rejects(db, {"hub.overheat_threshold": 39}))
-    check("above maximum is rejected", _rejects(db, {"hub.overheat_threshold": 121}))
+    # hub.high_temp_threshold is min=40 max=120.
+    check("minimum is accepted", _accepts(db, {"hub.high_temp_threshold": 40}))
+    check("maximum is accepted", _accepts(db, {"hub.high_temp_threshold": 120}))
+    check("below minimum is rejected", _rejects(db, {"hub.high_temp_threshold": 39}))
+    check("above maximum is rejected", _rejects(db, {"hub.high_temp_threshold": 121}))
 
-    # hub.overheat_avg_window_seconds is min=60 max=3600.
+    # hub.high_temp_avg_window_seconds is min=60 max=3600.
     check("window minimum is accepted",
-          _accepts(db, {"hub.overheat_avg_window_seconds": 60}))
+          _accepts(db, {"hub.high_temp_avg_window_seconds": 60}))
     check("window maximum is accepted",
-          _accepts(db, {"hub.overheat_avg_window_seconds": 3600}))
+          _accepts(db, {"hub.high_temp_avg_window_seconds": 3600}))
     check("window below minimum is rejected",
-          _rejects(db, {"hub.overheat_avg_window_seconds": 59}))
+          _rejects(db, {"hub.high_temp_avg_window_seconds": 59}))
     check("window above maximum is rejected",
-          _rejects(db, {"hub.overheat_avg_window_seconds": 3601}))
+          _rejects(db, {"hub.high_temp_avg_window_seconds": 3601}))
 
     try:
-        settings.set_many(db, {"hub.overheat_threshold": 5})
+        settings.set_many(db, {"hub.high_temp_threshold": 5})
         check("out-of-range message names the field", False)
     except ValueError as e:
-        check("out-of-range message names the field", "Overheat threshold" in str(e))
+        check("out-of-range message names the field", "High temperature threshold" in str(e))
         check("out-of-range message states the bound", "40" in str(e))
 
 
@@ -181,7 +223,7 @@ def test_set_many_is_all_or_nothing():
     try:
         settings.set_many(db, {
             "data.retention_days": 90,             # valid
-            "hub.overheat_threshold": 9999,        # out of range
+            "hub.high_temp_threshold": 9999,        # out of range
             "hub.low_load_threshold": 50,          # valid
         })
         check("batch with an invalid field raises", False)
@@ -368,6 +410,7 @@ def _accepts(db, updates):
 if __name__ == "__main__":
     test_defaults_match_the_old_constants()
     test_init_is_idempotent()
+    test_renamed_key_migration()
     test_table_is_sparse()
     test_set_and_reset()
     test_coercion()

@@ -5,7 +5,7 @@ The load-bearing case is test_absent_sensor_defers_to_agent. When the configured
 isn't in the block, the picker must return None so the caller keeps the temperature the
 AGENT chose. The tempting alternative -- fall back to any CPU temperature, the way
 SensorReader does on the endpoint -- would let a renamed sensor silently swap a real
-91 °C package reading for a 28 °C board probe and stop every overheat alert on that
+91 °C package reading for a 28 °C board probe and stop every high-temperature alert on that
 machine. That failure is silent, plausible-looking, and safety-relevant, so it gets an
 explicit test asserting None rather than "something reasonable".
 

@@ -1,0 +1,54 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so newly published queries reach the default branch without a push.
+    - cron: "23 4 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The agent targets net10.0-windows and publishes self-contained win-x64,
+          # so it cannot be built on a Linux runner. build-mode "none" extracts the
+          # C# sources directly and skips the compile.
+          - language: csharp
+            build-mode: none
+          # hub/ (Flask) plus companion.py, sign_release.py and tests/.
+          - language: python
+            build-mode: none
+          # hub/static/ frontend.
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended adds lower-severity / higher-precision-cost queries on
+          # top of the default suite; quality adds maintainability rules.
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

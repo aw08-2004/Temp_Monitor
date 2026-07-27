@@ -34,16 +34,16 @@ function requestNotificationPermission() {
 // Distinguishes "hot because it's under heavy load" (expected) from "hot while
 // mostly idle" (worth investigating -- possible cooling/thermal-paste/dust issue).
 // Unknown load (older companion, no sensors yet) conservatively reads as "investigate".
-function classifyOverheatStatus(temp, overheatThreshold, cpuLoadPct, lowLoadThreshold) {
-    if (temp === undefined || temp === null || temp < overheatThreshold) return 'normal';
-    if (typeof cpuLoadPct === 'number' && cpuLoadPct >= lowLoadThreshold) return 'overheat-expected';
-    return 'overheat-investigate';
+function classifyTemperatureStatus(temp, highTempThreshold, cpuLoadPct, lowLoadThreshold) {
+    if (temp === undefined || temp === null || temp < highTempThreshold) return 'normal';
+    if (typeof cpuLoadPct === 'number' && cpuLoadPct >= lowLoadThreshold) return 'high-temp-expected';
+    return 'high-temp-investigate';
 }
 
-function notifyOverheat(machine, temp) {
+function notifyHighTemp(machine, temp) {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    new Notification('CPU Overheat Alert!', {
-        body: `${machine} is overheating at ${temp}°C!`,
+    new Notification('High temperature', {
+        body: `${machine} is running hot: ${temp} °C`,
         icon: 'https://cdn-icons-png.flaticon.com/512/3248/3248139.png'
     });
 }

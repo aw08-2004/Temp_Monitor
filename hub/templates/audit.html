@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Audit Log - FleetHub{% endblock %}
+{% block content %}
+{#
+   Structure only. Rows are rendered by audit.js from GET /api/audit, which is also where
+   the level perimeter is enforced -- a security row an operator may not read never reaches
+   this page, so there is nothing here that hides one.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Audit Log</h1>
+        <p class="stat-card__meta">
+            Who did what on this hub: every command issued, machine changed, package deployed,
+            account edited, and key touched. Append-only and not machine-scoped -- entries are
+            never rewritten or deleted, so this is the record to reach for after the fact.
+        </p>
+    </div>
+</div>
+
+<div class="toolbar" style="margin-bottom: var(--space-4); flex-wrap: wrap; gap: var(--space-3);">
+    <input class="input" id="audit-search" type="search" autocomplete="off"
+           placeholder="Search actor, action, or target" style="max-width: 22rem; width: 100%;">
+    <input class="input" id="audit-actor" list="audit-actor-list" autocomplete="off"
+           placeholder="Actor" style="max-width: 16rem;">
+    <datalist id="audit-actor-list"></datalist>
+    <select class="input" id="audit-level" style="max-width: 12rem;">
+        <option value="">All levels</option>
+    </select>
+    <label class="stat-card__meta" for="audit-from">From</label>
+    <input class="input" id="audit-from" type="date" style="max-width: 11rem;">
+    <label class="stat-card__meta" for="audit-to">To</label>
+    <input class="input" id="audit-to" type="date" style="max-width: 11rem;">
+    <button class="btn" type="button" id="audit-clear">Clear</button>
+</div>
+
+<div id="audit-host"></div>
+<p class="stat-card__meta" id="audit-status" style="margin-top: var(--space-4);"></p>
+<button class="btn" type="button" id="audit-more" hidden style="margin-top: var(--space-3);">Load more</button>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/audit.js') }}"></script>
+{% endblock %}

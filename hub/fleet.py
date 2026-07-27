@@ -14,6 +14,10 @@ carry that weight:
     (ALLOWED_EMAILS). Every issue/claim/completion lands in the append-only
     audit_log, including the full params -- with no second gate, that trail is
     the accountability control, so it must never be allowed to go quiet.
+    Operators read it back on the Audit Log tab (audit_web.py, list_audit below).
+    Note audit_log is never pruned, by design -- if that ever needs bounding, add a
+    `data.audit_retention_days` setting consumed by app.retention_pruner rather than
+    deleting rows from anywhere else.
 
 Commands are NOT signed. They used to be: high-risk types (run_script,
 install_driver, update_bios) once required an Ed25519 signature made with an
@@ -109,6 +113,89 @@ DEFAULT_COMMAND_TTL_SECONDS = 15 * 60
 # any contact". Kept a bit above the companion's report cadence so a single missed
 # report doesn't flap the status.
 DEFAULT_OFFLINE_AFTER_SECONDS = 90
+
+
+# ================================
+# AUDIT LEVELS
+# ================================
+# Every audit row carries a level, and the level decides who may READ it: the Audit Log tab
+# shows info + notice to anyone with `view_audit_log`, and security rows only to holders of
+# `view_security_audit` as well (permissions.py). The split is about sensitivity of the
+# RECORD, not about how much the action matters -- a failed hub backup is operationally
+# louder than a permission-group edit, but only one of them tells you how to attack the hub.
+LEVEL_INFO = "info"          # routine bookkeeping, mostly written by agents or the hub itself
+LEVEL_NOTICE = "notice"      # an operator changed fleet state or configuration
+LEVEL_SECURITY = "security"  # identity, authorization, secrets, code execution, remote access
+AUDIT_LEVELS = (LEVEL_INFO, LEVEL_NOTICE, LEVEL_SECURITY)
+
+# Fail CLOSED. An action added later without a mapping, or a caller passing something
+# unrecognised, is treated as security-sensitive: briefly invisible to ordinary auditors is
+# a much cheaper mistake than silently exposing the next backup-key operation to everyone.
+DEFAULT_AUDIT_LEVEL = LEVEL_SECURITY
+
+# The level for every action string the hub writes today. Call sites pass `level=`
+# explicitly; this is the fallback that makes a levelless row impossible, and the map the
+# one-time backfill of pre-level history is derived from -- so it must stay complete.
+ACTION_LEVELS = {
+    # -- security: grants or reveals credentials, runs code as SYSTEM, opens a session,
+    # or changes who can do any of that.
+    "enroll": LEVEL_SECURITY,
+    "revoke_agent": LEVEL_SECURITY,
+    "issue_command": LEVEL_SECURITY,
+    "create_deployment": LEVEL_SECURITY,
+    "retry_deployment": LEVEL_SECURITY,
+    "remote_session_start": LEVEL_SECURITY,
+    "remote_session_end": LEVEL_SECURITY,
+    "remote_turn_secret_set": LEVEL_SECURITY,
+    "backup_key_create": LEVEL_SECURITY,
+    "backup_key_reveal": LEVEL_SECURITY,
+    "backup_key_escrowed": LEVEL_SECURITY,
+    "backup_restore_start": LEVEL_SECURITY,
+    "permission_group.create": LEVEL_SECURITY,
+    "permission_group.update": LEVEL_SECURITY,
+    "permission_group.delete": LEVEL_SECURITY,
+    # Settings are security-level because hub.auto_update decides whether this hub pulls
+    # and runs new code, and the retention keys decide how much history survives.
+    "settings.update": LEVEL_SECURITY,
+    "settings.reset": LEVEL_SECURITY,
+    # -- notice: an operator changed fleet state or configuration.
+    "machine.merge": LEVEL_NOTICE,
+    "machine.delete": LEVEL_NOTICE,
+    "machine.primary_sensor": LEVEL_NOTICE,
+    "alert.dismiss": LEVEL_NOTICE,
+    # The user directory is a profile list, not access -- permission groups grant that.
+    "user.create": LEVEL_NOTICE,
+    "user.update": LEVEL_NOTICE,
+    "user.delete": LEVEL_NOTICE,
+    "create_package": LEVEL_NOTICE,
+    "update_package": LEVEL_NOTICE,
+    "delete_package": LEVEL_NOTICE,
+    "upload_package_file": LEVEL_NOTICE,
+    "cancel_deployment": LEVEL_NOTICE,
+    "backup_destination_create": LEVEL_NOTICE,
+    "backup_destination_update": LEVEL_NOTICE,
+    "backup_destination_delete": LEVEL_NOTICE,
+    "backup_destination_test": LEVEL_NOTICE,
+    "backup_machine_config": LEVEL_NOTICE,
+    "backup_schedule_update": LEVEL_NOTICE,
+    "backup_files_run": LEVEL_NOTICE,
+    "backup_files_run_fleet": LEVEL_NOTICE,
+    "backup_files_cancel": LEVEL_NOTICE,
+    "backup_files_cancel_fleet": LEVEL_NOTICE,
+    # -- info: routine bookkeeping, the consequence of something already audited above.
+    "claim_commands": LEVEL_INFO,
+    "complete_command": LEVEL_INFO,
+    "cancel_command": LEVEL_INFO,
+    "create_favorite": LEVEL_INFO,
+    "update_favorite": LEVEL_INFO,
+    "delete_favorite": LEVEL_INFO,
+    "backup_files": LEVEL_INFO,
+    "backup_files_discard": LEVEL_INFO,
+    "backup_hub_db": LEVEL_INFO,
+    "backup_hub_db_failed": LEVEL_INFO,
+    "backup_restore": LEVEL_INFO,
+    "backup_restore_failed": LEVEL_INFO,
+}
 
 
 # ================================
@@ -255,21 +342,179 @@ def init_fleet_db(db_path):
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
+        # `level` decides who may READ the row (see AUDIT_LEVELS). Nullable rather than
+        # NOT NULL DEFAULT: a default would stamp every historic row with one level and
+        # make it indistinguishable from a real classification. Readers COALESCE NULL to
+        # the fail-closed default, so an unlevelled row is hidden, never leaked.
+        audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_log)")}
+        if "level" not in audit_columns:
+            conn.execute("ALTER TABLE audit_log ADD COLUMN level TEXT")
+        # One-time backfill of history, from the same map new writes fall back to. Guarded
+        # by a cheap EXISTS so a hub with a large audit_log doesn't rescan it every boot.
+        if conn.execute("SELECT 1 FROM audit_log WHERE level IS NULL LIMIT 1").fetchone():
+            for action, level in ACTION_LEVELS.items():
+                conn.execute("UPDATE audit_log SET level=? WHERE level IS NULL AND action=?",
+                             (level, action))
+            conn.execute("UPDATE audit_log SET level=? WHERE level IS NULL",
+                         (DEFAULT_AUDIT_LEVEL,))
+        # (ts, id) is scanned in reverse to satisfy both "ORDER BY ts DESC, id DESC" and
+        # the keyset cursor without a sort; the other two serve the actor filter and the
+        # level perimeter, which is the predicate that rejects the most rows for an
+        # operator without the security capability.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts_id ON audit_log(ts, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor_ts ON audit_log(actor, ts)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_level_ts ON audit_log(level, ts)")
 
 
-def audit(db_path, actor, action, target=None, detail=None):
+def _normalize_level(level, action):
+    """The level to store: what the caller asked for, else what the action maps to.
+
+    Never returns None or an unknown value -- a levelless row would be unreadable by
+    everyone (readers COALESCE to security) or, worse, readable by the wrong people.
+    """
+    text = str(level or "").strip().lower()
+    if text in AUDIT_LEVELS:
+        return text
+    return ACTION_LEVELS.get(str(action), DEFAULT_AUDIT_LEVEL)
+
+
+def audit(db_path, actor, action, target=None, detail=None, level=None):
     """Record one line in the append-only audit trail. Never raises on a bad
-    detail payload -- auditing must not be able to break the action it records."""
+    detail payload -- auditing must not be able to break the action it records.
+
+    `level` is one of AUDIT_LEVELS and decides who can read the row back; omit it and
+    ACTION_LEVELS decides, so adding an audit call can never produce an unclassified row.
+    """
     try:
         detail_json = json.dumps(detail, sort_keys=True) if detail is not None else None
     except (TypeError, ValueError):
         detail_json = json.dumps({"_unserializable": str(detail)})
     with get_conn(db_path) as conn:
         conn.execute(
-            "INSERT INTO audit_log(ts, actor, action, target, detail_json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (int(time.time()), str(actor), str(action), target, detail_json),
+            "INSERT INTO audit_log(ts, actor, action, target, detail_json, level) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (int(time.time()), str(actor), str(action), target, detail_json,
+             _normalize_level(level, action)),
         )
+
+
+def _decode_audit_row(row):
+    d = {"id": row["id"], "ts": row["ts"], "actor": row["actor"], "action": row["action"],
+         "target": row["target"], "level": row["level"]}
+    try:
+        d["detail"] = json.loads(row["detail_json"]) if row["detail_json"] else None
+    except (TypeError, ValueError):
+        # A row written before a serialization fix, or hand-edited. The audit line itself
+        # is still evidence; losing the whole page over its payload would not be.
+        d["detail"] = None
+    return d
+
+
+def _audit_level_clause(levels):
+    """(sql, params) restricting to `levels`, or (None, None) for no restriction.
+
+    Returns the sentinel ("", None) when the allowed set is empty -- callers must treat
+    that as "return nothing", never as "no filter".
+    """
+    if levels is None:
+        return None, None
+    allowed = [lv for lv in AUDIT_LEVELS if lv in set(levels)]
+    if not allowed:
+        return "", None
+    placeholders = ",".join("?" for _ in allowed)
+    return (f"COALESCE(level, ?) IN ({placeholders})", [DEFAULT_AUDIT_LEVEL] + allowed)
+
+
+def _like_needle(text):
+    """A LIKE pattern matching `text` literally. Without escaping, an operator searching
+    for "100%" would match everything after "100"."""
+    escaped = str(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def list_audit(db_path, q=None, actor=None, action=None, since=None, until=None,
+               levels=None, before_ts=None, before_id=None, limit=50):
+    """One page of the audit trail, newest first.
+
+    `levels` is the set of levels the CALLER is allowed to read. It is the security
+    perimeter, so it is applied HERE, in SQL -- never by the caller filtering the result,
+    and never from anything the client sent. None means unrestricted and is for internal
+    callers and tests only.
+
+    `since`/`until` are inclusive epoch seconds. `before_ts`/`before_id` is the cursor from
+    a previous page: paging is keyset rather than OFFSET because `ts` is whole seconds and
+    bulk operations write many rows within one, so an OFFSET page would duplicate and skip
+    rows as new lines land while an operator reads.
+
+    Returns {"entries": [{id, ts, actor, action, target, level, detail}],
+             "has_more": bool, "next_cursor": {"ts", "id"} or None}.
+    """
+    limit = max(1, min(200, int(limit or 50)))
+    empty = {"entries": [], "has_more": False, "next_cursor": None}
+
+    clauses, params = [], []
+    level_sql, level_params = _audit_level_clause(levels)
+    if level_sql == "":
+        return empty                      # caller may read nothing at all
+    if level_sql:
+        clauses.append(level_sql)
+        params.extend(level_params)
+    if actor:
+        clauses.append("actor = ? COLLATE NOCASE")
+        params.append(str(actor).strip())
+    if action:
+        clauses.append("action = ?")
+        params.append(str(action).strip())
+    if since is not None:
+        clauses.append("ts >= ?")
+        params.append(int(since))
+    if until is not None:
+        clauses.append("ts <= ?")
+        params.append(int(until))
+    if q:
+        needle = _like_needle(str(q).strip())
+        clauses.append("(actor LIKE ? ESCAPE '\\' OR action LIKE ? ESCAPE '\\' "
+                       "OR IFNULL(target, '') LIKE ? ESCAPE '\\')")
+        params.extend([needle, needle, needle])
+    if before_ts is not None and before_id is not None:
+        clauses.append("(ts < ? OR (ts = ? AND id < ?))")
+        params.extend([int(before_ts), int(before_ts), int(before_id)])
+
+    sql = ("SELECT id, ts, actor, action, target, detail_json, "
+           "COALESCE(level, ?) AS level FROM audit_log")
+    head = [DEFAULT_AUDIT_LEVEL]
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY ts DESC, id DESC LIMIT ?"
+
+    with get_conn(db_path) as conn:
+        # One extra row answers "is there another page?" without a COUNT, which behind a
+        # leading-wildcard LIKE would scan the whole table on every keystroke.
+        rows = conn.execute(sql, head + params + [limit + 1]).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    entries = [_decode_audit_row(r) for r in rows]
+    cursor = ({"ts": entries[-1]["ts"], "id": entries[-1]["id"]}
+              if entries and has_more else None)
+    return {"entries": entries, "has_more": has_more, "next_cursor": cursor}
+
+
+def list_audit_actors(db_path, levels=None, limit=200):
+    """Distinct actors, for the tab's actor filter. Takes the SAME level perimeter as
+    list_audit: an actor who only ever appears in security rows must not be enumerable by
+    someone who cannot read those rows."""
+    limit = max(1, min(1000, int(limit or 200)))
+    level_sql, level_params = _audit_level_clause(levels)
+    if level_sql == "":
+        return []
+    sql = "SELECT DISTINCT actor FROM audit_log"
+    params = []
+    if level_sql:
+        sql += " WHERE " + level_sql
+        params.extend(level_params)
+    sql += " ORDER BY actor COLLATE NOCASE LIMIT ?"
+    with get_conn(db_path) as conn:
+        return [r["actor"] for r in conn.execute(sql, params + [limit]).fetchall()]
 
 
 # ================================
@@ -306,7 +551,8 @@ def enroll_agent(db_path, machine, provided_secret, expected_secret):
             "VALUES (?, ?, ?, ?, ?, 0)",
             (agent_id, machine, _hash_token(token), now, now),
         )
-    audit(db_path, actor=f"agent:{machine}", action="enroll", target=machine,
+    audit(db_path, actor=f"agent:{machine}", action="enroll",
+          level=LEVEL_SECURITY, target=machine,
           detail={"agent_id": agent_id})
     return agent_id, token
 
@@ -337,7 +583,8 @@ def authenticate_agent(db_path, agent_id, token, touch=True):
 def revoke_agent(db_path, agent_id, actor="system"):
     with get_conn(db_path) as conn:
         conn.execute("UPDATE agents SET revoked = 1 WHERE agent_id = ?", (str(agent_id),))
-    audit(db_path, actor=actor, action="revoke_agent", target=agent_id)
+    audit(db_path, actor=actor, action="revoke_agent",
+          level=LEVEL_SECURITY, target=agent_id)
 
 
 def touch_last_seen(db_path, machine):
@@ -448,7 +695,8 @@ def create_command(db_path, machine, command_type, params, issued_by,
                 now, now + int(ttl_seconds), STATUS_PENDING,
             ),
         )
-    audit(db_path, actor=issued_by, action="issue_command", target=machine,
+    audit(db_path, actor=issued_by, action="issue_command",
+          level=LEVEL_SECURITY, target=machine,
           detail={"command_id": command_id, "type": command_type,
                   "params": params_json[:AUDIT_PARAMS_MAX_CHARS]})
     return command_id
@@ -502,7 +750,8 @@ def cancel_command_if_pending(db_path, command_id):
         )
         pending = (cur.rowcount or 0) == 1
     if pending:
-        audit(db_path, actor="hub", action="cancel_command", target=str(command_id))
+        audit(db_path, actor="hub", action="cancel_command",
+              level=LEVEL_INFO, target=str(command_id))
     return pending
 
 
@@ -540,7 +789,8 @@ def claim_commands(db_path, agent_id, machine):
                 "issued_by": row["issued_by"],
             })
     if claimed:
-        audit(db_path, actor=f"agent:{agent_id}", action="claim_commands", target=machine,
+        audit(db_path, actor=f"agent:{agent_id}", action="claim_commands",
+              level=LEVEL_INFO, target=machine,
               detail={"command_ids": [c["id"] for c in claimed]})
     return claimed
 
@@ -577,7 +827,8 @@ def complete_command(db_path, command_id, agent_id, success, output=None, cwd=No
             (STATUS_DONE if success else STATUS_FAILED, command_id),
         )
         machine = row["machine"]
-    audit(db_path, actor=f"agent:{agent_id}", action="complete_command", target=machine,
+    audit(db_path, actor=f"agent:{agent_id}", action="complete_command",
+          level=LEVEL_INFO, target=machine,
           detail={"command_id": command_id, "success": bool(success)})
     return machine
 
@@ -841,7 +1092,7 @@ def create_favorite(db_path, email, name, command_type, params, shared=False):
         # The unique (owner, name) index. Surfaced as ValueError so the HTTP layer
         # answers 400 rather than leaking a driver error as a 500.
         raise ValueError(f"you already have a favorite named {name!r}")
-    audit(db_path, actor=email, action="create_favorite", target=name,
+    audit(db_path, actor=email, action="create_favorite", level=LEVEL_INFO, target=name,
           detail={"favorite_id": favorite_id, "type": command_type, "shared": bool(shared)})
     return favorite_id
 
@@ -878,7 +1129,7 @@ def update_favorite(db_path, favorite_id, email, name=None, command_type=None,
             )
         except sqlite3.IntegrityError:
             raise ValueError(f"you already have a favorite named {new_name!r}")
-    audit(db_path, actor=email, action="update_favorite", target=new_name,
+    audit(db_path, actor=email, action="update_favorite", level=LEVEL_INFO, target=new_name,
           detail={"favorite_id": favorite_id, "shared": bool(new_shared)})
 
 
@@ -894,7 +1145,8 @@ def delete_favorite(db_path, favorite_id, email):
         if row["owner_email"] != email:
             raise PermissionError("only the owner can delete this favorite")
         conn.execute("DELETE FROM fleet_favorites WHERE id = ?", (favorite_id,))
-    audit(db_path, actor=email, action="delete_favorite", target=row["name"],
+    audit(db_path, actor=email, action="delete_favorite",
+          level=LEVEL_INFO, target=row["name"],
           detail={"favorite_id": favorite_id})
 
 

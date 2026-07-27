@@ -147,6 +147,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         except OSError as e:
             return jsonify({"error": f"Could not store the file: {e}"}), 500
         fleet.audit(db_path, actor=_current_email(), action="upload_package_file",
+                    level=fleet.LEVEL_NOTICE,
                     target=os.path.basename(upload.filename),
                     detail={"sha256": sha256, "bytes": size})
         return jsonify({

@@ -1,6 +1,6 @@
 const config = document.getElementById('machine-config');
 const MACHINE = config.dataset.machine;
-const OVERHEAT_THRESHOLD = Number(config.dataset.overheatThreshold);
+const HIGH_TEMP_THRESHOLD = Number(config.dataset.highTempThreshold);
 const LOW_LOAD_THRESHOLD = Number(config.dataset.lowLoadThreshold);
 
 const zoomPlugin = window['chartjs-plugin-zoom'];
@@ -450,7 +450,7 @@ let lastCpuLoadPct = null;
 function applyTemp(temp) {
     if (temp === undefined || temp === null) return;
     document.getElementById('stat-temp').textContent = Number(temp).toFixed(1) + ' °C';
-    tempCard.classList.remove('stat-card--overheat');
+    tempCard.classList.remove('stat-card--high-temp');
 }
 
 function formatMetric(value, suffix) {

@@ -1405,7 +1405,8 @@ def create_destination(db_path, log_dir, master_key, *, name, kind, config, secr
         raise ValueError(f"A destination named {name!r} already exists.")
     # Written after the row, so a failed insert cannot leave an orphan secret behind.
     store_secret(log_dir, master_key, destination_id, clean_secret)
-    fleet.audit(db_path, actor=actor, action="backup_destination_create", target=name,
+    fleet.audit(db_path, actor=actor, action="backup_destination_create",
+                level=fleet.LEVEL_NOTICE, target=name,
                 detail={"id": destination_id, "kind": kind})
     return destination_id
 
@@ -1434,6 +1435,7 @@ def update_destination(db_path, log_dir, master_key, destination_id, *, name=Non
     if clean_secret is not None:
         store_secret(log_dir, master_key, destination_id, clean_secret)
     fleet.audit(db_path, actor=actor, action="backup_destination_update",
+                level=fleet.LEVEL_NOTICE,
                 target=new_name,
                 detail={"id": destination_id, "credentials_changed": clean_secret is not None})
     return get_destination(db_path, destination_id, log_dir)
@@ -1450,6 +1452,7 @@ def delete_destination(db_path, log_dir, destination_id, actor="system"):
     # deleting a destination must not erase the evidence that a backup ever ran. The rows
     # keep the id, which list_runs() resolves to "(deleted destination)".
     fleet.audit(db_path, actor=actor, action="backup_destination_delete",
+                level=fleet.LEVEL_NOTICE,
                 target=current["name"], detail={"id": destination_id})
 
 
@@ -1494,6 +1497,7 @@ def probe_destination(db_path, log_dir, destination_id, actor="system"):
         except BackupError:
             pass
     fleet.audit(db_path, actor=actor, action="backup_destination_test",
+                level=fleet.LEVEL_NOTICE,
                 target=record["name"], detail={"id": destination_id})
     return f"Wrote, read back and deleted {key} successfully."
 
@@ -1632,7 +1636,8 @@ def set_machine_config(db_path, machine, *, enabled=None, destination_id=None,
             (machine, None if enabled is None else int(enabled), destination_id,
              json.dumps(include), json.dumps(exclude), now, actor),
         )
-    fleet.audit(db_path, actor=actor, action="backup_machine_config", target=machine,
+    fleet.audit(db_path, actor=actor, action="backup_machine_config",
+                level=fleet.LEVEL_NOTICE, target=machine,
                 detail={"enabled": enabled, "destination_id": destination_id,
                         "include": include, "exclude": exclude})
     return get_machine_config(db_path, machine)
@@ -1732,7 +1737,8 @@ def cancel_file_run(db_path, machine, actor="system"):
     if not any(out.values()):
         out["nothing_to_cancel"] = True
     else:
-        fleet.audit(db_path, actor=actor, action="backup_files_cancel", target=machine,
+        fleet.audit(db_path, actor=actor, action="backup_files_cancel",
+                    level=fleet.LEVEL_NOTICE, target=machine,
                     detail={k: v for k, v in out.items() if v})
     return out
 
@@ -2070,13 +2076,15 @@ def _backup_hub_database(db_path, log_dir, destination_id, *, keep, trigger, act
                     source_bytes=source_bytes, stored_bytes=stored_bytes,
                     artifact_sha256=digest, error=None)
         set_state(db_path, LAST_SUCCESS_STATE_KEY, int(time.time()))
-        fleet.audit(db_path, actor=actor, action="backup_hub_db", target=key,
+        fleet.audit(db_path, actor=actor, action="backup_hub_db",
+                    level=fleet.LEVEL_INFO, target=key,
                     detail={"run_id": run_id, "destination": record["name"],
                             "stored_bytes": stored_bytes, "rotated_out": len(removed),
                             "trigger": trigger})
     except (BackupError, ValueError, OSError, sqlite3.Error) as e:
         _finish_run(db_path, run_id, RUN_FAILED, object_key=key, error=str(e))
-        fleet.audit(db_path, actor=actor, action="backup_hub_db_failed", target=key,
+        fleet.audit(db_path, actor=actor, action="backup_hub_db_failed",
+                    level=fleet.LEVEL_INFO, target=key,
                     detail={"run_id": run_id, "error": str(e)[:MAX_ERROR_CHARS]})
     finally:
         for path in (snapshot, artifact):
@@ -2421,6 +2429,7 @@ def _discard_cancelled_object(db_path, log_dir, run):
         client, _record = open_client(db_path, log_dir, run["destination_id"])
         client.delete(run["object_key"])
         fleet.audit(db_path, actor="hub", action="backup_files_discard",
+                    level=fleet.LEVEL_INFO,
                     target=run["machine"], detail={"object_key": run["object_key"]})
     except Exception as e:                      # noqa: BLE001 -- see docstring
         print(f"[backup] Could not discard cancelled archive "
@@ -2873,7 +2882,8 @@ def ingest_file_result(db_path, log_dir, run_id, result, *, keep_chains=4):
         # A rotation failure must not turn a successful backup red -- the archive IS
         # uploaded and IS restorable. Logged, and the next run tries again.
         print(f"[backup] Rotation for {run['machine']} failed: {e}")
-    fleet.audit(db_path, actor="agent", action="backup_files", target=run["machine"],
+    fleet.audit(db_path, actor="agent", action="backup_files",
+                level=fleet.LEVEL_INFO, target=run["machine"],
                 detail={"run_id": run_id, "files": len(files),
                         "stored_bytes": stored_bytes, "chain": run["chain_id"],
                         "sequence": run["sequence"]})
@@ -3095,7 +3105,8 @@ def create_restore(db_path, *, machine, source_machine, destination_id, plan,
     # Audited with the SHAPE of the restore, never the file list: the point of the record
     # is "who pulled whose data onto which machine", and a 40,000-path audit row would
     # bury exactly that.
-    fleet.audit(db_path, actor=actor, action="backup_restore_start", target=machine,
+    fleet.audit(db_path, actor=actor, action="backup_restore_start",
+                level=fleet.LEVEL_SECURITY, target=machine,
                 detail={"restore_id": restore_id, "source_machine": source_machine,
                         "files": plan.get("file_count"),
                         "archives": len(plan.get("archives") or []),
@@ -3230,6 +3241,7 @@ def complete_restore(db_path, restore_id, *, restored=None, bytes_restored=None,
     if restore is not None:
         fleet.audit(db_path, actor=actor,
                     action="backup_restore_failed" if error else "backup_restore",
+                    level=fleet.LEVEL_INFO,
                     target=restore["machine"],
                     detail={"restore_id": restore_id,
                             "source_machine": restore["source_machine"],

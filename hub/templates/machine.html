@@ -6,13 +6,22 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
 {% endif %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+{# Version-pinned with subresource integrity -- see history.html for why. #}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+        integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
+        integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"
+        integrity="sha384-dwwI6ICEN/0ZQlS5owhUa/6ZzvwUPmjH45bFVCAcjgjTulbHJvlE+TGU3g1k0N3R"
+        crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"
+        integrity="sha384-ijk2QwnixVP19l5ENflXHY2/BMo9ANUiTqH6MiVk6i7wp68I6wjNQFOcyayHgClg"
+        crossorigin="anonymous"></script>
 {% endblock %}
 {% block content %}
-<div id="machine-config" data-machine="{{ machine }}" data-overheat-threshold="{{ overheat_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}'>
+<div id="machine-config" data-machine="{{ machine }}" data-high-temp-threshold="{{ high_temp_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}'>
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
     <div class="tabs" role="tablist" aria-label="Machine views" data-tabs-key="machine">

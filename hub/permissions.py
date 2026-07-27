@@ -50,6 +50,14 @@ import fleet
 # Each is an independent toggle an admin sets per group. Order is the order the admin
 # UI renders them in, so it runs least- to most-privileged.
 VIEW = "view"
+# Reading the audit trail is two capabilities, not one. VIEW_AUDIT_LOG is the perimeter --
+# it opens the tab and returns info + notice rows. VIEW_SECURITY_AUDIT is a MODIFIER on top
+# of it, widening the read to security-level rows (permission changes, backup-key access,
+# remote sessions, command execution, settings). On its own it grants nothing at all: a
+# group holding only it still gets no tab and a 403 from the API, because the level filter
+# is a widening of a read the first capability authorised.
+VIEW_AUDIT_LOG = "view_audit_log"
+VIEW_SECURITY_AUDIT = "view_security_audit"
 ISSUE_COMMANDS = "issue_commands"
 REMOTE_CONTROL = "remote_control"
 DEPLOY_PACKAGES = "deploy_packages"
@@ -60,6 +68,8 @@ MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
 
 CAPABILITIES = (
     VIEW,
+    VIEW_AUDIT_LOG,
+    VIEW_SECURITY_AUDIT,
     ISSUE_COMMANDS,
     REMOTE_CONTROL,
     DEPLOY_PACKAGES,
@@ -73,6 +83,14 @@ CAPABILITIES = (
 # and a new capability needs one edit rather than two.
 CAPABILITY_LABELS = {
     VIEW: ("View", "See these machines, their history, and their command results."),
+    VIEW_AUDIT_LOG: ("View audit log",
+                     "Read the record of who did what on this hub. Security-sensitive "
+                     "entries are withheld unless the next capability is held too. "
+                     "The audit log is not machine-scoped."),
+    VIEW_SECURITY_AUDIT: ("View security audit entries",
+                          "Additionally see security-level audit entries: permission "
+                          "changes, backup-key access, remote sessions, commands run, "
+                          "and settings changes. Does nothing without 'View audit log'."),
     ISSUE_COMMANDS: ("Issue commands",
                      "Run scripts and send restart/shutdown/install commands. This is "
                      "code execution as SYSTEM on the machines in scope."),
@@ -509,7 +527,7 @@ def create_group(db_path, name, capabilities=(), machines=(), members=(),
     fleet.audit(db_path, actor, "permission_group.create", name, {
         "group_id": group_id, "capabilities": capabilities,
         "scope_mode": scope_mode, "machines": machines, "members": members,
-    })
+    }, level=fleet.LEVEL_SECURITY)
     return group_id
 
 
@@ -564,7 +582,8 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
             changes[field] = {"from": before.get(field), "to": after.get(field)}
     if changes:
         fleet.audit(db_path, actor, "permission_group.update", after["name"],
-                    {"group_id": group_id, "changes": changes})
+                    {"group_id": group_id, "changes": changes},
+                    level=fleet.LEVEL_SECURITY)
     return after
 
 
@@ -587,7 +606,7 @@ def delete_group(db_path, group_id, actor="unknown"):
     fleet.audit(db_path, actor, "permission_group.delete", before["name"], {
         "group_id": group_id, "capabilities": before["capabilities"],
         "machines": before["machines"], "members": before["members"],
-    })
+    }, level=fleet.LEVEL_SECURITY)
     return True
 
 

@@ -97,33 +97,71 @@ def test_store_lifecycle():
         check("dismiss again returns False (already closed)", alerts.dismiss(db_path, aid3) is False)
         check("count_open back to 0", alerts.count_open(db_path) == 0)
 
-        print("  -- overheat kind --")
-        oid = alerts.upsert_overheat(db_path, "PC-HOT", 91.4, 85, 300)
-        check("overheat upsert opens an alert", oid is not None
+        print("  -- high_temperature kind --")
+        oid = alerts.upsert_high_temp(db_path, "PC-HOT", 91.4, 85, 300)
+        check("high-temp upsert opens an alert", oid is not None
               and alerts.count_open(db_path) == 1)
         got = alerts.get(db_path, oid)
-        check("overheat carries its machine and decoded detail",
+        check("high-temp alert carries its machine and decoded detail",
               got["machine"] == "PC-HOT" and got["detail"]["avg_temp"] == 91.4
               and got["detail"]["threshold"] == 85 and got["detail"]["window_seconds"] == 300)
-        oid2 = alerts.upsert_overheat(db_path, "PC-HOT", 88.0, 85, 300)
+        oid2 = alerts.upsert_high_temp(db_path, "PC-HOT", 88.0, 85, 300)
         check("re-upsert refreshes the SAME row", oid2 == oid
               and alerts.count_open(db_path) == 1)
         check("...and updates the detail", alerts.get(db_path, oid)["detail"]["avg_temp"] == 88.0)
         # A different machine is a separate subject -> its own open row.
-        alerts.upsert_overheat(db_path, "PC-HOT-2", 90.0, 85, 300)
+        alerts.upsert_high_temp(db_path, "PC-HOT-2", 90.0, 85, 300)
         check("a second hot machine gets its own alert", alerts.count_open(db_path) == 2)
-        # Overheat and duplicate_serial share the table but not the open-per-subject index.
+        # high_temperature and duplicate_serial share the table, not the open-per-subject index.
         alerts.upsert_duplicate(db_path, "S-COEXIST", ["x", "y"])
-        check("overheat and duplicate_serial coexist", alerts.count_open(db_path) == 3)
-        alerts.resolve_overheat(db_path, "PC-HOT")
-        check("resolve_overheat closes only that machine", alerts.count_open(db_path) == 2
+        check("high_temperature and duplicate_serial coexist", alerts.count_open(db_path) == 3)
+        alerts.resolve_high_temp(db_path, "PC-HOT")
+        check("resolve_high_temp closes only that machine", alerts.count_open(db_path) == 2
               and alerts.get(db_path, oid)["status"] == "resolved")
-        listed = [a for a in alerts.list_open(db_path) if a["kind"] == "overheat"]
-        check("list_open surfaces machine + detail on overheat rows",
+        listed = [a for a in alerts.list_open(db_path) if a["kind"] == "high_temperature"]
+        check("list_open surfaces machine + detail on high-temp rows",
               all(a.get("machine") and a.get("detail") for a in listed))
     finally:
         # Best-effort: on Windows the WAL connections sqlite3 leaves open (a `with conn`
         # block commits but doesn't close) can still hold the temp file. It's in TEMP.
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+
+def test_kind_rename_migration():
+    print("\n-- kind='overheat' rows migrate to 'high_temperature' --")
+    db_fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(db_fd)
+    try:
+        alerts.init_alerts_db(db_path)
+        # A row exactly as a pre-rename hub wrote it. Raw SQL on purpose: no current code
+        # path can produce the old kind any more, which is the whole point of the test.
+        with alerts.get_conn(db_path) as conn:
+            conn.execute(
+                "INSERT INTO alerts(kind, machine, detail, status, created_at, updated_at) "
+                "VALUES ('overheat', 'PC-LEGACY', '{\"avg_temp\": 92.0}', 'open', 1, 1)")
+        alerts.init_alerts_db(db_path)          # the migration runs on the next hub start
+        listed = [a for a in alerts.list_open(db_path) if a.get("machine") == "PC-LEGACY"]
+        check("the legacy row is still open, under the new kind",
+              len(listed) == 1 and listed[0]["kind"] == alerts.KIND_HIGH_TEMP)
+        with alerts.get_conn(db_path) as conn:
+            left = conn.execute("SELECT COUNT(*) AS c FROM alerts WHERE kind='overheat'"
+                                ).fetchone()["c"]
+        check("no rows left under the old kind", left == 0)
+
+        # An already-migrated hub must not be disturbed by a third start, and the machine
+        # must still be upsertable -- i.e. the migrated row IS the active episode, not a
+        # duplicate the unique index would reject.
+        alerts.init_alerts_db(db_path)
+        again = [a for a in alerts.list_open(db_path) if a.get("machine") == "PC-LEGACY"]
+        check("re-running the migration changes nothing", len(again) == 1)
+        alerts.upsert_high_temp(db_path, "PC-LEGACY", 95.0, 85, 300)
+        check("the migrated row is refreshed, not duplicated",
+              len([a for a in alerts.list_open(db_path)
+                   if a.get("machine") == "PC-LEGACY"]) == 1)
+    finally:
         try:
             os.remove(db_path)
         except OSError:
@@ -229,24 +267,31 @@ def _seed_readings(machine, temps, base, step=5):
                 "VALUES (?, ?, ?, ?)", (str(ts), ts, machine, t))
 
 
-def _open_overheat(machine):
-    return next((a for a in alerts.list_open(app.DB_PATH)
-                 if a["kind"] == "overheat" and a.get("machine") == machine), None)
+def _high_temps(machine):
+    """Every open high-temperature alert for `machine`, newest activity first."""
+    return [a for a in alerts.list_open(app.DB_PATH)
+            if a["kind"] == "high_temperature" and a.get("machine") == machine]
 
 
-def test_overheat_evaluator():
-    print("\n-- overheat evaluator: average, spike immunity, resolve, offline --")
+def _open_high_temp(machine):
+    """The ACTIVE episode for `machine` (the machine is hot right now), if any. Ended
+    episodes stay open and visible, so this deliberately ignores them."""
+    return next((a for a in _high_temps(machine) if not a.get("episode_ended_at")), None)
+
+
+def test_high_temp_evaluator():
+    print("\n-- high-temperature evaluator: average, spike immunity, episodes, offline --")
     settings.set_many(app.DB_PATH, {
-        "hub.overheat_threshold": 80,
-        "hub.overheat_avg_window_seconds": 300,
+        "hub.high_temp_threshold": 80,
+        "hub.high_temp_avg_window_seconds": 300,
         "fleet.dashboard_online_window_seconds": 120,
     })
     now = 1_950_000_000
 
     # Sustained: 40 readings at 90 over ~200s -> average 90 -> alert.
     _seed_readings("ovHot", [90] * 40, base=now)
-    app.evaluate_overheat_once(app.DB_PATH, now=now)
-    a = _open_overheat("ovHot")
+    app.evaluate_high_temp_once(app.DB_PATH, now=now)
+    a = _open_high_temp("ovHot")
     check("a sustained hot average raises exactly one alert",
           a is not None and a["detail"]["avg_temp"] == 90.0)
     check("...carrying the threshold and window it was judged against",
@@ -255,53 +300,79 @@ def test_overheat_evaluator():
     # A single 120 spike in an otherwise-50 window averages ~51.8 -> NO alert. This is the
     # whole point of the feature over the old instantaneous flag.
     _seed_readings("ovSpike", [50] * 39 + [120], base=now)
-    app.evaluate_overheat_once(app.DB_PATH, now=now)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now)
     check("a lone spike inside a cool window does NOT raise",
-          _open_overheat("ovSpike") is None)
+          _open_high_temp("ovSpike") is None)
 
-    # Newer cool readings pull the average down -> the open alert resolves.
+    # Refreshing while still hot must not pile up rows, and must remember the peak.
+    # Seeded past the 300s window so the average is purely the new (cooler but still hot)
+    # readings, not a blend with the 90s above.
+    _seed_readings("ovHot", [86] * 40, base=now + 400)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now + 400)
+    check("staying hot refreshes the SAME episode", len(_high_temps("ovHot")) == 1)
+    check("...tracking the current average and the episode's peak",
+          _open_high_temp("ovHot")["detail"]["avg_temp"] == 86.0
+          and _open_high_temp("ovHot")["detail"]["peak_temp"] == 90.0)
+
+    # Newer cool readings pull the average down -> the episode ends, but the alert stays
+    # open and visible until an operator dismisses it.
     _seed_readings("ovHot", [50] * 40, base=now + 1000)
-    app.evaluate_overheat_once(app.DB_PATH, now=now + 1000)
-    check("cooling back down resolves the alert", _open_overheat("ovHot") is None)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now + 1000)
+    check("cooling back down ends the episode without closing the alert",
+          _open_high_temp("ovHot") is None and len(_high_temps("ovHot")) == 1
+          and _high_temps("ovHot")[0]["episode_ended_at"] == now + 1000)
+
+    # ...and heating up again ACCUMULATES a second alert instead of overwriting the first.
+    _seed_readings("ovHot", [95] * 40, base=now + 5000)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now + 5000)
+    episodes = _high_temps("ovHot")
+    check("a second hot spell raises a NEW alert beside the old one", len(episodes) == 2)
+    check("...the earlier episode keeping its own numbers",
+          sorted(e["detail"]["peak_temp"] for e in episodes) == [90.0, 95.0])
+    # Only one of them is live, so the unique index still bounds the table.
+    check("...and only one episode is active at a time",
+          sum(1 for e in episodes if not e["episode_ended_at"]) == 1)
+    for e in episodes:
+        alerts.dismiss(app.DB_PATH, e["id"])
 
     # Hot but last reading older than the online window -> not currently online, no alert.
     _seed_readings("ovGone", [95] * 40, base=now - 10_000)
-    app.evaluate_overheat_once(app.DB_PATH, now=now)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now)
     check("a hot machine that stopped reporting is not alerted",
-          _open_overheat("ovGone") is None)
+          _open_high_temp("ovGone") is None)
 
     # A machine that was hot and then goes offline entirely (drops out of the window) has
-    # its open alert resolved, not left dangling.
+    # its episode ended, not left dangling open forever.
     _seed_readings("ovDrop", [95] * 40, base=now + 2000)
-    app.evaluate_overheat_once(app.DB_PATH, now=now + 2000)
-    check("hot machine alerts while online", _open_overheat("ovDrop") is not None)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now + 2000)
+    check("hot machine alerts while online", _open_high_temp("ovDrop") is not None)
     # Evaluate far in the future: ovDrop's readings are now well outside the window.
-    app.evaluate_overheat_once(app.DB_PATH, now=now + 2000 + 100_000)
-    check("...and resolves once it drops out of the window entirely",
-          _open_overheat("ovDrop") is None)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now + 2000 + 100_000)
+    check("...and its episode ends once it drops out of the window entirely",
+          _open_high_temp("ovDrop") is None and len(_high_temps("ovDrop")) == 1)
 
 
-def test_overheat_api_and_scope():
-    print("\n-- overheat alerts over /api/alerts, with scope --")
+def test_high_temp_api_and_scope():
+    print("\n-- high-temperature alerts over /api/alerts, with scope --")
     settings.set_many(app.DB_PATH, {
-        "hub.overheat_threshold": 80,
-        "hub.overheat_avg_window_seconds": 300,
+        "hub.high_temp_threshold": 80,
+        "hub.high_temp_avg_window_seconds": 300,
         "fleet.dashboard_online_window_seconds": 120,
     })
     now = 1_960_000_000
     _seed_readings("apiHot", [88] * 40, base=now)
-    app.evaluate_overheat_once(app.DB_PATH, now=now)
+    app.evaluate_high_temp_once(app.DB_PATH, now=now)
 
     resp = client.get("/api/alerts")
     check("GET /api/alerts 200", resp.status_code == 200)
     row = next((x for x in resp.get_json()
-                if x["kind"] == "overheat" and x["machine"] == "apiHot"), None)
-    check("overheat alert is returned with its detail",
+                if x["kind"] == "high_temperature" and x["machine"] == "apiHot"), None)
+    check("high-temp alert is returned with its detail",
           row is not None and row["detail"]["avg_temp"] == 88.0)
 
     resp = client.post(f"/api/alerts/{row['id']}/dismiss")
-    check("an overheat alert can be dismissed", resp.status_code == 200
-          and _open_overheat("apiHot") is None)
+    check("a high-temp alert can be dismissed", resp.status_code == 200
+          and _open_high_temp("apiHot") is None)
 
 
 def test_sidebar_badge_renders():
@@ -317,14 +388,15 @@ def test_sidebar_badge_renders():
 
 if __name__ == "__main__":
     test_store_lifecycle()
+    test_kind_rename_migration()
     test_both_online_raises_alert()
     test_merge_endpoint_resolves_alert()
     test_alert_auto_resolves_when_one_goes_offline()
     test_dismiss_endpoint()
     test_merge_endpoint_validation()
     test_auth_required()
-    test_overheat_evaluator()
-    test_overheat_api_and_scope()
+    test_high_temp_evaluator()
+    test_high_temp_api_and_scope()
     test_sidebar_badge_renders()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

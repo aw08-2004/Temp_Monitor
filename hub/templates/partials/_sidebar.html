@@ -25,6 +25,12 @@
            presentation only -- every route is gated server-side regardless (see
            permissions_web.Access) -- but a sidebar of links that all 403 is worse than
            no link at all. #}
+        {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" href="{{ url_for('audit.audit_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+            Audit Log
+        </a>
+        {% endif %}
         {% if cap.DEPLOY_PACKAGES in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'packages.packages_page' else '' }}" href="{{ url_for('packages.packages_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>

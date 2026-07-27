@@ -43,8 +43,11 @@ def create_settings_blueprint(db_path, login_required, access):
     def _audit_changes(before, after, action):
         for key, value in after.items():
             if before.get(key) != value:
+                # Security level: these keys decide whether the hub pulls and runs
+                # new code (hub.auto_update) and how much history survives.
                 fleet.audit(db_path, _current_email(), action, key,
-                            {"from": before.get(key), "to": value})
+                            {"from": before.get(key), "to": value},
+                            level=fleet.LEVEL_SECURITY)
 
     @bp.route("/api/settings", methods=["GET"])
     @login_required

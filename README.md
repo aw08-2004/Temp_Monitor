@@ -195,18 +195,40 @@ behind Google sign-in, see below):
 
 ### Temperature alerts
 
-A machine is flagged as overheating when its **average** temperature over a
-window (default **5 minutes**, `hub.overheat_avg_window_seconds` in Settings) is
-at or above the overheat threshold (`hub.overheat_threshold`). Averaging is the
-point: a momentary spike no longer raises an alert, only a sustained condition
-does.
+A machine is flagged as running hot when its **average** temperature over a
+window (default **5 minutes**, `hub.high_temp_avg_window_seconds` in Settings) is
+at or above the high-temperature threshold (`hub.high_temp_threshold`). Averaging
+is the point: a momentary spike no longer raises an alert, only a sustained
+condition does.
 
-The check runs on the hub every ~30 s (`evaluate_overheat_once`), so alerts are
-independent of any browser being open. An overheat alert appears in the **Alerts
-tab**, not on the Dashboard -- the Dashboard is a live temp/status view. It
-**auto-resolves** once the average drops back below the threshold (or the machine
-goes offline), and can be dismissed manually. Alerts are machine-scoped: an
-operator only sees, and is only badge-counted for, machines within their scope.
+The check runs on the hub every ~30 s (`evaluate_high_temp_once`), so alerts are
+independent of any browser being open. A high-temperature alert appears in the
+**Alerts tab**, not on the Dashboard -- the Dashboard is a live temp/status view.
+Alerts **stay until an operator dismisses them**: when the machine cools, the
+*episode* is closed but the card remains, and the next hot spell raises a **new**
+alert beside it rather than overwriting the old one's numbers. Alerts are
+machine-scoped: an operator only sees, and is only badge-counted for, machines
+within their scope.
+
+### Audit log
+
+Every command issued, machine merged or deleted, package deployed, account or
+permission group edited, setting changed and backup key touched is written to an
+append-only `audit_log` table, and read back on the **Audit Log** tab. Entries
+are never rewritten or pruned; with command signing gone, this trail is the
+accountability control.
+
+Each entry carries a level -- `info` (routine bookkeeping), `notice` (an operator
+changed fleet state) or `security` (identity, secrets, code execution, remote
+access). Two capabilities gate the tab: **View audit log** opens it and shows
+info + notice entries, and **View security audit entries** additionally reveals
+the security ones. The second does nothing on its own, and the split is applied
+in SQL -- a withheld entry never reaches the browser. Unlike the rest of the
+console the audit log is *not* machine-scoped: most entries have no machine, so
+the capability is the whole perimeter.
+
+The tab searches across actor/action/target, filters by actor, level and date
+range, pages through history, and expands any entry to its recorded detail.
 
 Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
 rotated log files also live under `logs/`. Run it via `wsgi.py`, or directly
