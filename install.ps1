@@ -1466,7 +1466,12 @@ done
 install -m 0644 "$S/wsl.conf" /etc/wsl.conf
 apt-get update -qq
 apt-get install -y --no-install-recommends coturn
-install -m 0640 -o root -g root "$S/turnserver.conf" /etc/turnserver.conf
+# Group MUST be turnserver: the systemd unit runs coturn as User=turnserver, and with a
+# root:root 0640 config it cannot read this file. coturn does NOT treat that as fatal -- it
+# silently falls back to built-in defaults, which means NO authentication (an open relay on
+# a forwarded port) and the default 49152-65535 relay range instead of min/max-port. Both
+# failures are invisible except that turn.log is never created. Verified 2026-07-28.
+install -m 0640 -o root -g turnserver "$S/turnserver.conf" /etc/turnserver.conf
 install -m 0644 "$S/coturn.default" /etc/default/coturn
 install -m 0755 "$S/fleethub-turn-boot.sh" /usr/local/sbin/fleethub-turn-boot.sh
 mkdir -p /var/log/coturn
@@ -1565,6 +1570,22 @@ function Test-TurnServer {
     if ($listen.Output -match ":$Port") { Ok "Listening on $Port/udp inside the distro" }
     else { Warn "Nothing is listening on $Port/udp inside the distro." }
 
+    # 2b. Can the service user actually READ its config? coturn runs as User=turnserver, and an
+    #     unreadable /etc/turnserver.conf is NOT fatal to it -- it silently starts on built-in
+    #     defaults: no authentication and the default 49152-65535 relay range. Everything below
+    #     still looks healthy, which is exactly why this needs its own check. Seen 2026-07-28.
+    $readable = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'su', '-s', '/bin/bash',
+                             '-c', 'head -1 /etc/turnserver.conf', 'turnserver')
+    if ($readable.ExitCode -eq 0) {
+        Ok "coturn's service user can read /etc/turnserver.conf"
+    } else {
+        Warn "coturn CANNOT read /etc/turnserver.conf -- it is running on defaults, with NO authentication."
+        Say  "That makes this an open relay on a forwarded port. Fix it with:"
+        Say  "  wsl -d $Distro -u root -- chown root:turnserver /etc/turnserver.conf"
+        Say  "  wsl -d $Distro -u root -- systemctl restart coturn"
+        Say  "Confirm afterwards that /var/log/coturn/turn.log exists -- if it does not, the config is still unread."
+    }
+
     # 3. Mirrored CONFIGURED is not mirrored ACTIVE. This catches a missed --shutdown and a
     #    .wslconfig written into a different profile than the one WSL reads.
     $hostname = Invoke-Wsl @('-d', $Distro, '--', 'hostname', '-I')
@@ -1617,7 +1638,10 @@ function Test-TurnServer {
                         '-p', "$Port", '-n', '1', '-c', '-e', '8.8.8.8', $target)
     if ($bad.Output -match 'Total transmit time' -and $bad.Output -notmatch '401') {
         Warn "A WRONG password was also accepted -- coturn is not enforcing authentication."
-        Say  "Check that 'use-auth-secret' is present in /etc/turnserver.conf."
+        Say  "This is an OPEN RELAY. Do not leave port $Port forwarded while it is in this state."
+        Say  "Most likely cause is not a missing directive but an unreadable config -- see check 2b"
+        Say  "above. If /var/log/coturn/turn.log does not exist, coturn never parsed the file at all."
+        Say  "Otherwise check that 'use-auth-secret' is present in /etc/turnserver.conf."
     } else {
         Ok "A wrong credential is correctly rejected"
     }
