@@ -743,7 +743,11 @@ set/rotate of `REMOTE_TURN_SECRET` (`manage_settings`; writes `.env` + applies l
   `remote_sessions` / `remote_signals`; session TTL swept on the 30 s housekeeping heartbeat.
 - **Hub as TURN (`turn/`)** — coturn on the hub host, credentials **minted by the hub app**
   via the standard TURN REST scheme (HMAC of `REMOTE_TURN_SECRET` in `.env`), so there is one
-  secret and no per-user database. **The credential interop was validated against real coturn**
+  secret and no per-user database. On a **Windows** hub the delivery mechanism changed from a
+  Docker container to a **dedicated WSL2 distro** after field testing (see the findings below);
+  that adds Windows 11 22H2+, the Store WSL package, a Hyper-V firewall rule, a boot task, ~3 GB
+  of disk, and globally-mirrored WSL networking to the requirements.
+  **The credential interop was validated against real coturn**
   via Docker (`tests/test_turn_interop.py`): a hub-minted credential authenticates and
   allocates; a wrong one is refused.
 - **Input control (`InputInjector.cs`)** — browser input over the DataChannel → `SendInput`
@@ -777,15 +781,38 @@ layer that test stubs out:
    lesson worth keeping: every layer reported success, so the diagnosis had to come from the
    helper's own `session=1` line rather than from any failure.
 
-**Still open after that test:** cross-NAT relay from a Windows/Docker coturn. Allocations
-succeed for **both** peers and ICE still reaches `failed` — the relay sockets sit on the Docker
+**Resolved — the installer now builds a WSL2 relay instead of a container.** The remaining
+failure after the fixes above was cross-NAT relay from a Windows/Docker coturn: allocations
+succeeded for **both** peers and ICE still reached `failed`. The relay sockets sit on the Docker
 bridge (`Relay address to use: 172.x.x.x`), so `--external-ip` advertises a public candidate
-whose egress source port Docker is free to rewrite. Inbound DNAT works, which is why allocation
-counts look healthy. The recommended resolution is to move coturn somewhere it can bind a real
-interface (a Linux host/VM beside the hub); running it natively in a WSL2 distro with
-`networkingMode=mirrored` also works, but **a container under Docker Desktop stays behind
-Docker's bridge regardless of WSL's networking mode**. This mechanism is strongly indicated by
-the evidence but has not been proven from an external vantage point.
+whose egress source port Docker is free to rewrite; inbound DNAT works, which is exactly why the
+allocation counts look healthy while every connectivity check fails.
+
+`install.ps1` therefore provisions coturn **natively in a dedicated `FleetHubTurn` Ubuntu 24.04
+WSL2 distro** (`wsl --install --name`, so there is no rootfs URL to maintain and no collision
+with an Ubuntu the admin already uses), under systemd with `Restart=always`, with
+`networkingMode=mirrored` merged into `.wslconfig` so the distro shares the host's network
+namespace and relay ports stay symmetric. It also opens **both** firewalls, registers a boot
+task, and verifies itself with a real Allocate. `docker-compose.windows.yml` is kept but demoted
+to LAN/credential testing; `docker-compose.yml` remains correct for a Linux hub.
+
+Four things that took real work to get right, all of which fail *silently* if got wrong:
+- **`wsl.exe` emits UTF-16LE**, so every `-match` against `wsl -l -q` fails and distro/Docker
+  detection reports "nothing found" — meaning the warning about restarting the operator's
+  containers would never fire. One `WSL_UTF8=1` wrapper fixes it at source.
+- **`WriteAllLines` emits CRLF** on .NET Framework; a trailing `\r` on `static-auth-secret`
+  produces 401s indistinguishable from a secret desync.
+- **WSL distros are registered per-user**, so the boot task must run S4U as the installing user.
+  A SYSTEM task — the pattern every other service here uses — cannot see the distro at all.
+- **`Get-Date -UFormat %s` returns local time** on PowerShell 5.1. The installer's verification
+  credential was ~3 h stale on a UTC-3 box, so coturn rejected it as expired and verification
+  would have condemned a working relay.
+
+Caveats carried forward: mirrored mode is a **global, persistent** change affecting every WSL
+distro including `docker-desktop`, and applying it needs one `wsl --shutdown` that restarts every
+container (the installer detects this, names what will stop, and asks separately, default *no*).
+A Linux host/VM beside the hub remains the lower-risk option. And the SNAT mechanism above is
+strongly indicated by the evidence but was never proven from an external vantage point.
 
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the

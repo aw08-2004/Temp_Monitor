@@ -44,7 +44,24 @@ param(
 
     # --- Hub ---
     [int]$HubPort = 3001,
-    [string]$HubInstallDir
+    [string]$HubInstallDir,
+
+    # --- Hub: TURN relay (coturn in a dedicated WSL2 distro) ---
+    # Supplying -TurnHost implies "yes, configure TURN" and skips that prompt, the same way
+    # -EnrollmentSecret pre-answers the enrollment question.
+    [switch]$SkipTurn,
+    [string]$TurnHost,
+    [string]$TurnSecret,
+    [string]$TurnDistro = "FleetHubTurn",
+    [string]$TurnWslLocation,
+    [int]$TurnPort = 3478,
+    [int]$TurnMinPort = 49160,
+    [int]$TurnMaxPort = 49200,
+    [string]$TurnRealm = "fleethub",
+    [int]$TurnMinFreeGB = 10,
+    # Pre-answers the "this restarts every WSL distro and Docker container" confirmation.
+    [switch]$AcceptWslNetworkChange,
+    [switch]$SkipTurnFirewall
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,6 +83,14 @@ $LhmDir         = Join-Path $InstallDir "LibreHardwareMonitor"
 $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
 $TaskCompanion  = "TempMonitor - Companion"
 $TaskHub        = "TempMonitor - Hub"          # legacy scheduled task (pre-service), cleaned up on install/uninstall
+$TaskTurn       = "FleetHub - TURN (WSL)"      # boots the coturn WSL distro; WSL distros do NOT auto-start
+
+# The WSL virtual machine's creator id, used to target Hyper-V firewall rules. This GUID is a
+# fixed WSL constant (documented by Microsoft), not something generated per machine.
+$WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+# Pinned LTS rather than the rolling "Ubuntu" alias, so a re-run a year from now provisions the
+# same thing it did today.
+$TurnDistroImage = "Ubuntu-24.04"
 
 # --- Shared install root ---
 # Hub and Agent live side by side under one root so an operator has a single place to
@@ -175,6 +200,144 @@ function Read-DotEnv([string]$Path) {
         }
     }
     return $result
+}
+
+function Invoke-Wsl {
+    <#
+      The single door to wsl.exe. Two things make a naive `& wsl ...` unreliable here:
+
+        * wsl.exe writes UTF-16LE by default, so a captured "FleetHubTurn" arrives as
+          "F`0l`0e`0e`0t..." and EVERY -match against it silently fails. That turns distro
+          detection into "found nothing", which is the worst possible wrong answer -- it means
+          the loud warning about restarting Docker never fires. WSL_UTF8=1 fixes it at source;
+          the -replace is belt-and-braces for older builds that ignore the variable.
+        * Native stderr redirection under $ErrorActionPreference='Stop' raises
+          NativeCommandError even on a clean exit, so the preference is relaxed for the call.
+
+      -Stream skips capture entirely for the multi-minute `wsl --install`, so its progress
+      renders live; a silent twelve-minute pause reads as a hang and gets Ctrl-C'd, which is
+      precisely how you end up with a half-registered distro.
+    #>
+    param([string[]]$Arguments, [switch]$Stream)
+
+    $prevUtf8 = $env:WSL_UTF8
+    $prevEap  = $ErrorActionPreference
+    $env:WSL_UTF8 = "1"
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($Stream) {
+            & wsl.exe @Arguments
+            return @{ ExitCode = $LASTEXITCODE; Output = "" }
+        }
+        $out = & wsl.exe @Arguments 2>&1 | Out-String
+        return @{ ExitCode = $LASTEXITCODE; Output = ($out -replace "`0", "") }
+    } catch {
+        return @{ ExitCode = -1; Output = $_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $prevEap
+        if ($null -eq $prevUtf8) { Remove-Item Env:\WSL_UTF8 -ErrorAction SilentlyContinue }
+        else { $env:WSL_UTF8 = $prevUtf8 }
+    }
+}
+
+function Get-FreeSpaceGB([string]$Path) {
+    # Walk up to the deepest existing ancestor: the target directory usually doesn't exist yet.
+    # Returns $null for anything that isn't a local drive (UNC, mapped oddities) so the caller
+    # can warn and carry on rather than guess.
+    try {
+        $probe = $Path
+        while ($probe -and -not (Test-Path $probe)) { $probe = Split-Path $probe -Parent }
+        if (-not $probe) { return $null }
+        $root = [System.IO.Path]::GetPathRoot((Resolve-Path $probe).Path)
+        if ($root -notmatch '^[A-Za-z]:\\$') { return $null }
+        $drive = $root.Substring(0, 2)
+        $disk  = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$drive'" -ErrorAction Stop
+        if (-not $disk) { return $null }
+        return @{
+            Drive   = $drive
+            FreeGB  = [math]::Round($disk.FreeSpace / 1GB, 1)
+            TotalGB = [math]::Round($disk.Size / 1GB, 1)
+        }
+    } catch { return $null }
+}
+
+function Ensure-FreeSpace([string]$Path, [double]$RequiredGB, [double]$HardFloorGB = 4) {
+    <#
+      Gate the WSL distro creation on free space. Sizing: the Ubuntu rootfs download is ~0.7 GB,
+      the registered ext4.vhdx settles around 1.5-2.5 GB, and apt metadata adds a few hundred MB
+      -- but the VHDX only ever ratchets UP as logs and apt churn accumulate, it never shrinks
+      on its own. Hence a soft gate well above the immediate need.
+
+      Below the hard floor we refuse outright: `wsl --install` that runs out of room mid-extract
+      leaves a half-registered distro, which is a worse place to be than not having started.
+      Returns $true to proceed. Never Die -- TURN is optional, the hub install is not.
+    #>
+    $space = Get-FreeSpaceGB $Path
+    if (-not $space) {
+        Warn "Could not determine free disk space for '$Path' -- continuing without the check."
+        return $true
+    }
+    if ($space.FreeGB -ge $RequiredGB) {
+        Ok "Disk space: $($space.FreeGB) GB free on $($space.Drive)"
+        return $true
+    }
+    if ($space.FreeGB -lt $HardFloorGB) {
+        Warn "Only $($space.FreeGB) GB free on $($space.Drive) -- a WSL distro needs ~3 GB to install and grows from there."
+        Say  "Refusing to start: running out of space mid-install leaves a half-registered distro."
+        Say  "Free up space, or re-run with  -TurnWslLocation D:\FleetHubTurn  to use another drive."
+        return $false
+    }
+    Warn "Only $($space.FreeGB) GB free on $($space.Drive) (recommended: $RequiredGB GB)."
+    Say  "A WSL distro needs ~3 GB now, and its virtual disk grows over time without shrinking back."
+    return (Prompt-YesNo "Continue anyway?" -Default No)
+}
+
+function ConvertTo-WslPath([string]$WindowsPath) {
+    # C:\foo\bar -> /mnt/c/foo/bar . UNC has no /mnt equivalent, so refuse rather than emit
+    # something that silently resolves to the wrong place inside the distro.
+    if ($WindowsPath -notmatch '^([A-Za-z]):\\(.*)$') { return $null }
+    $drive = $matches[1].ToLower()
+    $rest  = $matches[2] -replace '\\', '/'
+    return "/mnt/$drive/$rest"
+}
+
+function Write-LinuxFile([string]$Path, [string[]]$Lines) {
+    <#
+      Write a file that Linux will parse: LF endings, UTF-8, no BOM.
+
+      Deliberately NOT WriteAllLines, which the .env writes use: on .NET Framework that emits
+      Environment.NewLine (CRLF). python-dotenv tolerates a stray CR; bash, /etc/wsl.conf and
+      coturn's config parser do not. A CRLF here makes `static-auth-secret=abc` into the secret
+      "abc`r", and every allocation then fails with 401 -- indistinguishable from the hub/coturn
+      secret desync already documented in turn\README.md. One newline convention, chosen here.
+    #>
+    # Normalise after joining, not before: callers pass both line arrays and here-strings (which
+    # already carry CRLF internally on Windows), and only one of those is fixed by the join.
+    $text = (($Lines -join "`n") -replace "`r`n", "`n") -replace "`r", "`n"
+    if (-not $text.EndsWith("`n")) { $text += "`n" }
+    [System.IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function New-TurnRestCredential([string]$Secret, [string]$SessionId, [int]$TtlSeconds = 600) {
+    # The TURN REST scheme (draft-uberti-behave-turn-rest), mirroring hub/remote.py
+    # mint_turn_credentials EXACTLY: username = "<expiry-unix>:<session-id>",
+    # password = base64(HMAC-SHA1(secret, username)). Kept in lockstep with that function --
+    # if one changes, change both, or verification will pass while real sessions fail.
+    # Unix epoch the long way round, deliberately. `Get-Date -UFormat %s` on Windows PowerShell
+    # 5.1 returns LOCAL time, not UTC -- on a UTC-3 box that yields a timestamp three hours in
+    # the past, coturn rejects the credential as already expired, and verification reports a
+    # broken relay that is in fact fine. DateTimeOffset.ToUnixTimeSeconds() would also work but
+    # needs .NET 4.6+; this arithmetic works everywhere.
+    $utcNow   = [DateTime]::UtcNow
+    $unixBase = New-Object DateTime(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+    $expiry   = [int](($utcNow - $unixBase).TotalSeconds) + $TtlSeconds
+    $username = "$($expiry):$SessionId"
+    $hmac     = New-Object System.Security.Cryptography.HMACSHA1
+    try {
+        $hmac.Key = [System.Text.Encoding]::UTF8.GetBytes($Secret)
+        $digest   = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($username))
+    } finally { $hmac.Dispose() }
+    return @{ Username = $username; Password = [Convert]::ToBase64String($digest); Expiry = $expiry }
 }
 
 function Update-ProcessPath {
@@ -841,6 +1004,8 @@ function Uninstall-Hub {
         Unregister-ScheduledTask -TaskName $TaskHub -Confirm:$false
         Ok "Removed legacy scheduled task: $TaskHub"
     }
+    # Tear down the TURN relay too -- a no-op, and silent, when it was never installed.
+    Uninstall-TurnWsl
     Warn "Left the hub files at $hubDir (including .env and logs) in place -- they may still hold data you want."
     Write-Host "`nDone.`n" -ForegroundColor Green
 }
@@ -933,6 +1098,590 @@ function Move-LegacyHubInstall {
         }
     }
     Warn "Left the old tree at $LegacyHubDir -- delete it once you've confirmed the new hub is healthy."
+}
+
+# ============================================================================================
+# TURN relay: coturn in a dedicated Ubuntu WSL2 distro
+# ============================================================================================
+# Why WSL and not a container: on a Windows host a coturn CONTAINER relays from the Docker
+# bridge. --external-ip makes it advertise the public address and inbound DNAT works, so
+# allocations succeed for both peers and everything looks healthy -- but relay->peer egress is
+# SNAT'd to an arbitrary source port, and ICE requires the peer to receive from EXACTLY the
+# advertised candidate. Every check then fails and the agent logs "peer connection state:
+# failed". A distro in mirrored networking mode shares the host's network namespace, so the
+# relay ports are symmetric and the problem disappears. See turn\README.md 'Host-OS notes'.
+#
+# House rule for everything below: NOTHING here calls Die. This runs after the hub service is
+# already up and before the final banner that prints the once-only enrollment secret -- a throw
+# would destroy output the operator cannot get back. Failures Warn, explain the fix, and let the
+# hub install finish. The remediation for every partial state is the same single sentence:
+# re-run  install.ps1 -Component Hub.
+
+function Get-WslEnvironment {
+    <#
+      One probe of the machine's WSL situation, so the caller isn't shelling out repeatedly.
+      Every string here comes through Invoke-Wsl, which is what makes the -match calls work at
+      all (see the UTF-16 note there).
+    #>
+    param([string]$TargetDistro)
+
+    # Named $info, not $env: a local named $env reads as a shadow of the environment drive and
+    # is a trap for the next person editing this, even though PowerShell parses $env:X separately.
+    $info = @{
+        ExePresent = $false; Version = $null; SupportsNameFlag = $false
+        Distros = @(); OtherDistros = @(); HasDockerDesktop = $false; TargetExists = $false
+    }
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return $info }
+    $info.ExePresent = $true
+
+    $ver = Invoke-Wsl @('--version')
+    if ($ver.ExitCode -eq 0 -and $ver.Output -match 'WSL version:\s*([0-9]+)\.([0-9]+)') {
+        $info.Version = "$($matches[1]).$($matches[2])"
+    }
+
+    # Detect --name from the help text rather than comparing versions: the release that
+    # introduced it isn't something to guess at, and a wrong constant would disqualify machines
+    # that work perfectly well.
+    #
+    # Note `wsl --install --help` is NOT valid ("Invalid command line argument: --help") -- the
+    # flags live under the top-level `wsl --help`. And a bare search for "--name" there would
+    # false-positive on `--mount`'s own --name, so isolate the --install block first: top-level
+    # arguments are indented four spaces, their options deeper.
+    $help = Invoke-Wsl @('--help')
+    if ($help.Output -match '(?s)\n\s{4}--install\b.*?(?=\n\s{4}--\w)') {
+        if ($matches[0] -match '--name') { $info.SupportsNameFlag = $true }
+    } elseif ($help.Output -match '--name') {
+        # Unrecognised help layout: assume support rather than disqualify a capable machine.
+        # If it turns out to be wrong, `wsl --install` says so plainly and that path Warns.
+        $info.SupportsNameFlag = $true
+    }
+
+    $list = Invoke-Wsl @('--list', '--quiet')
+    if ($list.ExitCode -eq 0) {
+        $info.Distros = @($list.Output -split "`r?`n" | ForEach-Object { $_.Trim() } |
+                          Where-Object { $_ })
+    }
+    $info.TargetExists = @($info.Distros | Where-Object { $_ -eq $TargetDistro }).Count -gt 0
+    $info.OtherDistros = @($info.Distros | Where-Object { $_ -ne $TargetDistro })
+    if (Get-Service com.docker.service -ErrorAction SilentlyContinue) { $info.HasDockerDesktop = $true }
+    if (Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)   { $info.HasDockerDesktop = $true }
+    return $info
+}
+
+function Get-HostLanIPv4 {
+    # The address the distro will share in mirrored mode, and what verification points at.
+    try {
+        $cfg = Get-NetIPConfiguration -ErrorAction Stop |
+               Where-Object { $_.IPv4DefaultGateway -and $_.IPv4Address } |
+               Select-Object -First 1
+        if ($cfg) { return $cfg.IPv4Address.IPAddress }
+    } catch { }
+    return $null
+}
+
+function New-TurnServerConfLines {
+    param([string]$Secret, [string]$ExternalIp, [string]$LocalIp,
+          [string]$Realm, [int]$Port, [int]$MinPort, [int]$MaxPort)
+
+    # external-ip takes a PUBLIC/PRIVATE pair when the advertised address differs from the bound
+    # one; that is exactly our case behind a home/office NAT. Fall back to the bare public form
+    # if the LAN address couldn't be detected.
+    $ext = if ($LocalIp) { "$ExternalIp/$LocalIp" } else { $ExternalIp }
+
+    $lines = @(
+        "# Generated by FleetHub install.ps1 -- edit and 'systemctl restart coturn' to apply.",
+        "listening-port=$Port",
+        "listening-ip=0.0.0.0",
+        "min-port=$MinPort",
+        "max-port=$MaxPort",
+        "realm=$Realm",
+        "use-auth-secret",
+        "static-auth-secret=$Secret",
+        "external-ip=$ext",
+        "fingerprint",
+        "no-cli",
+        "no-tls",
+        "no-dtls",
+        "no-multicast-peers",
+        "# Deny relaying to loopback and link-local. RFC1918 is deliberately NOT denied: LAN",
+        "# relay is a legitimate case here. On an internet-exposed hub you may want to add",
+        "#   denied-peer-ip=10.0.0.0-10.255.255.255",
+        "#   denied-peer-ip=172.16.0.0-172.31.255.255",
+        "#   denied-peer-ip=192.168.0.0-192.168.255.255",
+        "denied-peer-ip=127.0.0.0-127.255.255.255",
+        "denied-peer-ip=169.254.0.0-169.254.255.255",
+        "log-file=/var/log/coturn/turn.log",
+        "simple-log"
+    )
+    return $lines
+}
+
+function Set-WslConfigMirrored([string]$Path) {
+    <#
+      Merge networkingMode=mirrored into %USERPROFILE%\.wslconfig, preserving every other line,
+      comment and section byte-for-byte. PowerShell 5.1 has no INI parser and .wslconfig may
+      hold memory/processor/swap settings the operator cares about, so this is deliberately a
+      minimal surgical edit rather than a rewrite.
+
+      Returns @{ Changed; Previous; BackupPath }. Changed=$false means no `wsl --shutdown` is
+      needed, which also means the caller can skip the whole "this restarts your containers"
+      confirmation.
+    #>
+    $result = @{ Changed = $false; Previous = $null; BackupPath = $null }
+
+    if (-not (Test-Path $Path)) {
+        Write-LinuxFile $Path @("[wsl2]", "networkingMode=mirrored")
+        $result.Changed = $true
+        return $result
+    }
+
+    $lines = @(Get-Content $Path -Encoding UTF8)
+    $secStart = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*\[wsl2\]\s*$') { $secStart = $i; break }
+    }
+
+    if ($secStart -lt 0) {
+        $backup = "$Path.fleethub-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+        Copy-Item $Path $backup -Force
+        $result.BackupPath = $backup
+        Write-LinuxFile $Path (@($lines) + @("", "[wsl2]", "networkingMode=mirrored"))
+        $result.Changed = $true
+        return $result
+    }
+
+    # Extent of the [wsl2] section: up to the next section header or EOF.
+    $secEnd = $lines.Count
+    for ($i = $secStart + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*\[') { $secEnd = $i; break }
+    }
+
+    $modeIdx = -1
+    for ($i = $secStart + 1; $i -lt $secEnd; $i++) {
+        if ($lines[$i] -match '^\s*networkingMode\s*=\s*(.*?)\s*$') {
+            $modeIdx = $i
+            $result.Previous = $matches[1]
+            break
+        }
+    }
+
+    if ($modeIdx -ge 0 -and $result.Previous -eq 'mirrored') { return $result }   # already there
+
+    $backup = "$Path.fleethub-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    Copy-Item $Path $backup -Force
+    $result.BackupPath = $backup
+
+    $new = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($i -eq $modeIdx) { $new.Add("networkingMode=mirrored"); continue }
+        $new.Add($lines[$i])
+        if ($modeIdx -lt 0 -and $i -eq $secStart) { $new.Add("networkingMode=mirrored") }
+    }
+    Write-LinuxFile $Path $new.ToArray()
+    $result.Changed = $true
+    return $result
+}
+
+function New-TurnFirewallRules {
+    <#
+      Two firewall layers must both allow this, and the second one is the one that catches
+      people out: with WSL 2.0.9+ the Hyper-V firewall is on by default and blocks inbound to
+      WSL even in mirrored mode. A coturn that works perfectly on the box and refuses every
+      remote allocation is almost always this.
+
+      Per-port Hyper-V rules rather than -DefaultInboundAction Allow, which would open every
+      port of every WSL distro on the machine, docker-desktop included.
+    #>
+    param([int]$Port, [int]$MinPort, [int]$MaxPort)
+
+    $rules = @(
+        @{ Name = 'FleetHub-TURN-Control-UDP'; Display = "FleetHub TURN control (UDP $Port)";            Proto = 'UDP'; Ports = "$Port" },
+        @{ Name = 'FleetHub-TURN-Control-TCP'; Display = "FleetHub TURN control (TCP $Port)";            Proto = 'TCP'; Ports = "$Port" },
+        @{ Name = 'FleetHub-TURN-Relay-UDP';   Display = "FleetHub TURN relay (UDP $MinPort-$MaxPort)";  Proto = 'UDP'; Ports = "$MinPort-$MaxPort" }
+    )
+
+    try {
+        foreach ($r in $rules) {
+            Remove-NetFirewallRule -Name $r.Name -ErrorAction SilentlyContinue
+            New-NetFirewallRule -Name $r.Name -DisplayName $r.Display -Group 'FleetHub' `
+                -Direction Inbound -Action Allow -Protocol $r.Proto -LocalPort $r.Ports `
+                -Profile Any -ErrorAction Stop | Out-Null
+        }
+        Ok "Windows Firewall: opened $Port/udp, $Port/tcp and $MinPort-$MaxPort/udp"
+    } catch {
+        Warn "Could not add Windows Firewall rules -- $($_.Exception.Message)"
+        Say  "Open $Port/udp, $Port/tcp and $MinPort-$MaxPort/udp inbound by hand."
+    }
+
+    if (-not (Get-Command New-NetFirewallHyperVRule -ErrorAction SilentlyContinue)) {
+        Warn "New-NetFirewallHyperVRule isn't available on this build."
+        Say  "The Hyper-V firewall may block inbound traffic to WSL even with the rules above."
+        if (Prompt-YesNo "Allow all inbound to WSL instead (opens every port of every WSL distro)?" -Default No) {
+            try {
+                Set-NetFirewallHyperVVMSetting -Name $WslVmCreatorId -DefaultInboundAction Allow -ErrorAction Stop
+                Ok "Hyper-V firewall: default inbound set to Allow for WSL"
+            } catch { Warn "That failed too -- $($_.Exception.Message). See turn\README.md." }
+        } else {
+            Say "Skipped. If remote machines can't allocate, this is the first thing to check."
+        }
+        return
+    }
+
+    try {
+        foreach ($r in $rules) {
+            Remove-NetFirewallHyperVRule -Name $r.Name -ErrorAction SilentlyContinue
+            New-NetFirewallHyperVRule -Name $r.Name -DisplayName $r.Display `
+                -VMCreatorId $WslVmCreatorId -Direction Inbound -Action Allow `
+                -Protocol $r.Proto -LocalPorts $r.Ports -ErrorAction Stop | Out-Null
+        }
+        Ok "Hyper-V firewall: opened the same ports for WSL"
+    } catch {
+        Warn "Could not add Hyper-V firewall rules -- $($_.Exception.Message)"
+        Say  "Inbound traffic to WSL may be blocked; see turn\README.md 'Troubleshooting'."
+    }
+}
+
+function Remove-TurnFirewallRules {
+    try { Remove-NetFirewallRule -Group 'FleetHub' -ErrorAction SilentlyContinue } catch { }
+    if (Get-Command Remove-NetFirewallHyperVRule -ErrorAction SilentlyContinue) {
+        foreach ($n in @('FleetHub-TURN-Control-UDP','FleetHub-TURN-Control-TCP','FleetHub-TURN-Relay-UDP')) {
+            try { Remove-NetFirewallHyperVRule -Name $n -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+}
+
+function Register-TurnBootTask([string]$Distro) {
+    <#
+      WSL distros do NOT start at boot. Without this the relay works on install day and is
+      silently dead after the next reboot -- the exact class of quiet failure this whole feature
+      exists to remove.
+
+      The principal matters more than it looks: WSL distros are registered PER USER under
+      HKCU\...\Lxss, so a task running as SYSTEM -- which is what every other service in this
+      installer does -- cannot see the distro at all and fails every time with "There is no
+      distribution with the supplied name." S4U under the installing user's SID runs whether or
+      not that user is logged on, with no stored password.
+
+      The repeating trigger is a watchdog: `wsl --shutdown` gets issued by all sorts of things
+      (Docker Desktop's own restart flow among them) and takes the distro down with it, with no
+      other recovery path.
+    #>
+    try {
+        $sid       = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+        $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType S4U -RunLevel Highest
+        $atStartup = New-ScheduledTaskTrigger -AtStartup
+        $atStartup.Delay = 'PT45S'          # let the WSL service and networking settle first
+        $watchdog  = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                        -RepetitionInterval (New-TimeSpan -Minutes 5)
+        $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                        -DontStopIfGoingOnBatteries -StartWhenAvailable `
+                        -ExecutionTimeLimit ([TimeSpan]::Zero)
+        # Invoke a script inside the distro, not an inline bash string: nothing to mis-quote in
+        # the task XML, and starting an already-running distro is a harmless no-op.
+        $action    = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\wsl.exe" `
+                        -Argument "-d $Distro -u root -- /usr/local/sbin/fleethub-turn-boot.sh"
+
+        Register-ScheduledTask -TaskName $TaskTurn -Force -Action $action `
+            -Trigger @($atStartup, $watchdog) -Principal $principal -Settings $settings `
+            -Description "Starts the FleetHub TURN WSL distro (coturn) at boot and keeps it up." | Out-Null
+        Ok "Registered the boot task '$TaskTurn'"
+    } catch {
+        Warn "Could not register the boot task -- $($_.Exception.Message)"
+        Say  "Without it, coturn will not come back after a reboot. Create it by hand, or re-run this installer."
+    }
+}
+
+function Unregister-TurnBootTask {
+    if (Get-ScheduledTask -TaskName $TaskTurn -ErrorAction SilentlyContinue) {
+        try {
+            Unregister-ScheduledTask -TaskName $TaskTurn -Confirm:$false -ErrorAction Stop
+            Ok "Removed the scheduled task '$TaskTurn'"
+        } catch { Warn "Could not remove '$TaskTurn' -- $($_.Exception.Message)" }
+    }
+}
+
+function Install-TurnWsl {
+    <#
+      Create (or reconfigure) the dedicated distro and bring coturn up in it. Returns $true only
+      if coturn ended up running. Every exit path is Warn-and-continue; see the house rule above.
+    #>
+    param([string]$Distro, [string]$Location, [string]$Secret, [string]$PublicHost,
+          [string]$Realm, [int]$Port, [int]$MinPort, [int]$MaxPort,
+          [bool]$DistroExists, [bool]$ApplyFirewall, [bool]$NeedsWslConfigChange)
+
+    Step "Setting up the TURN relay (coturn in WSL)"
+
+    # ---- 1. Create the distro (skipped when reconfiguring an existing one) ----
+    if (-not $DistroExists) {
+        Say "Creating the '$Distro' WSL distro from $TurnDistroImage."
+        Say "This downloads roughly 1 GB and can take 5-15 minutes -- leave it running."
+        if (-not (Test-Path $Location)) { New-Item -ItemType Directory -Force -Path $Location | Out-Null }
+
+        $mk = Invoke-Wsl @('--install', $TurnDistroImage, '--name', $Distro,
+                           '--location', $Location, '--no-launch') -Stream
+        if ($mk.ExitCode -ne 0) {
+            Say "Store install returned $($mk.ExitCode); retrying with a direct download..."
+            $mk = Invoke-Wsl @('--install', $TurnDistroImage, '--name', $Distro,
+                               '--location', $Location, '--no-launch', '--web-download') -Stream
+        }
+        if ($mk.ExitCode -ne 0) {
+            Warn "Could not create the WSL distro (exit $($mk.ExitCode))."
+            Say  "If it asked for a reboot, reboot and re-run:  install.ps1 -Component Hub"
+            return $false
+        }
+        Ok "Created the '$Distro' distro"
+    } else {
+        Say "Reusing the existing '$Distro' distro and rewriting its coturn config."
+    }
+
+    # ---- 2. Stage the config + provisioning script on the Windows side ----
+    # One LF-only bash script, copied in and run with a single wsl call. Building multi-command
+    # bash strings inside PowerShell 5.1 means nested quoting across wsl.exe's own re-parsing,
+    # which fails in ways that look like coturn bugs rather than quoting bugs.
+    $stage = Join-Path $env:TEMP ("fleethub-turn-" + [guid]::NewGuid().ToString("n"))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    try {
+        $localIp = Get-HostLanIPv4
+        Write-LinuxFile (Join-Path $stage "turnserver.conf") `
+            (New-TurnServerConfLines -Secret $Secret -ExternalIp $PublicHost -LocalIp $localIp `
+                                     -Realm $Realm -Port $Port -MinPort $MinPort -MaxPort $MaxPort)
+        Write-LinuxFile (Join-Path $stage "wsl.conf") @(
+            "[boot]", "systemd=true", "", "[automount]", "enabled=true")
+        Write-LinuxFile (Join-Path $stage "coturn.default") @("TURNSERVER_ENABLED=1")
+        Write-LinuxFile (Join-Path $stage "fleethub-turn-boot.sh") @(
+            "#!/bin/sh",
+            "# Started by the '$TaskTurn' scheduled task. Booting the distro is the point;",
+            "# starting coturn is belt-and-braces in case systemd hasn't got there yet.",
+            "systemctl start coturn >/dev/null 2>&1 || true",
+            "exit 0")
+
+        $provision = @'
+#!/bin/bash
+set -euo pipefail
+S="$1"
+export DEBIAN_FRONTEND=noninteractive
+for f in wsl.conf turnserver.conf coturn.default fleethub-turn-boot.sh; do
+  sed -i 's/\r$//' "$S/$f"
+done
+install -m 0644 "$S/wsl.conf" /etc/wsl.conf
+apt-get update -qq
+apt-get install -y --no-install-recommends coturn
+install -m 0640 -o root -g root "$S/turnserver.conf" /etc/turnserver.conf
+install -m 0644 "$S/coturn.default" /etc/default/coturn
+install -m 0755 "$S/fleethub-turn-boot.sh" /usr/local/sbin/fleethub-turn-boot.sh
+mkdir -p /var/log/coturn
+chown turnserver:turnserver /var/log/coturn 2>/dev/null || true
+mkdir -p /etc/systemd/system/coturn.service.d
+printf '[Service]\nRestart=always\nRestartSec=5\n' > /etc/systemd/system/coturn.service.d/10-fleethub.conf
+echo FLEETHUB_PROVISION_OK
+'@
+        Write-LinuxFile (Join-Path $stage "provision.sh") ($provision -split "`r?`n")
+
+        $stageWsl = ConvertTo-WslPath $stage
+        if (-not $stageWsl) {
+            Warn "Could not map '$stage' to a WSL path -- is TEMP on a network drive?"
+            return $false
+        }
+
+        # apt runs here, BEFORE the mirrored switch, while WSL is still on plain NAT: that is
+        # the well-trodden networking path, so a mirrored-mode problem can never be mistaken
+        # for "apt is broken".
+        Say "Installing coturn inside the distro (apt)..."
+        $prov = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'bash', "$stageWsl/provision.sh", $stageWsl)
+        if ($prov.Output -notmatch 'FLEETHUB_PROVISION_OK') {
+            Warn "Provisioning the distro failed."
+            Say  ($prov.Output.Trim())
+            Say  "If this is a DNS failure, check:  wsl -d $Distro -u root -- cat /etc/resolv.conf"
+            Say  "The distro was left in place -- re-run  install.ps1 -Component Hub  to retry."
+            return $false
+        }
+        Ok "coturn installed and configured"
+    } finally {
+        # turnserver.conf carried the shared secret through TEMP; don't leave it lying about.
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # Distro-scoped restart to apply [boot] systemd=true. Deliberately --terminate, NOT
+    # --shutdown: the latter would take down docker-desktop and every container with it.
+    Invoke-Wsl @('--terminate', $Distro) | Out-Null
+
+    # ---- 3. Mirrored networking (the one --shutdown in the whole feature) ----
+    if ($NeedsWslConfigChange) {
+        $wslConfig = Join-Path $env:USERPROFILE ".wslconfig"
+        $merge = Set-WslConfigMirrored $wslConfig
+        if ($merge.Changed) {
+            Ok "Set networkingMode=mirrored in $wslConfig"
+            if ($merge.BackupPath) { Say "(previous version backed up to $($merge.BackupPath))" }
+            Say "Restarting the WSL virtual machine now -- Docker containers will stop and restart..."
+            Invoke-Wsl @('--shutdown') | Out-Null
+            Say "Docker Desktop restarts its VM on next use; containers with a restart policy come back on their own."
+        } else {
+            Ok "WSL is already in mirrored networking mode"
+        }
+    }
+
+    # ---- 4. Firewalls, then start coturn ----
+    if ($ApplyFirewall) { New-TurnFirewallRules -Port $Port -MinPort $MinPort -MaxPort $MaxPort }
+    else { Say "Skipped firewall rules (-SkipTurnFirewall)." }
+
+    $start = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'systemctl', 'enable', '--now', 'coturn')
+    if ($start.ExitCode -ne 0) {
+        Warn "coturn did not start cleanly."
+        Say  ($start.Output.Trim())
+    }
+
+    Register-TurnBootTask -Distro $Distro
+    return $true
+}
+
+function Test-TurnServer {
+    <#
+      Prove the relay actually works, rather than assuming it does because nothing threw. Every
+      check is Ok or Warn; a failure here never fails the install.
+
+      Known limit, stated in the output too: turnutils_uclient runs INSIDE the distro, so it
+      never traverses the Hyper-V firewall inbound path, and the public-IP attempt usually fails
+      on routers that don't hairpin. These checks are strong evidence, not proof.
+    #>
+    param([string]$Distro, [string]$Secret, [string]$PublicHost, [int]$Port, [string]$HubEnvPath)
+
+    Step "Verifying the TURN relay"
+    $localIp = Get-HostLanIPv4
+
+    # 1. Is the service actually up?
+    $active = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'systemctl', 'is-active', 'coturn')
+    if ($active.Output -match 'active') {
+        Ok "coturn service is active"
+    } else {
+        Warn "coturn is not active."
+        $log = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'journalctl', '-u', 'coturn', '-n', '30', '--no-pager')
+        Say ($log.Output.Trim())
+        Say "Re-run  install.ps1 -Component Hub  once the cause is fixed."
+        return
+    }
+
+    # 2. Bound to the control port?
+    $listen = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'ss', '-lun')
+    if ($listen.Output -match ":$Port") { Ok "Listening on $Port/udp inside the distro" }
+    else { Warn "Nothing is listening on $Port/udp inside the distro." }
+
+    # 3. Mirrored CONFIGURED is not mirrored ACTIVE. This catches a missed --shutdown and a
+    #    .wslconfig written into a different profile than the one WSL reads.
+    $hostname = Invoke-Wsl @('-d', $Distro, '--', 'hostname', '-I')
+    if ($localIp -and $hostname.Output -match [regex]::Escape($localIp)) {
+        Ok "Mirrored networking is active (distro sees the host address $localIp)"
+    } else {
+        Warn "Mirrored networking does not look active -- the distro reports: $($hostname.Output.Trim())"
+        Say  "Expected it to include the host's LAN address ($localIp)."
+        Say  "Check networkingMode=mirrored in $(Join-Path $env:USERPROFILE '.wslconfig'), then run 'wsl --shutdown'."
+    }
+
+    # 4. Visible from Windows?
+    if ($localIp) {
+        try {
+            $tnc = Test-NetConnection -ComputerName $localIp -Port $Port -WarningAction SilentlyContinue
+            if ($tnc.TcpTestSucceeded) { Ok "Reachable from Windows on $localIp`:$Port/tcp" }
+            else { Warn "Could not reach $localIp`:$Port/tcp from Windows -- check the firewall rules." }
+        } catch { Warn "Reachability test failed -- $($_.Exception.Message)" }
+    }
+
+    # 5. Secret parity. This is the check that would have caught the 2026-07-27 desync, where a
+    #    rotation from the console updated the hub and left coturn on the old value.
+    $conf = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'grep', '-h', 'static-auth-secret', '/etc/turnserver.conf')
+    $hubSecret = (Read-DotEnv $HubEnvPath)["REMOTE_TURN_SECRET"]
+    if ($conf.Output -match 'static-auth-secret\s*=\s*(\S+)') {
+        if ($matches[1] -eq $hubSecret) { Ok "Shared secret matches the hub's .env" }
+        else {
+            Warn "The hub and coturn hold DIFFERENT secrets -- every allocation will fail with 401."
+            Say  "hub: $HubEnvPath   coturn: /etc/turnserver.conf in '$Distro'"
+        }
+    }
+
+    # 6. The real test: a credential minted exactly as the hub mints one, doing a real Allocate.
+    $cred = New-TurnRestCredential -Secret $Secret -SessionId "installer-check"
+    $target = if ($localIp) { $localIp } else { "127.0.0.1" }
+    $alloc = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'turnutils_uclient',
+                          '-u', $cred.Username, '-w', $cred.Password,
+                          '-p', "$Port", '-n', '2', '-c', '-e', '8.8.8.8', $target)
+    if ($alloc.Output -match 'Total transmit time' -and $alloc.Output -notmatch '401') {
+        Ok "TURN Allocate succeeded with a hub-minted credential"
+    } else {
+        Warn "TURN Allocate did NOT succeed against $target."
+        Say  "This is the check that matters -- remote sessions will fail until it passes."
+    }
+
+    # Negative control: without this, a coturn accidentally running without use-auth-secret
+    # would sail through every check above.
+    $bad = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'turnutils_uclient',
+                        '-u', $cred.Username, '-w', 'deliberately-wrong',
+                        '-p', "$Port", '-n', '1', '-c', '-e', '8.8.8.8', $target)
+    if ($bad.Output -match 'Total transmit time' -and $bad.Output -notmatch '401') {
+        Warn "A WRONG password was also accepted -- coturn is not enforcing authentication."
+        Say  "Check that 'use-auth-secret' is present in /etc/turnserver.conf."
+    } else {
+        Ok "A wrong credential is correctly rejected"
+    }
+
+    # Public path. Amber, never red: most consumer/SMB routers don't hairpin, so a failure here
+    # is a common false negative rather than evidence of a broken relay.
+    if ($PublicHost -and $PublicHost -ne $localIp) {
+        $pub = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'turnutils_uclient',
+                            '-u', $cred.Username, '-w', $cred.Password,
+                            '-p', "$Port", '-n', '1', '-c', '-e', '8.8.8.8', $PublicHost)
+        if ($pub.Output -match 'Total transmit time' -and $pub.Output -notmatch '401') {
+            Ok "TURN Allocate also succeeded via the public address $PublicHost"
+        } else {
+            Warn "Could not allocate via $PublicHost from this machine."
+            Say  "That is often just NAT hairpinning, not a fault -- most routers can't reach their own public IP from inside."
+        }
+    }
+
+    Say ""
+    Say "Only a machine on a genuinely different network proves the cross-NAT relay."
+    Say "See turn\README.md 'Troubleshooting' for how to read the coturn log during a real session."
+}
+
+function Uninstall-TurnWsl {
+    <#
+      Teardown for the TURN relay. Entirely silent when it was never installed, so the ordinary
+      hub uninstall is unchanged for everyone who skipped TURN.
+    #>
+    $wslPresent = [bool](Get-Command wsl.exe -ErrorAction SilentlyContinue)
+    $hasTask    = [bool](Get-ScheduledTask -TaskName $TaskTurn -ErrorAction SilentlyContinue)
+    $hasDistro  = $false
+    if ($wslPresent) {
+        $list = Invoke-Wsl @('--list', '--quiet')
+        $hasDistro = @($list.Output -split "`r?`n" | ForEach-Object { $_.Trim() } |
+                       Where-Object { $_ -eq $TurnDistro }).Count -gt 0
+    }
+    if (-not $hasTask -and -not $hasDistro) { return }
+
+    Step "Removing the TURN relay"
+    Unregister-TurnBootTask
+    Remove-TurnFirewallRules
+    Ok "Removed the FleetHub firewall rules"
+
+    if ($hasDistro) {
+        # Always ask: --unregister deletes the distro's virtual disk irreversibly. Default Yes
+        # because it holds nothing but coturn -- unlike the hub tree, which we leave alone.
+        if (Prompt-YesNo "Also remove the '$TurnDistro' WSL distro (deletes it and its coturn config)?" -Default Yes) {
+            Invoke-Wsl @('--terminate', $TurnDistro) | Out-Null
+            $rm = Invoke-Wsl @('--unregister', $TurnDistro)
+            if ($rm.ExitCode -eq 0) { Ok "Unregistered '$TurnDistro'" }
+            else { Warn "Could not unregister '$TurnDistro' -- $($rm.Output.Trim())" }
+        } else {
+            Say "Left '$TurnDistro' in place. Remove it later with:  wsl --unregister $TurnDistro"
+        }
+    }
+
+    # .wslconfig is deliberately NOT reverted by default: the operator may now depend on
+    # mirrored mode for other things, and reverting means a second wsl --shutdown -- another
+    # Docker outage during what is supposed to be a cleanup.
+    $wslConfig = Join-Path $env:USERPROFILE ".wslconfig"
+    if ((Test-Path $wslConfig) -and (Select-String -Path $wslConfig -Pattern 'networkingMode\s*=\s*mirrored' -Quiet)) {
+        Warn "Left networkingMode=mirrored in $wslConfig."
+        Say  "Remove that line and run 'wsl --shutdown' if you want NAT networking back."
+    }
 }
 
 function Install-Hub {
@@ -1028,20 +1777,123 @@ function Install-Hub {
     # optionally brings coturn up with Docker, and seeds the STUN/TURN URLs into Settings.
     Say ""
     Say "Remote view/control (optional -- this hub can be the WebRTC TURN relay):"
-    $configureTurn = Prompt-YesNo "Configure this hub as the TURN/STUN server for remote control?" -Default Yes
     $turnSecret = ""; $turnGenerated = $false; $turnHost = ""; $turnControlUrl = ""; $stunControlUrl = ""
+    $turnDistroExists = $false; $turnNeedsWslConfig = $true; $turnDistroName = $TurnDistro
+    $turnWslDir = if ($TurnWslLocation) { $TurnWslLocation }
+                  else { Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$TurnDistro" }
+
+    if ($SkipTurn) {
+        $configureTurn = $false
+        Say "Skipping TURN setup (-SkipTurn)."
+    } elseif ($TurnHost) {
+        $configureTurn = $true      # supplying the host implies yes, like -EnrollmentSecret does
+    } else {
+        $configureTurn = Prompt-YesNo "Configure this hub as the TURN/STUN server for remote control?" -Default Yes
+    }
+
     if ($configureTurn) {
         $turnSecretDefault = $existing["REMOTE_TURN_SECRET"]
+        if ($TurnSecret) { $turnSecretDefault = $TurnSecret }
         $turnGen = $false
         if (-not $turnSecretDefault) { $turnSecretDefault = New-RandomSecret; $turnGen = $true }
         $turnSecret = Prompt-Value "  TURN shared secret (blank = keep generated; paste an existing coturn secret to match it)" $turnSecretDefault -Secret
         $turnGenerated = ($turnGen -and $turnSecret -eq $turnSecretDefault)
 
-        $turnHostDefault = try { ([System.Uri]$hubUrlValue).Host } catch { "" }
+        $turnHostDefault = if ($TurnHost) { $TurnHost }
+                           else { try { ([System.Uri]$hubUrlValue).Host } catch { "" } }
         $turnHost = Prompt-Value "  Public IP (or hostname) clients reach the TURN server on" $turnHostDefault `
                         -Required -ValidateHint "Enter the hub's public IP address (preferred) or a resolvable hostname."
-        $turnControlUrl = "turn:$($turnHost):3478"
-        $stunControlUrl = "stun:$($turnHost):3478"
+        $turnControlUrl = "turn:$($turnHost):$TurnPort"
+        $stunControlUrl = "stun:$($turnHost):$TurnPort"
+
+        # ---- Preconditions, all asked up front ----
+        # Everything the operator needs to decide is settled here, before the hub service is
+        # installed. Nobody should be interrupted twelve minutes into a 1 GB download by a
+        # question about restarting their containers.
+        $skipReason = $null
+
+        $build = 0
+        try { $build = [int](Get-CimInstance Win32_OperatingSystem).BuildNumber } catch { }
+        if ($build -lt 22621) {
+            # Not [Environment]::OSVersion -- that is subject to manifest-based version lying.
+            $skipReason = "this is Windows build $build; mirrored WSL networking needs Windows 11 22H2 (build 22621) or newer"
+        }
+
+        $wsl = $null
+        if (-not $skipReason) {
+            $wsl = Get-WslEnvironment -TargetDistro $turnDistroName
+            if (-not $wsl.ExePresent) {
+                $skipReason = "wsl.exe was not found on this machine"
+            } elseif (-not $wsl.Version) {
+                # wsl.exe exists but --version failed: that is the old inbox component, which has
+                # neither --name nor mirrored networking.
+                Warn "This looks like the older in-box WSL, which can't do mirrored networking."
+                if (Prompt-YesNo "  Run 'wsl --update' now to install the current WSL?" -Default Yes) {
+                    Invoke-Wsl @('--update') -Stream | Out-Null
+                    $wsl = Get-WslEnvironment -TargetDistro $turnDistroName
+                }
+                if (-not $wsl.Version) { $skipReason = "WSL could not be updated to a version that supports mirrored networking" }
+            }
+        }
+        if (-not $skipReason -and -not $wsl.SupportsNameFlag) {
+            $skipReason = "this WSL build's 'wsl --install' has no --name flag; run 'wsl --update' and try again"
+        }
+
+        if (-not $skipReason) {
+            $turnDistroExists = $wsl.TargetExists
+            if ($turnDistroExists) {
+                Say ""
+                Say "A WSL distro named '$turnDistroName' already exists."
+                if (-not (Prompt-YesNo "  Reconfigure it in place (keeps the distro, rewrites the coturn config)?" -Default Yes)) {
+                    $turnDistroName = Prompt-Value "  Name for a new TURN distro" "$($TurnDistro)2" -Required
+                    $turnWslDir = Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$turnDistroName"
+                    $turnDistroExists = $false
+                }
+            }
+            # Only gate on space when something will actually be downloaded.
+            if (-not $turnDistroExists -and -not (Ensure-FreeSpace $turnWslDir $TurnMinFreeGB)) {
+                $skipReason = "there isn't enough free disk space for the WSL distro"
+            }
+        }
+
+        if (-not $skipReason) {
+            # Is the .wslconfig change even needed? If mirrored is already on, there is no
+            # wsl --shutdown and therefore nothing to warn about.
+            $wslConfigPath = Join-Path $env:USERPROFILE ".wslconfig"
+            $currentMode = $null
+            if (Test-Path $wslConfigPath) {
+                $m = Select-String -Path $wslConfigPath -Pattern '^\s*networkingMode\s*=\s*(\S+)' -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+                if ($m) { $currentMode = $m.Matches[0].Groups[1].Value }
+            }
+            $turnNeedsWslConfig = ($currentMode -ne 'mirrored')
+
+            if ($turnNeedsWslConfig) {
+                Say ""
+                Warn "Enabling mirrored WSL networking requires 'wsl --shutdown', which restarts the WSL virtual machine."
+                Say  "That will stop, right now:"
+                foreach ($d in $wsl.OtherDistros) { Say "  - WSL distro: $d" }
+                if ($wsl.HasDockerDesktop) { Say "  - Docker Desktop and EVERY running container on this machine" }
+                if (-not $wsl.OtherDistros -and -not $wsl.HasDockerDesktop) { Say "  - nothing else; this is the only WSL workload here" }
+                Say  "It also changes the networking mode for ALL WSL distros on this box, not just the TURN one."
+                Say  "Containers with a restart policy come back on their own; anything else must be started by hand."
+                if ($currentMode) { Say "  (networkingMode is currently '$currentMode')" }
+
+                $accepted = $AcceptWslNetworkChange
+                if (-not $accepted) {
+                    $accepted = Prompt-YesNo "Understood -- change WSL networking to mirrored and restart the WSL VM?" -Default No
+                }
+                if (-not $accepted) { $skipReason = "the WSL networking change was declined" }
+            }
+        }
+
+        if ($skipReason) {
+            Warn "Skipping the TURN relay: $skipReason."
+            Say  "The hub install continues; remote control just won't have a relay yet."
+            Say  "Run coturn on a Linux host or VM instead and point Settings -> Remote Control at it"
+            Say  "-- see turn\README.md 'Host-OS notes'."
+            $configureTurn = $false
+        }
     }
 
     $lines = @(
@@ -1169,51 +2021,25 @@ print("ok")
     else { Warn "No response yet on port $HubPort -- check 'Get-Service $HubServiceId' and $hubDir\$HubServiceId.wrapper.log." }
 
     # ---- Bring up the coturn TURN server (roadmap #2) ----
+    # Native coturn in a dedicated WSL2 distro. Everything it needs is generated inline, so
+    # unlike the old Docker path this works identically for `irm | iex` runs with no $PSScriptRoot.
+    $turnOk = $false
     if ($configureTurn) {
-        Step "Configuring the TURN server (coturn)"
-        $turnDir = if ($PSScriptRoot) { Join-Path $PSScriptRoot "turn" } else { $null }
-        if ($turnDir -and (Test-Path $turnDir)) {
-            # coturn validates against its OWN copy of the secret, so it must match the hub's.
-            $turnEnv   = Join-Path $turnDir ".env"
-            $turnLines = @("REMOTE_TURN_SECRET=$turnSecret", "TURN_EXTERNAL_IP=$turnHost")
-            [System.IO.File]::WriteAllLines($turnEnv, [string[]]$turnLines, (New-Object System.Text.UTF8Encoding($false)))
-            Ok "Wrote $turnEnv"
-
-            # Windows Docker Desktop has no Linux host networking, so use the published-ports
-            # compose variant (see turn\README.md).
-            $composeFile = "docker-compose.windows.yml"
-            $dockerCmd   = Get-Command docker -ErrorAction SilentlyContinue
-            $composeOk   = $false
-            if ($dockerCmd) {
-                & docker compose version *> $null
-                if ($LASTEXITCODE -eq 0) { $composeOk = $true }
-            }
-            $startCmd = "cd `"$turnDir`"; docker compose -f $composeFile up -d"
-            if ($composeOk -and (Test-Path (Join-Path $turnDir $composeFile))) {
-                if (Prompt-YesNo "Docker found. Start the coturn TURN server now?" -Default Yes) {
-                    Push-Location $turnDir
-                    try {
-                        & docker compose -f $composeFile up -d
-                        if ($LASTEXITCODE -eq 0) { Ok "coturn is up (docker compose -f $composeFile up -d)" }
-                        else { Warn "docker compose exited $LASTEXITCODE -- start it manually:  $startCmd" }
-                    } finally { Pop-Location }
-                } else {
-                    Say "Skipped. Start it later with:  $startCmd"
-                }
-                Say "Open UDP/TCP 3478 and UDP 49160-49200 to this host so relayed media can flow."
-                Warn "Cross-NAT note: a coturn CONTAINER relays from the Docker bridge, which can"
-                Say  "break media for machines outside your network even when allocations succeed."
-                Say  "Good for LAN and for proving credentials. For remote machines, prefer coturn"
-                Say  "on a Linux host/VM beside the hub -- see turn\README.md 'Host-OS notes'."
-            } else {
-                Warn "Docker (with the 'compose' plugin) was not found on this host."
-                Say  "Install Docker Desktop / WSL2, or run coturn on a small Linux VM, then:  $startCmd"
-                Say  "(turn\.env is already written with the matching secret and external IP.)"
-            }
+        $turnOk = Install-TurnWsl -Distro $turnDistroName -Location $turnWslDir `
+                      -Secret $turnSecret -PublicHost $turnHost -Realm $TurnRealm `
+                      -Port $TurnPort -MinPort $TurnMinPort -MaxPort $TurnMaxPort `
+                      -DistroExists $turnDistroExists -ApplyFirewall (-not $SkipTurnFirewall) `
+                      -NeedsWslConfigChange $turnNeedsWslConfig
+        if ($turnOk) {
+            Test-TurnServer -Distro $turnDistroName -Secret $turnSecret -PublicHost $turnHost `
+                            -Port $TurnPort -HubEnvPath $envPath
         } else {
-            Warn "A 'turn' folder was not found next to this installer -- coturn was not set up."
-            Say  "From the repo's turn\ folder: set turn\.env (REMOTE_TURN_SECRET + TURN_EXTERNAL_IP), then 'docker compose -f docker-compose.windows.yml up -d'."
+            Warn "The TURN relay was not fully set up. The hub itself is fine."
+            Say  "Fix the cause above and re-run:  install.ps1 -Component Hub"
         }
+        Say ""
+        Say "Forward these to this host on your router so remote agents can reach the relay:"
+        Say "  $TurnPort/udp, $TurnPort/tcp and $TurnMinPort-$TurnMaxPort/udp"
     }
 
     Write-Host @"
@@ -1230,12 +2056,23 @@ print("ok")
 
 "@ -ForegroundColor Green
 
+    if ($turnOk) {
+        Write-Host @"
+  TURN relay      : coturn in WSL distro '$turnDistroName'  ($turnControlUrl)
+    status        : wsl -d $turnDistroName -u root -- systemctl status coturn
+    logs          : wsl -d $turnDistroName -u root -- journalctl -u coturn -f
+    config        : wsl -d $turnDistroName -u root -- nano /etc/turnserver.conf
+    boot task     : $TaskTurn
+
+"@ -ForegroundColor Green
+    }
+
     # Show any secret this run GENERATED, exactly once. They live in .env (masked on re-run), so
     # this is the operator's only chance to copy them somewhere durable -- the enrollment secret
     # is needed to enrol agents, and the TURN secret must be set as coturn's --static-auth-secret.
     $generated = @()
     if ($enrollGenerated -and $enrollSecret) { $generated += ,@("AGENT_ENROLLMENT_SECRET", $enrollSecret, "enrol agents with this") }
-    if ($turnGenerated   -and $turnSecret)   { $generated += ,@("REMOTE_TURN_SECRET",      $turnSecret,   "coturn --static-auth-secret must match this") }
+    if ($turnGenerated   -and $turnSecret)   { $generated += ,@("REMOTE_TURN_SECRET",      $turnSecret,   "already set in the TURN distro's /etc/turnserver.conf") }
     if ($generated.Count) {
         Write-Host "  Save these now -- generated this run, shown only once:" -ForegroundColor Yellow
         Write-Host "  (also stored in $envPath; masked on any re-run)" -ForegroundColor DarkGray

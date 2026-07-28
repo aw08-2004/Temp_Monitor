@@ -6,11 +6,23 @@ a **TURN server**. FleetHub's design is that **the hub is the TURN server**: it 
 beside) the hub host, and the hub app mints the credentials, so there's nothing external to
 depend on and one secret to manage.
 
-This directory runs [coturn](https://github.com/coturn/coturn), which implements the standard
+Either way it's [coturn](https://github.com/coturn/coturn), which implements the standard
 **TURN REST credential scheme** the hub already mints against
 (`remote.mint_turn_credentials`): `username = "<expiry-unix>:<session-id>"`,
 `password = base64(HMAC-SHA1(secret, username))`. The hub and coturn share **one secret** and
 never exchange a per-user database.
+
+**Two ways to run it, and the choice is not cosmetic:**
+
+| Host | How | Cross-NAT |
+|---|---|---|
+| **Linux** | `docker-compose.yml` here, host networking | ✅ works |
+| **Windows** | a dedicated **WSL2 distro**, provisioned by `install.ps1` | ✅ works |
+| **Windows** | `docker-compose.windows.yml` (container) | ❌ **LAN only** — see [Host-OS notes](#host-os-notes) |
+
+A coturn *container* on Windows relays from the Docker bridge. That is fine on a LAN and fine
+for proving the credential path, but it cannot carry cross-NAT media, for reasons worked out the
+hard way and written up below. The Windows installer therefore builds a WSL2 distro instead.
 
 ## What you need
 
@@ -23,17 +35,46 @@ never exchange a per-user database.
   - **3478/udp and 3478/tcp** — the TURN control port.
   - **49160–49200/udp** (default range, tunable) — the relay port range. Media flows here.
 
-## Easiest: let the hub installer do it
+## Easiest: let the hub installer do it (Windows hub)
 
-`install.ps1` → **Install Hub** asks "Configure this hub as the TURN/STUN server?". Answer
-yes and it generates `REMOTE_TURN_SECRET` (into both the hub `.env` and `turn/.env`), asks for
-the public IP, optionally runs `docker compose up` here, and seeds the STUN/TURN URLs into
-**Settings → Remote Control**. The generated secret is printed once at the end. The manual
-steps below are for a hand setup or a TURN host separate from the hub.
+`install.ps1` → **Install Hub** asks "Configure this hub as the TURN/STUN server?". Answer yes
+and it generates `REMOTE_TURN_SECRET`, asks for the public IP, seeds the STUN/TURN URLs into
+**Settings → Remote Control**, and then builds a complete relay:
 
-> **On a Windows hub the installer gets you a working credential path, but not necessarily a
-> working cross-NAT relay** — read [Host-OS notes](#host-os-notes) before relying on it for
-> machines outside your own network.
+- Creates a **dedicated WSL2 distro** (`FleetHubTurn`, Ubuntu 24.04) via
+  `wsl --install --name ... --no-launch`. Dedicated so it never touches an Ubuntu you use for
+  anything else, and so uninstall is a clean `wsl --unregister`.
+- Installs **coturn natively** in it, under **systemd**, with `Restart=always` so a crash
+  self-heals. Config is written to `/etc/turnserver.conf` with the hub's secret already in it.
+- Sets **`networkingMode=mirrored`** in `%USERPROFILE%\.wslconfig`, merging into any existing
+  file rather than overwriting it (a timestamped backup is taken). This is what makes the relay
+  work — see below.
+- Opens **both firewalls**: normal Windows Firewall *and* the Hyper-V firewall.
+- Registers a **boot scheduled task**, because WSL distros do not start at boot.
+- **Verifies itself**: mints a credential exactly as the hub does and performs a real STUN
+  Binding and TURN Allocate, including a wrong-password negative control.
+
+The generated secret is printed once at the end. Prerequisites: **Windows 11 22H2 (build 22621)
+or newer**, the Store WSL package (`wsl --update`), and ~3 GB of free disk (the installer checks
+and asks). If any precondition fails it says why, skips TURN, and finishes the hub install
+normally — you are never left with a half-configured hub.
+
+> **The one disruptive step:** applying mirrored networking needs `wsl --shutdown`, which
+> restarts the WSL VM and therefore **every Docker Desktop container on the machine**. The
+> installer detects other distros and Docker, names what will stop, and asks for a separate
+> confirmation (default *no*) before doing it. It skips that entirely if mirrored mode is
+> already on.
+
+Day-to-day:
+
+```powershell
+wsl -d FleetHubTurn -u root -- systemctl status coturn     # health
+wsl -d FleetHubTurn -u root -- journalctl -u coturn -f      # live log during a session
+wsl -d FleetHubTurn -u root -- nano /etc/turnserver.conf    # config; restart coturn after
+```
+
+The manual steps below are for a Linux host, or a TURN server that lives somewhere other than
+the hub.
 
 ## Run it by hand
 
@@ -41,9 +82,11 @@ steps below are for a hand setup or a TURN host separate from the hub.
 # .env beside this file (or export the vars):
 #   REMOTE_TURN_SECRET=<same as the hub .env>
 #   TURN_EXTERNAL_IP=<this host's public IP>
-docker compose up -d                          # Linux host (host networking; see below)
-docker compose -f docker-compose.windows.yml up -d   # Windows host (published ports)
+docker compose up -d                          # Linux host (host networking) -- the good path
 docker compose logs -f turn                   # watch it accept allocations
+
+# Windows host, LAN / credential-proving ONLY -- not a cross-NAT relay, see Host-OS notes:
+docker compose -f docker-compose.windows.yml up -d
 ```
 
 Then in the console: **Settings → Remote Control → TURN servers** =
@@ -54,10 +97,26 @@ coturn answers STUN, so `stun:<this-host>:3478` works with no extra dependency.)
 
 **Settings → Remote Control** has a TURN status card where an admin can set or rotate
 `REMOTE_TURN_SECRET` without shell access on the hub (it writes the hub's `.env` and applies
-immediately). coturn validates against **its own** copy, so after a rotate you must set the
-same value as `--static-auth-secret` here — update `turn/.env` `REMOTE_TURN_SECRET` and
-`docker compose ... up -d` again — or coturn will reject every allocation. The UI shows the new
-value once for exactly this reason.
+immediately). coturn validates against **its own** copy, so a rotation is only half done until
+you sync it — otherwise coturn rejects **every** allocation with 401. The UI shows the new value
+once for exactly this reason.
+
+Where the other copy lives depends on how coturn runs:
+
+```powershell
+# WSL2 distro (what the Windows installer builds):
+wsl -d FleetHubTurn -u root -- sed -i "s/^static-auth-secret=.*/static-auth-secret=<new>/" /etc/turnserver.conf
+wsl -d FleetHubTurn -u root -- systemctl restart coturn
+```
+
+```sh
+# Docker (Linux host): update turn/.env, then
+docker compose up -d
+```
+
+This desync is not hypothetical — it happened in the field on 2026-07-27 and cost a debugging
+session. The Windows installer now checks the two values against each other as part of its
+post-install verification, so a re-run will tell you immediately if they have drifted.
 
 ## Host-OS notes
 
@@ -97,20 +156,25 @@ ICE even though allocations succeed. Read the Windows section before deploying t
      coturn logging `Global turn allocation count incremented` **twice** (both peers) while the
      agent logs `peer connection state: failed` about 16 s later.
 
-  So on Windows, treat `docker-compose.windows.yml` as good for **LAN and for proving the
-  credential path**, and not as a cross-NAT production relay. For production, put coturn
-  somewhere it can bind a real interface:
+  So on Windows, `docker-compose.windows.yml` is good for **LAN and for proving the credential
+  path**, and is not a cross-NAT production relay. Put coturn somewhere it can bind a real
+  interface instead:
 
-  - **A Linux host or small VM next to the hub — the recommended fix.** "The hub is the TURN
-    server" only means *the hub app mints the credentials*; the daemon does not have to share
-    the Windows box. Nothing about the hub changes — point **Settings → Remote Control → TURN
-    servers** at the new host and keep `REMOTE_TURN_SECRET` in sync.
-  - **coturn running natively inside a WSL2 distro**, with `networkingMode=mirrored` in
-    `%USERPROFILE%\.wslconfig` so WSL shares the host's network namespace. Note the *natively*:
-    a coturn **container under Docker Desktop stays behind Docker's own bridge no matter what
-    WSL's networking mode is**, so mirrored mode alone does not fix trap 2. Also note that
-    changing `.wslconfig` requires `wsl --shutdown`, which restarts Docker Desktop's VM and
-    therefore **every container on the box**.
+  - **coturn natively inside a WSL2 distro — what `install.ps1` now builds for you**, with
+    `networkingMode=mirrored` so WSL shares the host's network namespace and relay source ports
+    survive. See [the installer section](#easiest-let-the-hub-installer-do-it-windows-hub).
+
+    Note the *natively*. A coturn **container under Docker Desktop stays behind Docker's own
+    bridge no matter what WSL's networking mode is** — mirrored mode alone does not fix trap 2,
+    because the container sits behind a second NAT that `.wslconfig` has no say over. This is
+    worth spelling out because it is an easy and expensive thing to assume.
+
+  - **A Linux host or small VM next to the hub — still the lowest-risk option**, and the right
+    one if this Windows box does other jobs. "The hub is the TURN server" only means *the hub
+    app mints the credentials*; the daemon does not have to share the Windows box. Nothing about
+    the hub changes — point **Settings → Remote Control → TURN servers** at the new host and keep
+    `REMOTE_TURN_SECRET` in sync. Unlike the WSL route it needs no `wsl --shutdown`, so it never
+    disturbs anything else running on the hub.
 
 ## TLS (optional)
 
@@ -126,17 +190,25 @@ and allocates, a wrong one is refused.
 
 ## Troubleshooting
 
-Work top-down — each row assumes the ones above it pass. The agent-side log referenced here is
-`C:\ProgramData\FleetHub\Agent\remote-helper.log` on the target machine; the coturn side is
-`docker compose -f docker-compose.windows.yml logs -f turn`.
+Work top-down — each row assumes the ones above it pass. The agent-side log is
+`C:\ProgramData\FleetHub\Agent\remote-helper.log` on the target machine. For the coturn side:
+
+```powershell
+wsl -d FleetHubTurn -u root -- journalctl -u coturn -f     # WSL2 (installer-built)
+docker compose logs -f turn                                 # Docker (Linux host)
+```
 
 | Symptom | Almost certainly |
 |---|---|
 | Agent logs `ice_servers=0` | `REMOTE_TURN_SECRET` unset on the hub, or no TURN URL in **Settings → Remote Control**. The hub omits TURN rather than failing, so sessions still start and only cross-NAT media dies. |
-| Nothing listening on 3478 on the host; coturn log has **no requests at all** since boot | On Windows: started from the Linux `docker-compose.yml`. See trap 1 above. |
-| coturn logs `check_stun_auth: Cannot find credentials of user <...>` or clients get **401** | The secret differs between the hub's `.env` and coturn's `--static-auth-secret`. A rotation from the UI updates only the hub — coturn must be updated and restarted to match. |
-| Allocations **succeed** (`Global turn allocation count incremented`) but the agent still reports `peer connection state: failed` | The relay's media path, not auth. On Windows/Docker see trap 2 above. Otherwise check that the whole **relay UDP range** (not just 3478) is open and forwarded, and that `TURN_EXTERNAL_IP` is the real public IP. |
+| Nothing listening on 3478 on the host; coturn log has **no requests at all** since boot | On Windows/Docker: started from the Linux `docker-compose.yml`. See trap 1 above. |
+| coturn logs `check_stun_auth: Cannot find credentials of user <...>` or clients get **401** | The secret differs between the hub's `.env` and coturn's copy. A rotation from the UI updates only the hub — see [Rotating the secret](#rotating-the-secret-from-the-ui). |
+| Allocations **succeed** (`Global turn allocation count incremented`) but the agent still reports `peer connection state: failed` | The relay's media path, not auth. On Windows/Docker see trap 2 above. Otherwise check that the whole **relay UDP range** (not just 3478) is open and forwarded, and that the external IP is the real public IP. |
 | Works on the LAN, fails only cross-NAT | TURN is not actually being used or not reachable — the LAN case succeeds on host candidates alone and proves nothing about the relay. Always validate with a machine on a genuinely different network. |
+| **Worked on install day, dead after a reboot** | WSL distros do **not** auto-start. Check the `FleetHub - TURN (WSL)` scheduled task exists and is running. Note it must run as the **installing user** (S4U), not SYSTEM — distros are registered per-user, so a SYSTEM task cannot see it and fails every time. |
+| Remote machines can't allocate, but the LAN can | The **Hyper-V firewall**, which is on by default with WSL 2.0.9+ and blocks inbound to WSL even in mirrored mode. This is the single most likely cause of an otherwise-correct WSL setup failing. Check `Get-NetFirewallHyperVRule`. |
+| TURN died out of nowhere, nothing was changed | Someone ran `wsl --shutdown` — Docker Desktop's own restart flow does this — and took the distro with it. The boot task's 5-minute repeating trigger recovers it; that gap is why the trigger exists. |
+| `wsl -d FleetHubTurn -- hostname -I` shows a `172.x` address | Mirrored networking is configured but **not active**. Either `wsl --shutdown` was never run, or `.wslconfig` was written to a different user profile than the one WSL reads. |
 | Session connects, media flows, but the operator sees a **black screen** | Not TURN at all — the agent injected its capture helper into a session with no desktop. See the remote-control notes in the root [README](../README.md#remote-view--control). |
 
 A useful property of the coturn log: `Global turn allocation count incremented` appearing

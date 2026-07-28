@@ -682,28 +682,35 @@ the operator's scope; every session start/stop is in the audit log.
 - **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
   **The hub is the TURN server** (coturn from [`turn/`](turn/README.md)). The **hub installer
   sets this up for you**: choose *Install Hub*, answer yes to "Configure this hub as the
-  TURN/STUN server", and it generates `REMOTE_TURN_SECRET`, writes `turn/.env`, optionally
-  runs `docker compose up` (Windows uses `docker-compose.windows.yml`), and seeds
-  **Settings → Remote Control → TURN/STUN servers** to `turn:<host>:3478` / `stun:<host>:3478`.
-  Any secret it generates is printed **once** at the end — save it. The hub mints short-lived
-  per-session TURN credentials from the secret (nothing per-user to manage).
+  TURN/STUN server", and it generates `REMOTE_TURN_SECRET`, seeds
+  **Settings → Remote Control → TURN/STUN servers** to `turn:<host>:3478` / `stun:<host>:3478`,
+  and then builds the relay itself. On Windows that means a **dedicated `FleetHubTurn` WSL2
+  distro running coturn natively** under systemd — created, configured, firewalled (both the
+  Windows *and* Hyper-V firewalls), given a boot task, and then **verified with a real TURN
+  Allocate** before the installer finishes. Any secret it generates is printed **once** at the
+  end — save it. The hub mints short-lived per-session credentials from it (nothing per-user).
+  Needs Windows 11 22H2+, the Store WSL package, and ~3 GB free; the installer checks each and
+  skips TURN with an explanation rather than half-configuring anything.
 - **Managing TURN from the UI.** The whole config lives in **Settings → Remote Control**: the
   STUN/TURN URLs, consent mode, TTLs, and a **TURN status card** that shows whether
   `REMOTE_TURN_SECRET` is set and — the number that predicts a working session — how many ICE
   servers a session hands a peer right now (`0` is the "agent logs `ice_servers=0` → peer
   failed" case). From that card an admin (`manage_settings`) can **set or rotate the secret**
   without shell access; it writes `.env` and applies live. Because coturn validates against
-  its own copy, the new value is shown once so you can set the same `--static-auth-secret`
-  (`turn/.env`) and restart coturn. Leaving the secret unset simply omits TURN (STUN/direct
-  paths only — fine on a LAN). See [turn/README.md](turn/README.md) for ports, the public-IP
-  requirement, and the Windows-host notes.
-- **Running coturn on a Windows hub has a caveat worth reading before you rely on it.** The
-  supplied `docker-compose.windows.yml` gets 3478 reachable and credentials validating, but a
-  container's relay sockets sit behind Docker's bridge, which can break the media path for
-  machines outside your network even though allocations succeed. For cross-NAT production, put
-  coturn where it can bind a real interface — a Linux host or VM beside the hub is the simplest
-  answer, and nothing about the hub changes. [turn/README.md](turn/README.md#host-os-notes) has
-  the detail and a symptom-ordered troubleshooting table.
+  its own copy, **a rotation is only half done until you sync it** — the new value is shown once
+  so you can put it in the relay's config (`/etc/turnserver.conf` in the WSL distro, then
+  `systemctl restart coturn`; `turn/.env` for a Docker relay). Leaving the secret unset simply
+  omits TURN (STUN/direct paths only — fine on a LAN). See [turn/README.md](turn/README.md) for
+  ports, the public-IP requirement, and the host-OS notes.
+- **Why the Windows installer builds a WSL distro rather than running a container.** A coturn
+  *container* on Windows relays from the Docker bridge. `--external-ip` makes it advertise the
+  public address and inbound DNAT works — so both peers allocate and the logs look healthy — but
+  relay→peer egress is SNAT'd to an arbitrary source port, and ICE requires the peer to receive
+  from *exactly* the advertised candidate. Every check fails and the agent logs
+  `peer connection state: failed`. A WSL distro in mirrored networking mode shares the host's
+  network namespace, so the relay ports stay symmetric. `docker-compose.windows.yml` is kept for
+  LAN and credential testing only. [turn/README.md](turn/README.md#host-os-notes) has the full
+  forensics and a symptom-ordered troubleshooting table.
 - **Debugging a session that won't connect.** Read the two logs together: the agent's
   `C:\ProgramData\FleetHub\Agent\remote-helper.log` and coturn's. `ice_servers=0` means TURN
   isn't configured; allocations incrementing **twice** in coturn's log means both peers reached
