@@ -157,8 +157,27 @@
     function createPeer(iceServers) {
         pc = new RTCPeerConnection({ iceServers });
 
+        // The agent offers a send-only track with NO a=msid (SIPSorcery does not emit one, and
+        // nothing on the agent side sets a stream id). Chrome honours that literally: ontrack
+        // fires with an EMPTY e.streams, so keying off e.streams[0] alone leaves srcObject null
+        // and the operator gets a permanently blank stage -- while the data channel works fine,
+        // so input and status still behave and the session looks healthy from both ends. Build a
+        // MediaStream from the bare track instead. Verified against a live session 2026-07-28.
         pc.ontrack = (e) => {
-            if (e.streams && e.streams[0]) els.video.srcObject = e.streams[0];
+            if (e.streams && e.streams[0]) {
+                els.video.srcObject = e.streams[0];
+                return;
+            }
+            // Add the track BEFORE assigning srcObject: assigning an empty MediaStream and
+            // mutating it afterwards does not reliably start playback in every browser.
+            const stream = els.video.srcObject instanceof MediaStream
+                ? els.video.srcObject : new MediaStream();
+            if (!stream.getTracks().includes(e.track)) stream.addTrack(e.track);
+            if (els.video.srcObject !== stream) els.video.srcObject = stream;
+            // The element is muted + autoplay so this should not be needed, but a rejected
+            // play() is worth ignoring rather than throwing inside an event handler.
+            const played = els.video.play();
+            if (played && played.catch) played.catch(() => {});
         };
         // The agent (offerer) creates the "control" channel. It carries input UP and status
         // (geometry, desktop switches, capture stalls) DOWN.
