@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace TempMonitorAgent.Fleet;
 
 /// <summary>Finds the real winget.exe for a process running as SYSTEM.
@@ -97,20 +99,58 @@ public static class WingetLocator
             return null;
         }
 
-        string? best = null;
-        Version bestVersion = new(0, 0);
-        foreach (var dir in dirs)
-        {
-            var exe = Path.Combine(dir, "winget.exe");
-            if (!File.Exists(exe)) continue;
+        // Windows keeps more than the architecture build here. A real machine showed:
+        //   Microsoft.DesktopAppInstaller_1.29.279.0_x64__8wekyb3d8bbwe            <- the real one
+        //   Microsoft.DesktopAppInstaller_2026.623.1704.0_neutral_~_8wekyb3d8bbwe  <- resource stub
+        // The stub carries a much HIGHER version, so a pure highest-version-wins search points
+        // at it. Today that is harmless only because the stub contains no winget.exe and the
+        // File.Exists check below drops it -- which is luck, not a decision. Rank explicitly
+        // instead: an architecture-matching package beats a neutral one, and a "~" (staged /
+        // resource) package loses to anything else, before version is even consulted.
+        // Only directories that actually hold the binary are candidates; the rest of the
+        // decision is pure string ranking, which is where the subtlety is, so it lives in
+        // PickBestPackage where it can be tested without a filesystem.
+        var candidates = dirs.Where(d => File.Exists(Path.Combine(d, "winget.exe"))).ToList();
+        var chosen = PickBestPackage(candidates.Select(Path.GetFileName)!, CurrentArchitecture());
+        return chosen is null ? null : Path.Combine(windowsApps, chosen, "winget.exe");
+    }
 
+    internal static string CurrentArchitecture() => RuntimeInformation.OSArchitecture switch
+    {
+        Architecture.Arm64 => "arm64",
+        Architecture.X86 => "x86",
+        _ => "x64",
+    };
+
+    /// <summary>
+    /// Choose the App Installer package directory to run winget from, given their names.
+    ///
+    /// Rank before version, because version alone picks the wrong one: an architecture build
+    /// beats a neutral one, and a staged/resource package ("~" in the name) loses to anything
+    /// else. Only within a rank does the highest version win.
+    /// </summary>
+    internal static string? PickBestPackage(IEnumerable<string> directoryNames, string architecture)
+    {
+        string? best = null;
+        (int rank, Version version) bestKey = (int.MinValue, new Version(0, 0));
+
+        foreach (var name in directoryNames)
+        {
+            if (string.IsNullOrEmpty(name)) continue;
             // Microsoft.DesktopAppInstaller_1.22.10582.0_x64__8wekyb3d8bbwe
-            var parts = Path.GetFileName(dir).Split('_');
-            var version = parts.Length > 1 && Version.TryParse(parts[1], out var v) ? v : new Version(0, 0);
-            if (best is null || version > bestVersion)
+            var parts = name.Split('_');
+            var version = parts.Length > 1 && Version.TryParse(parts[1], out var v)
+                ? v : new Version(0, 0);
+
+            bool staged = parts.Contains("~");
+            bool architectureMatch = parts.Any(
+                p => p.Equals(architecture, StringComparison.OrdinalIgnoreCase));
+            int rank = staged ? 0 : architectureMatch ? 2 : 1;
+
+            if (best is null || (rank, version).CompareTo(bestKey) > 0)
             {
-                best = exe;
-                bestVersion = version;
+                best = name;
+                bestKey = (rank, version);
             }
         }
         return best;

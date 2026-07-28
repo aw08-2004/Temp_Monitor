@@ -239,9 +239,18 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             var winget = WingetLocator.Find();
             if (winget is null)
             {
+                // Name the Windows Server case explicitly. It is the most common reason for
+                // this on a managed fleet and the least obvious: Server ships no Microsoft
+                // Store and no App Installer, so winget is not "missing" there, it was never
+                // going to be present, and no amount of installing it by hand is the answer.
                 return (null, "", "[deploy] FAILED: winget (App Installer) was not found on " +
-                                  "this machine. Install the 'App Installer' package from the " +
-                                  "Microsoft Store, or use a url/upload payload instead.");
+                                  "this machine. On Windows Server this is expected -- there is " +
+                                  "no Store and no App Installer -- so use an upload or url " +
+                                  "payload for this package instead. On Windows 10/11, install " +
+                                  "'App Installer' from the Microsoft Store. (Note that typing " +
+                                  "'winget' into a SYSTEM shell always fails even where winget " +
+                                  "works, because the alias is per-user; that is not evidence " +
+                                  "either way.)");
             }
 
             var wingetArgs =
