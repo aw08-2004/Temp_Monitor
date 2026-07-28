@@ -103,9 +103,9 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             }
 
             // ---- 2. run ----
-            var (file, args) = BuildCommandLine(cmd, source, kind, payloadPath);
+            var (file, args, buildError) = BuildCommandLine(cmd, source, kind, payloadPath);
             if (file is null)
-                return new CommandResult(false, log + "\ndeploy_package has no install command");
+                return new CommandResult(false, log + "\n" + (buildError ?? "deploy_package has no install command"));
 
             Say($"[deploy] running: {file} {args}");
             var outcome = await ProcessRunner.RunAsync(
@@ -217,8 +217,9 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         return (dest, null);
     }
 
-    /// <summary>Substitute {file} and assemble the process to start.</summary>
-    private static (string? File, string Args) BuildCommandLine(
+    /// <summary>Substitute {file} and assemble the process to start. A null File means the
+    /// command could not be built, and Error says why.</summary>
+    private static (string? File, string Args, string? Error) BuildCommandLine(
         FleetCommand cmd, JsonObject source, string kind, string? payloadPath)
     {
         var command = cmd.Params.GetString("install_command") ?? "";
@@ -230,11 +231,23 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // for a winget package, so any extra switches are appended rather than
             // replacing ours. Mirrors InstallAppExecutor's flags for consistency.
             var id = source.GetString("id");
-            if (string.IsNullOrWhiteSpace(id)) return (null, "");
+            if (string.IsNullOrWhiteSpace(id))
+                return (null, "", "[deploy] FAILED: the winget source has no package id");
+
+            // Not the bare name: as a SYSTEM service we cannot see the per-user App
+            // Execution Alias. See WingetLocator.
+            var winget = WingetLocator.Find();
+            if (winget is null)
+            {
+                return (null, "", "[deploy] FAILED: winget (App Installer) was not found on " +
+                                  "this machine. Install the 'App Installer' package from the " +
+                                  "Microsoft Store, or use a url/upload payload instead.");
+            }
+
             var wingetArgs =
                 $"install --id {id} --silent --accept-package-agreements --accept-source-agreements";
             if (!string.IsNullOrWhiteSpace(args)) wingetArgs += " " + args;
-            return ("winget.exe", wingetArgs);
+            return (winget, wingetArgs, null);
         }
 
         if (payloadPath is not null)
@@ -242,7 +255,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             command = command.Replace("{file}", payloadPath, StringComparison.Ordinal);
             args = args.Replace("{file}", payloadPath, StringComparison.Ordinal);
         }
-        return (string.IsNullOrWhiteSpace(command) ? null : command, args);
+        return (string.IsNullOrWhiteSpace(command) ? null : command, args, null);
     }
 
     // ---------------------------------------------------------------- detection

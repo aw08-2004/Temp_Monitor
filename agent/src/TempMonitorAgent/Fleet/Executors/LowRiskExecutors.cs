@@ -104,9 +104,15 @@ public sealed class InstallAppExecutor : ICommandExecutor
         var id = cmd.Params.GetString("id");
         if (!string.IsNullOrWhiteSpace(id))
         {
+            // The bare name only resolves through a per-user App Execution Alias, which a
+            // SYSTEM service cannot see — see WingetLocator.
+            var winget = WingetLocator.Find();
+            if (winget is null)
+                return CommandResult.Fail("winget (App Installer) was not found on this machine");
+
             var args = $"install --id {id} --silent --accept-package-agreements --accept-source-agreements";
             var outcome = await ProcessRunner.RunAsync(
-                "winget.exe", args, ct, timeoutSeconds: 600, onLine: onOutput);
+                winget, args, ct, timeoutSeconds: 600, onLine: onOutput);
             return outcome.ExitCode == 0
                 ? CommandResult.Ok(outcome.Output)
                 : CommandResult.Fail($"winget exited {outcome.ExitCode}: {outcome.Output}");
