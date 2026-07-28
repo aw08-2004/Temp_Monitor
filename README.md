@@ -392,6 +392,26 @@ Agent (token auth): `GET /api/agent/packages/<sha256>`.
 Tunables live in Settings under **Package Deployment**: retry defaults, the upload size
 limit, and the scheduler interval.
 
+**If an upload fails with HTTP 413, it is not the hub.** The hub's own limit is
+`deploy.max_upload_mb` (512 MB by default) and it is enforced in Python, so exceeding it
+gives you a JSON error naming the limit. A raw `413` means the TLS terminator in front of
+the hub rejected the body before Flask ever saw it — and **nginx's default
+`client_max_body_size` is 1 MB**, so the very first real installer anyone uploads hits it.
+Raise it to something above your largest payload and reload:
+
+```nginx
+server {
+    client_max_body_size 600m;   # >= deploy.max_upload_mb
+    # A large upload over a slow link can also hit the read timeout:
+    proxy_read_timeout 300s;
+    proxy_request_buffering off; # stream to the hub instead of buffering the whole file
+}
+```
+
+The equivalents elsewhere: IIS `maxAllowedContentLength` (default ~30 MB) *and*
+`maxRequestLength`; Apache `LimitRequestBody`; Cloudflare's proxy caps free plans at
+100 MB and it cannot be raised from the origin.
+
 ## Backups
 
 A consistent snapshot of the hub database, compressed, encrypted **on the hub** and pushed

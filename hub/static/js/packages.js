@@ -40,8 +40,27 @@ async function api(path, options) {
     const resp = await fetch(path, options);
     let body = null;
     try { body = await resp.json(); } catch (e) { /* empty body is fine */ }
-    if (!resp.ok) throw new Error((body && body.error) || `HTTP ${resp.status}`);
+    if (!resp.ok) throw new Error((body && body.error) || httpMessage(resp.status));
     return body;
+}
+
+// A bare status number is a dead end for the operator staring at it. 413 in particular
+// never comes from the hub -- its own limit (deploy.max_upload_mb, 512 MB by default) is
+// enforced in Python and answers 400 with a JSON reason. A 413 means the TLS terminator in
+// front of the hub rejected the body before Flask ever saw it, and nginx's default
+// client_max_body_size is 1 MB, so the first installer anyone uploads hits it.
+function httpMessage(status) {
+    if (status === 413) {
+        return 'Upload rejected as too large (HTTP 413) before it reached the hub. This is the '
+             + 'reverse proxy in front of the hub, not the hub\'s own limit -- raise '
+             + 'client_max_body_size in nginx (or the equivalent: IIS maxAllowedContentLength, '
+             + 'Apache LimitRequestBody) and reload it.';
+    }
+    if (status === 502 || status === 504) {
+        return `The hub did not respond (HTTP ${status}). A large upload can also hit the proxy's `
+             + 'read timeout -- check the proxy log as well as the hub log.';
+    }
+    return `HTTP ${status}`;
 }
 
 function json(method, payload) {
