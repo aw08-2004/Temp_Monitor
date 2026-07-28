@@ -721,10 +721,12 @@ set/rotate of `REMOTE_TURN_SECRET` (`manage_settings`; writes `.env` + applies l
 `--static-auth-secret` synced by hand).
 
 - **Session injection (agent, `Remote/SessionInjector.cs`)** — the service duplicates its own
-  SYSTEM token, retargets `TokenSessionId` to the active console session (enabling `SeTcb`),
+  SYSTEM token, retargets `TokenSessionId` to the active interactive session (enabling `SeTcb`),
   and `CreateProcessAsUser`s the **same binary** with `--remote-helper` onto `winsta0\default`
   as **SYSTEM-in-session**. One binary, one signature; the helper reuses the self-update trust
-  root and the agent's enrollment identity to authenticate its signaling.
+  root and the agent's enrollment identity to authenticate its signaling. The target session is
+  chosen by enumerating `WTSEnumerateSessionsW` and preferring `WTSActive` (console wins ties),
+  **not** `WTSGetActiveConsoleSessionId` alone — see the field-test findings below.
 - **Capture + encode (`ScreenCapture.cs` + `H264Encoder.cs`, via Vortice)** — DXGI Desktop
   Duplication (GDI `BitBlt` fallback) → BGRA→NV12 (`ColorConvert.cs`) → a Media Foundation
   H.264 encoder → Annex-B. The software encoder path is the shipped baseline; hardware/async-MFT
@@ -752,6 +754,38 @@ set/rotate of `REMOTE_TURN_SECRET` (`manage_settings`; writes `.env` + applies l
   immediately) vs **attended** (a fail-closed, auto-denying prompt to the logged-in user via
   `MessageBoxTimeout`).
 - **Viewer** — a **Remote** tab on the machine page (`remote.js`), gated on `remote_control`.
+
+**Field-test findings (2026-07-27), from a hub + TURN + agent all on one Windows box.** Three
+faults, none of which the Docker-based interop test could have caught, because each lives in a
+layer that test stubs out:
+
+1. **coturn was unreachable on Windows and looked healthy.** It had been started from the Linux
+   `docker-compose.yml`, whose `network_mode: host` binds inside Docker Desktop's VM — nothing
+   listened on the Windows host. The container reported `Up 2 days` with **zero requests in its
+   log**. Fixed by using `docker-compose.windows.yml`; a raw STUN probe plus a real Allocate
+   against a hub-minted credential is now the verification of record.
+2. **A UI secret rotation had desynced the hub from coturn.** The **Settings → Remote Control**
+   card writes the hub's `.env` and applies live, but coturn validates against its own
+   `--static-auth-secret` — so rotating from the console silently breaks every allocation until
+   `turn/.env` is updated and coturn restarted. The UI showing the value once is the mitigation;
+   the failure mode is now in the `turn/` troubleshooting table.
+3. **The helper captured the wrong session, and nothing reported an error.**
+   `WTSGetActiveConsoleSessionId` names only the *physical console*, which on an RDP-administered
+   machine is typically signed out (`WTSConnected`, no user, no composited desktop). The helper
+   injected there, DXGI found no output to duplicate, GDI dutifully blitted an empty desktop, and
+   the pipeline streamed **a flawless black screen**. Fixed by preferring `WTSActive`. The
+   lesson worth keeping: every layer reported success, so the diagnosis had to come from the
+   helper's own `session=1` line rather than from any failure.
+
+**Still open after that test:** cross-NAT relay from a Windows/Docker coturn. Allocations
+succeed for **both** peers and ICE still reaches `failed` — the relay sockets sit on the Docker
+bridge (`Relay address to use: 172.x.x.x`), so `--external-ip` advertises a public candidate
+whose egress source port Docker is free to rewrite. Inbound DNAT works, which is why allocation
+counts look healthy. The recommended resolution is to move coturn somewhere it can bind a real
+interface (a Linux host/VM beside the hub); running it natively in a WSL2 distro with
+`networkingMode=mirrored` also works, but **a container under Docker Desktop stays behind
+Docker's bridge regardless of WSL's networking mode**. This mechanism is strongly indicated by
+the evidence but has not been proven from an external vantage point.
 
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the

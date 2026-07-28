@@ -622,6 +622,14 @@ the operator's scope; every session start/stop is in the audit log.
   as SYSTEM into the interactive session. The helper captures the screen (DXGI), encodes
   H.264, and streams it to the operator's browser over WebRTC; the browser sends mouse and
   keyboard back over a data channel (`SendInput`). Ctrl+Alt+Del is supported.
+- **Which session gets captured.** "The interactive session" is the one Windows reports as
+  `WTSActive`, not merely the physical console — on a machine administered over RDP the console
+  session is often signed out and has no rendered desktop at all. The console wins ties, so a
+  physically-present user beats a stray RDP session. Injecting into the wrong session is not an
+  error anyone notices: the helper starts, Desktop Duplication finds nothing to duplicate and
+  falls back to GDI, and the operator gets a perfectly healthy stream of **a black screen**.
+  The helper logs `Injecting helper into session N` and its own `session=` at startup — if
+  those name a session nobody is signed into, that is the whole bug.
 - **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
   (the logged-in user must approve first). Set it in **Settings → Remote Control**.
 - **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
@@ -642,6 +650,19 @@ the operator's scope; every session start/stop is in the audit log.
   (`turn/.env`) and restart coturn. Leaving the secret unset simply omits TURN (STUN/direct
   paths only — fine on a LAN). See [turn/README.md](turn/README.md) for ports, the public-IP
   requirement, and the Windows-host notes.
+- **Running coturn on a Windows hub has a caveat worth reading before you rely on it.** The
+  supplied `docker-compose.windows.yml` gets 3478 reachable and credentials validating, but a
+  container's relay sockets sit behind Docker's bridge, which can break the media path for
+  machines outside your network even though allocations succeed. For cross-NAT production, put
+  coturn where it can bind a real interface — a Linux host or VM beside the hub is the simplest
+  answer, and nothing about the hub changes. [turn/README.md](turn/README.md#host-os-notes) has
+  the detail and a symptom-ordered troubleshooting table.
+- **Debugging a session that won't connect.** Read the two logs together: the agent's
+  `C:\ProgramData\FleetHub\Agent\remote-helper.log` and coturn's. `ice_servers=0` means TURN
+  isn't configured; allocations incrementing **twice** in coturn's log means both peers reached
+  and authenticated against the relay, which rules out reachability, the shared secret and the
+  credential scheme in one stroke. Always confirm with a machine on a genuinely different
+  network — a LAN test succeeds on host candidates alone and proves nothing about TURN.
 
 > **Status:** built — hub 1.40.0. The agent half needs a signed release
 > (`sign_release.py --sign-agent`), and the hub should be deployed first. On-hardware

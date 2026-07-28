@@ -1201,6 +1201,10 @@ print("ok")
                     Say "Skipped. Start it later with:  $startCmd"
                 }
                 Say "Open UDP/TCP 3478 and UDP 49160-49200 to this host so relayed media can flow."
+                Warn "Cross-NAT note: a coturn CONTAINER relays from the Docker bridge, which can"
+                Say  "break media for machines outside your network even when allocations succeed."
+                Say  "Good for LAN and for proving credentials. For remote machines, prefer coturn"
+                Say  "on a Linux host/VM beside the hub -- see turn\README.md 'Host-OS notes'."
             } else {
                 Warn "Docker (with the 'compose' plugin) was not found on this host."
                 Say  "Install Docker Desktop / WSL2, or run coturn on a small Linux VM, then:  $startCmd"

@@ -31,6 +31,10 @@ the public IP, optionally runs `docker compose up` here, and seeds the STUN/TURN
 **Settings → Remote Control**. The generated secret is printed once at the end. The manual
 steps below are for a hand setup or a TURN host separate from the hub.
 
+> **On a Windows hub the installer gets you a working credential path, but not necessarily a
+> working cross-NAT relay** — read [Host-OS notes](#host-os-notes) before relying on it for
+> machines outside your own network.
+
 ## Run it by hand
 
 ```sh
@@ -57,15 +61,56 @@ value once for exactly this reason.
 
 ## Host-OS notes
 
+**A TURN relay wants a real network interface.** Everything below follows from that: the relay
+hands a peer a candidate address, and the peer must then receive packets *from exactly that
+address and port*. Any NAT between coturn and the wire that rewrites the source port breaks
+ICE even though allocations succeed. Read the Windows section before deploying there.
+
 - **Linux host (recommended):** keep `network_mode: host` in `docker-compose.yml`. TURN and its
-  relay range are reachable on the host's real IP with no port-publishing gymnastics.
-- **Windows host:** Docker Desktop has no Linux host networking, so use
-  **`docker-compose.windows.yml`** (`docker compose -f docker-compose.windows.yml up -d`) — it
-  drops `network_mode: host` and publishes the ports instead (the whole relay range is
-  published, which Docker Desktop supports but is heavyweight). This is the file the installer
-  uses. Alternatives that are often nicer on Windows: run coturn under WSL2, or put the TURN
-  server on a small Linux VM next to the hub — "the hub is the TURN server" only means *the hub
-  app mints the creds*, not that the daemon must share the exact Windows box.
+  relay range are reachable on the host's real IP with no port-publishing gymnastics, and the
+  relay's source port is preserved end to end.
+
+- **Windows host:** there are two distinct traps here, and field testing hit both.
+
+  1. **`network_mode: host` silently does nothing useful.** Docker Desktop has no Linux host
+     networking, so the container binds inside the Linux VM and *nothing listens on the Windows
+     host at all*. The tell is stark: `netstat -ano | findstr 3478` is empty and coturn's log
+     shows **zero requests, ever**, however long it has been up. Use
+     **`docker-compose.windows.yml`** (`docker compose -f docker-compose.windows.yml up -d`),
+     which drops `network_mode: host` and publishes the ports instead. This is the file the
+     installer uses.
+
+  2. **Published ports fix reachability but not the relay path.** With the Windows compose file
+     3478 answers, credentials validate, and both peers allocate successfully — and cross-NAT
+     sessions can *still* fail. The container's relay sockets live on the Docker bridge, which
+     coturn announces at startup:
+
+     ```
+     WARNING: NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED
+     Relay address to use: 172.22.0.2          <-- the bridge, not a real interface
+     ```
+
+     `--external-ip` makes coturn *advertise* the public address, and inbound DNAT delivers
+     peer→relay fine, so allocations look healthy. But relay→peer packets egress through
+     Docker's NAT, which is free to rewrite the source port; the peer then never receives from
+     the advertised candidate and every connectivity check fails. The observed signature is
+     coturn logging `Global turn allocation count incremented` **twice** (both peers) while the
+     agent logs `peer connection state: failed` about 16 s later.
+
+  So on Windows, treat `docker-compose.windows.yml` as good for **LAN and for proving the
+  credential path**, and not as a cross-NAT production relay. For production, put coturn
+  somewhere it can bind a real interface:
+
+  - **A Linux host or small VM next to the hub — the recommended fix.** "The hub is the TURN
+    server" only means *the hub app mints the credentials*; the daemon does not have to share
+    the Windows box. Nothing about the hub changes — point **Settings → Remote Control → TURN
+    servers** at the new host and keep `REMOTE_TURN_SECRET` in sync.
+  - **coturn running natively inside a WSL2 distro**, with `networkingMode=mirrored` in
+    `%USERPROFILE%\.wslconfig` so WSL shares the host's network namespace. Note the *natively*:
+    a coturn **container under Docker Desktop stays behind Docker's own bridge no matter what
+    WSL's networking mode is**, so mirrored mode alone does not fix trap 2. Also note that
+    changing `.wslconfig` requires `wsl --shutdown`, which restarts Docker Desktop's VM and
+    therefore **every container on the box**.
 
 ## TLS (optional)
 
@@ -76,7 +121,25 @@ with a certificate (mount it and drop `--no-tls --no-dtls`); see the coturn docs
 ## Verifying credentials
 
 The hub's minted credentials are checked against coturn's REST auth in
-`tests/test_turn_interop.py` (run with Docker available). If a browser shows
-`iceConnectionState: failed` only on cross-NAT machines, TURN is the thing to check: confirm
-`REMOTE_TURN_SECRET` matches on both sides, `TURN_EXTERNAL_IP` is the real public IP, and the
-relay UDP range is open.
+`tests/test_turn_interop.py` (run with Docker available): a hub-minted credential authenticates
+and allocates, a wrong one is refused.
+
+## Troubleshooting
+
+Work top-down — each row assumes the ones above it pass. The agent-side log referenced here is
+`C:\ProgramData\FleetHub\Agent\remote-helper.log` on the target machine; the coturn side is
+`docker compose -f docker-compose.windows.yml logs -f turn`.
+
+| Symptom | Almost certainly |
+|---|---|
+| Agent logs `ice_servers=0` | `REMOTE_TURN_SECRET` unset on the hub, or no TURN URL in **Settings → Remote Control**. The hub omits TURN rather than failing, so sessions still start and only cross-NAT media dies. |
+| Nothing listening on 3478 on the host; coturn log has **no requests at all** since boot | On Windows: started from the Linux `docker-compose.yml`. See trap 1 above. |
+| coturn logs `check_stun_auth: Cannot find credentials of user <...>` or clients get **401** | The secret differs between the hub's `.env` and coturn's `--static-auth-secret`. A rotation from the UI updates only the hub — coturn must be updated and restarted to match. |
+| Allocations **succeed** (`Global turn allocation count incremented`) but the agent still reports `peer connection state: failed` | The relay's media path, not auth. On Windows/Docker see trap 2 above. Otherwise check that the whole **relay UDP range** (not just 3478) is open and forwarded, and that `TURN_EXTERNAL_IP` is the real public IP. |
+| Works on the LAN, fails only cross-NAT | TURN is not actually being used or not reachable — the LAN case succeeds on host candidates alone and proves nothing about the relay. Always validate with a machine on a genuinely different network. |
+| Session connects, media flows, but the operator sees a **black screen** | Not TURN at all — the agent injected its capture helper into a session with no desktop. See the remote-control notes in the root [README](../README.md#remote-view--control). |
+
+A useful property of the coturn log: `Global turn allocation count incremented` appearing
+**twice** within a second or two means *both* peers reached the relay and authenticated. If you
+see that and ICE still fails, you have conclusively ruled out reachability of 3478, the shared
+secret, and the credential scheme — the problem is downstream in the media path.
