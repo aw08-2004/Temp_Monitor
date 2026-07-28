@@ -8,6 +8,10 @@
                       menu and gated behind a confirmation, since it migrates itself
                       to the agent on its first self-update anyway)
       3) Hub        - Flask/Socket.IO server (this machine becomes the fleet hub)
+      4) Turn       - coturn WebRTC relay only, in a dedicated Ubuntu WSL2 distro.
+                      Installing the hub can set this up too; this option exists for
+                      when the relay belongs on a different machine from the hub
+                      (typically one with a better public address).
 
     Prompts for whatever each path needs (enrollment secret, hub URL, OAuth
     creds, etc.), defaulting to values already present in a local .env when run
@@ -19,16 +23,18 @@
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -AgentUrl <url> -EnrollmentSecret <secret>
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
+        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -TurnHost <public-ip> -TurnSecret <secret>
         powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                    # legacy companion (back-compat)
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -Uninstall
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub -Uninstall
+        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -Uninstall
 
     From the web:
         irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1 | iex
 #>
 
 param(
-    [ValidateSet("Agent", "Companion", "Hub")]
+    [ValidateSet("Agent", "Companion", "Hub", "Turn")]
     [string]$Component,
     [switch]$Uninstall,
 
@@ -46,7 +52,8 @@ param(
     [int]$HubPort = 3001,
     [string]$HubInstallDir,
 
-    # --- Hub: TURN relay (coturn in a dedicated WSL2 distro) ---
+    # --- TURN relay (coturn in a dedicated WSL2 distro) ---
+    # Used by -Component Turn, and by -Component Hub when the hub also hosts the relay.
     # Supplying -TurnHost implies "yes, configure TURN" and skips that prompt, the same way
     # -EnrollmentSecret pre-answers the enrollment question.
     [switch]$SkipTurn,
@@ -489,7 +496,8 @@ function Show-Menu {
         Write-Host "   1) Install Agent      (C#/.NET Windows Service - recommended)"                 -ForegroundColor Cyan
         Write-Host "   2) Install Companion  (legacy Python scheduled-task agent - UNSUPPORTED)"      -ForegroundColor DarkGray
         Write-Host "   3) Install Hub        (Flask/Socket.IO server - this machine becomes the hub)" -ForegroundColor Cyan
-        Write-Host "   4) Uninstall..."                                                               -ForegroundColor Cyan
+        Write-Host "   4) Install TURN       (coturn relay only - for remote control, no hub)"        -ForegroundColor Cyan
+        Write-Host "   5) Uninstall..."                                                               -ForegroundColor Cyan
         Write-Host "   0) Exit"                                                                       -ForegroundColor Cyan
         Write-Host ""
         $choice = Read-Host "Choose an option"
@@ -497,7 +505,8 @@ function Show-Menu {
             "1" { return "Agent" }
             "2" { if (Confirm-CompanionChoice) { return "Companion" } }
             "3" { return "Hub" }
-            "4" { return "UninstallMenu" }
+            "4" { return "Turn" }
+            "5" { return "UninstallMenu" }
             "0" { return "Exit" }
             default { Warn "Invalid choice." }
         }
@@ -511,13 +520,15 @@ function Show-UninstallMenu {
         Write-Host "`n  Which component do you want to uninstall?" -ForegroundColor Cyan
         Write-Host "   1) Agent"
         Write-Host "   2) Companion"
-        Write-Host "   3) Hub"
+        Write-Host "   3) Hub            (also removes the TURN relay, if this box has one)"
+        Write-Host "   4) TURN relay     (leaves the hub alone)"
         Write-Host "   0) Cancel"
         $choice = Read-Host "Choose an option"
         switch ($choice) {
             "1" { return "Agent" }
             "2" { return "Companion" }
             "3" { return "Hub" }
+            "4" { return "Turn" }
             "0" { return "Exit" }
             default { Warn "Invalid choice." }
         }
@@ -1179,6 +1190,24 @@ function Get-HostLanIPv4 {
     return $null
 }
 
+function Get-PublicIPv4 {
+    <#
+      Best-effort public address, used ONLY to pre-fill the prompt -- the operator still confirms
+      it, and a wrong guess costs nothing. Kept short-timeout and fully swallowed: an installer
+      must not hang or fail because an outside lookup service is down or egress is blocked.
+    #>
+    $prev = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $r = Invoke-RestMethod -Uri 'https://api.ipify.org?format=json' -TimeoutSec 5 -ErrorAction Stop
+        if ($r.ip -match '^\d{1,3}(\.\d{1,3}){3}$') { return $r.ip }
+    } catch {
+    } finally {
+        $ProgressPreference = $prev
+    }
+    return ""
+}
+
 function New-TurnServerConfLines {
     param([string]$Secret, [string]$ExternalIp, [string]$LocalIp,
           [string]$Realm, [int]$Port, [int]$MinPort, [int]$MaxPort)
@@ -1426,7 +1455,7 @@ function Install-TurnWsl {
         }
         if ($mk.ExitCode -ne 0) {
             Warn "Could not create the WSL distro (exit $($mk.ExitCode))."
-            Say  "If it asked for a reboot, reboot and re-run:  install.ps1 -Component Hub"
+            Say  "If it asked for a reboot, reboot and re-run:  install.ps1 -Component Turn"
             return $false
         }
         Ok "Created the '$Distro' distro"
@@ -1497,7 +1526,7 @@ echo FLEETHUB_PROVISION_OK
             Warn "Provisioning the distro failed."
             Say  ($prov.Output.Trim())
             Say  "If this is a DNS failure, check:  wsl -d $Distro -u root -- cat /etc/resolv.conf"
-            Say  "The distro was left in place -- re-run  install.ps1 -Component Hub  to retry."
+            Say  "The distro was left in place -- re-run  install.ps1 -Component Turn  to retry."
             return $false
         }
         Ok "coturn installed and configured"
@@ -1561,7 +1590,7 @@ function Test-TurnServer {
         Warn "coturn is not active."
         $log = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'journalctl', '-u', 'coturn', '-n', '30', '--no-pager')
         Say ($log.Output.Trim())
-        Say "Re-run  install.ps1 -Component Hub  once the cause is fixed."
+        Say "Re-run  install.ps1 -Component Turn  once the cause is fixed."
         return
     }
 
@@ -1608,9 +1637,14 @@ function Test-TurnServer {
 
     # 5. Secret parity. This is the check that would have caught the 2026-07-27 desync, where a
     #    rotation from the console updated the hub and left coturn on the old value.
+    #    On a standalone TURN install there may be no hub on this box at all, in which case
+    #    there is nothing to compare against -- say so rather than reporting a false mismatch.
     $conf = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'grep', '-h', 'static-auth-secret', '/etc/turnserver.conf')
     $hubSecret = (Read-DotEnv $HubEnvPath)["REMOTE_TURN_SECRET"]
-    if ($conf.Output -match 'static-auth-secret\s*=\s*(\S+)') {
+    if (-not $hubSecret) {
+        Say "No hub .env on this machine, so the secret can't be cross-checked here."
+        Say "Make sure REMOTE_TURN_SECRET on the hub matches the secret printed below."
+    } elseif ($conf.Output -match 'static-auth-secret\s*=\s*(\S+)') {
         if ($matches[1] -eq $hubSecret) { Ok "Shared secret matches the hub's .env" }
         else {
             Warn "The hub and coturn hold DIFFERENT secrets -- every allocation will fail with 401."
@@ -1708,6 +1742,248 @@ function Uninstall-TurnWsl {
     }
 }
 
+function Uninstall-Turn {
+    <#
+      Standalone TURN teardown. Uninstall-TurnWsl is deliberately silent when TURN was never
+      set up -- correct as a step inside the hub uninstall, but confusing as the whole job here,
+      so say so explicitly.
+    #>
+    $wslPresent = [bool](Get-Command wsl.exe -ErrorAction SilentlyContinue)
+    $hasTask    = [bool](Get-ScheduledTask -TaskName $TaskTurn -ErrorAction SilentlyContinue)
+    $hasDistro  = $false
+    if ($wslPresent) {
+        $list = Invoke-Wsl @('--list', '--quiet')
+        $hasDistro = @($list.Output -split "`r?`n" | ForEach-Object { $_.Trim() } |
+                       Where-Object { $_ -eq $TurnDistro }).Count -gt 0
+    }
+    if (-not $hasTask -and -not $hasDistro) {
+        Say "No TURN relay found on this machine (no '$TurnDistro' distro and no '$TaskTurn' task)."
+        return
+    }
+    Uninstall-TurnWsl
+    Write-Host "`n  TURN relay removed.`n" -ForegroundColor Green
+}
+
+function Resolve-TurnSetup {
+    <#
+      Ask everything the TURN relay needs and check every precondition, WITHOUT touching the
+      machine. Returns a plan hashtable; .Configure is $false when TURN should be skipped.
+
+      Shared by 'Install Hub' (where TURN is an optional add-on) and 'Install TURN' (where it is
+      the whole job), so the two can never drift apart in what they ask or what they refuse.
+      -Standalone only changes wording and where the secret default comes from; every
+      precondition is identical.
+
+      House rule: this never calls Die. Under Install-Hub it runs before the banner that prints
+      the once-only enrollment secret, and losing that secret to a TURN problem is unacceptable.
+    #>
+    param([string]$SecretDefault, [string]$HostDefault, [switch]$Standalone)
+
+    $plan = @{
+        Configure = $false; Secret = ""; Generated = $false; PublicHost = ""
+        DistroName = $TurnDistro; DistroExists = $false; NeedsWslConfig = $true
+        ControlUrl = ""; StunUrl = ""
+    }
+    $plan.WslDir = if ($TurnWslLocation) { $TurnWslLocation }
+                   else { Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$TurnDistro" }
+
+    if ($SkipTurn) {
+        Say "Skipping TURN setup (-SkipTurn)."
+        return $plan
+    }
+    if ($Standalone) {
+        # They picked "Install TURN" off the menu; asking whether they want it would be silly.
+        $plan.Configure = $true
+    } elseif ($TurnHost) {
+        $plan.Configure = $true      # supplying the host implies yes, like -EnrollmentSecret does
+    } else {
+        $plan.Configure = Prompt-YesNo "Configure this hub as the TURN/STUN server for remote control?" -Default Yes
+    }
+    if (-not $plan.Configure) { return $plan }
+
+    # ---- Shared secret ----
+    if ($TurnSecret) { $SecretDefault = $TurnSecret }
+    $gen = $false
+    if (-not $SecretDefault) { $SecretDefault = New-RandomSecret; $gen = $true }
+    $secretHint = if ($Standalone) {
+        "  TURN shared secret (must match REMOTE_TURN_SECRET in the hub's .env)"
+    } else {
+        "  TURN shared secret (blank = keep generated; paste an existing coturn secret to match it)"
+    }
+    $plan.Secret    = Prompt-Value $secretHint $SecretDefault -Secret
+    $plan.Generated = ($gen -and $plan.Secret -eq $SecretDefault)
+
+    if ($TurnHost) { $HostDefault = $TurnHost }
+    $plan.PublicHost = Prompt-Value "  Public IP (or hostname) clients reach the TURN server on" $HostDefault `
+                           -Required -ValidateHint "Enter the public IP address (preferred) or a resolvable hostname."
+    $plan.ControlUrl = "turn:$($plan.PublicHost):$TurnPort"
+    $plan.StunUrl    = "stun:$($plan.PublicHost):$TurnPort"
+
+    # ---- Preconditions, all asked up front ----
+    # Everything the operator needs to decide is settled here, before anything is installed.
+    # Nobody should be interrupted twelve minutes into a 1 GB download by a question about
+    # restarting their containers.
+    $skipReason = $null
+
+    $build = 0
+    try { $build = [int](Get-CimInstance Win32_OperatingSystem).BuildNumber } catch { }
+    if ($build -lt 22621) {
+        # Not [Environment]::OSVersion -- that is subject to manifest-based version lying.
+        $skipReason = "this is Windows build $build; mirrored WSL networking needs Windows 11 22H2 (build 22621) or newer"
+    }
+
+    $wsl = $null
+    if (-not $skipReason) {
+        $wsl = Get-WslEnvironment -TargetDistro $plan.DistroName
+        if (-not $wsl.ExePresent) {
+            $skipReason = "wsl.exe was not found on this machine"
+        } elseif (-not $wsl.Version) {
+            # wsl.exe exists but --version failed: that is the old inbox component, which has
+            # neither --name nor mirrored networking.
+            Warn "This looks like the older in-box WSL, which can't do mirrored networking."
+            if (Prompt-YesNo "  Run 'wsl --update' now to install the current WSL?" -Default Yes) {
+                Invoke-Wsl @('--update') -Stream | Out-Null
+                $wsl = Get-WslEnvironment -TargetDistro $plan.DistroName
+            }
+            if (-not $wsl.Version) { $skipReason = "WSL could not be updated to a version that supports mirrored networking" }
+        }
+    }
+    if (-not $skipReason -and -not $wsl.SupportsNameFlag) {
+        $skipReason = "this WSL build's 'wsl --install' has no --name flag; run 'wsl --update' and try again"
+    }
+
+    if (-not $skipReason) {
+        $plan.DistroExists = $wsl.TargetExists
+        if ($plan.DistroExists) {
+            Say ""
+            Say "A WSL distro named '$($plan.DistroName)' already exists."
+            if (-not (Prompt-YesNo "  Reconfigure it in place (keeps the distro, rewrites the coturn config)?" -Default Yes)) {
+                $plan.DistroName   = Prompt-Value "  Name for a new TURN distro" "$($TurnDistro)2" -Required
+                $plan.WslDir       = Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$($plan.DistroName)"
+                $plan.DistroExists = $false
+            }
+        }
+        # Only gate on space when something will actually be downloaded.
+        if (-not $plan.DistroExists -and -not (Ensure-FreeSpace $plan.WslDir $TurnMinFreeGB)) {
+            $skipReason = "there isn't enough free disk space for the WSL distro"
+        }
+    }
+
+    if (-not $skipReason) {
+        # Is the .wslconfig change even needed? If mirrored is already on, there is no
+        # wsl --shutdown and therefore nothing to warn about.
+        $wslConfigPath = Join-Path $env:USERPROFILE ".wslconfig"
+        $currentMode = $null
+        if (Test-Path $wslConfigPath) {
+            $m = Select-String -Path $wslConfigPath -Pattern '^\s*networkingMode\s*=\s*(\S+)' -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+            if ($m) { $currentMode = $m.Matches[0].Groups[1].Value }
+        }
+        $plan.NeedsWslConfig = ($currentMode -ne 'mirrored')
+
+        if ($plan.NeedsWslConfig) {
+            Say ""
+            Warn "Enabling mirrored WSL networking requires 'wsl --shutdown', which restarts the WSL virtual machine."
+            Say  "That will stop, right now:"
+            foreach ($d in $wsl.OtherDistros) { Say "  - WSL distro: $d" }
+            if ($wsl.HasDockerDesktop) { Say "  - Docker Desktop and EVERY running container on this machine" }
+            if (-not $wsl.OtherDistros -and -not $wsl.HasDockerDesktop) { Say "  - nothing else; this is the only WSL workload here" }
+            Say  "It also changes the networking mode for ALL WSL distros on this box, not just the TURN one."
+            Say  "Containers with a restart policy come back on their own; anything else must be started by hand."
+            if ($currentMode) { Say "  (networkingMode is currently '$currentMode')" }
+
+            $accepted = $AcceptWslNetworkChange
+            if (-not $accepted) {
+                $accepted = Prompt-YesNo "Understood -- change WSL networking to mirrored and restart the WSL VM?" -Default No
+            }
+            if (-not $accepted) { $skipReason = "the WSL networking change was declined" }
+        }
+    }
+
+    if ($skipReason) {
+        Warn "Skipping the TURN relay: $skipReason."
+        if (-not $Standalone) { Say "The hub install continues; remote control just won't have a relay yet." }
+        Say  "Run coturn on a Linux host or VM instead and point Settings -> Remote Control at it"
+        Say  "-- see turn\README.md 'Host-OS notes'."
+        $plan.Configure = $false
+    }
+    return $plan
+}
+
+function Install-Turn {
+    <#
+      Standalone TURN install: this machine becomes the WebRTC relay and nothing else. Useful
+      when the hub lives elsewhere (a Linux box, another Windows server) but you want the relay
+      on a host with a good public address -- previously that meant installing a hub you did
+      not want just to get coturn.
+
+      Unlike the hub path this MAY Die, because there is no once-only secret at risk here: TURN
+      is the whole job, so a hard failure with a clear message beats a green "done" that lies.
+    #>
+    Write-Host @"
+
+  FleetHub - TURN Relay Installer
+  Installs coturn in a dedicated Ubuntu WSL2 distro ('$TurnDistro').
+  This machine becomes the WebRTC relay for remote view/control. No hub is installed.
+
+"@ -ForegroundColor Cyan
+
+    # If a hub happens to live here too, default to ITS secret. On an all-in-one box that makes
+    # the two agree by default, which is the desync this whole feature keeps tripping over.
+    $hubEnvPath   = Join-Path $HubInstallDefault ".env"
+    $secretDefault = (Read-DotEnv $hubEnvPath)["REMOTE_TURN_SECRET"]
+    if ($secretDefault) {
+        Say "Found a hub on this machine; defaulting to the shared secret already in its .env."
+        Say "  $hubEnvPath"
+    } else {
+        Say "No hub found on this machine. Copy the secret shown at the end into the hub's"
+        Say "REMOTE_TURN_SECRET (or Settings -> Remote Control), or paste the hub's existing one now."
+    }
+
+    $plan = Resolve-TurnSetup -SecretDefault $secretDefault -HostDefault (Get-PublicIPv4) -Standalone
+    if (-not $plan.Configure) {
+        Warn "Nothing was installed."
+        return
+    }
+
+    $ok = Install-TurnWsl -Distro $plan.DistroName -Location $plan.WslDir `
+              -Secret $plan.Secret -PublicHost $plan.PublicHost -Realm $TurnRealm `
+              -Port $TurnPort -MinPort $TurnMinPort -MaxPort $TurnMaxPort `
+              -DistroExists $plan.DistroExists -ApplyFirewall (-not $SkipTurnFirewall) `
+              -NeedsWslConfigChange $plan.NeedsWslConfig
+    if (-not $ok) {
+        Die "The TURN relay was not set up. Fix the cause above and re-run: install.ps1 -Component Turn"
+    }
+
+    Test-TurnServer -Distro $plan.DistroName -Secret $plan.Secret -PublicHost $plan.PublicHost `
+                    -Port $TurnPort -HubEnvPath $hubEnvPath
+
+    Write-Host @"
+
+  Done.
+
+  Relay host  : $($plan.PublicHost)
+  Distro      : $($plan.DistroName)   (wsl -d $($plan.DistroName) -u root -- systemctl status coturn)
+  Config      : /etc/turnserver.conf  (wsl -d $($plan.DistroName) -u root -- nano /etc/turnserver.conf)
+  Logs        : wsl -d $($plan.DistroName) -u root -- tail -f /var/log/coturn/turn.log
+  Boot task   : $TaskTurn
+
+  Forward these to this host on your router:
+    $TurnPort/udp, $TurnPort/tcp and $TurnMinPort-$TurnMaxPort/udp
+
+  Point the hub at this relay -- Settings -> Remote Control:
+    TURN URL : $($plan.ControlUrl)
+    STUN URL : $($plan.StunUrl)
+    Secret   : $($plan.Secret)
+
+  That secret must match REMOTE_TURN_SECRET in the hub's .env exactly, or every
+  allocation fails with 401 and remote sessions never connect.
+
+  Uninstall: powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -Uninstall
+
+"@ -ForegroundColor Green
+}
+
 function Install-Hub {
     # Resolve where the hub will live, then lay down just the runtime files. No git
     # clone and no Git dependency: self-update now pulls the same zip (see app.py).
@@ -1801,124 +2077,21 @@ function Install-Hub {
     # optionally brings coturn up with Docker, and seeds the STUN/TURN URLs into Settings.
     Say ""
     Say "Remote view/control (optional -- this hub can be the WebRTC TURN relay):"
-    $turnSecret = ""; $turnGenerated = $false; $turnHost = ""; $turnControlUrl = ""; $stunControlUrl = ""
-    $turnDistroExists = $false; $turnNeedsWslConfig = $true; $turnDistroName = $TurnDistro
-    $turnWslDir = if ($TurnWslLocation) { $TurnWslLocation }
-                  else { Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$TurnDistro" }
+    Say "(Skip this if the relay lives on another machine -- install it there with"
+    Say " install.ps1 -Component Turn, then point Settings -> Remote Control at it.)"
+    $turnHostDefault = try { ([System.Uri]$hubUrlValue).Host } catch { "" }
+    $turnPlan = Resolve-TurnSetup -SecretDefault $existing["REMOTE_TURN_SECRET"] -HostDefault $turnHostDefault
 
-    if ($SkipTurn) {
-        $configureTurn = $false
-        Say "Skipping TURN setup (-SkipTurn)."
-    } elseif ($TurnHost) {
-        $configureTurn = $true      # supplying the host implies yes, like -EnrollmentSecret does
-    } else {
-        $configureTurn = Prompt-YesNo "Configure this hub as the TURN/STUN server for remote control?" -Default Yes
-    }
-
-    if ($configureTurn) {
-        $turnSecretDefault = $existing["REMOTE_TURN_SECRET"]
-        if ($TurnSecret) { $turnSecretDefault = $TurnSecret }
-        $turnGen = $false
-        if (-not $turnSecretDefault) { $turnSecretDefault = New-RandomSecret; $turnGen = $true }
-        $turnSecret = Prompt-Value "  TURN shared secret (blank = keep generated; paste an existing coturn secret to match it)" $turnSecretDefault -Secret
-        $turnGenerated = ($turnGen -and $turnSecret -eq $turnSecretDefault)
-
-        $turnHostDefault = if ($TurnHost) { $TurnHost }
-                           else { try { ([System.Uri]$hubUrlValue).Host } catch { "" } }
-        $turnHost = Prompt-Value "  Public IP (or hostname) clients reach the TURN server on" $turnHostDefault `
-                        -Required -ValidateHint "Enter the hub's public IP address (preferred) or a resolvable hostname."
-        $turnControlUrl = "turn:$($turnHost):$TurnPort"
-        $stunControlUrl = "stun:$($turnHost):$TurnPort"
-
-        # ---- Preconditions, all asked up front ----
-        # Everything the operator needs to decide is settled here, before the hub service is
-        # installed. Nobody should be interrupted twelve minutes into a 1 GB download by a
-        # question about restarting their containers.
-        $skipReason = $null
-
-        $build = 0
-        try { $build = [int](Get-CimInstance Win32_OperatingSystem).BuildNumber } catch { }
-        if ($build -lt 22621) {
-            # Not [Environment]::OSVersion -- that is subject to manifest-based version lying.
-            $skipReason = "this is Windows build $build; mirrored WSL networking needs Windows 11 22H2 (build 22621) or newer"
-        }
-
-        $wsl = $null
-        if (-not $skipReason) {
-            $wsl = Get-WslEnvironment -TargetDistro $turnDistroName
-            if (-not $wsl.ExePresent) {
-                $skipReason = "wsl.exe was not found on this machine"
-            } elseif (-not $wsl.Version) {
-                # wsl.exe exists but --version failed: that is the old inbox component, which has
-                # neither --name nor mirrored networking.
-                Warn "This looks like the older in-box WSL, which can't do mirrored networking."
-                if (Prompt-YesNo "  Run 'wsl --update' now to install the current WSL?" -Default Yes) {
-                    Invoke-Wsl @('--update') -Stream | Out-Null
-                    $wsl = Get-WslEnvironment -TargetDistro $turnDistroName
-                }
-                if (-not $wsl.Version) { $skipReason = "WSL could not be updated to a version that supports mirrored networking" }
-            }
-        }
-        if (-not $skipReason -and -not $wsl.SupportsNameFlag) {
-            $skipReason = "this WSL build's 'wsl --install' has no --name flag; run 'wsl --update' and try again"
-        }
-
-        if (-not $skipReason) {
-            $turnDistroExists = $wsl.TargetExists
-            if ($turnDistroExists) {
-                Say ""
-                Say "A WSL distro named '$turnDistroName' already exists."
-                if (-not (Prompt-YesNo "  Reconfigure it in place (keeps the distro, rewrites the coturn config)?" -Default Yes)) {
-                    $turnDistroName = Prompt-Value "  Name for a new TURN distro" "$($TurnDistro)2" -Required
-                    $turnWslDir = Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$turnDistroName"
-                    $turnDistroExists = $false
-                }
-            }
-            # Only gate on space when something will actually be downloaded.
-            if (-not $turnDistroExists -and -not (Ensure-FreeSpace $turnWslDir $TurnMinFreeGB)) {
-                $skipReason = "there isn't enough free disk space for the WSL distro"
-            }
-        }
-
-        if (-not $skipReason) {
-            # Is the .wslconfig change even needed? If mirrored is already on, there is no
-            # wsl --shutdown and therefore nothing to warn about.
-            $wslConfigPath = Join-Path $env:USERPROFILE ".wslconfig"
-            $currentMode = $null
-            if (Test-Path $wslConfigPath) {
-                $m = Select-String -Path $wslConfigPath -Pattern '^\s*networkingMode\s*=\s*(\S+)' -ErrorAction SilentlyContinue |
-                     Select-Object -First 1
-                if ($m) { $currentMode = $m.Matches[0].Groups[1].Value }
-            }
-            $turnNeedsWslConfig = ($currentMode -ne 'mirrored')
-
-            if ($turnNeedsWslConfig) {
-                Say ""
-                Warn "Enabling mirrored WSL networking requires 'wsl --shutdown', which restarts the WSL virtual machine."
-                Say  "That will stop, right now:"
-                foreach ($d in $wsl.OtherDistros) { Say "  - WSL distro: $d" }
-                if ($wsl.HasDockerDesktop) { Say "  - Docker Desktop and EVERY running container on this machine" }
-                if (-not $wsl.OtherDistros -and -not $wsl.HasDockerDesktop) { Say "  - nothing else; this is the only WSL workload here" }
-                Say  "It also changes the networking mode for ALL WSL distros on this box, not just the TURN one."
-                Say  "Containers with a restart policy come back on their own; anything else must be started by hand."
-                if ($currentMode) { Say "  (networkingMode is currently '$currentMode')" }
-
-                $accepted = $AcceptWslNetworkChange
-                if (-not $accepted) {
-                    $accepted = Prompt-YesNo "Understood -- change WSL networking to mirrored and restart the WSL VM?" -Default No
-                }
-                if (-not $accepted) { $skipReason = "the WSL networking change was declined" }
-            }
-        }
-
-        if ($skipReason) {
-            Warn "Skipping the TURN relay: $skipReason."
-            Say  "The hub install continues; remote control just won't have a relay yet."
-            Say  "Run coturn on a Linux host or VM instead and point Settings -> Remote Control at it"
-            Say  "-- see turn\README.md 'Host-OS notes'."
-            $configureTurn = $false
-        }
-    }
+    $configureTurn      = $turnPlan.Configure
+    $turnSecret         = $turnPlan.Secret
+    $turnGenerated      = $turnPlan.Generated
+    $turnHost           = $turnPlan.PublicHost
+    $turnControlUrl     = $turnPlan.ControlUrl
+    $stunControlUrl     = $turnPlan.StunUrl
+    $turnDistroName     = $turnPlan.DistroName
+    $turnWslDir         = $turnPlan.WslDir
+    $turnDistroExists   = $turnPlan.DistroExists
+    $turnNeedsWslConfig = $turnPlan.NeedsWslConfig
 
     $lines = @(
         "GOOGLE_CLIENT_ID=$googleId"
@@ -2138,6 +2311,7 @@ try {
         "Agent"     { if ($Uninstall) { Uninstall-Agent }     else { Install-Agent } }
         "Companion" { if ($Uninstall) { Uninstall-Companion } else { Install-Companion } }
         "Hub"       { if ($Uninstall) { Uninstall-Hub }       else { Install-Hub } }
+        "Turn"      { if ($Uninstall) { Uninstall-Turn }      else { Install-Turn } }
     }
 } catch {
     # A Die (or any terminating error, since $ErrorActionPreference = 'Stop') lands here.

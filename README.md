@@ -64,6 +64,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1                            
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn                    # TURN relay only, no hub
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -Uninstall
 powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                        # bare -Uninstall = legacy companion, for back-compat
 ```
@@ -71,7 +72,28 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                 
 Component-specific parameters: `-InstallDir <path>` / `-Port <port>` (Companion,
 defaults `C:\Program Files\TempMonitor` / `8085`); `-AgentUrl` / `-AgentExe` /
 `-EnrollmentSecret` / `-HubUrl` (Agent); `-HubPort <port>` (default `3001`) and
-`-HubInstallDir <path>` (default `C:\Program Files\FleetHub\Hub`) (Hub).
+`-HubInstallDir <path>` (default `C:\Program Files\FleetHub\Hub`) (Hub);
+`-TurnHost` / `-TurnSecret` / `-TurnDistro` / `-TurnPort` / `-SkipTurn` (Turn — and
+the same flags apply to Hub, which can set the relay up as part of its own install).
+
+### Installing the TURN relay on its own
+
+`-Component Turn` provisions **only** the coturn WebRTC relay, in its own Ubuntu
+WSL2 distro, with no hub. Use it when the relay belongs on a different machine from
+the hub — typically one with a better public address, or when the hub runs on Linux
+and you want the relay on a Windows box you already have ports forwarded to.
+
+It asks the same questions and enforces the same preconditions as the hub's optional
+TURN step (they share one code path), then prints the `turn:` / `stun:` URLs and the
+shared secret to paste into **Settings → Remote Control** on the hub. If a hub *does*
+happen to live on the same machine, it defaults to the secret already in that hub's
+`.env`, so the two can't drift apart.
+
+> The shared secret must match `REMOTE_TURN_SECRET` on the hub **exactly**. A mismatch
+> fails every allocation with 401 and remote sessions simply never connect.
+
+Removing it (`-Component Turn -Uninstall`) leaves the hub untouched. Uninstalling the
+Hub still removes the relay too, if that machine has one.
 
 Hub and Agent install side by side under one root — `C:\Program Files\FleetHub\Hub`
 and `C:\Program Files\FleetHub\Agent`. The Hub installs as the **`FleetHub - Hub`
@@ -680,8 +702,12 @@ the operator's scope; every session start/stop is in the audit log.
 - **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
   (the logged-in user must approve first). Set it in **Settings → Remote Control**.
 - **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
-  **The hub is the TURN server** (coturn from [`turn/`](turn/README.md)). The **hub installer
-  sets this up for you**: choose *Install Hub*, answer yes to "Configure this hub as the
+  **The hub is the TURN server by default** (coturn from [`turn/`](turn/README.md)), but it does
+  not have to be — the relay can live on any Windows box you can forward ports to. Install it
+  there on its own with *Install TURN* (`-Component Turn`) and point
+  **Settings → Remote Control** at it; the questions, preconditions and verification are
+  identical either way. The **hub installer sets this up for you** when you want both on one
+  machine: choose *Install Hub*, answer yes to "Configure this hub as the
   TURN/STUN server", and it generates `REMOTE_TURN_SECRET`, seeds
   **Settings → Remote Control → TURN/STUN servers** to `turn:<host>:3478` / `stun:<host>:3478`,
   and then builds the relay itself. On Windows that means a **dedicated `FleetHubTurn` WSL2

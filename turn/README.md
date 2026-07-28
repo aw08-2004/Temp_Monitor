@@ -35,11 +35,22 @@ hard way and written up below. The Windows installer therefore builds a WSL2 dis
   - **3478/udp and 3478/tcp** — the TURN control port.
   - **49160–49200/udp** (default range, tunable) — the relay port range. Media flows here.
 
-## Easiest: let the hub installer do it (Windows hub)
+## Easiest: let the installer do it (Windows)
 
-`install.ps1` → **Install Hub** asks "Configure this hub as the TURN/STUN server?". Answer yes
-and it generates `REMOTE_TURN_SECRET`, asks for the public IP, seeds the STUN/TURN URLs into
-**Settings → Remote Control**, and then builds a complete relay:
+Two ways in, both landing on the same code path:
+
+- **On the hub** — `install.ps1` → **Install Hub** asks "Configure this hub as the TURN/STUN
+  server?". Answer yes and it also seeds the STUN/TURN URLs straight into
+  **Settings → Remote Control**.
+- **On its own** — `install.ps1` → **Install TURN** (`-Component Turn`) installs the relay and
+  nothing else, for when it belongs on a different machine than the hub: a box with a better
+  public address, or a Windows host you already have ports forwarded to while the hub runs on
+  Linux. It prints the `turn:` / `stun:` URLs and the secret for you to paste into
+  **Settings → Remote Control** yourself. If a hub happens to be installed on the same machine
+  it defaults to that hub's existing `REMOTE_TURN_SECRET`, so the two can't silently diverge.
+
+Either way it generates or reuses `REMOTE_TURN_SECRET`, asks for the public IP, and builds a
+complete relay:
 
 - Creates a **dedicated WSL2 distro** (`FleetHubTurn`, Ubuntu 24.04) via
   `wsl --install --name ... --no-launch`. Dedicated so it never touches an Ubuntu you use for
@@ -56,8 +67,13 @@ and it generates `REMOTE_TURN_SECRET`, asks for the public IP, seeds the STUN/TU
 
 The generated secret is printed once at the end. Prerequisites: **Windows 11 22H2 (build 22621)
 or newer**, the Store WSL package (`wsl --update`), and ~3 GB of free disk (the installer checks
-and asks). If any precondition fails it says why, skips TURN, and finishes the hub install
-normally — you are never left with a half-configured hub.
+and asks). If any precondition fails it says why and stops — from *Install Hub* it skips TURN and
+finishes the hub install normally, so you are never left with a half-configured hub; from
+*Install TURN* it fails outright, since the relay was the entire job.
+
+Removing it: **Uninstall → TURN relay** (`-Component Turn -Uninstall`) removes the distro, boot
+task and firewall rules while leaving any hub alone. Uninstalling the **Hub** removes the relay
+too, if that machine has one.
 
 > **The one disruptive step:** applying mirrored networking needs `wsl --shutdown`, which
 > restarts the WSL VM and therefore **every Docker Desktop container on the machine**. The
@@ -209,6 +225,8 @@ docker compose logs -f turn                                 # Docker (Linux host
 | Remote machines can't allocate, but the LAN can | The **Hyper-V firewall**, which is on by default with WSL 2.0.9+ and blocks inbound to WSL even in mirrored mode. This is the single most likely cause of an otherwise-correct WSL setup failing. Check `Get-NetFirewallHyperVRule`. |
 | TURN died out of nowhere, nothing was changed | Someone ran `wsl --shutdown` — Docker Desktop's own restart flow does this — and took the distro with it. The boot task's 5-minute repeating trigger recovers it; that gap is why the trigger exists. |
 | `wsl -d FleetHubTurn -- hostname -I` shows a `172.x` address | Mirrored networking is configured but **not active**. Either `wsl --shutdown` was never run, or `.wslconfig` was written to a different user profile than the one WSL reads. |
+| A **wrong** password is accepted, relay ports land outside `min-port`–`max-port`, and `/var/log/coturn/turn.log` **does not exist** | coturn could not read `/etc/turnserver.conf` and silently fell back to built-in defaults — no authentication at all, and the default 49152–65535 relay range. The unit runs as `User=turnserver`, so a `root:root 0640` config locks it out, and coturn does **not** treat that as fatal. Fix: `wsl -d FleetHubTurn -u root -- chown root:turnserver /etc/turnserver.conf` then `systemctl restart coturn`. The installer sets this group correctly and now checks for it; the missing log file is the fastest tell. |
+| coturn stuck in `activating`, journal repeats `bind: Address already in use` | Something else already owns 3478 on the host. Under `networkingMode=mirrored` the distro **shares the host's network namespace**, so a Docker container publishing `3478` collides with it — including a leftover `turn-turn-1` from the old `docker-compose.windows.yml` path. Stop/remove that container; only one of the two can serve. |
 | Session connects, media flows, but the operator sees a **black screen** | Not TURN at all — the agent injected its capture helper into a session with no desktop. See the remote-control notes in the root [README](../README.md#remote-view--control). |
 
 A useful property of the coturn log: `Global turn allocation count incremented` appearing
