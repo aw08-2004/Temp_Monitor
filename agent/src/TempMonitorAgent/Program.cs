@@ -21,6 +21,12 @@ if (RemoteHelper.TryGetSessionFileArg(args) is { } remoteSessionFile)
 if (RemoteHelper.TryGetCaptureTestArgs(args) is { } captureTestArgs)
     return RemoteHelper.RunCaptureSelfTest(captureTestArgs);
 
+// Desktop-tracking diagnostic: prints the input desktop as it changes, and whether this
+// process can actually attach to it. Everything about capturing the lock screen rests on that
+// working, so it gets a way to be tested on its own before a full session is involved.
+if (RemoteHelper.IsDesktopProbe(args))
+    return RemoteHelper.RunDesktopProbe(args);
+
 // Rotating file log under %ProgramData% so field issues on client machines are
 // diagnosable (parity with companion.py's RotatingFileHandler). Console sink too,
 // useful when run interactively for testing.
@@ -80,6 +86,12 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();
     // Remote view/control (roadmap #2): session-injects the capture/control helper.
     builder.Services.AddSingleton<ICommandExecutor, StartRemoteSessionExecutor>();
+    // Virtual display for headless machines: without a display output there is nothing for
+    // Desktop Duplication to duplicate, so a monitorless box streams a black screen.
+    builder.Services.AddSingleton<ICommandExecutor, InstallVirtualDisplayExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, UninstallVirtualDisplayExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, SetVirtualDisplayModeExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, RefreshRemoteInventoryExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
 
@@ -87,6 +99,11 @@ try
     builder.Services.AddSingleton<SelfUpdater>();
 
     builder.Services.AddHostedService<Worker>();
+    // Remote view/control (roadmap #2): brings the capture helper back when its Windows session
+    // is destroyed (i.e. the moment an operator signs in at the logon screen), and hosts the
+    // secure-attention pipe -- SendSAS is only honoured for a real service, which this is and
+    // the session-injected helper is not.
+    builder.Services.AddHostedService<RemoteSessionSupervisor>();
 
     var host = builder.Build();
     host.Run();

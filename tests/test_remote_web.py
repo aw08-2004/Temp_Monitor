@@ -222,6 +222,98 @@ def main():
         CURRENT_USER = "super@x.com"
         os.environ.pop("REMOTE_TURN_SECRET", None)
 
+        print("\n== Stream parameters are validated, not silently clamped ==")
+        r = c.post("/api/remote/PC-01/start",
+                   json={"fps": 30, "bitrate_kbps": 8000, "scale": 50,
+                         "codec": "vp8", "encoder": "hardware", "session": 2, "monitor": 1})
+        check("valid stream params -> 201", r.status_code == 201)
+        queued = [cmd for cmd in fleet.claim_commands(db_path, agent_id, "PC-01")
+                  if cmd["type"] == "start_remote_session"]
+        params = queued[-1]["params"]
+        check("stream params reach the agent command verbatim",
+              params["fps"] == 30 and params["bitrate_kbps"] == 8000 and params["scale"] == 50
+              and params["codec"] == "vp8" and params["encoder"] == "hardware"
+              and params["target_session"] == 2 and params["monitor"] == 1)
+        r = c.post("/api/remote/PC-01/start", json={})
+        check("session defaults to auto (-1)",
+              [cmd for cmd in fleet.claim_commands(db_path, agent_id, "PC-01")
+               if cmd["type"] == "start_remote_session"][-1]["params"]["target_session"] == -1)
+        check("fps out of range -> 400",
+              c.post("/api/remote/PC-01/start", json={"fps": 500}).status_code == 400)
+        check("unknown codec -> 400",
+              c.post("/api/remote/PC-01/start", json={"codec": "av1"}).status_code == 400)
+        # Session 0 is the non-interactive services session -- it has no desktop at all.
+        check("session 0 -> 400",
+              c.post("/api/remote/PC-01/start", json={"session": 0}).status_code == 400)
+
+        print("\n== Inventory: sessions + displays for the picker and the headless badge ==")
+        remote.record_inventory(db_path, "PC-01", {
+            "sessions": [
+                {"id": 1, "user": "", "station": "Console", "state_name": "connected",
+                 "is_console": True, "is_logon_screen": True},
+                {"id": 3, "user": "alice", "domain": "CONTOSO", "account": "CONTOSO\\alice",
+                 "station": "RDP-Tcp#0", "state_name": "active", "client": "LAPTOP"},
+            ],
+            "displays": {"physical_monitors": 0, "active_outputs": 0, "headless": True,
+                         "virtual_display_present": False, "output_names": []},
+        })
+        inv = c.get("/api/remote/PC-01/inventory").get_json()
+        check("inventory returns both sessions", len(inv["sessions"]) == 2)
+        check("the logon-screen session is surfaced, not filtered out",
+              any(s["is_logon_screen"] and s["id"] == 1 for s in inv["sessions"]))
+        check("inventory reports headless", inv["displays"]["headless"] is True)
+        check("inventory says no driver payload is pinned yet",
+              inv["payload_available"] is False)
+        r = c.post("/api/remote/PC-01/inventory/refresh", json={})
+        check("refresh queues refresh_remote_inventory -> 202", r.status_code == 202)
+        check("refresh command reached the queue",
+              any(cmd["type"] == "refresh_remote_inventory"
+                  for cmd in fleet.claim_commands(db_path, agent_id, "PC-01")))
+
+        print("\n== Virtual display ==")
+        r = c.post("/api/remote/PC-01/virtual-display", json={"mode": "install"})
+        check("install with no pinned payload -> 409", r.status_code == 409)
+
+        digest = "a" * 64
+        r = c.post("/api/remote/virtual-display/payload",
+                   json={"sha256": digest, "version": "25.7.23", "filename": "vdd.zip"})
+        check("pinning the payload -> 200", r.status_code == 200)
+        check("a short digest is rejected -> 400",
+              c.post("/api/remote/virtual-display/payload",
+                     json={"sha256": "abc", "version": "1"}).status_code == 400)
+
+        r = c.post("/api/remote/PC-01/virtual-display",
+                   json={"mode": "install", "monitors": 1,
+                         "resolutions": [{"width": 2560, "height": 1440, "hz": 60}]})
+        check("install with a pinned payload -> 202", r.status_code == 202)
+        install = [cmd for cmd in fleet.claim_commands(db_path, agent_id, "PC-01")
+                   if cmd["type"] == "install_virtual_display"][-1]
+        check("install command carries the pinned digest and the agent download url",
+              install["params"]["payload_sha256"] == digest
+              and install["params"]["payload_url"].endswith(f"/api/agent/packages/{digest}"))
+        check("install command carries the requested mode",
+              install["params"]["resolutions"] == [{"width": 2560, "height": 1440, "hz": 60}])
+        check("an out-of-range resolution -> 400",
+              c.post("/api/remote/PC-01/virtual-display",
+                     json={"mode": "install",
+                           "resolutions": [{"width": 99, "height": 99}]}).status_code == 400)
+        check("monitors: 0 stand-down is accepted",
+              c.post("/api/remote/PC-01/virtual-display/mode",
+                     json={"monitors": 0}).status_code == 202)
+
+        CURRENT_USER = "viewer@x.com"    # view only
+        check("virtual display blocked without remote_control -> 403",
+              c.post("/api/remote/PC-01/virtual-display", json={"mode": "install"}).status_code == 403)
+        check("inventory blocked without remote_control -> 403",
+              c.get("/api/remote/PC-01/inventory").status_code == 403)
+        CURRENT_USER = "tech@x.com"      # remote_control, scoped to PC-01
+        check("out-of-scope virtual display -> 403",
+              c.post("/api/remote/PC-09/virtual-display", json={"mode": "install"}).status_code == 403)
+        check("pinning the payload needs manage_settings -> 403",
+              c.post("/api/remote/virtual-display/payload",
+                     json={"sha256": "b" * 64, "version": "2"}).status_code == 403)
+        CURRENT_USER = "super@x.com"
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:

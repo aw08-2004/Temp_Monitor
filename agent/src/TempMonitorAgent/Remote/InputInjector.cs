@@ -21,11 +21,30 @@ namespace TempMonitorAgent.Remote;
 /// </summary>
 public sealed class InputInjector
 {
-    private readonly MonitorRect _monitor;
+    private MonitorRect _monitor;
+    private int _monitorIndex;
 
     public InputInjector(int monitorIndex)
     {
+        _monitorIndex = monitorIndex;
         _monitor = MonitorRect.ForIndex(monitorIndex);
+    }
+
+    /// <summary>
+    /// Re-resolve the target monitor's rectangle and the virtual-desktop bounds.
+    ///
+    /// Must be called ON THE INPUT THREAD, and only after that thread has attached to the
+    /// current input desktop: <c>EnumDisplayMonitors</c> and <c>GetSystemMetrics</c> both report
+    /// the *calling thread's* desktop. Resolving geometry from the wrong desktop is how a click
+    /// ends up hundreds of pixels from where the operator aimed.
+    ///
+    /// Call after a desktop switch (Default -> Winlogon can change the resolution, especially on
+    /// a headless box driven by a virtual display) and whenever the capture geometry changes.
+    /// </summary>
+    public void RefreshGeometry(int? monitorIndex = null)
+    {
+        if (monitorIndex is { } index) _monitorIndex = index;
+        _monitor = MonitorRect.ForIndex(_monitorIndex);
     }
 
     /// <summary>Apply one control message. Shapes (JSON):
@@ -136,11 +155,28 @@ public sealed class InputInjector
         One(KEYEVENTF_KEYUP);
     }
 
+    /// <summary>
+    /// Press Ctrl+Alt+Del.
+    ///
+    /// Two routes, in this order, because the first one probably does not work: SendSAS is
+    /// honoured for a caller running as a service, and this helper -- though SYSTEM -- is a
+    /// session-injected process, not a service. So we ask the agent service to do it over a
+    /// named pipe, and only if that is unavailable (older agent, service down) do we try
+    /// directly and hope the policy is permissive.
+    /// </summary>
     private static void SendSecureAttention()
+    {
+        if (SecureAttentionRelay.TryRequest()) return;
+        SendSecureAttentionFromService();
+    }
+
+    /// <summary>Call SendSAS directly. Named for its one legitimate caller: the agent service,
+    /// which really is a service and for which this actually works.</summary>
+    internal static void SendSecureAttentionFromService()
     {
         // asUser = false: send to the SAS-eligible desktop. Requires the SoftwareSASGeneration
         // policy to permit services; harmless (no-op) where it doesn't. Never throws.
-        try { SendSAS(false); } catch { /* sas.dll missing / policy off -- validate on-device */ }
+        try { SendSAS(false); } catch { /* sas.dll missing / policy off */ }
     }
 
     // ------------------------------------------------------------------ key mapping

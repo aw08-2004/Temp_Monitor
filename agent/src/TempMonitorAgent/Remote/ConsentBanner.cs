@@ -11,13 +11,44 @@ namespace TempMonitorAgent.Remote;
 /// user's own desktop. We use MessageBoxTimeout so an unanswered prompt auto-DENIES after a
 /// timeout rather than leaving a session hanging -- attended means someone actively agrees, and
 /// "no answer" must fail closed, not open.
+///
+/// <b>Threading:</b> showing this prompt gives the calling thread a window, and a thread that
+/// owns a window can never again call <c>SetThreadDesktop</c> -- it fails with ERROR_BUSY for
+/// the life of the thread. That is why <see cref="RequestConsentAsync"/> runs the prompt on its
+/// own dedicated, throwaway thread rather than the thread pool: a poisoned pool thread would go
+/// back into the pool and silently break whichever desktop-bound loop landed on it later.
 /// </summary>
 public static class ConsentBanner
 {
     private const int DefaultTimeoutSeconds = 30;
 
+    /// <summary>Show the prompt on a dedicated thread and await the answer. Always use this
+    /// rather than wrapping <see cref="RequestConsent"/> in Task.Run.</summary>
+    public static Task<bool> RequestConsentAsync(
+        string machine, string operatorEmail, int timeoutSeconds = DefaultTimeoutSeconds)
+    {
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            // Deny on any failure, matching RequestConsent's fail-closed contract.
+            try { completion.TrySetResult(RequestConsent(machine, operatorEmail, timeoutSeconds)); }
+            catch { completion.TrySetResult(false); }
+        })
+        {
+            Name = "remote-consent",
+            IsBackground = true,
+        };
+        thread.SetApartmentState(ApartmentState.STA); // it is a UI thread, however briefly
+        thread.Start();
+        return completion.Task;
+    }
+
     /// <summary>Ask the logged-in user to approve the session. Returns true only on an explicit
-    /// Yes; a No, a timeout, or any failure to show the prompt denies (fail closed).</summary>
+    /// Yes; a No, a timeout, or any failure to show the prompt denies (fail closed).
+    ///
+    /// Creates a window on the calling thread -- see the threading note on the class. Prefer
+    /// <see cref="RequestConsentAsync"/>.</summary>
     public static bool RequestConsent(string machine, string operatorEmail, int timeoutSeconds = DefaultTimeoutSeconds)
     {
         var who = string.IsNullOrWhiteSpace(operatorEmail) ? "An IT operator" : operatorEmail;

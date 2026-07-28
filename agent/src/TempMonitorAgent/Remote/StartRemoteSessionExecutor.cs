@@ -52,7 +52,9 @@ public sealed class StartRemoteSessionExecutor : ICommandExecutor
             return Task.FromResult(CommandResult.Fail("cannot resolve agent executable path"));
 
         var arguments = $"{AgentConfig.RemoteHelperArg} \"{sessionFile}\"";
-        var result = SessionInjector.Launch(exePath, arguments);
+        var result = SessionInjector.Launch(
+            exePath, arguments,
+            session.TargetSession is { } target and >= 0 ? (uint)target : null);
         if (!result.Ok)
         {
             // Leave no orphan session file behind on a failed launch (the helper would have
@@ -62,6 +64,10 @@ public sealed class StartRemoteSessionExecutor : ICommandExecutor
                 session.SessionId, result.Error);
             return Task.FromResult(CommandResult.Fail($"remote helper launch failed: {result.Error}"));
         }
+
+        // Track it so the supervisor can bring the helper back if its Windows session goes away
+        // -- which is exactly what happens the moment the operator signs in at the logon screen.
+        RemoteSessionSupervisor.Track(session.SessionId, session.ToJson(), result.Pid);
 
         _log.LogInformation(
             "start_remote_session {SessionId}: helper launched pid={Pid} in session {Session}",
@@ -83,14 +89,23 @@ public sealed class StartRemoteSessionExecutor : ICommandExecutor
         var consent = cmd.Params.GetString("consent_mode");
         if (string.IsNullOrWhiteSpace(consent)) consent = "unattended";
 
+        // -1 is the hub's encoding of "auto" -- let the helper pick the session itself.
+        int targetSession = cmd.Params.GetInt("target_session", -1);
+
         var session = new RemoteSessionParams
         {
             SessionId = sessionId,
             Monitor = Math.Max(0, cmd.Params.GetInt("monitor", 0)),
+            TargetSession = targetSession >= 0 ? targetSession : null,
             ConsentMode = consent,
             // Always from the hub's trusted attribution, never a client-supplied param.
             IssuedBy = cmd.IssuedBy ?? "",
             IceServers = ParseIceServers(cmd.Params),
+            Fps = cmd.Params.GetInt("fps", 15),
+            BitrateKbps = cmd.Params.GetInt("bitrate_kbps", 4000),
+            Scale = cmd.Params.GetInt("scale", 100),
+            Codec = cmd.Params.GetString("codec") is { Length: > 0 } c ? c : "h264",
+            Encoder = cmd.Params.GetString("encoder") is { Length: > 0 } enc ? enc : "auto",
         };
         return (session, null);
     }

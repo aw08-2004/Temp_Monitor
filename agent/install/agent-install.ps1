@@ -226,6 +226,35 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
 Ok "Failure recovery: restart x3 @ 60s"
 
 # ----------------------------------------------------------------------
+# 4b. Allow the service to press Ctrl+Alt+Del
+# ----------------------------------------------------------------------
+# The secure attention sequence cannot be synthesised with SendInput -- the kernel intercepts
+# it, which is the point of a *secure* attention sequence. SendSAS is the supported route, and
+# with SoftwareSASGeneration = 1 it is honoured for a caller running as a service. Without this
+# the Ctrl+Alt+Del button in the remote viewer is a silent no-op, which matters most on exactly
+# the machines the remote viewer is for: a headless box at the logon screen.
+#
+# Value 1 = "Services" only. Not 2 (ease-of-access apps) or 3 (both) -- this grants the
+# narrowest thing that makes the button work.
+Step "Allowing the service to send Ctrl+Alt+Del"
+try {
+    $sasKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+    if (-not (Test-Path $sasKey)) { New-Item -Path $sasKey -Force | Out-Null }
+    $existing = (Get-ItemProperty -Path $sasKey -Name SoftwareSASGeneration -ErrorAction SilentlyContinue).SoftwareSASGeneration
+    if ($existing -eq 1 -or $existing -eq 3) {
+        Ok "SoftwareSASGeneration already permits services ($existing)"
+    } else {
+        # Don't downgrade a value an admin deliberately set to 3 (services + apps).
+        New-ItemProperty -Path $sasKey -Name SoftwareSASGeneration -Value 1 -PropertyType DWord -Force | Out-Null
+        Ok "SoftwareSASGeneration = 1 (services may generate Ctrl+Alt+Del)"
+    }
+} catch {
+    # Group Policy may own this key on a domain-joined machine, in which case it is the
+    # domain admin's call, not ours. Everything else still works; only the button is dead.
+    Warn "Could not set SoftwareSASGeneration ($($_.Exception.Message)). Ctrl+Alt+Del from the remote viewer may not work."
+}
+
+# ----------------------------------------------------------------------
 # 5. Start
 # ----------------------------------------------------------------------
 Step "Starting service"

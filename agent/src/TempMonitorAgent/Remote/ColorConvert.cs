@@ -78,5 +78,107 @@ public static class ColorConvert
         }
     }
 
+    /// <summary>Scratch bytes <see cref="BgraToNv12Scaled"/> needs for a given output size.</summary>
+    public static int ScratchSize(int dstWidth, int dstHeight) => dstWidth * dstHeight * 3;
+
+    /// <summary>
+    /// Downscale a BGRA frame and convert it to NV12 in one pass.
+    ///
+    /// Resolution scaling is the single biggest bandwidth lever on a remote session -- halving
+    /// each dimension quarters the pixels the encoder has to spend bits on -- so an operator on
+    /// a slow link can trade sharpness for a stream that keeps up.
+    ///
+    /// The filter is a box average over the source rectangle each destination pixel covers, not
+    /// a nearest-neighbour point sample. That costs a little more arithmetic and is worth it:
+    /// point-sampling a desktop drops every second row of text, which is the one thing the
+    /// operator is usually trying to read.
+    ///
+    /// Upscaling is not supported (and never requested); dst must be &lt;= src.
+    /// </summary>
+    /// <param name="scratchRgb">Reusable buffer of at least <see cref="ScratchSize"/> bytes.
+    /// Passed in rather than allocated so a 15fps loop does not churn megabytes a second.</param>
+    public static void BgraToNv12Scaled(
+        ReadOnlySpan<byte> bgra, int stride, int srcWidth, int srcHeight,
+        int dstWidth, int dstHeight, Span<byte> nv12, Span<byte> scratchRgb)
+    {
+        if (dstWidth == srcWidth && dstHeight == srcHeight)
+        {
+            BgraToNv12(bgra, stride, dstWidth, dstHeight, nv12);
+            return;
+        }
+        if ((dstWidth & 1) != 0 || (dstHeight & 1) != 0)
+            throw new ArgumentException("NV12 requires even width and height");
+        if (dstWidth > srcWidth || dstHeight > srcHeight)
+            throw new ArgumentException("BgraToNv12Scaled downscales only");
+        if (nv12.Length < Nv12Size(dstWidth, dstHeight))
+            throw new ArgumentException("nv12 buffer too small");
+        if (scratchRgb.Length < ScratchSize(dstWidth, dstHeight))
+            throw new ArgumentException("scratch buffer too small");
+
+        // Pass 1: box-average into a compact RGB image at the destination size. Keeping the
+        // averaged RGB lets the chroma pass reuse it instead of re-reading four source blocks.
+        for (int dy = 0; dy < dstHeight; dy++)
+        {
+            int sy0 = dy * srcHeight / dstHeight;
+            int sy1 = Math.Max(sy0 + 1, (dy + 1) * srcHeight / dstHeight);
+            int outRow = dy * dstWidth * 3;
+            for (int dx = 0; dx < dstWidth; dx++)
+            {
+                int sx0 = dx * srcWidth / dstWidth;
+                int sx1 = Math.Max(sx0 + 1, (dx + 1) * srcWidth / dstWidth);
+                int b = 0, g = 0, r = 0, n = 0;
+                for (int sy = sy0; sy < sy1; sy++)
+                {
+                    int row = sy * stride;
+                    for (int sx = sx0; sx < sx1; sx++)
+                    {
+                        int p = row + sx * 4;
+                        b += bgra[p]; g += bgra[p + 1]; r += bgra[p + 2];
+                        n++;
+                    }
+                }
+                int o = outRow + dx * 3;
+                scratchRgb[o] = (byte)(b / n);
+                scratchRgb[o + 1] = (byte)(g / n);
+                scratchRgb[o + 2] = (byte)(r / n);
+            }
+        }
+
+        // Pass 2: the same BT.601 limited-range conversion as BgraToNv12, over the scaled image.
+        int ySize = dstWidth * dstHeight;
+        for (int y = 0; y < dstHeight; y++)
+        {
+            int row = y * dstWidth * 3;
+            int yOut = y * dstWidth;
+            for (int x = 0; x < dstWidth; x++)
+            {
+                int p = row + x * 3;
+                int b = scratchRgb[p], g = scratchRgb[p + 1], r = scratchRgb[p + 2];
+                nv12[yOut + x] = (byte)(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+            }
+        }
+
+        int uvOut = ySize;
+        for (int y = 0; y < dstHeight; y += 2)
+        {
+            int row0 = y * dstWidth * 3;
+            int row1 = (y + 1) * dstWidth * 3;
+            for (int x = 0; x < dstWidth; x += 2)
+            {
+                int p00 = row0 + x * 3, p01 = row0 + (x + 1) * 3;
+                int p10 = row1 + x * 3, p11 = row1 + (x + 1) * 3;
+
+                int b = (scratchRgb[p00] + scratchRgb[p01] + scratchRgb[p10] + scratchRgb[p11] + 2) >> 2;
+                int g = (scratchRgb[p00 + 1] + scratchRgb[p01 + 1] + scratchRgb[p10 + 1] + scratchRgb[p11 + 1] + 2) >> 2;
+                int r = (scratchRgb[p00 + 2] + scratchRgb[p01 + 2] + scratchRgb[p10 + 2] + scratchRgb[p11 + 2] + 2) >> 2;
+
+                int u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+                int v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+                nv12[uvOut++] = Clamp(u);
+                nv12[uvOut++] = Clamp(v);
+            }
+        }
+    }
+
     private static byte Clamp(int v) => (byte)(v < 0 ? 0 : v > 255 ? 255 : v);
 }

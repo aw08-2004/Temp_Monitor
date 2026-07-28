@@ -35,6 +35,7 @@ from flask import Blueprint, jsonify, request, session
 import backups
 import fleet
 import permissions
+import remote
 import settings
 
 
@@ -136,6 +137,14 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
                 backups.record_profiles(db_path, machine, data["profiles"])
             except Exception as e:
                 print(f"[backup] Could not record profiles for {machine}: {e}")
+        # Logon sessions + display outputs, on the same change-only cadence and with the same
+        # never-fatal handling: this feeds the remote session picker and the headless badge,
+        # and neither is worth failing a heartbeat over.
+        if data.get("remote"):
+            try:
+                remote.record_inventory(db_path, machine, data["remote"])
+            except Exception as e:
+                print(f"[remote] Could not record inventory for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])
@@ -319,6 +328,12 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         if data.get("type") in fleet.SCHEDULED_COMMANDS:
             return jsonify({"error": "Package deployments are issued from the Packages "
                                      "page, not the command channel."}), 400
+        # Same shape of hole, sharper consequence: these are gated on remote_control at the
+        # Remote tab, so accepting them here would let a holder of issue_commands ALONE
+        # install a driver and a new trusted publisher on any machine in their scope.
+        if data.get("type") in fleet.VIRTUAL_DISPLAY_COMMANDS | fleet.REMOTE_CONTROL_COMMANDS:
+            return jsonify({"error": "Remote sessions and virtual displays are managed from "
+                                     "the Remote tab, not the command channel."}), 400
         try:
             command_id = fleet.create_command(
                 db_path,

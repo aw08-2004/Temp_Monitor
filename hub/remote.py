@@ -111,6 +111,153 @@ def init_remote_db(db_path):
             "CREATE INDEX IF NOT EXISTS idx_remote_signals_session "
             "ON remote_signals(session_id, id)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS remote_inventory (
+                machine       TEXT PRIMARY KEY,
+                sessions_json TEXT NOT NULL,
+                displays_json TEXT NOT NULL,
+                reported_at   INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS virtual_display_payload (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                version     TEXT NOT NULL,
+                sha256      TEXT NOT NULL,
+                filename    TEXT NOT NULL,
+                uploaded_by TEXT NOT NULL,
+                uploaded_at INTEGER NOT NULL
+            )
+            """
+        )
+
+
+# --------------------------------------------------------------------------- inventory
+# What a remote session would find on a machine: which logon sessions exist, and whether
+# there is anything to capture. Reported on the heartbeat (change-detected agent-side), and
+# consumed by the session switcher and the "no display outputs" badge.
+#
+# This lives here rather than in its own module because it is remote-control data with no
+# other consumer -- the same reasoning that keeps the signal relay in this file.
+
+#: Cap on stored logon sessions. A machine with more than this has a problem, not a need.
+MAX_REPORTED_SESSIONS = 32
+
+
+def record_inventory(db_path, machine, payload):
+    """Store the agent's reported logon sessions and display outputs.
+
+    Written from the heartbeat, so unlike everything else here it is not operator input: it is
+    trimmed and type-checked before it lands in the database, and a malformed payload is
+    dropped rather than raised. A stale badge is an acceptable cost; a heartbeat that 500s
+    because a machine sent something odd is not -- that machine would go "offline" fleet-wide.
+
+    Returns True if something was stored.
+    """
+    if not isinstance(payload, dict):
+        return False
+
+    sessions = []
+    for raw in list(payload.get("sessions") or [])[:MAX_REPORTED_SESSIONS]:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            session_id = int(raw.get("id"))
+        except (TypeError, ValueError):
+            continue
+        sessions.append({
+            "id": session_id,
+            "user": str(raw.get("user") or "")[:128],
+            "domain": str(raw.get("domain") or "")[:128],
+            "account": str(raw.get("account") or "")[:260],
+            "station": str(raw.get("station") or "")[:64],
+            "client": str(raw.get("client") or "")[:128],
+            "state": str(raw.get("state_name") or "")[:32],
+            "is_console": bool(raw.get("is_console")),
+            "is_logon_screen": bool(raw.get("is_logon_screen")),
+        })
+
+    raw_displays = payload.get("displays")
+    displays = {}
+    if isinstance(raw_displays, dict):
+        def _int(key, default=0):
+            try:
+                return int(raw_displays.get(key, default))
+            except (TypeError, ValueError):
+                return default
+        displays = {
+            "physical_monitors": _int("physical_monitors"),
+            "active_outputs": _int("active_outputs", -1),
+            "virtual_display_present": bool(raw_displays.get("virtual_display_present")),
+            "virtual_display_started": bool(raw_displays.get("virtual_display_started")),
+            "headless": bool(raw_displays.get("headless")),
+            "output_names": [str(n)[:128]
+                             for n in list(raw_displays.get("output_names") or [])[:16]],
+        }
+
+    if not sessions and not displays:
+        return False
+
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO remote_inventory(machine, sessions_json, displays_json, reported_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(machine) DO UPDATE SET sessions_json = excluded.sessions_json, "
+            "displays_json = excluded.displays_json, reported_at = excluded.reported_at",
+            (machine, json.dumps(sessions), json.dumps(displays), int(time.time())),
+        )
+    return True
+
+
+def get_inventory(db_path, machine):
+    """The last reported sessions/displays for `machine`, or empty defaults if it has never
+    reported (an agent older than this feature, or one that has not heartbeated yet)."""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT sessions_json, displays_json, reported_at FROM remote_inventory "
+            "WHERE machine = ?", (machine,)
+        ).fetchone()
+    if row is None:
+        return {"sessions": [], "displays": {}, "reported_at": None}
+    try:
+        sessions = json.loads(row["sessions_json"])
+        displays = json.loads(row["displays_json"])
+    except (TypeError, ValueError):
+        sessions, displays = [], {}
+    return {"sessions": sessions, "displays": displays, "reported_at": row["reported_at"]}
+
+
+# --------------------------------------------------------------------------- VDD payload
+def set_virtual_display_payload(db_path, version, sha256, filename, uploaded_by):
+    """Pin which uploaded package blob is the virtual display driver.
+
+    Only a pointer is stored. The bytes live in the existing package blob store, and agents
+    fetch them through the existing authenticated, digest-verified package channel -- so this
+    feature adds no new download path, no second signed artifact, and nothing to the agent's
+    own update manifest.
+    """
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO virtual_display_payload(id, version, sha256, filename, uploaded_by, "
+            "uploaded_at) VALUES (1, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET version = excluded.version, "
+            "sha256 = excluded.sha256, filename = excluded.filename, "
+            "uploaded_by = excluded.uploaded_by, uploaded_at = excluded.uploaded_at",
+            (version, sha256, filename, uploaded_by, int(time.time())),
+        )
+
+
+def get_virtual_display_payload(db_path):
+    """The pinned driver payload, or None if an admin has not uploaded one yet."""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT version, sha256, filename, uploaded_by, uploaded_at "
+            "FROM virtual_display_payload WHERE id = 1"
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def _row_to_session(row):

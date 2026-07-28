@@ -333,3 +333,145 @@
     color: var(--danger);
     margin-bottom: var(--space-3);
 }
+
+/* ============ Remote view ============ */
+/* Two toolbars: start-time choices (session, codec, encoder) and live ones (monitor,
+   quality, view-only, fullscreen). Both collapse to a wrapped column on narrow screens
+   rather than overflowing, matching .terminal__head-actions. */
+.remote-toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-3);
+}
+
+.remote-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.remote-field__label {
+    font-size: var(--text-xs);
+    color: var(--muted);
+}
+
+.remote-field__control {
+    background: var(--control-bg);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: 6px var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.remote-field__control:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
+    border-color: var(--accent);
+}
+
+.remote-field__control:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.remote-field__control--num {
+    width: 6em;
+}
+
+.remote-field__note {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    align-self: center;
+}
+
+.remote-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.remote-badge {
+    /* Status badges sit next to the connection pill rather than in the actions group, so
+       they read as state rather than something to click. */
+    flex-shrink: 0;
+}
+
+.remote-stage {
+    position: relative;
+    background: #000;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.remote-stage__video {
+    display: block;
+    width: 100%;
+    max-height: 70vh;
+    /* contain, not fill: a stretched desktop is unreadable, and the aspect ratio changes
+       mid-stream when the machine switches to the lock screen or a virtual display comes
+       up at a different resolution. remote.js maps pointer coordinates against the
+       letterboxed content box so clicks still land where the operator aimed. */
+    object-fit: contain;
+    background: #000;
+}
+
+/* In fullscreen the stage IS the screen, so the video takes the whole viewport and the
+   toolbar is replaced by a minimal overlay -- otherwise the controls would be off-screen
+   and the only way out would be Esc. */
+.remote-stage:fullscreen .remote-stage__video {
+    max-height: 100vh;
+    height: 100vh;
+}
+
+.remote-stage__overlay {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: var(--radius-md);
+    /* Fades out so it does not sit permanently over the remote desktop's own UI. */
+    opacity: 0.25;
+    transition: opacity 120ms ease-in-out;
+}
+
+.remote-stage__overlay:hover,
+.remote-stage__overlay:focus-within {
+    opacity: 1;
+}
+
+.remote-stage__badge {
+    font-size: var(--text-xs);
+    color: #fff;
+}
+
+.remote-vdd {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+}
+
+.remote-vdd__text {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    flex: 1;
+    min-width: 240px;
+}
+
+.remote-vdd__actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}

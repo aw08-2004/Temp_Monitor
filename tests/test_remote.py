@@ -169,6 +169,49 @@ def main():
         finally:
             os.remove(env_path)
 
+        print("\n== Inventory intake is defensive: it comes off a heartbeat ==")
+        check("a machine that never reported yields empty defaults",
+              remote.get_inventory(db_path, "PC-NEVER") ==
+              {"sessions": [], "displays": {}, "reported_at": None})
+        check("a non-dict payload is dropped, not raised",
+              remote.record_inventory(db_path, "PC-01", "nonsense") is False)
+        check("an empty payload is dropped", remote.record_inventory(db_path, "PC-01", {}) is False)
+
+        # A malformed session must not take the whole report down with it -- the cost of one
+        # bad row is that row, not a machine that reads "offline" because its heartbeat 500s.
+        remote.record_inventory(db_path, "PC-01", {
+            "sessions": [{"id": "not-a-number"}, {"id": 2, "user": "bob", "state_name": "active"}],
+            "displays": {"physical_monitors": 1, "active_outputs": "?", "headless": False},
+        })
+        inv = remote.get_inventory(db_path, "PC-01")
+        check("the unparseable session is skipped and the good one kept",
+              len(inv["sessions"]) == 1 and inv["sessions"][0]["id"] == 2)
+        check("a non-numeric display field falls back rather than raising",
+              inv["displays"]["active_outputs"] == -1 and inv["displays"]["physical_monitors"] == 1)
+
+        many = {"sessions": [{"id": i} for i in range(remote.MAX_REPORTED_SESSIONS + 20)]}
+        remote.record_inventory(db_path, "PC-02", many)
+        check("the stored session list is capped",
+              len(remote.get_inventory(db_path, "PC-02")["sessions"])
+              == remote.MAX_REPORTED_SESSIONS)
+
+        # Overwrites rather than accumulating: this is a snapshot of current state.
+        remote.record_inventory(db_path, "PC-01", {"sessions": [{"id": 5}]})
+        check("a later report replaces the earlier one",
+              [s["id"] for s in remote.get_inventory(db_path, "PC-01")["sessions"]] == [5])
+
+        print("\n== Virtual display payload pin ==")
+        check("no payload pinned initially",
+              remote.get_virtual_display_payload(db_path) is None)
+        remote.set_virtual_display_payload(db_path, "25.7.23", "a" * 64, "vdd.zip", "me@x.com")
+        pinned = remote.get_virtual_display_payload(db_path)
+        check("the pin round-trips",
+              pinned["version"] == "25.7.23" and pinned["sha256"] == "a" * 64
+              and pinned["uploaded_by"] == "me@x.com")
+        remote.set_virtual_display_payload(db_path, "25.9.01", "b" * 64, "vdd2.zip", "you@x.com")
+        check("re-pinning replaces rather than adding a second row",
+              remote.get_virtual_display_payload(db_path)["version"] == "25.9.01")
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:

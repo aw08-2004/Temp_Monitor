@@ -87,6 +87,27 @@ SCHEDULED_COMMANDS = frozenset({
 # gated on the remote_control capability at the console session (see remote_web.py).
 REMOTE_CONTROL_COMMANDS = frozenset({
     "start_remote_session",
+    # Re-reports the machine's logon sessions and display outputs on its next heartbeat.
+    # Cheap and read-only, but it belongs to the remote feature and its answer is only
+    # meaningful to the Remote tab, so it is gated with the rest of it.
+    "refresh_remote_inventory",
+})
+
+# Virtual display driver for headless machines (roadmap #2). A machine with no monitor has
+# no display output, so Desktop Duplication has nothing to duplicate and the stream is a
+# black screen -- an indirect display driver gives the desktop (and the logon screen)
+# somewhere to be composited.
+#
+# install_ carries a SNAPSHOT of the payload pin (a sha256 + a hub URL) taken when the
+# operator clicked, so like the deploy and remote types a saved favorite would pin a digest
+# that may no longer be the current release. The other two carry only machine-independent
+# settings, but they are kept together here because they share one capability gate and one
+# audit story, and splitting them would invite issuing an uninstall through a channel that
+# does not know what it is uninstalling.
+VIRTUAL_DISPLAY_COMMANDS = frozenset({
+    "install_virtual_display",
+    "uninstall_virtual_display",
+    "set_virtual_display_mode",
 })
 
 ALL_COMMANDS = frozenset({
@@ -98,7 +119,8 @@ ALL_COMMANDS = frozenset({
     "run_script",
     "install_driver",
     "update_bios",
-}) | SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
+}) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
+      | VIRTUAL_DISPLAY_COMMANDS)
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -147,6 +169,12 @@ ACTION_LEVELS = {
     "remote_session_start": LEVEL_SECURITY,
     "remote_session_end": LEVEL_SECURITY,
     "remote_turn_secret_set": LEVEL_SECURITY,
+    # Installing the virtual display puts a third-party driver into the DriverStore and its
+    # publisher into this machine's certificate store. That is an expansion of what the
+    # machine trusts, so it is recorded at the same level as running code as SYSTEM.
+    "virtual_display_install": LEVEL_SECURITY,
+    "virtual_display_uninstall": LEVEL_SECURITY,
+    "virtual_display_payload_set": LEVEL_SECURITY,
     "backup_key_create": LEVEL_SECURITY,
     "backup_key_reveal": LEVEL_SECURITY,
     "backup_key_escrowed": LEVEL_SECURITY,
@@ -159,6 +187,8 @@ ACTION_LEVELS = {
     "settings.update": LEVEL_SECURITY,
     "settings.reset": LEVEL_SECURITY,
     # -- notice: an operator changed fleet state or configuration.
+    # Changing modes only reconfigures an already-trusted driver; it grants nothing new.
+    "virtual_display_mode": LEVEL_NOTICE,
     "machine.merge": LEVEL_NOTICE,
     "machine.delete": LEVEL_NOTICE,
     "machine.primary_sensor": LEVEL_NOTICE,
@@ -1042,6 +1072,13 @@ def _validate_favorite(name, command_type, params):
         # These carry a one-shot session id + single-use TURN credentials; a saved copy
         # would point at a dead session.
         raise ValueError(f"{command_type!r} commands start a live remote session and "
+                         f"cannot be saved as a favorite")
+    if command_type in VIRTUAL_DISPLAY_COMMANDS:
+        # install_virtual_display pins a payload DIGEST captured when the operator clicked;
+        # a favorite saved today would still be pinning it after the driver is re-uploaded,
+        # and would then fail the download's hash check on every machine it was replayed
+        # against. The other two ride along so the Remote tab stays the single way in.
+        raise ValueError(f"{command_type!r} commands are issued from the Remote tab and "
                          f"cannot be saved as a favorite")
     if params is None:
         params = {}

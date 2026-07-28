@@ -38,15 +38,31 @@ internal static class SessionInjector
     private const uint NoActiveSession = 0xFFFFFFFF;
 
     /// <summary>Launch <paramref name="applicationPath"/> with <paramref name="arguments"/>
-    /// as SYSTEM in the active interactive session, on winsta0\default.</summary>
-    public static InjectionResult Launch(string applicationPath, string arguments)
+    /// as SYSTEM in an interactive session, on winsta0\default.
+    ///
+    /// <paramref name="targetSession"/> pins a specific Windows session (the operator picked it
+    /// from the session switcher). It is validated against the live enumeration first: the list
+    /// the operator clicked may be seconds stale, and injecting into a session that has since
+    /// ended fails in a much less legible way than falling back does.</summary>
+    public static InjectionResult Launch(string applicationPath, string arguments,
+                                         uint? targetSession = null)
     {
-        uint session = FindInteractiveSession();
-        if (session == NoActiveSession)
-            return InjectionResult.Fail(
-                "no interactive session (no user is signed in), nothing to capture");
-
-        Log.Information("Injecting helper into session {Session}", session);
+        uint session;
+        if (targetSession is { } requested && IsUsableSession(requested))
+        {
+            session = requested;
+            Log.Information("Injecting helper into operator-selected session {Session}", session);
+        }
+        else
+        {
+            if (targetSession is { } gone)
+                Log.Warning("Requested session {Session} is no longer usable; auto-selecting", gone);
+            session = FindInteractiveSession();
+            if (session == NoActiveSession)
+                return InjectionResult.Fail(
+                    "no interactive session available on this machine, nothing to capture");
+            Log.Information("Injecting helper into session {Session}", session);
+        }
 
         // Not fatal on its own -- SYSTEM may already have SeTcb enabled -- but keep the
         // reason, since a later SetTokenInformation failure is otherwise a mystery.
@@ -204,6 +220,19 @@ internal static class SessionInjector
         public uint dwThreadId;
     }
 
+    /// <summary>True if <paramref name="session"/> is something we could inject into right now:
+    /// it exists, it is not the services session, and it is not in a dead state.</summary>
+    private static bool IsUsableSession(uint session)
+    {
+        if (session == 0 || session == NoActiveSession) return false;
+        foreach (var s in SessionProbe.Enumerate())
+            if (s.SessionId == session)
+                return s.State is SessionProbe.WtsActive
+                                or SessionProbe.WtsConnected
+                                or SessionProbe.WtsDisconnected;
+        return false;
+    }
+
     /// <summary>
     /// Pick the session that actually has a rendered desktop to capture.
     ///
@@ -214,70 +243,65 @@ internal static class SessionInjector
     /// GDI, and streams a perfectly black 1920x1080 screen -- connected, encoding, showing
     /// nothing. Meanwhile the operator's real desktop is in the RDP session next door.
     ///
-    /// So: prefer a session in WTSActive, which is the state Windows gives a session that has
-    /// a logged-on user attached to a desktop (a locked console counts -- still Active). The
-    /// console wins ties so a physically-present user beats a stray RDP session; otherwise the
-    /// lowest active session id, which is deterministic. Falls back to the console session id
-    /// if enumeration fails, preserving the old behaviour rather than refusing to start.
+    /// Three tiers, in order:
+    ///   1. A session in WTSActive -- a logged-on user attached to a desktop (a locked console
+    ///      counts, it is still Active). The console wins ties so a physically-present user
+    ///      beats a stray RDP session; otherwise the lowest active id, which is deterministic.
+    ///   2. Failing that, the CONSOLE session if it exists at all in Connected/Disconnected
+    ///      with a real window station. That is a machine sitting at the logon screen -- which
+    ///      used to be refused outright, making it impossible to sign in remotely to a machine
+    ///      nobody was signed in to. This is the whole point of remote-controlling a headless
+    ///      box, so it must be reachable. Only ever the console: falling back to an arbitrary
+    ///      disconnected RDP session would reintroduce the black-screen regression above.
+    ///   3. Nothing usable -- reported to the operator.
     /// </summary>
     private static uint FindInteractiveSession()
     {
-        uint console = WTSGetActiveConsoleSessionId();
+        uint console = SessionProbe.ConsoleSessionId();
 
-        if (!WTSEnumerateSessionsW(WtsCurrentServerHandle, 0, 1, out IntPtr buffer, out uint count)
-            || buffer == IntPtr.Zero)
+        var sessions = SessionProbe.Enumerate();
+        if (sessions.Count == 0)
         {
-            Log.Warning("WTSEnumerateSessions failed (win32 {Err}); falling back to console " +
-                        "session {Session}", LastError(), console);
+            Log.Warning("Session enumeration returned nothing (win32 {Err}); falling back to " +
+                        "console session {Session}", LastError(), console);
             return console;
         }
 
-        try
+        bool consoleIsActive = false;
+        uint best = NoActiveSession;
+        foreach (var s in sessions)
         {
-            bool consoleIsActive = false;
-            uint best = NoActiveSession;
-            int size = Marshal.SizeOf<WTS_SESSION_INFO>();
-
-            for (uint i = 0; i < count; i++)
-            {
-                var info = Marshal.PtrToStructure<WTS_SESSION_INFO>(buffer + (int)(i * size));
-                if (info.State != WtsActive) continue;
-                // Session 0 is the non-interactive services session -- never a capture target.
-                if (info.SessionId == 0) continue;
-
-                if (info.SessionId == console) consoleIsActive = true;
-                if (best == NoActiveSession || info.SessionId < best) best = info.SessionId;
-            }
-
-            if (consoleIsActive) return console;
-            return best; // NoActiveSession when nothing is active, which the caller reports
+            // Session 0 is the non-interactive services session -- never a capture target.
+            if (s.SessionId == 0 || s.State != SessionProbe.WtsActive) continue;
+            if (s.SessionId == console) consoleIsActive = true;
+            if (best == NoActiveSession || s.SessionId < best) best = s.SessionId;
         }
-        finally
+
+        if (consoleIsActive)
         {
-            WTSFreeMemory(buffer);
+            Log.Information("Session select: console session {Session} is active", console);
+            return console;
         }
+        if (best != NoActiveSession)
+        {
+            Log.Information("Session select: no active console, using active session {Session}", best);
+            return best;
+        }
+
+        // Tier 2: the logon screen.
+        foreach (var s in sessions)
+        {
+            if (s.SessionId != console || s.SessionId == 0) continue;
+            if (s.State is not (SessionProbe.WtsConnected or SessionProbe.WtsDisconnected)) continue;
+            if (string.IsNullOrWhiteSpace(s.StationName)) continue;
+            Log.Information(
+                "Session select: nobody signed in; using console session {Session} at the logon " +
+                "screen (station {Station}, state {State})", s.SessionId, s.StationName, s.State);
+            return s.SessionId;
+        }
+
+        return NoActiveSession;
     }
-
-    private const int WtsActive = 0;                       // WTS_CONNECTSTATE_CLASS.WTSActive
-    private static readonly IntPtr WtsCurrentServerHandle = IntPtr.Zero;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WTS_SESSION_INFO
-    {
-        public uint SessionId;
-        public IntPtr pWinStationName;
-        public int State;
-    }
-
-    [DllImport("wtsapi32.dll", SetLastError = true)]
-    private static extern bool WTSEnumerateSessionsW(
-        IntPtr server, uint reserved, uint version, out IntPtr sessionInfo, out uint count);
-
-    [DllImport("wtsapi32.dll")]
-    private static extern void WTSFreeMemory(IntPtr memory);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WTSGetActiveConsoleSessionId();
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentProcess();

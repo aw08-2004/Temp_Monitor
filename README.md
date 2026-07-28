@@ -622,14 +622,41 @@ the operator's scope; every session start/stop is in the audit log.
   as SYSTEM into the interactive session. The helper captures the screen (DXGI), encodes
   H.264, and streams it to the operator's browser over WebRTC; the browser sends mouse and
   keyboard back over a data channel (`SendInput`). Ctrl+Alt+Del is supported.
-- **Which session gets captured.** "The interactive session" is the one Windows reports as
-  `WTSActive`, not merely the physical console — on a machine administered over RDP the console
-  session is often signed out and has no rendered desktop at all. The console wins ties, so a
-  physically-present user beats a stray RDP session. Injecting into the wrong session is not an
-  error anyone notices: the helper starts, Desktop Duplication finds nothing to duplicate and
-  falls back to GDI, and the operator gets a perfectly healthy stream of **a black screen**.
-  The helper logs `Injecting helper into session N` and its own `session=` at startup — if
-  those name a session nobody is signed into, that is the whole bug.
+- **Which session gets captured — and choosing it.** The **Session** picker in the Remote tab
+  lists the machine's logon sessions (who, where, what state), reported on the agent heartbeat.
+  Leave it on **Auto** and the agent picks: a session Windows reports as `WTSActive`, not merely
+  the physical console — on a machine administered over RDP the console session is often signed
+  out and has no rendered desktop at all. The console wins ties, so a physically-present user
+  beats a stray RDP session. Failing that, it falls back to the **console session at the logon
+  screen**, which is what makes signing in remotely to a machine nobody is signed into possible
+  at all. Injecting into the wrong session is not an error anyone notices: the helper starts,
+  Desktop Duplication finds nothing to duplicate and falls back to GDI, and the operator gets a
+  perfectly healthy stream of **a black screen**. The helper logs which tier it chose and its
+  own `session=` at startup.
+- **The lock screen, the logon screen, and UAC.** The helper follows the Windows *input
+  desktop*, re-attaching its capture and input threads whenever it switches (`Default` ↔
+  `Winlogon`) and rebuilding Desktop Duplication on the new desktop. That is what makes the lock
+  screen visible and typeable. Signing in destroys the Windows session the helper lives in, so
+  the service supervises the helper and re-injects it into the new session — the view comes back
+  on its own a few seconds after the remote login succeeds.
+- **Headless machines need a virtual display.** Desktop Duplication duplicates a display
+  *output*; a machine with no monitor has none, so there is genuinely nothing to capture and the
+  stream is black. The Remote tab shows a **No display outputs** badge on such a machine and
+  offers to install a bundled IddCx **virtual display driver** on demand, per machine (never
+  fleet-wide, never automatically). It is a user-mode (UMDF2) driver, so no test-signing, Secure
+  Boot or HVCI changes are involved — but installing it does add its publisher to that machine's
+  TrustedPublisher store, which is why the command output names the exact subject and thumbprint
+  and the action is audited at security level. Set the payload once: upload the driver's
+  "Driver Only" zip on the **Packages** page, then pin it under **Settings → Remote Control**.
+  Uninstall is available from the same panel, and `monitors: 0` stands the driver down without
+  removing it once a real monitor is plugged in.
+- **Stream controls.** Session, codec (H.264 or VP8) and encoder (auto / hardware / software)
+  are chosen **before** connecting — they are negotiated in the SDP or decide which encoder gets
+  built, so changing them needs a new session, and the UI disables them while connected rather
+  than letting a change silently do nothing. Monitor, quality preset (or raw fps / bitrate /
+  resolution scale), **fullscreen** and **view only** change **live** mid-session over the
+  control data channel. View-only is an accident guard on the viewer, not a permission: it stops
+  *this browser* sending input, and does not stop anyone else driving the machine.
 - **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
   (the logged-in user must approve first). Set it in **Settings → Remote Control**.
 - **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
@@ -664,10 +691,25 @@ the operator's scope; every session start/stop is in the audit log.
   credential scheme in one stroke. Always confirm with a machine on a genuinely different
   network — a LAN test succeeds on host candidates alone and proves nothing about TURN.
 
-> **Status:** built — hub 1.40.0. The agent half needs a signed release
-> (`sign_release.py --sign-agent`), and the hub should be deployed first. On-hardware
-> follow-ups (tune together): secure-desktop capture during UAC, hardware H.264 encode, and
-> per-machine consent override.
+- **Diagnosing capture before you involve a browser.** Two agent-binary self-tests, both
+  runnable on the machine itself: `--desktop-probe [seconds]` prints the input desktop as it
+  changes and whether this process can attach to it (lock the screen, trigger a UAC prompt), and
+  `--remote-capture-test <file.h264> <seconds>` writes a playable clip straight from the capture
+  and encode path with no hub, browser or session injection involved.
+
+> **Status:** built — hub 1.44.0, agent 3.14.0. The agent half needs a signed release
+> (`sign_release.py --sign-agent`), and the hub should be deployed first.
+>
+> **On-hardware validation still outstanding**, in rough order of how much rests on it:
+> 1. Whether Desktop Duplication works against the Winlogon desktop after `SetThreadDesktop`
+>    on your specific GPU and driver. Everything about seeing the lock screen rests on this;
+>    `--desktop-probe` answers the first half of it in a minute.
+> 2. Whether IddCx and desktop-switch capture behave the same on **Windows Server** SKUs.
+> 3. Whether `SendSAS` is honoured — from the service (where the agent now routes it over a
+>    SYSTEM-only named pipe) or at all, given `SoftwareSASGeneration` may be Group-Policy owned.
+> 4. Whether the hand-rolled SetupAPI root-device creation matches what `devcon`/`nefcon` do.
+>
+> Per-machine consent override is still a follow-up.
 
 ## Signing releases
 

@@ -191,13 +191,22 @@
     {% endif %}
 
     {% if cap.REMOTE_CONTROL in user_capabilities %}
-    {# Remote view/control (roadmap #2). remote.js wires the WebRTC viewer; input control
-       (mouse/keyboard, Ctrl+Alt+Del) lands in phase 5. #}
+    {# Remote view/control (roadmap #2). remote.js wires the WebRTC viewer, the input control
+       (mouse/keyboard, Ctrl+Alt+Del), and the live quality controls.
+
+       The controls are split into two rows on purpose. Row 1 is what you choose BEFORE
+       connecting -- the Windows session to attach to, the codec, the encoder -- because those
+       are negotiated in the SDP or decide which encoder object exists, so changing them means a
+       new session. Row 2 is live: monitor, quality, view-only, fullscreen. #}
     <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote" hidden>
         <div class="card remote-card" id="remote-card">
             <div class="terminal__head">
                 <div class="section-title" style="margin-bottom: 0;">Remote view</div>
                 <span class="status-pill status-pill--muted" id="remote-status"><span class="status-pill__dot"></span>Idle</span>
+                <span class="status-pill status-pill--warn remote-badge" id="remote-desktop-badge" hidden>
+                    <span class="status-pill__dot"></span>Secure desktop</span>
+                <span class="status-pill status-pill--danger remote-badge" id="remote-headless-badge" hidden>
+                    <span class="status-pill__dot"></span>No display outputs</span>
                 <div class="terminal__head-actions">
                     <button id="remote-cad" type="button" class="btn btn--ghost" disabled
                             title="Send Ctrl+Alt+Del to the remote machine">Ctrl+Alt+Del</button>
@@ -205,11 +214,99 @@
                     <button id="remote-stop" type="button" class="btn btn--ghost" disabled>Stop</button>
                 </div>
             </div>
-            {# Rendered from the WebRTC media stream; muted so autoplay is allowed with no
-               user gesture. #}
-            <video id="remote-video" playsinline autoplay muted
-                   style="width: 100%; max-height: 70vh; background: #000; border-radius: var(--radius, 8px); margin-top: var(--space-3, 12px);"></video>
+
+            <div class="remote-toolbar" id="remote-toolbar-start">
+                <label class="remote-field">
+                    <span class="remote-field__label">Session</span>
+                    <select id="remote-session" class="remote-field__control">
+                        <option value="auto">Auto (agent picks)</option>
+                    </select>
+                </label>
+                <button id="remote-refresh-sessions" type="button" class="btn btn--ghost"
+                        title="Ask the machine to re-report its logon sessions and displays">Refresh</button>
+                <label class="remote-field">
+                    <span class="remote-field__label">Codec</span>
+                    <select id="remote-codec" class="remote-field__control">
+                        <option value="h264">H.264</option>
+                        <option value="vp8">VP8 (compatibility)</option>
+                    </select>
+                </label>
+                <label class="remote-field">
+                    <span class="remote-field__label">Encoder</span>
+                    <select id="remote-encoder" class="remote-field__control">
+                        <option value="auto">Auto</option>
+                        <option value="hardware">Hardware</option>
+                        <option value="software">Software</option>
+                    </select>
+                </label>
+                <span class="remote-field__note">Chosen before connecting</span>
+            </div>
+
+            <div class="remote-toolbar" id="remote-toolbar-live">
+                <label class="remote-field">
+                    <span class="remote-field__label">Monitor</span>
+                    <select id="remote-monitor" class="remote-field__control">
+                        <option value="0">1</option>
+                    </select>
+                </label>
+                <label class="remote-field">
+                    <span class="remote-field__label">Quality</span>
+                    <select id="remote-preset" class="remote-field__control">
+                        <option value="quality">Quality</option>
+                        <option value="balanced" selected>Balanced</option>
+                        <option value="speed">Speed</option>
+                        <option value="custom">Custom…</option>
+                    </select>
+                </label>
+                <label class="remote-field remote-field--custom" hidden>
+                    <span class="remote-field__label">FPS</span>
+                    <input id="remote-fps" class="remote-field__control remote-field__control--num"
+                           type="number" min="1" max="60" value="15">
+                </label>
+                <label class="remote-field remote-field--custom" hidden>
+                    <span class="remote-field__label">kbps</span>
+                    <input id="remote-bitrate" class="remote-field__control remote-field__control--num"
+                           type="number" min="100" max="50000" step="100" value="4000">
+                </label>
+                <label class="remote-field remote-field--custom" hidden>
+                    <span class="remote-field__label">Scale</span>
+                    <select id="remote-scale" class="remote-field__control">
+                        <option value="100">100%</option>
+                        <option value="75">75%</option>
+                        <option value="50">50%</option>
+                        <option value="25">25%</option>
+                    </select>
+                </label>
+                <label class="remote-toggle">
+                    <input type="checkbox" id="remote-viewonly">
+                    <span>View only</span>
+                </label>
+                <button id="remote-fullscreen" type="button" class="btn btn--ghost"
+                        title="Fullscreen (Esc to exit)">Fullscreen</button>
+            </div>
+
+            {# The video is wrapped so fullscreen can take the stage AND its overlay toolbar,
+               rather than a bare <video> the operator then cannot control. #}
+            <div class="remote-stage" id="remote-stage">
+                {# Rendered from the WebRTC media stream; muted so autoplay is allowed with no
+                   user gesture. object-fit: contain preserves aspect ratio -- remote.js maps
+                   click coordinates against the rendered content box, not the element box. #}
+                <video id="remote-video" class="remote-stage__video" playsinline autoplay muted></video>
+                <div class="remote-stage__overlay" id="remote-overlay" hidden>
+                    <span class="remote-stage__badge" id="remote-overlay-status">Live</span>
+                    <button type="button" class="btn btn--ghost" id="remote-exit-fullscreen">Exit fullscreen</button>
+                </div>
+            </div>
             <div id="remote-hint" class="terminal__hint"></div>
+            <div id="remote-meta" class="terminal__hint"></div>
+
+            <div class="remote-vdd" id="remote-vdd" hidden>
+                <div class="remote-vdd__text" id="remote-vdd-text"></div>
+                <div class="remote-vdd__actions">
+                    <button id="remote-vdd-install" type="button" class="btn btn--primary">Install virtual display</button>
+                    <button id="remote-vdd-uninstall" type="button" class="btn btn--ghost" hidden>Remove virtual display</button>
+                </div>
+            </div>
         </div>
     </div>
     {% endif %}

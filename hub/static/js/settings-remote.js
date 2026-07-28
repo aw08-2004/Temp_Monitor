@@ -1,4 +1,5 @@
-// TURN/STUN status + secret control for the Settings -> Remote Control tab.
+// TURN/STUN status, secret control, and the virtual-display payload pin for the
+// Settings -> Remote Control tab.
 //
 // The schema-driven fields (remote.stun_urls, remote.turn_urls, consent, TTLs) are rendered by
 // settings.js like every other section. This script adds the one thing a schema field can't
@@ -14,7 +15,9 @@
 
     const PANEL_ID = 'tab-remote';
     const CARD_ID = 'turn-status-card';
+    const VDD_CARD_ID = 'virtual-display-card';
     let cachedStatus = null;
+    let cachedPayload = null;     // the pinned virtual display driver, or null
     let lastSecretShown = null;   // shown once after a set/rotate, kept across re-renders
 
     function el(tag, props, children) {
@@ -148,11 +151,89 @@
         return card;
     }
 
+    // ---- Virtual display payload ---------------------------------------------------------
+    // Which uploaded package blob the fleet installs when an operator clicks "Install virtual
+    // display" on a headless machine. Pinning it is a fleet-wide decision about what code the
+    // agents will be told to run, so it lives here behind manage_settings rather than next to
+    // the per-machine install button, which only needs remote_control.
+    function buildVddCard() {
+        const card = el('div', { class: 'card', id: VDD_CARD_ID });
+        card.appendChild(el('h3', { class: 'card__title', text: 'Virtual display driver' }));
+        card.appendChild(el('p', { class: 'setting__help', text:
+            'A machine with no monitor has no display output, so screen capture has nothing to '
+            + 'duplicate and remote view shows a black screen. Upload the driver\'s "Driver Only" '
+            + 'zip on the Packages page, then pin its SHA-256 here. Operators can then install it '
+            + 'per machine from the Remote tab.' }));
+
+        const current = el('div', { class: 'turn-stats' }, [
+            statRow('Pinned payload', cachedPayload
+                ? pill(cachedPayload.version, 'ok')
+                : pill('None', 'warn')),
+        ]);
+        card.appendChild(current);
+        if (cachedPayload) {
+            card.appendChild(el('p', { class: 'setting__help', text:
+                `sha256 ${cachedPayload.sha256} · ${cachedPayload.filename || 'payload'} · `
+                + `pinned by ${cachedPayload.uploaded_by}` }));
+        }
+
+        const version = el('input', { type: 'text', class: 'input',
+            placeholder: 'Driver version, e.g. 25.7.23', autocomplete: 'off' });
+        const digest = el('input', { type: 'text', class: 'input',
+            placeholder: 'SHA-256 of the uploaded package (64 hex characters)',
+            autocomplete: 'off', spellcheck: 'false' });
+        const filename = el('input', { type: 'text', class: 'input',
+            placeholder: 'File name (optional)', autocomplete: 'off' });
+        const save = el('button', { type: 'button', class: 'btn btn--primary', text: 'Pin payload' });
+        const msg = el('div', { class: 'turn-secret__msg' });
+
+        save.addEventListener('click', async () => {
+            save.disabled = true;
+            msg.textContent = '';
+            msg.className = 'turn-secret__msg';
+            try {
+                const resp = await fetch('/api/remote/virtual-display/payload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        version: version.value.trim(),
+                        sha256: digest.value.trim(),
+                        filename: filename.value.trim(),
+                    }),
+                });
+                const body = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(body.error || ('HTTP ' + resp.status));
+                cachedPayload = body.payload;
+                version.value = digest.value = filename.value = '';
+                render();
+            } catch (e) {
+                msg.textContent = e.message;
+                msg.className = 'turn-secret__msg turn-secret__msg--err';
+                save.disabled = false;
+            }
+        });
+
+        card.appendChild(el('label', { class: 'setting__label', text: 'Version' }));
+        card.appendChild(version);
+        card.appendChild(el('label', { class: 'setting__label', text: 'SHA-256' }));
+        card.appendChild(digest);
+        card.appendChild(el('label', { class: 'setting__label', text: 'File name' }));
+        card.appendChild(filename);
+        card.appendChild(el('div', { class: 'card-actions' }, [save]));
+        card.appendChild(msg);
+        return card;
+    }
+
     function render() {
         const panel = document.getElementById(PANEL_ID);
         if (!panel) return;
-        const existing = document.getElementById(CARD_ID);
-        if (existing) existing.remove();
+        for (const id of [CARD_ID, VDD_CARD_ID]) {
+            const existing = document.getElementById(id);
+            if (existing) existing.remove();
+        }
+        // Inserted in reverse so TURN status ends up first: it is what an operator checks when a
+        // session will not connect, which is far more often than they pin a driver.
+        panel.insertBefore(buildVddCard(), panel.firstChild);
         panel.insertBefore(buildCard(), panel.firstChild);
     }
 
@@ -162,6 +243,10 @@
             if (!resp.ok) return;            // page already requires manage_settings; bail quietly
             cachedStatus = await resp.json();
         } catch (e) { /* leave cachedStatus as-is */ }
+        try {
+            const resp = await fetch('/api/remote/virtual-display/payload');
+            if (resp.ok) cachedPayload = (await resp.json()).payload;
+        } catch (e) { /* the card just shows "None" */ }
         render();
     }
 

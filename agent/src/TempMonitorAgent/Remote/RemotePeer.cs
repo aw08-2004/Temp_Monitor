@@ -11,9 +11,13 @@ namespace TempMonitorAgent.Remote;
 /// candidates trickle both ways through the hub's signaling relay.
 ///
 /// SIPSorcery does DTLS-SRTP, ICE (including TURN from the supplied ICE servers), and RTP
-/// packetisation of the H.264 access units we hand it. We only feed it encoded frames.
+/// packetisation of the encoded frames we hand it. We only feed it encoded frames.
 ///
-/// A control DataChannel for input (mouse/keyboard) is added in phase 5.
+/// The "control" DataChannel carries traffic BOTH ways: input events up from the browser, and
+/// status down from the agent (what geometry we are now capturing, which desktop we are on,
+/// whether capture has stalled). The downstream half is diagnostics rather than correctness --
+/// but without it, "the screen went black" is unguessable from the operator's side, and the
+/// answer is usually something the agent already knows.
 /// </summary>
 public sealed class RemotePeer : IDisposable
 {
@@ -30,18 +34,24 @@ public sealed class RemotePeer : IDisposable
     /// <summary>Fires for each control message (input event JSON) from the browser.</summary>
     public event Action<string>? OnControlMessage;
 
-    public RemotePeer(IEnumerable<IceServerConfig> iceServers, Action<string> log)
+    public RemotePeer(IEnumerable<IceServerConfig> iceServers, Action<string> log,
+                      VideoCodec codec = VideoCodec.H264)
     {
         _log = log;
         var config = new RTCConfiguration { iceServers = BuildIceServers(iceServers) };
         _pc = new RTCPeerConnection(config);
 
-        // H.264, payload type 96, 90 kHz, packetization-mode 1 -- the standard WebRTC H.264
-        // profile the browser negotiates against.
-        var track = new MediaStreamTrack(
-            new VideoFormat(VideoCodecsEnum.H264, 96, 90000, "packetization-mode=1"),
-            MediaStreamStatusEnum.SendOnly);
-        _pc.addTrack(track);
+        // The codec is fixed for the life of the peer because it is negotiated in the SDP:
+        // changing it means a new offer/answer, which is why the viewer exposes codec as a
+        // start-time choice while fps/bitrate/scale are live.
+        var format = codec == VideoCodec.Vp8
+            // VP8, payload type 100, 90 kHz. Mandatory-to-implement in WebRTC, so this is the
+            // fallback when a browser will not play our H.264.
+            ? new VideoFormat(VideoCodecsEnum.VP8, 100, 90000)
+            // H.264, payload type 96, 90 kHz, packetization-mode 1 -- the standard WebRTC H.264
+            // profile the browser negotiates against.
+            : new VideoFormat(VideoCodecsEnum.H264, 96, 90000, "packetization-mode=1");
+        _pc.addTrack(new MediaStreamTrack(format, MediaStreamStatusEnum.SendOnly));
 
         _pc.onicecandidate += candidate =>
         {
@@ -144,12 +154,24 @@ public sealed class RemotePeer : IDisposable
         _pc.addIceCandidate(init);
     }
 
-    /// <summary>Send one encoded H.264 access unit. <paramref name="durationRtpUnits"/> is the
-    /// frame duration in the 90 kHz RTP clock (90000 / fps).</summary>
-    public void SendFrame(byte[] annexB, uint durationRtpUnits)
+    /// <summary>Send one encoded frame (an H.264 Annex-B access unit, or a VP8 frame).
+    /// <paramref name="durationRtpUnits"/> is the frame duration in the 90 kHz RTP clock
+    /// (90000 / fps).</summary>
+    public void SendFrame(byte[] encoded, uint durationRtpUnits)
     {
-        if (annexB.Length == 0) return;
-        _pc.SendVideo(durationRtpUnits, annexB);
+        if (encoded.Length == 0) return;
+        _pc.SendVideo(durationRtpUnits, encoded);
+    }
+
+    /// <summary>Send a status message to the browser over the control channel. Best-effort by
+    /// design: this is diagnostics, and a viewer that misses one is no worse off than before
+    /// the channel existed, so it must never disturb the capture loop that calls it.</summary>
+    public void SendControl(string json)
+    {
+        var channel = _control;
+        if (channel is null || channel.readyState != RTCDataChannelState.open) return;
+        try { channel.send(json); }
+        catch (Exception e) { _log($"control send failed: {e.Message}"); }
     }
 
     public RTCPeerConnectionState State => _pc.connectionState;

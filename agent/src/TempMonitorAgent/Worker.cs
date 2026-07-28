@@ -173,6 +173,9 @@ public sealed class Worker : BackgroundService
         // mount a logged-off user's hive, which must never be able to delay a heartbeat
         // into the hub's 90-second offline window. It self-throttles to hourly.
         TempMonitorAgent.Backup.BackupProfileReporter.RefreshIfDue();
+        // Logon sessions + display outputs, for the remote session picker and the headless
+        // badge (roadmap #2). Same reasoning as above: off the heartbeat path, self-throttled.
+        TempMonitorAgent.Remote.RemoteInventoryReporter.RefreshIfDue();
 
         await _fleet.HeartbeatAsync(ct);
 

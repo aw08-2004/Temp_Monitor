@@ -128,6 +128,20 @@ def main():
                                                 "params": "not-an-object"})
         check("non-object params -> 400", r.status_code == 400)
 
+        # These are gated on OTHER capabilities at their own endpoints. Accepting them here
+        # would let a holder of issue_commands alone install a driver (and a new trusted
+        # publisher) or open a screen-sharing session on any machine in their scope.
+        for command_type in sorted(fleet.VIRTUAL_DISPLAY_COMMANDS | fleet.REMOTE_CONTROL_COMMANDS):
+            r = c.post("/api/fleet/commands",
+                       json={"machine": "PC-01", "type": command_type, "params": {}})
+            check(f"{command_type} refused on the generic command channel -> 400",
+                  r.status_code == 400)
+        for command_type in sorted(fleet.SCHEDULED_COMMANDS):
+            r = c.post("/api/fleet/commands",
+                       json={"machine": "PC-01", "type": command_type, "params": {}})
+            check(f"{command_type} refused on the generic command channel -> 400",
+                  r.status_code == 400)
+
         print("\n== Audit attributes the command to the session, not the body ==")
         global CURRENT_USER
         CURRENT_USER = "someone.else@x.com"

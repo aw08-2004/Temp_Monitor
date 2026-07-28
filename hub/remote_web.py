@@ -72,6 +72,58 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             turn_ttl=settings.get_int(db_path, "remote.turn_ttl_seconds"),
         )
 
+    def _stream_params(data):
+        """Validate the viewer's stream choices into agent command params.
+
+        Everything here arrives from a browser, so it is validated rather than clamped
+        silently: an operator who typed 500 fps should be told, not quietly given 60. The
+        agent clamps again on its own side -- an older hub, a replayed command, or a future
+        client must not be able to hand the capture loop an fps of 0.
+
+        `session` is the WINDOWS logon session to inject into, not the remote session id.
+        "auto" (the default) means the agent picks -- which is still the right answer for a
+        machine with one obvious session, and the only possible answer for an agent too old to
+        report its sessions.
+        """
+        def _int(key, default, low, high):
+            raw = data.get(key, default)
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be an integer")
+            if not low <= value <= high:
+                raise ValueError(f"{key} must be between {low} and {high}")
+            return value
+
+        target = data.get("session", "auto")
+        if target in (None, "", "auto"):
+            target_session = -1
+        else:
+            try:
+                target_session = int(target)
+            except (TypeError, ValueError):
+                raise ValueError("session must be an integer or 'auto'")
+            # Session 0 is the non-interactive services session; it has no desktop at all.
+            if target_session <= 0:
+                raise ValueError("session must be a positive Windows session id, or 'auto'")
+
+        codec = str(data.get("codec", "h264")).lower()
+        if codec not in ("h264", "vp8"):
+            raise ValueError("codec must be 'h264' or 'vp8'")
+        encoder = str(data.get("encoder", "auto")).lower()
+        if encoder not in ("auto", "hardware", "software"):
+            raise ValueError("encoder must be 'auto', 'hardware' or 'software'")
+
+        return {
+            "monitor": _int("monitor", 0, 0, 15),
+            "target_session": target_session,
+            "fps": _int("fps", 15, 1, 60),
+            "bitrate_kbps": _int("bitrate_kbps", 4000, 100, 50000),
+            "scale": _int("scale", 100, 25, 100),
+            "codec": codec,
+            "encoder": encoder,
+        }
+
     # ---------------- Agent-facing (bearer token) ----------------
     def agent_auth(view):
         @functools.wraps(view)
@@ -163,9 +215,9 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
 
         data = request.get_json(silent=True) or {}
         try:
-            monitor = max(0, int(data.get("monitor", 0)))
-        except (TypeError, ValueError):
-            return jsonify({"error": "monitor must be an integer"}), 400
+            stream = _stream_params(data)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
 
         consent_mode = settings.get(db_path, "remote.consent_mode") or "unattended"
         session_id = remote.create_session(
@@ -180,8 +232,8 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         try:
             fleet.create_command(
                 db_path, machine=machine, command_type="start_remote_session",
-                params={"session_id": session_id, "monitor": monitor,
-                        "consent_mode": consent_mode, "ice_servers": ice},
+                params={"session_id": session_id, "consent_mode": consent_mode,
+                        "ice_servers": ice, **stream},
                 issued_by=_current_email(),
                 ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             )
@@ -191,7 +243,43 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return jsonify({"error": str(e)}), 400
 
         return jsonify({"session_id": session_id, "ice_servers": ice,
-                        "consent_mode": consent_mode}), 201
+                        "consent_mode": consent_mode, **stream}), 201
+
+    @bp.route("/api/remote/<machine>/inventory", methods=["GET"])
+    @login_required
+    @can_remote
+    def machine_inventory(machine):
+        """Logon sessions and display outputs, as last reported on the agent's heartbeat.
+
+        This is what turns the session switcher from a guess into a choice, and what lets the
+        machine page say "no display outputs" before an operator opens a session and finds a
+        black screen. Read-only, so it answers from the last heartbeat rather than making the
+        operator wait on a round trip -- /refresh is there for when that is not good enough.
+        """
+        if not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        inventory = remote.get_inventory(db_path, machine)
+        inventory["payload_available"] = remote.get_virtual_display_payload(db_path) is not None
+        return jsonify(inventory), 200
+
+    @bp.route("/api/remote/<machine>/inventory/refresh", methods=["POST"])
+    @login_required
+    @can_remote
+    def refresh_inventory(machine):
+        """Queue a re-report. The agent's inventory rides the heartbeat on a change-detected,
+        self-throttled cadence -- right for the steady state, wrong for the moment an operator
+        is staring at the picker and somebody has just signed in."""
+        if not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        try:
+            command_id = fleet.create_command(
+                db_path, machine=machine, command_type="refresh_remote_inventory",
+                params={}, issued_by=_current_email(),
+                ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"command_id": command_id}), 202
 
     @bp.route("/api/remote/session/<session_id>/signal", methods=["POST"])
     @login_required
@@ -241,6 +329,159 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         if machine and not access.in_scope(machine):
             return jsonify({"error": "You do not have access to that machine."}), 403
         return jsonify(remote.list_sessions(db_path, machine, active_only=True)), 200
+
+    # ---------------- Virtual display (remote_control + scope) ----------------
+    # These exist to make a headless machine viewable at all, so they belong to the same
+    # capability as opening a session rather than inventing a new one. fleet_web refuses them
+    # on the generic command channel, so this is the only way in.
+
+    @bp.route("/api/remote/<machine>/virtual-display", methods=["POST"])
+    @login_required
+    @can_remote
+    def virtual_display(machine):
+        """Install or uninstall the virtual display on one machine.
+
+        The install carries a snapshot of the payload pin -- the digest and the hub URL the
+        agent should fetch from -- taken now. The bytes themselves live in the existing package
+        blob store and travel over the existing authenticated, digest-verified agent download
+        path, so this adds no new download channel and nothing to the agent's signed update
+        manifest.
+        """
+        if not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        data = request.get_json(silent=True) or {}
+        mode = str(data.get("mode", "install")).lower()
+        if mode not in ("install", "uninstall"):
+            return jsonify({"error": "mode must be 'install' or 'uninstall'"}), 400
+
+        if mode == "uninstall":
+            command_id, error = _queue(machine, "uninstall_virtual_display", {})
+            if error:
+                return jsonify({"error": error}), 400
+            fleet.audit(db_path, _current_email(), "virtual_display_uninstall", machine)
+            return jsonify({"command_id": command_id}), 202
+
+        payload = remote.get_virtual_display_payload(db_path)
+        if payload is None:
+            return jsonify({
+                "error": "No virtual display driver has been uploaded yet. Upload the driver "
+                         "package on the Packages page, then pin it in Settings > Remote."
+            }), 409
+
+        try:
+            params = _virtual_display_settings(data)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        params.update({
+            "payload_url": _agent_package_url(payload["sha256"]),
+            "payload_sha256": payload["sha256"],
+            "version": payload["version"],
+        })
+        if data.get("allow_arm64"):
+            params["allow_arm64"] = True
+
+        command_id, error = _queue(machine, "install_virtual_display", params)
+        if error:
+            return jsonify({"error": error}), 400
+        fleet.audit(db_path, _current_email(), "virtual_display_install", machine,
+                    f"version={payload['version']} sha256={payload['sha256'][:16]}")
+        return jsonify({"command_id": command_id, "version": payload["version"]}), 202
+
+    @bp.route("/api/remote/<machine>/virtual-display/mode", methods=["POST"])
+    @login_required
+    @can_remote
+    def virtual_display_mode(machine):
+        """Change how many virtual monitors exist and at what resolutions.
+
+        `monitors: 0` is the graceful stand-down for a machine that has since had a real
+        monitor plugged in -- the driver stays installed and stops adding a phantom display,
+        with no uninstall and no reboot.
+        """
+        if not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        try:
+            params = _virtual_display_settings(request.get_json(silent=True) or {})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        command_id, error = _queue(machine, "set_virtual_display_mode", params)
+        if error:
+            return jsonify({"error": error}), 400
+        fleet.audit(db_path, _current_email(), "virtual_display_mode", machine,
+                    f"monitors={params['monitors']}")
+        return jsonify({"command_id": command_id}), 202
+
+    def _queue(machine, command_type, params):
+        try:
+            return fleet.create_command(
+                db_path, machine=machine, command_type=command_type, params=params,
+                issued_by=_current_email(),
+                ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
+            ), None
+        except ValueError as e:
+            return None, str(e)
+
+    def _agent_package_url(sha256):
+        """The hub URL an agent fetches a blob from. Relative to the hub's own base so it works
+        behind the TLS terminator, which the app itself only ever sees as http."""
+        base = (os.environ.get("HUB_URL") or "").rstrip("/")
+        return f"{base}/api/agent/packages/{sha256}"
+
+    def _virtual_display_settings(data):
+        """Validate monitor count and resolutions. A bad entry is rejected rather than dropped:
+        an operator who asked for 3840x2160 and silently got 1920x1080 would have no way to
+        tell, and would reasonably conclude the driver was broken."""
+        try:
+            monitors = int(data.get("monitors", 1))
+        except (TypeError, ValueError):
+            raise ValueError("monitors must be an integer")
+        if not 0 <= monitors <= 8:
+            raise ValueError("monitors must be between 0 and 8")
+
+        resolutions = []
+        for entry in list(data.get("resolutions") or [])[:32]:
+            if not isinstance(entry, dict):
+                raise ValueError("each resolution must be an object")
+            try:
+                width, height = int(entry.get("width")), int(entry.get("height"))
+                hz = int(entry.get("hz", 60))
+            except (TypeError, ValueError):
+                raise ValueError("resolution width, height and hz must be integers")
+            if not (640 <= width <= 7680 and 480 <= height <= 4320):
+                raise ValueError(f"resolution {width}x{height} is out of range")
+            if not 24 <= hz <= 240:
+                raise ValueError(f"refresh rate {hz} is out of range")
+            resolutions.append({"width": width, "height": height, "hz": hz})
+
+        if not resolutions:
+            resolutions = [{"width": 1920, "height": 1080, "hz": 60}]
+        return {"monitors": monitors, "resolutions": resolutions}
+
+    @bp.route("/api/remote/virtual-display/payload", methods=["GET", "POST"])
+    @login_required
+    @can_manage_settings
+    def virtual_display_payload():
+        """Read or set which uploaded package blob is the virtual display driver.
+
+        Deliberately manage_settings rather than remote_control: pinning the payload decides
+        what code the whole fleet will be told to install, which is a fleet-wide configuration
+        decision, while installing it on one machine is a per-machine operational one.
+        """
+        if request.method == "GET":
+            return jsonify({"payload": remote.get_virtual_display_payload(db_path)}), 200
+
+        data = request.get_json(silent=True) or {}
+        sha256 = str(data.get("sha256") or "").strip().lower()
+        version = str(data.get("version") or "").strip()
+        filename = str(data.get("filename") or "").strip()
+        if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+            return jsonify({"error": "sha256 must be a 64-character hex digest"}), 400
+        if not version:
+            return jsonify({"error": "version is required"}), 400
+
+        remote.set_virtual_display_payload(db_path, version, sha256, filename, _current_email())
+        fleet.audit(db_path, _current_email(), "virtual_display_payload_set", None,
+                    f"version={version} sha256={sha256[:16]}")
+        return jsonify({"payload": remote.get_virtual_display_payload(db_path)}), 200
 
     # ---------------- TURN configuration (manage_settings) ----------------
     @bp.route("/api/remote/turn/status", methods=["GET"])

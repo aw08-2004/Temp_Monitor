@@ -21,7 +21,7 @@
 
     <!-- Assembly version drives the self-update version comparison. Keep in
          sync with AgentConfig.Version. -->
-    <Version>3.13.1</Version>
+    <Version>3.14.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,6 +32,9 @@
          verification is unchanged from 2.5.1. -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="System.Management" Version="10.0.0" />
+    <!-- SignedCms, for reading the signer chain out of a driver's .cat (a PKCS#7 envelope)
+         before we make the machine trust that publisher. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.0" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <!-- Remote view/control (roadmap #2). DXGI Desktop Duplication + a Media Foundation H.264
@@ -42,6 +45,11 @@
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
     <PackageReference Include="SIPSorcery" Version="10.0.12" />
+    <!-- VP8 fallback codec. Media Foundation has no in-box VP8 encoder, so this wraps libvpx
+         (a native DLL, which IncludeNativeLibrariesForSelfExtract above carries into the
+         single-file publish). H.264 stays the default: VP8 is software-only and costs
+         noticeably more CPU. It exists for a browser or middlebox that mishandles our H.264. -->
+    <PackageReference Include="SIPSorceryMedia.Encoders" Version="10.0.4" />
   </ItemGroup>
 
   <ItemGroup>

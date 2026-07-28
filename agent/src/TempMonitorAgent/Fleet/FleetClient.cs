@@ -130,6 +130,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader
             // profile block on every 10-second heartbeat would be pure noise.
             var profiles = BackupProfileReporter.TakeIfChanged();
             if (profiles is not null) body["profiles"] = profiles;
+            // Logon sessions + display outputs, for the remote session picker and the
+            // "no display outputs" badge. Same change-only discipline as profiles.
+            var remote = TempMonitorAgent.Remote.RemoteInventoryReporter.TakeIfChanged();
+            if (remote is not null) body["remote"] = remote;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 
