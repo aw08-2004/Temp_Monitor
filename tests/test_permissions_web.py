@@ -29,6 +29,10 @@ FAIL = 0
 
 SUPERUSERS = {"root@x.com"}
 CURRENT_USER = "root@x.com"
+# The directory-group tokens the current session claims to carry (roadmap #4). app.py
+# writes these at sign-in; here they stand in for "what the issuer asserted".
+CURRENT_DIR_GROUPS = []
+CURRENT_DIR_GROUPS_SEEN = []
 
 
 def check(name, cond):
@@ -61,13 +65,15 @@ def build_app(db_path):
     @app.before_request
     def _seed_session():
         from flask import session
-        session["user"] = {"email": CURRENT_USER}
+        session["user"] = {"email": CURRENT_USER,
+                           "directory_groups": list(CURRENT_DIR_GROUPS),
+                           "directory_groups_seen": list(CURRENT_DIR_GROUPS_SEEN)}
 
     return app, access
 
 
 def main():
-    global CURRENT_USER
+    global CURRENT_USER, CURRENT_DIR_GROUPS, CURRENT_DIR_GROUPS_SEEN
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(db_fd)
     try:
@@ -239,6 +245,97 @@ def main():
                      json={"machine": "PC-1", "type": "restart"}).status_code == 403)
         with app.test_request_context():
             check("nor sign in again", access.login_allowed("ann@x.com") is False)
+
+        # ============================================================
+        # DIRECTORY GROUP MAPPING (roadmap #4) -- the session seam
+        # ============================================================
+        # test_permissions.py proves the model resolves tokens correctly. What can only
+        # go wrong HERE is the wiring: permissions coming from the request instead of the
+        # session, or the session's tokens not reaching effective_permissions at all --
+        # the second of which fails OPEN in the sense that a mapped admin silently gets
+        # nothing, and the first of which is an outright authorization bypass.
+        print("\n== A session's directory groups grant through the HTTP layer ==")
+        CURRENT_USER = "root@x.com"
+        CURRENT_DIR_GROUPS = []
+        r = c.post("/api/permissions/groups", json={
+            "name": "Entra Hospital",
+            "capabilities": [permissions.VIEW, permissions.ISSUE_COMMANDS],
+            "machines": ["PC-1"],
+            "members": [],
+            "directory_groups": ["8F4C1E02-GUID"],
+        })
+        check("create with directory_groups 201", r.status_code == 201)
+        check("the token is stored normalised (casefolded)",
+              r.get_json()["directory_groups"] == ["8f4c1e02-guid"])
+
+        CURRENT_USER = "dana@x.com"          # in NO group by email
+        CURRENT_DIR_GROUPS = []
+        check("without the token she holds nothing",
+              c.get("/api/permissions/me").get_json()["capabilities"] == [])
+        check("...and is refused the command endpoint",
+              c.post("/api/fleet/commands",
+                     json={"machine": "PC-1", "type": "restart"}).status_code == 403)
+
+        CURRENT_DIR_GROUPS = ["8f4c1e02-guid"]
+        me = c.get("/api/permissions/me").get_json()
+        check("with the token in session she holds the group's capabilities",
+              set(me["capabilities"]) == {permissions.VIEW, permissions.ISSUE_COMMANDS})
+        check("...scoped to the group's machines", me["machines"] == ["PC-1"])
+        check("...and the granting token is reported back",
+              me["directory_groups"] == ["8f4c1e02-guid"])
+        check("...and she can now actually issue a command",
+              c.post("/api/fleet/commands",
+                     json={"machine": "PC-1", "type": "restart"}).status_code in (200, 201))
+        check("but still not to an out-of-scope machine",
+              c.post("/api/fleet/commands",
+                     json={"machine": "HR-9", "type": "restart"}).status_code == 403)
+
+        print("\n== login_allowed accepts a mapped directory group ==")
+        with app.test_request_context():
+            check("a stranger carrying a mapped token may sign in",
+                  access.login_allowed("stranger@x.com", ["8f4c1e02-guid"]))
+            check("an unmapped token does not admit them",
+                  access.login_allowed("stranger@x.com", ["some-other-guid"]) is False)
+            check("no tokens at all still refuses",
+                  access.login_allowed("stranger@x.com", []) is False)
+
+            print("\n== The sign-in intersection is what the session may carry ==")
+            # This is what bounds the session cookie. A token nothing maps must be
+            # dropped at the door, or a user in 200 Entra groups blows the 4 KB cookie.
+            kept = access.mapped_directory_groups(
+                ["8f4c1e02-guid", "unmapped-1", "unmapped-2"])
+            check("mapped tokens are kept", "8f4c1e02-guid" in kept)
+            check("unmapped tokens are dropped", len(kept) == 1)
+            check("an empty claim list is fine", access.mapped_directory_groups([]) == [])
+
+        print("\n== Directory tokens come from the SESSION, never the request ==")
+        # The whole gate rests on this: if a token could be supplied per-request, anyone
+        # who can read a group's mapping could grant themselves that group.
+        CURRENT_USER = "dana@x.com"
+        CURRENT_DIR_GROUPS = []
+        check("a token in the JSON body grants nothing",
+              c.post("/api/fleet/commands",
+                     json={"machine": "PC-1", "type": "restart",
+                           "directory_groups": ["8f4c1e02-guid"]}).status_code == 403)
+        check("nor does one in the query string",
+              c.get("/api/permissions/me?directory_groups=8f4c1e02-guid"
+                    ).get_json()["capabilities"] == [])
+
+        print("\n== The discovery hint is gated on being able to use it ==")
+        # /me echoes back the tokens this session claimed, so an admin can copy their own
+        # group's GUID into a mapping. To anyone who cannot edit groups that is not a
+        # hint, just their directory membership reflected back, so it is withheld.
+        CURRENT_DIR_GROUPS_SEEN = ["seen-guid-1", "seen-guid-2"]
+        CURRENT_USER = "dana@x.com"
+        CURRENT_DIR_GROUPS = ["8f4c1e02-guid"]     # view + issue_commands, no admin
+        check("a non-admin is not shown the claimed-token list",
+              c.get("/api/permissions/me").get_json()["directory_groups_seen"] == [])
+        CURRENT_USER = "root@x.com"
+        check("a group admin is",
+              c.get("/api/permissions/me").get_json()["directory_groups_seen"]
+              == ["seen-guid-1", "seen-guid-2"])
+        CURRENT_DIR_GROUPS_SEEN = []
+        CURRENT_DIR_GROUPS = []
 
         print("\n== Capability vocabulary is served to an admin ==")
         CURRENT_USER = "root@x.com"

@@ -97,6 +97,27 @@
 
 .chip-add .input { flex: 1; }
 
+/* The "your own sign-in carried these" tokens under the directory-groups field. Rendered
+   as buttons because they are clickable (one click adds the token), but styled down to
+   read as part of the help text -- they are a reference, not an action the admin is being
+   steered towards. Monospace because these are usually GUIDs, which are checked character
+   by character against a provider's portal. */
+.dirgroup-token {
+    border: 1px dashed var(--card-border);
+    border-radius: var(--radius-sm, 4px);
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    padding: 1px var(--space-2);
+}
+
+.dirgroup-token:hover {
+    color: var(--text);
+    border-style: solid;
+}
+
 /* Capability badges in the group table. Muted rather than colored: they are an
    inventory, not a severity scale, and coloring them would imply one. */
 .cap-badge {

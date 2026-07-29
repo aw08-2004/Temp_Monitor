@@ -297,6 +297,215 @@ def main():
         returned["machines"].append("SHOULD-NOT-STICK")
         check("callers get copies -- mutating a result can't poison the cache",
               permissions.get_group(db_path, fresh)["machines"] == [])
+        returned = permissions.get_group(db_path, fresh)
+        returned["directory_groups"].append("SHOULD-NOT-STICK")
+        check("...directory_groups is copied too, not shared with the cache",
+              permissions.get_group(db_path, fresh)["directory_groups"] == [])
+
+        # ============================================================
+        # DIRECTORY GROUP MAPPING (roadmap #4)
+        # ============================================================
+        # The risk here is asymmetric. Granting too little is visible -- someone cannot
+        # sign in and says so. Granting too MUCH is silent: a token that matches more
+        # loosely than the admin believed hands a stranger an operator's capabilities,
+        # and nothing in the UI would look wrong. Most of these tests are about the
+        # second kind.
+        print("\n== Reading group tokens out of provider claims ==")
+        claims = permissions.directory_groups_from_claims
+        check("Entra's `groups` array is read",
+              claims({"groups": ["8F4C1E02-AAAA", "b-222"]}) == ["8f4c1e02-aaaa", "b-222"])
+        check("`roles` and `wids` union in with `groups`",
+              set(claims({"groups": ["a"], "roles": ["b"], "wids": ["c"]}))
+              == {"a", "b", "c"})
+        check("a single-valued claim sent as a bare string still works",
+              claims({"groups": "hospital-it"}) == ["hospital-it"])
+        check("no group claims at all -> no tokens (not an error)",
+              claims({"email": "x@y.com"}) == [])
+        check("a claim of the wrong shape grants nothing",
+              claims({"groups": {"nested": "object"}}) == [])
+        # A non-string inside the array must be DROPPED, not str()'d: a claim of [None]
+        # stringifying to "none" could collide with a real group actually named "None".
+        check("non-string entries are dropped rather than stringified",
+              claims({"groups": ["ok", None, 17, {"a": 1}]}) == ["ok"])
+        check("duplicates across claims collapse",
+              claims({"groups": ["Same"], "roles": ["same"]}) == ["same"])
+
+        print("\n== Group-claim overage is distinguishable from 'no groups' ==")
+        # Entra withholds `groups` past ~200 and sends _claim_names instead. Both look
+        # like "in no mapped group" downstream; only one is a misconfiguration.
+        check("an overage response is detected",
+              permissions.has_group_claim_overage(
+                  {"_claim_names": {"groups": "src1"},
+                   "_claim_sources": {"src1": {"endpoint": "https://graph..."}}}))
+        check("an ordinary response is not mistaken for one",
+              not permissions.has_group_claim_overage({"groups": ["a"]}))
+        check("a junk _claim_names does not raise",
+              not permissions.has_group_claim_overage({"_claim_names": "nonsense"}))
+
+        print("\n== A mapped directory group grants its permission group ==")
+        permissions.invalidate()
+        hospital = permissions.create_group(
+            db_path, name="Hospital directory",
+            capabilities=[permissions.VIEW, permissions.ISSUE_COMMANDS],
+            machines=["HOSP-1"],
+            directory_groups=["CN=Hospital IT,OU=Groups,DC=x"],
+            actor="root@x.com")
+        p = permissions.effective_permissions(
+            db_path, "nobody@x.com", superusers,
+            directory_groups=["cn=hospital it,ou=groups,dc=x"])
+        check("a user in no group by email is granted via the directory token",
+              p["capabilities"] == {permissions.VIEW, permissions.ISSUE_COMMANDS})
+        check("...including its machine scope", p["machines"] == {"HOSP-1"})
+        check("...and the group is named in `groups`",
+              [g["id"] for g in p["groups"]] == [hospital])
+
+        print("\n== Token matching is case-insensitive but not fuzzy ==")
+        # DNs and GUIDs are case-insensitive at the source, so a mapping typed in one
+        # case must match a claim sent in another -- but nothing looser than that.
+        check("a differently-cased claim matches",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["CN=HOSPITAL IT,OU=GROUPS,DC=X"]
+              )["capabilities"] != set())
+        check("surrounding whitespace is tolerated",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["  cn=hospital it,ou=groups,dc=x  "]
+              )["capabilities"] != set())
+        # The important negatives: anything short of an exact (folded) match grants
+        # NOTHING. A prefix match here would mean "CN=Hospital" opening the Hospital
+        # group to any directory group whose name starts the same way.
+        for wrong in ("cn=hospital it", "hospital it", "cn=hospital it,ou=groups,dc=x,dc=y",
+                      "xcn=hospital it,ou=groups,dc=x", ""):
+            check(f"a near-miss token grants nothing: {wrong!r}",
+                  permissions.effective_permissions(
+                      db_path, "nobody@x.com", superusers,
+                      directory_groups=[wrong])["capabilities"] == set())
+        check("an unmapped token grants nothing",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["cn=some other group"])["capabilities"] == set())
+
+        print("\n== Directory and email grants union, without double-counting ==")
+        permissions.update_group(db_path, hospital, members=["frank@x.com"],
+                                 actor="root@x.com")
+        p = permissions.effective_permissions(
+            db_path, "frank@x.com", superusers,
+            directory_groups=["cn=hospital it,ou=groups,dc=x"])
+        check("someone who is both a member AND in the mapped group sees it once",
+              [g["id"] for g in p["groups"]].count(hospital) == 1)
+        both = permissions.create_group(
+            db_path, name="Lab directory", capabilities=[permissions.MANAGE_BACKUPS],
+            machines=["LAB-1"], directory_groups=["lab-guid"], actor="root@x.com")
+        p = permissions.effective_permissions(
+            db_path, "frank@x.com", superusers,
+            directory_groups=["cn=hospital it,ou=groups,dc=x", "lab-guid"])
+        check("capabilities union across an email group and a directory group",
+              p["capabilities"] == {permissions.VIEW, permissions.ISSUE_COMMANDS,
+                                    permissions.MANAGE_BACKUPS})
+        check("...and so do their machine scopes", p["machines"] == {"HOSP-1", "LAB-1"})
+
+        print("\n== Passing no directory groups changes nothing ==")
+        # Google sign-in sends no group claims at all, so this is the common path: it
+        # must behave exactly as it did before the feature existed.
+        check("omitting the argument entirely still resolves email membership",
+              permissions.effective_permissions(
+                  db_path, "frank@x.com", superusers)["capabilities"]
+              == {permissions.VIEW, permissions.ISSUE_COMMANDS})
+        check("an empty token list grants nothing extra",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=[])["capabilities"] == set())
+
+        print("\n== The sign-in intersection (what the session is allowed to carry) ==")
+        mapped = permissions.mapped_directory_groups(db_path)
+        check("every configured token is reported",
+              {"cn=hospital it,ou=groups,dc=x", "lab-guid"} <= mapped)
+        check("a token nothing maps is not",
+              "cn=some other group" not in mapped)
+
+        print("\n== Editing and clearing mappings ==")
+        permissions.update_group(db_path, hospital,
+                                 directory_groups=["cn=new group"], actor="root@x.com")
+        check("the old token stops granting immediately",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["cn=hospital it,ou=groups,dc=x"]
+              )["capabilities"] == set())
+        check("the new one grants",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["cn=new group"])["capabilities"] != set())
+        # None means "leave alone" here exactly as it does for machines/members -- the
+        # Follow-Fleet bug in backups.py was this distinction being got wrong once.
+        permissions.update_group(db_path, hospital, name="Hospital directory",
+                                 actor="root@x.com")
+        check("update with directory_groups omitted leaves them untouched",
+              permissions.get_group(db_path, hospital)["directory_groups"]
+              == ["cn=new group"])
+        permissions.update_group(db_path, hospital, directory_groups=[],
+                                 actor="root@x.com")
+        check("an explicit empty list clears them",
+              permissions.get_group(db_path, hospital)["directory_groups"] == [])
+        check("...and the token grants nothing afterwards",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["cn=new group"])["capabilities"] == set())
+        check("clearing the mapping did not disturb the email members",
+              permissions.get_group(db_path, hospital)["members"] == ["frank@x.com"])
+
+        print("\n== Editing one half of the member table leaves the other alone ==")
+        # email rows and ad_group_dn rows share a table; a DELETE that forgot its
+        # `ad_group_dn IS NOT NULL` guard would silently drop mappings on a member edit.
+        permissions.update_group(db_path, both, members=["gina@x.com"],
+                                 actor="root@x.com")
+        check("saving members preserved the directory mappings",
+              permissions.get_group(db_path, both)["directory_groups"] == ["lab-guid"])
+        permissions.update_group(db_path, both, directory_groups=["lab-guid", "lab-2"],
+                                 actor="root@x.com")
+        check("saving mappings preserved the email members",
+              permissions.get_group(db_path, both)["members"] == ["gina@x.com"])
+
+        print("\n== Directory-group validation ==")
+        for bad, why in ((["x" * 600], "over the length cap"), ([None], "not a string"),
+                         ([{"dn": "x"}], "not a string")):
+            try:
+                permissions.create_group(db_path, name=f"Bad {why}",
+                                         directory_groups=bad, actor="root@x.com")
+                check(f"rejects a token {why}", False)
+            except ValueError:
+                check(f"rejects a token {why}", True)
+        blank = permissions.create_group(db_path, name="Blank tokens",
+                                         directory_groups=["  ", "", "real"],
+                                         actor="root@x.com")
+        check("blank tokens are dropped, not stored as grant-nothing rows",
+              permissions.get_group(db_path, blank)["directory_groups"] == ["real"])
+
+        print("\n== Deleting a group drops its mappings ==")
+        permissions.delete_group(db_path, both, actor="root@x.com")
+        check("the mapped token no longer grants",
+              permissions.effective_permissions(
+                  db_path, "nobody@x.com", superusers,
+                  directory_groups=["lab-guid"])["capabilities"] == set())
+        check("and it is gone from the sign-in intersection",
+              "lab-guid" not in permissions.mapped_directory_groups(db_path))
+        with permissions.get_conn(db_path) as conn:
+            left = conn.execute(
+                "SELECT COUNT(*) c FROM permission_group_members WHERE group_id = ?",
+                (both,)).fetchone()["c"]
+        check("no orphan member rows are left behind", left == 0)
+
+        print("\n== A mapping change is in the security audit trail ==")
+        # Granting via a directory group is granting; if it were not audited, the widest
+        # grant on the hub would be the one change with no record of who made it.
+        actions = audit_actions(db_path)
+        check("group edits are audited", "permission_group.update" in actions)
+        with fleet.get_conn(db_path) as conn:
+            rows = [r["detail_json"] for r in conn.execute(
+                "SELECT detail_json FROM audit_log "
+                "WHERE action = 'permission_group.update' ORDER BY id")]
+        check("the audit details name directory_groups as a changed field",
+              any("directory_groups" in (d or "") for d in rows))
     finally:
         try:
             os.remove(db_path)

@@ -72,6 +72,22 @@
                 <button class="btn" type="button" id="member-add">Add</button>
             </div>
 
+            <h3 class="perm-subhead">Directory groups <span class="setting__default">optional</span></h3>
+            <p class="setting__help">
+                Anyone whose sign-in provider says they are in one of these groups gets this
+                permission group, without being listed above by name. Paste the group's
+                object ID (Entra), distinguished name, or name — whichever your provider
+                sends. Membership is read once, at sign-in: a change in the directory takes
+                effect the next time the person signs in.
+            </p>
+            <div class="chip-list" id="dirgroup-chips"></div>
+            <div class="chip-add">
+                <input class="input" id="dirgroup-input"
+                       placeholder="e.g. 8f4c1e02-1b7a-4a0d-9c31-2b6e5d0a7f11" autocomplete="off">
+                <button class="btn" type="button" id="dirgroup-add">Add</button>
+            </div>
+            <p class="setting__help" id="dirgroup-self"></p>
+
             <p class="setting__error" id="group-error"></p>
         </div>
         <div class="modal__foot">

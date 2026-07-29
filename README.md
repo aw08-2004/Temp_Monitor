@@ -296,9 +296,10 @@ python hub/app.py
 Viewing the dashboard (`/`, `/machine/<name>`, `/history`, and the
 `/api/history`, `/api/daily_summary`, `/api/machines`, `/api/machines/<name>`
 endpoints, plus live Socket.IO updates) requires signing in. Sign-in succeeds for
-an address in `ALLOWED_EMAILS` (break-glass superusers) or one that belongs to at
-least one permission group; anyone else is refused at the callback with 403 rather
-than admitted to an empty dashboard. `POST /api/report` is intentionally exempt so
+an address in `ALLOWED_EMAILS` (break-glass superusers), one that belongs to at
+least one permission group, or one whose provider says it is in a **directory group**
+some permission group maps (see [Permission groups](#permission-groups)); anyone else
+is refused at the callback with 403 rather than admitted to an empty dashboard. `POST /api/report` is intentionally exempt so
 agents never need credentials.
 
 Sign-in is **OpenID Connect**, and any OIDC provider will do. Configure Google,
@@ -390,6 +391,48 @@ gets the union of every group they're in. Scope is either an explicit machine li
 > ⚠️ **`ALLOWED_EMAILS` bypasses all of it.** It is the break-glass superuser list:
 > every capability over every machine, and the hub refuses to start with it empty.
 > Keep it to the smallest possible set of accounts and put everyone else in a group.
+
+### Granting a group by directory group
+
+A permission group can also name **directory groups** — Entra security groups, AD
+groups, or whatever else your issuer asserts — instead of listing operators by email.
+Anyone whose sign-in carries a matching group gets that permission group, so a new
+hire is granted access by being put in the right group in your directory, and never
+touches the FleetHub console at all.
+
+Add them in the group editor's **Directory groups** field. Paste whatever your
+provider sends: Entra sends group **object IDs** (GUIDs), on-prem/ADFS issuers send
+distinguished names, some send plain names. Matching is exact but case-insensitive —
+nothing is prefix- or substring-matched, so `CN=Hospital` will not open a group named
+`CN=Hospital IT`.
+
+To find out what your provider actually sends, sign in and open the group editor: the
+tokens **your own** sign-in carried are listed under the field, and clicking one adds
+it. (Shown only to people who can edit permission groups.)
+
+Configure your issuer to send the claim first — the hub reads `groups`, `roles` and
+`wids`. For Entra, that means adding a **groups claim** to the app registration
+(App registration → Token configuration → Add groups claim); without it the ID token
+carries no groups and every mapping matches nothing.
+
+Three things worth knowing before you rely on this:
+
+- **Membership is read once, at sign-in.** Removing someone from a directory group
+  takes effect the next time they sign in, not immediately — so revoking urgent access
+  means removing them from the group *and* waiting out `SESSION_LIFETIME_DAYS`, or
+  shortening it. The same is true in reverse: a newly added mapping or membership
+  needs a fresh sign-in.
+- **Only groups this hub maps are remembered.** The session records the mappings it
+  matched, not every group you're in — a user in 200 Entra groups would otherwise
+  overflow the signed session cookie.
+- **Entra stops sending the claim past ~200 groups.** It sends a Graph pointer
+  instead, which this hub does not follow. Such an account is refused with a message
+  saying so; grant it by email address instead.
+
+`/permissions` shows a group's mappings beside its members, but it cannot list *who*
+is in a mapped directory group — the hub never queries your directory, it only
+believes what an issuer signs at sign-in. Your directory remains the place that
+answers "who has this access?".
 
 The UI hides buttons an operator can't use, but that's presentation — the server-side
 gate on each endpoint is the control, and `/api/permissions/me` deliberately reveals

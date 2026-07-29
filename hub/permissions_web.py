@@ -38,6 +38,19 @@ def _current_email():
     return permissions.normalize_email((session.get("user") or {}).get("email"))
 
 
+def _current_directory_groups():
+    """The mapped directory groups this session's issuer asserted at sign-in (roadmap
+    #4). From the session for the same reason the email is: it is the signed cookie, not
+    the request, that says who someone is.
+
+    app.py stores only tokens that matched a mapping at sign-in time, so a mapping added
+    afterwards does not reach an existing session -- the operator signs out and back in,
+    which they would have to do for a new directory-group MEMBERSHIP anyway, since the
+    hub only learns membership from the issuer at sign-in.
+    """
+    return list((session.get("user") or {}).get("directory_groups") or ())
+
+
 class Access:
     """Per-request authorization for one hub. Built once in app.py and shared.
 
@@ -56,7 +69,8 @@ class Access:
         cached = getattr(g, "_fleethub_permissions", None)
         if cached is None:
             cached = permissions.effective_permissions(
-                self.db_path, _current_email(), self.superusers)
+                self.db_path, _current_email(), self.superusers,
+                directory_groups=_current_directory_groups())
             g._fleethub_permissions = cached
         return cached
 
@@ -72,19 +86,37 @@ class Access:
     def is_superuser(self):
         return bool(self.current().get("superuser"))
 
-    def login_allowed(self, email):
-        """May this identity sign in at all? Break-glass, or a member of any group.
+    def login_allowed(self, email, directory_groups=()):
+        """May this identity sign in at all? Break-glass, a member of any group by
+        email, or a member of a directory group some group maps (roadmap #4).
 
-        A valid Google account that belongs to no group is refused rather than being
-        let in to an empty dashboard: the hub is not a public service, and "signed in
-        but sees nothing" is an invitation to keep poking. Roadmap #4 (Entra) softens
-        this for directory identities -- there, login succeeding with zero groups is
-        the documented behaviour -- which is why this lives behind one method.
+        An account that reaches none of those is refused rather than being let in to an
+        empty dashboard: the hub is not a public service, and "signed in but sees
+        nothing" is an invitation to keep poking. The two outcomes are functionally
+        identical -- neither can read or do anything -- so the refusal is chosen for
+        being the one that tells the operator, and their admin, what is actually wrong.
+
+        `directory_groups` is passed in rather than read from the session because this
+        runs BEFORE the session exists: it is the gate that decides whether to create
+        one. It should be the tokens the issuer just asserted, already normalised.
         """
         email = permissions.normalize_email(email)
         if permissions.is_superuser(email, self.superusers):
             return True
-        return bool(permissions.groups_for_email(self.db_path, email))
+        if permissions.groups_for_email(self.db_path, email):
+            return True
+        return bool(permissions.groups_for_directory_groups(
+            self.db_path, directory_groups))
+
+    def mapped_directory_groups(self, claimed):
+        """Narrow the tokens an issuer asserted to those this hub actually maps.
+
+        Called at sign-in to decide what the session carries -- see
+        permissions.mapped_directory_groups for why storing the intersection rather
+        than the full claim is load-bearing rather than an optimisation.
+        """
+        mapped = permissions.mapped_directory_groups(self.db_path)
+        return [t for t in (claimed or []) if t in mapped]
 
     # ------------------------------------------------------------------ filtering
     def machine_filter(self):
@@ -183,6 +215,19 @@ def create_permissions_blueprint(db_path, login_required, access):
                          else sorted(current["machines"])),
             "groups": [{"id": grp["id"], "name": grp["name"]}
                        for grp in current["groups"]],
+            # What the issuer asserted for this session AND this hub maps -- i.e. the
+            # tokens that actually granted the groups listed above.
+            "directory_groups": _current_directory_groups(),
+            # Every directory group this session claimed, mapped or not, so the group
+            # editor can offer them as a starting point. Gated on being able to edit
+            # groups: to anyone else it is not a hint, just their own directory
+            # membership echoed back, and this endpoint's rule is that it reveals
+            # nothing the caller cannot already act on.
+            "directory_groups_seen": (
+                list((session.get("user") or {}).get("directory_groups_seen") or ())
+                if permissions.has_capability(
+                    access.current(), permissions.MANAGE_PERMISSION_GROUPS)
+                else []),
         }), 200
 
     @bp.route("/api/permissions/directory", methods=["GET"])
@@ -241,6 +286,7 @@ def create_permissions_blueprint(db_path, login_required, access):
                 capabilities=data.get("capabilities"),
                 machines=data.get("machines") or [],
                 members=data.get("members") or [],
+                directory_groups=data.get("directory_groups") or [],
                 scope_mode=data.get("scope_mode") or permissions.SCOPE_LIST,
                 actor=access.email(),
             )
@@ -270,6 +316,9 @@ def create_permissions_blueprint(db_path, login_required, access):
                 capabilities=data.get("capabilities"),
                 machines=data.get("machines"),
                 members=data.get("members"),
+                # None (key absent) means "leave alone"; [] clears the mappings. Same
+                # semantics as machines/members above -- see update_group's docstring.
+                directory_groups=data.get("directory_groups"),
                 scope_mode=data.get("scope_mode"),
                 actor=access.email(),
             )

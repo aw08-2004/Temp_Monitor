@@ -503,20 +503,64 @@ with skip-and-report on failure.)*
 
 ---
 
-## 📋 4. Active Directory integration   ·   build 4th — after Permission Groups exist to plug into
+## 🚧 4. Active Directory integration   ·   login hub 1.44.0, group mapping hub 1.49.0
 
 **Hybrid directory**: login via **Entra ID (OIDC)**, OU/computer data via **on-prem LDAP**
 (Entra has no classic OUs, which is why OU targeting has to come from the on-prem side).
 
-- **Login**: Entra as a second OIDC provider alongside the existing Google OAuth (same
-  Authlib mechanism, just a second registration). The session's user shape is unchanged —
-  it must keep a stable email/UPN so audit-log attribution stays coherent.
-- **Authorization: Entra group → Permission Group mapping.** An Admin maps Entra security
-  groups to existing Permission Groups. When a user's Entra groups match no mapping: check
-  `ALLOWED_EMAILS` — if listed, full break-glass admin (today's escape hatch); if not
-  listed, login succeeds (identity is valid) but the user has zero permission groups, so
-  they see and can do nothing until an Admin assigns one. This reuses the Permission
-  Groups foundation's break-glass rule rather than inventing a second one.
+**✅ Login — built (hub 1.44.0).** Delivered more generally than specified: rather than a
+second *Entra* registration, sign-in is **pluggable OIDC** (`OIDC_ISSUER` + client
+id/secret, discovery via `/.well-known/openid-configuration`), so Entra, Okta, Authentik
+and Keycloak are all a `.env` edit rather than a release. Google keeps its own
+registration; the hub refuses to boot with no provider at all. The session's user shape is
+unchanged, and `_complete_login` is shared by every provider so the authorization
+decision, the audit identity and the users-directory upsert cannot differ by which button
+was pressed. `permissions.email_from_claims` falls back to `preferred_username`/`upn`
+(Entra omits `email` in many tenants) but only when the value looks like an address — a
+bare `administrator` would otherwise collide with a granted mailbox name.
+
+**✅ Authorization: directory group → Permission Group mapping — built (hub 1.49.0).**
+The `ad_group_dn` column that shipped unused in 1.26.0 is now live: a group names
+directory groups alongside emails, and membership in one grants that group exactly as
+email membership does (same union semantics, same audit trail). Resolved parameters:
+
+- **Tokens are opaque, matched casefolded-exact.** Entra sends group object GUIDs, ADFS
+  and on-prem issuers send DNs, others send names — one comparison rule covers all three
+  without a mode flag, which is what the column was left opaque for. Exact and never
+  prefix/substring: a loose match here silently hands a stranger an operator's
+  capabilities, and nothing in the UI would look wrong. Claims read are `groups`, `roles`
+  and `wids`, unioned, because which claim carries membership is per-issuer and not
+  something an admin should have to know.
+- **The session carries the INTERSECTION of claimed and mapped, not the full claim.**
+  Load-bearing rather than an optimisation: Flask sessions are signed cookies with a ~4 KB
+  budget and a user in 200 Entra groups is ~7 KB of GUIDs — i.e. it would break sign-in
+  for precisely the most-privileged accounts. A claimed group nothing maps can never
+  affect authorization, so dropping it at the door loses nothing and bounds the session by
+  the admin's own config. The cost is that a *newly added mapping* needs a fresh sign-in,
+  which a new directory *membership* would have needed anyway.
+- **Group-claim overage is reported, never silently refused.** Entra stops emitting
+  `groups` past ~200 and sends a Graph pointer this hub does not follow. That is
+  indistinguishable downstream from "in no mapped group", and only one of the two is a
+  misconfiguration — so the refusal names the actual cause instead of leaving an admin
+  debugging a correct mapping that appears to do nothing.
+- **Discovery is solved in the UI, not the docs.** The group editor lists the tokens the
+  admin's *own* sign-in carried (display-only, gated on `manage_permission_groups`,
+  truncated), click-to-add. Otherwise configuring this means a trip to the Entra portal to
+  copy a GUID, with no way to tell which claim your tenant actually emits.
+
+**Deviation from the spec below, deliberate:** the spec said an identity matching no
+mapping should be *admitted* with zero groups. It is still **refused**, as before. The two
+outcomes are functionally identical — neither can read or do anything — so the refusal was
+kept for being the one that tells the operator and their admin what is wrong, and because
+softening it would weaken an existing control for no gain. Revisit if an empty dashboard
+turns out to be the better support experience.
+
+**Not yet done — machine ↔ AD sync and `ad_ou` scope mode**, i.e. everything needing
+on-prem LDAP. `members_of_machine()` is knowingly incomplete until then: it answers "who
+has access **by name**", and cannot enumerate a mapped directory group's members, because
+the hub never queries a directory — it only ever learns that one person is in one group,
+at their sign-in.
+
 - **Machine ↔ AD computer sync, on-prem LDAP.** Entirely opt-in and Admin-configured — if
   no AD is set up, nothing runs. The hub binds to a DC over LDAPS with a read-only service
   account and syncs computer objects, joining to `machine_info` by hostname (consistent
@@ -904,8 +948,15 @@ hardcoded enum.
 6. ~~**#2 Remote view & control**~~ — done, hub 1.40.0 (built ahead of #4 at the user's
    request; agent half pending a signed release; TURN server in `turn/`, installer-provisioned
    and managed from Settings → Remote Control)
-7. **#4 Active Directory ← next** — Entra login + group mapping first, then LDAP sync
+7. **#4 Active Directory ← in progress** — OIDC/Entra login done (hub 1.44.0) and
+   directory-group → permission-group mapping done (hub 1.49.0). **Remaining: on-prem
+   LDAP computer sync + the `ad_ou` machine-scope mode.**
 8. **#7 Localization** — lowest priority, most mechanical; do last
+
+> Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
+> interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
+> TURN installer all landed in 1.41–1.48 without a roadmap entry, since none of them was
+> a numbered feature above. #4's entry has been brought up to date.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full

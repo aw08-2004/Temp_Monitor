@@ -23,6 +23,9 @@ const machineChips = document.getElementById('machine-chips');
 const machineInput = document.getElementById('machine-input');
 const memberChips = document.getElementById('member-chips');
 const memberInput = document.getElementById('member-input');
+const dirGroupChips = document.getElementById('dirgroup-chips');
+const dirGroupInput = document.getElementById('dirgroup-input');
+const dirGroupSelfEl = document.getElementById('dirgroup-self');
 const errorEl = document.getElementById('group-error');
 const groupStatusEl = document.getElementById('group-status');
 
@@ -30,7 +33,9 @@ let capabilities = [];        // [{name, label, description}]
 let editingId = null;         // null while creating
 let draftMachines = [];
 let draftMembers = [];
+let draftDirGroups = [];
 let machineDirectory = [];    // full /api/machines rows, for the machine picker's search
+let myDirGroups = [];         // this session's own mapped directory tokens, as a hint
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -120,10 +125,20 @@ function renderGroupRow(group) {
     tr.appendChild(machinesCell);
 
     const membersCell = el('td');
-    if (!group.members.length) {
+    const dirGroups = group.directory_groups || [];
+    if (!group.members.length && !dirGroups.length) {
         membersCell.appendChild(el('span', 'stat-card__meta', 'None'));
-    } else {
+    }
+    if (group.members.length) {
         membersCell.appendChild(el('div', 'stat-card__meta', group.members.join(', ')));
+    }
+    if (dirGroups.length) {
+        // Named separately from the emails: these are not people, and a group whose only
+        // membership is a directory mapping would otherwise read as "nobody has this"
+        // when it may in fact be the widest grant on the page.
+        membersCell.appendChild(el('div', 'stat-card__meta',
+            `${dirGroups.length} directory group${dirGroups.length === 1 ? '' : 's'}: `
+            + dirGroups.join(', ')));
     }
     tr.appendChild(membersCell);
 
@@ -143,8 +158,13 @@ function renderGroupRow(group) {
 }
 
 async function deleteGroup(group, btn) {
+    const dirCount = (group.directory_groups || []).length;
+    const who = dirCount
+        ? `${group.members.length} member(s) and anyone in ${dirCount} mapped directory `
+          + 'group(s) lose'
+        : `${group.members.length} member(s) lose`;
     const warning = `Delete the permission group "${group.name}"?\n\n`
-        + `${group.members.length} member(s) lose the access it granted. `
+        + `${who} the access it granted. `
         + 'Anyone left with no groups at all can no longer sign in.';
     if (!window.confirm(warning)) return;
     btn.disabled = true;
@@ -201,6 +221,35 @@ function renderMemberChips() {
     });
 }
 
+function renderDirGroupChips() {
+    renderChips(dirGroupChips, draftDirGroups, (value) => {
+        draftDirGroups = draftDirGroups.filter((d) => d !== value);
+        renderDirGroupChips();
+        autoSaveGroup();
+    });
+}
+
+// There is no directory to search — the hub never queries one, it only hears what an
+// issuer asserts at sign-in — so instead of a picker, offer the admin the tokens their
+// OWN session carried. That answers the question this field actually raises ("which
+// claim does my tenant send, and in what form?") with real data from this provider,
+// rather than making them read Entra's docs and guess.
+function renderDirGroupHint() {
+    dirGroupSelfEl.replaceChildren();
+    if (!myDirGroups.length) return;
+    dirGroupSelfEl.appendChild(el('span', null, 'Your own sign-in carried: '));
+    myDirGroups.forEach((token, i) => {
+        if (i) dirGroupSelfEl.appendChild(el('span', null, ', '));
+        const btn = el('button', 'dirgroup-token', token);
+        btn.type = 'button';
+        btn.title = 'Add this directory group to this permission group';
+        btn.addEventListener('click', () => {
+            addValue(draftDirGroups, token, renderDirGroupChips);
+        });
+        dirGroupSelfEl.appendChild(btn);
+    });
+}
+
 function renderCapabilities(selected) {
     capabilityList.replaceChildren();
     capabilities.forEach((capability) => {
@@ -239,6 +288,7 @@ function openEditor(group) {
     descriptionInput.value = (group && group.description) || '';
     draftMachines = group ? group.machines.slice() : [];
     draftMembers = group ? group.members.slice() : [];
+    draftDirGroups = group ? (group.directory_groups || []).slice() : [];
     const mode = group ? group.scope_mode : 'list';
     modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
         radio.checked = radio.value === mode;
@@ -246,6 +296,8 @@ function openEditor(group) {
     renderCapabilities(group ? group.capabilities : []);
     renderMachineChips();
     renderMemberChips();
+    renderDirGroupChips();
+    renderDirGroupHint();
     syncScopeMode();
     errorEl.textContent = '';
     // Reset the auto-save machinery for the new editing session.
@@ -309,6 +361,7 @@ async function flushGroup() {
         // discard what was there.
         machines: draftMachines,
         members: draftMembers,
+        directory_groups: draftDirGroups,
     };
     groupSaving = true;
     groupPending = false;
@@ -438,11 +491,17 @@ document.getElementById('machine-add').addEventListener('click',
     () => addFrom(machineInput, draftMachines, renderMachineChips, (v) => v.trim()));
 document.getElementById('member-add').addEventListener('click',
     () => addFrom(memberInput, draftMembers, renderMemberChips, (v) => v.trim().toLowerCase()));
+// Lowercased to match the server's normalisation, so the chip shown is the token that
+// will actually be compared against a claim rather than whatever case was pasted.
+document.getElementById('dirgroup-add').addEventListener('click',
+    () => addFrom(dirGroupInput, draftDirGroups, renderDirGroupChips,
+                  (v) => v.trim().toLowerCase()));
 
 // Enter inside the chip inputs adds the entry rather than submitting the dialog --
 // which would otherwise close the editor and discard everything typed so far.
 [[machineInput, () => document.getElementById('machine-add').click()],
- [memberInput, () => document.getElementById('member-add').click()]].forEach(([input, add]) => {
+ [memberInput, () => document.getElementById('member-add').click()],
+ [dirGroupInput, () => document.getElementById('dirgroup-add').click()]].forEach(([input, add]) => {
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -470,6 +529,13 @@ async function init() {
     try {
         machineDirectory = await api('/api/machines');
     } catch (e) { /* suggestions are optional; typing still works */ }
+    // This session's own directory-group tokens, offered as a starting point in the
+    // editor. Optional in the same way the machine list is: without it the field is
+    // simply typed into by hand.
+    try {
+        const me = await api('/api/permissions/me');
+        myDirGroups = me.directory_groups_seen || [];
+    } catch (e) { /* the hint is optional */ }
     attachPickers();
     await loadGroups();
 }

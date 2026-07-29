@@ -32,9 +32,13 @@ of that (decorators, per-request caching, list filtering) lives in permissions_w
 this module stays Flask-free so it can be unit-tested in isolation, exactly like
 fleet.py and settings.py.
 
-Member rows carry an `ad_group_dn` column alongside `email` from day one. Nothing
-reads it yet -- it is where Entra/AD group mappings will land (roadmap #4) so that
-feature does not need a schema migration on a table this security-critical.
+Member rows carry an `ad_group_dn` column alongside `email`. It was added on day one
+so that roadmap #4 would not need a schema migration on a table this security-critical,
+and it is now live: a group can name directory groups as well as individual emails, and
+membership in a named directory group grants that group exactly as email membership
+does. See DIRECTORY_GROUP_CLAIMS below. The hub never queries a directory to establish
+this -- it believes what the identity provider signed at sign-in, so a directory grant
+is session-scoped where an email grant is stored.
 """
 import json
 import sqlite3
@@ -118,6 +122,30 @@ SCOPE_ALL = "all"
 SCOPE_MODES = (SCOPE_LIST, SCOPE_ALL)
 
 MAX_NAME_CHARS = 80
+
+# ================================
+# DIRECTORY GROUP MAPPING (roadmap #4)
+# ================================
+# A permission group can name directory groups as well as individual emails. At sign-in
+# the issuer tells us which directory groups the user is in; any permission group that
+# names one of them applies, exactly as though the user had been added by email.
+#
+# The claims below are checked in order and their values UNIONED, because "which claim
+# carries group membership" is per-issuer and not something an admin should have to know:
+# Entra puts security-group object ids in `groups` and app roles in `roles`; Okta,
+# Keycloak and Authentik all use `groups`; `wids` carries Entra's built-in directory
+# roles (the tenant-wide "Global Administrator" and friends), which is the one token an
+# admin is likely to reach for on day one.
+DIRECTORY_GROUP_CLAIMS = ("groups", "roles", "wids")
+
+# What a token may look like is deliberately NOT constrained beyond this. Entra sends
+# GUIDs, ADFS and on-prem issuers send distinguished names, others send plain names --
+# and the whole point of the `ad_group_dn` column being opaque is that it works for all
+# three without a mode flag. Comparison is casefolded because every one of those forms is
+# case-insensitive at its source (hex GUIDs, LDAP DNs, and group names alike), so a
+# mapping typed as `CN=Hospital IT,OU=Groups,DC=x` must match a claim spelling it
+# `cn=hospital it,ou=groups,dc=x`.
+MAX_DIRECTORY_GROUP_CHARS = 512
 
 
 # ================================
@@ -234,6 +262,55 @@ def email_from_claims(user_info):
     return ""
 
 
+def normalize_directory_group(token):
+    """Fold a directory-group token to its comparison form. See the note beside
+    DIRECTORY_GROUP_CLAIMS for why this is casefold-and-strip and nothing more."""
+    return str(token or "").strip().casefold()
+
+
+def has_group_claim_overage(user_info):
+    """Did the issuer decline to send the group list because it was too long?
+
+    Entra stops emitting `groups` once a user is in more than ~200 of them and sends
+    `_claim_names`/`_claim_sources` pointing at a Graph endpoint instead. Resolving that
+    needs a Graph token this hub does not hold, so we do not pretend to -- but the caller
+    must be able to tell "this user is in no mapped group" from "the issuer never told us
+    which groups this user is in". Those two look identical downstream and only one of
+    them is a configuration error, so an unreported overage is an admin staring at a
+    correct mapping that appears to do nothing.
+    """
+    names = (user_info or {}).get("_claim_names") or {}
+    if not isinstance(names, dict):
+        return False
+    return any(claim in names for claim in DIRECTORY_GROUP_CLAIMS)
+
+
+def directory_groups_from_claims(user_info):
+    """Every directory-group token an issuer asserted, normalised and deduplicated.
+
+    Lives here beside email_from_claims for the same reason that does: this is an
+    AUTHORIZATION input, not sign-in plumbing, and one place should decide what the hub
+    believes about who someone is. Non-string entries are dropped rather than coerced --
+    a claim shaped unexpectedly must grant nothing, not stringify into a token that might
+    collide with a real mapping.
+    """
+    seen = []
+    for claim in DIRECTORY_GROUP_CLAIMS:
+        values = (user_info or {}).get(claim)
+        # A single-valued claim is a bare string on several issuers, a list on the rest.
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, (list, tuple)):
+            continue
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            token = normalize_directory_group(value)
+            if token and token not in seen:
+                seen.append(token)
+    return seen
+
+
 def normalize_machine(machine):
     return str(machine or "").strip()
 
@@ -298,6 +375,31 @@ def _validate_members(members):
     return sorted(cleaned)
 
 
+def _validate_directory_groups(tokens):
+    """Normalise the directory-group tokens a group maps, refusing the shapes that
+    would silently grant more than the admin meant.
+
+    The only real hazard here is a token that normalises to empty or to something a
+    claim can never carry: stored, it would sit in the UI looking like a live grant
+    while matching nothing forever. Length is capped because an LDAP DN is the longest
+    legitimate form and 512 characters is well past the longest real one.
+    """
+    cleaned = []
+    for token in (tokens or []):
+        if not isinstance(token, str):
+            raise ValueError(f"{token!r} is not a directory group identifier.")
+        normalized = normalize_directory_group(token)
+        if not normalized:
+            continue
+        if len(normalized) > MAX_DIRECTORY_GROUP_CHARS:
+            raise ValueError(
+                f"Directory group identifiers are limited to "
+                f"{MAX_DIRECTORY_GROUP_CHARS} characters.")
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    return sorted(cleaned)
+
+
 # ================================
 # THE CACHE
 # ================================
@@ -324,6 +426,7 @@ def invalidate():
 def _build(db_path):
     groups = {}
     by_email = {}
+    by_directory_group = {}
     with get_conn(db_path) as conn:
         for row in conn.execute(
             "SELECT id, name, description, capabilities_json, scope_mode, "
@@ -344,6 +447,7 @@ def _build(db_path):
                 "scope_mode": row["scope_mode"] if row["scope_mode"] in SCOPE_MODES else SCOPE_LIST,
                 "machines": [],
                 "members": [],
+                "directory_groups": [],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "updated_by": row["updated_by"],
@@ -363,7 +467,23 @@ def _build(db_path):
                 continue
             group["members"].append(row["email"])
             by_email.setdefault(row["email"], []).append(row["group_id"])
-    return {"groups": groups, "by_email": by_email}
+        # Directory-group members (roadmap #4). Rows are written already normalised, but
+        # normalise on read too: the column predates this feature by several releases, so
+        # a row could have been put there by hand or by an older migration.
+        for row in conn.execute(
+            "SELECT group_id, ad_group_dn FROM permission_group_members "
+            "WHERE ad_group_dn IS NOT NULL ORDER BY ad_group_dn"
+        ):
+            group = groups.get(row["group_id"])
+            if group is None:
+                continue
+            token = normalize_directory_group(row["ad_group_dn"])
+            if not token:
+                continue
+            group["directory_groups"].append(token)
+            by_directory_group.setdefault(token, []).append(row["group_id"])
+    return {"groups": groups, "by_email": by_email,
+            "by_directory_group": by_directory_group}
 
 
 def _get_state(db_path):
@@ -380,33 +500,66 @@ def _get_state(db_path):
 # ================================
 # READS
 # ================================
+def _copy_group(group):
+    """A caller-owned copy of a cached group. Every list is copied too: callers (the API
+    layer, the UI) mutate what they get, and the cache must never be one of them. One
+    helper rather than three inline dict() calls, so a new list-valued field cannot be
+    deep-copied on one read path and shared on another."""
+    return dict(group,
+                capabilities=list(group["capabilities"]),
+                machines=list(group["machines"]),
+                members=list(group["members"]),
+                directory_groups=list(group["directory_groups"]))
+
+
 def list_groups(db_path):
-    """Every group, newest-named-first by name. Returns copies -- callers (the API
-    layer, the UI) mutate what they get, and the cache must never be one of them."""
-    state = _get_state(db_path)
-    groups = [dict(g, capabilities=list(g["capabilities"]),
-                   machines=list(g["machines"]), members=list(g["members"]))
-              for g in state["groups"].values()]
+    """Every group, ordered by name. Returns copies."""
+    groups = [_copy_group(g) for g in _get_state(db_path)["groups"].values()]
     return sorted(groups, key=lambda g: g["name"].lower())
 
 
 def get_group(db_path, group_id):
     """One group, or None."""
     group = _get_state(db_path)["groups"].get(str(group_id or "").strip())
-    if group is None:
-        return None
-    return dict(group, capabilities=list(group["capabilities"]),
-                machines=list(group["machines"]), members=list(group["members"]))
+    return None if group is None else _copy_group(group)
 
 
 def groups_for_email(db_path, email):
-    """The groups this user belongs to, as full group dicts."""
+    """The groups this user belongs to by email, as full group dicts."""
     state = _get_state(db_path)
     ids = state["by_email"].get(normalize_email(email), ())
-    return [dict(state["groups"][gid], capabilities=list(state["groups"][gid]["capabilities"]),
-                 machines=list(state["groups"][gid]["machines"]),
-                 members=list(state["groups"][gid]["members"]))
-            for gid in ids if gid in state["groups"]]
+    return [_copy_group(state["groups"][gid]) for gid in ids if gid in state["groups"]]
+
+
+def groups_for_directory_groups(db_path, directory_groups):
+    """The groups granted by the directory groups an issuer asserted for this session.
+
+    Order is by permission-group name so the result is stable regardless of the order
+    the issuer happened to list the user's groups in -- that ordering is not meaningful
+    and letting it leak into the audit trail or the UI makes two identical sessions look
+    different.
+    """
+    state = _get_state(db_path)
+    ids = []
+    for token in (directory_groups or []):
+        for gid in state["by_directory_group"].get(normalize_directory_group(token), ()):
+            if gid not in ids:
+                ids.append(gid)
+    found = [_copy_group(state["groups"][gid]) for gid in ids if gid in state["groups"]]
+    return sorted(found, key=lambda g: g["name"].lower())
+
+
+def mapped_directory_groups(db_path):
+    """Every directory-group token any permission group maps, as a set.
+
+    This is what lets sign-in store only the INTERSECTION of what the issuer claimed and
+    what this hub actually maps. That matters: Flask sessions are signed cookies with a
+    ~4 KB budget, and a user in 200 Entra groups carries 7 KB of GUIDs -- enough to break
+    the cookie, and therefore the login, for exactly the users who are in the most groups.
+    A claimed group nothing maps can never affect authorization, so dropping it at the
+    door loses nothing and bounds the session by the admin's own configuration.
+    """
+    return set(_get_state(db_path)["by_directory_group"].keys())
 
 
 def is_superuser(email, superusers):
@@ -414,7 +567,7 @@ def is_superuser(email, superusers):
     return normalize_email(email) in {normalize_email(e) for e in (superusers or ())}
 
 
-def effective_permissions(db_path, email, superusers=()):
+def effective_permissions(db_path, email, superusers=(), directory_groups=()):
     """What this user may actually do, as one dict:
 
         {"email", "superuser", "capabilities": set, "machines": set|None, "groups": [...]}
@@ -432,6 +585,14 @@ def effective_permissions(db_path, email, superusers=()):
     coarse, the answer is a narrower group, not a per-group intersection -- an
     intersection model makes the effect of adding someone to a group depend on every
     other group they are in, which no one can reason about.
+
+    `directory_groups` are the tokens the identity provider asserted for THIS SESSION
+    (roadmap #4). They union in exactly like email membership -- a group reached by
+    directory mapping is not a lesser grant, it is the same grant reached another way,
+    which is what makes "map the Hospital IT Entra group once" a replacement for
+    maintaining an email list by hand. They are a session input rather than a stored
+    one because that is what they are: the hub never queries the directory, it believes
+    what the issuer signed at sign-in, and that belief expires with the session.
     """
     email = normalize_email(email)
     if is_superuser(email, superusers):
@@ -446,7 +607,15 @@ def effective_permissions(db_path, email, superusers=()):
     capabilities = set()
     machines = set()
     all_machines = False
+    # Deduplicate by id: someone can be both an explicit member and in a mapped
+    # directory group, and counting that group twice would double every list it appears
+    # in on the "my permissions" page.
     groups = groups_for_email(db_path, email)
+    seen_ids = {group["id"] for group in groups}
+    for group in groups_for_directory_groups(db_path, directory_groups):
+        if group["id"] not in seen_ids:
+            seen_ids.add(group["id"])
+            groups.append(group)
     for group in groups:
         capabilities.update(group["capabilities"])
         if group["scope_mode"] == SCOPE_ALL:
@@ -487,7 +656,13 @@ def visible_machine_filter(permissions):
 def members_of_machine(db_path, machine):
     """Every email that can reach `machine` through a group. Excludes superusers --
     they are not in the group tables at all. Used by the admin UI to answer "who has
-    access to this box?"."""
+    access to this box?".
+
+    Also excludes anyone who reaches it through a mapped DIRECTORY group, and cannot do
+    otherwise: the hub never queries the directory, so it has no way to enumerate that
+    group's members -- it only ever learns that one person is in it, at their sign-in.
+    Read this as "who has access by name", not as the complete list.
+    """
     machine = normalize_machine(machine)
     emails = set()
     for group in _get_state(db_path)["groups"].values():
@@ -523,14 +698,31 @@ def _replace_members(conn, group_id, members, actor, now):
     )
 
 
+def _replace_directory_groups(conn, group_id, tokens, actor, now):
+    """The ad_group_dn half of the member table. Scoped to `ad_group_dn IS NOT NULL` so
+    saving a group's directory mappings never touches its email members, and vice versa
+    -- the two halves share a table but are edited by different fields of the form."""
+    conn.execute(
+        "DELETE FROM permission_group_members WHERE group_id = ? AND ad_group_dn IS NOT NULL",
+        (group_id,),
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO permission_group_members"
+        "(group_id, ad_group_dn, added_at, added_by) VALUES (?, ?, ?, ?)",
+        [(group_id, t, now, actor) for t in tokens],
+    )
+
+
 def create_group(db_path, name, capabilities=(), machines=(), members=(),
-                 scope_mode=SCOPE_LIST, description=None, actor="unknown"):
+                 scope_mode=SCOPE_LIST, description=None, directory_groups=(),
+                 actor="unknown"):
     """Create a group and return its id. Raises ValueError on invalid input or a
     duplicate name -- everything is validated before anything is written."""
     name = _validate_name(name)
     capabilities = _validate_capabilities(capabilities)
     scope_mode, machines = _validate_scope(scope_mode, machines)
     members = _validate_members(members)
+    directory_groups = _validate_directory_groups(directory_groups)
     description = (str(description).strip() or None) if description else None
 
     group_id = uuid.uuid4().hex
@@ -546,18 +738,21 @@ def create_group(db_path, name, capabilities=(), machines=(), members=(),
             )
             _replace_machines(conn, group_id, machines)
             _replace_members(conn, group_id, members, actor, now)
+            _replace_directory_groups(conn, group_id, directory_groups, actor, now)
     except sqlite3.IntegrityError:
         raise ValueError(f"A permission group named {name!r} already exists.")
     invalidate()
     fleet.audit(db_path, actor, "permission_group.create", name, {
         "group_id": group_id, "capabilities": capabilities,
         "scope_mode": scope_mode, "machines": machines, "members": members,
+        "directory_groups": directory_groups,
     }, level=fleet.LEVEL_SECURITY)
     return group_id
 
 
 def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
-                 members=None, scope_mode=None, description=None, actor="unknown"):
+                 members=None, scope_mode=None, description=None,
+                 directory_groups=None, actor="unknown"):
     """Patch a group in place. Every argument left as None is left untouched -- pass
     an empty list to actually clear machines or members. Raises KeyError if the group
     is gone, ValueError on invalid input or a duplicate name."""
@@ -575,6 +770,9 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
     )
     new_members = (_validate_members(members) if members is not None
                    else list(before["members"]))
+    new_directory_groups = (_validate_directory_groups(directory_groups)
+                            if directory_groups is not None
+                            else list(before["directory_groups"]))
     if description is None:
         new_description = before["description"]
     else:
@@ -594,6 +792,9 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
                 _replace_machines(conn, group_id, new_machines)
             if members is not None:
                 _replace_members(conn, group_id, new_members, actor, now)
+            if directory_groups is not None:
+                _replace_directory_groups(conn, group_id, new_directory_groups,
+                                          actor, now)
     except sqlite3.IntegrityError:
         raise ValueError(f"A permission group named {new_name!r} already exists.")
     invalidate()
@@ -602,7 +803,8 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
     # Record only what actually moved -- a full before/after on every save buries the
     # one edit that mattered under six unchanged fields.
     changes = {}
-    for field in ("name", "description", "capabilities", "scope_mode", "machines", "members"):
+    for field in ("name", "description", "capabilities", "scope_mode", "machines",
+                  "members", "directory_groups"):
         if before.get(field) != after.get(field):
             changes[field] = {"from": before.get(field), "to": after.get(field)}
     if changes:
@@ -631,6 +833,7 @@ def delete_group(db_path, group_id, actor="unknown"):
     fleet.audit(db_path, actor, "permission_group.delete", before["name"], {
         "group_id": group_id, "capabilities": before["capabilities"],
         "machines": before["machines"], "members": before["members"],
+        "directory_groups": before["directory_groups"],
     }, level=fleet.LEVEL_SECURITY)
     return True
 

@@ -63,12 +63,19 @@ def build_app(db_path, access, lifetime_days=7):
             return f"{provider} did not provide an email address", 403
         if user_info.get("email_verified") is False:
             return f"{provider} reports this account's email is unverified.", 403
-        if not access.login_allowed(email):
+        claimed_groups = permissions.directory_groups_from_claims(user_info)
+        directory_groups = access.mapped_directory_groups(claimed_groups)
+        if not access.login_allowed(email, directory_groups):
+            if permissions.has_group_claim_overage(user_info):
+                return (f"Access denied: {provider} did not send this account's group "
+                        f"membership because the account is in too many groups"), 403
             return f"Access denied: {email} is not authorized for this dashboard.", 403
         flask_session.permanent = True
         flask_session["user"] = {"email": email,
                                  "name": user_info.get("name") or email,
-                                 "provider": provider}
+                                 "provider": provider,
+                                 "directory_groups": directory_groups,
+                                 "directory_groups_seen": claimed_groups[:25]}
         try:
             users.upsert_from_login(db_path, email, user_info.get("name"))
         except Exception:
@@ -89,7 +96,11 @@ def build_app(db_path, access, lifetime_days=7):
     @app.route("/whoami")
     def whoami():
         user = flask_session.get("user")
-        return {"email": user["email"], "provider": user["provider"]} if user else {}
+        if not user:
+            return {}
+        return {"email": user["email"], "provider": user["provider"],
+                "directory_groups": user.get("directory_groups", []),
+                "directory_groups_seen": user.get("directory_groups_seen", [])}
 
     return app
 
@@ -300,6 +311,54 @@ def main():
         absent = app.test_client()
         check("email_verified absent is accepted (the issuer is trusted by configuration)",
               absent.post("/fake/Microsoft", json={"email": "boss@x.com"}).status_code == 302)
+
+        print("\n== Signing in on a mapped directory group (roadmap #4) ==")
+        # The point of the feature: somebody nobody has ever listed by email signs in
+        # because their issuer says they are in a group this hub maps.
+        permissions.create_group(
+            db_path, "Entra Techs", capabilities=[permissions.VIEW],
+            machines=["PC-02"], directory_groups=["hospital-it-guid"])
+
+        entra = app.test_client()
+        r = entra.post("/fake/Microsoft", json={
+            "email": "newhire@x.com",
+            "groups": ["HOSPITAL-IT-GUID", "some-other-guid"],
+        })
+        check("a never-listed account in a mapped group is admitted", r.status_code == 302)
+        who = entra.get("/whoami").get_json()
+        check("the session carries the granting token", who["directory_groups"] == ["hospital-it-guid"])
+        # The bound that keeps the signed cookie under 4 KB for a user in 200 groups.
+        check("an unmapped claimed group is NOT carried for authorization",
+              "some-other-guid" not in who["directory_groups"])
+        check("...but is kept in the display-only list, for the mapping hint",
+              "some-other-guid" in who["directory_groups_seen"])
+
+        nogroups = app.test_client()
+        check("an account in no mapped group is still refused",
+              nogroups.post("/fake/Microsoft", json={
+                  "email": "outsider@x.com", "groups": ["unrelated-guid"]}).status_code == 403)
+
+        # Google sends no group claims at all, so the common path must be untouched.
+        plain = app.test_client()
+        r = plain.post("/fake/Google", json={"email": "tech@x.com"})
+        check("a provider that sends no group claims still signs its members in",
+              r.status_code == 302)
+        check("...with an empty token list, not a crash",
+              plain.get("/whoami").get_json()["directory_groups"] == [])
+
+        print("\n== Group-claim overage is reported, not silently refused ==")
+        # Entra withholds `groups` past ~200 members and sends _claim_names instead. That
+        # is indistinguishable from "in no mapped group" unless the refusal says so, and
+        # the two need completely different fixes.
+        over = app.test_client()
+        r = over.post("/fake/Microsoft", json={
+            "email": "manygroups@x.com",
+            "_claim_names": {"groups": "src1"},
+            "_claim_sources": {"src1": {"endpoint": "https://graph.microsoft.com/..."}},
+        })
+        check("an overage sign-in is refused", r.status_code == 403)
+        check("...and the refusal names the actual cause",
+              "too many groups" in r.get_data(as_text=True))
 
         print("\n== Signing in records the operator in the users directory ==")
         listed = {u["email"] for u in users.list_users(db_path)}

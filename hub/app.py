@@ -69,7 +69,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.48.1"
+HUB_VERSION = "1.49.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1100,6 +1100,12 @@ OIDC_SCOPES = (os.environ.get("OIDC_SCOPES") or "openid email profile").strip()
 GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 OIDC_ENABLED = bool(OIDC_CLIENT_ID and OIDC_CLIENT_SECRET and OIDC_METADATA_URL)
 
+# How many of a session's claimed directory groups the Permission Groups page will offer
+# back to an admin as a "your own sign-in carried these" hint (roadmap #4). Display only;
+# see the session write in _complete_login. Small because it rides in the session cookie
+# and its only job is to let someone recognise and copy their own group's identifier.
+DIRECTORY_GROUPS_SHOWN = 25
+
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
 
 # How long a signed-in session lasts, in days. ROLLING: every request pushes the expiry
@@ -1331,10 +1337,30 @@ def _complete_login(user_info, provider):
     if user_info.get("email_verified") is False:
         return f"{provider} reports this account's email address is unverified.", 403
 
-    # Break-glass superuser, or a member of at least one permission group. A valid account
-    # that is in neither is refused outright rather than admitted to an empty dashboard --
-    # see Access.login_allowed for why.
-    if not access.login_allowed(email):
+    # Directory groups the issuer asserted (roadmap #4), narrowed to the ones some
+    # permission group actually maps. Only the intersection goes in the session: a user
+    # in 200 Entra groups would otherwise carry ~7 KB of GUIDs in a 4 KB signed cookie,
+    # breaking sign-in for precisely the most-privileged accounts, and a claimed group
+    # nothing maps can never affect authorization anyway.
+    claimed_groups = permissions.directory_groups_from_claims(user_info)
+    directory_groups = access.mapped_directory_groups(claimed_groups)
+
+    # Break-glass superuser, a member of a permission group by email, or a member of a
+    # mapped directory group. A valid account that is none of those is refused outright
+    # rather than admitted to an empty dashboard -- see Access.login_allowed for why.
+    if not access.login_allowed(email, directory_groups):
+        # An issuer that withheld the group list because the user is in too many of them
+        # produces a refusal identical to "this user is in no mapped group", and only one
+        # of those is a configuration error. Say which, or an admin debugs a correct
+        # mapping that appears to do nothing.
+        if permissions.has_group_claim_overage(user_info):
+            print(f"[auth] {provider} withheld the group claim for {email} (too many "
+                  f"groups -- the issuer sent _claim_names instead). This hub cannot "
+                  f"resolve that, so no directory mapping could be applied.")
+            return (f"Access denied: {provider} did not send this account's group "
+                    f"membership because the account is in too many groups, so its "
+                    f"directory-group mapping could not be applied. Grant access by "
+                    f"email address instead, or reduce the account's group count."), 403
         return f"Access denied: {email} is not authorized for this dashboard.", 403
 
     # Sessions outlive the browser (see PERMANENT_SESSION_LIFETIME). `permanent` is what
@@ -1346,6 +1372,19 @@ def _complete_login(user_info, provider):
         "name": user_info.get("name") or email,
         "picture": user_info.get("picture"),
         "provider": provider,
+        # Authorization input, not decoration: every request re-resolves this session's
+        # permissions from it. It is fixed at sign-in because that is the only moment the
+        # hub hears from the directory -- a membership revoked in Entra takes effect here
+        # when the session ends, not the instant it is revoked.
+        "directory_groups": directory_groups,
+        # DISPLAY ONLY -- never read by effective_permissions, and deliberately a
+        # different key so that stays true. The Permission Groups page shows an admin the
+        # tokens their own sign-in carried, which is the only practical way to discover
+        # what shape this tenant emits (Entra sends bare GUIDs) without a trip to the
+        # provider's portal. Truncated because the authorization list above is bounded by
+        # the hub's own mappings while this one is bounded only by how many groups the
+        # user is in, and the session is a ~4 KB signed cookie.
+        "directory_groups_seen": claimed_groups[:DIRECTORY_GROUPS_SHOWN],
     }
     # Auto-register / stamp the last login in the users directory (roadmap #8). Never
     # let a directory write break sign-in: the session is already established above, so
