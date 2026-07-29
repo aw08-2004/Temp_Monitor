@@ -25,8 +25,10 @@ public sealed class PtySessionManager : IDisposable
 
     public PtySessionManager(ILogger<PtySessionManager> log) => _log = log;
 
-    /// <summary>True while any terminal is open. The Worker uses this to keep ticking
-    /// promptly instead of sleeping out its normal telemetry interval.</summary>
+    /// <summary>True while any terminal is open. Terminals do not use the command channel
+    /// once opened -- they run their own loops against /api/agent/pty/* -- so nothing needs
+    /// to change cadence for them; this is here for diagnostics and for callers that only
+    /// want to know whether the machine has a live console.</summary>
     public bool AnyOpen => !_runners.IsEmpty;
 
     public int OpenCount => _runners.Count;

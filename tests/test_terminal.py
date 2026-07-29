@@ -34,6 +34,13 @@ def check(name, cond):
         print(f"  [XX] {name}")
 
 
+def read_static(*parts):
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub", "static", *parts)
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def fake_login_required(view):
     @functools.wraps(view)
     def wrapped(*a, **k):
@@ -347,6 +354,32 @@ def main():
               (terminal.get_session(db_path, gone)["close_reason"] or ""))
         check("reaping frees the operator's quota",
               c.post("/api/fleet/pty", json={"machine": "PC-01"}).status_code == 201)
+
+        print("\n== The console's end of the input contract ==")
+        # Source assertions, in the style of test_select_search: there is no browser harness
+        # here, but these are joins between fleet-pty.js and this module that break silently.
+        pty_js = read_static("js", "fleet-pty.js")
+
+        # push_input REFUSES an over-length body rather than truncating it, so the console
+        # has to split before it gets there. If these two drift apart, a pasted script or a
+        # long favorite is rejected whole and the operator sees "[input not delivered]".
+        check("fleet-pty.js splits input at the hub's cap",
+              f"MAX_INPUT_CHARS = {terminal.PTY_MAX_INPUT_CHARS}" in pty_js)
+
+        # Multi-line favorites used to be flattened to spaces here, which turned any script
+        # longer than one statement into a different (usually invalid) one.
+        check("fleet-pty.js no longer flattens newlines into spaces",
+              "replace(/\\r?\\n/g, ' ')" not in pty_js)
+        check("...it sends them as carriage returns instead",
+              "replace(/\\n/g, '\\r')" in pty_js)
+
+        # Both terminals share one toolbar and fleet-terminal.js binds it first. The pty
+        # console has to replace those nodes to drop the legacy handlers -- its Save reads a
+        # textarea that is hidden and empty in this mode, so leaving it bound means the
+        # button refuses with "nothing to save".
+        for button in ("terminal-clear", "terminal-favorites", "terminal-save-fav"):
+            check(f"the pty console takes over the shared {button} button",
+                  f"'{button}'" in pty_js)
 
         print("\n== Terminals are not favoritable ==")
         # Nothing reusable to save: the params name a live session.

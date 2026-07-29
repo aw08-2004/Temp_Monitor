@@ -45,11 +45,23 @@ public static class AgentConfig
         Env("MACHINE", "MACHINE") is { Length: > 0 } n ? n : Environment.MachineName;
 
     // --- Cadence (seconds) -------------------------------------------------
-    public const int IntervalSeconds = 5;         // main loop tick / temp report
+    // Each of these paces its OWN loop -- telemetry, heartbeat, command polling, the
+    // inventory scans and the update check all run concurrently (see Worker). They used to
+    // share one serial loop, which meant the slowest thing in a tick set the latency of
+    // everything else in it: a sensor read that stalls behind a busy disk, or a heartbeat
+    // sitting on its 10-second timeout, delayed command polling by exactly that long. That
+    // is what made the console feel unresponsive while a machine was doing something else.
+    public const int IntervalSeconds = 5;         // temp report
     public const int SensorIntervalSeconds = 10;  // full sensor block
     public const int UptimeIntervalSeconds = 600; // uptime field
-    public const int CommandPollSeconds = 10;     // poll + heartbeat (well under 90s online window)
+    public const int HeartbeatSeconds = 10;       // liveness + config (well under 90s online window)
+    public const int CommandPollSeconds = 10;     // idle command poll
     public const int UpdateIntervalSeconds = 7 * 24 * 60 * 60; // weekly self-update check
+
+    // The machine-inventory scans (backup profiles, logon sessions, display outputs) touch
+    // the registry, mount user hives and enumerate WTS sessions. They self-throttle to their
+    // own intervals; this is just how often the loop asks whether one is due.
+    public const int InventoryScanSeconds = 15;
 
     public const int OfflineBufferMax = 1000;
     public const int MaxChainRestarts = 3;
@@ -82,6 +94,15 @@ public static class AgentConfig
     // While a submission is in flight, poll the command channel this fast so typed
     // shell_input reaches the shell promptly instead of waiting out CommandPollSeconds.
     public const int CommandPollFastSeconds = 1;
+
+    // ...and keep polling that fast for a short window after anything arrives. An operator
+    // doing something is rarely doing one thing: opening the Terminal tab issues shell_open
+    // and then waits for the agent to claim it, starting a remote session issues
+    // start_remote_session and is immediately followed by the operator trying to DO
+    // something. On the idle cadence each of those steps cost a separate ~10s stare at a
+    // "Connecting" pill. The window is short and only ever opened by real activity, so an
+    // idle fleet still costs one poll per machine per CommandPollSeconds.
+    public const int CommandBurstSeconds = 20;
 
     // --- Interactive PTY terminals (ConPTY) --------------------------------
     // These sit OUTSIDE the command queue: once a shell_open command is claimed, keystrokes

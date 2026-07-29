@@ -48,6 +48,11 @@
     // Coalesce keystrokes for a frame before posting. Fast typing produces one event per
     // character; batching turns a burst into one request without being perceptible.
     const INPUT_FLUSH_MS = 20;
+    // terminal.PTY_MAX_INPUT_CHARS on the hub, which REFUSES an over-length body outright
+    // rather than truncating it. Typing never comes close; a pasted script or a loaded
+    // favorite does, and losing the whole thing to one oversized POST is not acceptable, so
+    // input is split here instead.
+    const MAX_INPUT_CHARS = 8000;
 
     let term = null;
     let fit = null;
@@ -55,6 +60,7 @@
     let pollTimer = null;
     let inputTimer = null;
     let pending = '';
+    let flushing = false;
     let connecting = false;
 
     // ---------------- Terminal ----------------
@@ -96,7 +102,7 @@
             return false;
         }
         if (e.ctrlKey && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
-            navigator.clipboard.readText().then(queueInput).catch(() => {});
+            navigator.clipboard.readText().then(paste).catch(() => {});
             return false;
         }
         return true;
@@ -274,10 +280,30 @@
 
     async function flushInput() {
         inputTimer = null;
-        if (!session || !pending) return;
-        const data = pending;
-        pending = '';
-        await postInput({ data });
+        // ORDER IS THE CONTRACT. Keystrokes must reach the shell in the order they were
+        // typed, and a large paste now takes several POSTs -- so a second flush starting
+        // while this one is mid-request would interleave two scripts into each other. One
+        // drain runs at a time and picks up whatever queued while it was working.
+        if (flushing) return;
+        flushing = true;
+        try {
+            while (session && pending) {
+                let rest = pending;
+                pending = '';
+                while (rest && session) {
+                    let take = Math.min(MAX_INPUT_CHARS, rest.length);
+                    // Never split a surrogate pair: half of one is not a character, and the
+                    // two halves would arrive at the shell as two replacement characters.
+                    const lead = rest.charCodeAt(take - 1);
+                    if (take < rest.length && lead >= 0xd800 && lead <= 0xdbff) take -= 1;
+                    const chunk = rest.slice(0, take);
+                    rest = rest.slice(take);
+                    await postInput({ data: chunk });
+                }
+            }
+        } finally {
+            flushing = false;
+        }
         // Typing makes the shell produce output; poll for it now rather than waiting out
         // whatever backoff the previous quiet period had set.
         schedulePoll(OUTPUT_POLL_MS);
@@ -350,22 +376,115 @@
         pollTimer = setTimeout(poll, delay);
     }
 
+    // ---------------- Multi-line input ----------------
+    //
+    // A console takes one line at a time: a CR submits the line before it. So any block of
+    // text with newlines in it -- a pasted snippet, a saved script -- necessarily RUNS as it
+    // arrives, line by line, with the shell's own continuation prompt holding open blocks
+    // together (`foreach (...) {` waits at `>>` for its closing brace, and PowerShell runs
+    // the whole block when it gets one). That is how every terminal emulator behaves and
+    // there is no way to make a real console behave otherwise.
+    //
+    // What we can do is not let it happen by surprise, which is what the confirmation below
+    // is for -- the same warning Windows Terminal shows on a multi-line paste, for the same
+    // reason: these lines are about to run as SYSTEM on somebody else's machine.
+
+    /** Normalise CRLF/CR to \n so line counting and the CR rewrite below have one shape. */
+    function normalizeEol(text) {
+        return String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    }
+
+    /** Send text to the shell as keystrokes, one CR per line break. */
+    function sendLines(text) {
+        queueInput(text.replace(/\n/g, '\r'));
+    }
+
+    function confirmMultiline(lines, what, lastLineHeld) {
+        return window.confirm(
+            `${what} is ${lines} lines long.\n\n` +
+            'It goes into the console as if you typed it, so every line but the last runs ' +
+            'as it arrives — a console has no way to hold a block back.\n\n' +
+            (lastLineHeld
+                ? 'The last line is left at the prompt so you get a final look before Enter.'
+                : 'If it ends with a line break, the last line runs too.') +
+            '\n\nSend it?');
+    }
+
+    /** Ctrl-Shift-V. A paste keeps its trailing newline -- copying a whole line and pasting
+     *  it is meant to run it -- so the confirmation says so. */
+    function paste(text) {
+        const body = normalizeEol(text);
+        if (!body || !session) return;
+        const lines = body.replace(/\n$/, '').split('\n').length;
+        if (lines > 1 && !confirmMultiline(lines, 'What you are pasting', false)) return;
+        sendLines(body);
+    }
+
     // ---------------- Favorites ----------------
     // A favorite is TYPED INTO the terminal rather than run: it may have come from a
     // teammate and is about to run as SYSTEM, so the operator reads it and presses Enter.
     // Same rule as the old terminal, for the same reason.
+    //
+    // MULTI-LINE FAVORITES used to be flattened -- every newline became a space -- which
+    // silently corrupted every favorite longer than one statement. `foreach ($x in $y) {`
+    // and its body joined with spaces is a different script, and usually not a valid one, so
+    // the operator got a syntax error from something that ran fine in the old terminal.
+    // They now go in as lines, with the trailing newline held back so the last one still
+    // waits at the prompt.
     function usePick(favorite) {
         if (favorite.command_type !== 'run_script') {
             note(`\r\n[${favorite.command_type} favorites are issued from the command ` +
                  `channel, not typed at a shell]\r\n`);
             return;
         }
-        const script = (favorite.params && favorite.params.script) || '';
-        // Strip newlines: pasting a multi-line script into a live shell would EXECUTE every
-        // line but the last as it arrived, which is the opposite of "review it first".
-        queueInput(script.replace(/\r?\n/g, ' '));
+        if (!session) {
+            note('\r\n[no console is open on this machine — reconnect first]\r\n');
+            return;
+        }
+        // Trailing whitespace off, so a script saved with a final newline doesn't submit its
+        // own last line and take the review step with it.
+        const script = normalizeEol(favorite.params && favorite.params.script).replace(/\s+$/, '');
+        if (!script) {
+            note(`\r\n[favorite "${favorite.name}" has no script in it]\r\n`);
+            return;
+        }
+
+        const lines = script.split('\n').length;
+        if (lines > 1 && !confirmMultiline(lines, `The favorite "${favorite.name}"`, true)) {
+            note(`\r\n[favorite "${favorite.name}" not sent]\r\n`);
+            return;
+        }
+
+        // Switching the dropdown would END this console (a running powershell cannot become
+        // cmd), so a mismatch is reported rather than acted on -- losing the session an
+        // operator is working in to "helpfully" match a saved field would be worse than a
+        // cmd one-liner failing loudly in PowerShell.
+        const savedFor = favorite.params && favorite.params.shell;
+        if (savedFor && shellEl && savedFor !== shellEl.value) {
+            note(`\r\n[this favorite was saved for ${savedFor}; this console is ` +
+                 `${shellEl.value}]\r\n`);
+        }
+
+        sendLines(script);
         term.focus();
-        note(`\r\n[loaded favorite "${favorite.name}" — review it, then press Enter]\r\n`);
+        note(lines > 1
+            ? `\r\n[loaded favorite "${favorite.name}" (${lines} lines) — the last line is ` +
+              'waiting for Enter]\r\n'
+            : `\r\n[loaded favorite "${favorite.name}" — review it, then press Enter]\r\n`);
+    }
+
+    /** "Save as favorite" in a pty console. There is no input box to read a script out of
+     *  here, so the terminal SELECTION is the seed -- select the command you just got right
+     *  and save it -- and the dialog's textarea is where it gets edited, newlines and all. */
+    function saveFavorite() {
+        const selection = term ? term.getSelection() : '';
+        FleetFavorites.openSave({
+            type: 'run_script',
+            params: {
+                script: normalizeEol(selection).replace(/\s+$/, ''),
+                shell: shellEl ? shellEl.value : 'powershell',
+            },
+        });
     }
 
     // ---------------- Public surface ----------------
@@ -377,21 +496,23 @@
             if (paneEl) paneEl.hidden = false;
             if (legacyEl) legacyEl.hidden = true;
             for (const id of ['terminal-timeout', 'terminal-timeout-label',
-                              'terminal-stop', 'terminal-reset', 'terminal-save-fav']) {
+                              'terminal-stop', 'terminal-reset']) {
                 const el = document.getElementById(id);
                 if (el) el.hidden = true;
             }
             if (reconnectBtn) reconnectBtn.hidden = true;
             if (newBtn) newBtn.hidden = false;
 
-            // Clear and Favorites live in the SHARED toolbar above both terminals, and
-            // fleet-terminal.js has already bound its own handlers to them by the time we
-            // get here (it binds synchronously; this runs after its async version lookup).
-            // Leaving those in place would open two favorites dialogs on one click.
+            // Clear, Favorites and Save-as-favorite live in the SHARED toolbar above both
+            // terminals, and fleet-terminal.js has already bound its own handlers to them by
+            // the time we get here (it binds synchronously; this runs after its async version
+            // lookup). Leaving those in place would open two favorites dialogs on one click,
+            // and its save handler reads the LEGACY textarea -- which is hidden and empty in
+            // this mode, so it would refuse with "nothing to save".
             // Replacing the nodes drops every listener registered on them -- so this has to
             // happen BEFORE we bind ours, and we have to re-read the references afterwards.
             const shared = {};
-            for (const id of ['terminal-clear', 'terminal-favorites']) {
+            for (const id of ['terminal-clear', 'terminal-favorites', 'terminal-save-fav']) {
                 const stale = document.getElementById(id);
                 if (!stale) continue;
                 const fresh = stale.cloneNode(true);
@@ -432,6 +553,11 @@
             if (shared['terminal-favorites']) {
                 shared['terminal-favorites'].addEventListener(
                     'click', () => FleetFavorites.open({ onPick: usePick }));
+            }
+            if (shared['terminal-save-fav']) {
+                shared['terminal-save-fav'].title =
+                    'Save a script as a favorite (any selected text is used as a starting point)';
+                shared['terminal-save-fav'].addEventListener('click', saveFavorite);
             }
             if (newBtn) newBtn.addEventListener('click', newConsole);
             // Switching shell can only mean a new console: a running powershell cannot
