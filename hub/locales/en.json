@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "English is the SCHEMA, not just a translation: every lookup falls back here, and a",
+    "key absent from this file does not exist as far as the app is concerned. Adding a",
+    "string means adding it here first; tests/test_i18n.py then names it as untranslated",
+    "in every other catalog until someone fills it in.",
+    "",
+    "Values are PLAIN TEXT -- never markup. Jinja autoescapes t() and the browser side",
+    "assigns through textContent, so a tag in here renders as visible angle brackets.",
+    "Placeholders are {named}, and the set of names in a translation must match this",
+    "file's exactly (a test enforces it -- a dropped {machine} is a silent bug).",
+    "",
+    "Keys are dotted paths written as nested objects, so a 500-key file stays reviewable.",
+    "The leading section is the page or component the string belongs to; 'common' is for",
+    "text that genuinely appears on several pages, not a dumping ground."
+  ],
+
+  "nav": {
+    "dashboard": "Dashboard",
+    "history": "History",
+    "inventory": "Asset Inventory",
+    "alerts": "Alerts",
+    "audit_log": "Audit Log",
+    "packages": "Packages",
+    "backups": "Backups",
+    "settings": "Settings",
+    "permission_groups": "Permission Groups",
+    "users": "Users",
+    "close": "Close navigation",
+    "open": "Open navigation"
+  },
+
+  "topbar": {
+    "hub_version": "Hub v{version}",
+    "agent_version": "Agent v{version}",
+    "companion_version": "Companion v{version}",
+    "sign_out": "Sign out",
+    "toggle_theme": "Toggle color theme",
+    "more": "More",
+    "connecting": "Connecting…",
+    "language": "Language"
+  },
+
+  "login": {
+    "title": "Sign in",
+    "prompt": "Sign in with an authorized account to view the dashboard.",
+    "google": "Sign in with Google",
+    "sso": "Sign in with {provider}"
+  },
+
+  "denied": {
+    "title": "Access denied",
+    "default_message": "You do not have permission to view this page.",
+    "note": "Permissions come from the groups you belong to. Ask an administrator to add you to a group that covers this.",
+    "back": "Back to dashboard"
+  },
+
+  "dashboard": {
+    "heading": "Live CPU Monitor",
+    "empty": "No machines have reported in yet."
+  },
+
+  "common": {
+    "status": {
+      "live": "Live",
+      "online": "Online",
+      "offline": "Offline"
+    },
+    "uptime": "Uptime: {value}",
+    "uptime_unknown": "Uptime: --",
+    "serial_prefix": "SN: {value}",
+    "asset_prefix": "Asset: {value}",
+    "high_temp_title": "High temperature",
+    "high_temp_body": "{machine} is running hot: {temp} °C",
+    "language_changed": "Language updated.",
+    "language_change_failed": "Could not change the language."
+  }
+}

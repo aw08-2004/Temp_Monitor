@@ -223,8 +223,26 @@
    provide is restored explicitly: badges (default 0), then the theme toggle, then the
    user. Without this the toggle would jump to the far right on desktop. */
 .theme-toggle { order: 1; }
+.topbar__language,
 .topbar__email,
 .topbar__signout { order: 2; }
+
+/* The language picker sits with the account chrome, so it takes .topbar__email's type
+   scale rather than a form control's -- a full-size <select> in the topbar reads as a
+   filter over the page instead of a preference. `display: contents` on the wrapper for
+   the same reason the meta wrapper uses it: the <label> exists to carry the .sr-only
+   text, and must not become a box that breaks the topbar's flex row. */
+.topbar__language {
+    display: contents;
+}
+
+.topbar__language .input {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+    /* Long endonyms would otherwise stretch the topbar and push the sign-out button off
+       a narrow desktop window. */
+    max-width: 10rem;
+}
 
 /* The mobile-only topbar controls (.nav-toggle, .topbar__more, .topbar__brand) and the
    overflow panel's mobile layout live at the END of this file, not here -- see the

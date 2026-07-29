@@ -960,28 +960,66 @@ present.
 
 ---
 
-## 📋 7. Localization / multi-language UI   ·   build last — lowest priority, most mechanical
+## 🚧 7. Localization / multi-language UI   ·   engine + chrome hub 1.51.0; page conversion ongoing
 
-Default shipped languages **English, Spanish, German**, with the ability to add more later
-without a schema/code shape change — a language is data (a translation file/table), not a
-hardcoded enum.
+Shipped languages **English, Spanish, German**. A language is data — one JSON file in
+`hub/locales/` plus a row in `i18n.LANGUAGES` — so a fourth needs no schema or code-shape
+change.
 
-- **No i18n infrastructure exists today.** The hub is Flask + server-rendered Jinja2 templates
-  (`templates\*.html`) plus vanilla JS (`static\js\*.js`) — every UI string is hardcoded English in
-  both layers, no `flask-babel` dependency, no translation files. This is a from-scratch addition,
-  not an extension of existing scaffolding.
-- **Server-side strings** (Jinja2 templates): open parameter — `flask-babel` + `.po`/`.mo` files
-  (mature, standard, one more dependency) vs. a minimal in-house JSON string-table loader (fits the
-  hub's established "keep it light" pattern — same reasoning as hand-rolling the S3 SigV4 signer
-  instead of taking botocore onto a 0.3 MB sparse install — at the cost of more code to maintain).
-- **Client-side strings** (`static\js\*.js`, not server-rendered) need a parallel JS-side string
-  table — the server-side mechanism alone doesn't cover these.
-- **Language selection**: open parameter — per-user preference (stored with the account/session)
-  vs. a fleet-wide default with per-user override.
-- **Scope note**: this touches every template and every hardcoded JS string in the app — the
-  highest-effort, most mechanical item on the roadmap, closer in shape to the Permission Groups
-  rollout's "ripple effect" than to a typical feature. Budget accordingly when this becomes a full
-  implementation plan.
+**✅ Engine — built (hub 1.51.0).** `hub/i18n.py` (flask-free, like every other model
+module), `hub/locales/{en,es,de}.json`, `hub/static/js/i18n.js`, and
+`tests/test_i18n.py`. Both open parameters are now resolved:
+
+- **In-house JSON string table, not flask-babel/gettext.** Three reasons, in order of
+  weight. (1) *Most of this console's user-facing text is in JavaScript, not Jinja* —
+  templates are ~1.5k lines against ~9.4k lines of vanilla DOM building, so gettext would
+  have solved only the server half and the client half would have needed a second
+  mechanism regardless: two catalogs, two extraction paths, guaranteed drift. One JSON
+  catalog feeds both. (2) *`.mo` files are a build step and this hub has no build step* —
+  deployment is a whole-directory file mirror with no compile stage, exactly the situation
+  in which a binary artifact goes silently stale and the hub serves last week's
+  translations with nothing on screen to say so. JSON is both source and runtime format,
+  so there is no stale-artifact state to be in. (3) It matches the hand-rolled-SigV4
+  precedent: ~250 lines, no new dependency on a 0.3 MB sparse install.
+- **Per-user preference over a fleet default, browser last.** `resolve()` is
+  user choice → `hub.default_language` → `Accept-Language` → English. The browser ranks
+  *below* the fleet setting deliberately: an admin who sets the fleet to Spanish has made
+  a statement about this deployment, and a stray `Accept-Language` from someone's phone is
+  not a preference they expressed about this console. A personal choice always wins, so
+  changing the fleet default never overrides an operator who has already picked. The
+  per-user column is on `users` and deliberately **not** in `_EDITABLE_FIELDS` — the Users
+  editor does whole-record updates and would otherwise reset a colleague's language when
+  an admin corrected their phone number. `POST /api/language` is gated on `@login_required`
+  and nothing else: requiring `manage_settings` to change the language of *your own*
+  console would mean only admins could read the UI in their own language, which inverts
+  who the feature is for.
+
+**Fallback is the load-bearing property.** Catalogs are merged server-side (English
+overlaid with the target language), so a key missing from `es.json` renders the English
+string, never a raw `nav.dashboard`. Partial catalogs degrade to mixed-language — ugly but
+usable — rather than to visible key names. The merge happening once on the server is also
+why `i18n.js` has no fallback logic of its own: one implementation, one behaviour.
+
+**Everything this engine can get wrong at runtime is silent**, which is why
+`tests/test_i18n.py` exists and what most of it is about: key parity in both directions
+(missing *and* stale), placeholder parity (a `{machine}` dropped in translation yields a
+grammatical alert that never names the machine), and a regex scan of every template and JS
+file asserting each literal `t('…')` key exists in `en.json` (a typo'd key renders its own
+name onto the page and raises nowhere). `_SafeFormat` means a translator's typo cannot 500
+a page, and the embedded catalog JSON has `<` escaped so a stray `</script>` cannot blank
+the console.
+
+**Known limitation:** `plural()` implements the one/other rule only. Correct for all three
+shipped languages, and explicitly wrong for languages with more forms (Polish, Russian,
+Arabic) — adding one means adding a rule table, not just a catalog.
+
+**Remaining work — mechanical.** The chrome is done, so *every* page already has a
+translated sidebar, topbar and language picker, and login/denied/dashboard are fully
+converted. Still English-only: 11 templates (history, inventory, alerts, audit, settings,
+users, permissions, backups, packages, machine), ~21 JS files, and the settings `REGISTRY`
+`label`/`help`/`unit` strings — Python-side UI text that no template scan will catch. Each
+is a self-contained increment; the key-scan test starts covering a file the moment its
+first string moves.
 
 ---
 
@@ -1001,9 +1039,10 @@ hardcoded enum.
 7. ~~**#4 Active Directory**~~ — done: OIDC/Entra login (1.44.0), directory-group →
    permission-group mapping (1.49.0), on-prem LDAP computer sync + the `ad_ou`
    machine-scope mode (1.50.0). Never run against a real DC — see the note above.
-8. **#7 Localization ← next** — the last numbered item, and the most mechanical. Its two
-   open parameters (flask-babel vs. an in-house JSON string table; per-user vs. fleet
-   default language) are still open.
+8. **#7 Localization ← in progress** — engine, catalogs and all shared chrome done in hub
+   1.51.0; both open parameters resolved (in-house JSON string table; per-user preference
+   over a fleet default). What is left is the page-by-page string conversion, which is
+   mechanical and needs no further decisions.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

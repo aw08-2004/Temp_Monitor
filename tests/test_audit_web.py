@@ -17,6 +17,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import fleet
 import permissions
+import i18n
 from audit_web import create_audit_blueprint
 from permissions_web import create_access
 from flask import Blueprint, Flask
@@ -74,11 +75,15 @@ def build_app(db_path):
     def _nav_context():
         from flask import session
         email = (session.get("user") or {}).get("email")
-        return {"cap": permissions, "hub_version": "test",
-                "user_capabilities": permissions.effective_permissions(
-                    db_path, email, superusers=SUPERUSERS)["capabilities"],
-                "open_alert_count": 0, "is_superuser": email in SUPERUSERS,
-                "latest_companion_version": None, "latest_agent_version": None}
+        context = {"cap": permissions, "hub_version": "test",
+                   "user_capabilities": permissions.effective_permissions(
+                       db_path, email, superusers=SUPERUSERS)["capabilities"],
+                   "open_alert_count": 0, "is_superuser": email in SUPERUSERS,
+                   "latest_companion_version": None, "latest_agent_version": None}
+        # The real t(), in English -- not a stub. A no-op t() here would let a page ship
+        # with a mistyped key that this test renders happily.
+        context.update(i18n.template_context("en"))
+        return context
 
     @app.before_request
     def _seed_session():

@@ -11,8 +11,8 @@ function formatMachineInfo(info) {
     if (!info) return '';
     const parts = [];
     if (info.model) parts.push(info.model);
-    if (info.serial_number) parts.push(`SN: ${info.serial_number}`);
-    if (info.asset_tag) parts.push(`Asset: ${info.asset_tag}`);
+    if (info.serial_number) parts.push(t('common.serial_prefix', { value: info.serial_number }));
+    if (info.asset_tag) parts.push(t('common.asset_prefix', { value: info.asset_tag }));
     return parts.join(' • ');
 }
 
@@ -50,7 +50,7 @@ function updateMachineCard(machine, temp, uptimeSeconds, info) {
         const uptimeEl = document.createElement('div');
         uptimeEl.className = 'stat-card__meta';
         uptimeEl.id = 'uptime-' + machine;
-        uptimeEl.textContent = 'Uptime: --';
+        uptimeEl.textContent = t('common.uptime_unknown');
 
         const pillEl = document.createElement('span');
         pillEl.className = 'status-pill status-pill--muted';
@@ -74,7 +74,7 @@ function updateMachineCard(machine, temp, uptimeSeconds, info) {
     }
 
     if (uptimeSeconds !== undefined && uptimeSeconds !== null) {
-        document.getElementById('uptime-' + machine).textContent = `Uptime: ${formatUptime(uptimeSeconds)}`;
+        document.getElementById('uptime-' + machine).textContent = t('common.uptime', { value: formatUptime(uptimeSeconds) });
     }
 
     const statusEl = document.getElementById('status-' + machine);
@@ -83,7 +83,7 @@ function updateMachineCard(machine, temp, uptimeSeconds, info) {
     document.getElementById('temp-' + machine).innerText = Number(temp).toFixed(1) + ' °C';
     // A card on the live Dashboard is, by construction, a machine currently reporting.
     // High temperature is not flagged here (see the top of this file).
-    setStatusPill(statusEl, 'ok', 'Online');
+    setStatusPill(statusEl, 'ok', t('common.status.online'));
 }
 
 async function refreshMachineInfo() {

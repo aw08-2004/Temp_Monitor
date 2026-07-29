@@ -67,6 +67,18 @@ def init_users_db(db_path):
             )
             """
         )
+        # Added for roadmap #7. An ALTER rather than a column in the CREATE above, so a
+        # hub that already has a users table gains it on the next start.
+        #
+        # NOT in _EDITABLE_FIELDS, deliberately: `language` is the user's own preference,
+        # set from the topbar picker, whereas the Users editor does WHOLE-RECORD updates
+        # (see update_user's docstring). Listing it there would mean an admin correcting
+        # someone's phone number silently reset their language to whatever the form
+        # happened to post. It has its own narrow setter below for the same reason
+        # backups gave manage_backups its own path to the four backup.* settings.
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if "language" not in existing:
+            conn.execute("ALTER TABLE users ADD COLUMN language TEXT")
 
 
 # ================================
@@ -118,6 +130,9 @@ def _row_to_dict(row):
         "title": row["title"],
         "department": row["department"],
         "notes": row["notes"],
+        # Read-only from the Users API's point of view: it is surfaced so an admin can
+        # SEE what someone chose, but only set_language() writes it (see init_users_db).
+        "language": row["language"],
         "source": row["source"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -244,6 +259,54 @@ def delete_user(db_path, email, actor="unknown"):
     fleet.audit(db_path, actor, "user.delete", email, None,
                 level=fleet.LEVEL_NOTICE)
     return True
+
+
+def get_language(db_path, email):
+    """The user's explicit language choice, or None if they have never picked one.
+
+    None is meaningful and is not the same as "en": it is what lets i18n.resolve() fall
+    through to the fleet default. Storing "en" for everyone at first sign-in would pin
+    the whole fleet to English and make the fleet-default setting do nothing.
+    """
+    email = normalize_email(email)
+    if not email:
+        return None
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT language FROM users WHERE email = ?", (email,)
+        ).fetchone()
+    return (row["language"] or None) if row else None
+
+
+def set_language(db_path, email, language):
+    """Record a language choice, auto-creating the profile row if the user has somehow
+    never been through `upsert_from_login` (a break-glass superuser on a fresh hub).
+
+    `language` is validated by the CALLER against i18n.LANGUAGE_CODES -- this module
+    stays free of that import so the users table has no opinion about which languages
+    ship. Passing None clears the choice, putting the user back on the fleet default.
+
+    Not audited: choosing your own interface language is a personal preference, not a
+    configuration change, and one audit row per language switch would dilute the trail
+    for the same reason `upsert_from_login` stays out of it.
+    """
+    email = normalize_email(email)
+    if not email:
+        raise ValueError("A language preference needs an email address.")
+    cleaned = _validate_field("language", language, 16)
+    now = int(time.time())
+    with get_conn(db_path) as conn:
+        updated = conn.execute(
+            "UPDATE users SET language = ?, updated_at = ? WHERE email = ?",
+            (cleaned, now, email),
+        ).rowcount
+        if not updated:
+            conn.execute(
+                "INSERT INTO users(email, language, source, created_at, updated_at, "
+                "created_by) VALUES (?, ?, ?, ?, ?, ?)",
+                (email, cleaned, SOURCE_LOGIN, now, now, email),
+            )
+    return cleaned
 
 
 def upsert_from_login(db_path, email, name):

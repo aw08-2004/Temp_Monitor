@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Access denied - FleetHub{% endblock %}
+{% block title %}{{ t('denied.title') }} - FleetHub{% endblock %}
 {% block content %}
 {#
    Rendered for a 403 on a PAGE route (an API route gets JSON -- see
@@ -11,14 +11,13 @@
    phrases it from what they already typed in the URL.
 #}
 <div class="empty-state" style="max-width: 520px; margin: var(--space-8) auto;">
-    <h1 class="section-title" style="font-size: var(--text-lg);">Access denied</h1>
+    <h1 class="section-title" style="font-size: var(--text-lg);">{{ t('denied.title') }}</h1>
     <p class="stat-card__meta" style="margin: var(--space-3) 0 var(--space-5);">
-        {{ message or "You do not have permission to view this page." }}
+        {{ message or t('denied.default_message') }}
     </p>
     <p class="stat-card__meta">
-        Permissions come from the groups you belong to. Ask an administrator to add you
-        to a group that covers this.
+        {{ t('denied.note') }}
     </p>
-    <a class="btn btn--primary" style="margin-top: var(--space-5);" href="{{ url_for('index') }}">Back to dashboard</a>
+    <a class="btn btn--primary" style="margin-top: var(--space-5);" href="{{ url_for('index') }}">{{ t('denied.back') }}</a>
 </div>
 {% endblock %}

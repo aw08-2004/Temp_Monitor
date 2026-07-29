@@ -40,6 +40,11 @@ import threading
 import time
 from collections import namedtuple
 
+# Only for LANGUAGE_CODES, so hub.default_language's choices cannot drift from the
+# catalogs actually shipped in locales/. i18n imports nothing from here, so there is no
+# cycle.
+import i18n
+
 # ---------------------------------------------------------------- the registry
 
 Setting = namedtuple("Setting", [
@@ -110,6 +115,11 @@ REGISTRY = (
     _s("hub.auto_update", "hub", "Hub auto-update", "bool", None,
        help="Let the hub pull and apply its own updates from the main branch. Leave unset "
             "to follow HUB_AUTO_UPDATE in .env; set here to override that."),
+    _s("hub.default_language", "hub", "Default console language", "enum", "en",
+       choices=list(i18n.LANGUAGE_CODES),
+       help="The console language for anyone who has not picked one in the topbar. A "
+            "personal choice always wins over this, so changing it does not override "
+            "operators who have already chosen."),
 
     # ---------------- Data & retention ----------------
     _s("data.retention_days", "data", "Keep readings for", "int", 30,

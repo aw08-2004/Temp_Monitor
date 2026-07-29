@@ -20,7 +20,7 @@ from functools import wraps
 import wmi
 import pythoncom
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify, redirect, session, url_for
+from flask import Flask, render_template, request, jsonify, redirect, session, url_for, g
 from flask_socketio import SocketIO, join_room
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -37,6 +37,7 @@ import backups
 import remote
 import directory
 import authconfig
+import i18n
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
@@ -73,7 +74,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.50.0"
+HUB_VERSION = "1.51.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3202,6 +3203,64 @@ def get_daily_summary():
         "reading_count": int(summary["reading_count"])
     })
 
+def current_language():
+    """The language for THIS request, resolved once and memoised on `g`.
+
+    Memoised because a single page render calls t() dozens of times and each call would
+    otherwise re-read the user's row: the language of a request cannot change halfway
+    through it, so one lookup is both cheaper and the only self-consistent answer.
+
+    Never raises. This runs on the login page, where there is no session and no user row
+    to have a preference in -- and on a hub whose users table predates the `language`
+    column, if one somehow starts before init_users_db(). A console that 500s because it
+    could not decide what language to apologise in is not an improvement on English.
+    """
+    cached = getattr(g, "_hub_language", None)
+    if cached:
+        return cached
+    chosen = None
+    fleet_default = None
+    accept = None
+    try:
+        fleet_default = settings.get(DB_PATH, "hub.default_language")
+        email = (session.get("user") or {}).get("email")
+        if email:
+            chosen = users.get_language(DB_PATH, email)
+        # Only reaches the decision when nobody has chosen and the fleet has no default
+        # -- see i18n.resolve for why the browser ranks below an admin's fleet setting.
+        accept = request.headers.get("Accept-Language")
+    except Exception:
+        pass
+    language = i18n.resolve(user_language=chosen, fleet_default=fleet_default,
+                            accept_language=accept)
+    g._hub_language = language
+    return language
+
+
+@app.route("/api/language", methods=["POST"])
+@login_required
+def set_language():
+    """Record the signed-in user's console language.
+
+    Gated on nothing but having a session, deliberately: this is a personal display
+    preference, not fleet configuration. Requiring `manage_settings` to change the
+    language of your own console would mean only admins could read the UI in their own
+    language, which inverts who the feature is for.
+    """
+    payload = request.get_json(silent=True) or {}
+    language = str(payload.get("language") or "").strip()
+    if not i18n.is_supported(language):
+        return jsonify({"error": f"{language!r} is not a supported language."}), 400
+    email = (session.get("user") or {}).get("email")
+    try:
+        users.set_language(DB_PATH, email, language)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    # The response is not what applies it -- the client reloads, and the next render
+    # resolves the language from the row just written.
+    return jsonify({"language": language})
+
+
 @app.context_processor
 def inject_nav_context():
     """Feed the sidebar on every page render: the Alerts badge, and which nav links the
@@ -3216,11 +3275,16 @@ def inject_nav_context():
     rather than COUNTing, since scoping needs the machine names. Never let any of this
     break a page -- it renders on login too, where there is no session at all.
     """
+    # Translation is injected here rather than as a jinja_env global so `t` and the
+    # language it renders in arrive together and cannot disagree -- a global `t` reading
+    # the language separately is how a page ends up with a Spanish sidebar and an English
+    # heading. Bound to this request's language, so templates just call t('nav.alerts').
     context = {"open_alert_count": 0, "user_capabilities": set(),
                "is_superuser": False, "cap": permissions,
                "hub_version": HUB_VERSION,
                "latest_companion_version": get_latest_companion_version(),
                "latest_agent_version": get_latest_agent_version()}
+    context.update(i18n.template_context(current_language()))
     if not session.get("user"):
         return context
     try:

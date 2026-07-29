@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+{# `lang` is set from the resolved language, not hardcoded: it is what screen readers and
+   the browser's own translation prompt key off, and static/js/i18n.js reads it back as
+   window.HUB_LANG rather than carrying a second copy that could disagree. #}
+<html lang="{{ current_language }}" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -30,6 +33,12 @@
         </main>
     </div>
 </div>
+{# The catalog is embedded rather than fetched so it cannot race the scripts below, which
+   call t() during their own top-level execution. `| safe` is correct here and only here:
+   i18n.catalog_json() already produced JSON with `<` escaped, and Jinja's HTML escaping
+   would turn the quotes into entities that JSON.parse then rejects. #}
+<script type="application/json" id="i18n-catalog">{{ i18n_catalog_json | safe }}</script>
+<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 <script src="{{ url_for('static', filename='js/common.js') }}"></script>
 {# Loaded for every page: it auto-upgrades long <select>s to searchable comboboxes and
    provides attachAutocomplete for the pickers that call it directly. #}

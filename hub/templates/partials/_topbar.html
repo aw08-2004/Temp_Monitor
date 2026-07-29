@@ -1,12 +1,12 @@
 <header class="topbar">
     {# Hamburger and brand are mobile-only (see components.css) -- above the breakpoint the
        sidebar is on screen and carries the brand itself. #}
-    <button type="button" id="nav-toggle" class="btn btn--icon nav-toggle" aria-label="Open navigation" aria-controls="app-sidebar" aria-expanded="false">
+    <button type="button" id="nav-toggle" class="btn btn--icon nav-toggle" aria-label="{{ t('nav.open') }}" aria-controls="app-sidebar" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <span class="topbar__brand">FleetHub</span>
     {% if request.endpoint in ('index', 'machine_page') %}
-    <span id="socket-status" class="status-pill status-pill--muted"><span class="status-pill__dot"></span>Connecting&hellip;</span>
+    <span id="socket-status" class="status-pill status-pill--muted"><span class="status-pill__dot"></span>{{ t('topbar.connecting') }}</span>
     {% endif %}
     {# Secondary chrome. On desktop the wrapper is `display: contents`, so these sit in the
        topbar row exactly as they always did -- flex `order` (components.css) keeps the
@@ -15,23 +15,37 @@
        row instead of wrapping to three. The status pill and theme toggle stay outside it:
        both are glanceable state you want without a tap. #}
     <div class="topbar__meta" id="topbar-meta">
-        <span class="badge">Hub v{{ hub_version }}</span>
+        <span class="badge">{{ t('topbar.hub_version', version=hub_version) }}</span>
         {% if latest_agent_version %}
-        <span class="badge">Agent v{{ latest_agent_version }}</span>
+        <span class="badge">{{ t('topbar.agent_version', version=latest_agent_version) }}</span>
         {% endif %}
         {% if latest_companion_version %}
-        <span class="badge">Companion v{{ latest_companion_version }}</span>
+        <span class="badge">{{ t('topbar.companion_version', version=latest_companion_version) }}</span>
         {% endif %}
         {% if session.user %}
+        {# In the overflow wrapper with the other account chrome: changing your language is
+           account-level, not glanceable state, so it sits with Sign out rather than beside
+           the theme toggle. Options are ENDONYMS -- someone hunting for their own language
+           is looking for "Deutsch", not for "German" spelled in a language they can't read.
+           Rendered only with a session because there is nowhere to persist a choice
+           without one; the login page follows Accept-Language instead. #}
+        <label class="topbar__language">
+            <span class="sr-only">{{ t('topbar.language') }}</span>
+            <select id="language-picker" class="input" aria-label="{{ t('topbar.language') }}">
+                {% for code, name in languages %}
+                <option value="{{ code }}" {{ 'selected' if code == current_language else '' }}>{{ name }}</option>
+                {% endfor %}
+            </select>
+        </label>
         <span class="topbar__email">{{ session.user.email }}</span>
-        <a class="btn btn--ghost topbar__signout" href="{{ url_for('logout') }}">Sign out</a>
+        <a class="btn btn--ghost topbar__signout" href="{{ url_for('logout') }}">{{ t('topbar.sign_out') }}</a>
         {% endif %}
     </div>
-    <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" aria-pressed="false">
+    <button type="button" id="theme-toggle" class="theme-toggle" aria-label="{{ t('topbar.toggle_theme') }}" aria-pressed="false">
         <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></svg>
     </button>
-    <button type="button" id="topbar-more" class="btn btn--icon topbar__more" aria-label="More" aria-controls="topbar-meta" aria-expanded="false">
+    <button type="button" id="topbar-more" class="btn btn--icon topbar__more" aria-label="{{ t('topbar.more') }}" aria-controls="topbar-meta" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
     </button>
 </header>

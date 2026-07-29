@@ -30,6 +30,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import backups
 import fleet
+import i18n
 import permissions
 import settings
 from backups_web import create_backups_blueprint
@@ -185,9 +186,11 @@ def main():
         def _nav_context():
             # Mirrors app.py's inject_nav_context, which the sidebar reads to decide
             # which links to draw.
-            return {"cap": permissions, "user_capabilities": set(),
-                    "open_alert_count": 0, "is_superuser": False,
-                    "hub_version": "1.28.0"}
+            context = {"cap": permissions, "user_capabilities": set(),
+                       "open_alert_count": 0, "is_superuser": False,
+                       "hub_version": "1.28.0"}
+            context.update(i18n.template_context("en"))
+            return context
 
         @app.before_request
         def _seed_session():

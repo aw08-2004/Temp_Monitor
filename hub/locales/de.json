@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "Deutsch. Mirrors en.json key for key -- a key missing here falls back to the English",
+    "string, so a partial catalog is mixed-language rather than broken. Placeholders",
+    "({name}) must match en.json exactly; tests/test_i18n.py fails if one is dropped."
+  ],
+
+  "nav": {
+    "dashboard": "Übersicht",
+    "history": "Verlauf",
+    "inventory": "Anlageninventar",
+    "alerts": "Warnungen",
+    "audit_log": "Auditprotokoll",
+    "packages": "Pakete",
+    "backups": "Sicherungen",
+    "settings": "Einstellungen",
+    "permission_groups": "Berechtigungsgruppen",
+    "users": "Benutzer",
+    "close": "Navigation schließen",
+    "open": "Navigation öffnen"
+  },
+
+  "topbar": {
+    "hub_version": "Hub v{version}",
+    "agent_version": "Agent v{version}",
+    "companion_version": "Companion v{version}",
+    "sign_out": "Abmelden",
+    "toggle_theme": "Farbschema umschalten",
+    "more": "Mehr",
+    "connecting": "Verbindung wird hergestellt…",
+    "language": "Sprache"
+  },
+
+  "login": {
+    "title": "Anmelden",
+    "prompt": "Melden Sie sich mit einem autorisierten Konto an, um die Übersicht zu sehen.",
+    "google": "Mit Google anmelden",
+    "sso": "Mit {provider} anmelden"
+  },
+
+  "denied": {
+    "title": "Zugriff verweigert",
+    "default_message": "Sie haben keine Berechtigung, diese Seite anzuzeigen.",
+    "note": "Berechtigungen ergeben sich aus den Gruppen, denen Sie angehören. Bitten Sie eine Administratorin oder einen Administrator, Sie einer passenden Gruppe hinzuzufügen.",
+    "back": "Zurück zur Übersicht"
+  },
+
+  "dashboard": {
+    "heading": "CPU-Live-Überwachung",
+    "empty": "Bisher hat kein Computer Daten gemeldet."
+  },
+
+  "common": {
+    "status": {
+      "live": "Live",
+      "online": "Online",
+      "offline": "Offline"
+    },
+    "uptime": "Laufzeit: {value}",
+    "uptime_unknown": "Laufzeit: --",
+    "serial_prefix": "S/N: {value}",
+    "asset_prefix": "Anlage: {value}",
+    "high_temp_title": "Hohe Temperatur",
+    "high_temp_body": "{machine} läuft heiß: {temp} °C",
+    "language_changed": "Sprache aktualisiert.",
+    "language_change_failed": "Die Sprache konnte nicht geändert werden."
+  }
+}

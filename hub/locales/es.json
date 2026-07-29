@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "Español. Mirrors en.json key for key -- a key missing here falls back to the English",
+    "string, so a partial catalog is mixed-language rather than broken. Placeholders",
+    "({name}) must match en.json exactly; tests/test_i18n.py fails if one is dropped."
+  ],
+
+  "nav": {
+    "dashboard": "Panel",
+    "history": "Historial",
+    "inventory": "Inventario de activos",
+    "alerts": "Alertas",
+    "audit_log": "Registro de auditoría",
+    "packages": "Paquetes",
+    "backups": "Copias de seguridad",
+    "settings": "Configuración",
+    "permission_groups": "Grupos de permisos",
+    "users": "Usuarios",
+    "close": "Cerrar navegación",
+    "open": "Abrir navegación"
+  },
+
+  "topbar": {
+    "hub_version": "Hub v{version}",
+    "agent_version": "Agente v{version}",
+    "companion_version": "Companion v{version}",
+    "sign_out": "Cerrar sesión",
+    "toggle_theme": "Cambiar el tema de color",
+    "more": "Más",
+    "connecting": "Conectando…",
+    "language": "Idioma"
+  },
+
+  "login": {
+    "title": "Iniciar sesión",
+    "prompt": "Inicia sesión con una cuenta autorizada para ver el panel.",
+    "google": "Iniciar sesión con Google",
+    "sso": "Iniciar sesión con {provider}"
+  },
+
+  "denied": {
+    "title": "Acceso denegado",
+    "default_message": "No tienes permiso para ver esta página.",
+    "note": "Los permisos provienen de los grupos a los que perteneces. Pide a un administrador que te añada a un grupo que lo incluya.",
+    "back": "Volver al panel"
+  },
+
+  "dashboard": {
+    "heading": "Monitor de CPU en vivo",
+    "empty": "Todavía no ha informado ningún equipo."
+  },
+
+  "common": {
+    "status": {
+      "live": "En vivo",
+      "online": "En línea",
+      "offline": "Sin conexión"
+    },
+    "uptime": "Tiempo activo: {value}",
+    "uptime_unknown": "Tiempo activo: --",
+    "serial_prefix": "N.º de serie: {value}",
+    "asset_prefix": "Activo: {value}",
+    "high_temp_title": "Temperatura alta",
+    "high_temp_body": "{machine} está a alta temperatura: {temp} °C",
+    "language_changed": "Idioma actualizado.",
+    "language_change_failed": "No se pudo cambiar el idioma."
+  }
+}

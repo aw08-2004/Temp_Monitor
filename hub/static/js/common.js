@@ -42,8 +42,8 @@ function classifyTemperatureStatus(temp, highTempThreshold, cpuLoadPct, lowLoadT
 
 function notifyHighTemp(machine, temp) {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    new Notification('High temperature', {
-        body: `${machine} is running hot: ${temp} °C`,
+    new Notification(t('common.high_temp_title'), {
+        body: t('common.high_temp_body', { machine: machine, temp: temp }),
         icon: 'https://cdn-icons-png.flaticon.com/512/3248/3248139.png'
     });
 }
@@ -53,8 +53,8 @@ function notifyHighTemp(machine, temp) {
 function connectSocketWithStatus() {
     const socket = io({ transports: ['polling'], upgrade: false });
     const statusEl = document.getElementById('socket-status');
-    socket.on('connect', () => setStatusPill(statusEl, 'ok', 'Live'));
-    socket.on('disconnect', () => setStatusPill(statusEl, 'danger', 'Offline'));
+    socket.on('connect', () => setStatusPill(statusEl, 'ok', t('common.status.live')));
+    socket.on('disconnect', () => setStatusPill(statusEl, 'danger', t('common.status.offline')));
     return socket;
 }
 

@@ -15,6 +15,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
+import i18n
 import permissions
 from flask import Blueprint, Flask, render_template_string
 
@@ -69,10 +70,13 @@ def build_app():
     # renders -- the drawer has to work for the operator who can see all ten links.
     @app.context_processor
     def _nav_context():
-        return {"cap": permissions, "hub_version": "test",
-                "user_capabilities": set(permissions.CAPABILITIES),
-                "open_alert_count": 3, "is_superuser": True,
-                "latest_companion_version": "9.9.9", "latest_agent_version": "8.8.8"}
+        context = {"cap": permissions, "hub_version": "test",
+                   "user_capabilities": set(permissions.CAPABILITIES),
+                   "open_alert_count": 3, "is_superuser": True,
+                   "latest_companion_version": "9.9.9",
+                   "latest_agent_version": "8.8.8"}
+        context.update(i18n.template_context("en"))
+        return context
 
     return app
 
