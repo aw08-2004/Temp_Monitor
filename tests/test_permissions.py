@@ -160,9 +160,12 @@ def main():
         rejects("unknown capability rejected",
                 lambda: permissions.create_group(db_path, name="Bad",
                                                  capabilities=["be_admin"]))
+        # NB: "ad_ou" used to be the example of an unknown mode here. It is a real mode
+        # since roadmap #4 landed, so this needs a genuinely unknown one -- otherwise the
+        # check quietly stops testing anything the day the vocabulary grows.
         rejects("unknown scope mode rejected",
                 lambda: permissions.create_group(db_path, name="Bad2",
-                                                 scope_mode="ad_ou"))
+                                                 scope_mode="everything_everywhere"))
         rejects("a non-email member rejected",
                 lambda: permissions.create_group(db_path, name="Bad3",
                                                  members=["not-an-email"]))
@@ -494,6 +497,139 @@ def main():
                 "SELECT COUNT(*) c FROM permission_group_members WHERE group_id = ?",
                 (both,)).fetchone()["c"]
         check("no orphan member rows are left behind", left == 0)
+
+        # ============================================================
+        # AD OU SCOPE MODE (roadmap #4)
+        # ============================================================
+        # A group scoped to an OU derives its machine list when the cache is built. The
+        # failure that matters is the derived list being WIDER than the OU -- an operator
+        # silently gaining machines nobody granted them -- so most of these are negatives.
+        print("\n== scope_mode = ad_ou ==")
+        import directory
+        with permissions.get_conn(db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS machine_info ("
+                         "machine TEXT PRIMARY KEY, asset_tag TEXT, serial_number TEXT, "
+                         "model TEXT, updated_at TEXT)")
+        directory.init_directory_db(db_path)
+        with permissions.get_conn(db_path) as conn:
+            for machine, ad_ou in (
+                ("WARD-1", "OU=Ward 3,OU=Clinical,DC=corp,DC=local"),
+                ("CLIN-1", "OU=Clinical,DC=corp,DC=local"),
+                ("FIN-1", "OU=Finance,DC=corp,DC=local"),
+                ("NOTCLIN-1", "OU=NotClinical,DC=corp,DC=local"),
+                ("NOAD-1", None),
+            ):
+                conn.execute("INSERT OR REPLACE INTO machine_info(machine, ad_ou) "
+                             "VALUES (?, ?)", (machine, ad_ou))
+        permissions.invalidate()
+
+        clinical = permissions.create_group(
+            db_path, name="Clinical OU", capabilities=[permissions.VIEW],
+            scope_mode=permissions.SCOPE_AD_OU,
+            ous=["OU=Clinical,DC=corp,DC=local"],
+            members=["hank@x.com"], actor="root@x.com")
+        p = permissions.effective_permissions(db_path, "hank@x.com", superusers)
+        check("an ad_ou group resolves to the machines in that OU",
+              p["machines"] == {"WARD-1", "CLIN-1"})
+        check("...which includes machines in NESTED OUs", "WARD-1" in p["machines"])
+        check("a machine in a sibling OU is NOT in scope", "FIN-1" not in p["machines"])
+        # The suffix-match bug, at the level that actually grants access.
+        check("a similarly-named OU does not leak in", "NOTCLIN-1" not in p["machines"])
+        check("a machine with no AD record is not in scope", "NOAD-1" not in p["machines"])
+        check("scope is a real set, never unrestricted", p["machines"] is not None)
+        check("machine_in_scope agrees",
+              permissions.machine_in_scope(p, "CLIN-1")
+              and not permissions.machine_in_scope(p, "FIN-1"))
+
+        print("\n== An ad_ou group with no OUs grants NOTHING ==")
+        # Fails closed. An empty scope must never read as "all machines".
+        empty_ou = permissions.create_group(
+            db_path, name="Empty OU", capabilities=[permissions.VIEW],
+            scope_mode=permissions.SCOPE_AD_OU, members=["iris@x.com"],
+            actor="root@x.com")
+        p = permissions.effective_permissions(db_path, "iris@x.com", superusers)
+        check("no OUs -> no machines", p["machines"] == set())
+        check("...and not unrestricted", p["machines"] is not None)
+
+        print("\n== The derived list follows the directory ==")
+        # This is the invalidation contract: a sync moves a machine, invalidates, and the
+        # next resolve reflects it. Without that a machine keeps its old group's access
+        # until the hub restarts.
+        with permissions.get_conn(db_path) as conn:
+            conn.execute("UPDATE machine_info SET ad_ou = ? WHERE machine = ?",
+                         ("OU=Finance,DC=corp,DC=local", "CLIN-1"))
+        permissions.invalidate()
+        p = permissions.effective_permissions(db_path, "hank@x.com", superusers)
+        check("a machine moved out of the OU leaves scope", "CLIN-1" not in p["machines"])
+        check("...and the rest of the OU is unaffected", p["machines"] == {"WARD-1"})
+        with permissions.get_conn(db_path) as conn:
+            conn.execute("UPDATE machine_info SET ad_ou = ? WHERE machine = ?",
+                         ("OU=Clinical,DC=corp,DC=local", "NEWPC"))
+            conn.execute("INSERT OR REPLACE INTO machine_info(machine, ad_ou) VALUES (?, ?)",
+                         ("NEWPC", "OU=Clinical,DC=corp,DC=local"))
+        permissions.invalidate()
+        check("a machine moved INTO the OU joins scope",
+              "NEWPC" in permissions.effective_permissions(
+                  db_path, "hank@x.com", superusers)["machines"])
+
+        print("\n== ad_ou composes with the other scope modes ==")
+        permissions.create_group(
+            db_path, name="Finance list", capabilities=[permissions.ISSUE_COMMANDS],
+            machines=["FIN-1"], members=["hank@x.com"], actor="root@x.com")
+        p = permissions.effective_permissions(db_path, "hank@x.com", superusers)
+        check("an OU group and an explicit-list group union",
+              {"WARD-1", "NEWPC", "FIN-1"} <= p["machines"])
+        check("...and their capabilities union too",
+              p["capabilities"] == {permissions.VIEW, permissions.ISSUE_COMMANDS})
+        permissions.create_group(
+            db_path, name="Everything", capabilities=[permissions.VIEW],
+            scope_mode=permissions.SCOPE_ALL, members=["hank@x.com"], actor="root@x.com")
+        check("a scope_mode=all group still wins over any derived list",
+              permissions.effective_permissions(
+                  db_path, "hank@x.com", superusers)["machines"] is None)
+
+        print("\n== OU validation ==")
+        for bad, why in ((["PC-1"], "a hostname, not a DN"),
+                         ([None], "not a string"),
+                         (["x" * 2000], "over the length cap")):
+            try:
+                permissions.create_group(db_path, name=f"Bad OU {why}",
+                                         scope_mode=permissions.SCOPE_AD_OU,
+                                         ous=bad, actor="root@x.com")
+                check(f"rejects {why}", False)
+            except ValueError:
+                check(f"rejects {why}", True)
+        kept = permissions.create_group(
+            db_path, name="Case kept", scope_mode=permissions.SCOPE_AD_OU,
+            ous=["OU=Clinical,DC=Corp", "  ", ""], actor="root@x.com")
+        check("blank OUs are dropped and the admin's case is preserved",
+              permissions.get_group(db_path, kept)["ous"] == ["OU=Clinical,DC=Corp"])
+        rejects("an unknown scope mode is still refused",
+                lambda: permissions.create_group(db_path, name="Bad mode",
+                                                 scope_mode="whatever"))
+
+        print("\n== Editing and clearing OUs ==")
+        permissions.update_group(db_path, clinical, ous=["OU=Finance,DC=corp,DC=local"],
+                                 actor="root@x.com")
+        check("re-pointing the OU re-derives the group's machines",
+              set(permissions.get_group(db_path, clinical)["machines"]) == {"FIN-1", "CLIN-1"})
+        permissions.update_group(db_path, clinical, name="Clinical OU",
+                                 actor="root@x.com")
+        check("update with ous omitted leaves them alone",
+              permissions.get_group(db_path, clinical)["ous"]
+              == ["OU=Finance,DC=corp,DC=local"])
+        permissions.update_group(db_path, clinical, ous=[], actor="root@x.com")
+        check("an explicit empty list clears them",
+              permissions.get_group(db_path, clinical)["ous"] == [])
+        check("...and the group then grants no machines",
+              permissions.get_group(db_path, clinical)["machines"] == [])
+
+        print("\n== Deleting an ad_ou group cleans up its OU rows ==")
+        permissions.delete_group(db_path, empty_ou, actor="root@x.com")
+        with permissions.get_conn(db_path) as conn:
+            left = conn.execute("SELECT COUNT(*) c FROM permission_group_ous "
+                                "WHERE group_id = ?", (empty_ou,)).fetchone()["c"]
+        check("no orphan OU rows are left behind", left == 0)
 
         print("\n== A mapping change is in the security audit trail ==")
         # Granting via a directory group is granting; if it were not audited, the widest

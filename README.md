@@ -337,9 +337,34 @@ OIDC_SCOPES=openid email profile         # optional
 ```
 
 The issuer's `/.well-known/openid-configuration` is discovered automatically, so
-there is no per-vendor code and adding a provider is a `.env` edit, not a release.
+there is no per-vendor code and adding a provider is configuration, not a release.
 (Set `OIDC_METADATA_URL` instead if your provider's discovery document isn't at
 the conventional path.)
+
+**You can also edit all of the above from the console**, at **Settings → Sign-in** —
+`.env` is only needed to bootstrap the first provider. Changes are written to `.env` and
+applied immediately, with no restart. Client secrets are write-only: the editor shows
+whether one is saved, never what it is, and leaving the placeholder untouched keeps it.
+
+> ⚠️ **Only the break-glass admins in `ALLOWED_EMAILS` can change sign-in settings** —
+> deliberately not `manage_settings`, and not any permission group, however privileged.
+> Whoever configures the identity provider can point the hub at an issuer they control and
+> sign in as anyone, so this is the one thing that stays with the accounts that already
+> hold total access. A group holding *every* capability is still refused.
+
+Guards, because this is the way back in:
+
+- A configuration that would leave **no working provider is refused** — a hub with none
+  can only be fixed by editing `.env` on the server.
+- A **half-filled provider is refused**, not silently ignored, so a client ID with no
+  secret is an error rather than a button that never appears.
+- The **issuer must be https**. The discovery document names the token endpoint and the
+  signing keys, so anything that can rewrite it in flight chooses who the hub believes
+  you are.
+- If the new settings are rejected when the clients are re-registered, **everything is
+  rolled back** — `.env`, the live process, and the running clients — before the error
+  comes back.
+- Every change is audited by **field name only**; secrets never enter the database.
 
 **Identity.** Whichever provider is used, the **email** is the identity, and it goes
 through the same permission groups and the same break-glass `ALLOWED_EMAILS` list.
@@ -433,6 +458,72 @@ Three things worth knowing before you rely on this:
 is in a mapped directory group — the hub never queries your directory, it only
 believes what an issuer signs at sign-in. Your directory remains the place that
 answers "who has this access?".
+
+### Scoping a group by Active Directory OU
+
+With **Active Directory sync** on (below), a group's machine scope can be *"machines in
+an AD OU"* instead of an explicit list. Machines then follow the directory: a PC re-filed
+into a scoped OU joins the group at the next sync, and one moved out leaves it. **Nested
+OUs are included** — scoping to `OU=Clinical` covers `OU=Ward 3,OU=Clinical` — and
+matching is component-wise, so `OU=Clinical` never captures `OU=NotClinical`.
+
+The group editor shows which machines the OUs currently resolve to, because an OU scope
+is a rule and the only way to check you picked the right one is to see its effect.
+
+## Active Directory sync
+
+Optional, off by default, and **nothing contacts a domain controller until you turn it
+on**. When enabled, the hub binds to a DC over LDAPS with a read-only service account and
+reads **computer objects**, so each machine record gains its distinguished name, OU,
+object GUID, owner (`managedBy`) and AD-recorded OS. That is what makes OU-based scoping
+above possible.
+
+Configure it at **Settings → Active Directory**:
+
+| Setting | |
+|---|---|
+| `directory.enabled` | master switch; off by default |
+| `directory.server` | `ldaps://dc1.corp.local` |
+| `directory.base_dn` | where to search, e.g. `OU=Computers,DC=corp,DC=local` |
+| `directory.bind_dn` | a **read-only** service account |
+| `directory.sync_interval_minutes` | 60 by default |
+| `directory.computer_filter` | `(objectClass=computer)` by default |
+
+The bind **password** goes in `.env`, never in hub settings — the settings table is
+readable by anyone with `manage_settings` and is included in the hub database backup:
+
+```
+DIRECTORY_BIND_PASSWORD=...
+```
+
+Sync needs the `ldap3` package (`pip install -r hub/requirements.txt`). It is imported
+lazily, so a hub that never enables AD does not need it installed; if the feature is on
+and the library is missing, the status card says exactly that.
+
+**Press "Sync now"** after configuring — it runs a pass synchronously and reports what it
+found, so a wrong bind DN takes seconds to diagnose instead of an hour.
+
+Things worth knowing:
+
+- **Nothing is ever written to your directory**, and no machine records are created from
+  it. AD computers with no agent installed are counted and otherwise ignored — inventing
+  machines from AD would fill the console with rows that never report.
+- **A managed machine with no computer object raises a review alert** (`ad_unmatched`),
+  auto-resolved when it reappears. Usually it means a PC was never domain-joined, was
+  renamed, or is half-decommissioned. Turn it off with
+  `directory.alert_on_unmatched`.
+- **A machine that leaves AD has its AD fields cleared**, deliberately. A stale OU left
+  behind on a deleted computer account would keep granting access through an OU-scoped
+  group indefinitely.
+- **Plain `ldap://` is refused by default** — a simple bind sends the service account's
+  password in cleartext. There is an explicit opt-out for isolated labs.
+- Searches are **always paged**. AD's default server limit is 1000 results and it
+  truncates *silently*, which would look like half your fleet vanishing from the
+  directory.
+
+> ⚠️ **Removing a machine from an OU removes access at the next sync, not instantly.**
+> OU scope is as current as your last sync (hourly by default). For urgent revocation,
+> change the group rather than the directory.
 
 The UI hides buttons an operator can't use, but that's presentation — the server-side
 gate on each endpoint is the control, and `/api/permissions/me` deliberately reveals

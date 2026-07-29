@@ -54,6 +54,7 @@
             <div class="perm-scope-modes">
                 <label class="checkbox"><input type="radio" name="scope-mode" value="list" checked> Only the machines listed below</label>
                 <label class="checkbox"><input type="radio" name="scope-mode" value="all"> Every machine in the fleet</label>
+                <label class="checkbox"><input type="radio" name="scope-mode" value="ad_ou"> Machines in an Active Directory OU</label>
             </div>
             <div id="machine-picker">
                 <div class="chip-list" id="machine-chips"></div>
@@ -62,6 +63,20 @@
                            placeholder="Search by name, asset tag, serial, service tag" autocomplete="off">
                     <button class="btn" type="button" id="machine-add">Add</button>
                 </div>
+            </div>
+            <div id="ou-picker" hidden>
+                <p class="setting__help">
+                    Machines are taken from Active Directory, and follow it: a PC moved into
+                    one of these OUs joins this group at the next directory sync, and one
+                    moved out leaves it. Nested OUs are included.
+                </p>
+                <div class="chip-list" id="ou-chips"></div>
+                <div class="chip-add">
+                    <input class="input" id="ou-input"
+                           placeholder="OU=Clinical,DC=corp,DC=local" autocomplete="off">
+                    <button class="btn" type="button" id="ou-add">Add</button>
+                </div>
+                <p class="setting__help" id="ou-resolved"></p>
             </div>
 
             <h3 class="perm-subhead">Members</h3>

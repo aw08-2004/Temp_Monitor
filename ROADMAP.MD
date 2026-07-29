@@ -503,7 +503,7 @@ with skip-and-report on failure.)*
 
 ---
 
-## 🚧 4. Active Directory integration   ·   login hub 1.44.0, group mapping hub 1.49.0
+## ✅ 4. Active Directory integration   ·   login 1.44.0, group mapping 1.49.0, LDAP sync 1.50.0
 
 **Hybrid directory**: login via **Entra ID (OIDC)**, OU/computer data via **on-prem LDAP**
 (Entra has no classic OUs, which is why OU targeting has to come from the on-prem side).
@@ -555,11 +555,61 @@ kept for being the one that tells the operator and their admin what is wrong, an
 softening it would weaken an existing control for no gain. Revisit if an empty dashboard
 turns out to be the better support experience.
 
-**Not yet done — machine ↔ AD sync and `ad_ou` scope mode**, i.e. everything needing
-on-prem LDAP. `members_of_machine()` is knowingly incomplete until then: it answers "who
+`members_of_machine()` is knowingly incomplete and cannot be otherwise: it answers "who
 has access **by name**", and cannot enumerate a mapped directory group's members, because
-the hub never queries a directory — it only ever learns that one person is in one group,
-at their sign-in.
+the hub never queries a directory for *users* — it only ever learns that one person is in
+one group, at their sign-in.
+
+**✅ Machine ↔ AD computer sync + `ad_ou` scope mode — built (hub 1.50.0).**
+`directory.py` (model, flask-free) + `directory_web.py` (status, OU list, "sync now"), a
+Settings → Active Directory tab, `directory.*` settings, an `ad_unmatched` alert kind, and
+the third machine-scope mode in the permission-group editor. Resolved parameters:
+
+- **`ldap3`, imported lazily.** The one dependency taken purely for this feature. LDAP is
+  a real ASN.1/BER protocol over TLS — not the SigV4 situation, where hand-rolling ~100
+  lines of `hmac` beat taking 80 MB of botocore. It is pure Python (~1 MB, no compiler),
+  and `directory.py` imports it *inside the connect path*, so a hub that never turns AD on
+  neither needs it installed nor pays the import. Missing-with-the-feature-on is reported
+  as a configuration error with the install command, not a crash loop.
+- **Paging strategy (the roadmap's open question): always paged, no exceptions.** AD's
+  default `MaxPageSize` is 1000 and it does **not** error when a search exceeds it — it
+  returns the first page and a referral. An unpaged search on a 2000-computer domain would
+  therefore sync half the fleet, mark the other half as having no AD object, and raise a
+  review alert on a thousand healthy machines, with nothing in any log to say why.
+- **`owner`/`last_logon_user` (the other open question): split, honestly.** `owner` comes
+  from `managedBy` (stored as the leaf CN, since showing an operator a full DN where a name
+  belongs is not an improvement on showing nothing). **`last_logon_user` was NOT
+  implemented, because it is not an AD attribute** — `lastLogonTimestamp` is when the
+  *computer account* authenticated, which is a different fact, and is stored as
+  `ad_last_logon`. A real last-logged-on *user* needs an agent-side signal; noted, not
+  faked.
+- **The join is hostname-based**, leading DNS label, case-insensitively, `dNSHostName`
+  preferring `name` — consistent with the existing hostname-primary-key model. Two AD
+  objects claiming one hostname (a re-join that left the old account behind) uses the first
+  and reports the collision, so the OU cannot flip between syncs.
+- **AD is authoritative for AD's fields and nothing else.** No machine records are ever
+  created from the directory — AD computers without the agent are counted (a useful
+  number) and otherwise ignored, because inventing machines from AD fills the console with
+  rows that never report. Conversely a machine leaving AD has its AD fields **cleared**:
+  a stale OU on a deleted computer account would keep granting access through an OU-scoped
+  group indefinitely, with nothing on screen to suggest it.
+- **`ad_ou` scope resolves at cache-build time, not per request.** Safe for exactly one
+  reason, made explicit in the code: only a directory sync can change which machines are
+  in an OU, and `sync_once` invalidates the permissions cache when any machine's OU
+  actually moved (and only then — firing every pass would dump the cache hourly for
+  nothing). **Containment is component-wise**, so a parent OU covers nested children while
+  `OU=Clinical` never captures `OU=NotClinical` — a string `endswith` here is an
+  access-control bug, not a display one.
+- **Cleartext binds refused by default**, and the refusal lives in `validate_config()`
+  ahead of the library import — a safety check must not be reachable only on hubs that got
+  a dependency right. Found by a test that asserted on the message: with `ldap3` absent,
+  four config-validation checks had been passing on the *import* error instead.
+
+**Not covered by tests, and worth saying:** everything above is exercised against literal
+LDAP entries through `sync_once(fetcher=...)`, with no directory and no `ldap3` present.
+What that cannot cover is the ldap3 call itself — the bind, the TLS handshake and the
+paged-search generator are a thin adapter that has never run against a real DC. Expect the
+same shape of finding the TURN work produced on first contact with hardware.
 
 - **Machine ↔ AD computer sync, on-prem LDAP.** Entirely opt-in and Admin-configured — if
   no AD is set up, nothing runs. The hub binds to a DC over LDAPS with a read-only service
@@ -948,10 +998,12 @@ hardcoded enum.
 6. ~~**#2 Remote view & control**~~ — done, hub 1.40.0 (built ahead of #4 at the user's
    request; agent half pending a signed release; TURN server in `turn/`, installer-provisioned
    and managed from Settings → Remote Control)
-7. **#4 Active Directory ← in progress** — OIDC/Entra login done (hub 1.44.0) and
-   directory-group → permission-group mapping done (hub 1.49.0). **Remaining: on-prem
-   LDAP computer sync + the `ad_ou` machine-scope mode.**
-8. **#7 Localization** — lowest priority, most mechanical; do last
+7. ~~**#4 Active Directory**~~ — done: OIDC/Entra login (1.44.0), directory-group →
+   permission-group mapping (1.49.0), on-prem LDAP computer sync + the `ad_ou`
+   machine-scope mode (1.50.0). Never run against a real DC — see the note above.
+8. **#7 Localization ← next** — the last numbered item, and the most mechanical. Its two
+   open parameters (flask-babel vs. an in-house JSON string table; per-user vs. fleet
+   default language) are still open.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

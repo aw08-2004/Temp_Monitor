@@ -23,6 +23,10 @@ const machineChips = document.getElementById('machine-chips');
 const machineInput = document.getElementById('machine-input');
 const memberChips = document.getElementById('member-chips');
 const memberInput = document.getElementById('member-input');
+const ouPicker = document.getElementById('ou-picker');
+const ouChips = document.getElementById('ou-chips');
+const ouInput = document.getElementById('ou-input');
+const ouResolvedEl = document.getElementById('ou-resolved');
 const dirGroupChips = document.getElementById('dirgroup-chips');
 const dirGroupInput = document.getElementById('dirgroup-input');
 const dirGroupSelfEl = document.getElementById('dirgroup-self');
@@ -34,8 +38,10 @@ let editingId = null;         // null while creating
 let draftMachines = [];
 let draftMembers = [];
 let draftDirGroups = [];
+let draftOus = [];
 let machineDirectory = [];    // full /api/machines rows, for the machine picker's search
 let myDirGroups = [];         // this session's own mapped directory tokens, as a hint
+let fleetOus = [];            // OUs the fleet is actually in, for the OU picker
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -121,6 +127,14 @@ function renderGroupRow(group) {
     } else {
         machinesCell.appendChild(el('span', null, String(group.machines.length)));
         machinesCell.appendChild(el('div', 'stat-card__meta', group.machines.join(', ')));
+    }
+    if (group.scope_mode === 'ad_ou') {
+        // Name the RULE as well as its current result: the count above is what the OUs
+        // resolve to today, and an operator reading the row needs to know it will move on
+        // its own when someone re-files a PC in AD.
+        const ous = group.ous || [];
+        machinesCell.appendChild(el('div', 'stat-card__meta',
+            ous.length ? `from AD OU: ${ous.join(', ')}` : 'from AD OU: none selected'));
     }
     tr.appendChild(machinesCell);
 
@@ -221,6 +235,37 @@ function renderMemberChips() {
     });
 }
 
+function renderOuChips() {
+    renderChips(ouChips, draftOus, (value) => {
+        draftOus = draftOus.filter((o) => o !== value);
+        renderOuChips();
+        autoSaveGroup();
+    });
+}
+
+// An OU scope is a RULE, not a list, so the editor has to answer "and which machines is
+// that right now?" -- otherwise an admin picks an OU and has no way to tell whether they
+// picked the right one until somebody complains about their access.
+function renderOuResolved(group) {
+    ouResolvedEl.replaceChildren();
+    if (scopeMode() !== 'ad_ou') return;
+    if (!draftOus.length) {
+        ouResolvedEl.appendChild(el('span', null,
+            'No OUs selected — this group currently grants access to no machines.'));
+        return;
+    }
+    const machines = (group && group.machines) || [];
+    if (!machines.length) {
+        ouResolvedEl.appendChild(el('span', null,
+            'No machines are in these OUs yet. If Active Directory sync has not run '
+            + 'since these PCs enrolled, they will appear after the next sync.'));
+        return;
+    }
+    ouResolvedEl.appendChild(el('span', null,
+        `${machines.length} machine${machines.length === 1 ? '' : 's'} in scope: `
+        + machines.slice(0, 12).join(', ') + (machines.length > 12 ? '…' : '')));
+}
+
 function renderDirGroupChips() {
     renderChips(dirGroupChips, draftDirGroups, (value) => {
         draftDirGroups = draftDirGroups.filter((d) => d !== value);
@@ -276,9 +321,12 @@ function scopeMode() {
 }
 
 function syncScopeMode() {
-    // "Every machine" makes the explicit list meaningless, so hide it rather than
-    // leaving a list that silently has no effect.
-    machinePicker.hidden = scopeMode() === 'all';
+    // Show exactly the picker the selected mode uses. A list left visible under "every
+    // machine" -- or under an OU rule -- is a list that silently has no effect, which is
+    // the kind of thing an admin reads as a grant that is in force.
+    const mode = scopeMode();
+    machinePicker.hidden = mode !== 'list';
+    ouPicker.hidden = mode !== 'ad_ou';
 }
 
 function openEditor(group) {
@@ -289,6 +337,7 @@ function openEditor(group) {
     draftMachines = group ? group.machines.slice() : [];
     draftMembers = group ? group.members.slice() : [];
     draftDirGroups = group ? (group.directory_groups || []).slice() : [];
+    draftOus = group ? (group.ous || []).slice() : [];
     const mode = group ? group.scope_mode : 'list';
     modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
         radio.checked = radio.value === mode;
@@ -296,9 +345,11 @@ function openEditor(group) {
     renderCapabilities(group ? group.capabilities : []);
     renderMachineChips();
     renderMemberChips();
+    renderOuChips();
     renderDirGroupChips();
     renderDirGroupHint();
     syncScopeMode();
+    renderOuResolved(group);
     errorEl.textContent = '';
     // Reset the auto-save machinery for the new editing session.
     groupSaving = false;
@@ -362,6 +413,9 @@ async function flushGroup() {
         machines: draftMachines,
         members: draftMembers,
         directory_groups: draftDirGroups,
+        // Always sent, like machines: the server ignores OUs for a non-ad_ou group, and
+        // keeping them means switching modes back and forth doesn't discard what was set.
+        ous: draftOus,
     };
     groupSaving = true;
     groupPending = false;
@@ -387,6 +441,9 @@ async function flushGroup() {
             modalTitle.textContent = `Edit ${group.name}`;
         }
         setGroupStatus('Saved', 'autosave--saved');
+        // The saved group carries its freshly re-derived machine list, so an OU edit
+        // shows its effect immediately rather than at the next time the editor is opened.
+        renderOuResolved(group);
         await loadGroups();      // refresh the list behind the modal
     } catch (e) {
         // Validation failure (e.g. a duplicate name) writes nothing; show it and leave the
@@ -470,6 +527,26 @@ function attachPickers() {
             memberInput.focus();
         },
     });
+    // The OUs the fleet is actually in, filtered client-side -- a short list that only
+    // changes on a directory sync, so there is nothing to query per keystroke. Free text
+    // still works, so an OU that has no machines in it yet can be scoped ahead of time.
+    attachAutocomplete(ouInput, {
+        minChars: 0,
+        emptyText: 'No matching OUs — press Add to use exactly what you typed.',
+        source: (query) => {
+            const q = query.toLowerCase();
+            return fleetOus
+                .filter((ou) => !draftOus.includes(ou))
+                .filter((ou) => ou.toLowerCase().includes(q))
+                .slice(0, 20)
+                .map((ou) => ({ value: ou, label: ou }));
+        },
+        onSelect: (item) => {
+            addValue(draftOus, item.value, renderOuChips);
+            ouInput.value = '';
+            ouInput.focus();
+        },
+    });
 }
 
 // ---------------------------------------------------------------- wiring
@@ -484,13 +561,22 @@ nameInput.addEventListener('input', autoSaveGroupDebounced);
 descriptionInput.addEventListener('input', autoSaveGroupDebounced);
 capabilityList.addEventListener('change', autoSaveGroup);
 modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
-    radio.addEventListener('change', () => { syncScopeMode(); autoSaveGroup(); });
+    radio.addEventListener('change', () => {
+        syncScopeMode();
+        renderOuResolved(null);
+        autoSaveGroup();
+    });
 });
 
 document.getElementById('machine-add').addEventListener('click',
     () => addFrom(machineInput, draftMachines, renderMachineChips, (v) => v.trim()));
 document.getElementById('member-add').addEventListener('click',
     () => addFrom(memberInput, draftMembers, renderMemberChips, (v) => v.trim().toLowerCase()));
+// OUs keep the case the admin typed -- they are displayed back, and comparison is
+// casefolded server-side (directory.ou_contains), so folding here would only make the
+// chip disagree with what their AD tools show.
+document.getElementById('ou-add').addEventListener('click',
+    () => addFrom(ouInput, draftOus, renderOuChips, (v) => v.trim()));
 // Lowercased to match the server's normalisation, so the chip shown is the token that
 // will actually be compared against a claim rather than whatever case was pasted.
 document.getElementById('dirgroup-add').addEventListener('click',
@@ -501,7 +587,8 @@ document.getElementById('dirgroup-add').addEventListener('click',
 // which would otherwise close the editor and discard everything typed so far.
 [[machineInput, () => document.getElementById('machine-add').click()],
  [memberInput, () => document.getElementById('member-add').click()],
- [dirGroupInput, () => document.getElementById('dirgroup-add').click()]].forEach(([input, add]) => {
+ [dirGroupInput, () => document.getElementById('dirgroup-add').click()],
+ [ouInput, () => document.getElementById('ou-add').click()]].forEach(([input, add]) => {
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -536,6 +623,11 @@ async function init() {
         const me = await api('/api/permissions/me');
         myDirGroups = me.directory_groups_seen || [];
     } catch (e) { /* the hint is optional */ }
+    // The OUs the fleet sits in, for the OU scope picker. Absent on a hub with no AD
+    // configured, which is the ordinary case -- the field then just takes typed input.
+    try {
+        fleetOus = (await api('/api/directory/ous')).ous || [];
+    } catch (e) { /* no AD, or no permission to read it; typing still works */ }
     attachPickers();
     await loadGroups();
 }

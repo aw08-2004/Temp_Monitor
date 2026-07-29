@@ -324,8 +324,10 @@ def test_schema_shape():
     db = fresh_db()
     doc = settings.schema(db)
     names = [s["name"] for s in doc["sections"]]
-    check("all sections present in order",
-          names == ["computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote"])
+    # Derived from SECTIONS rather than typed out again. The contract worth testing is
+    # "schema() emits every section, in registry order" -- a literal copy of the constant
+    # tests nothing extra and has to be edited every time a section is added.
+    check("all sections present in order", names == list(settings.SECTIONS))
     check("sections carry display labels",
           any(s["label"] == "Data & Retention" for s in doc["sections"]))
 

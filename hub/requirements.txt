@@ -10,3 +10,8 @@ waitress
 # explicit requirement rather than a new download -- but backups.py must not be at the
 # mercy of another package's dependency tree for the thing that encrypts them.
 cryptography
+# Active Directory sync (roadmap #4) ONLY. Pure Python, no compiler, ~1 MB -- taken
+# because LDAP is a real ASN.1/BER protocol over TLS, not something to hand-roll the way
+# the S3 SigV4 signer was. directory.py imports it lazily, inside the connect path, so a
+# hub that never turns AD on neither needs it installed nor pays its import cost.
+ldap3

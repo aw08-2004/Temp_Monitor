@@ -28,6 +28,13 @@
                 aria-controls="tab-fleet" aria-selected="false" tabindex="-1">Fleet</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
                 aria-controls="tab-remote" aria-selected="false" tabindex="-1">Remote Control</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-directory"
+                aria-controls="tab-directory" aria-selected="false" tabindex="-1">Active Directory</button>
+        {# Sign-in has no schema-rendered fields at all -- its settings live in .env, not
+           the settings table, because they are credentials and the perimeter itself.
+           settings-auth.js builds the whole panel. #}
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-signin"
+                aria-controls="tab-signin" aria-selected="false" tabindex="-1">Sign-in</button>
     </div>
     <div class="settings-layout__panels">
         <div class="tab-panel" id="tab-computer" role="tabpanel" aria-labelledby="tab-btn-computer"></div>
@@ -36,6 +43,8 @@
         <div class="tab-panel" id="tab-metrics" role="tabpanel" aria-labelledby="tab-btn-metrics"></div>
         <div class="tab-panel" id="tab-fleet" role="tabpanel" aria-labelledby="tab-btn-fleet"></div>
         <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote"></div>
+        <div class="tab-panel" id="tab-directory" role="tabpanel" aria-labelledby="tab-btn-directory"></div>
+        <div class="tab-panel" id="tab-signin" role="tabpanel" aria-labelledby="tab-btn-signin"></div>
     </div>
 </div>
 {% endblock %}
@@ -48,4 +57,10 @@
 {# settings-remote.js adds the TURN status/secret card on top of the schema-rendered
    remote.* fields; it re-injects on the 'settings:rendered' event settings.js fires. #}
 <script src="{{ url_for('static', filename='js/settings-remote.js') }}"></script>
+{# Same pattern for the Active Directory tab: the directory.* fields are schema-rendered,
+   and this adds the sync status card and the "Sync now" button on top. #}
+<script src="{{ url_for('static', filename='js/settings-directory.js') }}"></script>
+{# The Sign-in panel is built entirely by this script -- there are no schema fields for it,
+   since its settings live in .env rather than the settings table. #}
+<script src="{{ url_for('static', filename='js/settings-auth.js') }}"></script>
 {% endblock %}

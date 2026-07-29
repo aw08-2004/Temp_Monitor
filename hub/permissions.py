@@ -115,11 +115,22 @@ CAPABILITY_LABELS = {
 
 # Machine-scope resolution modes. "list" is the v1 explicit list; "all" is the
 # fleet-wide group (a global auditor, or the group that replaces break-glass once a
-# deployment stops relying on ALLOWED_EMAILS). Roadmap #4 adds "ad_ou" here, which is
-# why this is a mode column rather than an is_all_machines flag.
+# deployment stops relying on ALLOWED_EMAILS); "ad_ou" resolves the machine set from
+# Active Directory OUs (roadmap #4) -- which is why this was a mode column from the
+# start rather than an is_all_machines flag.
 SCOPE_LIST = "list"
 SCOPE_ALL = "all"
-SCOPE_MODES = (SCOPE_LIST, SCOPE_ALL)
+SCOPE_AD_OU = "ad_ou"
+SCOPE_MODES = (SCOPE_LIST, SCOPE_ALL, SCOPE_AD_OU)
+
+# An `ad_ou` group stores OU distinguished names and its machine list is DERIVED from
+# them at cache-build time, rather than resolved per request. That is safe for exactly
+# one reason, and it is worth being explicit about it: the only thing that can change
+# which machines are in an OU is a directory sync, and directory.sync_once invalidates
+# this cache when any machine's OU actually moves. A machine enrolling has no OU until
+# the next sync either, so there is no window where the derived list is stale in a way a
+# per-request resolve would have caught.
+MAX_OU_CHARS = 1024
 
 MAX_NAME_CHARS = 80
 
@@ -224,6 +235,20 @@ def init_permissions_db(db_path):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pg_members_lookup "
             "ON permission_group_members(email)"
+        )
+        # The OU scope list for a scope_mode='ad_ou' group (roadmap #4). A table of its
+        # own rather than more rows in permission_group_machines: those hold resolved
+        # hostnames and this holds the RULE that produces them, and overloading one table
+        # with both would make "is this machine explicitly granted, or is it just in the
+        # OU today?" unanswerable -- which is exactly the question asked when revoking.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS permission_group_ous (
+                group_id TEXT NOT NULL,
+                ou       TEXT NOT NULL,
+                PRIMARY KEY (group_id, ou)
+            )
+            """
         )
 
 
@@ -362,6 +387,35 @@ def _validate_scope(scope_mode, machines):
     return mode, sorted(cleaned)
 
 
+def _validate_ous(ous):
+    """Normalise the OU distinguished names an `ad_ou` group scopes to.
+
+    Stored in the admin's original case (it is displayed back to them), and compared
+    casefolded component-wise by directory.ou_contains -- the same split between display
+    form and comparison form the DN helpers over there use.
+    """
+    cleaned = []
+    for ou in (ous or []):
+        if not isinstance(ou, str):
+            raise ValueError(f"{ou!r} is not an organizational unit name.")
+        text = ou.strip()
+        if not text:
+            continue
+        if len(text) > MAX_OU_CHARS:
+            raise ValueError(f"Organizational unit names are limited to {MAX_OU_CHARS} "
+                             f"characters.")
+        # A DN has at least one `component=value`. Refusing anything else is what stops a
+        # hostname being pasted into the OU field, where it would match nothing forever
+        # while looking like a configured scope.
+        if "=" not in text:
+            raise ValueError(
+                f"{ou!r} does not look like an organizational unit. Use its distinguished "
+                f"name, e.g. OU=Clinical,DC=corp,DC=local.")
+        if text not in cleaned:
+            cleaned.append(text)
+    return sorted(cleaned)
+
+
 def _validate_members(members):
     cleaned = []
     for member in (members or []):
@@ -448,6 +502,7 @@ def _build(db_path):
                 "machines": [],
                 "members": [],
                 "directory_groups": [],
+                "ous": [],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "updated_by": row["updated_by"],
@@ -482,8 +537,55 @@ def _build(db_path):
                 continue
             group["directory_groups"].append(token)
             by_directory_group.setdefault(token, []).append(row["group_id"])
+        for row in conn.execute(
+            "SELECT group_id, ou FROM permission_group_ous ORDER BY ou"
+        ):
+            group = groups.get(row["group_id"])
+            if group is not None:
+                group["ous"].append(row["ou"])
+
+    # Resolve every ad_ou group's OUs to the machines actually in them, ONCE per cache
+    # build, so machine_in_scope and visible_machine_filter keep working unchanged
+    # downstream. See the note by SCOPE_AD_OU for why a snapshot is correct here: only a
+    # directory sync can change the answer, and it invalidates this cache when it does.
+    ou_groups = [g for g in groups.values() if g["scope_mode"] == SCOPE_AD_OU]
+    if ou_groups:
+        _resolve_ou_scopes(db_path, ou_groups)
+
     return {"groups": groups, "by_email": by_email,
             "by_directory_group": by_directory_group}
+
+
+def _resolve_ou_scopes(db_path, ou_groups):
+    """Fill in `machines` for each ad_ou group from the fleet's current OUs.
+
+    Imported here rather than at module scope: permissions.py is the access-control core
+    and is imported by everything, while directory.py imports alerts and fleet -- a
+    top-level import would make that a cycle. It is also the honest dependency direction,
+    since AD is an optional feature this module works fine without.
+
+    A failure to resolve leaves `machines` EMPTY, never unrestricted. If the AD columns
+    are somehow unreadable, an ad_ou group must grant access to nothing rather than
+    falling through to a wider scope.
+    """
+    try:
+        import directory
+    except Exception:
+        return
+    try:
+        with get_conn(db_path) as conn:
+            rows = conn.execute(
+                "SELECT machine, ad_ou FROM machine_info "
+                "WHERE ad_ou IS NOT NULL AND ad_ou <> ''").fetchall()
+    except sqlite3.Error:
+        # machine_info without the AD columns -- a hub that has not run
+        # directory.init_directory_db yet. No OU data means no machines in scope.
+        return
+    fleet_ous = [(row["machine"], row["ad_ou"]) for row in rows]
+    for group in ou_groups:
+        matched = [machine for machine, ad_ou in fleet_ous
+                   if any(directory.ou_contains(scope, ad_ou) for scope in group["ous"])]
+        group["machines"] = sorted(matched)
 
 
 def _get_state(db_path):
@@ -509,7 +611,8 @@ def _copy_group(group):
                 capabilities=list(group["capabilities"]),
                 machines=list(group["machines"]),
                 members=list(group["members"]),
-                directory_groups=list(group["directory_groups"]))
+                directory_groups=list(group["directory_groups"]),
+                ous=list(group["ous"]))
 
 
 def list_groups(db_path):
@@ -621,6 +724,9 @@ def effective_permissions(db_path, email, superusers=(), directory_groups=()):
         if group["scope_mode"] == SCOPE_ALL:
             all_machines = True
         else:
+            # Both "list" and "ad_ou" arrive here as a concrete machine list -- the OU
+            # group's was derived at cache-build time. Union semantics are identical, so
+            # an OU-scoped group composes with an explicit one without a special case.
             machines.update(group["machines"])
     return {
         "email": email,
@@ -698,6 +804,14 @@ def _replace_members(conn, group_id, members, actor, now):
     )
 
 
+def _replace_ous(conn, group_id, ous):
+    conn.execute("DELETE FROM permission_group_ous WHERE group_id = ?", (group_id,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO permission_group_ous(group_id, ou) VALUES (?, ?)",
+        [(group_id, o) for o in ous],
+    )
+
+
 def _replace_directory_groups(conn, group_id, tokens, actor, now):
     """The ad_group_dn half of the member table. Scoped to `ad_group_dn IS NOT NULL` so
     saving a group's directory mappings never touches its email members, and vice versa
@@ -715,7 +829,7 @@ def _replace_directory_groups(conn, group_id, tokens, actor, now):
 
 def create_group(db_path, name, capabilities=(), machines=(), members=(),
                  scope_mode=SCOPE_LIST, description=None, directory_groups=(),
-                 actor="unknown"):
+                 ous=(), actor="unknown"):
     """Create a group and return its id. Raises ValueError on invalid input or a
     duplicate name -- everything is validated before anything is written."""
     name = _validate_name(name)
@@ -723,6 +837,7 @@ def create_group(db_path, name, capabilities=(), machines=(), members=(),
     scope_mode, machines = _validate_scope(scope_mode, machines)
     members = _validate_members(members)
     directory_groups = _validate_directory_groups(directory_groups)
+    ous = _validate_ous(ous)
     description = (str(description).strip() or None) if description else None
 
     group_id = uuid.uuid4().hex
@@ -739,20 +854,21 @@ def create_group(db_path, name, capabilities=(), machines=(), members=(),
             _replace_machines(conn, group_id, machines)
             _replace_members(conn, group_id, members, actor, now)
             _replace_directory_groups(conn, group_id, directory_groups, actor, now)
+            _replace_ous(conn, group_id, ous)
     except sqlite3.IntegrityError:
         raise ValueError(f"A permission group named {name!r} already exists.")
     invalidate()
     fleet.audit(db_path, actor, "permission_group.create", name, {
         "group_id": group_id, "capabilities": capabilities,
         "scope_mode": scope_mode, "machines": machines, "members": members,
-        "directory_groups": directory_groups,
+        "directory_groups": directory_groups, "ous": ous,
     }, level=fleet.LEVEL_SECURITY)
     return group_id
 
 
 def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
                  members=None, scope_mode=None, description=None,
-                 directory_groups=None, actor="unknown"):
+                 directory_groups=None, ous=None, actor="unknown"):
     """Patch a group in place. Every argument left as None is left untouched -- pass
     an empty list to actually clear machines or members. Raises KeyError if the group
     is gone, ValueError on invalid input or a duplicate name."""
@@ -773,6 +889,7 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
     new_directory_groups = (_validate_directory_groups(directory_groups)
                             if directory_groups is not None
                             else list(before["directory_groups"]))
+    new_ous = _validate_ous(ous) if ous is not None else list(before["ous"])
     if description is None:
         new_description = before["description"]
     else:
@@ -795,6 +912,8 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
             if directory_groups is not None:
                 _replace_directory_groups(conn, group_id, new_directory_groups,
                                           actor, now)
+            if ous is not None or scope_mode is not None:
+                _replace_ous(conn, group_id, new_ous)
     except sqlite3.IntegrityError:
         raise ValueError(f"A permission group named {new_name!r} already exists.")
     invalidate()
@@ -804,7 +923,7 @@ def update_group(db_path, group_id, name=None, capabilities=None, machines=None,
     # one edit that mattered under six unchanged fields.
     changes = {}
     for field in ("name", "description", "capabilities", "scope_mode", "machines",
-                  "members", "directory_groups"):
+                  "members", "directory_groups", "ous"):
         if before.get(field) != after.get(field):
             changes[field] = {"from": before.get(field), "to": after.get(field)}
     if changes:
@@ -828,12 +947,13 @@ def delete_group(db_path, group_id, actor="unknown"):
     with get_conn(db_path) as conn:
         conn.execute("DELETE FROM permission_group_machines WHERE group_id = ?", (group_id,))
         conn.execute("DELETE FROM permission_group_members WHERE group_id = ?", (group_id,))
+        conn.execute("DELETE FROM permission_group_ous WHERE group_id = ?", (group_id,))
         conn.execute("DELETE FROM permission_groups WHERE id = ?", (group_id,))
     invalidate()
     fleet.audit(db_path, actor, "permission_group.delete", before["name"], {
         "group_id": group_id, "capabilities": before["capabilities"],
         "machines": before["machines"], "members": before["members"],
-        "directory_groups": before["directory_groups"],
+        "directory_groups": before["directory_groups"], "ous": before["ous"],
     }, level=fleet.LEVEL_SECURITY)
     return True
 

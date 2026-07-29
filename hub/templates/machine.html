@@ -80,6 +80,12 @@
             <div class="stat-card__meta" id="stat-serial">Serial: --</div>
             <div class="stat-card__meta" id="stat-service">Service tag: --</div>
             <div class="stat-card__meta" id="stat-asset">Asset tag: --</div>
+            {# AD fields (roadmap #4). Hidden entirely unless a directory sync has matched
+               this machine -- on a hub with no AD configured these would otherwise be
+               four permanent "--" rows suggesting something is broken. #}
+            <div class="stat-card__meta" id="stat-ad-ou" hidden>OU: --</div>
+            <div class="stat-card__meta" id="stat-ad-owner" hidden>Managed by: --</div>
+            <div class="stat-card__meta" id="stat-ad-status" hidden></div>
         </div>
     </div>
 

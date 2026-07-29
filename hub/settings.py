@@ -309,10 +309,64 @@ REGISTRY = (
             "block direct connections -- point these at the hub's TURN server. Credentials "
             "are minted per session from REMOTE_TURN_SECRET in .env; TURN is skipped if that "
             "secret is unset."),
+
+    # ---------------- Active Directory (roadmap #4) ----------------
+    # Entirely opt-in: with `enabled` off nothing runs, ldap3 is never imported, and the
+    # AD columns on machine_info stay NULL. The bind PASSWORD is deliberately absent from
+    # this registry -- it is a credential, and the settings table is readable by anyone
+    # holding manage_settings and is dumped into the hub-database backup. It lives in .env
+    # as DIRECTORY_BIND_PASSWORD, the same rule backups.py applies to destination secrets.
+    _s("directory.enabled", "directory", "Sync with Active Directory", "bool", False,
+       help="Read computer objects from an on-prem domain controller so machines carry "
+            "their OU, owner and AD name. Off by default; nothing contacts a DC until "
+            "this is on and the fields below are filled in."),
+    _s("directory.server", "directory", "Domain controller URL", "str", "",
+       help="e.g. ldaps://dc1.corp.local. Use ldaps:// (port 636) -- a plain ldap:// bind "
+            "sends the service account's password in cleartext and is refused unless you "
+            "explicitly allow it below."),
+    _s("directory.base_dn", "directory", "Search base", "str", "",
+       help="Where to search for computer objects, e.g. OU=Computers,DC=corp,DC=local. "
+            "Narrow this to the OU your managed PCs live in rather than the domain root: "
+            "it is faster and it keeps servers and other objects out of the results."),
+    _s("directory.bind_dn", "directory", "Bind account", "str", "",
+       help="A READ-ONLY service account, e.g. CN=fleethub,OU=Service,DC=corp,DC=local "
+            "(a user@corp.local UPN also works). Its password goes in .env as "
+            "DIRECTORY_BIND_PASSWORD. Nothing here ever writes to the directory."),
+    _s("directory.computer_filter", "directory", "LDAP filter", "str",
+       "(objectClass=computer)",
+       help="The LDAP filter for computer objects. Narrow it to exclude servers or stale "
+            "accounts, e.g. (&(objectClass=computer)(!(userAccountControl:1.2.840.113556."
+            "1.4.803:=2)))  to skip disabled ones."),
+    _s("directory.sync_interval_minutes", "directory", "Sync every", "int", 60,
+       minimum=5, maximum=10080, unit="minutes",
+       help="How often to re-read the directory. Hourly is plenty -- OUs change rarely, "
+            "and every pass is a full read of the search base."),
+    _s("directory.page_size", "directory", "LDAP page size", "int", 500,
+       minimum=50, maximum=5000,
+       help="Results per page. Searches are always paged; AD's default server limit is "
+            "1000 and it truncates silently rather than erroring, which would look like "
+            "half the fleet vanishing from the directory."),
+    _s("directory.timeout_seconds", "directory", "Connection timeout", "int", 15,
+       minimum=5, maximum=300, unit="seconds",
+       help="How long to wait for the domain controller before giving up on a pass."),
+    _s("directory.alert_on_unmatched", "directory", "Alert on machines missing from AD",
+       "bool", True,
+       help="Raise a review alert for a managed machine the directory has no computer "
+            "object for -- usually a PC that was never domain-joined, was renamed, or is "
+            "half-decommissioned. Auto-resolves when the machine reappears."),
+    _s("directory.tls_verify", "directory", "Verify the DC's certificate", "bool", True,
+       help="Validate the domain controller's LDAPS certificate. Turn off only for a lab "
+            "with a self-signed cert -- with it off, anything that can intercept the "
+            "connection can capture the service account's password."),
+    _s("directory.allow_insecure", "directory", "Allow plain (unencrypted) LDAP", "bool",
+       False,
+       help="Permit binding over ldap:// without TLS. The bind password is then sent in "
+            "CLEARTEXT across your network. Leave off unless this is an isolated lab."),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
-SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote")
+SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
+            "directory")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;
@@ -675,6 +729,7 @@ _SECTION_LABELS = {
     "deploy": "Package Deployment",
     "backup": "Backups",
     "remote": "Remote Control",
+    "directory": "Active Directory",
 }
 
 

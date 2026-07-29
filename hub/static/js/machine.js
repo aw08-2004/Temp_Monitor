@@ -552,7 +552,38 @@ async function loadMachineInfo() {
         document.getElementById('stat-serial').textContent = 'Serial: ' + (info.serial_number || '--');
         document.getElementById('stat-service').textContent = 'Service tag: ' + (info.service_tag || '--');
         document.getElementById('stat-asset').textContent = 'Asset tag: ' + (info.asset_tag || '--');
+        showDirectoryFacts(info);
     } catch (e) { /* non-critical */ }
+}
+
+// Active Directory facts (roadmap #4). Each row appears only when the directory actually
+// supplied it: on a hub with no AD these stay hidden rather than showing "--" forever,
+// and a machine AD has no computer object for shows nothing rather than a stale OU.
+function showDirectoryFacts(info) {
+    const ouEl = document.getElementById('stat-ad-ou');
+    const ownerEl = document.getElementById('stat-ad-owner');
+    const statusEl = document.getElementById('stat-ad-status');
+    if (!ouEl || !ownerEl || !statusEl) return;
+
+    ouEl.hidden = !info.ad_ou;
+    if (info.ad_ou) ouEl.textContent = 'OU: ' + info.ad_ou;
+
+    ownerEl.hidden = !info.ad_owner;
+    if (info.ad_owner) ownerEl.textContent = 'Managed by: ' + info.ad_owner;
+
+    // Worth calling out: a machine still reporting telemetry whose computer account has
+    // been disabled is usually a half-finished decommission, and nothing else on this
+    // page would show it.
+    statusEl.hidden = !info.ad_disabled;
+    if (info.ad_disabled) {
+        statusEl.replaceChildren();
+        const pill = document.createElement('span');
+        pill.className = 'status-pill status-pill--danger';
+        const dot = document.createElement('span');
+        dot.className = 'status-pill__dot';
+        pill.append(dot, document.createTextNode('AD account disabled'));
+        statusEl.appendChild(pill);
+    }
 }
 
 // ---- Primary sensor pin -------------------------------------------------------

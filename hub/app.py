@@ -35,6 +35,8 @@ import users
 import packages
 import backups
 import remote
+import directory
+import authconfig
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
@@ -43,6 +45,8 @@ from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
+from directory_web import create_directory_blueprint
+from auth_web import create_auth_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
 # telemetry DB) lives one level up in the install root. Keeping the two apart is what lets
@@ -69,7 +73,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.49.0"
+HUB_VERSION = "1.50.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1081,24 +1085,30 @@ def start_hub_update_watcher():
 # ⚠️ If you configure both, they are both doors to the same rooms. An operator's access is
 # whatever the WEAKER issuer will assert about their email address -- so do not enable a
 # second issuer that lets users self-assert an email you have granted access to.
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+#
+# These are no longer read once at import: the break-glass admins can edit them from
+# Settings -> Sign-in, and configure_oauth() below rebinds every name here and re-registers
+# the Authlib clients when they do. The module-level names remain the live values (routes
+# read them at call time), so nothing downstream had to change -- but treat them as
+# variables, not constants, and never capture them in a default argument or a closure.
+AUTH_CONFIG = authconfig.load(os.environ)
 
-OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID")
-OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET")
-# Either the issuer (we append the well-known path) or a full discovery document URL, so
-# both of the forms an admin is likely to have on hand work.
-OIDC_ISSUER = (os.environ.get("OIDC_ISSUER") or "").strip().rstrip("/")
-OIDC_METADATA_URL = (os.environ.get("OIDC_METADATA_URL") or "").strip()
-if OIDC_ISSUER and not OIDC_METADATA_URL:
-    OIDC_METADATA_URL = OIDC_ISSUER + "/.well-known/openid-configuration"
+GOOGLE_CLIENT_ID = AUTH_CONFIG["google_client_id"]
+GOOGLE_CLIENT_SECRET = AUTH_CONFIG["google_client_secret"]
+
+OIDC_CLIENT_ID = AUTH_CONFIG["oidc_client_id"]
+OIDC_CLIENT_SECRET = AUTH_CONFIG["oidc_client_secret"]
+# Either the issuer (the well-known path is appended) or a full discovery document URL, so
+# both of the forms an admin is likely to have on hand work. authconfig.load resolves it.
+OIDC_ISSUER = AUTH_CONFIG["oidc_issuer"]
+OIDC_METADATA_URL = AUTH_CONFIG["oidc_metadata_url"]
 # What the button says. Worth setting -- "Sign in with Microsoft" is a much clearer prompt
 # than "Sign in with SSO" when someone is looking at an unfamiliar login page.
-OIDC_DISPLAY_NAME = (os.environ.get("OIDC_DISPLAY_NAME") or "SSO").strip()
-OIDC_SCOPES = (os.environ.get("OIDC_SCOPES") or "openid email profile").strip()
+OIDC_DISPLAY_NAME = AUTH_CONFIG["oidc_display_name"]
+OIDC_SCOPES = AUTH_CONFIG["oidc_scopes"]
 
-GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
-OIDC_ENABLED = bool(OIDC_CLIENT_ID and OIDC_CLIENT_SECRET and OIDC_METADATA_URL)
+GOOGLE_ENABLED = authconfig.google_enabled(AUTH_CONFIG)
+OIDC_ENABLED = authconfig.oidc_enabled(AUTH_CONFIG)
 
 # How many of a session's claimed directory groups the Permission Groups page will offer
 # back to an admin as a "your own sign-in carried these" hint (roadmap #4). Display only;
@@ -1225,28 +1235,74 @@ socketio = SocketIO(
     allow_upgrades=False
 )
 
-oauth = OAuth(app)
-if GOOGLE_ENABLED:
-    oauth.register(
-        name="google",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
-    )
-if OIDC_ENABLED:
-    # No vendor-specific code: discovery supplies the endpoints and the signing keys, which
-    # is what makes "add Entra" or "add Okta" a .env edit rather than a release.
-    oauth.register(
-        name="oidc",
-        client_id=OIDC_CLIENT_ID,
-        client_secret=OIDC_CLIENT_SECRET,
-        server_metadata_url=OIDC_METADATA_URL,
-        client_kwargs={"scope": OIDC_SCOPES},
-    )
-print("[auth] Sign-in providers: " + ", ".join(
-    ([f"Google"] if GOOGLE_ENABLED else []) +
-    ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else [])))
+oauth = None
+
+
+def configure_oauth(config=None, announce=True):
+    """(Re)build the Authlib clients from `config`, and rebind the module-level provider
+    names to match. Called once at import, and again whenever an admin saves a change on
+    Settings -> Sign-in.
+
+    A FRESH OAuth object each time rather than mutating the old one's registry: re-binding
+    one name is a poke at Authlib internals (`_registry` and a separate `_clients` cache,
+    either of which going stale would leave the hub using the previous issuer while the
+    console reported the new one), whereas building a new instance uses only the public
+    API. The old object is simply dropped.
+
+    Raises whatever Authlib raises on a bad registration. The caller is expected to have
+    kept the previous configuration so it can put it back -- see auth_web.py. This function
+    does NOT validate; authconfig.validate does, and must have run first.
+    """
+    global oauth, AUTH_CONFIG
+    global GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ENABLED
+    global OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_ISSUER, OIDC_METADATA_URL
+    global OIDC_DISPLAY_NAME, OIDC_SCOPES, OIDC_ENABLED
+
+    config = config or authconfig.load(os.environ)
+    new_oauth = OAuth(app)
+    if authconfig.google_enabled(config):
+        new_oauth.register(
+            name="google",
+            client_id=config["google_client_id"],
+            client_secret=config["google_client_secret"],
+            server_metadata_url=authconfig.GOOGLE_METADATA_URL,
+            client_kwargs={"scope": authconfig.GOOGLE_SCOPES},
+        )
+    if authconfig.oidc_enabled(config):
+        # No vendor-specific code: discovery supplies the endpoints and the signing keys,
+        # which is what makes "add Entra" or "add Okta" configuration, not a release.
+        new_oauth.register(
+            name="oidc",
+            client_id=config["oidc_client_id"],
+            client_secret=config["oidc_client_secret"],
+            server_metadata_url=config["oidc_metadata_url"],
+            client_kwargs={"scope": config["oidc_scopes"]},
+        )
+
+    # Rebind only after every registration has succeeded, so a failure part-way through
+    # leaves the hub signing people in with the configuration it had a moment ago.
+    oauth = new_oauth
+    AUTH_CONFIG = config
+    GOOGLE_CLIENT_ID = config["google_client_id"]
+    GOOGLE_CLIENT_SECRET = config["google_client_secret"]
+    GOOGLE_ENABLED = authconfig.google_enabled(config)
+    OIDC_CLIENT_ID = config["oidc_client_id"]
+    OIDC_CLIENT_SECRET = config["oidc_client_secret"]
+    OIDC_ISSUER = config["oidc_issuer"]
+    OIDC_METADATA_URL = config["oidc_metadata_url"]
+    OIDC_DISPLAY_NAME = config["oidc_display_name"]
+    OIDC_SCOPES = config["oidc_scopes"]
+    OIDC_ENABLED = authconfig.oidc_enabled(config)
+
+    if announce:
+        print("[auth] Sign-in providers: " + (", ".join(
+            (["Google"] if GOOGLE_ENABLED else []) +
+            ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else []))
+            or "none"))
+    return config
+
+
+configure_oauth(AUTH_CONFIG)
 print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 
 
@@ -1307,6 +1363,15 @@ app.register_blueprint(create_backups_blueprint(
 # facing session control (remote_control capability + machine scope). Same login_required and
 # access seam as every other blueprint.
 app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access, env_path=ENV_PATH))
+
+# Active Directory sync (roadmap #4): status, the OU list the group scope picker uses,
+# and a synchronous "sync now". Same login_required + access seam as everything above.
+app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, access))
+
+# Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
+# capability -- see auth_web.py for why this one is not delegable via manage_settings.
+app.register_blueprint(create_auth_blueprint(
+    DB_PATH, login_required, access, ENV_PATH, configure_oauth))
 
 
 @app.route("/login")
@@ -2463,6 +2528,59 @@ def start_backup_scheduler():
     threading.Thread(target=backup_scheduler, daemon=True, name="backup_scheduler").start()
 
 
+# ================================
+# ACTIVE DIRECTORY SYNC (roadmap #4)
+# ================================
+# Opt-in and idle by default: the loop wakes on a fixed short tick, checks whether the
+# feature is on and whether the configured interval has elapsed, and otherwise does
+# nothing. Interval changes therefore take effect without a restart, which matters
+# because an admin turning this on for the first time should not have to bounce the
+# service to find out whether their bind DN was right.
+DIRECTORY_TICK_SECONDS = 60
+
+_directory_last_sync = 0.0
+
+
+def run_directory_sync():
+    """One AD pass. Raises DirectoryError with an operator-readable message.
+
+    `on_change` re-points permission scoping at the new OU data. An ad_ou group's machine
+    list is derived when the permissions cache is built, and a directory sync is the only
+    thing that can change it -- so this invalidation is what keeps a machine moved between
+    OUs from staying in its old group's scope until the next hub restart.
+    """
+    return directory.sync_once(DB_PATH, directory.config_from_settings(DB_PATH),
+                               on_change=permissions.invalidate)
+
+
+def directory_sync_scheduler():
+    global _directory_last_sync
+    while True:
+        try:
+            if settings.get_bool(DB_PATH, "directory.enabled"):
+                interval = max(5, settings.get_int(
+                    DB_PATH, "directory.sync_interval_minutes")) * 60
+                if time.time() - _directory_last_sync >= interval:
+                    # Stamped BEFORE the pass, not after: a DC that takes 90 seconds to
+                    # time out must not be retried every tick for as long as it stays
+                    # down, hammering a domain controller somebody is already fixing.
+                    _directory_last_sync = time.time()
+                    result = run_directory_sync()
+                    print(f"[directory] Synced: {result['objects_found']} objects in AD, "
+                          f"{result['matched']} machines matched, "
+                          f"{len(result['unmatched'])} unmatched.")
+        except directory.DirectoryError as e:
+            print(f"[directory] Sync failed: {e}")
+        except Exception as e:
+            print(f"[directory] Sync pass crashed: {e}")
+        time.sleep(DIRECTORY_TICK_SECONDS)
+
+
+def start_directory_sync_scheduler():
+    threading.Thread(target=directory_sync_scheduler, daemon=True,
+                     name="directory_sync").start()
+
+
 init_db()
 fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
@@ -2473,6 +2591,8 @@ packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
+# Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
+directory.init_directory_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()
@@ -2484,6 +2604,7 @@ start_retention_pruner()
 start_deploy_scheduler()
 start_backup_scheduler()
 start_high_temp_evaluator()
+start_directory_sync_scheduler()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -2676,7 +2797,8 @@ def get_machine(machine):
     machine_name = str(machine).strip()
     with get_db_conn() as conn:
         row = conn.execute(
-            "SELECT machine, asset_tag, serial_number, service_tag, model, companion_version, updated_at "
+            "SELECT machine, asset_tag, serial_number, service_tag, model, companion_version, "
+            "updated_at, ad_ou, ad_dn, ad_owner, ad_os, ad_disabled, ad_synced_at "
             "FROM machine_info WHERE machine = ?",
             (machine_name,),
         ).fetchone()
@@ -2688,6 +2810,8 @@ def get_machine(machine):
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
         'service_tag': None, 'model': None, 'companion_version': None, 'updated_at': None,
+        'ad_ou': None, 'ad_dn': None, 'ad_owner': None, 'ad_os': None,
+        'ad_disabled': None, 'ad_synced_at': None,
     }
     result['uptime_seconds'] = uptime_seconds
     result['temp'] = temp

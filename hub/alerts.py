@@ -11,6 +11,11 @@ Two kinds today:
 * `high_temperature` -- a machine whose AVERAGE temperature over the configured window is
   at or above the high-temperature threshold (app.evaluate_high_temp_once). Keyed on the
   single `machine`; `detail` holds {avg_temp, peak_temp, threshold, window_seconds}.
+* `ad_unmatched` -- a machine this hub manages that the configured Active Directory has no
+  computer object for (directory.sync_once, roadmap #4). Keyed on the single `machine`.
+  Raised only while AD sync is enabled, and auto-resolved the moment the machine turns up
+  in a later sync -- see _sync_unmatched_alerts for why resolving matters as much here as
+  raising does.
 
 There is at most one OPEN duplicate_serial alert per serial: it is refreshed while the
 collision persists and moved to `resolved` once it clears, or `dismissed` if an operator
@@ -35,6 +40,7 @@ import time
 
 KIND_DUPLICATE_SERIAL = "duplicate_serial"
 KIND_HIGH_TEMP = "high_temperature"
+KIND_AD_UNMATCHED = "ad_unmatched"
 # What KIND_HIGH_TEMP was called before the rename. Only init_alerts_db()'s migration reads
 # it -- no other code path should ever match on it again.
 _LEGACY_KIND_HIGH_TEMP = "overheat"
@@ -242,6 +248,52 @@ def resolve_high_temp(db_path, machine):
             "UPDATE alerts SET status=?, updated_at=? "
             "WHERE kind=? AND machine=? AND status=?",
             (STATUS_RESOLVED, int(time.time()), KIND_HIGH_TEMP, machine, STATUS_OPEN),
+        )
+
+
+def raise_ad_unmatched(db_path, machine, now=None):
+    """Raise the open `ad_unmatched` alert for `machine` if it has none. Returns the id.
+
+    Deliberately does NOT refresh an existing row's timestamp on every pass. An hourly
+    sync would otherwise re-stamp `updated_at` sixty times a day and float a months-old
+    problem to the top of a newest-first list every hour, which is how an alert tab stops
+    being read. `created_at` is when AD first stopped knowing about this machine, and that
+    is the number an operator actually wants.
+
+    A dismissed alert stays dismissed for the same reason: this fires on every sync, so
+    re-raising what an operator has waved off would make dismissal useless. It comes back
+    only if the machine reappears in AD (resolving the row) and then goes missing again.
+    """
+    machine = str(machine).strip()
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM alerts WHERE kind=? AND machine=? AND status<>?",
+            (KIND_AD_UNMATCHED, machine, STATUS_RESOLVED),
+        ).fetchone()
+        if row:
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO alerts(kind, machine, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (KIND_AD_UNMATCHED, machine, STATUS_OPEN, now, now),
+        )
+        return cur.lastrowid
+
+
+def resolve_ad_unmatched(db_path, machine, now=None):
+    """The machine has a computer object again (or the check was turned off): resolve it.
+
+    Resolves DISMISSED rows too, not just open ones -- otherwise a dismissed alert would
+    sit in the table forever blocking raise_ad_unmatched's "already exists" check, and the
+    machine could never raise a fresh alert if it fell out of AD a second time.
+    """
+    machine = str(machine).strip()
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE alerts SET status=?, updated_at=? WHERE kind=? AND machine=? AND status<>?",
+            (STATUS_RESOLVED, int(time.time() if now is None else now),
+             KIND_AD_UNMATCHED, machine, STATUS_RESOLVED),
         )
 
 

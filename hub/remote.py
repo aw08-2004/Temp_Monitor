@@ -35,6 +35,7 @@ import sqlite3
 import time
 import uuid
 
+import envfile
 import fleet
 
 # ================================
@@ -480,36 +481,12 @@ def generate_turn_secret(nbytes=24):
     return secrets.token_hex(nbytes)
 
 
-_ENV_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
-
-
 def set_env_var(env_path, key, value):
-    """Upsert `KEY=value` in a dotenv file, preserving every other line and adding no BOM.
-
-    This is how the console lets an operator set/rotate REMOTE_TURN_SECRET without shell access
-    on the hub host. It writes UTF-8 without a BOM and with LF newlines for the same reason the
-    installer does (python-dotenv folds a leading BOM into the first key, so a BOM here would
-    silently break the hub's config on the next restart). Returns the value written.
-    """
-    key = str(key)
-    value = str(value)
-    lines, found = [], False
-    if os.path.exists(env_path):
-        # utf-8-sig tolerates an existing BOM (e.g. one a prior tool wrote) without carrying it
-        # forward; splitlines() drops the trailing newline so we re-add exactly one at the end.
-        with open(env_path, "r", encoding="utf-8-sig") as fh:
-            for line in fh.read().splitlines():
-                m = _ENV_KEY_RE.match(line)
-                if m and m.group(1) == key:
-                    lines.append(f"{key}={value}")
-                    found = True
-                else:
-                    lines.append(line)
-    if not found:
-        lines.append(f"{key}={value}")
-    with open(env_path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return value
+    """Upsert `KEY=value` in a dotenv file. Kept as remote.py's own name because the TURN
+    secret control calls it, but the implementation now lives in envfile.py -- several
+    features write .env, and the BOM trap it encodes is worth having in exactly one place.
+    Returns the value written."""
+    return envfile.set_var(env_path, key, value)
 
 
 def ice_servers(session_id, stun_urls=None, turn_urls=None, turn_secret=None, turn_ttl=600):
