@@ -373,6 +373,12 @@ def main():
         check("...it sends them as carriage returns instead",
               "replace(/\\n/g, '\\r')" in pty_js)
 
+        # Returning false from an xterm custom key handler stops the KEY being forwarded but
+        # does not preventDefault, so the browser still performs its own paste. Reading the
+        # clipboard here as well is what doubled every Ctrl-Shift-V.
+        check("fleet-pty.js leaves pasting to the browser",
+              "clipboard.readText" not in pty_js)
+
         # Both terminals share one toolbar and fleet-terminal.js binds it first. The pty
         # console has to replace those nodes to drop the legacy handlers -- its Save reads a
         # textarea that is hidden and empty in this mode, so leaving it bound means the

@@ -93,7 +93,18 @@
 
     // Ctrl-C must reach the shell as an interrupt -- that is the whole point of a real
     // console -- so copy/paste move to the Ctrl-SHIFT-C/V that every terminal emulator uses.
-    // Returning false tells xterm we handled the key and it must not forward it.
+    // Returning false tells xterm we handled the key and it must not forward it, which for
+    // both of these is what stops the shell being sent a stray 0x03 / 0x16.
+    //
+    // PASTE IS THE BROWSER'S JOB, not ours. It used to read the clipboard here and inject
+    // the text itself, which DOUBLED every paste: returning false out of a custom key
+    // handler stops xterm forwarding the KEY, but it does not preventDefault (see
+    // `_customKeyEventHandler(e)===!1` in xterm.js -- it just returns), so the browser still
+    // performed its own paste, xterm's own `paste` listener turned that into an onData event,
+    // and the injected copy landed on top of it. Letting the default happen leaves exactly
+    // one path -- and it is the better path anyway: it is the same one Ctrl-V, right-click
+    // paste and middle-click use, it needs no clipboard-read permission, and it goes through
+    // xterm's own handler, which honours bracketed-paste mode when the shell has asked for it.
     function handleKey(e) {
         if (e.type !== 'keydown') return true;
         if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
@@ -101,10 +112,7 @@
             if (selection) navigator.clipboard.writeText(selection).catch(() => {});
             return false;
         }
-        if (e.ctrlKey && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
-            navigator.clipboard.readText().then(paste).catch(() => {});
-            return false;
-        }
+        if (e.ctrlKey && e.shiftKey && (e.key === 'V' || e.key === 'v')) return false;
         return true;
     }
 
@@ -385,39 +393,19 @@
     // the whole block when it gets one). That is how every terminal emulator behaves and
     // there is no way to make a real console behave otherwise.
     //
-    // What we can do is not let it happen by surprise, which is what the confirmation below
-    // is for -- the same warning Windows Terminal shows on a multi-line paste, for the same
-    // reason: these lines are about to run as SYSTEM on somebody else's machine.
+    // A clipboard paste is xterm's own business (see handleKey) and arrives through onData
+    // like any other input. What is left here is the FAVORITE path, which has no browser
+    // paste behind it and has to do the same line rewriting itself.
 
     /** Normalise CRLF/CR to \n so line counting and the CR rewrite below have one shape. */
     function normalizeEol(text) {
         return String(text == null ? '' : text).replace(/\r\n?/g, '\n');
     }
 
-    /** Send text to the shell as keystrokes, one CR per line break. */
+    /** Send text to the shell as keystrokes, one CR per line break -- the same rewrite
+     *  xterm applies to pasted text before handing it over. */
     function sendLines(text) {
         queueInput(text.replace(/\n/g, '\r'));
-    }
-
-    function confirmMultiline(lines, what, lastLineHeld) {
-        return window.confirm(
-            `${what} is ${lines} lines long.\n\n` +
-            'It goes into the console as if you typed it, so every line but the last runs ' +
-            'as it arrives — a console has no way to hold a block back.\n\n' +
-            (lastLineHeld
-                ? 'The last line is left at the prompt so you get a final look before Enter.'
-                : 'If it ends with a line break, the last line runs too.') +
-            '\n\nSend it?');
-    }
-
-    /** Ctrl-Shift-V. A paste keeps its trailing newline -- copying a whole line and pasting
-     *  it is meant to run it -- so the confirmation says so. */
-    function paste(text) {
-        const body = normalizeEol(text);
-        if (!body || !session) return;
-        const lines = body.replace(/\n$/, '').split('\n').length;
-        if (lines > 1 && !confirmMultiline(lines, 'What you are pasting', false)) return;
-        sendLines(body);
     }
 
     // ---------------- Favorites ----------------
@@ -431,6 +419,10 @@
     // the operator got a syntax error from something that ran fine in the old terminal.
     // They now go in as lines, with the trailing newline held back so the last one still
     // waits at the prompt.
+    //
+    // No confirmation for this: picking a favorite by name off a list that previews what it
+    // contains IS the deliberate act, and a modal in front of it just trains people to click
+    // through. The console note afterwards says what went in and what is still waiting.
     function usePick(favorite) {
         if (favorite.command_type !== 'run_script') {
             note(`\r\n[${favorite.command_type} favorites are issued from the command ` +
@@ -450,10 +442,6 @@
         }
 
         const lines = script.split('\n').length;
-        if (lines > 1 && !confirmMultiline(lines, `The favorite "${favorite.name}"`, true)) {
-            note(`\r\n[favorite "${favorite.name}" not sent]\r\n`);
-            return;
-        }
 
         // Switching the dropdown would END this console (a running powershell cannot become
         // cmd), so a mismatch is reported rather than acted on -- losing the session an
@@ -468,8 +456,8 @@
         sendLines(script);
         term.focus();
         note(lines > 1
-            ? `\r\n[loaded favorite "${favorite.name}" (${lines} lines) — the last line is ` +
-              'waiting for Enter]\r\n'
+            ? `\r\n[favorite "${favorite.name}": ${lines} lines pasted, the first ${lines - 1} ` +
+              'ran as they arrived — the last is waiting for Enter]\r\n'
             : `\r\n[loaded favorite "${favorite.name}" — review it, then press Enter]\r\n`);
     }
 
