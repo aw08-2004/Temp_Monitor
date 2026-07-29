@@ -20,7 +20,9 @@
 
     Usage (elevated PowerShell):
         powershell -ExecutionPolicy Bypass -File install.ps1
-        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -AgentUrl <url> -EnrollmentSecret <secret>
+        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -HubUrl <hub-url> -EnrollmentSecret <secret>
+        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -HubUrl <hub-url> -EnrollmentSecret <secret> `
+            -InstallDir "D:\Apps\FleetHub\Agent" -AddDefenderExclusion     # fully unattended
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -TurnHost <public-ip> -TurnSecret <secret>
@@ -38,15 +40,23 @@ param(
     [string]$Component,
     [switch]$Uninstall,
 
-    # --- Companion (legacy) ---
+    # Where the selected component is installed. Left unbound, each component uses its own
+    # default (Agent -> C:\Program Files\FleetHub\Agent, Hub -> ...\FleetHub\Hub, Companion ->
+    # C:\Program Files\TempMonitor). Passing it explicitly overrides that default for whichever
+    # component is being installed -- including the path offered for the Defender exclusion.
     [string]$InstallDir = "C:\Program Files\TempMonitor",
+
+    # --- Companion (legacy) ---
     [int]$Port = 8085,
 
     # --- Agent ---
-    [string]$AgentUrl,
-    [string]$AgentExe,
+    [string]$AgentUrl,                  # download URL for the agent exe (a release asset)
+    [string]$AgentExe,                  # OR a local path to an already-built exe
     [string]$EnrollmentSecret,
-    [string]$HubUrl,
+    [string]$HubUrl,                    # the hub the agent reports to, e.g. https://hub.example.com
+    # Pre-answer the Defender exclusion question so an unattended run never blocks on it.
+    [switch]$AddDefenderExclusion,
+    [switch]$SkipDefenderExclusion,
 
     # --- Hub ---
     [int]$HubPort = 3001,
@@ -107,6 +117,17 @@ $InstallRoot        = "C:\Program Files\FleetHub"
 $HubInstallDefault  = Join-Path $InstallRoot "Hub"
 $AgentInstallDir    = Join-Path $InstallRoot "Agent"
 $LegacyHubDir       = "C:\Program Files\TempMonitor\Hub"
+
+# -InstallDir carries a default (the legacy companion location), so "was it supplied?" can only
+# be answered from PSBoundParameters -- an explicit value redirects whichever component is being
+# installed. The elevation relaunch below forwards every bound parameter, so this stays true in
+# the elevated process too.
+$InstallDirGiven = $PSBoundParameters.ContainsKey('InstallDir')
+if ($InstallDirGiven) {
+    $InstallDir      = $InstallDir.TrimEnd('\')
+    $AgentInstallDir = $InstallDir
+    if (-not $HubInstallDir) { $HubInstallDir = $InstallDir }
+}
 
 # --- Hub-as-Windows-Service ---
 # WinSW wraps the Python/waitress process as a real Windows Service (Python can't be one on
@@ -857,12 +878,14 @@ function Uninstall-Agent {
         if (Test-Path $p) { $localInstaller = $p }
     }
 
+    # Forwarded so an agent installed with -InstallDir can be removed with the same flag; the
+    # sub-installer would otherwise only clean its own default location.
     if ($localInstaller) {
-        & $localInstaller -Uninstall
+        & $localInstaller -Uninstall -InstallDir $AgentInstallDir
     } else {
         $tmp = Join-Path $env:TEMP "temp-monitor-agent-install.ps1"
         Invoke-WebRequest -Uri $AgentInstallUrl -OutFile $tmp -UseBasicParsing
-        & $tmp -Uninstall
+        & $tmp -Uninstall -InstallDir $AgentInstallDir
     }
 }
 
@@ -878,6 +901,21 @@ function Install-Agent {
 
     $resolvedExe = $AgentExe
     $resolvedUrl = $AgentUrl
+    $resolvedHubUrl = $HubUrl
+
+    # -AgentUrl is the download URL of a release asset, but "the URL" an operator has in hand is
+    # almost always the hub's. A bare origin (no path, or no file at the end) can't be an asset,
+    # so take it as the hub URL rather than installing an agent that downloads an HTML page.
+    if ($resolvedUrl -and -not ($resolvedUrl -match '/[^/]+\.(exe|zip)$')) {
+        if (-not $resolvedHubUrl) {
+            Warn "-AgentUrl '$resolvedUrl' is not a downloadable agent asset (.exe/.zip)."
+            Say  "Treating it as the hub URL. Pass -HubUrl next time; -AgentUrl is only for a specific release asset."
+            $resolvedHubUrl = $resolvedUrl
+        } else {
+            Warn "-AgentUrl '$resolvedUrl' is not a downloadable agent asset (.exe/.zip) -- ignoring it."
+        }
+        $resolvedUrl = $null
+    }
 
     if (-not $resolvedExe -and -not $resolvedUrl) {
         $localExeDefault = $null
@@ -893,21 +931,34 @@ function Install-Agent {
         }
 
         if (-not $resolvedExe) {
+            # No prompt: the latest release is what an operator wants in every case except an
+            # explicit pin, and -AgentUrl / -AgentExe already cover the pin.
             Say "Looking up the latest agent release on GitHub..."
-            $latest = Get-LatestAgentAssetUrl
-            $resolvedUrl = Prompt-Value "Agent download URL" $latest
+            $resolvedUrl = Get-LatestAgentAssetUrl
             if (-not $resolvedUrl) { Die "No agent URL available. Re-run with -AgentUrl <url> or -AgentExe <path>." }
+            Ok "Agent download: $resolvedUrl"
         }
     }
 
-    $hubUrlDefault = $envDefaults["HUB_URL"]
-    if (-not $hubUrlDefault) { $hubUrlDefault = "https://your.domain.com" }
-    if ($HubUrl) { $hubUrlDefault = $HubUrl }
-    $resolvedHubUrl = Prompt-Value "Hub URL" $hubUrlDefault
+    # Anything supplied on the command line is used as given -- an answered question is not
+    # asked again, so a fully-specified invocation runs start to finish without input.
+    if ($resolvedHubUrl) {
+        Ok "Hub URL: $resolvedHubUrl"
+    } else {
+        $hubUrlDefault = $envDefaults["HUB_URL"]
+        if (-not $hubUrlDefault) { $hubUrlDefault = "https://your.domain.com" }
+        $resolvedHubUrl = Prompt-Value "Hub URL" $hubUrlDefault `
+                            -Required -Validate { param($v) $v -match '^https?://' } `
+                            -ValidateHint "Enter a full URL starting with http:// or https://."
+    }
 
-    $secretDefault = $envDefaults["AGENT_ENROLLMENT_SECRET"]
-    if ($EnrollmentSecret) { $secretDefault = $EnrollmentSecret }
-    $resolvedSecret = Prompt-Value "Agent enrollment secret (blank = telemetry-only until enrolled later)" $secretDefault -Secret
+    if ($EnrollmentSecret) {
+        $resolvedSecret = $EnrollmentSecret
+        Ok "Enrollment secret: $(Mask $resolvedSecret)"
+    } else {
+        $secretDefault  = $envDefaults["AGENT_ENROLLMENT_SECRET"]
+        $resolvedSecret = Prompt-Value "Agent enrollment secret (blank = telemetry-only until enrolled later)" $secretDefault -Secret
+    }
 
     $agentArgs = @{}
     if ($resolvedExe) { $agentArgs.AgentExe = $resolvedExe } else { $agentArgs.AgentUrl = $resolvedUrl }
@@ -917,8 +968,21 @@ function Install-Agent {
     # (whose own default could be an older release's) still lands where this installer says.
     $agentArgs.InstallDir = $AgentInstallDir
 
-    # Prompt to add the Agent install directory to Windows Defender exclusions
-    if (Prompt-YesNo "Add agent install directory '$AgentInstallDir' to Windows Defender exclusion?" -Default No) {
+    # The exclusion always follows the directory the agent is actually installed to, so
+    # -InstallDir redirects it too. -AddDefenderExclusion / -SkipDefenderExclusion pre-answer
+    # the question for unattended runs; without either, ask.
+    $wantExclusion = $false
+    if ($AddDefenderExclusion -and $SkipDefenderExclusion) {
+        Die "Pass either -AddDefenderExclusion or -SkipDefenderExclusion, not both."
+    } elseif ($AddDefenderExclusion) {
+        $wantExclusion = $true
+    } elseif ($SkipDefenderExclusion) {
+        Say "Skipping the Windows Defender exclusion (-SkipDefenderExclusion)."
+    } else {
+        $wantExclusion = Prompt-YesNo "Add agent install directory '$AgentInstallDir' to Windows Defender exclusion?" -Default No
+    }
+
+    if ($wantExclusion) {
         # Ensure the path exists so the exclusion is meaningful
         if (-not (Test-Path $AgentInstallDir)) {
             try {
@@ -1987,8 +2051,12 @@ function Install-Turn {
 function Install-Hub {
     # Resolve where the hub will live, then lay down just the runtime files. No git
     # clone and no Git dependency: self-update now pulls the same zip (see app.py).
-    $default = if ($HubInstallDir) { $HubInstallDir } else { $HubInstallDefault }
-    $hubDir  = (Prompt-Value "Hub install location" $default).TrimEnd('\')
+    # An explicit -HubInstallDir / -InstallDir is an answer, not a default to re-ask.
+    if ($HubInstallDir) {
+        $hubDir = $HubInstallDir.TrimEnd('\')
+    } else {
+        $hubDir = (Prompt-Value "Hub install location" $HubInstallDefault).TrimEnd('\')
+    }
 
     Write-Host @"
 

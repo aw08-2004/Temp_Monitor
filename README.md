@@ -9,7 +9,7 @@ machine runs an agent that reads sensors and reports them to a central **hub**
   See [agent/README.md](agent/README.md).
 - **Companion (legacy, existing installs):** `companion.py` — a Python scheduled-task
   agent. Self-updates now migrate it to the C# agent automatically (see below).
-- Unified installer (Agent / Companion / Hub): `install.ps1`
+- Unified installer (Agent / Companion / Hub / TURN relay): `install.ps1`
 
 ## Two agents, one hub
 
@@ -36,12 +36,12 @@ Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 
 ## Unified installer
 
-`install.ps1` at the repo root is a single menu-driven installer covering all
-three pieces -- Agent, Companion, and Hub. Run it with no arguments for an
-interactive menu; it prompts for whatever the chosen path needs (enrollment
-secret, hub URL, OAuth creds, ...), defaulting to values already in a local
-`.env` when run from a clone. The installer elevates itself automatically if
-not already run as admin.
+`install.ps1` at the repo root is a single menu-driven installer covering every
+component -- Agent, Companion, Hub, and the TURN relay. Run it with no arguments
+for an interactive menu; it prompts for whatever the chosen path needs
+(enrollment secret, hub URL, OAuth creds, ...), defaulting to values already in
+a local `.env` when run from a clone. The installer elevates itself
+automatically if not already run as admin.
 
 **From the web:**
 
@@ -51,11 +51,20 @@ not already run as admin.
 
 **Non-interactive**, pass `-Component` plus the relevant parameters (`iex`
 alone can't take arguments, so invoke the fetched script as a scriptblock
-instead):
+instead). Anything supplied on the command line is used as given and never
+prompted for again, so a fully-specified invocation runs start to finish
+without input:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) -Component Agent -AgentUrl <url> -EnrollmentSecret <secret>
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) `
+    -Component Agent -HubUrl https://hub.example.com -EnrollmentSecret <secret> -AddDefenderExclusion
 ```
+
+Note `-HubUrl` — the address of the hub the agent reports to. `-AgentUrl` is a
+different thing: the download URL of a *specific* agent release asset, only
+needed to pin a version. Left out, the installer resolves the latest release
+itself. A `-AgentUrl` that isn't a `.exe`/`.zip` asset is assumed to be the hub
+URL and used as such, with a warning.
 
 **From a local clone:**
 
@@ -65,16 +74,29 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn                    # TURN relay only, no hub
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -InstallDir "D:\Apps\FleetHub\Agent"
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -Uninstall
 powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                        # bare -Uninstall = legacy companion, for back-compat
 ```
 
-Component-specific parameters: `-InstallDir <path>` / `-Port <port>` (Companion,
-defaults `C:\Program Files\TempMonitor` / `8085`); `-AgentUrl` / `-AgentExe` /
-`-EnrollmentSecret` / `-HubUrl` (Agent); `-HubPort <port>` (default `3001`) and
-`-HubInstallDir <path>` (default `C:\Program Files\FleetHub\Hub`) (Hub);
-`-TurnHost` / `-TurnSecret` / `-TurnDistro` / `-TurnPort` / `-SkipTurn` (Turn — and
-the same flags apply to Hub, which can set the relay up as part of its own install).
+`-InstallDir <path>` applies to whichever component is being installed. Left
+out, each uses its own default — Agent `C:\Program Files\FleetHub\Agent`, Hub
+`C:\Program Files\FleetHub\Hub`, Companion `C:\Program Files\TempMonitor`.
+Passed explicitly, it redirects the install *and* the Windows Defender
+exclusion offered for it. Pass the same `-InstallDir` to `-Uninstall` so the
+right directory is cleaned up.
+
+Component-specific parameters: `-Port <port>` (Companion, default `8085`);
+`-HubUrl` / `-EnrollmentSecret` / `-AgentUrl` / `-AgentExe` /
+`-AddDefenderExclusion` / `-SkipDefenderExclusion` (Agent); `-HubPort <port>`
+(default `3001`) and `-HubInstallDir <path>` (Hub — takes precedence over
+`-InstallDir`); `-TurnHost` / `-TurnSecret` / `-TurnDistro` / `-TurnPort` /
+`-SkipTurn` (Turn — and the same flags apply to Hub, which can set the relay up
+as part of its own install).
+
+The Defender exclusion is otherwise an interactive y/N question, defaulting to
+no. `-AddDefenderExclusion` and `-SkipDefenderExclusion` pre-answer it for
+unattended runs; passing both is an error.
 
 ### Installing the TURN relay on its own
 
