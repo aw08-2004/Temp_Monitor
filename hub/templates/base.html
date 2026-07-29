@@ -31,6 +31,9 @@
     </div>
 </div>
 <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+{# Loaded for every page: it auto-upgrades long <select>s to searchable comboboxes and
+   provides attachAutocomplete for the pickers that call it directly. #}
+<script src="{{ url_for('static', filename='js/autocomplete.js') }}"></script>
 {% block page_scripts %}{% endblock %}
 </body>
 </html>

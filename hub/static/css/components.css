@@ -964,6 +964,43 @@ label.checkbox input {
     font-size: var(--text-sm);
 }
 
+/* ---- Searchable <select> (enhanceSelect) ----
+   The native control stays in the DOM as the value holder; it is collapsed rather than
+   display:none'd so form association and any layout that measures it keep working. */
+.select-search {
+    position: relative;
+    display: block;
+    width: 100%;
+}
+
+.select-search__native {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.select-search__input {
+    width: 100%;
+    /* Room for the caret, which stands in for the native dropdown arrow. */
+    padding-right: calc(var(--space-3) + 14px);
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: right 14px center, right 9px center;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    cursor: text;
+}
+
+.select-search__input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 /* ---- TURN/STUN status card (Settings -> Remote Control, settings-remote.js) ---- */
 .card__title {
     font-size: var(--text-md);
