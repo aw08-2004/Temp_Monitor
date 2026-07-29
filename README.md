@@ -4,7 +4,7 @@ CPU temperature monitoring and remote fleet management across machines. Each
 machine runs an agent that reads sensors and reports them to a central **hub**
 (Flask + Socket.IO) for live charts, history, and remote commands.
 
-- Hub: `app.py` (served via `wsgi.py`), live at https://your.domain.com
+- Hub: `hub/app.py` (served via `hub/wsgi.py`), live at https://your.domain.com
 - **Agent (recommended, new machines):** `agent/` — a C#/.NET Windows Service.
   See [agent/README.md](agent/README.md).
 - **Companion (legacy, existing installs):** `companion.py` — a Python scheduled-task
@@ -121,10 +121,10 @@ Hub and Agent install side by side under one root — `C:\Program Files\FleetHub
 and `C:\Program Files\FleetHub\Agent`. The Hub installs as the **`FleetHub - Hub`
 Windows Service** (Python wrapped with WinSW, running as LocalSystem).
 
-The Hub install downloads only the files the hub actually needs (~0.3 MB: the Python
-modules, `templates/`, `static/`, `requirements.txt`) rather than cloning the whole
-repo, so the agent tree, tests and docs never land on a server. `git` is no longer
-required on the hub box.
+The Hub install downloads the branch archive and lays down just the `hub/` subtree
+(~2 MB: the Python modules, `templates/`, `static/`, `requirements.txt`) rather than
+cloning the whole repo (~85 MB), so the agent tree, tests and docs never land on a
+server. `git` is no longer required on the hub box.
 
 Installs made before the FleetHub rename are detected and migrated: the old service is
 removed, `.env` and `logs/` (including the telemetry DB) are moved to the new root, and
@@ -170,17 +170,21 @@ below) — an unsigned or tampered `companion.py` is refused, not applied.
 
 The hub can keep itself current too, but it's **off by default** — set
 `HUB_AUTO_UPDATE=1` in the hub's `.env` to enable it (a dev clone left unset never
-touches itself). When enabled, the hub checks `HUB_VERSION` on `main` every 15
-minutes; when `main` is ahead it updates itself, best-effort re-installs
+touches itself). The `hub.auto_update` setting overrides the `.env` value when set,
+so it can also be flipped from the Settings tab. When enabled, the hub checks
+`HUB_VERSION` on `main` every 15 minutes; when `main` is ahead it updates itself, best-effort re-installs
 `requirements.txt`, then exits non-zero so the `FleetHub - Hub` Windows Service
 auto-restarts waitress on the new code (WinSW `onfailure`, ~5 s downtime).
 
 How it updates depends on the layout, decided by whether a `.git` directory is present:
 
 - **Files-only install** (what the installer now produces): downloads the branch
-  archive and replaces the hub runtime file set. The whole archive is staged and
-  checked for completeness first, so a truncated download leaves the hub untouched
-  rather than half-updated. `.env`, `logs/` and the service wrapper are never written.
+  archive and mirrors the whole `hub/` directory over the installed one — a whole-dir
+  mirror, not a hand-maintained file allowlist, because an allowlist that missed a new
+  module once left the hub crash-looping. The archive is staged and checked for
+  completeness first, so a truncated download leaves the hub untouched rather than
+  half-updated. `.env`, `logs/` and the service wrapper live one level up in
+  `STATE_ROOT`, outside the mirrored directory, so they are structurally out of reach.
 - **Git clone** (dev checkouts, and hubs deployed before the change): `git fetch` +
   `git reset --hard origin/main`, mirroring `main` exactly — **local changes on the
   hub box are discarded**. Requires `git` on `PATH`.
@@ -189,7 +193,7 @@ Unlike the companion/agent trains, neither path uses the Ed25519 release key: bo
 trust GitHub over HTTPS plus push access to `main` (the pinned git origin for a clone,
 the branch archive over TLS for a files-only install). The Ed25519 trust root still
 gates agent binaries and is untouched by this. As with every hub change, bump
-`HUB_VERSION` near the top of `app.py` on each push to `main`, or the hub won't know
+`HUB_VERSION` near the top of `hub/app.py` on each push to `main`, or the hub won't know
 to update. (The installer offers to set
 `HUB_AUTO_UPDATE=1` for you; on hubs still on the older scheduled-task deployment the
 same exit instead relies on the task's 2-minute repetition.)
@@ -221,9 +225,9 @@ new agent is confirmed running. Set `MIGRATION_ENABLED = False` near the top of
 
 ## Hub
 
-`app.py` receives reports at `POST /api/report` (open, no auth -- agents
-must be able to post without signing in), and serves these views (gated
-behind Google sign-in, see below):
+`hub/app.py` receives reports at `POST /api/report` (open, no auth -- agents
+must be able to post without signing in), and serves these views (gated behind
+OIDC sign-in plus permission groups, see below):
 
 - `/` -- a card per machine (live temp, status, uptime); click one to open
   its detail page
@@ -236,6 +240,9 @@ behind Google sign-in, see below):
 - `/history` -- daily summary/average across all machines
 - `/alerts` -- conditions that want attention: machines running hot, and
   duplicate machines that share a serial while both online (see below)
+- `/inventory` -- one row per machine of the hardware/asset facts agents report
+- `/audit` -- the audit log (see below); `/packages`, `/backups` -- their own
+  sections below; `/settings`, `/users`, `/permissions` -- administration
 
 ### Temperature alerts
 
@@ -275,19 +282,23 @@ The tab searches across actor/action/target, filters by actor, level and date
 range, pages through history, and expands any entry to its recorded detail.
 
 Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
-rotated log files also live under `logs/`. Run it via `wsgi.py`, or directly
-with:
+rotated log files also live under `logs/`. The code lives in `hub/`; `.env` and
+`logs/` sit one level up in the install root (`STATE_ROOT`), so a self-update that
+mirrors the code directory can never touch operator state. Run it via
+`hub/wsgi.py` (`wsgi:application` under waitress), or directly with:
 
 ```powershell
-python app.py
+python hub/app.py
 ```
 
-### Google sign-in setup
+### Sign-in setup (OIDC)
 
 Viewing the dashboard (`/`, `/machine/<name>`, `/history`, and the
 `/api/history`, `/api/daily_summary`, `/api/machines`, `/api/machines/<name>`
-endpoints, plus live Socket.IO updates) requires signing in with an
-allow-listed account. `POST /api/report` is intentionally exempt so
+endpoints, plus live Socket.IO updates) requires signing in. Sign-in succeeds for
+an address in `ALLOWED_EMAILS` (break-glass superusers) or one that belongs to at
+least one permission group; anyone else is refused at the callback with 403 rather
+than admitted to an empty dashboard. `POST /api/report` is intentionally exempt so
 agents never need credentials.
 
 Sign-in is **OpenID Connect**, and any OIDC provider will do. Configure Google,
@@ -352,12 +363,47 @@ This is a security control, not just convenience — a console session can run c
 SYSTEM on any enrolled machine (see below). Shorten it if operators sign in from
 machines they don't control; `/logout` always ends a session immediately.
 
+## Permission groups
+
+Signing in is one gate; **what you can then do is a second one**, enforced per
+endpoint in [hub/permissions.py](hub/permissions.py) (model) and
+[hub/permissions_web.py](hub/permissions_web.py) (the shared `access` object and the
+admin API). Administered at `/permissions`.
+
+A **permission group** carries a set of capabilities and a machine scope. An operator
+gets the union of every group they're in. Scope is either an explicit machine list
+(`list`) or the whole fleet (`all`).
+
+| Capability | Grants |
+|---|---|
+| `view` | see these machines, their history and their command results |
+| `view_audit_log` | read the audit log (info + notice; **not** machine-scoped) |
+| `view_security_audit` | additionally see security-level entries — does nothing alone |
+| `issue_commands` | run scripts and restart/shutdown/install — **code execution as SYSTEM** |
+| `remote_control` | start a remote view/control session |
+| `deploy_packages` | schedule software deployments |
+| `manage_backups` | configure backups and trigger restores (deliberately fleet-wide) |
+| `manage_settings` | change hub settings; delete/merge machines, pin sensors, dismiss alerts |
+| `manage_users` | edit the registered-users directory (a profile directory, not access) |
+| `manage_permission_groups` | create and edit groups — i.e. grant anyone, including themselves, any of the above |
+
+> ⚠️ **`ALLOWED_EMAILS` bypasses all of it.** It is the break-glass superuser list:
+> every capability over every machine, and the hub refuses to start with it empty.
+> Keep it to the smallest possible set of accounts and put everyone else in a group.
+
+The UI hides buttons an operator can't use, but that's presentation — the server-side
+gate on each endpoint is the control, and `/api/permissions/me` deliberately reveals
+nothing the caller doesn't already hold.
+
+Two adjacent pages: `/users` (the registered-users directory — profiles, auto-created
+on first login, `manage_users`) and `/inventory` (fleet-wide hardware/asset view).
+
 ## Fleet command channel (RMM)
 
 Beyond telemetry, the hub can queue **commands** for a machine that its agent
 pulls and executes (restart, rename, install, etc.). This is the hub→agent
-direction, added by [fleet.py](fleet.py) (core logic) and
-[fleet_web.py](fleet_web.py) (HTTP surface), with state in the same SQLite DB
+direction, added by [fleet.py](hub/fleet.py) (core logic) and
+[fleet_web.py](hub/fleet_web.py) (HTTP surface), with state in the same SQLite DB
 (`agents`, `commands`, `command_results`, `audit_log`). **The C#/.NET agent
 (`agent/`) implements the client side of this channel; `companion.py` does not**
 (it's telemetry-only, which is why it migrates itself away — see above).
@@ -368,14 +414,16 @@ direction, added by [fleet.py](fleet.py) (core logic) and
   `POST /api/agent/enroll` and receives a per-agent bearer token (only its hash
   is stored). All other agent endpoints require `Authorization: Bearer
   <agent_id>:<token>`. With the secret unset, no agent can enroll (fail closed).
-- **Issuing a command requires nothing but a signed-in, allow-listed session.**
-  Every type — including `run_script`, which runs arbitrary PowerShell **as SYSTEM** —
-  dispatches on that alone. So:
+- **Issuing a command requires a signed-in session holding `issue_commands`, plus the
+  target machine in that operator's scope** — no offline signature. Every type,
+  including `run_script`, which runs arbitrary PowerShell **as SYSTEM**, dispatches on
+  that alone. See [Permission groups](#permission-groups) below.
 
-  > ⚠️ **`ALLOWED_EMAILS` is the entire perimeter for remote code execution as SYSTEM
-  > across the fleet.** Anyone on that list can run anything, anywhere, at any time.
-  > Treat adding an address to it as granting domain-admin-equivalent power, and keep
-  > those accounts on MFA.
+  > ⚠️ **`issue_commands` is the entire perimeter for remote code execution as SYSTEM
+  > on the machines in scope**, and **`ALLOWED_EMAILS` — the break-glass superuser
+  > list — holds it over every machine, unconditionally.** Treat adding an address to
+  > `ALLOWED_EMAILS` as granting domain-admin-equivalent power, keep those accounts on
+  > MFA, and give day-to-day operators a permission group instead.
 
   This is deliberate: the channel is operated by a helpdesk group, and the previous
   design (below) could not serve more than one person.
@@ -476,16 +524,20 @@ AGENT_ENROLLMENT_SECRET=a-long-random-shared-secret
 
 **Endpoints.** Agent-facing (token auth): `POST /api/agent/enroll`,
 `POST /api/agent/heartbeat`, `GET /api/agent/commands` (pull + claim),
-`POST /api/agent/commands/<id>/result`. Console-facing (Google sign-in):
+`POST /api/agent/commands/<id>/result`, `POST /api/agent/commands/<id>/output`
+(live output streaming), and the terminal's `GET|POST /api/agent/pty/<session>/input`
+`/output` `/closed`. Console-facing (`issue_commands` + machine scope):
 `GET /api/fleet/status` (online/offline), `GET|POST /api/fleet/commands`,
-`GET /api/fleet/commands/<id>`. Every issue/claim/complete/enroll is written to
-`audit_log`.
+`GET /api/fleet/commands/<id>`, `GET /api/fleet/commands/<id>/output`,
+`GET|POST|DELETE /api/fleet/favorites[/<id>]` (saved scripts), and
+`POST /api/fleet/pty` + `/api/fleet/pty/<session>/input` `/output` `/clear` `/close`.
+Every issue/claim/complete/enroll is written to `audit_log`.
 
 ## Package deployment (PDQ-style)
 
 Define an installer once — payload, silent command line, what proves it worked — then
-aim it at machines and watch it land. Core logic in [packages.py](packages.py), HTTP
-surface in [packages_web.py](packages_web.py), UI at `/packages`, agent side in
+aim it at machines and watch it land. Core logic in [packages.py](hub/packages.py), HTTP
+surface in [packages_web.py](hub/packages_web.py), UI at `/packages`, agent side in
 `agent/src/TempMonitorAgent/Fleet/Executors/DeployPackageExecutor.cs`. State lives in the
 same SQLite DB (`packages`, `package_sources`, `deployments`, `deployment_targets`).
 
@@ -562,9 +614,9 @@ The equivalents elsewhere: IIS `maxAllowedContentLength` (default ~30 MB) *and*
 ## Backups
 
 A consistent snapshot of the hub database, compressed, encrypted **on the hub** and pushed
-offsite on a schedule. Core logic in [backups.py](backups.py), HTTP surface in
-[backups_web.py](backups_web.py), UI at `/backups`, and the restore tool at
-[restore_backup.py](restore_backup.py). State lives in the same SQLite DB
+offsite on a schedule. Core logic in [backups.py](hub/backups.py), HTTP surface in
+[backups_web.py](hub/backups_web.py), UI at `/backups`, and the restore tool at
+[restore_backup.py](hub/restore_backup.py). State lives in the same SQLite DB
 (`backup_destinations`, `backup_runs`, `backup_state`, plus `backup_machine_config`,
 `backup_file_sets`, `backup_files` and `backup_restores` for the per-PC half below).
 
@@ -594,8 +646,8 @@ than restoring as a plausible-looking corrupt database.
 > network:
 >
 > ```
-> python restore_backup.py --in 20260721T030000Z-temp_v2.db.gz.fhb --out temp_v2.db --verify
-> python restore_backup.py --in <file>.fhb --info     # just read the header
+> python hub/restore_backup.py --in 20260721T030000Z-temp_v2.db.gz.fhb --out temp_v2.db --verify
+> python hub/restore_backup.py --in <file>.fhb --info     # just read the header
 > ```
 >
 > Then stop the hub service, move the old `logs/temp_v2.db` aside (with its `-wal`/`-shm`),
@@ -604,7 +656,7 @@ than restoring as a plausible-looking corrupt database.
 
 **Destinations: S3-compatible or WebDAV, your choice per destination.** S3 covers AWS,
 MinIO, Backblaze B2 and Wasabi — signed with SigV4 implemented in ~100 lines of stdlib
-`hmac` rather than pulling ~80 MB of botocore onto a hub whose sparse install is 0.3 MB,
+`hmac` rather than pulling ~80 MB of botocore onto a hub whose whole install is ~2 MB,
 and checked against AWS's published test vectors in the suite. WebDAV covers Nextcloud,
 ownCloud and IIS, with Basic auth over TLS. Plain `http://` is refused for anything but a
 loopback host, so a typo cannot ship your credentials in clear.
@@ -636,12 +688,20 @@ capability.
 `POST /api/backups/key`, `POST /api/backups/key/reveal`,
 `POST /api/backups/key/escrowed`, `POST /api/backups/destinations`,
 `PUT|DELETE /api/backups/destinations/<id>`, `POST /api/backups/destinations/<id>/test`,
-`PUT /api/backups/schedule`, `POST /api/backups/run`.
+`PUT /api/backups/schedule`, `POST /api/backups/run`, `GET /api/backups/machines`,
+`POST /api/backups/preview` (resolve path patterns against a real machine),
+`POST /api/backups/files/run` and `POST /api/backups/files/cancel` (fleet-wide
+"back up now" / cancel, over the caller's scope).
 
 The per-machine routes need `manage_backups` **and** that machine in scope:
 `GET|PUT /api/backups/machines/<machine>`, `GET /api/backups/machines/<machine>/manifest`,
+`POST /api/backups/machines/<machine>/run`, `POST /api/backups/machines/<machine>/cancel`,
 `POST /api/backups/machines/<machine>/restore`,
 `GET /api/backups/machines/<machine>/restores`.
+
+Agent-facing (token auth): `POST /api/agent/backups/upload/<run_id>`,
+`POST /api/agent/backups/<run_id>/result`, and for restores
+`GET /api/agent/backups/restore/<id>/plan`, `.../archive/<index>`, `.../result`.
 
 > Revealing the key is a **POST with a JSON body**, not a GET — so it cannot be triggered
 > by a link, an `<img src>`, or anything else a browser fetches on someone's behalf. Keep
@@ -653,7 +713,7 @@ destination, interval, and generations to keep.
 ### Per-PC file backups
 
 Configured on the Backups page's **Backup Settings** tab, per machine on that machine's
-**Backup** tab. Path selection lives in [backup_paths.py](backup_paths.py).
+**Backup** tab. Path selection lives in [backup_paths.py](hub/backup_paths.py).
 
 **You never enumerate user profiles.** A pattern is written once with tokens and expanded
 on each PC at backup time, so it keeps being right as people come and go:
@@ -766,17 +826,16 @@ other 100, and a green row means nobody does.
 > or when you want one file without pushing anything onto a PC:
 >
 > ```bash
-> python restore_backup.py --in 20260721T030000Z-a1b2c3-000-full.fhb --list
-> python restore_backup.py --in <file>.fhb --extract C:\Recovered
-> python restore_backup.py --in <file>.fhb --extract C:\Recovered --match "*/Desktop/*"
+> python hub/restore_backup.py --in 20260721T030000Z-a1b2c3-000-full.fhb --list
+> python hub/restore_backup.py --in <file>.fhb --extract C:\Recovered
+> python hub/restore_backup.py --in <file>.fhb --extract C:\Recovered --match "*/Desktop/*"
 > ```
 >
 > One master key opens every machine: the per-machine key is derived from it, and the
 > envelope header says which machine to derive for.
 
-> **Status:** built end to end — hub 1.30.0 and agent 3.9.0. The agent needs a signed
-> release (`sign_release.py --sign-agent`) before the fleet gains any of this, and the hub
-> should be deployed first. See [features.md](features.md).
+> **Status:** built end to end, shipped in hub 1.30.0 / agent 3.9.0 and signed-released
+> since — the fleet has it. See [ROADMAP.MD](ROADMAP.MD).
 
 ## Remote view & control
 
@@ -875,8 +934,9 @@ the operator's scope; every session start/stop is in the audit log.
   `--remote-capture-test <file.h264> <seconds>` writes a playable clip straight from the capture
   and encode path with no hub, browser or session injection involved.
 
-> **Status:** built — hub 1.44.0, agent 3.14.0. The agent half needs a signed release
-> (`sign_release.py --sign-agent`), and the hub should be deployed first.
+> **Status:** built — shipped in hub 1.44.0 / agent 3.14.0; the agent half has been
+> signed-released since (current: agent 3.15.0). Deploy the hub before an agent release
+> so the fleet never runs ahead of it.
 >
 > **On-hardware validation still outstanding**, in rough order of how much rests on it:
 > 1. Whether Desktop Duplication works against the Winlogon desktop after `SetThreadDesktop`
@@ -908,6 +968,6 @@ repo, paste the printed public key into `companion.py`'s `UPDATE_PUBLIC_KEY_HEX`
 
 This is the **release** trust root: it governs what *code* the fleet is allowed to run,
 and it is fully enforced. It is unrelated to fleet *commands*, which are no longer signed
-(see [Fleet command channel](#fleet-command-channel)). Don't conflate the two — a
+(see [Fleet command channel](#fleet-command-channel-rmm)). Don't conflate the two — a
 compromised hub still must not be able to push a malicious binary, which is exactly what
 these signatures prevent.

@@ -3,7 +3,9 @@
 A Windows Service (runs under **LocalSystem**) that replaces the Python `companion.py`
 for RMM. It reaches telemetry parity with the companion **and** speaks the hub's fleet
 command channel: it enrolls, heartbeats, polls for commands, executes them, reports
-results, and updates itself from a **signed** manifest (verified fail-closed).
+results, and updates itself from a **signed** manifest (verified fail-closed). It also
+carries the client half of the interactive terminal (ConPTY), package deployment,
+per-PC file backup/restore, and remote view/control.
 
 - **Target:** .NET 10 (`net10.0-windows`), published **self-contained single-file
   win-x64** (no runtime install needed on the fleet).
@@ -14,14 +16,19 @@ results, and updates itself from a **signed** manifest (verified fail-closed).
 ## Layout
 ```
 src/TempMonitorAgent/
-  Program.cs / Worker.cs         host + main loop
+  Program.cs / Worker.cs         host + main loop, executor registration
   AgentConfig.cs                 constants, endpoints, trust roots, %ProgramData% paths
+  Models.cs                      wire DTOs shared across the client surfaces
   Telemetry/                     SensorReader (LHM), SystemInfo (WMI), TelemetryReporter
   Fleet/                         FleetClient, SignatureVerifier, CommandDispatcher,
-                                 Executors/
+                                 OutputStreamer, ProcessRunner, WingetLocator,
+                                 Shell/ (ConPTY sessions), Executors/
+  Backup/                        BackupFilesExecutor, RestoreFilesExecutor (VSS, chains)
+  Remote/                        remote view/control helper + virtual-display executors
   Update/                        SelfUpdater, VersionUtil
   State/                         AgentState (agent.json, restart_state.json)
 tests/TempMonitorAgent.Tests/    xUnit: update-manifest sig verify, versions
+tests/ShellParserTests/          xUnit: terminal/ConPTY stream parsing
 install/agent-install.ps1        installs the service (+ PawnIO, recovery, enroll secret)
 ```
 
@@ -29,7 +36,14 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
 - Telemetry: `POST /api/report` (no auth). Cadence 5s temp / 10s sensors / 600s uptime.
 - Fleet: `POST /api/agent/enroll` → `{agent_id, token}`; then
   `Authorization: Bearer <agent_id>:<token>` on `POST /api/agent/heartbeat`,
-  `GET /api/agent/commands` (pull+claim), `POST /api/agent/commands/<id>/result`.
+  `GET /api/agent/commands` (pull+claim), `POST /api/agent/commands/<id>/result`,
+  `POST /api/agent/commands/<id>/output` (live output while a script runs).
+- Terminal (ConPTY): `GET /api/agent/pty/<session>/input`,
+  `POST /api/agent/pty/<session>/output`, `POST /api/agent/pty/<session>/closed`.
+- Remote: `GET /api/agent/remote/<session>/poll`, `POST .../signal`, `POST .../ended`.
+- Backups: `POST /api/agent/backups/upload/<run_id>`, `POST /api/agent/backups/<run_id>/result`;
+  restores via `GET /api/agent/backups/restore/<id>/plan`, `.../archive/<index>`, `.../result`.
+- Packages: `GET /api/agent/packages/<sha256>` (payload fetch, re-hashed before execution).
 - Commands are **not signed**. The agent executes what an enrolled, authenticated pull
   returns; the hub authorizes on an allow-listed console session and records every
   command in its `audit_log`. (Until hub 1.10 / agent 3.1, `run_script`,
@@ -37,8 +51,18 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
   verified here. No key was ever configured, so in practice they were always refused —
   which is why removing the gate is what made them work, not a loosening.)
 
-Implemented executors: `restart`, `shutdown`, `rename`, `gpupdate`, `install_app`,
-`run_script`. `install_driver` / `update_bios` are stubs.
+Implemented executors (registered in `Program.cs`):
+
+| Area | Types |
+|---|---|
+| Low risk | `restart`, `shutdown`, `rename`, `gpupdate`, `install_app` |
+| Scripts | `run_script` |
+| Packages | `deploy_package` |
+| Terminal | `shell_open`, `shell_input`, `shell_signal`, `shell_reset` |
+| Backups | `backup_files`, `restore_files` |
+| Remote | `start_remote_session`, `install_virtual_display`, `uninstall_virtual_display`, `set_virtual_display_mode`, `refresh_remote_inventory` |
+
+`install_driver` / `update_bios` are still registered as `StubExecutor`s.
 
 **Still signed, and unrelated to the above:** the self-update manifest. `SelfUpdater`
 verifies it with `SignatureVerifier.VerifyRaw` against `AgentConfig.UpdatePublicKeyHex`
@@ -46,11 +70,25 @@ before any binary replaces the running one. That is what stops a compromised hub
 pushing malicious code to the fleet — do not remove it.
 
 ## Configuration
-- `TEMP_MONITOR_HUB` — hub base URL (default `https://temp.arkeanos.net`).
-- `TEMP_MONITOR_MACHINE` — machine name (default `Environment.MachineName`).
+
+Settings are read as `FLEETHUB_*`, falling back to the pre-rename `TEMP_MONITOR_*`
+name — machines installed before the FleetHub rename still have the old machine-level
+env vars set, and an agent that self-updates must keep honouring them or a box pinned
+at a non-default hub silently swings back to the production default.
+
+- `FLEETHUB_HUB` (legacy `TEMP_MONITOR_HUB`) — hub base URL (default
+  `https://temp.arkeanos.net`).
+- `FLEETHUB_MACHINE` (legacy `TEMP_MONITOR_MACHINE`) — machine name (default
+  `Environment.MachineName`).
 - `AGENT_ENROLLMENT_SECRET` — enrollment secret (installer writes it to
-  `HKLM\SOFTWARE\TempMonitorAgent`; env overrides for testing).
-- `TEMP_MONITOR_NO_UPDATE=1` — disable self-update (testing).
+  `HKLM\SOFTWARE\FleetHub\Agent`, legacy `HKLM\SOFTWARE\TempMonitorAgent`; env
+  overrides for testing).
+- `FLEETHUB_NO_UPDATE=1` (legacy `TEMP_MONITOR_NO_UPDATE`) — disable self-update (testing).
+
+State lives in `%ProgramData%\FleetHub\Agent` (`agent.json`, `config.json`,
+`restart_state.json`, `update/`, `remote/`). A pre-rename
+`%ProgramData%\TempMonitorAgent` is migrated on first touch, and kept if the migration
+fails rather than starting from a blank identity.
 
 ## Build / test / publish
 ```powershell
@@ -94,4 +132,16 @@ agent/install/agent-install.ps1 -AgentUrl <release-url> -EnrollmentSecret <secre
     -HubUrl https://temp.arkeanos.net
 agent/install/agent-install.ps1 -Uninstall
 ```
-Logs: `%ProgramData%\TempMonitorAgent\companion.log`.
+`-InstallDir` defaults to `C:\Program Files\FleetHub\Agent`. The Windows service is
+still registered as **`TempMonitorAgent`** on purpose: .NET takes the service name from
+the assembly, and a self-updating agent swaps its binary without re-registering, so
+renaming one side alone would break exactly the machines already in the field.
+
+Logs: `%ProgramData%\FleetHub\Agent\companion.log`, plus
+`remote-helper.log` beside it for the remote view/control helper (it runs in a
+different session, so it gets its own file).
+
+Self-tests runnable on the machine, no hub or browser involved:
+`--desktop-probe [seconds]` (which input desktop, and can this process attach to it)
+and `--remote-capture-test <file.h264> <seconds>` (a playable clip straight from the
+capture + encode path).

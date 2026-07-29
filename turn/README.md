@@ -178,7 +178,7 @@ ICE even though allocations succeed. Read the Windows section before deploying t
 
   - **coturn natively inside a WSL2 distro — what `install.ps1` now builds for you**, with
     `networkingMode=mirrored` so WSL shares the host's network namespace and relay source ports
-    survive. See [the installer section](#easiest-let-the-hub-installer-do-it-windows-hub).
+    survive. See [the installer section](#easiest-let-the-installer-do-it-windows).
 
     Note the *natively*. A coturn **container under Docker Desktop stays behind Docker's own
     bridge no matter what WSL's networking mode is** — mirrored mode alone does not fix trap 2,
