@@ -2027,8 +2027,41 @@ function Install-Hub {
 
     Step "Configuring .env"
     Say "Press Enter to keep the value shown in [brackets]."
-    $googleId      = Prompt-Value "Google OAuth client ID" $existing["GOOGLE_CLIENT_ID"] -Required
-    $googleSecret  = Prompt-Value "Google OAuth client secret" $existing["GOOGLE_CLIENT_SECRET"] -Secret -Required
+    # Sign-in providers. Either or both; the hub refuses to boot with neither. Google is
+    # still the default answer because it is what most existing hubs run, but it is no
+    # longer forced -- an organisation on Entra/Okta/Authentik should not have to stand up a
+    # Google project just to satisfy the installer.
+    $hadGoogle = [bool]$existing["GOOGLE_CLIENT_ID"]
+    $hadOidc   = [bool]$existing["OIDC_CLIENT_ID"]
+    # Default each answer to what this hub is already configured with, so re-running the
+    # installer over an existing .env keeps the current setup on a straight Enter.
+    $wantGoogle = Prompt-YesNo "Configure Google sign-in?" -Default $(if ($hadOidc -and -not $hadGoogle) { "No" } else { "Yes" })
+    $googleId = ""; $googleSecret = ""
+    if ($wantGoogle) {
+        $googleId     = Prompt-Value "  Google OAuth client ID" $existing["GOOGLE_CLIENT_ID"] -Required
+        $googleSecret = Prompt-Value "  Google OAuth client secret" $existing["GOOGLE_CLIENT_SECRET"] -Secret -Required
+    }
+
+    $wantOidc = Prompt-YesNo "Configure another SSO provider (Microsoft Entra, Okta, Authentik, Keycloak)?" `
+                    -Default $(if ($hadOidc) { "Yes" } else { "No" })
+    $oidcName = ""; $oidcIssuer = ""; $oidcId = ""; $oidcSecret = ""
+    if ($wantOidc) {
+        $oidcNameDefault = $existing["OIDC_DISPLAY_NAME"]
+        if (-not $oidcNameDefault) { $oidcNameDefault = "Microsoft" }
+        $oidcName   = Prompt-Value "  Name to show on the sign-in button" $oidcNameDefault -Required
+        # The issuer URL, not the discovery document: the hub appends
+        # /.well-known/openid-configuration itself, and pasting the full discovery URL also
+        # works (OIDC_METADATA_URL). Entra's is
+        # https://login.microsoftonline.com/<tenant-id>/v2.0
+        $oidcIssuer = Prompt-Value "  Issuer URL" $existing["OIDC_ISSUER"] `
+                        -Required -Validate { param($v) $v -match '^https?://' } `
+                        -ValidateHint "Enter the issuer URL, e.g. https://login.microsoftonline.com/<tenant-id>/v2.0"
+        $oidcId     = Prompt-Value "  Client ID" $existing["OIDC_CLIENT_ID"] -Required
+        $oidcSecret = Prompt-Value "  Client secret" $existing["OIDC_CLIENT_SECRET"] -Secret -Required
+    }
+    if (-not $wantGoogle -and -not $wantOidc) {
+        Die "At least one sign-in provider is required -- the hub will not start without one."
+    }
 
     $flaskSecretDefault = $existing["FLASK_SECRET_KEY"]
     if (-not $flaskSecretDefault) { $flaskSecretDefault = New-RandomSecret }
@@ -2043,6 +2076,13 @@ function Install-Hub {
     $hubUrlValue   = Prompt-Value "Public hub URL" $hubUrlDefault `
                         -Required -Validate { param($v) $v -match '^https?://' } `
                         -ValidateHint "Enter a full URL starting with http:// or https://."
+
+    # Printed only once the public URL is known -- a redirect URI is the one setting the
+    # operator has to go and paste into the provider's console, and getting it wrong is the
+    # single most common reason a fresh sign-in fails.
+    $redirectBase = $hubUrlValue.TrimEnd("/")
+    if ($wantGoogle) { Say "  Google redirect URI: $redirectBase/auth/callback" }
+    if ($wantOidc)   { Say "  $oidcName redirect URI: $redirectBase/auth/oidc/callback" }
 
     Say ""
     Say "Fleet command channel (optional -- leave blank to keep telemetry-only):"
@@ -2094,12 +2134,28 @@ function Install-Hub {
     $turnNeedsWslConfig = $turnPlan.NeedsWslConfig
 
     $lines = @(
-        "GOOGLE_CLIENT_ID=$googleId"
-        "GOOGLE_CLIENT_SECRET=$googleSecret"
         "FLASK_SECRET_KEY=$flaskSecret"
         "ALLOWED_EMAILS=$allowedEmails"
         "HUB_URL=$hubUrlValue"
     )
+    # Only write the keys that were actually configured. A blank GOOGLE_CLIENT_ID= line
+    # would read as "Google is configured" to a naive check; the hub tests for a non-empty
+    # value, but leaving the key out entirely is what makes the .env honest about what
+    # this hub does.
+    if ($wantGoogle) {
+        $lines += "GOOGLE_CLIENT_ID=$googleId"
+        $lines += "GOOGLE_CLIENT_SECRET=$googleSecret"
+    }
+    if ($wantOidc) {
+        $lines += "OIDC_DISPLAY_NAME=$oidcName"
+        $lines += "OIDC_ISSUER=$oidcIssuer"
+        $lines += "OIDC_CLIENT_ID=$oidcId"
+        $lines += "OIDC_CLIENT_SECRET=$oidcSecret"
+    }
+    # Preserve an operator-tuned session lifetime across re-installs; the hub defaults to 7.
+    if ($existing["SESSION_LIFETIME_DAYS"]) {
+        $lines += "SESSION_LIFETIME_DAYS=$($existing['SESSION_LIFETIME_DAYS'])"
+    }
     if ($enrollSecret)      { $lines += "AGENT_ENROLLMENT_SECRET=$enrollSecret" }
     if ($autoUpdateDefault) { $lines += "HUB_AUTO_UPDATE=$autoUpdateDefault" }
     if ($turnSecret)        { $lines += "REMOTE_TURN_SECRET=$turnSecret" }

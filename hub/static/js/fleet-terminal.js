@@ -53,6 +53,11 @@
     const MIN_INTERACTIVE_AGENT = '3.2.0';
     // Older still: pre-3.1 agents don't stream at all.
     const MIN_STREAMING_AGENT = '3.1.0';
+    // From here up the agent can open a real pseudoconsole, and this whole file becomes a
+    // fallback for the tail of a rollout — fleet-pty.js takes the tab instead. Everything
+    // below this version is stuck sending scripts and reading text back, which is why a
+    // `Read-Host` prompt never appeared and a bare Enter did nothing.
+    const MIN_PTY_AGENT = '3.15.0';
 
     let history = loadHistory();
     let historyIndex = history.length;   // one past the end == "typing a new command"
@@ -347,6 +352,13 @@
         try {
             const info = await FleetApi.getJson(`/api/machines/${encodeURIComponent(MACHINE)}`);
             const version = info && info.companion_version;
+            // A modern agent gets a REAL console (ConPTY + xterm.js) instead of any of this.
+            // The decision lives here because this is the one place that looks the agent
+            // version up -- two terminals both deciding they are in charge would be a mess.
+            if (version && !versionLess(version, MIN_PTY_AGENT) && window.FleetPty) {
+                FleetPty.activate();
+                return;
+            }
             if (version && versionLess(version, MIN_STREAMING_AGENT)) {
                 // Pre-3.1: refuses run_script outright.
                 setInteractive(false);

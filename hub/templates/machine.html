@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ machine }} - FleetHub{% endblock %}
 {% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
@@ -153,9 +154,17 @@
                         <option value="powershell">PowerShell</option>
                         <option value="cmd">cmd</option>
                     </select>
-                    <label for="terminal-timeout" class="fleet-field__label">Timeout (s)</label>
+                    <label for="terminal-timeout" id="terminal-timeout-label" class="fleet-field__label">Timeout (s)</label>
                     <input id="terminal-timeout" class="input terminal__timeout" type="number"
                            min="1" value="600" title="Per-command timeout in seconds">
+                    {# Both are ConPTY-mode only. A terminal survives leaving the page, so
+                       ending one has to be something the operator ASKS for -- that is what
+                       New console is. Reconnect appears only after a session has already
+                       ended on its own (the shell exited, the machine went away). #}
+                    <button id="terminal-new" type="button" class="btn btn--ghost" hidden
+                            title="End this shell and start a fresh one">New console</button>
+                    <button id="terminal-reconnect" type="button" class="btn btn--primary" hidden
+                            title="Open a new console on this machine">Reconnect</button>
                     <button id="terminal-favorites" type="button" class="btn">★ Favorites</button>
                     <button id="terminal-save-fav" type="button" class="btn btn--ghost">Save as favorite</button>
                     <button id="terminal-stop" type="button" class="btn btn--ghost" disabled
@@ -166,18 +175,32 @@
                 </div>
             </div>
 
-            {# aria-live=polite so a screen reader announces streamed output as it lands.
-               Rendered with textContent only -- this is untrusted agent-side text. #}
-            <pre class="console-surface terminal__scrollback" id="terminal-scrollback" tabindex="0"
-                 aria-live="polite" aria-label="Command output"></pre>
+            {# TWO terminals live here and exactly one is ever shown. fleet-terminal.js does
+               the single agent-version lookup and hands over to FleetPty when the machine
+               can open a pseudoconsole; everything below stays for agents that can't yet.
+               See fleet-pty.js for why they are not the same feature. #}
+            <div id="terminal-pty" hidden>
+                {# xterm.js owns everything inside this element and measures it on open, so
+                   it must have a real size before the terminal is built -- which is why
+                   fleet-pty.js waits for tab:shown rather than connecting on load. #}
+                <div id="terminal-pty-screen" class="terminal__pty-screen"
+                     aria-label="Interactive terminal"></div>
+            </div>
 
-            <div class="terminal__promptline">
-                <span class="terminal__ps" id="terminal-ps" aria-hidden="true">PS {{ machine }}&gt;</span>
-                <label for="terminal-input" class="sr-only">Script to run on {{ machine }}</label>
-                <textarea id="terminal-input" class="terminal__input" rows="1" spellcheck="false"
-                          autocomplete="off" autocapitalize="off"
-                          placeholder="Get-Service Spooler"></textarea>
-                <button id="terminal-run" type="button" class="btn btn--primary">Run</button>
+            <div id="terminal-legacy">
+                {# aria-live=polite so a screen reader announces streamed output as it lands.
+                   Rendered with textContent only -- this is untrusted agent-side text. #}
+                <pre class="console-surface terminal__scrollback" id="terminal-scrollback" tabindex="0"
+                     aria-live="polite" aria-label="Command output"></pre>
+
+                <div class="terminal__promptline">
+                    <span class="terminal__ps" id="terminal-ps" aria-hidden="true">PS {{ machine }}&gt;</span>
+                    <label for="terminal-input" class="sr-only">Script to run on {{ machine }}</label>
+                    <textarea id="terminal-input" class="terminal__input" rows="1" spellcheck="false"
+                              autocomplete="off" autocapitalize="off"
+                              placeholder="Get-Service Spooler"></textarea>
+                    <button id="terminal-run" type="button" class="btn btn--primary">Run</button>
+                </div>
             </div>
             <div id="terminal-hint" class="terminal__hint"></div>
         </div>
@@ -329,6 +352,12 @@
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
+{# Vendored, not a CDN: the Terminal tab must work on an isolated LAN, and a third
+   party must not be able to inject script into a page that runs code as SYSTEM.
+   See static/vendor/README.md for versions and checksums. #}
+<script src="{{ url_for('static', filename='vendor/xterm.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/xterm-addon-fit.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-pty.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
 <script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>

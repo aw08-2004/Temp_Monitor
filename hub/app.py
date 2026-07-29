@@ -29,6 +29,7 @@ import requests
 import fleet
 import alerts
 import settings
+import terminal
 import permissions
 import users
 import packages
@@ -68,7 +69,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.44.2"
+HUB_VERSION = "1.46.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1064,11 +1065,56 @@ def start_hub_update_watcher():
         print(f"[hub-update] Watcher started -- hub self-update currently {state}.")
 
 # ================================
-# AUTH CONFIG (Google sign-in)
+# AUTH CONFIG (single sign-on)
 # ================================
+# Two interchangeable OpenID Connect providers, either or both of which may be configured:
+#
+#   * GOOGLE_*  -- Google Workspace, the original and still the common case.
+#   * OIDC_*    -- any other OIDC issuer (Microsoft Entra ID, Okta, Authentik, Keycloak,
+#                  Auth0...). Discovery does the work, so there is no per-vendor code here
+#                  and adding a provider is configuration, not a release.
+#
+# Both land in the SAME place: an email, checked against the same permission groups and the
+# same break-glass list. The identity provider decides who you are; permissions.py decides
+# what that gets you. Nothing downstream knows or cares which button was pressed.
+#
+# ⚠️ If you configure both, they are both doors to the same rooms. An operator's access is
+# whatever the WEAKER issuer will assert about their email address -- so do not enable a
+# second issuer that lets users self-assert an email you have granted access to.
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID")
+OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET")
+# Either the issuer (we append the well-known path) or a full discovery document URL, so
+# both of the forms an admin is likely to have on hand work.
+OIDC_ISSUER = (os.environ.get("OIDC_ISSUER") or "").strip().rstrip("/")
+OIDC_METADATA_URL = (os.environ.get("OIDC_METADATA_URL") or "").strip()
+if OIDC_ISSUER and not OIDC_METADATA_URL:
+    OIDC_METADATA_URL = OIDC_ISSUER + "/.well-known/openid-configuration"
+# What the button says. Worth setting -- "Sign in with Microsoft" is a much clearer prompt
+# than "Sign in with SSO" when someone is looking at an unfamiliar login page.
+OIDC_DISPLAY_NAME = (os.environ.get("OIDC_DISPLAY_NAME") or "SSO").strip()
+OIDC_SCOPES = (os.environ.get("OIDC_SCOPES") or "openid email profile").strip()
+
+GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+OIDC_ENABLED = bool(OIDC_CLIENT_ID and OIDC_CLIENT_SECRET and OIDC_METADATA_URL)
+
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
+
+# How long a signed-in session lasts, in days. ROLLING: every request pushes the expiry
+# back, so somebody using the console daily is never signed out, while a browser left
+# untouched for longer than this has to sign in again.
+#
+# This is a real security control, not a convenience knob: a console session can run
+# arbitrary code as SYSTEM on any enrolled machine, so the cookie IS the perimeter (see
+# ALLOWED_EMAILS below). A week is the default because it covers a normal working pattern
+# without leaving an unattended browser as an indefinite foothold. Shorten it if operators
+# sign in from machines they don't control.
+try:
+    SESSION_LIFETIME_DAYS = max(1, int(os.environ.get("SESSION_LIFETIME_DAYS", "7")))
+except ValueError:
+    SESSION_LIFETIME_DAYS = 7
 # The BREAK-GLASS SUPERUSER LIST, not the perimeter it once was. Membership grants
 # every capability over every machine, bypassing permission groups entirely -- which
 # is what bootstraps a hub (someone has to create the first group) and what keeps a
@@ -1080,10 +1126,18 @@ ALLOWED_EMAILS = {
     if email.strip()
 }
 
-if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and FLASK_SECRET_KEY):
+if not FLASK_SECRET_KEY:
     raise RuntimeError(
-        "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and FLASK_SECRET_KEY must all be set "
-        "(as env vars, or in a .env file) to run the hub -- see README."
+        "FLASK_SECRET_KEY must be set (as an env var, or in a .env file) to run the hub "
+        "-- see README."
+    )
+# At least one way in. Refusing to boot with none is deliberate: a hub that started with no
+# configured provider would serve a login page with no buttons, which looks like a bug in
+# the hub rather than a missing setting.
+if not (GOOGLE_ENABLED or OIDC_ENABLED):
+    raise RuntimeError(
+        "No sign-in provider is configured. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, "
+        "and/or OIDC_CLIENT_ID + OIDC_CLIENT_SECRET + OIDC_ISSUER -- see README."
     )
 if not ALLOWED_EMAILS:
     raise RuntimeError(
@@ -1128,9 +1182,22 @@ app.secret_key = FLASK_SECRET_KEY
 #     Strict: the Google OAuth callback is a top-level cross-site GET redirect and
 #     needs the cookie to find its state.
 #   Secure -- derived from HUB_URL so http://localhost dev still signs in.
+#   HttpOnly -- Flask's default, pinned here so it is visible next to the others. No
+#     script needs to read this cookie, and one that could would be reading the perimeter.
+#   PERMANENT_SESSION_LIFETIME + SESSION_REFRESH_EACH_REQUEST -- the session survives
+#     closing the browser and expires SESSION_LIFETIME_DAYS after last use, rather than
+#     when the browser closes. Flask's default is a browser-session cookie, which meant
+#     signing in again every morning; that is not more secure in any way that matters
+#     (it survives sleep/restore and tab restore anyway) and it trained people to click
+#     through the sign-in prompt without reading it. Rolling, so daily users stay in and
+#     an abandoned browser still ages out. The expiry is inside the SIGNED cookie value,
+#     so an operator cannot extend their own session by editing it.
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=HUB_URL.startswith("https://"),
+    SESSION_COOKIE_HTTPONLY=True,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=SESSION_LIFETIME_DAYS),
+    SESSION_REFRESH_EACH_REQUEST=True,
 )
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
@@ -1153,13 +1220,28 @@ socketio = SocketIO(
 )
 
 oauth = OAuth(app)
-oauth.register(
-    name="google",
-    client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
-    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-    client_kwargs={"scope": "openid email profile"},
-)
+if GOOGLE_ENABLED:
+    oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+if OIDC_ENABLED:
+    # No vendor-specific code: discovery supplies the endpoints and the signing keys, which
+    # is what makes "add Entra" or "add Okta" a .env edit rather than a release.
+    oauth.register(
+        name="oidc",
+        client_id=OIDC_CLIENT_ID,
+        client_secret=OIDC_CLIENT_SECRET,
+        server_metadata_url=OIDC_METADATA_URL,
+        client_kwargs={"scope": OIDC_SCOPES},
+    )
+print("[auth] Sign-in providers: " + ", ".join(
+    ([f"Google"] if GOOGLE_ENABLED else []) +
+    ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else [])))
+print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 
 
 def login_required(view):
@@ -1225,38 +1307,45 @@ app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access, 
 def login():
     if session.get("user"):
         return redirect(url_for("index"))
-    return render_template("login.html")
+    return render_template(
+        "login.html",
+        google_enabled=GOOGLE_ENABLED,
+        oidc_enabled=OIDC_ENABLED,
+        oidc_display_name=OIDC_DISPLAY_NAME,
+    )
 
 
-@app.route("/login/google")
-def login_google():
-    # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
-    # terminator (nginx/Cloudflare) the request can reach waitress as plain http, so the
-    # _external form emits http://.../auth/callback -- which Google rejects as a
-    # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
-    redirect_uri = HUB_URL.rstrip("/") + url_for("auth_callback")
-    return oauth.google.authorize_redirect(redirect_uri)
+def _complete_login(user_info, provider):
+    """Everything after an identity provider has vouched for someone. Deliberately shared
+    by every provider: the authorization decision, the audit identity and the users
+    directory must not be able to differ depending on which button was pressed."""
+    email = permissions.email_from_claims(user_info)
+    if not email:
+        return (f"{provider} did not provide an email address for this account, so it "
+                f"cannot be matched to a permission group."), 403
 
+    # `email_verified` absent is NOT the same as false. Google always sends it; plenty of
+    # issuers (Entra among them) never do, and refusing those would rule out exactly the
+    # providers this feature was added for. Present-and-false is a refusal, though: that
+    # is an issuer telling us it does not stand behind the address.
+    if user_info.get("email_verified") is False:
+        return f"{provider} reports this account's email address is unverified.", 403
 
-@app.route("/auth/callback")
-def auth_callback():
-    token = oauth.google.authorize_access_token()
-    user_info = token.get("userinfo") or oauth.google.userinfo(token=token)
-    email = (user_info.get("email") or "").strip().lower()
-
-    if not user_info.get("email_verified", True):
-        return "Google account email is not verified.", 403
-    # Break-glass superuser, or a member of at least one permission group. A valid
-    # Google account that is in neither is refused outright rather than admitted to an
-    # empty dashboard -- see Access.login_allowed for why, and for where roadmap #4
-    # (Entra) will change it.
+    # Break-glass superuser, or a member of at least one permission group. A valid account
+    # that is in neither is refused outright rather than admitted to an empty dashboard --
+    # see Access.login_allowed for why.
     if not access.login_allowed(email):
         return f"Access denied: {email} is not authorized for this dashboard.", 403
 
+    # Sessions outlive the browser (see PERMANENT_SESSION_LIFETIME). `permanent` is what
+    # opts this session into that lifetime -- without it Flask issues a cookie that dies
+    # when the browser closes, no matter what the lifetime says.
+    session.permanent = True
     session["user"] = {
         "email": email,
         "name": user_info.get("name") or email,
         "picture": user_info.get("picture"),
+        "provider": provider,
     }
     # Auto-register / stamp the last login in the users directory (roadmap #8). Never
     # let a directory write break sign-in: the session is already established above, so
@@ -1266,6 +1355,57 @@ def auth_callback():
     except Exception as e:
         print(f"[users] upsert_from_login failed for {email}: {e}")
     return redirect(url_for("index"))
+
+
+def _callback_url(endpoint):
+    # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
+    # terminator (nginx/Cloudflare) the request can reach waitress as plain http, so the
+    # _external form emits http://.../auth/callback -- which the provider rejects as a
+    # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
+    return HUB_URL.rstrip("/") + url_for(endpoint)
+
+
+@app.route("/login/google")
+def login_google():
+    if not GOOGLE_ENABLED:
+        return "Google sign-in is not configured on this hub.", 404
+    return oauth.google.authorize_redirect(_callback_url("auth_callback"))
+
+
+@app.route("/auth/callback")
+def auth_callback():
+    if not GOOGLE_ENABLED:
+        return "Google sign-in is not configured on this hub.", 404
+    token = oauth.google.authorize_access_token()
+    user_info = token.get("userinfo") or oauth.google.userinfo(token=token)
+    return _complete_login(user_info, "Google")
+
+
+@app.route("/login/oidc")
+def login_oidc():
+    if not OIDC_ENABLED:
+        return "SSO is not configured on this hub.", 404
+    return oauth.oidc.authorize_redirect(_callback_url("auth_oidc_callback"))
+
+
+@app.route("/auth/oidc/callback")
+def auth_oidc_callback():
+    if not OIDC_ENABLED:
+        return "SSO is not configured on this hub.", 404
+    token = oauth.oidc.authorize_access_token()
+    # `userinfo` is parsed from the ID token by Authlib when the issuer returns one. Some
+    # issuers put a thinner set of claims there than at the userinfo endpoint (Entra omits
+    # `email` from the ID token in several tenant configurations), so fall back to asking
+    # rather than refusing a sign-in over a missing claim we could simply go and fetch.
+    user_info = token.get("userinfo") or {}
+    if not permissions.email_from_claims(user_info):
+        try:
+            fetched = oauth.oidc.userinfo(token=token)
+            if fetched:
+                user_info = {**fetched, **{k: v for k, v in user_info.items() if v}}
+        except Exception as e:
+            print(f"[auth] userinfo lookup failed for the OIDC provider: {e}")
+    return _complete_login(user_info, OIDC_DISPLAY_NAME)
 
 
 @app.route("/logout")
@@ -2162,6 +2302,17 @@ def high_temp_evaluator():
             remote.expire_sessions(DB_PATH)
         except Exception as e:
             print(f"[remote] Session expiry sweep failed: {e}")
+        # Interactive terminals ride the same sweep, and here the hub is the AUTHORITY
+        # rather than a backstop: a session deliberately survives its operator navigating
+        # away, so only the hub can tell "gone to Packages for ten minutes" from "closed
+        # the browser on Friday" -- it is the only party that sees the console's own polls.
+        # The agent's equivalent timer is deliberately much longer (AgentConfig
+        # .PtyIdleTimeoutSeconds) so it cannot pre-empt this and reap the very absence the
+        # feature exists to support.
+        try:
+            terminal.reap_sessions(DB_PATH)
+        except Exception as e:
+            print(f"[terminal] Session reap sweep failed: {e}")
         time.sleep(HIGH_TEMP_TICK_SECONDS)
 
 
@@ -2282,6 +2433,7 @@ users.init_users_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
+terminal.init_pty_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
 try:
     resolve_all_duplicate_serials()

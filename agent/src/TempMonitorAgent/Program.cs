@@ -68,6 +68,13 @@ try
     builder.Services.AddSingleton<CommandDispatcher>();
     // Persistent interactive shells live here (singleton, disposed at host shutdown).
     builder.Services.AddSingleton<ShellSessionManager>();
+    // ConPTY terminals (the interactive Terminal tab). Same lifetime reasoning as above --
+    // a session outlives the command that opened it only in the sense that the command IS
+    // the session, so the registry must be a singleton the host disposes.
+    builder.Services.AddSingleton<PtySessionManager>();
+    // ShellOpenExecutor takes the pty endpoints as an interface (testable without a hub);
+    // it must resolve to the SAME FleetClient singleton that holds the enrollment token.
+    builder.Services.AddSingleton<IPtyChannel>(sp => sp.GetRequiredService<FleetClient>());
     builder.Services.AddSingleton<ICommandExecutor, RestartExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
@@ -84,6 +91,7 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShellInputExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellSignalExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShellResetExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, ShellOpenExecutor>();
     // Remote view/control (roadmap #2): session-injects the capture/control helper.
     builder.Services.AddSingleton<ICommandExecutor, StartRemoteSessionExecutor>();
     // Virtual display for headless machines: without a display output there is nothing for

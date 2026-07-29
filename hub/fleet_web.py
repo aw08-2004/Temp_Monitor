@@ -37,6 +37,7 @@ import fleet
 import permissions
 import remote
 import settings
+import terminal
 
 
 def _bearer_agent(db_path):
@@ -334,6 +335,13 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         if data.get("type") in fleet.VIRTUAL_DISPLAY_COMMANDS | fleet.REMOTE_CONTROL_COMMANDS:
             return jsonify({"error": "Remote sessions and virtual displays are managed from "
                                      "the Remote tab, not the command channel."}), 400
+        # shell_open names a pty session row that POST /api/fleet/pty creates. Issued by
+        # hand it would point an agent at a session id that does not exist, or at another
+        # operator's -- so the only way to get one is through the endpoint that makes the
+        # session and binds it to the caller.
+        if data.get("type") == "shell_open":
+            return jsonify({"error": "Terminal sessions are opened from the Terminal tab, "
+                                     "not the command channel."}), 400
         try:
             command_id = fleet.create_command(
                 db_path,
@@ -346,5 +354,216 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"command_id": command_id}), 201
+
+    # ---------------- Interactive terminal (ConPTY) ----------------
+    # Six endpoints, three each way, all of them thin: terminal.py owns the rules. The split
+    # between agent-facing and console-facing is the same as everywhere else in this file
+    # -- bearer token vs. browser session -- but the ownership checks are TIGHTER on the
+    # console side. `issue_commands` plus machine scope is what lets you OPEN a terminal;
+    # it is deliberately not enough to touch one that is already open, because that
+    # session carries another operator's keystrokes. See terminal.py's module docstring.
+
+    def _own_session(view):
+        """Resolve <session_id>, and refuse anything that is not the caller's own live
+        session on a machine they can see. Unknown / not-yours / out-of-scope all answer
+        404 alike, matching scoped_command: distinguishing them would leak which session
+        ids exist."""
+        @functools.wraps(view)
+        def wrapped(session_id, *args, **kwargs):
+            found = terminal.get_session(db_path, session_id)
+            if (found is None
+                    or found["operator"] != _current_email().strip().lower()
+                    or not access.in_scope(found["machine"])):
+                return jsonify({"error": "unknown terminal session"}), 404
+            return view(found, *args, **kwargs)
+        return wrapped
+
+    @bp.route("/api/fleet/pty", methods=["GET"])
+    @login_required
+    @can_view
+    def fleet_list_pty():
+        """The caller's own OPEN terminals on a machine, newest first.
+
+        This is what makes a terminal survive leaving the page: on return the console asks
+        "do I still have a shell here?" and re-attaches instead of spawning a second one.
+        Scoped to the caller by construction -- there is no operator parameter, because the
+        answer must never be "here is somebody else's terminal".
+        """
+        machine = (request.args.get("machine") or "").strip()
+        if not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        found = terminal.list_sessions(
+            db_path, machine=machine, operator=_current_email(), active_only=True)
+        return jsonify({"sessions": [
+            {"session_id": row["id"], "shell": row["shell"], "status": row["status"],
+             "cols": row["cols"], "rows": row["rows"], "created_at": row["created_at"]}
+            for row in found
+        ]}), 200
+
+    @bp.route("/api/fleet/pty", methods=["POST"])
+    @login_required
+    @access.require(permissions.ISSUE_COMMANDS)
+    def fleet_open_pty():
+        """Open a terminal: create the session row, then issue the shell_open command that
+        tells the agent to attach a pseudoconsole to it.
+
+        ORDER MATTERS -- the session must exist before the command referencing it does, or
+        an agent that polls in between gets a session id the hub has never heard of.
+        """
+        data = request.get_json(silent=True) or {}
+        machine = data.get("machine")
+        if not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        try:
+            found = terminal.open_session(
+                db_path,
+                machine=machine,
+                operator=_current_email(),
+                shell=data.get("shell"),
+                cols=data.get("cols"),
+                rows=data.get("rows"),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        try:
+            command_id = fleet.create_command(
+                db_path,
+                machine=machine,
+                command_type="shell_open",
+                params={
+                    "session_id": found["id"],
+                    "shell": found["shell"],
+                    "cols": found["cols"],
+                    "rows": found["rows"],
+                },
+                issued_by=_current_email(),
+                ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
+            )
+        except ValueError as e:
+            # Don't leave a session nothing will ever attach to sitting in the operator's
+            # per-machine quota.
+            terminal.finish_session(db_path, found["id"], "could not queue shell_open")
+            return jsonify({"error": str(e)}), 400
+
+        terminal.attach_command(db_path, found["id"], command_id)
+        return jsonify({
+            "session_id": found["id"],
+            "command_id": command_id,
+            "shell": found["shell"],
+            "cols": found["cols"],
+            "rows": found["rows"],
+        }), 201
+
+    @bp.route("/api/fleet/pty/<session_id>/input", methods=["POST"])
+    @login_required
+    @access.require(permissions.ISSUE_COMMANDS)
+    @_own_session
+    def fleet_pty_input(found):
+        """Keystrokes, or a resize. `data` is raw terminal bytes and is passed through
+        untouched -- see terminal.push_input."""
+        body = request.get_json(silent=True) or {}
+        terminal.note_console_seen(db_path, found["id"])
+        try:
+            if "size" in body:
+                terminal.push_input(db_path, found["id"], "resize", body.get("size") or {})
+            if body.get("data"):
+                terminal.push_input(db_path, found["id"], "data", body.get("data"))
+        except KeyError:
+            return jsonify({"error": "unknown terminal session"}), 404
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 409
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"status": "ok"}), 200
+
+    @bp.route("/api/fleet/pty/<session_id>/output", methods=["GET"])
+    @login_required
+    @can_view
+    @_own_session
+    def fleet_pty_output(found):
+        try:
+            after_seq = int(request.args.get("after_seq", -1))
+        except (TypeError, ValueError):
+            after_seq = -1
+        # Being polled IS the operator still watching. Without this the abandonment reaper
+        # could not tell "reading the output of a long build" from "closed the browser".
+        terminal.note_console_seen(db_path, found["id"])
+        try:
+            body = terminal.pull_output(db_path, found["id"], after_seq)
+        except KeyError:
+            return jsonify({"error": "unknown terminal session"}), 404
+        # The console can't tell "the agent is still starting the shell" from "the agent
+        # is offline and never will" without this: a shell_open that expired means the
+        # machine never picked it up.
+        if body["status"] == terminal.STATUS_OPEN and found.get("command_id"):
+            command = fleet.get_command(db_path, found["command_id"])
+            if command and command["status"] == fleet.STATUS_EXPIRED:
+                terminal.finish_session(db_path, found["id"], "the agent never picked it up")
+                body["status"] = terminal.STATUS_CLOSED
+                body["close_reason"] = "the agent never picked it up"
+        return jsonify(body), 200
+
+    @bp.route("/api/fleet/pty/<session_id>/clear", methods=["POST"])
+    @login_required
+    @can_view
+    @_own_session
+    def fleet_pty_clear(found):
+        """Forget this session's scrollback. The shell keeps running."""
+        terminal.note_console_seen(db_path, found["id"])
+        terminal.clear_replay(db_path, found["id"])
+        return jsonify({"status": "cleared"}), 200
+
+    @bp.route("/api/fleet/pty/<session_id>/close", methods=["POST"])
+    @login_required
+    @can_view
+    @_own_session
+    def fleet_pty_close(found):
+        """Ask the agent to end the session. It stays 'closing' until the agent confirms,
+        so the console can tell a shell that actually went away from one that is ignoring
+        us (a wedged child holding the console)."""
+        terminal.request_close(db_path, found["id"])
+        return jsonify({"status": "closing"}), 200
+
+    @bp.route("/api/agent/pty/<session_id>/input", methods=["GET"])
+    @agent_auth
+    def agent_pty_input(agent_id, machine, session_id):
+        """The agent's fast poll for keystrokes. Scoped to the agent's OWN machine: an
+        enrolled agent must not be able to read the keystrokes typed at another."""
+        found = terminal.get_session(db_path, session_id)
+        if found is None or found["machine"] != machine:
+            return jsonify({"error": "unknown terminal session"}), 404
+        try:
+            after_seq = int(request.args.get("after_seq", -1))
+        except (TypeError, ValueError):
+            after_seq = -1
+        return jsonify(terminal.pull_input(db_path, session_id, after_seq)), 200
+
+    @bp.route("/api/agent/pty/<session_id>/output", methods=["POST"])
+    @agent_auth
+    def agent_pty_output(agent_id, machine, session_id):
+        found = terminal.get_session(db_path, session_id)
+        if found is None or found["machine"] != machine:
+            return jsonify({"error": "unknown terminal session"}), 404
+        data = request.get_json(silent=True) or {}
+        try:
+            oldest = terminal.push_output(db_path, session_id, data.get("seq"), data.get("chunk"))
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 409
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"status": "ok", "oldest_seq": oldest}), 200
+
+    @bp.route("/api/agent/pty/<session_id>/closed", methods=["POST"])
+    @agent_auth
+    def agent_pty_closed(agent_id, machine, session_id):
+        """The shell ended (operator typed `exit`, it crashed, or the agent honoured a
+        close). Terminal state -- the console stops polling on seeing it."""
+        found = terminal.get_session(db_path, session_id)
+        if found is None or found["machine"] != machine:
+            return jsonify({"error": "unknown terminal session"}), 404
+        data = request.get_json(silent=True) or {}
+        terminal.finish_session(db_path, session_id, data.get("reason") or "the shell exited")
+        return jsonify({"status": "closed"}), 200
 
     return bp

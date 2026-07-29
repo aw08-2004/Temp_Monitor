@@ -265,27 +265,70 @@ python app.py
 Viewing the dashboard (`/`, `/machine/<name>`, `/history`, and the
 `/api/history`, `/api/daily_summary`, `/api/machines`, `/api/machines/<name>`
 endpoints, plus live Socket.IO updates) requires signing in with an
-allow-listed Google account. `POST /api/report` is intentionally exempt so
+allow-listed account. `POST /api/report` is intentionally exempt so
 agents never need credentials.
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
-   create an **OAuth 2.0 Client ID** (Application type: Web application).
-2. Add an authorized redirect URI: `https://your.domain.com/auth/callback`
-   (and `http://localhost:3001/auth/callback` for local dev).
-3. Set the following as environment variables, or in a `.env` file next to
-   `app.py` (gitignored):
+Sign-in is **OpenID Connect**, and any OIDC provider will do. Configure Google,
+another issuer, or both — the hub refuses to start with none.
 
-   ```
-   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=your-client-secret
-   FLASK_SECRET_KEY=a-long-random-string   # signs the session cookie
-   ALLOWED_EMAILS=you@example.com,teammate@example.com
-   HUB_URL=https://your.domain.com         # public URL of this hub
-   ```
+Always required, whichever provider you use:
 
-`app.py` fails fast at startup if any of these are missing. Only emails in
-`ALLOWED_EMAILS` (comma-separated, case-insensitive) can complete sign-in;
-everyone else gets a 403 after authenticating with Google.
+```
+FLASK_SECRET_KEY=a-long-random-string   # signs the session cookie
+ALLOWED_EMAILS=you@example.com,teammate@example.com
+HUB_URL=https://your.domain.com         # public URL of this hub
+SESSION_LIFETIME_DAYS=7                 # optional; see "Staying signed in" below
+```
+
+**Google.** In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
+create an **OAuth 2.0 Client ID** (Application type: Web application) and add the
+redirect URI `https://your.domain.com/auth/callback` (plus
+`http://localhost:3001/auth/callback` for local dev). Then:
+
+```
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+```
+
+**Any other OIDC provider** (Microsoft Entra ID, Okta, Authentik, Keycloak,
+Auth0…). Register a web/confidential application with the redirect URI
+`https://your.domain.com/auth/oidc/callback`, then:
+
+```
+OIDC_DISPLAY_NAME=Microsoft              # what the sign-in button says
+OIDC_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+OIDC_SCOPES=openid email profile         # optional
+```
+
+The issuer's `/.well-known/openid-configuration` is discovered automatically, so
+there is no per-vendor code and adding a provider is a `.env` edit, not a release.
+(Set `OIDC_METADATA_URL` instead if your provider's discovery document isn't at
+the conventional path.)
+
+**Identity.** Whichever provider is used, the **email** is the identity, and it goes
+through the same permission groups and the same break-glass `ALLOWED_EMAILS` list.
+Some providers don't send an `email` claim — Entra often doesn't — so
+`preferred_username` and `upn` are accepted as fallbacks *when they look like an
+address*; a bare username is refused rather than allowed to collide with a granted
+mailbox name. A provider that reports `email_verified: false` is refused. A provider
+that omits the claim entirely is trusted, because you configured it.
+
+> ⚠️ **Two providers are two doors to the same rooms.** An operator's access is
+> whatever the *weaker* issuer will assert about their address. Don't enable a
+> second issuer that lets users self-assert an email you've granted access to.
+
+### Staying signed in
+
+Sessions are **persistent and rolling**: closing the browser doesn't sign you out, and
+every request pushes the expiry back, so day-to-day use never hits a login prompt. A
+browser left untouched for `SESSION_LIFETIME_DAYS` (default **7**) has to sign in
+again. The expiry lives inside the signed cookie, so it can't be extended client-side.
+
+This is a security control, not just convenience — a console session can run code as
+SYSTEM on any enrolled machine (see below). Shorten it if operators sign in from
+machines they don't control; `/logout` always ends a session immediately.
 
 ## Fleet command channel (RMM)
 
@@ -342,6 +385,66 @@ and **every high-risk command was refused outright**. Removing the gate is what 
 Self-update signing is a **separate trust root and is untouched** — see
 [Signing releases](#signing-releases).
 </details>
+
+### The Terminal tab (interactive console)
+
+A machine's **Terminal** tab is a **real Windows console** on that box — a pseudoconsole
+(ConPTY) hosting `powershell.exe` or `cmd.exe`, rendered in the browser by xterm.js. Enter,
+Ctrl-C, Tab completion, arrow keys, colour, progress bars and interactive prompts
+(`Read-Host`, `$Host.UI.PromptForChoice`) all behave as they would sitting at the machine,
+which is what makes it possible to drive something like `install.ps1` remotely.
+
+That is a different mechanism from `run_script`, which still exists and is unchanged —
+favorites and automation use it, because a one-shot script has an exit code and a result
+worth recording. A terminal has neither. The distinction runs all the way through:
+
+| | `run_script` | Terminal (`shell_open`) |
+|---|---|---|
+| Unit | one script, one result | a continuous byte stream |
+| Transport | the command queue (`commands`, `command_output_chunks`) | its own `pty_*` tables (`hub/terminal.py`) |
+| Retention | capped at 256 KB, kept as the durable record | rolling window, nothing retained |
+| Latency | seconds | ~250–400 ms echo |
+| Recorded | full output + exit code | only *that a terminal was opened*, in `audit_log` |
+
+**A session outlives the page.** Start a download, go to Packages, come back — the shell is
+still there, with its working directory, its variables, and everything it printed while you
+were away. The console re-attaches to the existing session rather than opening a second
+one, and replays the hub's buffer into a fresh terminal to restore the scrollback. A
+session ends only when you press **New console**, switch shell, the shell itself exits, or
+a reaper fires. **Clear** drops the scrollback on the hub as well as locally, so a cleared
+terminal stays cleared when you come back to it.
+
+**What is and isn't recorded.** Opening a terminal writes a `shell_open` row to the
+`audit_log` naming the operator, the machine and when — the same accountability trail as
+any other command. What is *typed* is deliberately not kept: the stream lives in a rolling
+buffer (256 KB) that is dropped when the session ends. A transcript of a SYSTEM console
+would be a store of half-typed credentials, and nothing reads it back.
+
+**Isolation.** A session is bound to one operator and one machine. Another operator with
+`issue_commands` on the same machine may open their own terminal but cannot read, type
+into, or close somebody else's — "can run commands here" is not consent to watch someone's
+keystrokes. On the agent side each session is checked against the authenticated agent's own
+machine.
+
+**Cleanup.** An open session is a live SYSTEM shell, and because sessions now persist across
+navigation, "still open" no longer implies "still wanted". Two different silences are
+measured separately, and conflating them would disable one of them entirely:
+
+- **The agent went quiet** (15 min). It polls for keystrokes continuously while it holds a
+  session, so a gap means the machine is gone.
+- **Nobody came back** (60 min). Measured on a clock that *only the console's own polls*
+  refresh — the agent's polling would otherwise keep a session looking alive forever.
+
+The agent keeps a much longer backstop timer of its own (2 h) for a hub that forgets a
+session while still answering, and the pseudoconsole's child is enlisted in a
+kill-on-job-close job so even the hard `Environment.Exit` a self-update uses cannot orphan
+one.
+
+**Rollout.** Needs **agent 3.15.0+**. Below that the tab falls back to the older
+line-oriented terminal (`fleet-terminal.js`), which sends whole scripts and prints the text
+that comes back — usable, but it cannot answer an interactive prompt. The console picks the
+mode from the agent's reported version, so a fleet mid-update gets whichever each machine
+can actually do.
 
 Add to the hub's environment / `.env`:
 

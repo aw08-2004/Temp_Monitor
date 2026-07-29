@@ -30,6 +30,7 @@ public sealed class Worker : BackgroundService
     private readonly CommandDispatcher _dispatcher;
     private readonly SelfUpdater _updater;
     private readonly ShellSessionManager _shells;
+    private readonly PtySessionManager _ptys;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -40,7 +41,7 @@ public sealed class Worker : BackgroundService
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
-        SelfUpdater updater, ShellSessionManager shells)
+        SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys)
     {
         _log = log;
         _state = state;
@@ -50,6 +51,7 @@ public sealed class Worker : BackgroundService
         _dispatcher = dispatcher;
         _updater = updater;
         _shells = shells;
+        _ptys = ptys;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -130,11 +132,20 @@ public sealed class Worker : BackgroundService
                 // happen while commands were awaited inline; now that they run on their
                 // own tasks, it can. Deferring costs at most one command's runtime on a
                 // weekly check, and `updateDue` is left set so the next tick retries.
+                //
+                // Open TERMINALS are excluded from that count, deliberately. A shell_open
+                // command runs for as long as an operator keeps a tab open -- which can be
+                // days -- so counting it would let one forgotten tab stall this agent's
+                // updates indefinitely, and "the fleet stopped updating" is a much worse
+                // failure than "a terminal disconnected". The session ends cleanly either
+                // way: the runner reports "the agent is shutting down" and the console says
+                // so instead of hanging.
                 bool updateWanted =
                     updateDue || (now - lastUpdateCheck).TotalSeconds >= AgentConfig.UpdateIntervalSeconds;
-                if (updateWanted && !_running.IsEmpty)
+                var realWork = _running.Count - _ptys.OpenCount;
+                if (updateWanted && realWork > 0)
                 {
-                    _log.LogInformation("Update deferred: {N} command(s) still running", _running.Count);
+                    _log.LogInformation("Update deferred: {N} command(s) still running", realWork);
                     updateDue = true;
                 }
                 else if (updateWanted)
@@ -191,7 +202,12 @@ public sealed class Worker : BackgroundService
             // Session-control commands (shell_input/signal/reset) steer a shell that is
             // ALREADY running a submission -- refusing them for concurrency would deadlock the
             // very command holding a slot. They're near-instant, so let them straight through.
-            bool isControl = cmd.Type is "shell_input" or "shell_signal" or "shell_reset";
+            // shell_open joins them for a different reason: it is the one command that
+            // runs for as long as an operator keeps a tab open, so counting it toward the
+            // cap would let four idle terminals block every script and deployment on this
+            // machine. Its own cap is MaxPtySessions (see PtySessionManager).
+            bool isControl = cmd.Type is "shell_input" or "shell_signal" or "shell_reset"
+                                      or "shell_open";
             if (!isControl && _running.Count >= AgentConfig.MaxConcurrentCommands)
             {
                 _log.LogWarning("At {Max} concurrent commands; refusing {Type} {Id}",

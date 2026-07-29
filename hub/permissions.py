@@ -209,6 +209,31 @@ def normalize_email(email):
     return str(email or "").strip().lower()
 
 
+def email_from_claims(user_info):
+    """Pick the email out of an OIDC userinfo / ID-token payload, or "" if there isn't one.
+
+    Lives here rather than in app.py because it is an AUTHORIZATION decision, not a bit of
+    sign-in plumbing: whatever this returns is the identity every permission group, every
+    audit row and every terminal session is then keyed on. It belongs next to
+    normalize_email for the same reason that does -- one place decides who someone is.
+
+    `email` is the standard claim and what Google always sends, but it is not guaranteed.
+    Microsoft Entra ID omits it in plenty of tenants and puts the sign-in name in
+    `preferred_username` or `upn` instead, so falling back is the difference between "Entra
+    works" and "Entra signs in and is then refused for having no email".
+
+    The "@" test is the guard that makes those fallbacks safe. On some issuers
+    `preferred_username` is a bare username ("administrator"), and accepting one of those
+    as an identity would let it collide with a granted address -- so anything that isn't
+    shaped like an address is ignored rather than trusted.
+    """
+    for claim in ("email", "preferred_username", "upn"):
+        value = normalize_email((user_info or {}).get(claim))
+        if "@" in value:
+            return value
+    return ""
+
+
 def normalize_machine(machine):
     return str(machine or "").strip()
 

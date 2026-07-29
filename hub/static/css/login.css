@@ -58,3 +58,29 @@ body.login-body {
 .google-btn:hover {
     background: #f0f0f0;
 }
+
+/* The generic SSO button. Composes .google-btn for shape and hit area but drops the
+   Google-white treatment: it stands for whichever issuer the operator configured, so it
+   should read as "the other way in", not as a second Google button. */
+.sso-btn {
+    background: var(--card, #1b2027);
+    color: var(--text, #e6edf3);
+    border-color: var(--card-border, #2a313a);
+}
+
+.sso-btn:hover {
+    background: var(--control-bg, #232a33);
+}
+
+/* Stack the provider buttons. A column rather than the card's inline centring, because
+   with two providers the inline-flex buttons would otherwise sit side by side and wrap
+   awkwardly at the card's 340px. With one provider this is a column of one. */
+.login-providers {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.login-providers .google-btn {
+    justify-content: center;
+}

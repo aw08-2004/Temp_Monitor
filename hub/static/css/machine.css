@@ -182,6 +182,23 @@
     outline-offset: 2px;
 }
 
+/* xterm.js host element. Deliberately NOT composing .console-surface: xterm builds its
+   own scrolling viewport and text layer inside here, and that class's own overflow /
+   white-space / padding rules fight it. All this needs to provide is a sized, themed box.
+
+   A FIXED height, not min/max: the FitAddon computes the pty's cols x rows from this
+   element's measured size and tells the agent to resize the real console to match, so a
+   box that grows with its content would feed the terminal's own output back into its
+   dimensions. */
+.terminal__pty-screen {
+    height: 60vh;
+    min-height: 360px;
+    background: var(--control-bg);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    overflow: hidden;
+}
+
 .terminal__line { display: block; }
 .terminal__line--echo { color: var(--accent); font-weight: 600; }
 .terminal__line--meta { color: var(--muted); }

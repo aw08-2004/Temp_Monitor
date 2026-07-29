@@ -64,6 +64,17 @@ SESSION_CONTROL_COMMANDS = frozenset({
     "shell_input",
     "shell_signal",
     "shell_reset",
+    # shell_open belongs to the ConPTY terminal (see terminal.py), which superseded the three
+    # above: it tells the agent to attach a real pseudoconsole to a session id the hub
+    # already created, after which keystrokes and VT output flow over the pty_* endpoints
+    # rather than through this queue. The other three are kept for a fleet mid-rollout --
+    # an agent too old for a pty still gets the line-oriented terminal.
+    #
+    # Unlike its siblings this one is NOT issuable by hand from /api/fleet/commands: its
+    # params name a session row, so a hand-rolled copy would point the agent at a session
+    # that does not exist (or, worse, at somebody else's). It is issued only by
+    # fleet_web's POST /api/fleet/pty, which creates the session first.
+    "shell_open",
 })
 
 # Issued by the deployment scheduler rather than by an operator's hand (see packages.py).
