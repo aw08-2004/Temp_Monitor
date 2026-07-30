@@ -199,6 +199,126 @@
     overflow: hidden;
 }
 
+/* ============ Console tab strip (ConPTY mode) ============
+   One tab per open session, sitting on top of the terminal box the way a terminal app's
+   own tabs do: the active tab shares the screen's background and loses its bottom border,
+   so the two read as one surface. */
+.pty-tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+}
+
+.pty-tab {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    padding-right: 4px;
+    /* Sits ON the strip's bottom border so the active tab can cover it. */
+    margin-bottom: -1px;
+    max-width: 260px;
+}
+
+.pty-tab:hover {
+    background: var(--control-bg);
+}
+
+.pty-tab--active {
+    background: var(--control-bg);
+    border-color: var(--border);
+}
+
+.pty-tab__select {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-sm);
+    padding: 6px 4px 6px 10px;
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pty-tab--active .pty-tab__select {
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* A console that ended on its own keeps its tab (and its last screen) until the operator
+   dismisses it -- struck through so it is obviously not typeable. */
+.pty-tab--closed .pty-tab__select {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+.pty-tab__close {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: var(--text-md);
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.pty-tab__close:hover {
+    background: var(--danger-bg, rgba(220, 80, 80, 0.15));
+    color: var(--danger);
+}
+
+.pty-tabs__add {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: var(--text-md);
+    line-height: 1;
+    padding: 6px 12px;
+    margin-bottom: -1px;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    cursor: pointer;
+}
+
+.pty-tabs__add:hover:not(:disabled) {
+    background: var(--control-bg);
+    color: var(--text);
+}
+
+.pty-tabs__add:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.pty-tab__select:focus-visible,
+.pty-tab__close:focus-visible,
+.pty-tabs__add:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+
+/* Every console's screen lives here; all but the front one are `hidden`. */
+.pty-screens {
+    margin-top: var(--space-2);
+}
+
+.pty-empty {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    padding: var(--space-5);
+    text-align: center;
+}
+
 .terminal__line { display: block; }
 .terminal__line--echo { color: var(--accent); font-weight: 600; }
 .terminal__line--meta { color: var(--muted); }

@@ -614,9 +614,21 @@ worth recording. A terminal has neither. The distinction runs all the way throug
 still there, with its working directory, its variables, and everything it printed while you
 were away. The console re-attaches to the existing session rather than opening a second
 one, and replays the hub's buffer into a fresh terminal to restore the scrollback. A
-session ends only when you press **New console**, switch shell, the shell itself exits, or
-a reaper fires. **Clear** drops the scrollback on the hub as well as locally, so a cleared
-terminal stays cleared when you come back to it.
+session ends only when you close its tab, the shell itself exits, or a reaper fires.
+**Clear** drops the scrollback on the hub as well as locally, so a cleared terminal stays
+cleared when you come back to it.
+
+**Several consoles at once.** The tab strip above the terminal lists every console you have
+open on that machine — **+** opens another (up to four per operator per machine, as the hub
+enforces), **×** ends one. Each tab is its own shell with its own working directory and
+scrollback; the front one polls at typing speed and the rest keep collecting output in the
+background, so a build in one tab keeps running while you work in another. The strip is
+built from the hub's list of *your* sessions rather than from anything the browser
+remembers, so a console you opened on one computer is listed — with its scrollback — when
+you sign in from another, or from a second browser tab, or after a browser restart. The
+**Shell** dropdown chooses what the next **+** opens and follows whichever tab is in front;
+changing it no longer ends anything. A shell that exits on its own leaves its tab behind,
+struck through, showing its last screen until you dismiss it.
 
 **What is and isn't recorded.** Opening a terminal writes a `shell_open` row to the
 `audit_log` naming the operator, the machine and when — the same accountability trail as

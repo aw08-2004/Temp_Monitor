@@ -163,14 +163,10 @@
                     <label for="terminal-timeout" id="terminal-timeout-label" class="fleet-field__label">Timeout (s)</label>
                     <input id="terminal-timeout" class="input terminal__timeout" type="number"
                            min="1" value="600" title="Per-command timeout in seconds">
-                    {# Both are ConPTY-mode only. A terminal survives leaving the page, so
-                       ending one has to be something the operator ASKS for -- that is what
-                       New console is. Reconnect appears only after a session has already
-                       ended on its own (the shell exited, the machine went away). #}
-                    <button id="terminal-new" type="button" class="btn btn--ghost" hidden
-                            title="End this shell and start a fresh one">New console</button>
-                    <button id="terminal-reconnect" type="button" class="btn btn--primary" hidden
-                            title="Open a new console on this machine">Reconnect</button>
+                    {# Opening and ending consoles is the tab strip's job in ConPTY mode
+                       (+ and ×), so there is no New console / Reconnect button here: a
+                       terminal survives leaving the page, and ending one must be something
+                       the operator ASKS for on the tab they mean. #}
                     <button id="terminal-favorites" type="button" class="btn">★ Favorites</button>
                     <button id="terminal-save-fav" type="button" class="btn btn--ghost">Save as favorite</button>
                     <button id="terminal-stop" type="button" class="btn btn--ghost" disabled
@@ -186,11 +182,24 @@
                can open a pseudoconsole; everything below stays for agents that can't yet.
                See fleet-pty.js for why they are not the same feature. #}
             <div id="terminal-pty" hidden>
-                {# xterm.js owns everything inside this element and measures it on open, so
-                   it must have a real size before the terminal is built -- which is why
-                   fleet-pty.js waits for tab:shown rather than connecting on load. #}
-                <div id="terminal-pty-screen" class="terminal__pty-screen"
-                     aria-label="Interactive terminal"></div>
+                {# One tab per open console. The strip is built from the HUB's list of this
+                   operator's sessions, not from anything this browser remembers, so a
+                   console opened on another computer shows up here too -- see
+                   fleet-pty.js:syncSessions. Empty in the markup; fleet-pty.js fills it. #}
+                <div id="terminal-tabs" class="pty-tabs" role="tablist"
+                     aria-label="Open consoles">
+                    <button id="terminal-add" type="button" class="pty-tabs__add"
+                            aria-label="Open another console"
+                            title="Open another console on this machine">+</button>
+                </div>
+                {# xterm.js owns each screen it is given and measures it on open, so a screen
+                   must have a real size before its terminal is built -- which is why
+                   fleet-pty.js builds a console when its tab is first shown, not on load. #}
+                <div id="terminal-screens" class="pty-screens">
+                    <div id="terminal-empty" class="pty-empty" hidden>
+                        No console is open on this machine. Press + to start one.
+                    </div>
+                </div>
             </div>
 
             <div id="terminal-legacy">
