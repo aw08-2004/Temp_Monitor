@@ -1065,8 +1065,10 @@ the operator's scope; every session start/stop is in the audit log.
 - **Diagnosing capture before you involve a browser.** Two agent-binary self-tests, both
   runnable on the machine itself: `--desktop-probe [seconds]` prints the input desktop as it
   changes and whether this process can attach to it (lock the screen, trigger a UAC prompt), and
-  `--remote-capture-test <file.h264> <seconds>` writes a playable clip straight from the capture
-  and encode path with no hub, browser or session injection involved.
+  `--remote-capture-test <file.h264> <seconds> [monitor] [fps] [kbps] [encoder]` writes a playable
+  clip straight from the capture and encode path with no hub, browser or session injection
+  involved. `encoder` (auto / hardware / software) pins the H.264 MFT flavour, which separates a
+  hardware encoder that will not run on this machine from a broken capture pipeline.
 
 > **Status:** built — shipped in hub 1.44.0 / agent 3.14.0; the agent half has been
 > signed-released since (current: agent 3.15.0). Deploy the hub before an agent release

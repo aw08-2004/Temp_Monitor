@@ -1,4 +1,8 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using Vortice.Direct3D;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
 using Vortice.MediaFoundation;
 
 namespace TempMonitorAgent.Remote;
@@ -11,10 +15,19 @@ namespace TempMonitorAgent.Remote;
 ///   * <b>Synchronous</b> — the in-box software "H.264 Video Encoder". Drive it by alternating
 ///     ProcessInput / ProcessOutput. Always available, always the safe fallback.
 ///   * <b>Asynchronous</b> — the hardware encoders (NVENC, QuickSync, AMF). These will not
-///     work if driven synchronously: they must be unlocked via MF_TRANSFORM_ASYNC_UNLOCK and
-///     then driven from their event queue (METransformNeedInput / METransformHaveOutput).
-///     Because the capture loop owns a dedicated thread, we can block on GetEvent rather than
-///     wiring an IMFAsyncCallback, which keeps the control flow readable.
+///     work if driven synchronously: they must be unlocked via MF_TRANSFORM_ASYNC_UNLOCK, given
+///     a D3D device manager, and then driven from their event queue (METransformNeedInput /
+///     METransformHaveOutput).
+///
+/// <b>Every wait on that event queue is bounded, and every failure is logged.</b> That is the
+/// hard-won rule here. IMFMediaEventGenerator::GetEvent with dwFlags=0 blocks with no timeout,
+/// so calling it on the capture thread parks the whole session the moment a hardware MFT
+/// declines to produce its first event — which is exactly what a hardware encoder does when it
+/// has no usable D3D device (an RDP session, for instance, where MFTEnumEx still cheerfully
+/// hands back the machine's NVENC). The capture loop then never runs again, so nothing logs,
+/// nothing rebuilds, and the operator sees a black screen that looks identical to a healthy
+/// session. Hence: the blocking GetEvent lives on its own pump thread and the capture thread
+/// only ever waits on a queue with a deadline.
 ///
 /// The GOP is bounded through MF_MT_MAX_KEYFRAME_SPACING on the output type rather than
 /// ICodecAPI. That matters: a WebRTC receiver that loses the packet carrying SPS/PPS cannot
@@ -26,7 +39,8 @@ namespace TempMonitorAgent.Remote;
 /// itself is started once per process by <see cref="MediaFoundationRuntime"/>, not here:
 /// MFShutdown is refcounted and would otherwise tear MF down under a replacement encoder.
 ///
-/// Not thread-safe: one encoder per capture loop.
+/// Not thread-safe: one encoder per capture loop (the event pump is internal and owns nothing
+/// the capture thread touches except the queue).
 /// </summary>
 public sealed class H264Encoder : IVideoEncoder
 {
@@ -45,30 +59,56 @@ public sealed class H264Encoder : IVideoEncoder
 
     /// <summary>Cap on how long the async encoder may stall waiting for a NeedInput event
     /// before we give up on the frame. A hardware MFT that has wedged must not wedge the whole
-    /// capture loop with it.</summary>
+    /// capture loop with it — see the class remarks for why this is enforced against a queue
+    /// rather than against GetEvent directly.</summary>
     private const int AsyncEventTimeoutMs = 2000;
 
-    private readonly int _width, _height, _fps;
+    /// <summary>Consecutive frames an async MFT may swallow before we stop believing in it and
+    /// rebuild on the software path. At 15 fps this is ~2s of black screen, which is long enough
+    /// to ride out an encoder that is merely buffering and short enough that the operator sees a
+    /// picture rather than a mystery.</summary>
+    private const int SilentFrameLimit = 30;
+
+    private readonly int _width, _height, _fps, _bitrateBps;
+    private readonly Action<string> _log;
+
     private IMFTransform? _transform;
     private IMFMediaEventGenerator? _events;
+    private BlockingCollection<MediaEventTypes>? _eventQueue;
+    private Thread? _eventPump;
+    private IMFDXGIDeviceManager? _deviceManager;
+    private ID3D11Device? _d3dDevice;
+    private ID3D11DeviceContext? _d3dContext;
+
     private int _outputBufferSize;
-    private bool _started;
+    private volatile bool _started;
+    private volatile bool _disposed;
     private bool _isAsync;
     private bool _mftProvidesSamples;
     /// <summary>An async MFT signals NeedInput independently of our cadence; if one arrives
     /// while we are draining output, remember it rather than blocking for another.</summary>
     private int _pendingNeedInput;
+    /// <summary>How many frames in a row have produced nothing. Drives the software fallback.</summary>
+    private int _silentFrames;
+    /// <summary>The software fallback is one-shot: if the in-box encoder is silent too, the
+    /// problem is not the MFT flavour and rebuilding again would just churn.</summary>
+    private bool _fellBack;
+    /// <summary>Per-encoder latches so a persistent fault logs once instead of once per frame.</summary>
+    private bool _warnedNoInput, _warnedPullFailed;
 
     public bool IsHardware { get; private set; }
 
     public string Description => $"H.264 ({(IsHardware ? "hardware" : "software")})";
 
     public H264Encoder(int width, int height, int fps, int bitrateBps,
-                       EncoderPreference preference = EncoderPreference.Auto)
+                       EncoderPreference preference = EncoderPreference.Auto,
+                       Action<string>? log = null)
     {
         _width = width;
         _height = height;
         _fps = fps <= 0 ? 30 : fps;
+        _bitrateBps = bitrateBps;
+        _log = log ?? (_ => { });
 
         MediaFoundationRuntime.EnsureStarted();
 
@@ -78,20 +118,15 @@ public sealed class H264Encoder : IVideoEncoder
 
         if (hardware) PrepareAsync();
 
-        ConfigureTypes(bitrateBps);
+        // Order matters: unlock, then hand over the D3D manager, then set types. A hardware MFT
+        // that is given its device manager after SetOutputType may accept every call and still
+        // never produce a frame.
+        if (_isAsync) AttachD3DManager();
 
-        var info = _transform.GetOutputStreamInfo(0);
-        _mftProvidesSamples =
-            (info.Flags & (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples |
-                                OutputStreamInfoFlags.OutputStreamCanProvideSamples)) != 0;
-        // When the MFT allocates its own output samples we must not pre-allocate one. The in-box
-        // software encoder does not, so size a buffer from the reported minimum (with a floor for
-        // MFTs that report 0 before the first frame).
-        _outputBufferSize = info.Size > 0 ? info.Size : Math.Max(1 << 16, _width * _height);
-
-        _transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
-        _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
-        _started = true;
+        ConfigureTypes(_bitrateBps);
+        CacheOutputStreamInfo();
+        StartStreaming();
+        if (_isAsync) StartEventPump();
     }
 
     /// <summary>Find an encoder MFT. Hardware is tried first unless the operator forced
@@ -146,8 +181,9 @@ public sealed class H264Encoder : IVideoEncoder
             _events = _transform.QueryInterfaceOrNull<IMFMediaEventGenerator>();
             _isAsync = _events is not null;
         }
-        catch
+        catch (Exception e)
         {
+            _log($"H.264 hardware MFT could not be unlocked ({e.Message}); using software");
             _isAsync = false;
             _events = null;
         }
@@ -159,6 +195,58 @@ public sealed class H264Encoder : IVideoEncoder
             _transform = Activate(MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER)
                 ?? throw new InvalidOperationException("no H.264 encoder MFT available");
             IsHardware = false;
+        }
+    }
+
+    /// <summary>Give the async MFT a D3D11 device to encode against.
+    ///
+    /// This is what was missing when hardware H.264 produced nothing at all: without
+    /// MFT_MESSAGE_SET_D3D_MANAGER a hardware encoder accepts the unlock, accepts both media
+    /// types, accepts BEGIN_STREAMING — and then never raises METransformNeedInput, because it
+    /// has no device to allocate against. Everything looks healthy right up to the point where
+    /// nothing happens.
+    ///
+    /// The device is ours rather than the capture's on purpose: MF calls into it from its own
+    /// worker threads, so it needs multithread protection, and imposing that on the duplication
+    /// device would slow down the capture path for no benefit. Best-effort — if the device or
+    /// the manager cannot be created we simply do not send the message, and the frame watchdog
+    /// in <see cref="Encode"/> catches an MFT that then refuses to run.</summary>
+    private void AttachD3DManager()
+    {
+        try
+        {
+            var levels = new[] { FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1 };
+            var hr = D3D11.D3D11CreateDevice(
+                null, DriverType.Hardware,
+                DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport, levels,
+                out _d3dDevice, out _d3dContext);
+            if (hr.Failure || _d3dDevice is null)
+            {
+                _log($"H.264 hardware MFT: no D3D11 device ({hr}); encoder may not start");
+                return;
+            }
+
+            // MF drives this device from its own threads. Without this the MFT can deadlock or
+            // corrupt state under load, and the failure looks like a random stall.
+            using (var multithread = _d3dDevice.QueryInterfaceOrNull<ID3D11Multithread>())
+                multithread?.SetMultithreadProtected(true);
+
+            // Vortice's parameterless overload keeps the reset token on the manager and applies
+            // it in ResetDevice, so the token never has to be carried around here.
+            _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
+            if (_deviceManager is null)
+            {
+                _log("H.264 hardware MFT: MFCreateDXGIDeviceManager returned nothing");
+                return;
+            }
+            _deviceManager.ResetDevice(_d3dDevice).CheckError();
+            _transform!.ProcessMessage(TMessageType.MessageSetD3DManager,
+                                       (UIntPtr)(ulong)(long)_deviceManager.NativePointer);
+        }
+        catch (Exception e)
+        {
+            _log($"H.264 hardware MFT: attaching a D3D manager failed ({e.Message}); " +
+                 "the encoder will be watched for silence and may fall back to software");
         }
     }
 
@@ -187,6 +275,25 @@ public sealed class H264Encoder : IVideoEncoder
         _transform.SetInputType(0, inType, 0);
     }
 
+    private void CacheOutputStreamInfo()
+    {
+        var info = _transform!.GetOutputStreamInfo(0);
+        _mftProvidesSamples =
+            (info.Flags & (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples |
+                                OutputStreamInfoFlags.OutputStreamCanProvideSamples)) != 0;
+        // When the MFT allocates its own output samples we must not pre-allocate one. The in-box
+        // software encoder does not, so size a buffer from the reported minimum (with a floor for
+        // MFTs that report 0 before the first frame).
+        _outputBufferSize = info.Size > 0 ? info.Size : Math.Max(1 << 16, _width * _height);
+    }
+
+    private void StartStreaming()
+    {
+        _transform!.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
+        _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+        _started = true;
+    }
+
     /// <summary>Encode one NV12 frame. Returns the encoded Annex-B bytes produced for it
     /// (usually one access unit; occasionally empty while the encoder buffers).</summary>
     public byte[] Encode(byte[] nv12, int nv12Length, long timestamp100ns, long duration100ns)
@@ -194,18 +301,77 @@ public sealed class H264Encoder : IVideoEncoder
         if (!_started || _transform is null) return Array.Empty<byte>();
 
         using var output = new MemoryStream();
-        if (_isAsync)
+        try
         {
-            if (!AwaitNeedInput(output)) return output.ToArray();
-            _transform.ProcessInput(0, BuildSample(nv12, nv12Length, timestamp100ns, duration100ns), 0);
-            DrainAsyncOutput(output, blocking: false);
+            if (_isAsync)
+            {
+                if (AwaitNeedInput(output))
+                {
+                    _transform.ProcessInput(0, BuildSample(nv12, nv12Length, timestamp100ns, duration100ns), 0);
+                    DrainAsyncOutput(output);
+                }
+            }
+            else
+            {
+                _transform.ProcessInput(0, BuildSample(nv12, nv12Length, timestamp100ns, duration100ns), 0);
+                DrainSyncOutput(output);
+            }
         }
-        else
+        catch (Exception e)
         {
-            _transform.ProcessInput(0, BuildSample(nv12, nv12Length, timestamp100ns, duration100ns), 0);
-            DrainSyncOutput(output);
+            // A failed frame is a dropped frame, not a dead session -- but an encoder that fails
+            // every frame is caught by the watchdog below rather than failing in silence.
+            _log($"H.264 encode failed: {e.Message}");
         }
-        return output.ToArray();
+
+        var encoded = output.ToArray();
+        NoteFrameProduced(encoded.Length > 0);
+        return encoded;
+    }
+
+    /// <summary>Watch for an encoder that accepts everything and produces nothing, and demote it
+    /// to the software path. This is the backstop for the whole hardware story: whatever the
+    /// reason a given machine's NVENC/QuickSync will not run in this session, the operator ends
+    /// up with a picture and a log line rather than a black rectangle.</summary>
+    private void NoteFrameProduced(bool produced)
+    {
+        if (produced) { _silentFrames = 0; return; }
+        if (++_silentFrames < SilentFrameLimit || _fellBack || !_isAsync) return;
+        FallBackToSoftware($"produced no output for {_silentFrames} consecutive frames");
+    }
+
+    private void FallBackToSoftware(string reason)
+    {
+        _fellBack = true;
+        _log($"H.264 hardware encoder {reason}; rebuilding on the in-box software encoder");
+        try
+        {
+            StopEventPump();
+            ShutdownTransform();
+
+            _transform = Activate(MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER);
+            if (_transform is null)
+            {
+                _log("no software H.264 encoder MFT available; this session has no video");
+                _started = false;
+                return;
+            }
+            _isAsync = false;
+            IsHardware = false;
+            _pendingNeedInput = 0;
+            _silentFrames = 0;
+            _warnedNoInput = _warnedPullFailed = false;
+
+            ConfigureTypes(_bitrateBps);
+            CacheOutputStreamInfo();
+            StartStreaming();
+            _log($"H.264 software encoder ready ({_width}x{_height} @ {_fps}fps)");
+        }
+        catch (Exception e)
+        {
+            _log($"H.264 software fallback failed: {e.Message}; this session has no video");
+            _started = false;
+        }
     }
 
     private static IMFSample BuildSample(byte[] nv12, int length, long timestamp100ns, long duration100ns)
@@ -231,14 +397,96 @@ public sealed class H264Encoder : IVideoEncoder
             var hr = _transform!.ProcessOutput(ProcessOutputFlags.None, 1, ref data, out _);
 
             if (hr.Code == MF_E_TRANSFORM_NEED_MORE_INPUT) return; // wants the next frame
-            if (hr.Code == MF_E_TRANSFORM_STREAM_CHANGE) return;   // handled by rebuilding, not here
-            if (hr.Failure) return; // surface nothing rather than throwing mid-stream
+            if (hr.Code == MF_E_TRANSFORM_STREAM_CHANGE)
+            {
+                // The MFT wants to renegotiate its output type. Accepting the new type is the
+                // whole handling -- returning here (as this used to) leaves the encoder in a
+                // state where every subsequent ProcessOutput fails the same way and the stream
+                // is dead for the rest of the session with nothing logged.
+                if (!RenegotiateOutputType()) return;
+                continue;
+            }
+            if (hr.Failure)
+            {
+                _log($"H.264 ProcessOutput failed: 0x{hr.Code:X8}");
+                return; // surface nothing rather than throwing mid-stream
+            }
 
             CopySample(data.Sample, sink);
         }
     }
 
+    /// <summary>Accept the MFT's new output type after a stream change, and re-read the sizing
+    /// that depends on it.</summary>
+    private bool RenegotiateOutputType()
+    {
+        try
+        {
+            using var newType = _transform!.GetOutputAvailableType(0, 0);
+            _transform.SetOutputType(0, newType, 0);
+            CacheOutputStreamInfo();
+            _log("H.264 encoder renegotiated its output type");
+            return true;
+        }
+        catch (Exception e)
+        {
+            _log($"H.264 output type renegotiation failed: {e.Message}");
+            return false;
+        }
+    }
+
     // ---------------------------------------------------------------- asynchronous MFT drain
+    /// <summary>Pump the MFT's event queue on a dedicated thread.
+    ///
+    /// GetEvent(0) is a blocking call with NO timeout, so it can only be issued somewhere that
+    /// is allowed to block forever. That is this thread and nowhere else — the capture loop
+    /// waits on <see cref="_eventQueue"/> with a deadline instead. See the class remarks.</summary>
+    private void StartEventPump()
+    {
+        _eventQueue = new BlockingCollection<MediaEventTypes>();
+        _eventPump = new Thread(PumpEvents)
+        {
+            IsBackground = true,
+            Name = "h264-mft-events",
+        };
+        _eventPump.Start();
+    }
+
+    private void PumpEvents()
+    {
+        var events = _events;
+        var queue = _eventQueue;
+        while (events is not null && queue is not null && !_disposed)
+        {
+            MediaEventTypes type;
+            try
+            {
+                using var mediaEvent = events.GetEvent(0);
+                if (mediaEvent is null) break;
+                type = mediaEvent.EventType;
+            }
+            catch
+            {
+                // MF_E_SHUTDOWN once the transform is released -- the ordinary way out.
+                break;
+            }
+            try { queue.Add(type); }
+            catch { break; } // queue completed underneath us during teardown
+        }
+        try { queue?.CompleteAdding(); } catch { /* already completed */ }
+    }
+
+    /// <summary>Take the next event, waiting at most <paramref name="timeoutMs"/>. Unlike the
+    /// GetEvent it replaces, this genuinely cannot outlast its timeout.</summary>
+    private bool TryTakeEvent(int timeoutMs, out MediaEventTypes type)
+    {
+        type = MediaEventTypes.TransformUnknown;
+        var queue = _eventQueue;
+        if (queue is null) return false;
+        try { return queue.TryTake(out type, Math.Max(0, timeoutMs)); }
+        catch { return false; } // completed/disposed while we waited
+    }
+
     /// <summary>Block until the async MFT asks for input, servicing any output events that
     /// arrive first. Returns false if it never asks within the timeout, which we treat as a
     /// dropped frame rather than a dead session.</summary>
@@ -247,41 +495,39 @@ public sealed class H264Encoder : IVideoEncoder
         if (_pendingNeedInput > 0) { _pendingNeedInput--; return true; }
 
         var deadline = Environment.TickCount64 + AsyncEventTimeoutMs;
-        while (Environment.TickCount64 < deadline)
+        while (true)
         {
-            if (!TryGetEvent(blocking: true, out var type)) return false;
+            int remaining = (int)(deadline - Environment.TickCount64);
+            if (remaining <= 0)
+            {
+                WarnOnce(ref _warnedNoInput,
+                    $"H.264 async MFT did not ask for input within {AsyncEventTimeoutMs}ms; " +
+                    "dropping frames (further occurrences not logged)");
+                return false;
+            }
+            if (!TryTakeEvent(remaining, out var type))
+            {
+                WarnOnce(ref _warnedNoInput, "H.264 async MFT event queue closed; dropping frames");
+                return false;
+            }
             if (type == MediaEventTypes.TransformNeedInput) return true;
             if (type == MediaEventTypes.TransformHaveOutput) PullOne(sink);
+            else if (type == MediaEventTypes.StreamFormatChanged) RenegotiateOutputType();
+            else if (type == MediaEventTypes.TransformDrainComplete) return false;
         }
-        return false;
     }
 
     /// <summary>Drain whatever the async MFT has ready right now.</summary>
-    private void DrainAsyncOutput(Stream sink, bool blocking)
+    private void DrainAsyncOutput(Stream sink)
     {
-        while (TryGetEvent(blocking, out var type))
+        while (TryTakeEvent(0, out var type))
         {
             if (type == MediaEventTypes.TransformHaveOutput) PullOne(sink);
             // A NeedInput that arrives while we are draining belongs to the NEXT frame; banking
             // it keeps the loop from blocking for an event the MFT has already sent.
             else if (type == MediaEventTypes.TransformNeedInput) { _pendingNeedInput++; return; }
+            else if (type == MediaEventTypes.StreamFormatChanged) RenegotiateOutputType();
         }
-    }
-
-    private bool TryGetEvent(bool blocking, out MediaEventTypes type)
-    {
-        type = MediaEventTypes.TransformUnknown;
-        if (_events is null) return false;
-        try
-        {
-            // MF_EVENT_FLAG_NO_WAIT = 1. Non-blocking throws MF_E_NO_EVENTS_AVAILABLE when the
-            // queue is empty, which is the ordinary "nothing more to drain" answer, not an error.
-            using var mediaEvent = _events.GetEvent(blocking ? 0 : 1);
-            if (mediaEvent is null) return false;
-            type = mediaEvent.EventType;
-            return true;
-        }
-        catch { return false; }
     }
 
     private void PullOne(Stream sink)
@@ -293,8 +539,21 @@ public sealed class H264Encoder : IVideoEncoder
             Sample = _mftProvidesSamples ? null! : NewOutputSample(),
         };
         var hr = _transform!.ProcessOutput(ProcessOutputFlags.None, 1, ref data, out _);
-        if (hr.Failure) return;
+        if (hr.Code == MF_E_TRANSFORM_STREAM_CHANGE) { RenegotiateOutputType(); return; }
+        if (hr.Failure)
+        {
+            WarnOnce(ref _warnedPullFailed,
+                $"H.264 ProcessOutput failed: 0x{hr.Code:X8} (further occurrences not logged)");
+            return;
+        }
         CopySample(data.Sample, sink);
+    }
+
+    private void WarnOnce(ref bool latch, string message)
+    {
+        if (latch) return;
+        latch = true;
+        _log(message);
     }
 
     private IMFSample NewOutputSample()
@@ -326,7 +585,37 @@ public sealed class H264Encoder : IVideoEncoder
 
     private static ulong PackU64(int high, int low) => ((ulong)(uint)high << 32) | (uint)low;
 
-    public void Dispose()
+    /// <summary>Tell the async MFT to stop and let the pump thread fall out of its blocking
+    /// GetEvent. FLUSH + END_OF_STREAM + END_STREAMING is the documented shutdown for an async
+    /// MFT and is what releases a thread parked in GetEvent; the pump is a background thread, so
+    /// an MFT that ignores all three costs us a parked thread for the life of the process rather
+    /// than blocking exit.</summary>
+    private void StopEventPump()
+    {
+        var pump = _eventPump;
+        var queue = _eventQueue;
+        _eventPump = null;
+        _eventQueue = null;
+
+        try
+        {
+            if (_started && _transform is not null)
+            {
+                _transform.ProcessMessage(TMessageType.MessageCommandFlush, UIntPtr.Zero);
+                _transform.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero);
+                _transform.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero);
+            }
+        }
+        catch { /* shutting down */ }
+
+        _events?.Dispose();
+        _events = null;
+        pump?.Join(500);
+        try { queue?.CompleteAdding(); } catch { }
+        queue?.Dispose();
+    }
+
+    private void ShutdownTransform()
     {
         try
         {
@@ -338,10 +627,24 @@ public sealed class H264Encoder : IVideoEncoder
         }
         catch { /* shutting down */ }
         _started = false;
-        _events?.Dispose();
-        _events = null;
         _transform?.Dispose();
         _transform = null;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        if (_isAsync) StopEventPump();
+        ShutdownTransform();
+
+        _deviceManager?.Dispose();
+        _deviceManager = null;
+        _d3dContext?.Dispose();
+        _d3dContext = null;
+        _d3dDevice?.Dispose();
+        _d3dDevice = null;
         // Media Foundation itself stays up -- MediaFoundationRuntime owns that, so a replacement
         // encoder built moments from now does not find MF torn down under it.
     }

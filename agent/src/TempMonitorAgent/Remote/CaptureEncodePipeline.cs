@@ -34,14 +34,21 @@ public sealed class CaptureEncodePipeline
         int Width, int Height, string Desktop, string Encoder, int Monitor, int MonitorCount);
 
     /// <summary>Capture <paramref name="seconds"/> to an Annex-B <c>.h264</c> file. Returns the
-    /// number of encoded frames.</summary>
+    /// number of encoded frames. <paramref name="preference"/> is exposed here (unlike the live
+    /// path, which takes it from the session) so the self-test can pin hardware or software on a
+    /// machine where one of the two misbehaves -- which is the first thing worth knowing when
+    /// H.264 produces nothing.</summary>
     public static int RunToFile(
-        string outputPath, int seconds, int monitor, int fps, int bitrateBps, Action<string> log)
+        string outputPath, int seconds, int monitor, int fps, int bitrateBps, Action<string> log,
+        EncoderPreference preference = EncoderPreference.Auto)
     {
         using var file = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
         var sw = Stopwatch.StartNew();
         var settings = new LiveStreamSettings(
-            StreamSettings.Default with { Monitor = monitor, Fps = fps, BitrateBps = bitrateBps });
+            StreamSettings.Default with
+            {
+                Monitor = monitor, Fps = fps, BitrateBps = bitrateBps, Preference = preference,
+            });
 
         int frames = RunLoop(settings,
             keepGoing: () => sw.Elapsed.TotalSeconds < seconds,
@@ -248,7 +255,7 @@ public sealed class CaptureEncodePipeline
                 {
                     VideoCodec.Vp8 => new Vp8Encoder(dstW, dstH, settings.Fps, settings.BitrateBps),
                     _ => new H264Encoder(dstW, dstH, settings.Fps, settings.BitrateBps,
-                                         settings.Preference),
+                                         settings.Preference, log),
                 };
                 return new CaptureSession(settings, capture, encoder, srcW, srcH, dstW, dstH,
                                           DisplayProbe.OutputCount());

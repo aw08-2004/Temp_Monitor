@@ -67,7 +67,8 @@ public static class RemoteHelper
         args.Any(a => string.Equals(a, "--desktop-probe", StringComparison.Ordinal));
 
     /// <summary>Runs the capture self-test:
-    /// <c>--remote-capture-test [outputPath] [seconds] [monitor] [fps] [bitrateKbps]</c>.</summary>
+    /// <c>--remote-capture-test [outputPath] [seconds] [monitor] [fps] [bitrateKbps] [encoder]</c>,
+    /// where <c>encoder</c> is auto (default), hardware or software.</summary>
     public static int RunCaptureSelfTest(string[] rest)
     {
         string outPath = rest.Length > 0 && rest[0].Length > 0
@@ -77,9 +78,16 @@ public static class RemoteHelper
         int monitor = rest.Length > 2 && int.TryParse(rest[2], out var m) ? m : 0;
         int fps = rest.Length > 3 && int.TryParse(rest[3], out var f) ? f : 15;
         int kbps = rest.Length > 4 && int.TryParse(rest[4], out var k) ? k : 4000;
+        var preference = rest.Length > 5 ? rest[5].ToLowerInvariant() switch
+        {
+            "hardware" => EncoderPreference.Hardware,
+            "software" => EncoderPreference.Software,
+            _ => EncoderPreference.Auto,
+        } : EncoderPreference.Auto;
 
         void Say(string msg) => Console.WriteLine("[remote-capture-test] " + msg);
-        Say($"output={outPath} seconds={seconds} monitor={monitor} fps={fps} bitrate={kbps}kbps");
+        Say($"output={outPath} seconds={seconds} monitor={monitor} fps={fps} bitrate={kbps}kbps " +
+            $"encoder={preference.ToString().ToLowerInvariant()}");
         var displays = DisplayProbe.ProbeFromSession();
         Say($"displays: {displays.ActiveOutputs} output(s) " +
             $"[{string.Join(", ", displays.OutputNames)}], " +
@@ -91,7 +99,8 @@ public static class RemoteHelper
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
-            int frames = CaptureEncodePipeline.RunToFile(outPath, seconds, monitor, fps, kbps * 1000, Say);
+            int frames = CaptureEncodePipeline.RunToFile(
+                outPath, seconds, monitor, fps, kbps * 1000, Say, preference);
             Say(frames > 0 ? $"done, {frames} frames. Play with: ffplay \"{outPath}\"" : "no frames produced");
             return frames > 0 ? 0 : 3;
         }

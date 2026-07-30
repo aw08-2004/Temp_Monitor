@@ -143,5 +143,6 @@ different session, so it gets its own file).
 
 Self-tests runnable on the machine, no hub or browser involved:
 `--desktop-probe [seconds]` (which input desktop, and can this process attach to it)
-and `--remote-capture-test <file.h264> <seconds>` (a playable clip straight from the
-capture + encode path).
+and `--remote-capture-test <file.h264> <seconds> [monitor] [fps] [kbps] [encoder]`
+(a playable clip straight from the capture + encode path; `encoder` is auto, hardware
+or software, which is how you tell a broken hardware MFT from a broken pipeline).
