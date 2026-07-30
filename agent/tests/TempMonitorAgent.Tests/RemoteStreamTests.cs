@@ -197,4 +197,53 @@ public class RemoteStreamTests
         // Must not block for the full timeout, and must not hand back a phantom event.
         Assert.False(queue.TryTake(out _, 1000));
     }
+
+    // ---- H.264 keyframe detection ---------------------------------------------------------
+    // This is what holds a hardware encoder to the GOP it was asked for: a real capture showed
+    // one emitting a single IDR in eight seconds while accepting every keyframe-spacing setting
+    // we gave it, so the bitstream is read rather than the setting trusted. Getting the scan
+    // wrong in either direction is expensive -- a false negative rebuilds the encoder every two
+    // seconds, a false positive lets a viewer sit on black forever.
+
+    /// <summary>An Annex-B access unit: 4-byte start code + NAL header per unit.</summary>
+    private static byte[] AccessUnit(params int[] nalTypes)
+    {
+        var bytes = new List<byte>();
+        foreach (var type in nalTypes)
+        {
+            bytes.AddRange(new byte[] { 0, 0, 0, 1 });
+            bytes.Add((byte)(type & 0x1f));   // forbidden_zero=0, nal_ref_idc=0
+            bytes.AddRange(new byte[] { 0xAA, 0xBB, 0xCC });
+        }
+        return bytes.ToArray();
+    }
+
+    [Fact]
+    public void ContainsIdr_FindsKeyframeAccessUnits()
+    {
+        // What the software encoder emits at a keyframe: AUD, SPS, PPS, SEI, IDR.
+        Assert.True(H264Encoder.ContainsIdr(AccessUnit(9, 7, 8, 6, 5)));
+        Assert.True(H264Encoder.ContainsIdr(AccessUnit(5)));          // bare IDR
+        Assert.True(H264Encoder.ContainsIdr(AccessUnit(9, 7, 8)));    // parameter sets alone
+    }
+
+    [Fact]
+    public void ContainsIdr_RejectsInterFrames()
+    {
+        // The hardware encoder's steady state: AUD, PPS, SEI, non-IDR slice -- note the PPS,
+        // which must NOT count as a keyframe on its own or the watchdog never fires.
+        Assert.False(H264Encoder.ContainsIdr(AccessUnit(9, 8, 6, 1)));
+        Assert.False(H264Encoder.ContainsIdr(AccessUnit(1)));
+        Assert.False(H264Encoder.ContainsIdr(Array.Empty<byte>()));
+    }
+
+    [Fact]
+    public void ContainsIdr_HandlesThreeByteStartCodesAndTruncation()
+    {
+        // Encoders mix 3- and 4-byte start codes within one access unit.
+        Assert.True(H264Encoder.ContainsIdr(new byte[] { 0, 0, 0, 1, 9, 0x10, 0, 0, 1, 5, 0x88 }));
+        Assert.False(H264Encoder.ContainsIdr(new byte[] { 0, 0, 0, 1, 1, 0x88, 0, 0, 1 }));
+        // A start code with no payload byte must not read past the end.
+        Assert.False(H264Encoder.ContainsIdr(new byte[] { 0, 0, 0, 1 }));
+    }
 }

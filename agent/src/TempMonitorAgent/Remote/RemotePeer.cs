@@ -48,9 +48,21 @@ public sealed class RemotePeer : IDisposable
             // VP8, payload type 100, 90 kHz. Mandatory-to-implement in WebRTC, so this is the
             // fallback when a browser will not play our H.264.
             ? new VideoFormat(VideoCodecsEnum.VP8, 100, 90000)
-            // H.264, payload type 96, 90 kHz, packetization-mode 1 -- the standard WebRTC H.264
-            // profile the browser negotiates against.
-            : new VideoFormat(VideoCodecsEnum.H264, 96, 90000, "packetization-mode=1");
+            // H.264, payload type 96, 90 kHz. The fmtp is spelled out rather than left to
+            // defaults: SIPSorcery emits no profile-level-id at all, and libwebrtc reads a
+            // MISSING profile-level-id as Constrained Baseline level 3.1 -- a level that cannot
+            // represent 1080p, which is the least we send.
+            //
+            // 42e033 is Constrained Baseline (42 + constraint bits e0) at level 5.1 (0x33). The
+            // level is deliberately generous rather than accurate, because it CANNOT be accurate:
+            // the peer is built and the offer sent before the capture pipeline knows what geometry
+            // it will get, and that geometry varies a lot -- self-tests on one machine produced
+            // level 4.0 for a single 1920x1080 monitor and level 5.0 for a 3840x1080 span. Level
+            // 5.1 covers anything realistic, and over-advertising is the safe direction:
+            // under-advertising is the bug being fixed here. level-asymmetry-allowed lets the
+            // browser answer with whatever level it prefers to decode at.
+            : new VideoFormat(VideoCodecsEnum.H264, 96, 90000,
+                              "packetization-mode=1;profile-level-id=42e033;level-asymmetry-allowed=1");
         _pc.addTrack(new MediaStreamTrack(format, MediaStreamStatusEnum.SendOnly));
 
         _pc.onicecandidate += candidate =>

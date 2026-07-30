@@ -69,10 +69,25 @@ public sealed class H264Encoder : IVideoEncoder
     /// picture rather than a mystery.</summary>
     private const int SilentFrameLimit = 30;
 
+    /// <summary>Frames of grace after asking for a keyframe before asking again. An encoder that
+    /// honours ForceKeyFrame answers on the very next frame; this is slack for one that queues.</summary>
+    private const int KeyFrameGraceFrames = 5;
+
+    /// <summary>How many times we will rebuild the transform purely to force a keyframe before
+    /// concluding that this encoder is never going to produce one and leaving it alone. Rebuilding
+    /// forever would turn a bad encoder into a bad encoder that also churns.</summary>
+    private const int MaxKeyFrameRebuilds = 3;
+
     private readonly int _width, _height, _fps, _bitrateBps;
+    private readonly EncoderPreference _preference;
     private readonly Action<string> _log;
+    /// <summary>Target frames between IDRs -- the same interval we ask the MFT for, and the
+    /// deadline the bitstream watchdog holds it to.</summary>
+    private readonly int _keyFrameGop;
 
     private IMFTransform? _transform;
+    private ICodecApi? _codecApi;
+    private object? _codecApiRcw;
     private IMFMediaEventGenerator? _events;
     private BlockingCollection<MediaEventTypes>? _eventQueue;
     private Thread? _eventPump;
@@ -94,7 +109,10 @@ public sealed class H264Encoder : IVideoEncoder
     /// problem is not the MFT flavour and rebuilding again would just churn.</summary>
     private bool _fellBack;
     /// <summary>Per-encoder latches so a persistent fault logs once instead of once per frame.</summary>
-    private bool _warnedNoInput, _warnedPullFailed;
+    private bool _warnedNoInput, _warnedPullFailed, _warnedNoKeyFrames;
+    /// <summary>Frames emitted since the last IDR we actually saw in the bitstream, and how many
+    /// times we have asked for one since. See <see cref="NoteEncodedFrame"/>.</summary>
+    private int _framesSinceIdr, _keyFrameAsks, _keyFrameRebuilds;
 
     public bool IsHardware { get; private set; }
 
@@ -108,10 +126,19 @@ public sealed class H264Encoder : IVideoEncoder
         _height = height;
         _fps = fps <= 0 ? 30 : fps;
         _bitrateBps = bitrateBps;
+        _preference = preference;
         _log = log ?? (_ => { });
+        _keyFrameGop = Math.Max(2, _fps * 2);
 
         MediaFoundationRuntime.EnsureStarted();
+        BuildPipeline(preference);
+    }
 
+    /// <summary>Activate an MFT and drive it all the way to "streaming". Shared by construction
+    /// and by every rebuild, so there is exactly one order in which an encoder gets set up --
+    /// which matters, because that order is load-bearing (see <see cref="AttachD3DManager"/>).</summary>
+    private void BuildPipeline(EncoderPreference preference)
+    {
         _transform = CreateEncoder(preference, out bool hardware)
             ?? throw new InvalidOperationException("no H.264 encoder MFT available");
         IsHardware = hardware;
@@ -124,9 +151,17 @@ public sealed class H264Encoder : IVideoEncoder
         if (_isAsync) AttachD3DManager();
 
         ConfigureTypes(_bitrateBps);
+        AcquireCodecApi();
+        ApplyCodecApiSettings();
         CacheOutputStreamInfo();
         StartStreaming();
         if (_isAsync) StartEventPump();
+
+        _framesSinceIdr = 0;
+        _keyFrameAsks = 0;
+        _pendingNeedInput = 0;
+        _silentFrames = 0;
+        _warnedNoInput = _warnedPullFailed = false;
     }
 
     /// <summary>Find an encoder MFT. Hardware is tried first unless the operator forced
@@ -275,6 +310,56 @@ public sealed class H264Encoder : IVideoEncoder
         _transform.SetInputType(0, inType, 0);
     }
 
+    /// <summary>QueryInterface the MFT for ICodecAPI. Absent on some software MFTs, which is why
+    /// every use of <see cref="_codecApi"/> is null-checked rather than assumed.</summary>
+    private void AcquireCodecApi()
+    {
+        try
+        {
+            _codecApiRcw = Marshal.GetObjectForIUnknown(_transform!.NativePointer);
+            _codecApi = _codecApiRcw as ICodecApi;
+            if (_codecApi is null) ReleaseCodecApi();
+        }
+        catch (Exception e)
+        {
+            _log($"H.264 encoder exposes no ICodecAPI ({e.Message}); relying on media-type settings");
+            ReleaseCodecApi();
+        }
+    }
+
+    private void ReleaseCodecApi()
+    {
+        _codecApi = null;
+        if (_codecApiRcw is null) return;
+        try { Marshal.ReleaseComObject(_codecApiRcw); } catch { /* already released */ }
+        _codecApiRcw = null;
+    }
+
+    /// <summary>Ask for the GOP and low-latency behaviour we want. Best-effort in both directions:
+    /// an MFT may not implement a property, and one that accepts it may still ignore it -- which
+    /// is what the keyframe watchdog in <see cref="NoteEncodedFrame"/> is there to catch.</summary>
+    private void ApplyCodecApiSettings()
+    {
+        TrySetCodecProperty(ref CodecApiProperties.GopSize, (uint)_keyFrameGop, "GOP size");
+        TrySetCodecProperty(ref CodecApiProperties.LowLatencyMode, true, "low-latency mode");
+    }
+
+    private bool TrySetCodecProperty(ref Guid property, object value, string what)
+    {
+        if (_codecApi is null) return false;
+        try
+        {
+            int hr = _codecApi.SetValue(ref property, ref value);
+            if (hr >= 0) return true;
+            _log($"H.264 encoder rejected {what}: 0x{hr:X8}");
+        }
+        catch (Exception e)
+        {
+            _log($"H.264 encoder rejected {what}: {e.Message}");
+        }
+        return false;
+    }
+
     private void CacheOutputStreamInfo()
     {
         var info = _transform!.GetOutputStreamInfo(0);
@@ -326,7 +411,62 @@ public sealed class H264Encoder : IVideoEncoder
 
         var encoded = output.ToArray();
         NoteFrameProduced(encoded.Length > 0);
+        NoteEncodedFrame(encoded);
         return encoded;
+    }
+
+    /// <summary>Hold the encoder to the GOP it was asked for, by reading the bitstream rather
+    /// than trusting the setting.
+    ///
+    /// Hardware MFTs routinely accept MF_MT_MAX_KEYFRAME_SPACING and CODECAPI_AVEncMPVGOPSize and
+    /// then emit exactly one IDR for the life of the encoder. A WebRTC receiver that misses that
+    /// one keyframe -- which it will, because media starts flowing while DTLS is still completing
+    /// -- has no way back and shows black forever. So: count frames since the last IDR we actually
+    /// saw, ask for one when overdue, and if asking does not work, rebuild the transform, because
+    /// a fresh encoder always emits SPS/PPS + IDR.</summary>
+    private void NoteEncodedFrame(byte[] encoded)
+    {
+        if (encoded.Length == 0) return;
+        if (ContainsIdr(encoded)) { _framesSinceIdr = 0; _keyFrameAsks = 0; return; }
+        if (++_framesSinceIdr < _keyFrameGop) return;
+
+        if (_keyFrameAsks < 2 &&
+            TrySetCodecProperty(ref CodecApiProperties.ForceKeyFrame, (uint)1, "a forced keyframe"))
+        {
+            _keyFrameAsks++;
+            _framesSinceIdr -= KeyFrameGraceFrames; // let it answer before we ask again
+            return;
+        }
+
+        if (_keyFrameRebuilds >= MaxKeyFrameRebuilds)
+        {
+            WarnOnce(ref _warnedNoKeyFrames,
+                "H.264 encoder will not produce periodic keyframes; a viewer that joins late or " +
+                "drops a packet will not recover (further occurrences not logged)");
+            _framesSinceIdr = 0; // stop re-triggering; the warning stands
+            return;
+        }
+        _keyFrameRebuilds++;
+        RebuildTransform(_preference, $"went {_framesSinceIdr} frames without a keyframe");
+    }
+
+    /// <summary>True if this access unit carries an IDR (NAL type 5) or a parameter set (7/8),
+    /// scanning Annex-B start codes. Cheap: it stops at the first one it finds.</summary>
+    internal static bool ContainsIdr(byte[] annexB)
+    {
+        for (int i = 0; i + 3 < annexB.Length; i++)
+        {
+            if (annexB[i] != 0 || annexB[i + 1] != 0) continue;
+            int payload;
+            if (annexB[i + 2] == 1) payload = i + 3;
+            else if (annexB[i + 2] == 0 && annexB[i + 3] == 1) payload = i + 4;
+            else continue;
+            if (payload >= annexB.Length) return false;
+            int nalType = annexB[payload] & 0x1f;
+            if (nalType == 5 || nalType == 7) return true;
+            i = payload;
+        }
+        return false;
     }
 
     /// <summary>Watch for an encoder that accepts everything and produces nothing, and demote it
@@ -337,39 +477,33 @@ public sealed class H264Encoder : IVideoEncoder
     {
         if (produced) { _silentFrames = 0; return; }
         if (++_silentFrames < SilentFrameLimit || _fellBack || !_isAsync) return;
-        FallBackToSoftware($"produced no output for {_silentFrames} consecutive frames");
+        _fellBack = true;
+        RebuildTransform(EncoderPreference.Software,
+                         $"produced no output for {_silentFrames} consecutive frames");
     }
 
-    private void FallBackToSoftware(string reason)
+    /// <summary>Tear the encoder down and stand a new one up, keeping the same geometry. Used
+    /// both to demote a hardware MFT that will not run and to re-key one that will not emit
+    /// keyframes -- the same recovery the pipeline already relies on for a desktop or resolution
+    /// change, applied to the encoder alone so the capture keeps running.</summary>
+    private void RebuildTransform(EncoderPreference preference, string reason)
     {
-        _fellBack = true;
-        _log($"H.264 hardware encoder {reason}; rebuilding on the in-box software encoder");
+        _log($"H.264 {(IsHardware ? "hardware" : "software")} encoder {reason}; rebuilding" +
+             (preference == EncoderPreference.Software && IsHardware ? " on the in-box software encoder" : ""));
         try
         {
-            StopEventPump();
+            if (_isAsync) StopEventPump();
+            ReleaseCodecApi();
             ShutdownTransform();
-
-            _transform = Activate(MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER);
-            if (_transform is null)
-            {
-                _log("no software H.264 encoder MFT available; this session has no video");
-                _started = false;
-                return;
-            }
+            ReleaseD3D();
             _isAsync = false;
-            IsHardware = false;
-            _pendingNeedInput = 0;
-            _silentFrames = 0;
-            _warnedNoInput = _warnedPullFailed = false;
 
-            ConfigureTypes(_bitrateBps);
-            CacheOutputStreamInfo();
-            StartStreaming();
-            _log($"H.264 software encoder ready ({_width}x{_height} @ {_fps}fps)");
+            BuildPipeline(preference);
+            _log($"H.264 encoder ready: {Description}, {_width}x{_height} @ {_fps}fps");
         }
         catch (Exception e)
         {
-            _log($"H.264 software fallback failed: {e.Message}; this session has no video");
+            _log($"H.264 encoder rebuild failed: {e.Message}; this session has no video");
             _started = false;
         }
     }
@@ -631,20 +765,25 @@ public sealed class H264Encoder : IVideoEncoder
         _transform = null;
     }
 
-    public void Dispose()
+    private void ReleaseD3D()
     {
-        if (_disposed) return;
-        _disposed = true;
-
-        if (_isAsync) StopEventPump();
-        ShutdownTransform();
-
         _deviceManager?.Dispose();
         _deviceManager = null;
         _d3dContext?.Dispose();
         _d3dContext = null;
         _d3dDevice?.Dispose();
         _d3dDevice = null;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        if (_isAsync) StopEventPump();
+        ReleaseCodecApi();
+        ShutdownTransform();
+        ReleaseD3D();
         // Media Foundation itself stays up -- MediaFoundationRuntime owns that, so a replacement
         // encoder built moments from now does not find MF torn down under it.
     }
