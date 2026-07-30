@@ -208,7 +208,7 @@
     align-items: stretch;
     gap: 2px;
     flex-wrap: wrap;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--card-border);
     padding-bottom: 0;
 }
 
@@ -231,7 +231,7 @@
 
 .pty-tab--active {
     background: var(--control-bg);
-    border-color: var(--border);
+    border-color: var(--card-border);
 }
 
 .pty-tab__select {
@@ -274,7 +274,7 @@
 }
 
 .pty-tab__close:hover {
-    background: var(--danger-bg, rgba(220, 80, 80, 0.15));
+    background: var(--danger-bg);
     color: var(--danger);
 }
 

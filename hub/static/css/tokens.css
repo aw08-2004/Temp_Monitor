@@ -80,4 +80,9 @@
     --focus-ring: rgba(37, 99, 235, 0.35);
     --control-bg: #f2f3f5;
     --scrollbar: #e4e7ec;
+
+    /* Lighter than the dark theme's, but still a real dimmer: it was missing here
+       entirely, which left the mobile nav scrim (components.css .nav-scrim, no fallback)
+       resolving to transparent -- an open drawer over a fully live-looking page. */
+    --overlay-scrim: rgb(15 20 30 / 0.45);
 }

@@ -43,11 +43,13 @@
 /* Not started yet: deliberately the track's own colour, so an untouched deployment
    reads as an empty bar rather than a full bar of some ambiguous shade. */
 .pkg-progress__seg--pending   { background: var(--card-border); }
-.pkg-progress__seg--succeeded { background: var(--ok, #3fb950); }
-.pkg-progress__seg--failed    { background: var(--danger, #f85149); }
-.pkg-progress__seg--expired   { background: var(--warn, #d29922); }
+/* --success / --warning, not --ok / --warn: the latter two are not tokens, so these two
+   segments were painting their literal fallback in both themes. */
+.pkg-progress__seg--succeeded { background: var(--success); }
+.pkg-progress__seg--failed    { background: var(--danger); }
+.pkg-progress__seg--expired   { background: var(--warning); }
 .pkg-progress__seg--cancelled { background: var(--muted); }
-.pkg-progress__seg--in_flight { background: var(--accent, #58a6ff); }
+.pkg-progress__seg--in_flight { background: var(--accent); }
 
 .pkg-tally {
     display: flex;

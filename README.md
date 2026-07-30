@@ -620,7 +620,7 @@ cleared when you come back to it.
 
 **Several consoles at once.** The tab strip above the terminal lists every console you have
 open on that machine — **+** opens another (up to four per operator per machine, as the hub
-enforces), **×** ends one. Each tab is its own shell with its own working directory and
+enforces); **×**, or a middle-click on the tab, ends one. Each tab is its own shell with its own working directory and
 scrollback; the front one polls at typing speed and the rest keep collecting output in the
 background, so a build in one tab keeps running while you work in another. The strip is
 built from the hub's list of *your* sessions rather than from anything the browser

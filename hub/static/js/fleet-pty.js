@@ -140,10 +140,23 @@
         close.type = 'button';
         close.className = 'pty-tab__close';
         close.setAttribute('aria-label', 'Close this console');
-        close.title = 'Close this console';
+        close.title = 'Close this console (or middle-click the tab)';
         close.textContent = '×';
         close.addEventListener('click', (e) => {
             e.stopPropagation();   // the strip's click would just re-select it
+            closeConsole(record.id);
+        });
+
+        // Middle-click closes the tab, as it does in every browser and terminal app.
+        // `auxclick` is the event that actually fires for a non-primary button (a plain
+        // `click` listener never sees button 1 in Chrome or Firefox), and the mousedown
+        // default has to be suppressed or the browser starts autoscroll instead.
+        tab.addEventListener('mousedown', (e) => {
+            if (e.button === 1) e.preventDefault();
+        });
+        tab.addEventListener('auxclick', (e) => {
+            if (e.button !== 1) return;
+            e.preventDefault();
             closeConsole(record.id);
         });
 
@@ -754,7 +767,8 @@
                     'Real consoles on the machine, running as SYSTEM. Enter, Ctrl-C, Tab ' +
                     'completion and interactive prompts all work. Ctrl-Shift-C / Ctrl-Shift-V ' +
                     'copy and paste (Ctrl-C is passed through to the shell). "+" opens another ' +
-                    `console (up to ${MAX_CONSOLES}), "×" ends one. Sessions survive leaving ` +
+                    `console (up to ${MAX_CONSOLES}); "×" or a middle-click on a tab ends ` +
+                    'one. Sessions survive leaving ' +
                     'this page and are listed on every computer you sign in from — come back ' +
                     'and your shells, working directories and scrollback are still there.';
             }

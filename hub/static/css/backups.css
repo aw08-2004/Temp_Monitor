@@ -11,7 +11,7 @@
     padding: var(--space-4);
     border-radius: var(--radius-md, 8px);
     border: 1px solid var(--card-border);
-    background: var(--card-bg);
+    background: var(--card);
     margin-bottom: var(--space-5);
 }
 
@@ -19,12 +19,12 @@
     border-color: var(--warning, #d29922);
     /* color-mix keeps the tint honest in both themes rather than hardcoding a light
        yellow that turns unreadable on the dark one. */
-    background: color-mix(in srgb, var(--warning, #d29922) 12%, var(--card-bg));
+    background: color-mix(in srgb, var(--warning, #d29922) 12%, var(--card));
 }
 
 .bk-banner--danger {
     border-color: var(--danger, #f85149);
-    background: color-mix(in srgb, var(--danger, #f85149) 12%, var(--card-bg));
+    background: color-mix(in srgb, var(--danger, #f85149) 12%, var(--card));
 }
 
 .bk-banner__body { flex: 1; }
@@ -55,7 +55,10 @@
     font-family: var(--font-mono, ui-monospace, monospace);
     font-size: var(--text-sm);
     color: var(--text);
-    background: var(--console-bg, rgba(127, 127, 127, 0.12));
+    /* --control-bg is the console/monospace surface everywhere else (.console-surface,
+       the terminal); --console-bg was never a token and was silently painting a grey
+       wash instead. */
+    background: var(--control-bg);
     border: 1px solid var(--card-border);
     border-radius: var(--radius-sm, 6px);
     padding: var(--space-3);

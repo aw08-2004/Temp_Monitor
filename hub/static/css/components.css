@@ -934,10 +934,10 @@ label.checkbox input {
     list-style: none;
     max-height: 260px;
     overflow-y: auto;
-    background: var(--card-bg, var(--control-bg));
+    background: var(--control-bg);
     border: 1px solid var(--card-border);
     border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.28));
+    box-shadow: var(--shadow-card);
 }
 
 .ac-option {
@@ -950,7 +950,7 @@ label.checkbox input {
 
 .ac-option.is-active,
 .ac-option:hover {
-    background: var(--control-hover, var(--card-border));
+    background: var(--card-border);
 }
 
 .ac-option__body {
