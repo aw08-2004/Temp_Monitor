@@ -1246,7 +1246,8 @@
       "overview": "Übersicht",
       "terminal": "Terminal",
       "backup": "Sicherung",
-      "remote": "Remote"
+      "remote": "Remote",
+      "firmware": "Firmware"
     },
     "live_temp": "Live-Temperatur",
     "uptime": "Laufzeit",
@@ -1398,6 +1399,41 @@
       "vdd_queue_failed": "Einreihen nicht möglich: {error}",
       "fullscreen_refused": "Vollbild abgelehnt: {error}",
       "view_only_note": "Nur ansehen: Eingaben aus diesem Browser werden unterdrückt. Das ist ein Versehensschutz, keine Berechtigung – es hindert niemand anderen daran, den Computer zu steuern."
+    },
+    "firmware": {
+      "title": "Firmware-Einstellungen",
+      "search": "Einstellungen suchen",
+      "refresh": "Neu lesen",
+      "refresh_title": "Den Computer bitten, seine Firmware-Einstellungen erneut zu lesen",
+      "refresh_queued": "Eingereiht. Der Computer liest seine Firmware bei der nächsten Meldung; diese Seite aktualisiert sich, sobald er zurückmeldet.",
+      "reported_at": "Gemeldet {when}",
+      "bios_version": "BIOS {version}",
+      "state": {
+        "unknown": "Nicht gemeldet",
+        "unsupported": "Nicht verwaltbar",
+        "error": "Lesen fehlgeschlagen",
+        "count": {
+          "one": "{count} Einstellung",
+          "other": "{count} Einstellungen"
+        }
+      },
+      "unknown_help": "Dieser Computer hat seine Firmware-Einstellungen noch nicht gemeldet. Dafür ist ein Agent mit Firmware-Inventar nötig; die Meldung kommt bei der nächsten Verbindung nach dem Agent-Update.",
+      "unsupported_help": "Dieser Computer hat keine verwaltbare Firmware-Schnittstelle. Virtuelle Maschinen und selbst gebaute PCs melden das; für sie ist es die erwartete, dauerhafte Antwort und kein Fehler.",
+      "error_unknown": "Der Computer hat eine Firmware-Schnittstelle, das Lesen ist jedoch fehlgeschlagen, ohne einen Grund zu nennen.",
+      "password_set": "Für diesen Computer ist ein BIOS-Setup-Kennwort gesetzt. Eine Änderung erfordert dieses Kennwort.",
+      "no_matches": "Keine Einstellung passt zu deiner Suche.",
+      "read_only": "schreibgeschützt",
+      "col": {
+        "setting": "Einstellung",
+        "value": "Wert",
+        "kind": "Typ"
+      },
+      "kind": {
+        "enum": "Auswahl",
+        "string": "Text",
+        "integer": "Zahl",
+        "unknown": "Nicht klassifiziert"
+      }
     },
     "favorites": {
       "title": "Favoriten",

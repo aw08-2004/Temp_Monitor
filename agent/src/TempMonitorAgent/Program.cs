@@ -1,6 +1,7 @@
 using Serilog;
 using TempMonitorAgent;
 using TempMonitorAgent.Backup;
+using TempMonitorAgent.Bios;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
@@ -100,6 +101,10 @@ try
     builder.Services.AddSingleton<ICommandExecutor, UninstallVirtualDisplayExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, SetVirtualDisplayModeExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RefreshRemoteInventoryExecutor>();
+    // Firmware settings inventory (roadmap #9). Read-only for now: the machine re-reads its
+    // BIOS and the answer rides the next heartbeat. update_bios stays stubbed below until the
+    // vendor-dispatched flash executor lands.
+    builder.Services.AddSingleton<ICommandExecutor, RefreshBiosInventoryExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
 

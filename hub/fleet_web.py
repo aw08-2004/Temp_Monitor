@@ -33,6 +33,7 @@ import functools
 from flask import Blueprint, jsonify, request, session
 
 import backups
+import bios
 import fleet
 import permissions
 import remote
@@ -146,6 +147,16 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
                 remote.record_inventory(db_path, machine, data["remote"])
             except Exception as e:
                 print(f"[remote] Could not record inventory for {machine}: {e}")
+        # BIOS/firmware settings, same change-only cadence and same never-fatal handling. A
+        # BIOS enumeration is slow (seconds, on some vendors) and the offline window is 90s --
+        # which is exactly why it is scanned on the agent's inventory loop and merely CARRIED
+        # here, never performed here. An unsupported machine reports that fact once and then
+        # goes quiet, so a fleet of VMs costs one payload each, forever.
+        if data.get("bios"):
+            try:
+                bios.record_inventory(db_path, machine, data["bios"])
+            except Exception as e:
+                print(f"[bios] Could not record inventory for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])

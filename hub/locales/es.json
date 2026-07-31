@@ -1246,7 +1246,8 @@
       "overview": "Resumen",
       "terminal": "Terminal",
       "backup": "Copia",
-      "remote": "Remoto"
+      "remote": "Remoto",
+      "firmware": "Firmware"
     },
     "live_temp": "Temperatura en vivo",
     "uptime": "Tiempo activo",
@@ -1398,6 +1399,41 @@
       "vdd_queue_failed": "No se pudo poner en cola: {error}",
       "fullscreen_refused": "Pantalla completa rechazada: {error}",
       "view_only_note": "Solo ver: se suprime la entrada desde este navegador. Es una protección contra accidentes, no un permiso: no impide que otra persona controle el equipo."
+    },
+    "firmware": {
+      "title": "Ajustes de firmware",
+      "search": "Buscar ajustes",
+      "refresh": "Releer",
+      "refresh_title": "Pedir al equipo que vuelva a leer sus ajustes de firmware",
+      "refresh_queued": "En cola. El equipo leerá su firmware en su próxima conexión y esta página se actualizará cuando responda.",
+      "reported_at": "Reportado {when}",
+      "bios_version": "BIOS {version}",
+      "state": {
+        "unknown": "Sin reportar",
+        "unsupported": "No administrable",
+        "error": "No se pudo leer",
+        "count": {
+          "one": "{count} ajuste",
+          "other": "{count} ajustes"
+        }
+      },
+      "unknown_help": "Este equipo aún no ha reportado sus ajustes de firmware. Necesita un agente compatible con el inventario de firmware; llegará en su próxima conexión tras la actualización del agente.",
+      "unsupported_help": "Este equipo no tiene una interfaz de firmware administrable. Las máquinas virtuales y los PC de montaje propio reportan esto, y para ellos es la respuesta esperada y permanente, no un fallo.",
+      "error_unknown": "El equipo tiene una interfaz de firmware pero su lectura falló, y no indicó el motivo.",
+      "password_set": "Este equipo tiene una contraseña de configuración del BIOS. Cambiar un ajuste requerirá esa contraseña.",
+      "no_matches": "Ningún ajuste coincide con tu búsqueda.",
+      "read_only": "solo lectura",
+      "col": {
+        "setting": "Ajuste",
+        "value": "Valor",
+        "kind": "Tipo"
+      },
+      "kind": {
+        "enum": "Opción",
+        "string": "Texto",
+        "integer": "Número",
+        "unknown": "Sin clasificar"
+      }
     },
     "favorites": {
       "title": "Favoritos",

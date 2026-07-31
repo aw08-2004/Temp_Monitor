@@ -120,6 +120,16 @@ VIRTUAL_DISPLAY_COMMANDS = frozenset({
     "set_virtual_display_mode",
 })
 
+# BIOS/firmware management (roadmap #9). Only the read side exists so far: a machine's
+# firmware inventory rides the heartbeat on a change-only cadence, and this forces a re-read
+# for the operator who is looking at the tab right now and does not want to wait for the next
+# scan. Machine-independent and empty-params, so unlike the remote and deploy types there is
+# nothing stale a saved copy could carry -- it stays favoritable on purpose, because
+# "re-read firmware on these twelve PCs" is exactly the shape a favorite is for.
+FIRMWARE_COMMANDS = frozenset({
+    "refresh_bios_inventory",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -130,7 +140,7 @@ ALL_COMMANDS = frozenset({
     "install_driver",
     "update_bios",
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
-      | VIRTUAL_DISPLAY_COMMANDS)
+      | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS)
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent

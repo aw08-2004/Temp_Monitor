@@ -154,6 +154,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // "no display outputs" badge. Same change-only discipline as profiles.
             var remote = TempMonitorAgent.Remote.RemoteInventoryReporter.TakeIfChanged();
             if (remote is not null) body["remote"] = remote;
+            // Firmware settings (roadmap #9). Same discipline again, and the payload that
+            // benefits from it most: a BIOS enumeration takes seconds, so it is scanned on the
+            // inventory loop and only CARRIED here. A machine with no manageable firmware
+            // reports that once and then never appears in a heartbeat again.
+            var biosInventory = TempMonitorAgent.Bios.BiosInventoryReporter.TakeIfChanged();
+            if (biosInventory is not null) body["bios"] = biosInventory;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 

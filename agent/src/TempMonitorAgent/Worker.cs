@@ -281,12 +281,14 @@ public sealed class Worker : BackgroundService
     /// <summary>
     /// The slow local scans, on a loop of their own.
     ///
-    /// Both of these are synchronous and genuinely expensive: profile discovery reads the
-    /// registry and may mount a logged-off user's hive, and the remote inventory enumerates
-    /// WTS sessions and probes display outputs through PnP. They self-throttle (hourly and
-    /// per-minute respectively) but when they DO run they take real time, and they used to
-    /// run on the same loop as the heartbeat -- immediately in front of it. "Off the
-    /// heartbeat path" is only true now that they are on a different thread from it.
+    /// All three are synchronous and genuinely expensive: profile discovery reads the
+    /// registry and may mount a logged-off user's hive, the remote inventory enumerates
+    /// WTS sessions and probes display outputs through PnP, and the firmware read connects a
+    /// vendor WMI namespace and enumerates a few hundred attributes. They self-throttle
+    /// (hourly, per-minute and six-hourly respectively) but when they DO run they take real
+    /// time, and they used to run on the same loop as the heartbeat -- immediately in front
+    /// of it. "Off the heartbeat path" is only true now that they are on a different thread
+    /// from it.
     ///
     /// Neither posts anything itself; each leaves a payload for the next heartbeat to carry.
     /// </summary>
@@ -298,6 +300,7 @@ public sealed class Worker : BackgroundService
             {
                 TempMonitorAgent.Backup.BackupProfileReporter.RefreshIfDue();
                 TempMonitorAgent.Remote.RemoteInventoryReporter.RefreshIfDue();
+                TempMonitorAgent.Bios.BiosInventoryReporter.RefreshIfDue();
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
 

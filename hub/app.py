@@ -36,6 +36,7 @@ import packages
 import backups
 import remote
 import directory
+import bios
 import authconfig
 import i18n
 from fleet_web import create_fleet_blueprint
@@ -46,6 +47,7 @@ from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
+from bios_web import create_bios_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 
@@ -74,7 +76,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.58.0"
+HUB_VERSION = "1.59.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1344,6 +1346,10 @@ app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access, 
 # and a synchronous "sync now". Same login_required + access seam as everything above.
 app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, access))
 
+# BIOS/firmware inventory (roadmap #9): the read side of what a machine's firmware is set to,
+# plus a "re-read it now" command. Same login_required + access seam as everything above.
+app.register_blueprint(create_bios_blueprint(DB_PATH, login_required, access))
+
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
 app.register_blueprint(create_auth_blueprint(
@@ -2043,6 +2049,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # archives stay under the old name's folder and key -- the envelope header records
     # which machine it was sealed for, so they remain restorable.
     backups.rename_machine(DB_PATH, dropped, survivor)
+    # Firmware inventory follows the hostname too. The survivor has usually reported its own
+    # (same hardware, so the same attributes), which is why bios.rename_machine keeps the
+    # survivor's row rather than overwriting it with the dropped name's older reading.
+    bios.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -2589,6 +2599,7 @@ users.init_users_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
+bios.init_bios_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
@@ -2917,6 +2928,10 @@ def delete_machine(machine):
     # SURVIVE -- deleting a machine record does not mean its archives stopped existing,
     # and those are exactly what someone wants when the deletion turns out to be a mistake.
     backups.forget_machine(DB_PATH, machine_name)
+    # And its firmware inventory: a different box reusing this hostname must not inherit an
+    # attribute list describing hardware it isn't -- which is exactly what an operator would
+    # then be offered a "change this setting" button against.
+    bios.forget_machine(DB_PATH, machine_name)
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")

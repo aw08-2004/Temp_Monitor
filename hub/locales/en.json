@@ -1345,7 +1345,8 @@
       "overview": "Overview",
       "terminal": "Terminal",
       "backup": "Backup",
-      "remote": "Remote"
+      "remote": "Remote",
+      "firmware": "Firmware"
     },
     "live_temp": "Live Temperature",
     "uptime": "Uptime",
@@ -1497,6 +1498,43 @@
       "vdd_queue_failed": "Could not queue: {error}",
       "fullscreen_refused": "Fullscreen refused: {error}",
       "view_only_note": "View only: input from this browser is suppressed. This is an accident guard, not a permission — it does not stop anyone else driving the machine."
+    },
+    "firmware": {
+      "title": "Firmware settings",
+      "search": "Search settings",
+      "refresh": "Re-read",
+      "refresh_title": "Ask the machine to read its firmware settings again",
+      "refresh_queued": "Queued. The machine reads its firmware on its next check-in and this page updates once it reports back.",
+      "reported_at": "Reported {when}",
+      "bios_version": "BIOS {version}",
+      "_state": "Four states, and the first two are NOT the same claim: 'unknown' means nobody has told us yet, 'unsupported' means the machine told us it has nothing to manage.",
+      "state": {
+        "unknown": "Not reported",
+        "unsupported": "Not manageable",
+        "error": "Could not read",
+        "count": {
+          "one": "{count} setting",
+          "other": "{count} settings"
+        }
+      },
+      "unknown_help": "This machine has not reported its firmware settings yet. It needs an agent that supports firmware inventory; one will arrive on its next check-in after the agent updates.",
+      "unsupported_help": "This machine has no manageable firmware interface. Virtual machines and self-built PCs report this, and it is the expected, permanent answer for them rather than a fault.",
+      "error_unknown": "The machine has a firmware interface but reading it failed, and it did not say why.",
+      "password_set": "A BIOS setup password is set on this machine. Changing a setting will need that password.",
+      "no_matches": "No settings match your search.",
+      "read_only": "read-only",
+      "col": {
+        "setting": "Setting",
+        "value": "Value",
+        "kind": "Type"
+      },
+      "_kind": "How a value may be written. Shown because it is what an operator can do with the row, not vendor trivia.",
+      "kind": {
+        "enum": "Choice",
+        "string": "Text",
+        "integer": "Number",
+        "unknown": "Unclassified"
+      }
     },
     "favorites": {
       "title": "Favorites",

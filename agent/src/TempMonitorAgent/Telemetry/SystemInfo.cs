@@ -23,6 +23,18 @@ public static class SystemInfo
     private static readonly string[] PlaceholderManufacturers =
         PlaceholderAssetTags.Concat(new[] { "system manufacturer", "o.e.m." }).ToArray();
 
+    /// <summary>Is this a manufacturer string worth dispatching on? Shared with
+    /// <see cref="Bios.BiosReader"/> (roadmap #9) rather than copied: the vendor the firmware
+    /// reader picks and the manufacturer shown on the machine page must be the same
+    /// judgement, or a machine reads "Dell" on screen while reporting no manageable BIOS.</summary>
+    public static bool IsRealManufacturer(string? manufacturer)
+    {
+        var value = (manufacturer ?? "").Trim();
+        if (value.Length == 0) return false;
+        var lowered = value.ToLowerInvariant();
+        return !PlaceholderManufacturers.Any(p => lowered.Contains(p));
+    }
+
     public static SystemIdentity Read(ILogger logger)
     {
         var info = new SystemIdentity();
@@ -32,11 +44,7 @@ public static class SystemInfo
             info.Model = Clean(QueryFirst("Win32_ComputerSystem", "Model"));
 
             var manufacturer = (QueryFirst("Win32_ComputerSystem", "Manufacturer") ?? "").Trim();
-            if (manufacturer.Length > 0 &&
-                !PlaceholderManufacturers.Any(p => manufacturer.ToLowerInvariant().Contains(p)))
-            {
-                info.Manufacturer = manufacturer;
-            }
+            if (IsRealManufacturer(manufacturer)) info.Manufacturer = manufacturer;
 
             var assetTag = (QueryFirst("Win32_SystemEnclosure", "SMBIOSAssetTag") ?? "").Trim();
             if (assetTag.Length > 0 &&

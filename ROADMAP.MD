@@ -1133,7 +1133,7 @@ language with more forms needs a rule table, not just a catalog.
 
 ---
 
-## 🚧 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0
+## 🚧 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0; settings inventory hub 1.59.0 + agent 3.19.0
 
 Read and change firmware settings across the fleet, and finally execute the `update_bios`
 command type that has been accepted, queued and routed — and then stubbed — since the
@@ -1184,12 +1184,59 @@ in the fleet shows a red error forever.
   list to one vendor — which is how a fleet-wide firmware action will be scoped) and on
   the machine page's Identity card, above Model. Every searchable field has a visible
   column on purpose: a row matching on something not on screen reads as a bug.
-- **Settings inventory rides the heartbeat, change-only.** A machine reports its readable
-  BIOS settings under a `bios` key on `POST /api/agent/heartbeat`, content-hashed so it
-  is sent only when it actually changes, and never fatal — the same discipline
-  `backups.record_profiles` and `remote.record_inventory` already follow. A BIOS
-  enumeration is slow and the offline window is 90 seconds; that precedent exists
-  precisely to keep one out of the other.
+- **✅ Settings inventory — built (hub 1.59.0 + agent 3.19.0).** `bios.py` (model,
+  flask-free) + `bios_web.py` (console read + "re-read now"), a `machine_bios` table, a
+  **Firmware tab** on the machine page, and `agent/src/TempMonitorAgent/Bios/` — three
+  vendor sources behind one dispatcher, a change-only reporter, and a
+  `refresh_bios_inventory` executor. A machine reports its readable BIOS settings under a
+  `bios` key on `POST /api/agent/heartbeat`, content-hashed so it is sent only when it
+  actually changes, never fatal, and scanned on the agent's inventory loop rather than the
+  heartbeat's — a BIOS enumeration is seconds and the offline window is 90, so the two must
+  not share a thread. Resolved parameters:
+  - **Three outcomes, and the split is the feature.** `supported` / `unsupported` /
+    `error`, distinct in the model, the payload and the UI. A namespace that is *absent*
+    (Dell without Command | Monitor, any VM, any whitebox) is **unsupported** — neutral,
+    permanent, and quiet: one payload per machine, ever. A namespace that exists and throws
+    is an **error**, and so is one that enumerates *nothing*, because "the interface
+    answered with zero attributes" is a permissions or WMI-repository fault wearing the
+    costume of a support claim. The hub additionally normalises an unrecognised support
+    string to `error` rather than storing it: guessing `unsupported` would file a real fault
+    under the one state nobody investigates.
+  - **A fourth value exists only at the read boundary: `support: null`.** "No agent has told
+    us" is not "this hardware cannot do it" — and until the 3.19.0 release propagates, every
+    machine in the fleet is in that state. Rendering it as `unsupported` would write off a
+    whole fleet on the strength of no evidence.
+  - **`password_set` is nullable on purpose.** Null where the vendor gives no way to ask,
+    which is not the same as `false`. The two lead to different advice the moment somebody
+    tries to change a setting, and the write half is next.
+  - **Vendor dispatch is agent-side; the hub never branches on vendor.** What crosses the
+    wire is already normalised to `{name, value, kind, possible_values, read_only,
+    display_name}`. Dell (`root\dcim\sysman`) and HP (`root\hp\instrumentedBIOS`) split
+    attributes across three classes by type — so the kind comes from the class, not from
+    guessing at the value — while Lenovo is the odd one out: every setting is one string,
+    `"WakeOnLAN,Enable;[Enable,Disable,ACOnly]"`, so parsing that format *is* the interface,
+    and a setting arriving with no option list is reported `unknown` rather than assumed an
+    enum. No CLI fallback is used: CCTK/BiosConfigUtility/ThinkBiosConfig would each add a
+    deployment prerequisite to an agent meant to work on a stock vendor image.
+  - **Read is `view`, re-read is `issue_commands`.** What a PC's firmware is set to is
+    inventory, like its model or its disks; needing an admin to answer "is Wake-on-LAN on?"
+    would make the question cost more than walking to the desk. Forcing a re-read queues a
+    real command on a real machine, so it sits behind the command channel's perimeter, and
+    the console says *queued*, not *refreshed* — a machine that is asleep answers on its
+    next check-in (same honesty as "Back up now").
+  - **Names stay per-vendor, as specified below.** The real attribute name is always shown;
+    a vendor's friendlier `display_name` goes beside it, never instead of it, because the
+    real name is the identity a write will target.
+
+  **Tested where it can be** — `tests/test_bios.py` (the ingest boundary: nothing a machine
+  can send raises, the states never collapse, caps bound the row) + `tests/test_bios_web.py`
+  (both capability gates in both directions, and a malformed `bios` block still returning a
+  200 heartbeat — a 500 there marks the machine offline fleet-wide) +
+  `BiosReaderTests.cs` (each vendor's parsing against fake WMI rows, since a build box is
+  never simultaneously a Dell, an HP and a Lenovo). **What none of that covers is the WMI
+  adapter itself**: whether the property names above match what real firmware emits, and
+  whether a missing vendor namespace really surfaces as `InvalidNamespace`. Expect the same
+  shape of first-contact finding the LDAP and TURN work produced.
 - **New `set_bios_settings` command type** in `ALL_COMMANDS`, carrying a snapshot of the
   attribute/value pairs the operator chose (like `install_virtual_display` carries its
   payload pin).
@@ -1221,12 +1268,31 @@ feature on this roadmap there is no restore path — no chain to re-pull, no sna
 roll back to. Battery/AC preconditions, model matching and a refusal to flash a machine
 whose reported model does not match the payload are part of v1, not hardening for later.
 
+**A settings change does NOT imply a reboot, and the design must not assume one.** Whether
+a write takes effect immediately is **per vendor *and* per setting**: Dell's interface
+(CCTK and the `root\dcim\sysman` classes behind it) applies many attributes live, others
+sit pending until POST, and HP and Lenovo each draw that line somewhere else again. So
+"changed a BIOS setting → tell the operator to reboot" is wrong most of the time, and a
+per-vendor "requires reboot" table would be the alias-map mistake in another costume —
+guessed from documentation, wrong on the third vendor, and wrong per-attribute even where
+the vendor is right.
+
+**The inventory is the source of truth, so verification replaces the guess.** After a write
+the agent re-reads the affected attributes and reports what the firmware now says. If the
+new value is there, the change is applied — say so, and say nothing about rebooting. If the
+old value is still there and the write itself did not fail, the change is **pending**, and
+*that* is when the console asks for a restart. This needs no vendor knowledge, is correct
+per-attribute for free, and degrades honestly on hardware nobody has tested: the worst case
+is "pending" on a machine that actually applied it live, which the next scheduled read
+corrects. It also gives the write half a real completion signal rather than an exit code,
+the same way `update_bios` gets its answer from the BIOS version after the flash rather
+than from the command result.
+
 **Still to decide during implementation**: whether `set_bios_settings` is favoritable (a
 boot-order policy is genuinely reusable across a fleet, unlike the session and deploy
 types that are excluded today); whether firmware payloads reuse the `packages.py` blob
-store outright or need their own; and how a settings change that requires a reboot to take
-effect is represented, given the reported inventory will disagree with the intended state
-until then.
+store outright or need their own; and whether a pending change is stored per attribute on
+`machine_bios` or lives on the command result until the next inventory report supersedes it.
 
 ---
 
@@ -1319,10 +1385,14 @@ comes online.
    stub that has been queued-but-unimplemented since the signing removal, and adds the
    settings half it never had. Its prerequisite is **done**: `manufacturer` is collected,
    stored, merged and shown as of hub 1.57.0 (+ agent 3.18.0 / companion 2.12.0), so
-   vendor dispatch now has something to dispatch on. Next is the change-only BIOS
-   settings inventory on the heartbeat, then the `set_bios_settings` command, then the
-   `update_bios` executor. **The agent half is pending a signed release** (build +
-   `sign_release.py --sign-agent` + asset upload).
+   vendor dispatch now has something to dispatch on. The **change-only settings inventory
+   is done too** (hub 1.59.0 + agent 3.19.0): three vendor sources, a `machine_bios` table,
+   a Firmware tab, and `unsupported` kept firmly distinct from `error`. Next is the
+   `set_bios_settings` command — the write half, which is where the BIOS password lands,
+   and where a change is confirmed by **re-reading the attribute** rather than by assuming a
+   reboot (many Dell attributes apply live; the line is per vendor *and* per setting) —
+   then the `update_bios` executor. **The agent half
+   is pending a signed release** (build + `sign_release.py --sign-agent` + asset upload).
 10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
     NIC inventory (MAC + subnet) the hub does not collect today.
 

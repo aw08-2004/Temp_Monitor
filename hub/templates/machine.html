@@ -42,6 +42,11 @@
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
                 aria-controls="tab-remote" aria-selected="false" tabindex="-1">{{ t('machine.tab.remote') }}</button>
         {% endif %}
+        {# Firmware (roadmap #9) is NOT capability-gated: what a PC's BIOS is set to is
+           inventory, like its model or its disks, and anyone who can open this page has
+           `view` already. The re-read button inside is the part that needs issue_commands. #}
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-firmware"
+                aria-controls="tab-firmware" aria-selected="false" tabindex="-1">{{ t('machine.tab.firmware') }}</button>
     </div>
 
     {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
@@ -354,6 +359,31 @@
         </div>
     </div>
     {% endif %}
+
+    {# Firmware settings, as last reported on the heartbeat (roadmap #9). Structure only --
+       firmware.js renders the state (never reported / unsupported / error / N attributes)
+       and the attribute table, because four states rendered from one payload are clearer in
+       one renderer than as four Jinja branches over a value the template cannot see. #}
+    <div class="tab-panel" id="tab-firmware" role="tabpanel" aria-labelledby="tab-btn-firmware" hidden>
+        <div class="card" id="firmware-card">
+            <div class="terminal__head">
+                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.title') }}</div>
+                <span class="status-pill status-pill--muted" id="firmware-status">
+                    <span class="status-pill__dot"></span><span id="firmware-status-text">{{ t('common.loading') }}</span></span>
+                <div class="terminal__head-actions">
+                    <input type="search" id="firmware-search" class="input"
+                           placeholder="{{ t('machine.firmware.search') }}"
+                           aria-label="{{ t('machine.firmware.search') }}">
+                    {% if cap.ISSUE_COMMANDS in user_capabilities %}
+                    <button id="firmware-refresh" type="button" class="btn btn--ghost"
+                            title="{{ t('machine.firmware.refresh_title') }}">{{ t('machine.firmware.refresh') }}</button>
+                    {% endif %}
+                </div>
+            </div>
+            <div id="firmware-meta" class="terminal__hint"></div>
+            <div id="firmware-body"></div>
+        </div>
+    </div>
 </div>
 
 {# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
@@ -386,5 +416,6 @@
 {% if cap.REMOTE_CONTROL in user_capabilities %}
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 {% endblock %}
