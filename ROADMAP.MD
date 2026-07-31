@@ -1127,7 +1127,7 @@ language with more forms needs a rule table, not just a catalog.
 
 ---
 
-## 📋 9. BIOS settings + firmware management
+## 🚧 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0
 
 Read and change firmware settings across the fleet, and finally execute the `update_bios`
 command type that has been accepted, queued and routed — and then stubbed — since the
@@ -1153,12 +1153,31 @@ in the fleet shows a red error forever.
 
 **Scope:**
 
-- **`manufacturer` has to be collected first.** `SystemInfo.cs` reads
-  `Win32_BIOS.SerialNumber` and `Win32_ComputerSystem.Model` but not `Manufacturer`, and
-  vendor dispatch is the first branch every code path here takes. Add a
+- **✅ `manufacturer` — built (hub 1.57.0 + agent 3.18.0 / companion 2.12.0).** Vendor
+  dispatch is the first branch every code path here takes, and `SystemInfo.cs` read
+  `Win32_BIOS.SerialNumber` and `Win32_ComputerSystem.Model` but not `Manufacturer`. Now a
   `machine_info.manufacturer` column on the exact `service_tag` precedent from #6 —
   collected by both agents, COALESCE-updated in `save_machine_info`, backfilled by the
-  duplicate-serial merge, and simply null on an older agent.
+  duplicate-serial merge, null on an older agent. Two decisions worth carrying into the
+  rest of #9:
+  - **A whitebox's placeholder vendor is filtered to null, not stored.**
+    `Win32_ComputerSystem.Manufacturer` reads `System manufacturer` or
+    `To Be Filled By O.E.M.` on a self-built PC, and `model` has never been filtered at
+    all — but manufacturer is what dispatch reads, so a value that looks like a brand and
+    matches no vendor is worse than no value. Both agents share the filter list
+    (`_PLACEHOLDER_MANUFACTURERS` / `PlaceholderManufacturers`), extending the asset-tag
+    one. This is what keeps **null** ("no agent has told us what this is") distinct from
+    the **unsupported** outcome ("this machine has no manageable BIOS") that the feature
+    needs to be a different row.
+  - **Manufacturer counts as an identity field in `save_machine_info`.** The function
+    returns early unless *some* identity field is present, so a report carrying only a
+    manufacturer would otherwise have been dropped silently. Tested
+    (`test_manufacturer_alone_creates_a_row`).
+
+  Surfaced as an Inventory column (sortable, and in `SEARCH_FIELDS` so `dell` narrows the
+  list to one vendor — which is how a fleet-wide firmware action will be scoped) and on
+  the machine page's Identity card, above Model. Every searchable field has a visible
+  column on purpose: a row matching on something not on screen reads as a bug.
 - **Settings inventory rides the heartbeat, change-only.** A machine reports its readable
   BIOS settings under a `bios` key on `POST /api/agent/heartbeat`, content-hashed so it
   is sent only when it actually changes, and never fatal — the same discipline
@@ -1290,9 +1309,15 @@ comes online.
    asserts catalog coverage so a vocabulary entry added without words fails a test instead
    of captioning a page with its own key. 1.56.0 also fixed the browser-language fallback,
    which had been unreachable since the feature shipped.
-9. **#9 BIOS settings + firmware management ← next** — planned. Fills in the `update_bios` stub
-   that has been queued-but-unimplemented since the signing removal, and adds the settings
-   half it never had. Needs `manufacturer` on `machine_info` before anything else.
+9. **#9 BIOS settings + firmware management ← in progress** — fills in the `update_bios`
+   stub that has been queued-but-unimplemented since the signing removal, and adds the
+   settings half it never had. Its prerequisite is **done**: `manufacturer` is collected,
+   stored, merged and shown as of hub 1.57.0 (+ agent 3.18.0 / companion 2.12.0), so
+   vendor dispatch now has something to dispatch on. Next is the change-only BIOS
+   settings inventory on the heartbeat, then the `set_bios_settings` command, then the
+   `update_bios` executor. **The agent half is pending a signed release** (build +
+   `sign_release.py --sign-agent` + asset upload); companion.py 2.12.0 is re-signed and
+   ready.
 10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
     NIC inventory (MAC + subnet) the hub does not collect today.
 

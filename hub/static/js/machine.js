@@ -567,6 +567,8 @@ async function loadMachineInfo() {
         }
         const dash = t('machine.unknown');
         document.getElementById('stat-version').textContent = info.companion_version || dash;
+        document.getElementById('stat-manufacturer').textContent =
+            t('machine.manufacturer', { value: info.manufacturer || dash });
         document.getElementById('stat-model').textContent =
             t('machine.model', { value: info.model || dash });
         document.getElementById('stat-serial').textContent =

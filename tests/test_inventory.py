@@ -1,7 +1,7 @@
-"""Tests the Service Tag identity field end to end through the hub (roadmap #6):
-report ingest -> machine_info -> /api/machines and /api/machines/<machine>, plus that a
-duplicate-serial merge backfills service_tag from the dropped row like the other
-identity fields.
+"""Tests the reported identity fields end to end through the hub -- Service Tag
+(roadmap #6) and Manufacturer (roadmap #9): report ingest -> machine_info ->
+/api/machines and /api/machines/<machine>, plus that a duplicate-serial merge backfills
+each of them from the dropped row like the older identity fields.
 
 Imports app the same way test_dedup.py does (env + cwd set before import), so it drives
 the real Flask app and the real save_machine_info / merge paths rather than a stand-in.
@@ -96,10 +96,67 @@ def test_merge_backfills_service_tag():
     check("dropped row is gone", "mergeDrop" not in machines_list())
 
 
+def test_manufacturer_round_trip():
+    print("\n-- manufacturer survives report -> /api/machines & /api/machines/<machine> --")
+    report("MFR-1", serial_number="BIOS-SER-M1", manufacturer="Dell Inc.",
+           model="Latitude 5420")
+    row = machines_list().get("MFR-1")
+    check("/api/machines carries manufacturer", row and row.get("manufacturer") == "Dell Inc.")
+    check("manufacturer and model are independent fields",
+          row and row.get("model") == "Latitude 5420")
+
+    detail = client.get("/api/machines/MFR-1").get_json()
+    check("/api/machines/<machine> carries manufacturer",
+          detail.get("manufacturer") == "Dell Inc.")
+
+
+def test_manufacturer_coalesced_not_clobbered():
+    print("\n-- a later report without manufacturer does not wipe a stored one (COALESCE) --")
+    report("MFR-2", manufacturer="HP")
+    report("MFR-2", temp=50.0)   # a plain temp report, no identity fields
+    row = machines_list().get("MFR-2")
+    check("stored manufacturer preserved across a bare report",
+          row and row.get("manufacturer") == "HP")
+
+
+def test_missing_manufacturer_is_null():
+    # The distinction #9's vendor dispatch rests on: null means "no agent has told us
+    # what this is", which is not the same as a machine whose BIOS is unmanageable.
+    print("\n-- an older agent that reports no manufacturer leaves it null --")
+    report("MFR-3", serial_number="BIOS-SER-M3")
+    row = machines_list().get("MFR-3")
+    check("manufacturer is null when never reported", row and row.get("manufacturer") is None)
+
+
+def test_manufacturer_alone_creates_a_row():
+    # save_machine_info returns early unless SOME identity field is present; manufacturer
+    # has to count as one, or a report carrying nothing else would be dropped silently.
+    print("\n-- a report whose only identity field is manufacturer is still stored --")
+    report("MFR-4", manufacturer="LENOVO")
+    row = machines_list().get("MFR-4")
+    check("row written from manufacturer alone", row and row.get("manufacturer") == "LENOVO")
+
+
+def test_merge_backfills_manufacturer():
+    print("\n-- merge backfills manufacturer from the dropped row --")
+    report("mfrKeep", serial_number="SER-MFR-MERGE")
+    report("mfrDrop", serial_number="SER-MFR-MERGE", manufacturer="Dell Inc.")
+    app.merge_machines("mfrKeep", "mfrDrop")
+    row = machines_list().get("mfrKeep")
+    check("survivor inherited the dropped row's manufacturer",
+          row and row.get("manufacturer") == "Dell Inc.")
+    check("dropped row is gone", "mfrDrop" not in machines_list())
+
+
 if __name__ == "__main__":
     test_service_tag_round_trip()
     test_service_tag_coalesced_not_clobbered()
     test_missing_service_tag_is_null()
     test_merge_backfills_service_tag()
+    test_manufacturer_round_trip()
+    test_manufacturer_coalesced_not_clobbered()
+    test_missing_manufacturer_is_null()
+    test_manufacturer_alone_creates_a_row()
+    test_merge_backfills_manufacturer()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

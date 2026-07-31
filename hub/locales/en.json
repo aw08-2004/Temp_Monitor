@@ -128,10 +128,11 @@
   "inventory": {
     "heading": "Asset Inventory",
     "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
-    "search_placeholder": "Search name, asset tag, serial, service tag…",
+    "search_placeholder": "Search name, manufacturer, asset tag, serial, service tag…",
     "col": {
       "machine": "Machine",
       "status": "Status",
+      "manufacturer": "Manufacturer",
       "model": "Model",
       "serial": "Serial",
       "service_tag": "Service tag",
@@ -1357,6 +1358,7 @@
     "gpu_clock": "Clock: {value}",
     "companion_version": "Companion Version",
     "identity": "Identity",
+    "manufacturer": "Manufacturer: {value}",
     "model": "Model: {value}",
     "serial": "Serial: {value}",
     "service_tag": "Service tag: {value}",

@@ -73,6 +73,7 @@ public sealed class TelemetryReporter : IDisposable
             ["client_ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             ["serial_number"] = _identity.SerialNumber,
             ["model"] = _identity.Model,
+            ["manufacturer"] = _identity.Manufacturer,
             ["asset_tag"] = _identity.AssetTag,
             ["service_tag"] = _identity.ServiceTag,
         };

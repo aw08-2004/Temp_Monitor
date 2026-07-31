@@ -17,8 +17,10 @@ const countEl = document.getElementById('inventory-count');
 const headRow = document.getElementById('inventory-head');
 
 const SORT_STORAGE_KEY = 'fleethub.inventory.sort';
-// The columns a row can be searched against -- name plus the three identifiers.
-const SEARCH_FIELDS = ['machine', 'asset_tag', 'serial_number', 'service_tag'];
+// The columns a row can be searched against -- name, the three identifiers, and the
+// manufacturer, so "dell" narrows the list to one vendor's machines. Every field here has
+// a visible column: a row that matches on something not on screen looks like a bug.
+const SEARCH_FIELDS = ['machine', 'asset_tag', 'serial_number', 'service_tag', 'manufacturer'];
 
 let allRows = [];          // the last fetch, unfiltered/unsorted
 let searchQuery = '';
@@ -148,6 +150,8 @@ function renderRow(row) {
     setStatusPill(pill, online ? 'ok' : 'muted', online ? t('common.status.online') : t('common.status.offline'));
     statusTd.appendChild(pill);
 
+    const makeTd = document.createElement('td');
+    makeTd.textContent = row.manufacturer || '--';
     const modelTd = document.createElement('td');
     modelTd.textContent = row.model || '--';
     const serialTd = document.createElement('td');
@@ -170,7 +174,8 @@ function renderRow(row) {
     btn.addEventListener('click', () => deleteMachine(row.machine, tr, btn));
     actionTd.appendChild(btn);
 
-    tr.append(nameTd, statusTd, modelTd, serialTd, serviceTd, assetTd, tempTd, seenTd, actionTd);
+    tr.append(nameTd, statusTd, makeTd, modelTd, serialTd, serviceTd, assetTd, tempTd,
+              seenTd, actionTd);
     return tr;
 }
 
@@ -210,7 +215,7 @@ async function loadInventory() {
         // and a translation is not something to interpolate into markup.
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 9;
+        td.colSpan = 10;
         td.className = 'stat-card__meta';
         td.textContent = t('inventory.load_failed');
         tr.appendChild(td);

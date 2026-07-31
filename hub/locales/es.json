@@ -100,10 +100,11 @@
   "inventory": {
     "heading": "Inventario de activos",
     "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos en línea también aparecen en el panel en vivo; los que están sin conexión permanecen aquí hasta que se eliminen. Eliminar un equipo borra de forma permanente su identidad, su historial de temperatura y su inscripción en la flota.",
-    "search_placeholder": "Buscar por nombre, etiqueta de activo, n.º de serie o service tag…",
+    "search_placeholder": "Buscar por nombre, fabricante, etiqueta de activo, n.º de serie o service tag…",
     "col": {
       "machine": "Equipo",
       "status": "Estado",
+      "manufacturer": "Fabricante",
       "model": "Modelo",
       "serial": "N.º de serie",
       "service_tag": "Service tag",
@@ -1258,6 +1259,7 @@
     "gpu_clock": "Frecuencia: {value}",
     "companion_version": "Versión de Companion",
     "identity": "Identidad",
+    "manufacturer": "Fabricante: {value}",
     "model": "Modelo: {value}",
     "serial": "N.º de serie: {value}",
     "service_tag": "Service tag: {value}",

@@ -67,6 +67,7 @@ public sealed class SystemIdentity
 {
     [JsonPropertyName("serial_number")] public string? SerialNumber { get; set; }
     [JsonPropertyName("model")] public string? Model { get; set; }
+    [JsonPropertyName("manufacturer")] public string? Manufacturer { get; set; }
     [JsonPropertyName("asset_tag")] public string? AssetTag { get; set; }
     [JsonPropertyName("service_tag")] public string? ServiceTag { get; set; }
 }

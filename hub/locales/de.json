@@ -100,10 +100,11 @@
   "inventory": {
     "heading": "Anlageninventar",
     "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Online-Computer erscheinen zusätzlich in der Live-Übersicht; Offline-Computer bleiben hier, bis sie gelöscht werden. Beim Löschen werden Identität, Temperaturverlauf und Flottenregistrierung dauerhaft entfernt.",
-    "search_placeholder": "Nach Name, Anlagenkennzeichen, Seriennummer oder Service-Tag suchen…",
+    "search_placeholder": "Nach Name, Hersteller, Anlagenkennzeichen, Seriennummer oder Service-Tag suchen…",
     "col": {
       "machine": "Computer",
       "status": "Status",
+      "manufacturer": "Hersteller",
       "model": "Modell",
       "serial": "Seriennummer",
       "service_tag": "Service-Tag",
@@ -1258,6 +1259,7 @@
     "gpu_clock": "Takt: {value}",
     "companion_version": "Companion-Version",
     "identity": "Identität",
+    "manufacturer": "Hersteller: {value}",
     "model": "Modell: {value}",
     "serial": "Seriennummer: {value}",
     "service_tag": "Service-Tag: {value}",

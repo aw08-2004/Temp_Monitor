@@ -20,7 +20,7 @@ import requests
 # From 2.8.0 onward every pushed companion.py must also be re-signed (see
 # sign_release.py) or clients will refuse the update. See UPDATE_PUBLIC_KEY_HEX.
 # ================================
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 
 # Third-party packages the companion needs. Update this alongside any new
 # import so a self-update installs them automatically -- see install_requirements().
@@ -276,6 +276,12 @@ def flatten_sensors(node, hardware=None, hardware_id=None, group=None, found=Non
 # ================================
 _PLACEHOLDER_ASSET_TAGS = ("default string", "no asset", "to be filled", "invalid")
 
+# Whitebox/OEM-unset values for Win32_ComputerSystem.Manufacturer. Filtered to None
+# rather than stored, because manufacturer is what BIOS/firmware management dispatches on
+# (roadmap #9): "System manufacturer" is not a vendor, and a machine whose vendor is
+# unknown must read as unknown rather than as a brand nobody can query.
+_PLACEHOLDER_MANUFACTURERS = _PLACEHOLDER_ASSET_TAGS + ("system manufacturer", "o.e.m.")
+
 
 def get_system_info():
     """Reads BIOS/chassis identity via CIM. Values don't change at runtime, so call once."""
@@ -286,11 +292,13 @@ def get_system_info():
         "[PSCustomObject]@{ "
         "SerialNumber = $bios.SerialNumber; "
         "Model = $cs.Model; "
+        "Manufacturer = $cs.Manufacturer; "
         "AssetTag = $encl.SMBIOSAssetTag; "
         "ServiceTag = $encl.SerialNumber "
         "} | ConvertTo-Json -Compress"
     )
-    info = {"serial_number": None, "model": None, "asset_tag": None, "service_tag": None}
+    info = {"serial_number": None, "model": None, "manufacturer": None,
+            "asset_tag": None, "service_tag": None}
     try:
         output = subprocess.check_output(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_command],
@@ -301,6 +309,7 @@ def get_system_info():
 
         serial = str(parsed.get("SerialNumber") or "").strip()
         model = str(parsed.get("Model") or "").strip()
+        manufacturer = str(parsed.get("Manufacturer") or "").strip()
         asset_tag = str(parsed.get("AssetTag") or "").strip()
         # The chassis/enclosure serial -- distinct from the BIOS serial above, and the
         # field that carries the Dell "Service Tag". Placeholder-filtered like asset_tag,
@@ -309,6 +318,8 @@ def get_system_info():
 
         info["serial_number"] = serial or None
         info["model"] = model or None
+        if manufacturer and not any(p in manufacturer.lower() for p in _PLACEHOLDER_MANUFACTURERS):
+            info["manufacturer"] = manufacturer
         # Many boards ship with a placeholder like "Default string" when no asset tag is set
         if asset_tag and not any(p in asset_tag.lower() for p in _PLACEHOLDER_ASSET_TAGS):
             info["asset_tag"] = asset_tag
