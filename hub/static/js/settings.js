@@ -87,7 +87,8 @@ function renderField(field) {
     const control = buildControl(field);
     top.appendChild(control);
 
-    if (field.unit && field.type !== 'bool' && field.type !== 'str_list') {
+    if (field.unit && field.type !== 'bool' && field.type !== 'str_list'
+        && field.type !== 'url_list') {
         const unit = document.createElement('span');
         unit.className = 'setting__unit';
         unit.textContent = field.unit;
@@ -136,7 +137,7 @@ function buildControl(field) {
             ? buildTriStateControl(field)
             : buildCheckboxControl(field);
     }
-    if (field.type === 'str_list') return buildPreferenceControl(field);
+    if (field.type === 'str_list' || field.type === 'url_list') return buildListControl(field);
     if (field.type === 'enum') return buildEnumControl(field);
     return buildNumberControl(field);
 }
@@ -208,22 +209,44 @@ function buildEnumControl(field) {
     return select;
 }
 
-// Ordered preference list: order IS the setting, so the control has to express rank,
-// not just membership. Reorder/remove, plus an add picker seeded from sensor names the
-// fleet is actually reporting (field.choices), falling back to free text so an operator
-// can still enter a name for a machine that is currently offline.
-function buildPreferenceControl(field) {
+// Ordered list: order IS the setting, so the control has to express rank, not just
+// membership.
+//
+// Two shapes, and the difference is driven by the field rather than hard-coded, because
+// this used to be the sensor-preference control only -- which meant the STUN and TURN
+// fields rendered with a dead "No sensors reported yet" dropdown and an "or type a sensor
+// name" box, offered to lowercase what you typed, and refused to let you delete the last
+// entry even though both settings are documented as optional:
+//
+//   * a CLOSED vocabulary (field.choices non-empty -- sensor names the fleet is actually
+//     reporting): show the picker, normalise to lowercase to match how the names are
+//     compared downstream, and keep at least one entry.
+//   * an OPEN list (url_list: STUN/TURN URLs): free text only, typed verbatim, and
+//     emptiable. field.placeholder carries the example.
+function buildListControl(field) {
     const box = document.createElement('div');
     box.style.flexBasis = '100%';
     box.id = controlId(field.key);
+
+    const choices = Array.isArray(field.choices) ? field.choices : null;
+    // A field that declares choices at all is drawn from a vocabulary, even when the fleet
+    // happens to be reporting none right now -- that is what keeps the picker (and its
+    // "nothing reported yet" state) on the sensor field and off the URL fields.
+    const isVocabulary = choices !== null;
+    const minItems = isVocabulary ? 1 : 0;
 
     let items = Array.isArray(field.value) ? field.value.slice() : [];
 
     const list = document.createElement('ol');
     list.className = 'pref-list';
 
+    const empty = document.createElement('p');
+    empty.className = 'setting__help';
+    empty.textContent = 'None configured.';
+
     const redraw = () => {
         list.replaceChildren();
+        empty.hidden = items.length > 0;
         items.forEach((name, index) => {
             const li = document.createElement('li');
             li.className = 'pref-list__item';
@@ -246,7 +269,7 @@ function buildPreferenceControl(field) {
                 [items[index + 1], items[index]] = [items[index], items[index + 1]];
                 commit();
             }));
-            li.appendChild(moveButton('✕', 'Remove', items.length > 1, () => {
+            li.appendChild(moveButton('✕', 'Remove', items.length > minItems, () => {
                 items.splice(index, 1);
                 commit();
             }));
@@ -262,45 +285,65 @@ function buildPreferenceControl(field) {
     };
 
     box.appendChild(list);
+    box.appendChild(empty);
 
     const adder = document.createElement('div');
     adder.className = 'toolbar';
     adder.style.marginBottom = '0';
 
-    const picker = document.createElement('select');
-    picker.className = 'select';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = (field.choices && field.choices.length)
-        ? 'Add a sensor…'
-        : 'No sensors reported yet';
-    picker.appendChild(placeholder);
-    for (const choice of field.choices || []) {
-        const opt = document.createElement('option');
-        opt.value = choice;
-        opt.textContent = choice;             // agent-supplied; never innerHTML
-        picker.appendChild(opt);
+    let picker = null;
+    if (isVocabulary) {
+        picker = document.createElement('select');
+        picker.className = 'select';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = choices.length ? 'Add a sensor…' : 'No sensors reported yet';
+        picker.appendChild(placeholder);
+        for (const choice of choices) {
+            const opt = document.createElement('option');
+            opt.value = choice;
+            opt.textContent = choice;         // agent-supplied; never innerHTML
+            picker.appendChild(opt);
+        }
+        adder.appendChild(picker);
     }
-    adder.appendChild(picker);
 
     const custom = document.createElement('input');
     custom.className = 'input';
     custom.type = 'text';
-    custom.placeholder = 'or type a sensor name';
+    custom.placeholder = field.placeholder
+        || (isVocabulary ? 'or type a sensor name' : 'Add an entry');
+    if (!isVocabulary) custom.style.flexGrow = '1';
     adder.appendChild(custom);
+
+    const addEntry = () => {
+        const typed = custom.value.trim();
+        const picked = picker ? picker.value : '';
+        // Lowercase only for a closed vocabulary: those names are matched
+        // case-insensitively downstream, so normalising here keeps what is shown identical
+        // to what is matched. A URL is stored exactly as typed.
+        let name = typed || picked;
+        if (isVocabulary) name = name.toLowerCase();
+        if (!name || items.includes(name)) return;
+        items.push(name);
+        custom.value = '';
+        if (picker) picker.value = '';
+        commit();
+    };
+
+    // Enter in the text box adds, rather than doing nothing or submitting the page --
+    // typing three URLs in a row should not need a trip to the mouse between each.
+    custom.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        addEntry();
+    });
 
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'btn btn--ghost';
     add.textContent = 'Add';
-    add.addEventListener('click', () => {
-        const name = (custom.value.trim() || picker.value).toLowerCase();
-        if (!name || items.includes(name)) return;
-        items.push(name);
-        custom.value = '';
-        picker.value = '';
-        commit();
-    });
+    add.addEventListener('click', addEntry);
     adder.appendChild(add);
 
     box.appendChild(adder);

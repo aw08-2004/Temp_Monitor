@@ -74,7 +74,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.52.2"
+HUB_VERSION = "1.53.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2009,7 +2009,19 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
         return
     with get_db_conn() as conn:
         # Preserve history: the dropped hostname's readings belong to the same box.
-        conn.execute("UPDATE readings SET machine = ? WHERE machine = ?", (survivor, dropped))
+        #
+        # OR IGNORE, then delete the leftovers, because readings carries a UNIQUE index on
+        # (ts_epoch, machine, temp). The two names ARE one physical machine, so a second in
+        # which both reported the same temperature is not a freak coincidence -- it is the
+        # normal shape of the rename/re-enroll window that creates duplicates in the first
+        # place. A bare UPDATE raises IntegrityError there and aborts the whole merge
+        # mid-transaction, so the merge that most needs to work is the one that fails.
+        #
+        # A skipped row is by definition redundant: same second, same temperature as a row
+        # the survivor already has. Dropping it loses nothing but a duplicate.
+        conn.execute("UPDATE OR IGNORE readings SET machine = ? WHERE machine = ?",
+                     (survivor, dropped))
+        conn.execute("DELETE FROM readings WHERE machine = ?", (dropped,))
         d = conn.execute(
             "SELECT asset_tag, serial_number, service_tag, model, companion_version "
             "FROM machine_info WHERE machine = ?",

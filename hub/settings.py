@@ -51,7 +51,7 @@ Setting = namedtuple("Setting", [
     "key",       # "data.retention_days" -- the section is the prefix, by convention
     "section",   # "computer" | "hub" | "data" | "fleet"
     "label",     # human label in the form
-    "type",      # "int" | "float" | "bool" | "str" | "enum" | "str_list" | "path_list"
+    "type",      # "int"|"float"|"bool"|"str"|"enum"|"str_list"|"path_list"|"url_list"
     "default",   # MUST equal the constant this replaced
     "minimum",   # numeric bounds; None for non-numeric types
     "maximum",
@@ -59,13 +59,14 @@ Setting = namedtuple("Setting", [
     "help",      # one or two sentences, shown under the field
     "choices",   # for "enum"/"str_list": a list, or callable(db_path) -> list
     "agent",     # True => shipped to agents over the heartbeat config channel
+    "placeholder",  # for the list types: example text in the "add an entry" box
 ])
 
 
 def _s(key, section, label, type, default, *, minimum=None, maximum=None,
-       unit="", help="", choices=None, agent=False):
+       unit="", help="", choices=None, agent=False, placeholder=""):
     return Setting(key, section, label, type, default, minimum, maximum,
-                   unit, help, choices, agent)
+                   unit, help, choices, agent, placeholder)
 
 
 # Default for computer.primary_sensor_preference. Mirrors SensorReader.cs's
@@ -311,14 +312,20 @@ REGISTRY = (
        minimum=60, maximum=86400, unit="seconds",
        help="How long the short-lived TURN credentials handed to each peer stay valid. "
             "Only needs to cover connection setup; media keeps flowing once ICE completes."),
-    _s("remote.stun_urls", "remote", "STUN servers", "str_list", [],
+    _s("remote.stun_urls", "remote", "STUN servers", "url_list", [],
+       placeholder="stun:relay.example.com:3478",
        help="STUN URLs offered to both peers for NAT discovery, e.g. "
-            "stun:stun.l.google.com:19302. Optional; leave empty on a LAN."),
-    _s("remote.turn_urls", "remote", "TURN servers", "str_list", [],
-       help="TURN relay URLs (e.g. turn:your-hub:3478). Required for peers behind NATs that "
-            "block direct connections -- point these at the hub's TURN server. Credentials "
-            "are minted per session from REMOTE_TURN_SECRET in .env; TURN is skipped if that "
-            "secret is unset."),
+            "stun:stun.l.google.com:19302. Optional; leave empty on a LAN. One entry is "
+            "enough -- a STUN URL on a LAN address just returns a peer its own LAN "
+            "address, duplicating a candidate it already has."),
+    _s("remote.turn_urls", "remote", "TURN servers", "url_list", [],
+       placeholder="turn:relay.example.com:3478",
+       help="TURN relay URLs, tried in order. Required for peers behind NATs that block "
+            "direct connections. A relay behind NAT needs three: turn:<public-host>:3478 "
+            "for peers on the internet, turn:<lan-ip>:3478 for a peer inside the relay's "
+            "own network, and turn:<lan-ip>:3479 for two peers both inside it -- see "
+            "turn/README.md. Credentials are minted per session from REMOTE_TURN_SECRET "
+            "in .env; TURN is skipped if that secret is unset."),
 
     # ---------------- Active Directory (roadmap #4) ----------------
     # Entirely opt-in: with `enabled` off nothing runs, ldap3 is never imported, and the
@@ -515,6 +522,32 @@ def coerce_and_validate(setting, raw):
         # what is stored is what is matched, and a stray "CPU Package" can't look
         # different from "cpu package" in the UI while behaving identically.
         return [v.lower() for v in items]
+
+    if setting.type == "url_list":
+        # STUN/TURN URLs. Deliberately NOT str_list, for the same two reasons path_list
+        # isn't: str_list refuses an empty list (but "no STUN servers" is a perfectly good
+        # answer on a LAN, and the help text says so), and it lowercases every entry, which
+        # is right for sensor names and wrong for anything an operator typed verbatim.
+        #
+        # The scheme is validated because a typo here fails silently and expensively: a
+        # malformed URL is carried all the way into the browser's RTCPeerConnection and the
+        # agent's ICE config, where it is skipped without comment, and the only symptom is
+        # that sessions stop connecting from some networks.
+        if not isinstance(raw, (list, tuple)):
+            raise ValueError(f"{label}: expected a list of URLs")
+        items = []
+        for value in raw:
+            text = str(value).strip()
+            if not text:
+                continue
+            scheme, sep, rest = text.partition(":")
+            if not sep or scheme.lower() not in ("stun", "stuns", "turn", "turns"):
+                raise ValueError(
+                    f"{label}: {text!r} must start with stun:, stuns:, turn: or turns:")
+            if not rest.strip():
+                raise ValueError(f"{label}: {text!r} has no host")
+            items.append(text)
+        return items
 
     if setting.type == "path_list":
         # Backup include/exclude patterns. Deliberately NOT str_list, which is wrong here
@@ -724,6 +757,7 @@ def schema(db_path):
                 "help": setting.help,
                 "choices": _resolve_choices(setting, db_path),
                 "agent": setting.agent,
+                "placeholder": setting.placeholder,
             })
         if fields:
             sections.append({"name": name, "label": _SECTION_LABELS[name], "fields": fields})

@@ -188,6 +188,29 @@ def test_coercion():
           _rejects(db, {"computer.primary_sensor_preference": ["", "  "]}))
     check("unparseable bool is rejected", _rejects(db, {"hub.auto_update": "maybe"}))
 
+    # url_list is the STUN/TURN shape: emptiable and case-preserving, unlike str_list. A
+    # settings page that lowercases what you typed, or refuses to let you clear a field its
+    # own help text calls optional, is one operators stop trusting.
+    print("\n-- url_list (STUN/TURN) --")
+    settings.set_many(db, {"remote.turn_urls": ["turn:Relay.Example.COM:3478", " turn:10.0.0.5:3479 "]})
+    check("URLs keep their case and are trimmed",
+          settings.get(db, "remote.turn_urls")
+          == ["turn:Relay.Example.COM:3478", "turn:10.0.0.5:3479"])
+    check("an empty url_list is accepted", _accepts(db, {"remote.stun_urls": []}))
+    check("blank entries are dropped, not stored",
+          _accepts(db, {"remote.stun_urls": ["", "  "]})
+          and settings.get(db, "remote.stun_urls") == [])
+    check("stuns:/turns: are accepted",
+          _accepts(db, {"remote.stun_urls": ["stuns:relay.example.com:5349"]}))
+    check("a URL with no scheme is rejected",
+          _rejects(db, {"remote.turn_urls": ["relay.example.com:3478"]}))
+    check("a non-ICE scheme is rejected",
+          _rejects(db, {"remote.turn_urls": ["https://relay.example.com"]}))
+    check("a scheme with no host is rejected",
+          _rejects(db, {"remote.turn_urls": ["turn:"]}))
+    check("non-list for a url_list is rejected",
+          _rejects(db, {"remote.turn_urls": "turn:relay.example.com:3478"}))
+
 
 def test_range_validation():
     print("\n-- bounds are enforced at the edges --")

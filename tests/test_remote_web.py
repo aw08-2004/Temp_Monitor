@@ -186,8 +186,12 @@ def main():
 
         print("\n== TURN status + secret management (manage_settings) ==")
         os.environ.pop("REMOTE_TURN_SECRET", None)
-        # str_list fields reject an empty list on save; you clear them via reset (drop overrides).
-        settings.reset(db_path, ["remote.stun_urls", "remote.turn_urls"])
+        # url_list, unlike str_list, accepts an empty list: "no STUN servers" is a real answer
+        # on a LAN, and the Settings control lets you delete the last entry to say so.
+        settings.set_many(db_path, {"remote.stun_urls": [], "remote.turn_urls": []})
+        check("a url_list can be emptied through a normal save",
+              settings.get_list(db_path, "remote.stun_urls") == []
+              and settings.get_list(db_path, "remote.turn_urls") == [])
         r = c.get("/api/remote/turn/status")
         st = r.get_json()
         check("status -> 200 for a settings manager", r.status_code == 200)

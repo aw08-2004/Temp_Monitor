@@ -31,9 +31,53 @@ hard way and written up below. The Windows installer therefore builds a WSL2 dis
   on the hub, TURN is simply omitted from the ICE list and only STUN/direct paths are tried.
 - **`TURN_EXTERNAL_IP`** — the **public** IP address clients reach this host on. Required behind
   NAT/cloud, or coturn will hand out unreachable relay candidates.
+- **`TURN_LOCAL_IP`** — this host's **LAN** address, for the second listener described below.
 - Firewall/NAT openings to this host:
   - **3478/udp and 3478/tcp** — the TURN control port.
   - **49160–49200/udp** (default range, tunable) — the relay port range. Media flows here.
+  - **3479/udp+tcp and 49210–49250/udp**, reachable **from the LAN only** — the LAN listener.
+    Do not port-forward these; see below.
+
+## Two listeners, three URLs
+
+`--external-ip` makes coturn advertise the **public** address in every allocate response —
+including responses to clients on its own LAN. That is exactly right for a peer out on the
+internet and useless for a peer sitting next to the relay: it gets handed a relay candidate
+pointing at the router's WAN address and has to hairpin back in. Most consumer routers either
+refuse that outright or do it while rewriting the source port, and ICE requires the peer to
+receive from *exactly* the advertised address **and port** — so allocations succeed, the log
+looks healthy, and every connectivity check fails.
+
+Adding a LAN URL alone does **not** fix this. Which address a client uses to *reach* coturn has
+no bearing on the relay address coturn *advertises*. The fix is a second listener that does not
+rewrite anything:
+
+| Listener | Binds | `external-ip` | Relay range | Serves |
+|---|---|---|---|---|
+| public (`/etc/turnserver.conf`) | `0.0.0.0:3478` | yes | 49160–49200 | peers on the internet |
+| LAN (`/etc/turnserver-lan.conf`) | `<lan-ip>:3479` | **no** | 49210–49250 | peers inside this network |
+
+The two relay ranges **must not overlap** — under WSL mirrored networking (and Linux host
+networking) both instances share one network namespace, so an overlap means whichever process
+claims a port first wins and the other's allocation silently goes nowhere.
+
+Both listeners share one secret and one realm, so a hub-minted credential authenticates against
+either with no extra bookkeeping. Put **all three** URLs in **Settings → Remote Control → TURN
+servers**, in this order:
+
+```
+turn:<public-host>:3478     # both peers on the internet
+turn:<lan-ip>:3478          # one peer inside this network, one outside
+turn:<lan-ip>:3479          # both peers inside this network
+```
+
+The middle one is the same public listener reached by its LAN address: the inside peer no longer
+hairpins to *reach* the relay, and still gets a public relay candidate — which is what the
+outside peer needs to be able to reach it. A peer only ever uses what it can reach, so an
+internet-side machine's attempts against the two LAN URLs simply time out during gathering; the
+same list is correct for every machine in the fleet.
+
+`install.ps1` provisions both listeners and seeds all three URLs into Settings.
 
 ## Easiest: let the installer do it (Windows)
 
@@ -84,9 +128,10 @@ too, if that machine has one.
 Day-to-day:
 
 ```powershell
-wsl -d FleetHubTurn -u root -- systemctl status coturn     # health
-wsl -d FleetHubTurn -u root -- journalctl -u coturn -f      # live log during a session
-wsl -d FleetHubTurn -u root -- nano /etc/turnserver.conf    # config; restart coturn after
+wsl -d FleetHubTurn -u root -- systemctl status coturn coturn-lan    # health, both listeners
+wsl -d FleetHubTurn -u root -- journalctl -u coturn -u coturn-lan -f # live log during a session
+wsl -d FleetHubTurn -u root -- nano /etc/turnserver.conf             # public listener
+wsl -d FleetHubTurn -u root -- nano /etc/turnserver-lan.conf         # LAN listener
 ```
 
 The manual steps below are for a Linux host, or a TURN server that lives somewhere other than
@@ -98,16 +143,19 @@ the hub.
 # .env beside this file (or export the vars):
 #   REMOTE_TURN_SECRET=<same as the hub .env>
 #   TURN_EXTERNAL_IP=<this host's public IP>
+#   TURN_LOCAL_IP=<this host's LAN IP>
 docker compose up -d                          # Linux host (host networking) -- the good path
-docker compose logs -f turn                   # watch it accept allocations
+docker compose logs -f turn turn-lan          # watch both listeners accept allocations
 
 # Windows host, LAN / credential-proving ONLY -- not a cross-NAT relay, see Host-OS notes:
 docker compose -f docker-compose.windows.yml up -d
 ```
 
-Then in the console: **Settings → Remote Control → TURN servers** =
-`turn:<this-host-public-hostname-or-ip>:3478`. (Optionally also set **STUN servers** — the same
-coturn answers STUN, so `stun:<this-host>:3478` works with no extra dependency.)
+Then in the console: **Settings → Remote Control → TURN servers** — all three URLs from
+[Two listeners, three URLs](#two-listeners-three-urls). (Optionally also set **STUN servers** —
+the same coturn answers STUN, so `stun:<this-host>:3478` works with no extra dependency. One
+entry is enough; a LAN STUN URL is not useful, since it returns the client its own LAN address
+as a reflexive candidate, duplicating a host candidate it already has.)
 
 ## Rotating the secret from the UI
 
@@ -120,9 +168,12 @@ once for exactly this reason.
 Where the other copy lives depends on how coturn runs:
 
 ```powershell
-# WSL2 distro (what the Windows installer builds):
+# WSL2 distro (what the Windows installer builds). BOTH configs -- the LAN listener validates
+# against its own copy too, so updating only turnserver.conf leaves LAN sessions failing with
+# 401 while internet sessions work, which is a genuinely confusing half-broken state.
 wsl -d FleetHubTurn -u root -- sed -i "s/^static-auth-secret=.*/static-auth-secret=<new>/" /etc/turnserver.conf
-wsl -d FleetHubTurn -u root -- systemctl restart coturn
+wsl -d FleetHubTurn -u root -- sed -i "s/^static-auth-secret=.*/static-auth-secret=<new>/" /etc/turnserver-lan.conf
+wsl -d FleetHubTurn -u root -- systemctl restart coturn coturn-lan
 ```
 
 ```sh
@@ -210,8 +261,8 @@ Work top-down — each row assumes the ones above it pass. The agent-side log is
 `C:\ProgramData\FleetHub\Agent\remote-helper.log` on the target machine. For the coturn side:
 
 ```powershell
-wsl -d FleetHubTurn -u root -- journalctl -u coturn -f     # WSL2 (installer-built)
-docker compose logs -f turn                                 # Docker (Linux host)
+wsl -d FleetHubTurn -u root -- journalctl -u coturn -u coturn-lan -f   # WSL2 (installer-built)
+docker compose logs -f turn turn-lan                                    # Docker (Linux host)
 ```
 
 | Symptom | Almost certainly |
@@ -221,6 +272,10 @@ docker compose logs -f turn                                 # Docker (Linux host
 | coturn logs `check_stun_auth: Cannot find credentials of user <...>` or clients get **401** | The secret differs between the hub's `.env` and coturn's copy. A rotation from the UI updates only the hub — see [Rotating the secret](#rotating-the-secret-from-the-ui). |
 | Allocations **succeed** (`Global turn allocation count incremented`) but the agent still reports `peer connection state: failed` | The relay's media path, not auth. On Windows/Docker see trap 2 above. Otherwise check that the whole **relay UDP range** (not just 3478) is open and forwarded, and that the external IP is the real public IP. |
 | Works on the LAN, fails only cross-NAT | TURN is not actually being used or not reachable — the LAN case succeeds on host candidates alone and proves nothing about the relay. Always validate with a machine on a genuinely different network. |
+| Works cross-NAT, fails when **one** peer is on the relay's own LAN | That peer is hairpinning off the router to reach the relay. Add `turn:<lan-ip>:3478` — the same public listener reached by its LAN address. See [Two listeners, three URLs](#two-listeners-three-urls). |
+| Works cross-NAT, fails when **both** peers are on the relay's own LAN | The relay candidate is being rewritten to the public IP by `--external-ip`, so both peers are pointed back out at the router. Add the LAN listener and `turn:<lan-ip>:3479`. Adding a LAN URL to the *public* listener does not help — the advertised address is chosen by coturn's config, not by the URL the client dialled. |
+| LAN sessions get 401 but internet sessions work (or vice versa) | The two listeners' `static-auth-secret` values have drifted. Rotation must update `/etc/turnserver.conf` **and** `/etc/turnserver-lan.conf`. |
+| `coturn-lan` dead, journal shows `bind: Address already in use` on a relay port | The two relay ranges overlap. They must be disjoint — both instances share one network namespace. |
 | **Worked on install day, dead after a reboot** | WSL distros do **not** auto-start. Check the `FleetHub - TURN (WSL)` scheduled task exists and is running. Note it must run as the **installing user** (S4U), not SYSTEM — distros are registered per-user, so a SYSTEM task cannot see it and fails every time. |
 | Remote machines can't allocate, but the LAN can | The **Hyper-V firewall**, which is on by default with WSL 2.0.9+ and blocks inbound to WSL even in mirrored mode. This is the single most likely cause of an otherwise-correct WSL setup failing. Check `Get-NetFirewallHyperVRule`. |
 | TURN died out of nowhere, nothing was changed | Someone ran `wsl --shutdown` — Docker Desktop's own restart flow does this — and took the distro with it. The boot task's 5-minute repeating trigger recovers it; that gap is why the trigger exists. |

@@ -173,6 +173,56 @@ def test_merge_cleans_fleet_and_caches():
     check("live temp cache evicted", "boxDrop" not in app.latest_temp)
 
 
+def test_merge_survives_identical_readings():
+    """Two names for one box reporting the same temperature in the same second.
+
+    readings has a UNIQUE index on (ts_epoch, machine, temp), so re-pointing the dropped
+    host's rows onto the survivor collides. This used to raise IntegrityError and abort the
+    whole merge -- and it is not an edge case: duplicates ARE one physical machine, usually
+    caught mid-rename while both names are still reporting, which is exactly when identical
+    readings happen. It only failed intermittently in this suite because it depended on two
+    HTTP posts landing in the same wall-clock second; here it is forced.
+    """
+    print("\n-- merge tolerates readings that collide on the unique index --")
+    report("dupKeep", "SER-DUP-1")
+    report("dupDrop", "SER-DUP-1")
+
+    ts = int(datetime.now().timestamp())
+    with app.get_db_conn() as conn:
+        # The colliding pair: same second, same temp, different machine.
+        for machine in ("dupKeep", "dupDrop"):
+            conn.execute(
+                "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp, sensors_json) "
+                "VALUES (?, ?, ?, ?, NULL)",
+                (app.to_timestamp_str(datetime.fromtimestamp(ts)), ts, machine, 42.0),
+            )
+        # ...and one only the dropped host has, which must survive the merge.
+        conn.execute(
+            "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp, sensors_json) "
+            "VALUES (?, ?, ?, ?, NULL)",
+            (app.to_timestamp_str(datetime.fromtimestamp(ts - 60)), ts - 60, "dupDrop", 41.0),
+        )
+
+    app.merge_machines("dupKeep", "dupDrop")   # must not raise
+
+    check("merge completed", not machine_exists("dupDrop") and machine_exists("dupKeep"))
+    with app.get_db_conn() as conn:
+        left = conn.execute(
+            "SELECT COUNT(*) AS c FROM readings WHERE machine='dupDrop'"
+        ).fetchone()["c"]
+        collided = conn.execute(
+            "SELECT COUNT(*) AS c FROM readings WHERE machine='dupKeep' AND ts_epoch=? AND temp=42.0",
+            (ts,),
+        ).fetchone()["c"]
+        unique_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM readings WHERE machine='dupKeep' AND ts_epoch=?",
+            (ts - 60,),
+        ).fetchone()["c"]
+    check("no readings left behind under the dropped name", left == 0)
+    check("the colliding reading is kept exactly once", collided == 1)
+    check("a reading only the dropped host had is preserved", unique_row == 1)
+
+
 def _updated_at(machine):
     with app.get_db_conn() as conn:
         row = conn.execute(
@@ -188,5 +238,6 @@ if __name__ == "__main__":
     test_all_offline_keeps_newest()
     test_junk_serial_not_merged()
     test_merge_cleans_fleet_and_caches()
+    test_merge_survives_identical_readings()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

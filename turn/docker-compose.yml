@@ -7,11 +7,24 @@
 # browser.
 #
 # Usage:
-#   1. Set REMOTE_TURN_SECRET (same value as the hub's .env) and TURN_EXTERNAL_IP (this host's
-#      PUBLIC IP) in a .env file beside this compose file, or export them.
+#   1. Set REMOTE_TURN_SECRET (same value as the hub's .env), TURN_EXTERNAL_IP (this host's
+#      PUBLIC IP) and TURN_LOCAL_IP (this host's LAN IP) in a .env file beside this compose
+#      file, or export them.
 #   2. docker compose up -d
 #   3. In the FleetHub console: Settings -> Remote Control -> TURN servers =
 #      turn:<this-host-public-hostname>:3478
+#      turn:<this-host-lan-ip>:3478
+#      turn:<this-host-lan-ip>:3479
+#
+# Why three URLs and two listeners: --external-ip makes coturn advertise the PUBLIC address in
+# every allocate response, including to clients on its own LAN. That is right for a peer out on
+# the internet and useless for two peers inside this network, who would be handed a relay
+# candidate pointing at the router's WAN address and have to hairpin back in -- which most
+# routers refuse, or do while rewriting the source port, and ICE requires the peer to receive
+# from exactly the advertised address:port. The `turn-lan` service below is the same coturn with
+# no external-ip, bound to the LAN address, so LAN peers get a routable LAN relay candidate.
+#
+# The two relay port ranges MUST NOT overlap -- both services share the host's network namespace.
 #
 # See README.md for the Windows-host notes, the firewall ports, and TLS.
 services:
@@ -36,4 +49,20 @@ services:
       --listening-port=3478
       --min-port=${TURN_MIN_PORT:-49160} --max-port=${TURN_MAX_PORT:-49200}
       --external-ip=${TURN_EXTERNAL_IP}
+      --fingerprint
+
+  # The LAN listener: same secret and realm, no external-ip, bound to the LAN address only.
+  # Peers inside this network allocate here and get a relay candidate they can actually route
+  # to. Do NOT port-forward this one -- a LAN relay address means nothing on the internet.
+  turn-lan:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host
+    command: >
+      -n --log-file=stdout --no-cli --no-tls --no-dtls
+      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET}
+      --realm=${TURN_REALM:-fleethub}
+      --listening-port=${TURN_LAN_PORT:-3479}
+      --listening-ip=${TURN_LOCAL_IP}
+      --min-port=${TURN_LAN_MIN_PORT:-49210} --max-port=${TURN_LAN_MAX_PORT:-49250}
       --fingerprint
