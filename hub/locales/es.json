@@ -50,7 +50,158 @@
     "empty": "Todavía no ha informado ningún equipo."
   },
 
+  "inventory": {
+    "heading": "Inventario de activos",
+    "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos en línea también aparecen en el panel en vivo; los que están sin conexión permanecen aquí hasta que se eliminen. Eliminar un equipo borra de forma permanente su identidad, su historial de temperatura y su inscripción en la flota.",
+    "search_placeholder": "Buscar por nombre, etiqueta de activo, n.º de serie o service tag…",
+    "col": {
+      "machine": "Equipo",
+      "status": "Estado",
+      "model": "Modelo",
+      "serial": "N.º de serie",
+      "service_tag": "Service tag",
+      "asset_tag": "Etiqueta de activo",
+      "temp": "Última temp.",
+      "last_seen": "Visto por última vez"
+    },
+    "empty": "Todavía no ha informado ningún equipo.",
+    "no_match": "Ningún equipo coincide con tu búsqueda.",
+    "count": {
+      "one": "{count} equipo",
+      "other": "{count} equipos"
+    },
+    "count_filtered": {
+      "one": "{visible} de {count} equipo",
+      "other": "{visible} de {count} equipos"
+    },
+    "confirm_delete": "¿Eliminar «{machine}» de forma permanente?\n\nEsto borra su identidad, todo su historial de temperatura y su inscripción en la flota. No se puede deshacer.",
+    "delete_failed": "No se pudo eliminar «{machine}»: {error}",
+    "load_failed": "No se pudo cargar el inventario."
+  },
+
+  "alerts": {
+    "heading": "Alertas",
+    "intro": "Situaciones que requieren tu atención. Los equipos que funcionan calientes —cuya temperatura media durante la ventana configurada alcanza o supera el umbral de temperatura alta— aparecen aquí y permanecen hasta que los descartes, con una tarjeta por episodio: un equipo que se calienta repetidamente acumula una tarjeta por episodio en lugar de reemplazar la anterior. Lo mismo ocurre con los equipos duplicados que comparten n.º de serie mientras ambos están en línea: el hub no fusiona equipos activos automáticamente, así que elige qué registro conservar y los demás se fusionarán en él (su historial de temperatura se conserva).",
+    "empty": "No hay alertas abiertas. Todo está al día.",
+    "load_failed": "No se pudieron cargar las alertas.",
+    "view_machine": "Ver equipo",
+    "dismiss": "Descartar",
+    "dismiss_failed": "No se pudo descartar la alerta: {error}",
+    "unknown_machine": "(equipo desconocido)",
+    "high_temp": {
+      "title": "Temperatura alta: {machine}",
+      "title_ended": "Temperatura alta (finalizada): {machine}",
+      "window_minutes": "de {minutes} min",
+      "window_unknown": "de la ventana",
+      "ongoing": "La media {window} de {avg} °C alcanza o supera el umbral de {threshold} °C. Caliente desde {since}.",
+      "ongoing_peak": "La media {window} de {avg} °C alcanza o supera el umbral de {threshold} °C (pico de {peak} °C). Caliente desde {since}.",
+      "ended": "Alcanzó o superó el umbral de {threshold} °C. Desde {from} hasta {until}.",
+      "ended_peak": "Alcanzó o superó el umbral de {threshold} °C, con un pico de {peak} °C (media {window}). Desde {from} hasta {until}."
+    },
+    "duplicate": {
+      "title": "⚠ N.º de serie duplicado: {serial}",
+      "unknown_serial": "(desconocido)",
+      "intro": "Estos equipos informan del mismo n.º de serie y ambos están en línea. Elige el registro que quieres conservar:",
+      "col": {
+        "keep": "Conservar",
+        "machine": "Equipo",
+        "status": "Estado",
+        "model": "Modelo",
+        "last_seen": "Visto por última vez"
+      },
+      "merge": "Fusionar",
+      "merging": "Fusionando…",
+      "pick_first": "Primero elige el equipo que quieres conservar.",
+      "confirm": {
+        "one": "¿Conservar «{survivor}» y fusionar «{victim}» en él?\n\nEl historial de temperatura de los equipos fusionados pasa a «{survivor}»; sus registros duplicados y sus inscripciones en la flota se eliminan. No se puede deshacer.",
+        "other": "¿Conservar «{survivor}» y fusionar {count} equipos en él?\n\nEl historial de temperatura de los equipos fusionados pasa a «{survivor}»; sus registros duplicados y sus inscripciones en la flota se eliminan. No se puede deshacer."
+      },
+      "merge_failed": "No se pudo fusionar: {error}"
+    }
+  },
+
+  "audit": {
+    "heading": "Registro de auditoría",
+    "intro": "Quién hizo qué en este hub: cada comando emitido, equipo modificado, paquete implementado, cuenta editada y clave utilizada. Es de solo anexado y no está limitado por equipo: las entradas nunca se reescriben ni se eliminan, así que este es el registro al que acudir después de los hechos.",
+    "search_placeholder": "Buscar por autor, acción u objetivo",
+    "actor_placeholder": "Autor",
+    "all_levels": "Todos los niveles",
+    "from": "Desde",
+    "to": "Hasta",
+    "clear": "Limpiar",
+    "load_more": "Cargar más",
+    "level": {
+      "info": "Información",
+      "notice": "Aviso",
+      "security": "Seguridad",
+      "unknown": "Desconocido"
+    },
+    "col": {
+      "time": "Hora",
+      "level": "Nivel",
+      "actor": "Autor",
+      "action": "Acción",
+      "target": "Objetivo"
+    },
+    "details": "Detalles",
+    "hide": "Ocultar",
+    "no_detail": "No se registró ningún detalle.",
+    "empty": "Todavía no hay entradas de auditoría.",
+    "empty_filtered": "Ninguna entrada de auditoría coincide con estos filtros.",
+    "loading_more": "Cargando más…",
+    "showing_recent": {
+      "one": "Mostrando la {count} entrada coincidente más reciente.",
+      "other": "Mostrando las {count} entradas coincidentes más recientes."
+    },
+    "showing_all": {
+      "one": "Mostrando la única entrada coincidente ({count}).",
+      "other": "Mostrando las {count} entradas coincidentes."
+    },
+    "load_failed": "No se pudo cargar el registro de auditoría: {error}"
+  },
+
+  "users": {
+    "heading": "Usuarios",
+    "intro": "Las personas que usan esta consola. Cualquiera que inicie sesión se añade automáticamente; también puedes añadir a alguien antes de su primer inicio de sesión. Editar un perfil aquí no cambia lo que esa persona puede hacer: eso lo definen sus grupos de permisos.",
+    "add": "Añadir usuario",
+    "search_placeholder": "Buscar por nombre, nombre de usuario o correo",
+    "col": {
+      "name": "Nombre",
+      "username": "Nombre de usuario",
+      "email": "Correo electrónico",
+      "department": "Departamento",
+      "last_login": "Último inicio de sesión"
+    },
+    "empty": "Todavía no hay usuarios registrados.",
+    "empty_hint": "Cualquiera que inicie sesión aparecerá aquí automáticamente.",
+    "no_match": "Ningún usuario coincide con tu búsqueda.",
+    "edit_title": "Editar {user}",
+    "field": {
+      "email": "Correo electrónico",
+      "email_placeholder": "persona@ejemplo.com",
+      "full_name": "Nombre completo",
+      "username": "Nombre de usuario",
+      "title": "Cargo",
+      "department": "Departamento",
+      "phone": "Teléfono",
+      "notes": "Notas"
+    },
+    "email_required": "Se requiere una dirección de correo electrónico.",
+    "confirm_delete": "¿Quitar a «{user}» del directorio?\n\nEsto solo elimina su perfil. NO cambia lo que puede hacer ni si puede iniciar sesión: eso lo definen sus grupos de permisos.",
+    "delete_failed": "No se pudo eliminar «{email}»: {error}",
+    "load_failed": "No se pudieron cargar los usuarios: {error}"
+  },
+
   "common": {
+    "loading": "Cargando…",
+    "optional": "opcional",
+    "save": "Guardar",
+    "saving": "Guardando…",
+    "close": "Cerrar",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "deleting": "Eliminando…",
+    "never": "Nunca",
     "status": {
       "live": "En vivo",
       "online": "En línea",

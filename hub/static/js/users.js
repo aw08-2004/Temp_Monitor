@@ -54,11 +54,10 @@ function renderUsers(users) {
     if (!users.length) {
         const empty = el('div', 'empty-state');
         empty.appendChild(el('p', null, searchInput.value.trim()
-            ? 'No users match your search.'
-            : 'No registered users yet.'));
+            ? t('users.no_match')
+            : t('users.empty')));
         if (!searchInput.value.trim()) {
-            empty.appendChild(el('p', 'stat-card__meta',
-                'Anyone who signs in appears here automatically.'));
+            empty.appendChild(el('p', 'stat-card__meta', t('users.empty_hint')));
         }
         usersHost.appendChild(empty);
         return;
@@ -68,7 +67,8 @@ function renderUsers(users) {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Name', 'Username', 'Email', 'Department', 'Last login', ''].forEach((label) => {
+    [t('users.col.name'), t('users.col.username'), t('users.col.email'),
+     t('users.col.department'), t('users.col.last_login'), ''].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -82,7 +82,7 @@ function renderUsers(users) {
 }
 
 function formatLastLogin(ts) {
-    if (!ts) return 'Never';
+    if (!ts) return t('common.never');
     return new Date(ts * 1000).toLocaleString();
 }
 
@@ -106,10 +106,10 @@ function renderUserRow(user) {
 
     const actions = el('td');
     const wrap = el('div', 'perm-row-actions');
-    const edit = el('button', 'btn', 'Edit');
+    const edit = el('button', 'btn', t('common.edit'));
     edit.type = 'button';
     edit.addEventListener('click', () => openEditor(user));
-    const remove = el('button', 'btn', 'Delete');
+    const remove = el('button', 'btn', t('common.delete'));
     remove.type = 'button';
     remove.addEventListener('click', () => deleteUser(user, remove));
     wrap.append(edit, remove);
@@ -120,9 +120,7 @@ function renderUserRow(user) {
 }
 
 async function deleteUser(user, btn) {
-    const warning = `Remove "${user.full_name || user.email}" from the directory?\n\n`
-        + 'This only removes their profile. It does NOT change what they can do or '
-        + 'whether they can sign in -- that is set by their Permission Groups.';
+    const warning = t('users.confirm_delete', { user: user.full_name || user.email });
     if (!window.confirm(warning)) return;
     btn.disabled = true;
     try {
@@ -130,7 +128,7 @@ async function deleteUser(user, btn) {
         await loadUsers();
     } catch (e) {
         btn.disabled = false;
-        window.alert(`Could not delete "${user.email}": ${e.message}`);
+        window.alert(t('users.delete_failed', { email: user.email, error: e.message }));
     }
 }
 
@@ -142,7 +140,7 @@ async function loadUsers() {
     } catch (e) {
         usersHost.replaceChildren();
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, `Could not load users: ${e.message}`));
+        empty.appendChild(el('p', null, t('users.load_failed', { error: e.message })));
         usersHost.appendChild(empty);
     }
 }
@@ -151,7 +149,9 @@ async function loadUsers() {
 
 function openEditor(user) {
     editingEmail = user ? user.email : null;
-    modalTitle.textContent = user ? `Edit ${user.full_name || user.email}` : 'Add user';
+    modalTitle.textContent = user
+        ? t('users.edit_title', { user: user.full_name || user.email })
+        : t('users.add');
     emailInput.value = user ? user.email : '';
     // Email is the primary key -- immutable once the row exists.
     emailInput.disabled = !!user;
@@ -182,12 +182,12 @@ function payload() {
 async function saveUser() {
     const data = payload();
     if (!editingEmail && !data.email) {
-        errorEl.textContent = 'An email address is required.';
+        errorEl.textContent = t('users.email_required');
         return;
     }
     saveBtn.disabled = true;
     errorEl.textContent = '';
-    statusEl.textContent = 'Saving…';
+    statusEl.textContent = t('common.saving');
     try {
         if (editingEmail) {
             await api(`/api/users/${encodeURIComponent(editingEmail)}`, {

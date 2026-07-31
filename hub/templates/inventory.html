@@ -1,16 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Asset Inventory - FleetHub{% endblock %}
+{% block title %}{{ t('nav.inventory') }} - FleetHub{% endblock %}
 {% block content %}
-<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">Asset Inventory</h1>
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('inventory.heading') }}</h1>
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">
-    Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard;
-    offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history,
-    and fleet enrollment.
+    {{ t('inventory.intro') }}
 </p>
 
 <div class="toolbar" style="margin-bottom: var(--space-4);">
     <input class="input" id="inventory-search" type="search" autocomplete="off"
-           placeholder="Search name, asset tag, serial, service tag…" style="min-width: 320px; max-width: 100%;">
+           placeholder="{{ t('inventory.search_placeholder') }}" style="min-width: 320px; max-width: 100%;">
     <span class="stat-card__meta" id="inventory-count"></span>
 </div>
 
@@ -20,24 +18,24 @@
     <table class="data-table data-table--sortable">
         <thead>
             <tr id="inventory-head">
-                <th data-sort="machine">Machine</th>
-                <th data-sort="status">Status</th>
-                <th data-sort="model">Model</th>
-                <th data-sort="serial_number">Serial</th>
-                <th data-sort="service_tag">Service tag</th>
-                <th data-sort="asset_tag">Asset tag</th>
-                <th data-sort="temp">Last temp</th>
-                <th data-sort="updated_at">Last seen</th>
+                <th data-sort="machine">{{ t('inventory.col.machine') }}</th>
+                <th data-sort="status">{{ t('inventory.col.status') }}</th>
+                <th data-sort="model">{{ t('inventory.col.model') }}</th>
+                <th data-sort="serial_number">{{ t('inventory.col.serial') }}</th>
+                <th data-sort="service_tag">{{ t('inventory.col.service_tag') }}</th>
+                <th data-sort="asset_tag">{{ t('inventory.col.asset_tag') }}</th>
+                <th data-sort="temp">{{ t('inventory.col.temp') }}</th>
+                <th data-sort="updated_at">{{ t('inventory.col.last_seen') }}</th>
                 <th></th>
             </tr>
         </thead>
         <tbody id="inventory-body">
-            <tr><td colspan="9" class="stat-card__meta">Loading…</td></tr>
+            <tr><td colspan="9" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
         </tbody>
     </table>
 </div>
-<div class="empty-state" id="inventory-empty" style="display:none;">No machines have reported in yet.</div>
-<div class="empty-state" id="inventory-no-match" style="display:none;">No machines match your search.</div>
+<div class="empty-state" id="inventory-empty" style="display:none;">{{ t('inventory.empty') }}</div>
+<div class="empty-state" id="inventory-no-match" style="display:none;">{{ t('inventory.no_match') }}</div>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/inventory.js') }}"></script>

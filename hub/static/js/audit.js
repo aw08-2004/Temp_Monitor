@@ -26,12 +26,14 @@ const fromInput = document.getElementById('audit-from');
 const toInput = document.getElementById('audit-to');
 const clearBtn = document.getElementById('audit-clear');
 
-// Labels are hard-coded, never the server's string: setStatusPill builds its label with
-// innerHTML, so passing a value through from the API would be an injection point.
+// Labels come from the catalog by a LITERAL key, never from the server's string:
+// setStatusPill builds its label with innerHTML, so passing a value through from the API
+// would be an injection point. Catalog values are markup-free by test, and the literal
+// keys are what tests/test_i18n.py's key scan can see.
 const LEVELS = {
-    info: { label: 'Info', pill: 'muted' },
-    notice: { label: 'Notice', pill: 'ok' },
-    security: { label: 'Security', pill: 'danger' },
+    info: { label: t('audit.level.info'), pill: 'muted' },
+    notice: { label: t('audit.level.notice'), pill: 'ok' },
+    security: { label: t('audit.level.security'), pill: 'danger' },
 };
 
 let cursor = null;          // {ts, id} from the last page, or null for the first
@@ -84,7 +86,8 @@ function buildTable() {
     const table = el('table', 'data-table');
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
-    for (const label of ['Time', 'Level', 'Actor', 'Action', 'Target', '']) {
+    for (const label of [t('audit.col.time'), t('audit.col.level'), t('audit.col.actor'),
+                         t('audit.col.action'), t('audit.col.target'), '']) {
         headRow.appendChild(el('th', null, label));
     }
     thead.appendChild(headRow);
@@ -103,7 +106,7 @@ function appendEntry(entry) {
     tr.appendChild(el('td', null, formatEpoch(entry.ts)));
 
     const levelTd = document.createElement('td');
-    const meta = LEVELS[entry.level] || { label: 'Unknown', pill: 'warn' };
+    const meta = LEVELS[entry.level] || { label: t('audit.level.unknown'), pill: 'warn' };
     const pill = el('span', 'status-pill');
     setStatusPill(pill, meta.pill, meta.label);
     levelTd.appendChild(pill);
@@ -115,7 +118,7 @@ function appendEntry(entry) {
         ? '--' : String(entry.target)));
 
     const actionTd = document.createElement('td');
-    const toggle = el('button', 'btn btn--ghost', 'Details');
+    const toggle = el('button', 'btn btn--ghost', t('audit.details'));
     toggle.type = 'button';
     actionTd.appendChild(toggle);
     tr.appendChild(actionTd);
@@ -131,14 +134,14 @@ function appendEntry(entry) {
     toggle.addEventListener('click', () => {
         if (!filled) {
             if (entry.detail === null || entry.detail === undefined) {
-                detailTd.appendChild(el('p', 'stat-card__meta', 'No detail recorded.'));
+                detailTd.appendChild(el('p', 'stat-card__meta', t('audit.no_detail')));
             } else {
                 detailTd.appendChild(el('pre', null, JSON.stringify(entry.detail, null, 2)));
             }
             filled = true;
         }
         detailTr.hidden = !detailTr.hidden;
-        toggle.textContent = detailTr.hidden ? 'Details' : 'Hide';
+        toggle.textContent = detailTr.hidden ? t('audit.details') : t('audit.hide');
     });
 
     tbody.appendChild(tr);
@@ -148,8 +151,8 @@ function appendEntry(entry) {
 function renderEmpty() {
     const empty = el('div', 'empty-state');
     empty.appendChild(el('p', null, hasFilters()
-        ? 'No audit entries match these filters.'
-        : 'No audit entries yet.'));
+        ? t('audit.empty_filtered')
+        : t('audit.empty')));
     auditHost.replaceChildren(empty);
 }
 
@@ -179,7 +182,7 @@ async function load(append) {
     if (loading) return;
     loading = true;
     moreBtn.disabled = true;
-    auditStatus.textContent = append ? 'Loading more…' : 'Loading…';
+    auditStatus.textContent = append ? t('audit.loading_more') : t('common.loading');
     try {
         const page = await api('/api/audit?' + buildQuery(append));
         buildLevelOptions(page.levels || []);
@@ -197,10 +200,10 @@ async function load(append) {
         moreBtn.hidden = !page.has_more;
         const shown = tbody ? tbody.querySelectorAll('tr:not(.audit-detail)').length : 0;
         auditStatus.textContent = page.has_more
-            ? `Showing the ${shown} most recent matching entries.`
-            : `Showing all ${shown} matching entries.`;
+            ? tPlural('audit.showing_recent', shown)
+            : tPlural('audit.showing_all', shown);
     } catch (e) {
-        auditStatus.textContent = `Could not load the audit log: ${e.message}`;
+        auditStatus.textContent = t('audit.load_failed', { error: e.message });
         moreBtn.hidden = true;
     } finally {
         loading = false;

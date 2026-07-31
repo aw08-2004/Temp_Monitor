@@ -25,13 +25,15 @@ function formatEpoch(epoch) {
 }
 
 async function mergeAlert(survivor, victims, cardEl, btnEl) {
-    if (!window.confirm(
-        `Keep "${survivor}" and merge ${victims.length === 1 ? `"${victims[0]}"` : `${victims.length} machines`} into it?\n\n` +
-        `The merged machines' temperature history moves onto "${survivor}"; their duplicate records and fleet enrollments are removed. This cannot be undone.`)) {
+    // One whole sentence per plural form rather than a phrase spliced into the middle of
+    // another: "merge X into it" and "merge N machines into it" inflect differently in the
+    // languages this ships in, and a translator cannot fix a sentence built by `+`.
+    if (!window.confirm(tPlural('alerts.duplicate.confirm', victims.length,
+        { survivor, victim: victims[0] }))) {
         return;
     }
     btnEl.disabled = true;
-    btnEl.textContent = 'Merging…';
+    btnEl.textContent = t('alerts.duplicate.merging');
     try {
         const resp = await fetch('/api/machines/merge', {
             method: 'POST',
@@ -45,8 +47,8 @@ async function mergeAlert(survivor, victims, cardEl, btnEl) {
         loadAlerts();
     } catch (e) {
         btnEl.disabled = false;
-        btnEl.textContent = 'Merge';
-        window.alert(`Could not merge: ${e.message}`);
+        btnEl.textContent = t('alerts.duplicate.merge');
+        window.alert(t('alerts.duplicate.merge_failed', { error: e.message }));
     }
 }
 
@@ -58,7 +60,7 @@ async function dismissAlert(alertId, cardEl, btnEl) {
         loadAlerts();
     } catch (e) {
         btnEl.disabled = false;
-        window.alert(`Could not dismiss alert: ${e.message}`);
+        window.alert(t('alerts.dismiss_failed', { error: e.message }));
     }
 }
 
@@ -81,7 +83,10 @@ function renderHighTemp(alert) {
     const title = document.createElement('div');
     title.style.fontWeight = '600';
     title.style.marginBottom = 'var(--space-2)';
-    title.textContent = `High temperature${ongoing ? '' : ' (ended)'}: ${alert.machine || '(unknown machine)'}`;
+    const machineName = alert.machine || t('alerts.unknown_machine');
+    title.textContent = ongoing
+        ? t('alerts.high_temp.title', { machine: machineName })
+        : t('alerts.high_temp.title_ended', { machine: machineName });
     card.appendChild(title);
 
     const detail = alert.detail || {};
@@ -92,15 +97,30 @@ function renderHighTemp(alert) {
     const avg = typeof detail.avg_temp === 'number' ? detail.avg_temp.toFixed(1) : '?';
     const peak = typeof detail.peak_temp === 'number' ? detail.peak_temp.toFixed(1) : null;
     const threshold = detail.threshold != null ? detail.threshold : '?';
+    // Four whole sentences in the catalog rather than one assembled from clauses. The
+    // English original read fine concatenated; translated, the clause order and the
+    // punctuation between them differ per language, so a sentence built by `+` here is one
+    // no translator can repair. Only the window is a fragment, and it has its own key.
+    const windowLabel = windowMins
+        ? t('alerts.high_temp.window_minutes', { minutes: windowMins })
+        : t('alerts.high_temp.window_unknown');
     // Past episodes lead with the peak: the last average before it cooled is the least
     // interesting number on a card about something that already happened.
-    meta.textContent = ongoing
-        ? `${windowMins ? windowMins + '-min' : 'Windowed'} average ${avg} °C is at or above `
-          + `the ${threshold} °C threshold${peak && peak !== avg ? ` (peak ${peak} °C)` : ''}. `
-          + `Hot since ${formatEpoch(alert.created_at)}.`
-        : `Ran at or above the ${threshold} °C threshold`
-          + `${peak ? `, peaking at ${peak} °C ${windowMins ? `(${windowMins}-min average)` : ''}` : ''}. `
-          + `From ${formatEpoch(alert.created_at)} until ${formatEpoch(alert.episode_ended_at)}.`;
+    if (ongoing) {
+        const params = { window: windowLabel, avg, threshold, since: formatEpoch(alert.created_at) };
+        meta.textContent = (peak && peak !== avg)
+            ? t('alerts.high_temp.ongoing_peak', Object.assign({ peak }, params))
+            : t('alerts.high_temp.ongoing', params);
+    } else {
+        const params = {
+            threshold,
+            from: formatEpoch(alert.created_at),
+            until: formatEpoch(alert.episode_ended_at),
+        };
+        meta.textContent = peak
+            ? t('alerts.high_temp.ended_peak', Object.assign({ peak, window: windowLabel }, params))
+            : t('alerts.high_temp.ended', params);
+    }
     card.appendChild(meta);
 
     const actions = document.createElement('div');
@@ -111,7 +131,7 @@ function renderHighTemp(alert) {
     if (alert.machine) {
         const view = document.createElement('a');
         view.className = 'btn btn--primary';
-        view.textContent = 'View machine';
+        view.textContent = t('alerts.view_machine');
         view.href = '/machine/' + encodeURIComponent(alert.machine);
         actions.appendChild(view);
     }
@@ -119,7 +139,7 @@ function renderHighTemp(alert) {
     const dismissBtn = document.createElement('button');
     dismissBtn.type = 'button';
     dismissBtn.className = 'btn btn--ghost';
-    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.textContent = t('alerts.dismiss');
     dismissBtn.addEventListener('click', () => dismissAlert(alert.id, card, dismissBtn));
     actions.appendChild(dismissBtn);
 
@@ -135,13 +155,15 @@ function renderDuplicateSerial(alert) {
     const title = document.createElement('div');
     title.style.fontWeight = '600';
     title.style.marginBottom = 'var(--space-2)';
-    title.textContent = `⚠ Duplicate serial number: ${alert.serial_number || '(unknown)'}`;
+    title.textContent = t('alerts.duplicate.title', {
+        serial: alert.serial_number || t('alerts.duplicate.unknown_serial'),
+    });
     card.appendChild(title);
 
     const meta = document.createElement('p');
     meta.className = 'stat-card__meta';
     meta.style.marginBottom = 'var(--space-4)';
-    meta.textContent = 'These machines report the same serial and are both online. Choose the record to keep:';
+    meta.textContent = t('alerts.duplicate.intro');
     card.appendChild(meta);
 
     const machines = alert.machines || [];
@@ -152,7 +174,19 @@ function renderDuplicateSerial(alert) {
     const table = document.createElement('table');
     table.className = 'data-table';
     const thead = document.createElement('thead');
-    thead.innerHTML = '<tr><th>Keep</th><th>Machine</th><th>Status</th><th>Model</th><th>Last seen</th></tr>';
+    const headRow = document.createElement('tr');
+    for (const label of [
+        t('alerts.duplicate.col.keep'),
+        t('alerts.duplicate.col.machine'),
+        t('alerts.duplicate.col.status'),
+        t('alerts.duplicate.col.model'),
+        t('alerts.duplicate.col.last_seen'),
+    ]) {
+        const th = document.createElement('th');
+        th.textContent = label;
+        headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
     table.appendChild(thead);
     const tbody = document.createElement('tbody');
 
@@ -174,7 +208,7 @@ function renderDuplicateSerial(alert) {
         const pill = document.createElement('span');
         pill.className = 'status-pill';
         const online = m.status === 'online';
-        setStatusPill(pill, online ? 'ok' : 'muted', online ? 'Online' : 'Offline');
+        setStatusPill(pill, online ? 'ok' : 'muted', online ? t('common.status.online') : t('common.status.offline'));
         statusTd.appendChild(pill);
 
         const modelTd = document.createElement('td');
@@ -196,10 +230,10 @@ function renderDuplicateSerial(alert) {
     const mergeBtn = document.createElement('button');
     mergeBtn.type = 'button';
     mergeBtn.className = 'btn btn--primary';
-    mergeBtn.textContent = 'Merge';
+    mergeBtn.textContent = t('alerts.duplicate.merge');
     mergeBtn.addEventListener('click', () => {
         const chosen = card.querySelector(`input[name="${radioName}"]:checked`);
-        if (!chosen) { window.alert('Pick a machine to keep first.'); return; }
+        if (!chosen) { window.alert(t('alerts.duplicate.pick_first')); return; }
         const survivor = chosen.value;
         const victims = machines.map((m) => m.machine).filter((name) => name !== survivor);
         mergeAlert(survivor, victims, card, mergeBtn);
@@ -208,7 +242,7 @@ function renderDuplicateSerial(alert) {
     const dismissBtn = document.createElement('button');
     dismissBtn.type = 'button';
     dismissBtn.className = 'btn btn--ghost';
-    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.textContent = t('alerts.dismiss');
     dismissBtn.addEventListener('click', () => dismissAlert(alert.id, card, dismissBtn));
 
     actions.append(mergeBtn, dismissBtn);
@@ -227,7 +261,11 @@ async function loadAlerts() {
             alertsList.appendChild(renderAlert(alert));
         }
     } catch (e) {
-        alertsList.innerHTML = '<p class="stat-card__meta">Failed to load alerts.</p>';
+        // DOM rather than an innerHTML string, now that the message comes from the catalog.
+        const failed = document.createElement('p');
+        failed.className = 'stat-card__meta';
+        failed.textContent = t('alerts.load_failed');
+        alertsList.replaceChildren(failed);
     }
 }
 

@@ -60,7 +60,163 @@
     "empty": "No machines have reported in yet."
   },
 
+  "inventory": {
+    "heading": "Asset Inventory",
+    "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
+    "search_placeholder": "Search name, asset tag, serial, service tag…",
+    "col": {
+      "machine": "Machine",
+      "status": "Status",
+      "model": "Model",
+      "serial": "Serial",
+      "service_tag": "Service tag",
+      "asset_tag": "Asset tag",
+      "temp": "Last temp",
+      "last_seen": "Last seen"
+    },
+    "empty": "No machines have reported in yet.",
+    "no_match": "No machines match your search.",
+    "count": {
+      "one": "{count} machine",
+      "other": "{count} machines"
+    },
+    "count_filtered": {
+      "one": "{visible} of {count} machine",
+      "other": "{visible} of {count} machines"
+    },
+    "confirm_delete": "Permanently delete \"{machine}\"?\n\nThis removes its identity, all temperature history, and its fleet enrollment. This cannot be undone.",
+    "delete_failed": "Could not delete \"{machine}\": {error}",
+    "load_failed": "Failed to load inventory."
+  },
+
+  "alerts": {
+    "heading": "Alerts",
+    "intro": "Conditions that want your attention. Machines running hot — whose average temperature over the configured window is at or above the high-temperature threshold — show here and stay until you dismiss them, one card per episode, so a machine that runs hot repeatedly builds up a card per spell rather than replacing the last one. So do duplicate machines that share a serial number while both are online: the hub won't merge live machines automatically, so pick which record to keep and the others are merged into it (their temperature history is preserved).",
+    "empty": "No open alerts. You're all caught up.",
+    "load_failed": "Failed to load alerts.",
+    "view_machine": "View machine",
+    "dismiss": "Dismiss",
+    "dismiss_failed": "Could not dismiss alert: {error}",
+    "unknown_machine": "(unknown machine)",
+    "high_temp": {
+      "title": "High temperature: {machine}",
+      "title_ended": "High temperature (ended): {machine}",
+      "_window": [
+        "A sentence fragment, not a string of its own: it fills {window} in the four",
+        "bodies below so a known window reads '5-min average' and an unknown one reads",
+        "'windowed average'. Translate it as it would appear mid-sentence."
+      ],
+      "window_minutes": "{minutes}-min",
+      "window_unknown": "windowed",
+      "ongoing": "The {window} average {avg} °C is at or above the {threshold} °C threshold. Hot since {since}.",
+      "ongoing_peak": "The {window} average {avg} °C is at or above the {threshold} °C threshold (peak {peak} °C). Hot since {since}.",
+      "ended": "Ran at or above the {threshold} °C threshold. From {from} until {until}.",
+      "ended_peak": "Ran at or above the {threshold} °C threshold, peaking at {peak} °C ({window} average). From {from} until {until}."
+    },
+    "duplicate": {
+      "title": "⚠ Duplicate serial number: {serial}",
+      "unknown_serial": "(unknown)",
+      "intro": "These machines report the same serial and are both online. Choose the record to keep:",
+      "col": {
+        "keep": "Keep",
+        "machine": "Machine",
+        "status": "Status",
+        "model": "Model",
+        "last_seen": "Last seen"
+      },
+      "merge": "Merge",
+      "merging": "Merging…",
+      "pick_first": "Pick a machine to keep first.",
+      "confirm": {
+        "one": "Keep \"{survivor}\" and merge \"{victim}\" into it?\n\nThe merged machines' temperature history moves onto \"{survivor}\"; their duplicate records and fleet enrollments are removed. This cannot be undone.",
+        "other": "Keep \"{survivor}\" and merge {count} machines into it?\n\nThe merged machines' temperature history moves onto \"{survivor}\"; their duplicate records and fleet enrollments are removed. This cannot be undone."
+      },
+      "merge_failed": "Could not merge: {error}"
+    }
+  },
+
+  "audit": {
+    "heading": "Audit Log",
+    "intro": "Who did what on this hub: every command issued, machine changed, package deployed, account edited, and key touched. Append-only and not machine-scoped — entries are never rewritten or deleted, so this is the record to reach for after the fact.",
+    "search_placeholder": "Search actor, action, or target",
+    "actor_placeholder": "Actor",
+    "all_levels": "All levels",
+    "from": "From",
+    "to": "To",
+    "clear": "Clear",
+    "load_more": "Load more",
+    "level": {
+      "info": "Info",
+      "notice": "Notice",
+      "security": "Security",
+      "unknown": "Unknown"
+    },
+    "col": {
+      "time": "Time",
+      "level": "Level",
+      "actor": "Actor",
+      "action": "Action",
+      "target": "Target"
+    },
+    "details": "Details",
+    "hide": "Hide",
+    "no_detail": "No detail recorded.",
+    "empty": "No audit entries yet.",
+    "empty_filtered": "No audit entries match these filters.",
+    "loading_more": "Loading more…",
+    "showing_recent": {
+      "one": "Showing the {count} most recent matching entry.",
+      "other": "Showing the {count} most recent matching entries."
+    },
+    "showing_all": {
+      "one": "Showing all {count} matching entry.",
+      "other": "Showing all {count} matching entries."
+    },
+    "load_failed": "Could not load the audit log: {error}"
+  },
+
+  "users": {
+    "heading": "Users",
+    "intro": "The people who use this console. Anyone who signs in is added automatically; you can also add someone ahead of their first login. Editing a profile here does not change what they can do — that is set by their Permission Groups.",
+    "add": "Add user",
+    "search_placeholder": "Search by name, username, or email",
+    "col": {
+      "name": "Name",
+      "username": "Username",
+      "email": "Email",
+      "department": "Department",
+      "last_login": "Last login"
+    },
+    "empty": "No registered users yet.",
+    "empty_hint": "Anyone who signs in appears here automatically.",
+    "no_match": "No users match your search.",
+    "edit_title": "Edit {user}",
+    "field": {
+      "email": "Email",
+      "email_placeholder": "person@example.com",
+      "full_name": "Full name",
+      "username": "Username",
+      "title": "Title",
+      "department": "Department",
+      "phone": "Phone",
+      "notes": "Notes"
+    },
+    "email_required": "An email address is required.",
+    "confirm_delete": "Remove \"{user}\" from the directory?\n\nThis only removes their profile. It does NOT change what they can do or whether they can sign in — that is set by their Permission Groups.",
+    "delete_failed": "Could not delete \"{email}\": {error}",
+    "load_failed": "Could not load users: {error}"
+  },
+
   "common": {
+    "loading": "Loading…",
+    "optional": "optional",
+    "save": "Save",
+    "saving": "Saving…",
+    "close": "Close",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleting": "Deleting…",
+    "never": "Never",
     "status": {
       "live": "Live",
       "online": "Online",

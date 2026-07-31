@@ -50,7 +50,158 @@
     "empty": "Bisher hat kein Computer Daten gemeldet."
   },
 
+  "inventory": {
+    "heading": "Anlageninventar",
+    "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Online-Computer erscheinen zusätzlich in der Live-Übersicht; Offline-Computer bleiben hier, bis sie gelöscht werden. Beim Löschen werden Identität, Temperaturverlauf und Flottenregistrierung dauerhaft entfernt.",
+    "search_placeholder": "Nach Name, Anlagenkennzeichen, Seriennummer oder Service-Tag suchen…",
+    "col": {
+      "machine": "Computer",
+      "status": "Status",
+      "model": "Modell",
+      "serial": "Seriennummer",
+      "service_tag": "Service-Tag",
+      "asset_tag": "Anlagenkennzeichen",
+      "temp": "Letzte Temp.",
+      "last_seen": "Zuletzt gesehen"
+    },
+    "empty": "Bisher hat kein Computer Daten gemeldet.",
+    "no_match": "Kein Computer entspricht Ihrer Suche.",
+    "count": {
+      "one": "{count} Computer",
+      "other": "{count} Computer"
+    },
+    "count_filtered": {
+      "one": "{visible} von {count} Computer",
+      "other": "{visible} von {count} Computern"
+    },
+    "confirm_delete": "„{machine}“ dauerhaft löschen?\n\nDamit werden Identität, der gesamte Temperaturverlauf und die Flottenregistrierung entfernt. Das kann nicht rückgängig gemacht werden.",
+    "delete_failed": "„{machine}“ konnte nicht gelöscht werden: {error}",
+    "load_failed": "Das Inventar konnte nicht geladen werden."
+  },
+
+  "alerts": {
+    "heading": "Warnungen",
+    "intro": "Zustände, die Ihre Aufmerksamkeit brauchen. Heiß laufende Computer – deren Durchschnittstemperatur im konfigurierten Zeitfenster den Schwellenwert erreicht oder überschreitet – erscheinen hier und bleiben, bis Sie sie schließen: eine Karte pro Episode, damit ein wiederholt heiß laufender Computer je Episode eine eigene Karte bekommt, statt die vorherige zu ersetzen. Ebenso doppelte Computer, die dieselbe Seriennummer melden, während beide online sind: der Hub führt aktive Computer nicht automatisch zusammen, also wählen Sie den Datensatz, der bleiben soll – die übrigen werden in ihn zusammengeführt (ihr Temperaturverlauf bleibt erhalten).",
+    "empty": "Keine offenen Warnungen. Alles erledigt.",
+    "load_failed": "Die Warnungen konnten nicht geladen werden.",
+    "view_machine": "Computer anzeigen",
+    "dismiss": "Schließen",
+    "dismiss_failed": "Die Warnung konnte nicht geschlossen werden: {error}",
+    "unknown_machine": "(unbekannter Computer)",
+    "high_temp": {
+      "title": "Hohe Temperatur: {machine}",
+      "title_ended": "Hohe Temperatur (beendet): {machine}",
+      "window_minutes": "{minutes}-Minuten",
+      "window_unknown": "gefensterte",
+      "ongoing": "Der {window}-Durchschnitt von {avg} °C erreicht oder überschreitet den Schwellenwert von {threshold} °C. Heiß seit {since}.",
+      "ongoing_peak": "Der {window}-Durchschnitt von {avg} °C erreicht oder überschreitet den Schwellenwert von {threshold} °C (Spitze {peak} °C). Heiß seit {since}.",
+      "ended": "Erreichte oder überschritt den Schwellenwert von {threshold} °C. Von {from} bis {until}.",
+      "ended_peak": "Erreichte oder überschritt den Schwellenwert von {threshold} °C, mit einer Spitze von {peak} °C ({window}-Durchschnitt). Von {from} bis {until}."
+    },
+    "duplicate": {
+      "title": "⚠ Doppelte Seriennummer: {serial}",
+      "unknown_serial": "(unbekannt)",
+      "intro": "Diese Computer melden dieselbe Seriennummer und sind beide online. Wählen Sie den Datensatz, der bleiben soll:",
+      "col": {
+        "keep": "Behalten",
+        "machine": "Computer",
+        "status": "Status",
+        "model": "Modell",
+        "last_seen": "Zuletzt gesehen"
+      },
+      "merge": "Zusammenführen",
+      "merging": "Wird zusammengeführt…",
+      "pick_first": "Wählen Sie zuerst den Computer, der bleiben soll.",
+      "confirm": {
+        "one": "„{survivor}“ behalten und „{victim}“ hineinführen?\n\nDer Temperaturverlauf der zusammengeführten Computer geht auf „{survivor}“ über; ihre doppelten Datensätze und Flottenregistrierungen werden entfernt. Das kann nicht rückgängig gemacht werden.",
+        "other": "„{survivor}“ behalten und {count} Computer hineinführen?\n\nDer Temperaturverlauf der zusammengeführten Computer geht auf „{survivor}“ über; ihre doppelten Datensätze und Flottenregistrierungen werden entfernt. Das kann nicht rückgängig gemacht werden."
+      },
+      "merge_failed": "Zusammenführen nicht möglich: {error}"
+    }
+  },
+
+  "audit": {
+    "heading": "Auditprotokoll",
+    "intro": "Wer auf diesem Hub was getan hat: jeder abgesetzte Befehl, jede Computeränderung, jedes verteilte Paket, jedes bearbeitete Konto und jeder verwendete Schlüssel. Nur anfügend und nicht auf einzelne Computer beschränkt – Einträge werden nie überschrieben oder gelöscht, dies ist also die Aufzeichnung, auf die man im Nachhinein zurückgreift.",
+    "search_placeholder": "Nach Akteur, Aktion oder Ziel suchen",
+    "actor_placeholder": "Akteur",
+    "all_levels": "Alle Stufen",
+    "from": "Von",
+    "to": "Bis",
+    "clear": "Zurücksetzen",
+    "load_more": "Mehr laden",
+    "level": {
+      "info": "Info",
+      "notice": "Hinweis",
+      "security": "Sicherheit",
+      "unknown": "Unbekannt"
+    },
+    "col": {
+      "time": "Zeit",
+      "level": "Stufe",
+      "actor": "Akteur",
+      "action": "Aktion",
+      "target": "Ziel"
+    },
+    "details": "Details",
+    "hide": "Ausblenden",
+    "no_detail": "Keine Details aufgezeichnet.",
+    "empty": "Noch keine Auditeinträge.",
+    "empty_filtered": "Keine Auditeinträge entsprechen diesen Filtern.",
+    "loading_more": "Weitere werden geladen…",
+    "showing_recent": {
+      "one": "Es wird der {count} neueste passende Eintrag angezeigt.",
+      "other": "Es werden die {count} neuesten passenden Einträge angezeigt."
+    },
+    "showing_all": {
+      "one": "Es wird {count} passender Eintrag angezeigt.",
+      "other": "Es werden alle {count} passenden Einträge angezeigt."
+    },
+    "load_failed": "Das Auditprotokoll konnte nicht geladen werden: {error}"
+  },
+
+  "users": {
+    "heading": "Benutzer",
+    "intro": "Die Personen, die diese Konsole verwenden. Wer sich anmeldet, wird automatisch aufgenommen; Sie können jemanden auch vor der ersten Anmeldung hinzufügen. Das Bearbeiten eines Profils ändert nicht, was diese Person tun darf – das legen ihre Berechtigungsgruppen fest.",
+    "add": "Benutzer hinzufügen",
+    "search_placeholder": "Nach Name, Benutzername oder E-Mail suchen",
+    "col": {
+      "name": "Name",
+      "username": "Benutzername",
+      "email": "E-Mail",
+      "department": "Abteilung",
+      "last_login": "Letzte Anmeldung"
+    },
+    "empty": "Noch keine registrierten Benutzer.",
+    "empty_hint": "Wer sich anmeldet, erscheint hier automatisch.",
+    "no_match": "Kein Benutzer entspricht Ihrer Suche.",
+    "edit_title": "{user} bearbeiten",
+    "field": {
+      "email": "E-Mail",
+      "email_placeholder": "person@beispiel.de",
+      "full_name": "Vollständiger Name",
+      "username": "Benutzername",
+      "title": "Position",
+      "department": "Abteilung",
+      "phone": "Telefon",
+      "notes": "Notizen"
+    },
+    "email_required": "Eine E-Mail-Adresse ist erforderlich.",
+    "confirm_delete": "„{user}“ aus dem Verzeichnis entfernen?\n\nDamit wird nur das Profil entfernt. Es ändert NICHT, was diese Person tun darf oder ob sie sich anmelden kann – das legen ihre Berechtigungsgruppen fest.",
+    "delete_failed": "„{email}“ konnte nicht gelöscht werden: {error}",
+    "load_failed": "Die Benutzer konnten nicht geladen werden: {error}"
+  },
+
   "common": {
+    "loading": "Wird geladen…",
+    "optional": "optional",
+    "save": "Speichern",
+    "saving": "Wird gespeichert…",
+    "close": "Schließen",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "deleting": "Wird gelöscht…",
+    "never": "Nie",
     "status": {
       "live": "Live",
       "online": "Online",

@@ -115,11 +115,11 @@ function matchesSearch(row) {
 
 // ---- rendering ----------------------------------------------------------------
 async function deleteMachine(machine, rowEl, btnEl) {
-    if (!window.confirm(`Permanently delete "${machine}"?\n\nThis removes its identity, all temperature history, and its fleet enrollment. This cannot be undone.`)) {
+    if (!window.confirm(t('inventory.confirm_delete', { machine }))) {
         return;
     }
     btnEl.disabled = true;
-    btnEl.textContent = 'Deleting…';
+    btnEl.textContent = t('common.deleting');
     try {
         const resp = await fetch('/api/machines/' + encodeURIComponent(machine), { method: 'DELETE' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -127,8 +127,8 @@ async function deleteMachine(machine, rowEl, btnEl) {
         render();
     } catch (e) {
         btnEl.disabled = false;
-        btnEl.textContent = 'Delete';
-        window.alert(`Could not delete "${machine}": ${e.message}`);
+        btnEl.textContent = t('common.delete');
+        window.alert(t('inventory.delete_failed', { machine, error: e.message }));
     }
 }
 
@@ -145,7 +145,7 @@ function renderRow(row) {
     const pill = document.createElement('span');
     pill.className = 'status-pill';
     const online = row.status === 'online';
-    setStatusPill(pill, online ? 'ok' : 'muted', online ? 'Online' : 'Offline');
+    setStatusPill(pill, online ? 'ok' : 'muted', online ? t('common.status.online') : t('common.status.offline'));
     statusTd.appendChild(pill);
 
     const modelTd = document.createElement('td');
@@ -166,7 +166,7 @@ function renderRow(row) {
     btn.type = 'button';
     btn.className = 'btn btn--ghost';
     btn.style.color = 'var(--danger, #e5484d)';
-    btn.textContent = 'Delete';
+    btn.textContent = t('common.delete');
     btn.addEventListener('click', () => deleteMachine(row.machine, tr, btn));
     actionTd.appendChild(btn);
 
@@ -183,10 +183,12 @@ function render() {
     const visible = allRows.filter(matchesSearch).sort(compareRows);
     inventoryNoMatch.style.display = (total && !visible.length) ? 'block' : 'none';
 
+    // Pluralised through tPlural rather than a trailing `s`: the count and its noun agree
+    // differently per language, and a hand-built "machine(s)" cannot be translated at all.
     if (searchQuery && total) {
-        countEl.textContent = `${visible.length} of ${total} machine${total === 1 ? '' : 's'}`;
+        countEl.textContent = tPlural('inventory.count_filtered', total, { visible: visible.length });
     } else if (total) {
-        countEl.textContent = `${total} machine${total === 1 ? '' : 's'}`;
+        countEl.textContent = tPlural('inventory.count', total);
     } else {
         countEl.textContent = '';
     }
@@ -204,7 +206,15 @@ async function loadInventory() {
         allRows = await resp.json();
         render();
     } catch (e) {
-        inventoryBody.innerHTML = '<tr><td colspan="9" class="stat-card__meta">Failed to load inventory.</td></tr>';
+        // Built as DOM rather than an innerHTML string: the message is now catalog text,
+        // and a translation is not something to interpolate into markup.
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 9;
+        td.className = 'stat-card__meta';
+        td.textContent = t('inventory.load_failed');
+        tr.appendChild(td);
+        inventoryBody.replaceChildren(tr);
     }
 }
 

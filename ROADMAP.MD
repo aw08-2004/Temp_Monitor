@@ -960,7 +960,7 @@ present.
 
 ---
 
-## 🚧 7. Localization / multi-language UI   ·   engine + chrome hub 1.51.0; page conversion ongoing
+## 🚧 7. Localization / multi-language UI   ·   engine + chrome hub 1.51.0; Inventory/Alerts/Audit/Users hub 1.54.0; page conversion ongoing
 
 Shipped languages **English, Spanish, German**. A language is data — one JSON file in
 `hub/locales/` plus a row in `i18n.LANGUAGES` — so a fourth needs no schema or code-shape
@@ -1013,13 +1013,173 @@ the console.
 shipped languages, and explicitly wrong for languages with more forms (Polish, Russian,
 Arabic) — adding one means adding a rule table, not just a catalog.
 
-**Remaining work — mechanical.** The chrome is done, so *every* page already has a
-translated sidebar, topbar and language picker, and login/denied/dashboard are fully
-converted. Still English-only: 11 templates (history, inventory, alerts, audit, settings,
-users, permissions, backups, packages, machine), ~21 JS files, and the settings `REGISTRY`
+**Converted so far.** Chrome (sidebar, topbar, language picker) plus login, denied and
+dashboard in 1.51.0; **Asset Inventory, Alerts, Audit Log and Users in 1.54.0** — template
+and JS together, since a page converted by halves is a page that reads in two languages at
+once. Three conventions came out of that first batch and are worth following in the rest:
+
+- **A sentence is a catalog entry; a sentence assembled from clauses is not.** The
+  high-temperature alert body was built by `+` from five fragments (`'Windowed'` /
+  `windowMins + '-min'`, the threshold clause, an optional peak parenthetical, the "hot
+  since" tail). Concatenation reads fine in English and is unfixable in translation, where
+  clause order and punctuation differ — so it became four whole sentences
+  (`ongoing`/`ongoing_peak`/`ended`/`ended_peak`), each complete, each with named
+  placeholders. Only the window itself stays a fragment, with its own key and an authoring
+  note saying it appears mid-sentence. Same reason `"machine" + (n === 1 ? '' : 's')`
+  became `tPlural`.
+- **Converting a string is also the moment to stop building it with `innerHTML`.**
+  Three load-failure paths assigned a literal `<tr>…</tr>` string; a catalog value dropped
+  into markup is a new injection surface (catalogs are markup-free by test, but the test is
+  the only thing standing there). They now build DOM and set `textContent`, matching how
+  the rest of each file already renders data.
+- **`common` earns entries only on the second page that needs them.** `delete`, `edit`,
+  `save`, `close`, `optional`, `never`, `loading` moved there once Users wanted what
+  Inventory and Audit already had; anything that reads the same in English but differently
+  in context stays page-scoped.
+
+**Remaining work — mechanical.** Still English-only: 6 templates (history, settings,
+permissions, backups, packages, machine), ~17 JS files, and the settings `REGISTRY`
 `label`/`help`/`unit` strings — Python-side UI text that no template scan will catch. Each
 is a self-contained increment; the key-scan test starts covering a file the moment its
 first string moves.
+
+---
+
+## 📋 9. BIOS settings + firmware management
+
+Read and change firmware settings across the fleet, and finally execute the `update_bios`
+command type that has been accepted, queued and routed — and then stubbed — since the
+command-signing removal. The console can already issue one today and the agent already
+dispatches it to a `StubExecutor` that answers "not implemented yet"; nothing has ever
+run. The settings half has no command type at all yet.
+
+The immediate motivator is #10 below: **Wake-on-LAN is a firmware setting before it is a
+network feature**, and turning it on by hand on every machine is exactly the errand this
+console exists to remove.
+
+**There is no cross-vendor BIOS API, and pretending otherwise is the main way this
+feature goes wrong.** Dell, HP and Lenovo each expose their own WMI namespace
+(`root\dcim\sysman`, `root\hp\instrumentedbios`, `root\wmi`'s `Lenovo_*` classes) and
+each ships its own CLI (Dell CCTK/DCU, HP BiosConfigUtility, Lenovo ThinkBiosConfig).
+The recommended shape is **WMI-first with tool fallback**: the WMI classes are present on
+a stock vendor image, whereas the CLI is an extra install — and the agent is a
+single-file service that should not require a vendor package to have been deployed first.
+Hardware that participates in none of this (a whitebox, a VM) must report **unsupported**
+as an outcome distinct from **failed**: "this machine has no manageable BIOS" and "we
+tried to change it and it broke" are different rows, and collapsing them means every VM
+in the fleet shows a red error forever.
+
+**Scope:**
+
+- **`manufacturer` has to be collected first.** `SystemInfo.cs` reads
+  `Win32_BIOS.SerialNumber` and `Win32_ComputerSystem.Model` but not `Manufacturer`, and
+  vendor dispatch is the first branch every code path here takes. Add a
+  `machine_info.manufacturer` column on the exact `service_tag` precedent from #6 —
+  collected by both agents, COALESCE-updated in `save_machine_info`, backfilled by the
+  duplicate-serial merge, and simply null on an older agent.
+- **Settings inventory rides the heartbeat, change-only.** A machine reports its readable
+  BIOS settings under a `bios` key on `POST /api/agent/heartbeat`, content-hashed so it
+  is sent only when it actually changes, and never fatal — the same discipline
+  `backups.record_profiles` and `remote.record_inventory` already follow. A BIOS
+  enumeration is slow and the offline window is 90 seconds; that precedent exists
+  precisely to keep one out of the other.
+- **New `set_bios_settings` command type** in `ALL_COMMANDS`, carrying a snapshot of the
+  attribute/value pairs the operator chose (like `install_virtual_display` carries its
+  payload pin).
+- **Setting names stay per-vendor in v1.** A curated cross-vendor alias set —
+  `wake_on_lan`, `virtualization`, `secure_boot` — is the obvious design and the one that
+  silently writes the wrong attribute on the third vendor, where the mapping was guessed
+  from documentation rather than tested on hardware. v1 shows and writes each machine's
+  own attribute names; aliases become a later layer with tests behind them, which is also
+  the only form in which fleet-wide "turn WoL on everywhere" can be trusted.
+- **A BIOS setup password blocks writes on all three vendors**, so a change can supply an
+  existing password from `.env`-backed secret storage (the mechanism `backups.py` already
+  uses for destination credentials), per-machine or fleet-wide. **Setting, rotating or
+  clearing the BIOS password from the console is deliberately out of scope** — recorded
+  here so the gap is a decision rather than a discovery.
+- **Firmware update (`update_bios`) is the second half**, sharing the same vendor
+  dispatch. Payload either hub-hosted or pulled from the vendor catalogue, **sha256-pinned
+  by the hub** exactly as `packages.py` pins installer blobs. The load-bearing difference
+  from a package install: **the reboot is part of the operation, not a side effect** — the
+  flash completes during POST, so the command's own result cannot be the answer and
+  success is only known when the machine comes back reporting a new BIOS version. Reuse
+  the deploy scheduler's maintenance windows rather than inventing a second scheduler.
+- **Gate**: either reuse `deploy_packages` or add a `manage_firmware` capability —
+  open parameter. Flashing firmware is the most bricking-capable action in the product,
+  which is the argument for its own toggle. Audited at `LEVEL_SECURITY`, alongside
+  `virtual_display_install`.
+
+**Constraint, stated plainly**: a failed flash can brick a machine, and unlike every other
+feature on this roadmap there is no restore path — no chain to re-pull, no snapshot to
+roll back to. Battery/AC preconditions, model matching and a refusal to flash a machine
+whose reported model does not match the payload are part of v1, not hardening for later.
+
+**Still to decide during implementation**: whether `set_bios_settings` is favoritable (a
+boot-order policy is genuinely reusable across a fleet, unlike the session and deploy
+types that are excluded today); whether firmware payloads reuse the `packages.py` blob
+store outright or need their own; and how a settings change that requires a reboot to take
+effect is represented, given the reported inventory will disagree with the intended state
+until then.
+
+---
+
+## 📋 10. Wake-on-LAN
+
+Power a sleeping machine on from the console, so an out-of-hours patch window or a remote
+session does not depend on someone being at the desk to press a button. Small feature,
+one real design decision.
+
+**Prerequisite: a NIC inventory the hub does not have.** Nothing in the product collects
+a MAC address or an IP address today — `machine_info` has no network columns at all. So
+this starts with a new agent-side reporter on the `BackupProfileReporter.cs` change-only
+pattern, sending per wired adapter: MAC, IPv4, prefix length and link state, into a new
+`machine_nics` table. A table rather than columns because a machine has several adapters
+and which one is the wake target changes with a dock. Rides the heartbeat under a
+`network` key with the same never-fatal handling as `profiles` and `remote`.
+
+**Delivery is agent peer-relay.** The hub picks an **online** machine whose reported
+IPv4/prefix puts it on the same subnet as the target and issues *it* a new `wake_machine`
+command carrying the target MAC and broadcast address; that agent sends the magic packet
+to UDP 9. This is the only mechanism that works across sites and VLANs without touching
+router configuration — a hub-sent broadcast reaches the hub's own L2 segment and nothing
+else, which for a multi-site helpdesk is the wrong default.
+
+- **Subnet grouping is the design**, so it is worth saying explicitly: the group key is
+  `(ipv4 & mask, prefix)` computed hub-side from the reported NICs — never inferred from
+  the source address of the last heartbeat, which is the NAT'd edge address and would
+  group an entire site into one fictional subnet.
+- **"No relay available" is a first-class, named outcome, not a failure.** Every machine
+  on a subnet being asleep is the *expected* state at 3am. "No awake machine on
+  10.4.7.0/24 to relay through" is a diagnosis someone can act on; "wake failed" is not.
+- **The result is a wake *attempt*, and the console has to say so.** WoL is
+  fire-and-forget — nothing acknowledges a magic packet, and a machine that was already
+  awake looks identical to one that just woke. The honest shape is
+  optimistic-then-confirmed: the command succeeds when the packet is sent, and the
+  machine's own next heartbeat is what turns the row green. Same indirection as "Back up
+  now", where recording a request and reporting it truthfully beat pretending to talk to
+  a machine that cannot answer.
+- **Fleet-wide and scheduled waking**, so a maintenance window can wake its targets before
+  the deploy scheduler dispatches into a dark office — that pairing, not the manual
+  button, is what makes this worth building. Reuse the existing deployment scheduler
+  rather than adding a second one.
+- **Gate**: `issue_commands` plus machine scope, like `restart` and `shutdown`. No new
+  capability — waking a PC is strictly less dangerous than shutting one down, and the
+  vocabulary is already large.
+
+**Constraints — most of a WoL rollout is preconditions, not code**: the firmware wake
+setting (**that is #9's job**, and the reason these two arrived together); the NIC
+driver's own "Allow this device to wake the computer" power setting, which the agent can
+set locally; **Windows Fast Startup**, which turns shutdown into a hybrid state that
+defeats wake-from-S5 on many machines; and Wi-Fi, over which this mechanism cannot wake a
+laptop at all. A machine that can never be woken should be shown as such from its
+inventory rather than offered a button that silently does nothing.
+
+**Still to decide during implementation**: whether `wake_machine` is favoritable; whether
+the hub should *also* try its own broadcast when it happens to share the target's subnet
+(rejected as the primary mechanism, cheap as an addition); how long to wait before
+reporting a wake as unsuccessful; and whether a wake request persists across ticks like a
+backup request does, so a target on an all-asleep subnet is woken by the first peer that
+comes online.
 
 ---
 
@@ -1041,13 +1201,21 @@ first string moves.
    machine-scope mode (1.50.0). Never run against a real DC — see the note above.
 8. **#7 Localization ← in progress** — engine, catalogs and all shared chrome done in hub
    1.51.0; both open parameters resolved (in-house JSON string table; per-user preference
-   over a fleet default). What is left is the page-by-page string conversion, which is
+   over a fleet default). Inventory, Alerts, Audit Log and Users converted in 1.54.0. What
+   is left is the page-by-page string conversion of history, settings, permissions,
+   backups, packages and machine (plus the settings `REGISTRY` strings), which is
    mechanical and needs no further decisions.
+9. **#9 BIOS settings + firmware management** — planned. Fills in the `update_bios` stub
+   that has been queued-but-unimplemented since the signing removal, and adds the settings
+   half it never had. Needs `manufacturer` on `machine_info` before anything else.
+10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
+    NIC inventory (MAC + subnet) the hub does not collect today.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
 > TURN installer all landed in 1.41–1.48 without a roadmap entry, since none of them was
-> a numbered feature above. #4's entry has been brought up to date.
+> a numbered feature above. #4's entry has been brought up to date. #9 and #10 are the
+> first new items added to this board since #7, and are the only ones still unbuilt.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full
