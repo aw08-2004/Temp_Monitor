@@ -100,14 +100,12 @@ KIND_S3 = "s3"
 KIND_WEBDAV = "webdav"
 DESTINATION_KINDS = (KIND_S3, KIND_WEBDAV)
 
-DESTINATION_LABELS = {
-    KIND_S3: ("S3-compatible",
-              "AWS S3, MinIO, Backblaze B2, Wasabi -- anything speaking the S3 API. "
-              "Signed with SigV4; the hub can also mint scoped upload URLs from it."),
-    KIND_WEBDAV: ("WebDAV",
-                  "Nextcloud, ownCloud, IIS, or any WebDAV share. Authenticated with a "
-                  "username and password over HTTPS."),
-}
+# The label and description each destination kind is shown with live in the translation
+# catalogs, under `backups.kind.<kind>.label` / `.description`; backups_web resolves them
+# in the caller's language. Same move as permissions.CAPABILITY_TEXT_KEY and
+# packages.DETECTION_TEXT_KEY -- the API stays self-describing, one string has one home,
+# and a kind added without entries fails tests/test_i18n.py.
+KIND_TEXT_KEY = "backups.kind"
 
 # What a run backed up. Only `hub_db` runs today; `machine_files` is roadmap #1b and is
 # why `backup_runs` carries a `machine` column already -- see init_backups_db().

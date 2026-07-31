@@ -65,17 +65,21 @@ function getSelectedDailyResolution(spanMs) {
     return '10s';
 }
 
+// Spelled out one branch per bucket rather than building the key by concatenating the
+// resolution onto a prefix: a computed key is invisible to the key scan in
+// tests/test_i18n.py, and this is also the one place a resolution the API adds later
+// would otherwise render as its own key name on screen.
 function formatDailyResolutionLabel(resolution) {
-    if (resolution === 'raw') return 'Raw';
-    if (resolution === '10s') return '10s';
-    if (resolution === '1m') return '1m';
-    if (resolution === '5m') return '5m';
-    return '--';
+    if (resolution === 'raw') return t('history.resolution_label.raw');
+    if (resolution === '10s') return t('history.resolution_label.10s');
+    if (resolution === '1m') return t('history.resolution_label.1m');
+    if (resolution === '5m') return t('history.resolution_label.5m');
+    return t('history.resolution_label.unknown');
 }
 
 function setDailyResolutionInUse(resolution) {
     if (!dailyResolutionInUseEl) return;
-    dailyResolutionInUseEl.textContent = `In use: ${formatDailyResolutionLabel(resolution)}`;
+    dailyResolutionInUseEl.textContent = t('history.in_use', { value: formatDailyResolutionLabel(resolution) });
 }
 
 function buildHistoryUrl(date, minMs, maxMs, resolution) {
@@ -108,8 +112,8 @@ const dailyChart = new Chart(document.getElementById('dailyChart').getContext('2
         animation: { duration: 0 },
         interaction: { mode: 'nearest', axis: 'x', intersect: false },
         scales: {
-            x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, title: { display: true, text: 'Time' }, grid: { color: chartGridColor } },
-            y: { title: { display: true, text: 'Temperature (°C)' }, grid: { color: chartGridColor } }
+            x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, title: { display: true, text: t('history.axis.time') }, grid: { color: chartGridColor } },
+            y: { title: { display: true, text: t('history.axis.temperature') }, grid: { color: chartGridColor } }
         },
         plugins: {
             decimation: {
@@ -122,7 +126,7 @@ const dailyChart = new Chart(document.getElementById('dailyChart').getContext('2
                 mode: 'index',
                 intersect: false,
                 callbacks: {
-                    label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} °C`
+                    label: (ctx) => `${ctx.dataset.label}: ${t('history.temp_c', { value: ctx.parsed.y.toFixed(1) })}`
                 }
             },
             zoom: {
@@ -150,7 +154,7 @@ function updateMachineAverages(machineAverages) {
         const cell = document.createElement('td');
         cell.colSpan = 2;
         cell.className = 'stat-card__meta';
-        cell.textContent = 'No data for selected day.';
+        cell.textContent = t('history.no_data_for_day');
         row.appendChild(cell);
         machineAvgBody.appendChild(row);
         return;
@@ -208,12 +212,23 @@ async function loadDailySummary(date) {
     const summaryRes = await fetch(`/api/daily_summary?date=${encodeURIComponent(date)}`);
     const summary = await summaryRes.json();
 
+    // The meta line is three independent facts, and two of them are counts -- so each is
+    // pluralised on its own and dropped into history.meta, rather than the line being
+    // assembled from clauses here (which is what makes a string untranslatable).
+    const setMeta = (machines, readings) => {
+        dailyMetaEl.textContent = t('history.meta', {
+            date,
+            machines: tPlural('history.machine_count', machines),
+            readings: tPlural('history.reading_count', readings)
+        });
+    };
+
     if (summary.overall_avg === null) {
-        overallAvgEl.textContent = '-- °C';
-        dailyMetaEl.textContent = `${date} • 0 machines • 0 readings`;
+        overallAvgEl.textContent = t('history.temp_unknown');
+        setMeta(0, 0);
     } else {
-        overallAvgEl.textContent = `${Number(summary.overall_avg).toFixed(1)} °C`;
-        dailyMetaEl.textContent = `${date} • ${summary.machine_count} machines • ${summary.reading_count} readings`;
+        overallAvgEl.textContent = t('history.temp_c', { value: Number(summary.overall_avg).toFixed(1) });
+        setMeta(Number(summary.machine_count) || 0, Number(summary.reading_count) || 0);
     }
     updateMachineAverages(summary.machine_averages);
 }

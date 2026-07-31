@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Permission Groups - FleetHub{% endblock %}
+{% block title %}{{ t('nav.permission_groups') }} - FleetHub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
 {% endblock %}
@@ -12,22 +12,22 @@
 #}
 <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
     <div>
-        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Permission Groups</h1>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('permissions.heading') }}</h1>
         <p class="stat-card__meta">
-            A group grants a set of capabilities over a set of machines. A person's
-            effective access is the union of every group they belong to.
+            {{ t('permissions.intro') }}
         </p>
     </div>
-    <button class="btn btn--primary" type="button" id="new-group">New group</button>
+    <button class="btn btn--primary" type="button" id="new-group">{{ t('permissions.new_group') }}</button>
 </div>
 
 <div class="card" id="breakglass-note" style="margin-bottom: var(--space-5);">
+    {# ALLOWED_EMAILS used to be wrapped in <code>. Catalog values are plain text by test
+       -- t() is autoescaped, so a tag inside a translation renders as visible angle
+       brackets -- and asking a translator to preserve inline markup is how that starts
+       happening. The .env key name is passed in as a parameter instead, which also stops
+       it from being translated by accident. #}
     <p class="stat-card__meta" id="breakglass-text">
-        Addresses in <code>ALLOWED_EMAILS</code> are break-glass superusers: they hold
-        every capability over every machine regardless of the groups below, and they can
-        always sign in. That is what lets you create the first group here, and what stops
-        a mistake on this page from locking everyone out. Everyone else must be in a
-        group to sign in at all.
+        {{ t('permissions.breakglass', allowed_emails='ALLOWED_EMAILS') }}
     </p>
 </div>
 
@@ -36,70 +36,64 @@
 <dialog class="modal" id="group-modal">
     <form method="dialog" id="group-form">
         <div class="modal__head">
-            <h2 class="modal__title" id="group-modal-title">New permission group</h2>
+            <h2 class="modal__title" id="group-modal-title">{{ t('permissions.editor.new_title') }}</h2>
         </div>
         <div class="modal__body">
-            <label class="setting__label" for="group-name">Name</label>
+            <label class="setting__label" for="group-name">{{ t('permissions.editor.name') }}</label>
             <input class="input" id="group-name" maxlength="80" autocomplete="off"
-                   placeholder="Hospital IT" style="width: 100%;">
+                   placeholder="{{ t('permissions.editor.name_placeholder') }}" style="width: 100%;">
 
-            <label class="setting__label" for="group-description" style="margin-top: var(--space-4);">Description <span class="setting__default">optional</span></label>
+            <label class="setting__label" for="group-description" style="margin-top: var(--space-4);">{{ t('permissions.editor.description') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
             <input class="input" id="group-description" maxlength="200" autocomplete="off"
-                   placeholder="Manages the clinical PCs" style="width: 100%;">
+                   placeholder="{{ t('permissions.editor.description_placeholder') }}" style="width: 100%;">
 
-            <h3 class="perm-subhead">Capabilities</h3>
+            <h3 class="perm-subhead">{{ t('permissions.editor.capabilities') }}</h3>
             <div id="capability-list"></div>
 
-            <h3 class="perm-subhead">Machines</h3>
+            <h3 class="perm-subhead">{{ t('permissions.editor.machines') }}</h3>
             <div class="perm-scope-modes">
-                <label class="checkbox"><input type="radio" name="scope-mode" value="list" checked> Only the machines listed below</label>
-                <label class="checkbox"><input type="radio" name="scope-mode" value="all"> Every machine in the fleet</label>
-                <label class="checkbox"><input type="radio" name="scope-mode" value="ad_ou"> Machines in an Active Directory OU</label>
+                <label class="checkbox"><input type="radio" name="scope-mode" value="list" checked> {{ t('permissions.editor.scope_list') }}</label>
+                <label class="checkbox"><input type="radio" name="scope-mode" value="all"> {{ t('permissions.editor.scope_all') }}</label>
+                <label class="checkbox"><input type="radio" name="scope-mode" value="ad_ou"> {{ t('permissions.editor.scope_ad_ou') }}</label>
             </div>
             <div id="machine-picker">
                 <div class="chip-list" id="machine-chips"></div>
                 <div class="chip-add">
                     <input class="input" id="machine-input"
-                           placeholder="Search by name, asset tag, serial, service tag" autocomplete="off">
-                    <button class="btn" type="button" id="machine-add">Add</button>
+                           placeholder="{{ t('permissions.editor.machine_placeholder') }}" autocomplete="off">
+                    <button class="btn" type="button" id="machine-add">{{ t('permissions.editor.add') }}</button>
                 </div>
             </div>
             <div id="ou-picker" hidden>
                 <p class="setting__help">
-                    Machines are taken from Active Directory, and follow it: a PC moved into
-                    one of these OUs joins this group at the next directory sync, and one
-                    moved out leaves it. Nested OUs are included.
+                    {{ t('permissions.editor.ou_help') }}
                 </p>
                 <div class="chip-list" id="ou-chips"></div>
                 <div class="chip-add">
                     <input class="input" id="ou-input"
-                           placeholder="OU=Clinical,DC=corp,DC=local" autocomplete="off">
-                    <button class="btn" type="button" id="ou-add">Add</button>
+                           placeholder="{{ t('permissions.editor.ou_placeholder') }}" autocomplete="off">
+                    <button class="btn" type="button" id="ou-add">{{ t('permissions.editor.add') }}</button>
                 </div>
                 <p class="setting__help" id="ou-resolved"></p>
             </div>
 
-            <h3 class="perm-subhead">Members</h3>
+            <h3 class="perm-subhead">{{ t('permissions.editor.members') }}</h3>
             <div class="chip-list" id="member-chips"></div>
             <div class="chip-add">
                 <input class="input" id="member-input" type="email"
-                       placeholder="Search registered users, or type an email" autocomplete="off">
-                <button class="btn" type="button" id="member-add">Add</button>
+                       placeholder="{{ t('permissions.editor.member_placeholder') }}" autocomplete="off">
+                <button class="btn" type="button" id="member-add">{{ t('permissions.editor.add') }}</button>
             </div>
 
-            <h3 class="perm-subhead">Directory groups <span class="setting__default">optional</span></h3>
+            <h3 class="perm-subhead">{{ t('permissions.editor.directory_groups') }} <span class="setting__default">{{ t('common.optional') }}</span></h3>
             <p class="setting__help">
-                Anyone whose sign-in provider says they are in one of these groups gets this
-                permission group, without being listed above by name. Paste the group's
-                object ID (Entra), distinguished name, or name — whichever your provider
-                sends. Membership is read once, at sign-in: a change in the directory takes
-                effect the next time the person signs in.
+                {{ t('permissions.editor.directory_help') }}
             </p>
             <div class="chip-list" id="dirgroup-chips"></div>
             <div class="chip-add">
                 <input class="input" id="dirgroup-input"
-                       placeholder="e.g. 8f4c1e02-1b7a-4a0d-9c31-2b6e5d0a7f11" autocomplete="off">
-                <button class="btn" type="button" id="dirgroup-add">Add</button>
+                       placeholder="{{ t('permissions.editor.directory_placeholder') }}" autocomplete="off">
+                <button class="btn" type="button" id="dirgroup-add">{{ t('permissions.editor.add') }}</button>
             </div>
             <p class="setting__help" id="dirgroup-self"></p>
 
@@ -107,7 +101,7 @@
         </div>
         <div class="modal__foot">
             <span class="autosave" id="group-status"></span>
-            <button class="btn" type="button" id="group-cancel">Close</button>
+            <button class="btn" type="button" id="group-cancel">{{ t('common.close') }}</button>
         </div>
     </form>
 </dialog>

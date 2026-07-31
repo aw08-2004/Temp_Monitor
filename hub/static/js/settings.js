@@ -99,7 +99,7 @@ function renderField(field) {
     reset.type = 'button';
     reset.className = 'btn btn--ghost';
     reset.dataset.role = 'reset';   // so an in-place save can toggle its visibility
-    reset.textContent = 'Reset';
+    reset.textContent = t('settings.reset');
     // Only offered when there is something to reset -- a Reset next to an untouched
     // field is a button that does nothing.
     reset.hidden = field.is_default;
@@ -117,7 +117,7 @@ function renderField(field) {
 
     const dflt = document.createElement('div');
     dflt.className = 'setting__default';
-    dflt.textContent = `Default: ${describe(field, field.default)}`;
+    dflt.textContent = t('settings.default_is', { value: describe(field, field.default) });
     row.appendChild(dflt);
 
     const error = document.createElement('div');
@@ -180,7 +180,9 @@ function buildTriStateControl(field) {
     const select = document.createElement('select');
     select.className = 'select';
     select.id = controlId(field.key);
-    for (const [value, text] of [['', 'Use .env default'], ['true', 'On'], ['false', 'Off']]) {
+    for (const [value, text] of [['', t('settings.tristate.env')],
+                                ['true', t('settings.tristate.on')],
+                                ['false', t('settings.tristate.off')]]) {
         const opt = document.createElement('option');
         opt.value = value;
         opt.textContent = text;
@@ -198,10 +200,14 @@ function buildEnumControl(field) {
     const select = document.createElement('select');
     select.className = 'select';
     select.id = controlId(field.key);
+    // The VALUE stays the raw choice -- it is what gets saved. Only the label is
+    // translated, and only where the server had one: a data-driven vocabulary (a backup
+    // destination the operator named) falls back to showing itself.
+    const labels = field.choice_labels || {};
     for (const choice of field.choices || []) {
         const opt = document.createElement('option');
         opt.value = choice;
-        opt.textContent = choice;
+        opt.textContent = labels[choice] || choice;
         select.appendChild(opt);
     }
     select.value = field.value == null ? '' : String(field.value);
@@ -242,7 +248,7 @@ function buildListControl(field) {
 
     const empty = document.createElement('p');
     empty.className = 'setting__help';
-    empty.textContent = 'None configured.';
+    empty.textContent = t('settings.empty_list');
 
     const redraw = () => {
         list.replaceChildren();
@@ -261,15 +267,15 @@ function buildListControl(field) {
             text.textContent = name;          // agent-supplied; never innerHTML
             li.appendChild(text);
 
-            li.appendChild(moveButton('↑', 'Move up', index > 0, () => {
+            li.appendChild(moveButton('↑', t('settings.move_up'), index > 0, () => {
                 [items[index - 1], items[index]] = [items[index], items[index - 1]];
                 commit();
             }));
-            li.appendChild(moveButton('↓', 'Move down', index < items.length - 1, () => {
+            li.appendChild(moveButton('↓', t('settings.move_down'), index < items.length - 1, () => {
                 [items[index + 1], items[index]] = [items[index], items[index + 1]];
                 commit();
             }));
-            li.appendChild(moveButton('✕', 'Remove', items.length > minItems, () => {
+            li.appendChild(moveButton('✕', t('settings.remove_entry'), items.length > minItems, () => {
                 items.splice(index, 1);
                 commit();
             }));
@@ -297,7 +303,8 @@ function buildListControl(field) {
         picker.className = 'select';
         const placeholder = document.createElement('option');
         placeholder.value = '';
-        placeholder.textContent = choices.length ? 'Add a sensor…' : 'No sensors reported yet';
+        placeholder.textContent = choices.length ? t('settings.add_sensor')
+                                                 : t('settings.no_sensors');
         picker.appendChild(placeholder);
         for (const choice of choices) {
             const opt = document.createElement('option');
@@ -312,7 +319,7 @@ function buildListControl(field) {
     custom.className = 'input';
     custom.type = 'text';
     custom.placeholder = field.placeholder
-        || (isVocabulary ? 'or type a sensor name' : 'Add an entry');
+        || (isVocabulary ? t('settings.custom_entry') : t('settings.add_entry'));
     if (!isVocabulary) custom.style.flexGrow = '1';
     adder.appendChild(custom);
 
@@ -342,7 +349,7 @@ function buildListControl(field) {
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'btn btn--ghost';
-    add.textContent = 'Add';
+    add.textContent = t('settings.add');
     add.addEventListener('click', addEntry);
     adder.appendChild(add);
 
@@ -427,7 +434,7 @@ async function flushDirty() {
 
     saving = true;
     pending = false;
-    setStatus('Saving…', '');
+    setStatus(t('common.saving'), '');
     try {
         const resp = await fetch('/api/settings', {
             method: 'POST',
@@ -445,11 +452,11 @@ async function flushDirty() {
             return;
         }
         adoptSaved(body.settings, keys);
-        setStatus('Saved', 'autosave--saved');
+        setStatus(t('common.saved'), 'autosave--saved');
     } catch (e) {
         // Transport failure, not validation. Leave the value dirty and let the operator
         // re-commit; a background retry loop on a dropped network is worse than silence.
-        setStatus(`Could not save: ${e.message}`, 'autosave--error');
+        setStatus(t('settings.save_failed', { error: e.message }), 'autosave--error');
     } finally {
         saving = false;
         if (pending) flushDirty();     // a genuine new edit arrived mid-request
@@ -519,7 +526,7 @@ async function resetField(key, btn) {
         applySchema(body.settings);
     } catch (e) {
         btn.disabled = false;
-        window.alert(`Could not reset: ${e.message}`);
+        window.alert(t('settings.reset_failed', { error: e.message }));
     }
 }
 
@@ -529,10 +536,15 @@ function controlId(key) { return `set-${key.replace(/\./g, '-')}`; }
 function errorId(key) { return `err-${key.replace(/\./g, '-')}`; }
 
 function describe(field, value) {
-    if (value === null || value === undefined) return 'follow .env';
-    if (Array.isArray(value)) return value.join(' → ');
-    if (typeof value === 'boolean') return value ? 'on' : 'off';
-    return field.unit ? `${value} ${field.unit}` : String(value);
+    if (value === null || value === undefined) return t('settings.describe.env');
+    if (Array.isArray(value)) return value.join(t('settings.describe.list_join'));
+    if (typeof value === 'boolean') {
+        return value ? t('settings.describe.on') : t('settings.describe.off');
+    }
+    // field.unit arrives already translated from settings.schema(); the separator is a
+    // catalog entry because not every language puts a plain space between the two.
+    return field.unit ? t('settings.describe.with_unit', { value, unit: field.unit })
+                      : String(value);
 }
 
 loadSettings();

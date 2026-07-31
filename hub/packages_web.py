@@ -36,9 +36,15 @@ import os
 from flask import Blueprint, jsonify, render_template, request, send_file, session
 
 import fleet
+import i18n
 import packages
 import permissions
 import settings
+
+
+def _lang():
+    """The language of the request in flight; English outside one. See i18n.current."""
+    return i18n.current()
 
 
 def _bearer_agent(db_path):
@@ -110,8 +116,10 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
             # /api/permissions/capabilities.
             "detection_kinds": [
                 {"name": kind,
-                 "label": packages.DETECTION_LABELS[kind][0],
-                 "description": packages.DETECTION_LABELS[kind][1]}
+                 "label": i18n.translate(
+                     f"{packages.DETECTION_TEXT_KEY}.{kind}.label", _lang()),
+                 "description": i18n.translate(
+                     f"{packages.DETECTION_TEXT_KEY}.{kind}.description", _lang())}
                 for kind in packages.DETECTION_KINDS
             ],
             "source_kinds": list(packages.SOURCE_KINDS),

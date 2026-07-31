@@ -51,16 +51,12 @@ async function api(path, options) {
 // client_max_body_size is 1 MB, so the first installer anyone uploads hits it.
 function httpMessage(status) {
     if (status === 413) {
-        return 'Upload rejected as too large (HTTP 413) before it reached the hub. This is the '
-             + 'reverse proxy in front of the hub, not the hub\'s own limit -- raise '
-             + 'client_max_body_size in nginx (or the equivalent: IIS maxAllowedContentLength, '
-             + 'Apache LimitRequestBody) and reload it.';
+        return t('packages.http_413');
     }
     if (status === 502 || status === 504) {
-        return `The hub did not respond (HTTP ${status}). A large upload can also hit the proxy's `
-             + 'read timeout -- check the proxy log as well as the hub log.';
+        return t('packages.http_502', { status });
     }
-    return `HTTP ${status}`;
+    return t('packages.http_other', { status });
 }
 
 function json(method, payload) {
@@ -106,9 +102,9 @@ deploymentsPane.addEventListener('tab:shown', () => loadDeployments());
 // ---------------------------------------------------------------- package list
 
 function sourceSummary(source) {
-    if (!source) return 'No payload';
-    if (source.kind === 'winget') return `winget: ${source.ref}`;
-    if (source.kind === 'upload') return source.file_name || 'Uploaded file';
+    if (!source) return t('packages.no_payload');
+    if (source.kind === 'winget') return t('packages.winget_ref', { ref: source.ref });
+    if (source.kind === 'upload') return source.file_name || t('packages.uploaded_file');
     return source.ref || source.kind;
 }
 
@@ -116,9 +112,8 @@ function renderPackages(list) {
     packagesPane.replaceChildren();
     if (!list.length) {
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, 'No packages defined yet.'));
-        empty.appendChild(el('p', 'stat-card__meta',
-            'A package is an installer plus how to run it silently and how to tell it worked.'));
+        empty.appendChild(el('p', null, t('packages.empty')));
+        empty.appendChild(el('p', 'stat-card__meta', t('packages.empty_hint')));
         packagesPane.appendChild(empty);
         return;
     }
@@ -127,7 +122,8 @@ function renderPackages(list) {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Package', 'Payload', 'Command', 'Detection', ''].forEach((label) => {
+    [t('packages.col.package'), t('packages.col.payload'), t('packages.col.command'),
+     t('packages.col.detection'), ''].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -141,14 +137,18 @@ function renderPackages(list) {
 }
 
 function detectionSummary(rule) {
-    if (!rule || rule.kind === 'none') return 'Exit code only';
+    if (!rule || rule.kind === 'none') return t('packages.detect_exit_only');
     if (rule.kind === 'file_exists') return rule.path;
     if (rule.kind === 'registry_value') {
-        const base = `${rule.root}\\${rule.key}\\${rule.name}`;
-        return rule.equals === undefined ? base : `${base} = ${rule.equals}`;
+        const parts = { root: rule.root, key: rule.key, name: rule.name };
+        return rule.equals === undefined
+            ? t('packages.detect_registry', parts)
+            : t('packages.detect_registry_equals', { ...parts, value: rule.equals });
     }
     if (rule.kind === 'installed_version') {
-        return rule.min_version ? `${rule.name} >= ${rule.min_version}` : rule.name;
+        return rule.min_version
+            ? t('packages.detect_version_min', { name: rule.name, version: rule.min_version })
+            : rule.name;
     }
     return rule.kind;
 }
@@ -175,28 +175,29 @@ function renderPackageRow(pkg) {
     cmdCell.appendChild(el('div', 'pkg-hash',
         `${pkg.install_command || 'winget'} ${pkg.install_args || ''}`.trim()));
     cmdCell.appendChild(el('div', 'stat-card__meta',
-        `exit ${pkg.success_exit_codes.join(', ')} · ${pkg.timeout_seconds}s`));
+        t('packages.exit_summary', { codes: pkg.success_exit_codes.join(', '),
+                                     timeout: pkg.timeout_seconds })));
     tr.appendChild(cmdCell);
 
     tr.appendChild(el('td', 'pkg-target-error', detectionSummary(pkg.detection)));
 
     const actions = el('td');
-    const deployBtn = el('button', 'btn btn--primary', 'Deploy');
+    const deployBtn = el('button', 'btn btn--primary', t('packages.deploy'));
     deployBtn.type = 'button';
     deployBtn.addEventListener('click', () => openDeploy(pkg));
     actions.appendChild(deployBtn);
 
-    const editBtn = el('button', 'btn', 'Edit');
+    const editBtn = el('button', 'btn', t('common.edit'));
     editBtn.type = 'button';
     editBtn.style.marginLeft = 'var(--space-2)';
     editBtn.addEventListener('click', () => openPackage(pkg));
     actions.appendChild(editBtn);
 
-    const delBtn = el('button', 'btn', 'Delete');
+    const delBtn = el('button', 'btn', t('common.delete'));
     delBtn.type = 'button';
     delBtn.style.marginLeft = 'var(--space-2)';
     delBtn.addEventListener('click', async () => {
-        if (!confirm(`Delete the package "${pkg.name}"? Deployment history is kept.`)) return;
+        if (!confirm(t('packages.confirm_delete', { package: pkg.name }))) return;
         try {
             await api(`/api/packages/${encodeURIComponent(pkg.id)}`, { method: 'DELETE' });
             loadPackages();
@@ -225,12 +226,20 @@ function selectedSourceKind() {
     return checked ? checked.value : 'upload';
 }
 
+// Spelled out per kind rather than built from `'packages.source.' + kind`: a computed
+// key is invisible to the literal-key scan in tests/test_i18n.py, and a source kind added
+// server-side without catalog entries would then label its own radio button with a key.
 const SOURCE_LABELS = {
-    upload: ['Upload a file to the hub', 'Stored here, hash-pinned, served to agents over the authenticated channel.'],
-    winget: ['winget package id', 'winget resolves and verifies its own payload.'],
-    url: ['Download from a URL', 'The agent fetches it directly. Pin a hash if you can.'],
-    unc: ['Copy from a UNC path', 'The agent reads it from a share it can already reach.'],
+    upload: () => [t('packages.source.upload.label'), t('packages.source.upload.help')],
+    winget: () => [t('packages.source.winget.label'), t('packages.source.winget.help')],
+    url: () => [t('packages.source.url.label'), t('packages.source.url.help')],
+    unc: () => [t('packages.source.unc.label'), t('packages.source.unc.help')],
 };
+
+function sourceText(kind) {
+    const get = SOURCE_LABELS[kind];
+    return get ? get() : [kind, ''];
+}
 
 const REF_PLACEHOLDERS = {
     winget: '7zip.7zip',
@@ -242,7 +251,7 @@ function renderSourceKinds() {
     const host = document.getElementById('source-kinds');
     host.replaceChildren();
     vocab.source_kinds.forEach((kind) => {
-        const [label, help] = SOURCE_LABELS[kind] || [kind, ''];
+        const [label, help] = sourceText(kind);
         const wrap = el('label', 'perm-capability');
         const radio = document.createElement('input');
         radio.type = 'radio';
@@ -263,18 +272,20 @@ function syncSourcePanes() {
     document.getElementById('source-upload').hidden = kind !== 'upload';
     document.getElementById('source-ref').hidden = kind === 'upload';
     document.getElementById('pkg-ref').placeholder = REF_PLACEHOLDERS[kind] || '';
-    document.getElementById('pkg-ref-help').textContent =
-        (SOURCE_LABELS[kind] || ['', ''])[1];
+    document.getElementById('pkg-ref-help').textContent = sourceText(kind)[1];
     // winget has its own trust chain and its own command line, so both the hash pin and
     // the command field are meaningless there — say so rather than accepting input the
     // server will reject.
     document.getElementById('pkg-ref-sha').disabled = kind === 'winget';
     const command = document.getElementById('pkg-command');
     command.disabled = kind === 'winget';
-    command.placeholder = kind === 'winget' ? 'winget (built by the agent)' : 'msiexec.exe';
+    command.placeholder = kind === 'winget'
+        ? t('packages.editor.command_winget_placeholder')
+        : t('packages.editor.command_placeholder');
     document.getElementById('pkg-cmd-help').textContent = kind === 'winget'
-        ? 'The agent builds the winget command line. Anything here is appended as extra switches.'
-        : `Use ${vocab.file_placeholder || '{file}'} where the downloaded payload goes — it must appear in the command or the arguments.`;
+        ? t('packages.editor.cmd_help_winget')
+        : t('packages.editor.cmd_help',
+            { placeholder: vocab.file_placeholder || '{file}' });
 }
 
 function renderDetectionKinds() {
@@ -310,8 +321,9 @@ function openPackage(pkg) {
     editingPackageId = pkg ? pkg.id : null;
     uploadedSource = null;
     packageError.textContent = '';
-    document.getElementById('package-modal-title').textContent =
-        pkg ? `Edit ${pkg.name}` : 'New package';
+    document.getElementById('package-modal-title').textContent = pkg
+        ? t('packages.editor.edit_title', { package: pkg.name })
+        : t('packages.editor.new_title');
 
     document.getElementById('pkg-name').value = pkg ? pkg.name : '';
     document.getElementById('pkg-version').value = (pkg && pkg.version) || '';
@@ -330,8 +342,9 @@ function openPackage(pkg) {
     document.getElementById('pkg-ref-sha').value =
         source.kind === 'upload' ? '' : (source.sha256 || '');
     document.getElementById('pkg-file-state').textContent = source.file_name
-        ? `Current payload: ${source.file_name} (${fmtBytes(source.file_size)}). Choose a file to replace it.`
-        : 'The hub stores the file and pins its SHA-256. Agents verify that hash before running anything.';
+        ? t('packages.editor.current_payload',
+            { file: source.file_name, size: fmtBytes(source.file_size) })
+        : t('packages.editor.upload_help');
     syncSourcePanes();
 
     const rule = (pkg && pkg.detection) || { kind: 'none' };
@@ -386,10 +399,12 @@ async function uploadIfNeeded() {
     if (selectedSourceKind() !== 'upload' || !input.files.length) return null;
     const form = new FormData();
     form.append('file', input.files[0]);
-    document.getElementById('pkg-file-state').textContent = 'Uploading…';
+    document.getElementById('pkg-file-state').textContent = t('packages.editor.uploading');
     const result = await api('/api/packages/upload', { method: 'POST', body: form });
     document.getElementById('pkg-file-state').textContent =
-        `Uploaded ${result.file_name} (${fmtBytes(result.file_size)}), sha256 ${result.sha256.slice(0, 16)}…`;
+        t('packages.editor.uploaded', { file: result.file_name,
+                                        size: fmtBytes(result.file_size),
+                                        sha256: result.sha256.slice(0, 16) });
     return result;
 }
 
@@ -421,7 +436,7 @@ document.getElementById('package-save').addEventListener('click', async () => {
             existingSource = current.source;
         }
         const source = collectSource(existingSource);
-        if (!source) throw new Error('Choose a file to upload.');
+        if (!source) throw new Error(t('packages.editor.choose_file'));
 
         const payload = {
             name: document.getElementById('pkg-name').value,
@@ -495,7 +510,8 @@ function openDeploy(pkg) {
     draftMachines = [];
     deployError.textContent = '';
     renderMachineChips();
-    document.getElementById('deploy-modal-title').textContent = `Deploy ${pkg.name}`;
+    document.getElementById('deploy-modal-title').textContent =
+        t('packages.deploy_editor.title_for', { package: pkg.name });
     document.getElementById('deploy-start').value = '';
     document.getElementById('deploy-end').value = '';
     document.getElementById('deploy-note').value = '';
@@ -531,6 +547,28 @@ document.getElementById('deploy-save').addEventListener('click', async () => {
 
 // ---------------------------------------------------------------- deployments
 
+// Deployment and per-machine statuses are wire values ('in_flight'), so they need a
+// display name. Literal keys per status rather than a computed one, for the same reason
+// SOURCE_LABELS is spelled out: the key scan in tests/test_i18n.py only sees literals.
+const STATUS_LABELS = {
+    scheduled: () => t('packages.status.scheduled'),
+    running: () => t('packages.status.running'),
+    complete: () => t('packages.status.complete'),
+    cancelled: () => t('packages.status.cancelled'),
+    pending: () => t('packages.status.pending'),
+    in_flight: () => t('packages.status.in_flight'),
+    succeeded: () => t('packages.status.succeeded'),
+    failed: () => t('packages.status.failed'),
+    expired: () => t('packages.status.expired'),
+};
+
+function statusLabel(status) {
+    const get = STATUS_LABELS[status];
+    // An unknown status shows itself rather than a key: it can only come from a hub
+    // newer than this page, and the raw word is more use than nothing.
+    return get ? get() : String(status || '').replace('_', ' ');
+}
+
 const STATUS_ORDER = ['succeeded', 'in_flight', 'pending', 'failed', 'expired', 'cancelled'];
 
 function renderProgressBar(counts, total) {
@@ -550,7 +588,10 @@ function renderTally(counts) {
     const tally = el('div', 'pkg-tally');
     STATUS_ORDER.forEach((status) => {
         const n = counts[status] || 0;
-        if (n) tally.appendChild(el('span', null, `${status.replace('_', ' ')}: ${n}`));
+        if (n) {
+            tally.appendChild(el('span', null,
+                t('packages.deployments.tally', { status: statusLabel(status), count: n })));
+        }
     });
     return tally;
 }
@@ -559,9 +600,8 @@ function renderDeployments(list) {
     deploymentsPane.replaceChildren();
     if (!list.length) {
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, 'Nothing has been deployed yet.'));
-        empty.appendChild(el('p', 'stat-card__meta',
-            'Deploy a package from the Packages tab and its progress shows up here.'));
+        empty.appendChild(el('p', null, t('packages.deployments.empty')));
+        empty.appendChild(el('p', 'stat-card__meta', t('packages.deployments.empty_hint')));
         deploymentsPane.appendChild(empty);
         return;
     }
@@ -570,7 +610,9 @@ function renderDeployments(list) {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Package', 'Scheduled', 'By', 'Status', 'Progress', ''].forEach((label) => {
+    [t('packages.deployments.col.package'), t('packages.deployments.col.scheduled'),
+     t('packages.deployments.col.by'), t('packages.deployments.col.status'),
+     t('packages.deployments.col.progress'), ''].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -581,22 +623,25 @@ function renderDeployments(list) {
         const tr = el('tr');
         const nameCell = el('td');
         // A deployment outlives the package definition on purpose, so this can be null.
-        nameCell.appendChild(el('div', null, dep.package_name || '(deleted package)'));
+        nameCell.appendChild(el('div', null,
+            dep.package_name || t('packages.deployments.deleted_package')));
         if (dep.note) nameCell.appendChild(el('div', 'stat-card__meta', dep.note));
         tr.appendChild(nameCell);
 
         const whenCell = el('td');
         whenCell.appendChild(el('div', null, fmtTime(dep.created_at)));
         if (dep.window_start) {
-            whenCell.appendChild(el('div', 'stat-card__meta', `starts ${fmtTime(dep.window_start)}`));
+            whenCell.appendChild(el('div', 'stat-card__meta',
+                t('packages.deployments.starts', { when: fmtTime(dep.window_start) })));
         }
         if (dep.window_end) {
-            whenCell.appendChild(el('div', 'stat-card__meta', `gives up ${fmtTime(dep.window_end)}`));
+            whenCell.appendChild(el('div', 'stat-card__meta',
+                t('packages.deployments.gives_up', { when: fmtTime(dep.window_end) })));
         }
         tr.appendChild(whenCell);
 
         tr.appendChild(el('td', 'stat-card__meta', dep.created_by));
-        tr.appendChild(el('td', null, dep.status));
+        tr.appendChild(el('td', null, statusLabel(dep.status)));
 
         const progressCell = el('td');
         progressCell.appendChild(renderProgressBar(dep.target_counts, dep.target_total));
@@ -604,7 +649,7 @@ function renderDeployments(list) {
         tr.appendChild(progressCell);
 
         const actions = el('td');
-        const view = el('button', 'btn', 'View');
+        const view = el('button', 'btn', t('packages.deployments.view'));
         view.type = 'button';
         view.addEventListener('click', () => openProgress(dep.id));
         actions.appendChild(view);
@@ -630,7 +675,10 @@ async function loadDeployments() {
 
 function renderProgress(deployment) {
     document.getElementById('progress-title').textContent =
-        `${deployment.package_name || '(deleted package)'} — ${deployment.status}`;
+        t('packages.deployments.progress_title', {
+            package: deployment.package_name || t('packages.deployments.deleted_package'),
+            status: statusLabel(deployment.status),
+        });
     progressBody.replaceChildren();
     progressBody.appendChild(renderProgressBar(deployment.target_counts, deployment.target_total));
     progressBody.appendChild(renderTally(deployment.target_counts));
@@ -639,7 +687,9 @@ function renderProgress(deployment) {
     table.style.marginTop = 'var(--space-4)';
     const head = el('thead');
     const headRow = el('tr');
-    ['Machine', 'Status', 'Attempts', 'Detail'].forEach((label) => {
+    [t('packages.deployments.target_col.machine'), t('packages.deployments.target_col.status'),
+     t('packages.deployments.target_col.attempts'),
+     t('packages.deployments.target_col.detail')].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -649,7 +699,7 @@ function renderProgress(deployment) {
     deployment.targets.forEach((target) => {
         const tr = el('tr');
         tr.appendChild(el('td', null, target.machine));
-        tr.appendChild(el('td', null, target.status.replace('_', ' ')));
+        tr.appendChild(el('td', null, statusLabel(target.status)));
         tr.appendChild(el('td', null, String(target.attempts)));
 
         const detail = el('td');
@@ -657,7 +707,8 @@ function renderProgress(deployment) {
             detail.appendChild(el('div', 'pkg-target-error', target.last_error));
         } else if (target.next_attempt_at) {
             detail.appendChild(el('div', 'stat-card__meta',
-                `retries ${fmtTime(target.next_attempt_at)}`));
+                t('packages.deployments.retries_at',
+                  { when: fmtTime(target.next_attempt_at) })));
         }
         tr.appendChild(detail);
         body.appendChild(tr);
@@ -685,7 +736,7 @@ async function refreshProgress() {
 
 async function openProgress(deploymentId) {
     openDeploymentId = deploymentId;
-    progressBody.replaceChildren(el('p', 'stat-card__meta', 'Loading…'));
+    progressBody.replaceChildren(el('p', 'stat-card__meta', t('common.loading')));
     progressModal.showModal();
     await refreshProgress();
 }
@@ -697,7 +748,7 @@ document.getElementById('progress-close').addEventListener('click', () => {
 });
 
 document.getElementById('progress-cancel-deploy').addEventListener('click', async () => {
-    if (!confirm('Stop this deployment? Machines already running the installer will finish.')) return;
+    if (!confirm(t('packages.deployments.confirm_cancel'))) return;
     try {
         renderProgress(await api(
             `/api/deployments/${encodeURIComponent(openDeploymentId)}/cancel`, { method: 'POST' }));

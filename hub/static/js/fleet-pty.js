@@ -139,8 +139,8 @@
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'pty-tab__close';
-        close.setAttribute('aria-label', 'Close this console');
-        close.title = 'Close this console (or middle-click the tab)';
+        close.setAttribute('aria-label', t('machine.pty.close_console'));
+        close.title = t('machine.pty.close_console_title');
         close.textContent = '×';
         close.addEventListener('click', (e) => {
             e.stopPropagation();   // the strip's click would just re-select it
@@ -183,15 +183,16 @@
 
         for (const record of list) {
             const name = shellName(record.shell);
-            record.labelEl.textContent =
-                totals[name] > 1 ? `${name} ${record.index}` : name;
+            record.labelEl.textContent = totals[name] > 1
+                ? t('machine.pty.tab_numbered', { name, index: record.index })
+                : name;
             record.tabEl.classList.toggle('pty-tab--active', record.id === activeId);
             record.tabEl.classList.toggle('pty-tab--closed', record.status === 'closed');
             record.selectEl.setAttribute(
                 'aria-selected', record.id === activeId ? 'true' : 'false');
             record.selectEl.title = record.status === 'closed'
-                ? 'This console has ended — close the tab to clear it'
-                : `${name} console on ${MACHINE}`;
+                ? t('machine.pty.tab_ended')
+                : t('machine.pty.tab_title', { name, machine: MACHINE });
             // Append in order; appendChild on an existing child MOVES it, so this is also
             // the re-order.
             stripEl.insertBefore(record.tabEl, addBtn);
@@ -201,9 +202,8 @@
         if (addBtn) {
             addBtn.disabled = live >= MAX_CONSOLES;
             addBtn.title = addBtn.disabled
-                ? `You already have ${MAX_CONSOLES} consoles open on this machine — ` +
-                  'close one before opening another'
-                : 'Open another console on this machine';
+                ? t('machine.pty.max_consoles', { max: MAX_CONSOLES })
+                : t('machine.terminal.add_console_title');
         }
         if (emptyEl) emptyEl.hidden = list.length > 0;
     }
@@ -243,7 +243,8 @@
 
         const screen = document.createElement('div');
         screen.className = 'terminal__pty-screen';
-        screen.setAttribute('aria-label', `${shellName(record.shell)} console`);
+        screen.setAttribute('aria-label',
+                            t('machine.pty.screen_label', { name: shellName(record.shell) }));
         screensEl.appendChild(screen);
         record.screenEl = screen;
 
@@ -333,13 +334,13 @@
     function setPill() {
         const record = activeConsole();
         if (!record) {
-            setStatusPill(statusEl, 'muted', 'No console');
+            setStatusPill(statusEl, 'muted', t('machine.pty.pill_none'));
         } else if (record.status === 'closed') {
-            setStatusPill(statusEl, 'muted', 'Closed');
+            setStatusPill(statusEl, 'muted', t('machine.pty.pill_closed'));
         } else if (record.status === 'open') {
-            setStatusPill(statusEl, 'warn', 'Connecting');
+            setStatusPill(statusEl, 'warn', t('machine.pty.pill_connecting'));
         } else {
-            setStatusPill(statusEl, 'ok', 'Connected');
+            setStatusPill(statusEl, 'ok', t('machine.pty.pill_connected'));
         }
     }
 
@@ -398,11 +399,16 @@
             });
             renderStrip();
             activate(record.id);
-            note(record, `Opening a ${body.shell} console on ${MACHINE}…\r\n`);
+            note(record, t('machine.pty.opening',
+                           { shell: body.shell, machine: MACHINE }) + '\r\n');
         } catch (e) {
             const front = activeConsole();
-            if (front) note(front, `\r\n[could not open a console: ${e.message}]\r\n`);
-            else if (emptyEl) emptyEl.textContent = `Could not open a console: ${e.message}`;
+            if (front) {
+                note(front, '\r\n'
+                     + t('machine.pty.open_failed_note', { error: e.message }) + '\r\n');
+            } else if (emptyEl) {
+                emptyEl.textContent = t('machine.pty.open_failed', { error: e.message });
+            }
         } finally {
             opening = false;
             renderStrip();
@@ -457,7 +463,9 @@
         if (record.status === 'closed') return;
         record.status = 'closed';
         stopPolling(record);
-        if (record.term) note(record, `\r\n[${reason || 'the terminal closed'}]\r\n`);
+        if (record.term) {
+            note(record, `\r\n[${reason || t('machine.pty.closed_default')}]\r\n`);
+        }
         renderStrip();
         if (record.id === activeId) setPill();
     }
@@ -508,7 +516,8 @@
                 `/api/fleet/pty/${encodeURIComponent(record.id)}/input`, body);
         } catch (e) {
             // A 409 means the session ended underneath us; anything else is transient.
-            note(record, `\r\n[input not delivered: ${e.message}]\r\n`);
+            note(record, '\r\n'
+                 + t('machine.pty.input_failed', { error: e.message }) + '\r\n');
         }
     }
 
@@ -537,7 +546,8 @@
             // once and keep trying at the background rate.
             if (!record.hubWarned) {
                 record.hubWarned = true;
-                note(record, `\r\n[lost contact with the hub: ${e.message} — retrying]\r\n`);
+                note(record, '\r\n'
+                     + t('machine.pty.hub_lost', { error: e.message }) + '\r\n');
             }
             schedulePoll(record, BACKGROUND_POLL_MS);
             return;
@@ -551,13 +561,13 @@
             // half-eaten escape sequence that corrupts everything after it. Reset the
             // emulator and carry on from here.
             record.term.reset();
-            note(record, '[reconnected — some output was skipped]\r\n');
+            note(record, t('machine.pty.reconnected') + '\r\n');
         }
         if (body.replay_truncated) {
             // A re-attach whose history is older than the buffer holds. Nothing is corrupt;
             // say so at the top so the operator doesn't read a mid-command screen as the
             // start of their session.
-            note(record, '[earlier output from this session is no longer buffered]\r\n');
+            note(record, t('machine.pty.replay_truncated') + '\r\n');
         }
         if (body.chunks.length) {
             for (const chunk of body.chunks) record.term.write(chunk.text);
@@ -618,7 +628,7 @@
             // from a response that predates it, and retiring it would kill a live shell the
             // operator is already typing into.
             if (record.knownAt > startedAt) continue;
-            if (record.term) markClosed(record, 'this console was closed');
+            if (record.term) markClosed(record, t('machine.pty.closed_by_you'));
             else closeConsole(record.id, { local: true });   // never shown, nothing to preserve
         }
 
@@ -680,20 +690,21 @@
         const record = activeConsole();
         if (favorite.command_type !== 'run_script') {
             if (record) {
-                note(record, `\r\n[${favorite.command_type} favorites are issued from the ` +
-                             `command channel, not typed at a shell]\r\n`);
+                note(record, '\r\n' + t('machine.pty.favorite_wrong_kind',
+                                        { type: favorite.command_type }) + '\r\n');
             }
             return;
         }
         if (!record || record.status === 'closed') {
-            if (record) note(record, '\r\n[this console has ended — open a new one with +]\r\n');
+            if (record) note(record, '\r\n' + t('machine.pty.console_ended') + '\r\n');
             return;
         }
         // Trailing whitespace off, so a script saved with a final newline doesn't submit its
         // own last line and take the review step with it.
         const script = normalizeEol(favorite.params && favorite.params.script).replace(/\s+$/, '');
         if (!script) {
-            note(record, `\r\n[favorite "${favorite.name}" has no script in it]\r\n`);
+            note(record, '\r\n'
+                 + t('machine.pty.favorite_no_script', { name: favorite.name }) + '\r\n');
             return;
         }
 
@@ -703,16 +714,16 @@
         // switching consoles under the operator would not be. Report the mismatch.
         const savedFor = favorite.params && favorite.params.shell;
         if (savedFor && savedFor !== record.shell) {
-            note(record, `\r\n[this favorite was saved for ${savedFor}; this console is ` +
-                         `${record.shell}]\r\n`);
+            note(record, '\r\n' + t('machine.pty.favorite_wrong_shell',
+                                    { saved: savedFor, actual: record.shell }) + '\r\n');
         }
 
         queueInput(record, script.replace(/\n/g, '\r'));
         record.term.focus();
-        note(record, lines > 1
-            ? `\r\n[favorite "${favorite.name}": ${lines} lines pasted, the first ${lines - 1} ` +
-              'ran as they arrived — the last is waiting for Enter]\r\n'
-            : `\r\n[loaded favorite "${favorite.name}" — review it, then press Enter]\r\n`);
+        note(record, '\r\n' + (lines > 1
+            ? t('machine.pty.favorite_pasted',
+                { name: favorite.name, lines, ran: lines - 1 })
+            : t('machine.pty.favorite_loaded', { name: favorite.name })) + '\r\n');
     }
 
     /** "Save as favorite" in a pty console. There is no input box to read a script out of
@@ -763,21 +774,14 @@
 
             if (hintEl) {
                 hintEl.className = 'terminal__hint';
-                hintEl.textContent =
-                    'Real consoles on the machine, running as SYSTEM. Enter, Ctrl-C, Tab ' +
-                    'completion and interactive prompts all work. Ctrl-Shift-C / Ctrl-Shift-V ' +
-                    'copy and paste (Ctrl-C is passed through to the shell). "+" opens another ' +
-                    `console (up to ${MAX_CONSOLES}); "×" or a middle-click on a tab ends ` +
-                    'one. Sessions survive leaving ' +
-                    'this page and are listed on every computer you sign in from — come back ' +
-                    'and your shells, working directories and scrollback are still there.';
+                hintEl.textContent = t('machine.pty.hint', { max: MAX_CONSOLES });
             }
 
             if (shared['terminal-clear']) {
                 // Clear the hub's replay buffer too, not just the local view -- otherwise
                 // the scrollback you just cleared comes back the next time you navigate
                 // away and return, which reads as the button not having worked.
-                shared['terminal-clear'].title = 'Clear the front console’s scrollback';
+                shared['terminal-clear'].title = t('machine.pty.clear_title');
                 shared['terminal-clear'].addEventListener('click', () => {
                     const record = activeConsole();
                     if (!record) return;
@@ -792,8 +796,7 @@
                     'click', () => FleetFavorites.open({ onPick: usePick }));
             }
             if (shared['terminal-save-fav']) {
-                shared['terminal-save-fav'].title =
-                    'Save a script as a favorite (any selected text is used as a starting point)';
+                shared['terminal-save-fav'].title = t('machine.pty.save_fav_title');
                 shared['terminal-save-fav'].addEventListener('click', saveFavorite);
             }
             if (addBtn) addBtn.addEventListener('click', openConsole);
@@ -802,7 +805,7 @@
             // cannot become cmd, and ending the session an operator is working in because
             // they touched a dropdown was never a good trade.
             if (shellEl) {
-                shellEl.title = 'Shell used when you open another console with +';
+                shellEl.title = t('machine.pty.shell_title');
             }
 
             window.addEventListener('resize', () => refit(activeConsole()));

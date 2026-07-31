@@ -517,28 +517,27 @@ def preview(includes, excludes, profiles):
 # ================================
 # TOKEN REFERENCE (for the UI)
 # ================================
-# Rendered in the Backup Settings tab. Here rather than in the template for the same
-# reason permissions.CAPABILITY_LABELS is: the API describes itself, so adding a token is
-# one edit.
-TOKEN_HELP = [
-    ("%Users%", "Every real user profile on the machine (skips Public, Default and "
-                "service accounts). One pattern covers everyone, including people who "
-                "sign in for the first time next week."),
-    ("%User%", "The same as %Users% -- one path per real profile. Reads better for a "
-               "custom subfolder: %User%\\Scripts backs up every user's Scripts folder. "
-               "It does NOT mean 'whoever is logged in now'; backups run with nobody "
-               "signed in, so every per-user token covers all of them."),
-    ("%Desktop%", "Each user's actual Desktop -- follows OneDrive folder redirection, "
-                  "unlike a literal C:\\Users\\name\\Desktop."),
-    ("%Documents%", "Each user's actual Documents folder."),
-    ("%Downloads%", "Each user's actual Downloads folder."),
-    ("%Pictures%", "Each user's actual Pictures folder."),
-    ("%Favorites%", "Each user's browser favourites folder."),
-    ("%AppData%", "Each user's roaming AppData."),
-    ("%LocalAppData%", "Each user's local AppData."),
-    ("%ProgramData%", "C:\\ProgramData -- machine-wide, no per-user expansion."),
-    ("%SystemDrive%", "Usually C:."),
-]
+# Rendered in the Backup Settings tab. The list lives here so the API describes itself
+# and adding a token is one edit; the prose moved to the catalogs when the console became
+# translatable (roadmap #7).
+# The token NAMES are the grammar an operator types and are never translated; only the
+# explanation beside each one is, and it lives in the catalogs under
+# `backups.token.<slug>`. backups_web pairs the two when it serves the reference.
+TOKEN_HELP_KEY = "backups.token"
+
+TOKEN_REFERENCE = (
+    ("%Users%", "users"),
+    ("%User%", "user"),
+    ("%Desktop%", "desktop"),
+    ("%Documents%", "documents"),
+    ("%Downloads%", "downloads"),
+    ("%Pictures%", "pictures"),
+    ("%Favorites%", "favorites"),
+    ("%AppData%", "appdata"),
+    ("%LocalAppData%", "localappdata"),
+    ("%ProgramData%", "programdata"),
+    ("%SystemDrive%", "systemdrive"),
+)
 
 
 def load_vectors(path):

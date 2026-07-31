@@ -64,18 +64,19 @@
         const wrap = el('div', { class: 'turn-secret' });
 
         if (!canWrite) {
-            wrap.appendChild(el('p', { class: 'setting__help', text:
-                'This deployment cannot write .env from the hub; set REMOTE_TURN_SECRET on the '
-                + 'host and restart the hub.' }));
+            wrap.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.remote.cannot_write_env') }));
             return wrap;
         }
 
         const input = el('input', {
-            type: 'text', class: 'input', placeholder: 'Paste an existing coturn secret, or leave blank to generate',
+            type: 'text', class: 'input', placeholder: t('settings.remote.secret_placeholder'),
             autocomplete: 'off', spellcheck: 'false',
         });
-        const setBtn = el('button', { type: 'button', class: 'btn btn--primary', text: 'Set secret' });
-        const rotBtn = el('button', { type: 'button', class: 'btn btn--ghost', text: 'Rotate (generate)' });
+        const setBtn = el('button', { type: 'button', class: 'btn btn--primary',
+                                     text: t('settings.remote.set_secret') });
+        const rotBtn = el('button', { type: 'button', class: 'btn btn--ghost',
+                                     text: t('settings.remote.rotate_secret') });
         const msg = el('div', { class: 'turn-secret__msg' });
 
         async function submit(useInput) {
@@ -96,18 +97,16 @@
         setBtn.addEventListener('click', () => submit(true));
         rotBtn.addEventListener('click', () => submit(false));
 
-        wrap.appendChild(el('label', { class: 'setting__label', text: 'TURN shared secret (REMOTE_TURN_SECRET)' }));
+        wrap.appendChild(el('label', { class: 'setting__label',
+                                       text: t('settings.remote.secret_label') }));
         wrap.appendChild(input);
         wrap.appendChild(el('div', { class: 'card-actions' }, [setBtn, rotBtn]));
         wrap.appendChild(msg);
 
         if (lastSecretShown) {
             const box = el('div', { class: 'turn-secret__reveal' });
-            box.appendChild(el('p', { class: 'setting__help', text:
-                'Saved and applied to the hub. Copy it now -- it is not shown again. coturn '
-                + 'validates against its OWN copy, so set the SAME value as its '
-                + '--static-auth-secret (turn/.env REMOTE_TURN_SECRET) and restart coturn, or '
-                + 'TURN will reject every allocation.' }));
+            box.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.remote.secret_saved') }));
             const code = el('input', { type: 'text', class: 'input turn-secret__code', readonly: 'readonly' });
             code.value = lastSecretShown;
             code.addEventListener('focus', () => code.select());
@@ -119,35 +118,38 @@
 
     function buildCard() {
         const card = el('div', { class: 'card', id: CARD_ID });
-        card.appendChild(el('h3', { class: 'card__title', text: 'TURN / STUN status' }));
+        card.appendChild(el('h3', { class: 'card__title', text: t('settings.remote.title') }));
 
         if (!cachedStatus) {
-            card.appendChild(el('p', { class: 'setting__help', text: 'Loading TURN status...' }));
+            card.appendChild(el('p', { class: 'setting__help',
+                                       text: t('settings.remote.loading') }));
             return card;
         }
 
         const s = cachedStatus;
         const iceKind = s.ice_count > 0 ? 'ok' : (s.enabled ? 'danger' : 'muted');
         const stats = el('div', { class: 'turn-stats' }, [
-            statRow('Remote control', s.enabled ? pill('On', 'ok') : pill('Off', 'muted')),
-            statRow('REMOTE_TURN_SECRET', s.secret_set ? pill('Set', 'ok') : pill('Not set', 'warn')),
-            statRow('STUN servers', el('span', { text: String(s.stun_count) })),
-            statRow('TURN servers', el('span', { text: String(s.turn_count) })),
-            statRow('ICE servers per session', pill(String(s.ice_count), iceKind)),
+            statRow(t('settings.remote.remote_control'),
+                    s.enabled ? pill(t('settings.remote.on'), 'ok')
+                              : pill(t('settings.remote.off'), 'muted')),
+            // The .env key name is deliberately NOT translated: it is what you type.
+            statRow('REMOTE_TURN_SECRET',
+                    s.secret_set ? pill(t('settings.remote.secret_set'), 'ok')
+                                 : pill(t('settings.remote.secret_unset'), 'warn')),
+            statRow(t('settings.remote.stun_servers'), el('span', { text: String(s.stun_count) })),
+            statRow(t('settings.remote.turn_servers'), el('span', { text: String(s.turn_count) })),
+            statRow(t('settings.remote.ice_per_session'), pill(String(s.ice_count), iceKind)),
         ]);
         card.appendChild(stats);
 
         if (s.ice_count === 0 && s.enabled) {
-            card.appendChild(el('p', { class: 'turn-warn', text:
-                'A session hands peers 0 ICE servers, so anything not on the same LAN fails to '
-                + 'connect (the agent logs "ice_servers=0"). Add a STUN and/or TURN URL below and, '
-                + 'for TURN, set the shared secret.' }));
+            card.appendChild(el('p', { class: 'turn-warn',
+                text: t('settings.remote.no_ice_warning') }));
         }
 
         card.appendChild(secretControls());
-        card.appendChild(el('p', { class: 'setting__help', text:
-            'Point TURN servers at the hub\'s coturn, e.g. turn:your-hub:3478 (and stun:your-hub:3478). '
-            + 'The URLs are the fields below; this secret is what mints per-session credentials.' }));
+        card.appendChild(el('p', { class: 'setting__help',
+            text: t('settings.remote.urls_help') }));
         return card;
     }
 
@@ -158,33 +160,35 @@
     // the per-machine install button, which only needs remote_control.
     function buildVddCard() {
         const card = el('div', { class: 'card', id: VDD_CARD_ID });
-        card.appendChild(el('h3', { class: 'card__title', text: 'Virtual display driver' }));
-        card.appendChild(el('p', { class: 'setting__help', text:
-            'A machine with no monitor has no display output, so screen capture has nothing to '
-            + 'duplicate and remote view shows a black screen. Upload the driver\'s "Driver Only" '
-            + 'zip on the Packages page, then pin its SHA-256 here. Operators can then install it '
-            + 'per machine from the Remote tab.' }));
+        card.appendChild(el('h3', { class: 'card__title', text: t('settings.remote.vdd_title') }));
+        card.appendChild(el('p', { class: 'setting__help',
+            text: t('settings.remote.vdd_help') }));
 
         const current = el('div', { class: 'turn-stats' }, [
-            statRow('Pinned payload', cachedPayload
+            statRow(t('settings.remote.vdd_pinned'), cachedPayload
                 ? pill(cachedPayload.version, 'ok')
-                : pill('None', 'warn')),
+                : pill(t('settings.remote.vdd_none'), 'warn')),
         ]);
         card.appendChild(current);
         if (cachedPayload) {
-            card.appendChild(el('p', { class: 'setting__help', text:
-                `sha256 ${cachedPayload.sha256} · ${cachedPayload.filename || 'payload'} · `
-                + `pinned by ${cachedPayload.uploaded_by}` }));
+            card.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.remote.vdd_detail', {
+                    sha256: cachedPayload.sha256,
+                    filename: cachedPayload.filename
+                              || t('settings.remote.vdd_payload_fallback'),
+                    who: cachedPayload.uploaded_by,
+                }) }));
         }
 
         const version = el('input', { type: 'text', class: 'input',
-            placeholder: 'Driver version, e.g. 25.7.23', autocomplete: 'off' });
+            placeholder: t('settings.remote.vdd_version_placeholder'), autocomplete: 'off' });
         const digest = el('input', { type: 'text', class: 'input',
-            placeholder: 'SHA-256 of the uploaded package (64 hex characters)',
+            placeholder: t('settings.remote.vdd_sha_placeholder'),
             autocomplete: 'off', spellcheck: 'false' });
         const filename = el('input', { type: 'text', class: 'input',
-            placeholder: 'File name (optional)', autocomplete: 'off' });
-        const save = el('button', { type: 'button', class: 'btn btn--primary', text: 'Pin payload' });
+            placeholder: t('settings.remote.vdd_filename_placeholder'), autocomplete: 'off' });
+        const save = el('button', { type: 'button', class: 'btn btn--primary',
+                                    text: t('settings.remote.vdd_pin') });
         const msg = el('div', { class: 'turn-secret__msg' });
 
         save.addEventListener('click', async () => {
@@ -213,11 +217,14 @@
             }
         });
 
-        card.appendChild(el('label', { class: 'setting__label', text: 'Version' }));
+        card.appendChild(el('label', { class: 'setting__label',
+                                       text: t('settings.remote.vdd_version') }));
         card.appendChild(version);
-        card.appendChild(el('label', { class: 'setting__label', text: 'SHA-256' }));
+        card.appendChild(el('label', { class: 'setting__label',
+                                       text: t('settings.remote.vdd_sha') }));
         card.appendChild(digest);
-        card.appendChild(el('label', { class: 'setting__label', text: 'File name' }));
+        card.appendChild(el('label', { class: 'setting__label',
+                                       text: t('settings.remote.vdd_filename') }));
         card.appendChild(filename);
         card.appendChild(el('div', { class: 'card-actions' }, [save]));
         card.appendChild(msg);

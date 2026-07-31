@@ -83,35 +83,17 @@ CAPABILITIES = (
     MANAGE_PERMISSION_GROUPS,
 )
 
-# Shown in the admin UI. Kept here, not in the template, so the API is self-describing
-# and a new capability needs one edit rather than two.
-CAPABILITY_LABELS = {
-    VIEW: ("View", "See these machines, their history, and their command results."),
-    VIEW_AUDIT_LOG: ("View audit log",
-                     "Read the record of who did what on this hub. Security-sensitive "
-                     "entries are withheld unless the next capability is held too. "
-                     "The audit log is not machine-scoped."),
-    VIEW_SECURITY_AUDIT: ("View security audit entries",
-                          "Additionally see security-level audit entries: permission "
-                          "changes, backup-key access, remote sessions, commands run, "
-                          "and settings changes. Does nothing without 'View audit log'."),
-    ISSUE_COMMANDS: ("Issue commands",
-                     "Run scripts and send restart/shutdown/install commands. This is "
-                     "code execution as SYSTEM on the machines in scope."),
-    REMOTE_CONTROL: ("Remote control", "Start a remote view/control session."),
-    DEPLOY_PACKAGES: ("Deploy packages", "Schedule software deployments."),
-    MANAGE_BACKUPS: ("Manage backups", "Configure backups and trigger restores."),
-    MANAGE_SETTINGS: ("Manage settings",
-                      "Change hub settings, and administer machine records "
-                      "(delete, merge, pin a sensor, dismiss alerts)."),
-    MANAGE_USERS: ("Manage users",
-                   "Add, edit, and remove entries in the registered-users directory. "
-                   "This is a profile directory, not access -- membership in a "
-                   "permission group is what grants what someone can do."),
-    MANAGE_PERMISSION_GROUPS: ("Manage permission groups",
-                               "Create and edit permission groups -- i.e. grant "
-                               "anyone, including themselves, any of the above."),
-}
+# The label and description each capability is shown with live in the translation
+# catalogs, under `permissions.capability.<name>.label` / `.description` --
+# `permissions_web.permissions_capabilities` reads them in the caller's language, so the
+# API stays self-describing while the admin UI reads in the operator's language.
+#
+# They used to be a CAPABILITY_LABELS dict here, which was the right home while the
+# console was English-only. Two homes for one string is how a catalog rots, so there is
+# now exactly one: `en.json` is the schema (a key absent from it does not exist), and
+# tests/test_i18n.py fails if a capability in the tuple above has no entries -- a new
+# capability cannot reach the UI nameless.
+CAPABILITY_TEXT_KEY = "permissions.capability"
 
 # Machine-scope resolution modes. "list" is the v1 explicit list; "all" is the
 # fleet-wide group (a global auditor, or the group that replaces break-glass once a

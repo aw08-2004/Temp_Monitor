@@ -128,9 +128,34 @@
         }
     }
 
+    // Run/restore status and trigger are wire values and need display names. Spelled out
+    // per value rather than a computed key: only literal keys are visible to the scan in
+    // tests/test_i18n.py. An unrecognised value shows itself, which beats showing a key.
+    const RUN_STATUS = {
+        running: () => t('backups.status.running'),
+        succeeded: () => t('backups.status.succeeded'),
+        failed: () => t('backups.status.failed'),
+        cancelled: () => t('backups.status.cancelled'),
+    };
+
+    function runStatus(status) {
+        const get = RUN_STATUS[status];
+        return get ? get() : String(status || '');
+    }
+
+    const RUN_TRIGGER = {
+        schedule: () => t('backups.trigger.schedule'),
+        manual: () => t('backups.trigger.manual'),
+    };
+
+    function runTrigger(trigger) {
+        const get = RUN_TRIGGER[trigger];
+        return get ? get() : String(trigger || '');
+    }
+
     function policyCard() {
         const card = el('div', 'card');
-        card.appendChild(el('h2', 'section-title', 'Backup policy'));
+        card.appendChild(el('h2', 'section-title', t('backups.tab.policy')));
 
         const effective = data.effective || {};
         const config = data.config || {};
@@ -140,24 +165,22 @@
         const state = el('p', 'stat-card__meta');
         if (config.enabled === null || config.enabled === undefined) {
             state.textContent = effective.enabled
-                ? 'Following the fleet policy: this machine IS backed up.'
-                : 'Following the fleet policy: nothing on this machine is backed up.';
+                ? t('backups.tab.follow_on') : t('backups.tab.follow_off');
         } else {
             state.textContent = config.enabled
-                ? 'Overridden: this machine is backed up even if the fleet policy is off.'
-                : 'Overridden: this machine is NOT backed up, even though the fleet policy is on.';
+                ? t('backups.tab.override_on') : t('backups.tab.override_off');
         }
         card.appendChild(state);
 
         const grid = el('div', 'bk-schedule-grid');
 
         const modeWrap = el('div');
-        modeWrap.appendChild(el('label', 'setting__label', 'Back up this machine'));
+        modeWrap.appendChild(el('label', 'setting__label', t('backups.tab.mode')));
         const mode = el('select', 'input');
         mode.id = 'backup-mode';
         mode.style.width = '100%';
-        [['', 'Follow the fleet policy'], ['on', 'Always back up'],
-         ['off', 'Never back up']].forEach(([value, label]) => {
+        [['', t('backups.tab.mode_follow')], ['on', t('backups.tab.mode_on')],
+         ['off', t('backups.tab.mode_off')]].forEach(([value, label]) => {
             const option = el('option', null, label);
             option.value = value;
             if ((config.enabled === null || config.enabled === undefined) ? value === ''
@@ -172,25 +195,28 @@
         card.appendChild(grid);
 
         card.appendChild(pathEditor(
-            'Extra folders for this machine', 'include', draftInclude,
-            'ADDED to the fleet list below, not replacing it. Use it for something only '
-            + 'this PC has — a local project folder, a line-of-business data directory.',
-            'e.g. D:\\Finance or %User%\\Scripts'));
+            t('backups.tab.extra_include'), 'include', draftInclude,
+            t('backups.tab.extra_include_help'),
+            t('backups.tab.extra_include_placeholder')));
         card.appendChild(pathEditor(
-            'Extra exclusions for this machine', 'exclude', draftExclude,
-            'Also added to the fleet exclusions.',
-            'e.g. D:\\Scratch\\** or *.bak'));
+            t('backups.tab.extra_exclude'), 'exclude', draftExclude,
+            t('backups.tab.extra_exclude_help'), t('backups.files.exclude_placeholder')));
 
         // The inherited policy, read-only. Shown because "extra paths" is meaningless
         // without knowing what they are extra TO.
         const inherited = el('details', 'bk-tokens');
-        inherited.appendChild(el('summary', null,
-            'Fleet policy this machine inherits'));
+        inherited.appendChild(el('summary', null, t('backups.tab.inherited')));
         const list = el('div');
         list.appendChild(el('p', 'setting__default',
-            `Includes: ${(data.effective.include || []).join(', ') || 'none'}`));
+            t('backups.tab.inherited_includes', {
+                paths: (data.effective.include || []).join(', ')
+                       || t('backups.tab.none'),
+            })));
         list.appendChild(el('p', 'setting__default',
-            `Excludes: ${(data.effective.exclude || []).join(', ') || 'none'}`));
+            t('backups.tab.inherited_excludes', {
+                paths: (data.effective.exclude || []).join(', ')
+                       || t('backups.tab.none'),
+            })));
         inherited.appendChild(list);
         card.appendChild(inherited);
 
@@ -226,7 +252,7 @@
         const modeEl = document.getElementById('backup-mode');
         const value = modeEl ? modeEl.value : '';
         const seq = ++policySaveSeq;
-        setPolicyStatus('Saving…', '');
+        setPolicyStatus(t('common.saving'), '');
         try {
             const body = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`,
                              json('PUT', {
@@ -239,7 +265,7 @@
             draftInclude = (data.config.include || []).slice();
             draftExclude = (data.config.exclude || []).slice();
             dirty = false;
-            policyStatus = { text: 'Saved', cls: 'autosave--saved' };
+            policyStatus = { text: t('common.saved'), cls: 'autosave--saved' };
             render();
         } catch (e) {
             if (seq !== policySaveSeq) return;
@@ -300,13 +326,10 @@
     function previewCard() {
         const card = el('div', 'card');
         card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', 'What this resolves to'));
+        card.appendChild(el('h2', 'section-title', t('backups.tab.resolves_to')));
 
         if (!data.has_profiles) {
-            card.appendChild(el('p', 'setting__default',
-                'This machine has not reported its user profiles yet — its agent sends '
-                + 'them on the next heartbeat after an upgrade. The patterns will still '
-                + 'expand correctly on the machine itself.'));
+            card.appendChild(el('p', 'setting__default', t('backups.tab.no_profiles')));
             return card;
         }
 
@@ -315,14 +338,16 @@
             const table = el('table', 'data-table');
             const head = el('thead');
             const headRow = el('tr');
-            ['Folder', 'User', 'From'].forEach((l) => headRow.appendChild(el('th', null, l)));
+            [t('backups.preview.col.folder'), t('backups.preview.col.user'),
+             t('backups.preview.col.from')].forEach(
+                (l) => headRow.appendChild(el('th', null, l)));
             head.appendChild(headRow);
             table.appendChild(head);
             const body = el('tbody');
             preview.roots.forEach((root) => {
                 const row = el('tr');
                 row.appendChild(el('td', null, root.path));
-                row.appendChild(el('td', null, root.user || '—'));
+                row.appendChild(el('td', null, root.user || t('backups.preview.no_user')));
                 row.appendChild(el('td', null, root.pattern));
                 body.appendChild(row);
             });
@@ -330,7 +355,7 @@
             card.appendChild(table);
         } else {
             card.appendChild(el('p', 'setting__default',
-                'These patterns cover nothing on this machine.'));
+                t('backups.tab.covers_nothing')));
         }
         (preview.problems || []).forEach((p) => card.appendChild(el('p', 'setting__error', p)));
         return card;
@@ -348,25 +373,26 @@
     function restoreCard() {
         const card = el('div', 'card');
         card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', 'Restore files'));
+        card.appendChild(el('h2', 'section-title', t('backups.tab.restore_title')));
 
         const summary = (data.manifest || {});
         if (!summary.file_count) {
             card.appendChild(el('p', 'setting__default',
-                'Nothing to restore yet — this machine has no completed file backups. '
-                + 'Once one finishes, its contents are browsable here.'));
+                t('backups.tab.nothing_to_restore')));
             return card;
         }
 
         const meta = el('p', 'stat-card__meta');
-        meta.textContent =
-            `${summary.file_count.toLocaleString()} file(s), ${fmtBytes(summary.total_bytes)}`
-            + ` recoverable across ${summary.chains} chain(s)`
-            + ` — newest ${fmtTime(summary.latest_at)}.`;
+        meta.textContent = t('backups.tab.recoverable', {
+            files: summary.file_count.toLocaleString(),
+            size: fmtBytes(summary.total_bytes),
+            chains: summary.chains,
+            when: fmtTime(summary.latest_at),
+        });
         card.appendChild(meta);
 
         if (!restoreOpen) {
-            const open = el('button', 'btn', 'Browse backed-up files');
+            const open = el('button', 'btn', t('backups.tab.browse'));
             open.addEventListener('click', () => {
                 restoreOpen = true;
                 render();
@@ -454,14 +480,14 @@
         } else {
             crumbs.appendChild(el('span', 'bk-crumb__sep', '›'));
             crumbs.appendChild(el('span', 'bk-crumb bk-crumb--current',
-                                  `search: ${manifestSearch}`));
+                t('backups.tab.search_crumb', { query: manifestSearch })));
         }
         bar.appendChild(crumbs);
 
         const find = el('div', 'chip-add');
         const input = el('input', 'input');
         input.id = 'restore-search';
-        input.placeholder = 'Find a file across every folder…';
+        input.placeholder = t('backups.tab.search_placeholder');
         input.value = manifestSearch;
         input.autocomplete = 'off';
         const run = () => {
@@ -488,14 +514,16 @@
 
         if (!dirs.length && !files.length) {
             wrap.appendChild(el('p', 'setting__default',
-                manifestSearch ? 'Nothing matched.' : 'This folder holds no backed-up files.'));
+                manifestSearch ? t('backups.tab.nothing_matched')
+                               : t('backups.tab.folder_empty')));
             return wrap;
         }
 
         const table = el('table', 'data-table');
         const head = el('thead');
         const headRow = el('tr');
-        ['', 'Name', 'Size', 'Modified'].forEach((l) => headRow.appendChild(el('th', null, l)));
+        ['', t('backups.col.name'), t('backups.col.size'),
+         t('backups.col.modified')].forEach((l) => headRow.appendChild(el('th', null, l)));
         head.appendChild(headRow);
         table.appendChild(head);
 
@@ -510,10 +538,11 @@
             link.addEventListener('click', () => goTo(dir.path));
             nameCell.appendChild(link);
             nameCell.appendChild(el('span', 'setting__default',
-                ` ${dir.file_count.toLocaleString()} file(s)`));
+                ' ' + t('backups.tab.folder_files',
+                        { count: dir.file_count.toLocaleString() })));
             row.appendChild(nameCell);
             row.appendChild(el('td', null, fmtBytes(dir.total_bytes)));
-            row.appendChild(el('td', null, '—'));
+            row.appendChild(el('td', null, t('backups.unknown')));
             body.appendChild(row);
         });
         files.forEach((file) => {
@@ -531,8 +560,7 @@
 
         if (manifest.truncated) {
             wrap.appendChild(el('p', 'setting__default',
-                'Only the first part of this folder is shown. Tick the folder itself to '
-                + 'restore all of it, or use Find to narrow down.'));
+                t('backups.tab.folder_truncated')));
         }
         return wrap;
     }
@@ -557,15 +585,12 @@
         const wrap = el('div', 'bk-restore');
         const chosen = [...selected.values()];
         if (!chosen.length) {
-            wrap.appendChild(el('p', 'setting__default',
-                'Tick files or folders above to restore them. A ticked folder restores '
-                + 'everything under it, including files that are no longer in the folders '
-                + 'you can see here.'));
+            wrap.appendChild(el('p', 'setting__default', t('backups.tab.tick_hint')));
             return wrap;
         }
 
         wrap.appendChild(el('h3', 'perm-subhead',
-            `${chosen.length} item(s) selected`));
+            t('backups.tab.selected', { count: chosen.length })));
         const chips = el('div', 'chip-list');
         chosen.slice(0, 12).forEach((item) => {
             const chip = el('span', 'chip');
@@ -573,7 +598,8 @@
             const remove = el('button', 'chip__remove');
             remove.type = 'button';
             remove.textContent = '×';
-            remove.setAttribute('aria-label', `Deselect ${item.path}`);
+            remove.setAttribute('aria-label',
+                                t('backups.tab.deselect', { path: item.path }));
             remove.addEventListener('click', () => {
                 selected.delete(item.path.toLowerCase());
                 render();
@@ -583,14 +609,15 @@
         });
         if (chosen.length > 12) {
             chips.appendChild(el('span', 'setting__default',
-                `and ${chosen.length - 12} more`));
+                t('backups.tab.and_more', { count: chosen.length - 12 })));
         }
         wrap.appendChild(chips);
 
         const grid = el('div', 'bk-schedule-grid');
 
         const targetWrap = el('div');
-        targetWrap.appendChild(el('label', 'setting__label', 'Restore onto'));
+        targetWrap.appendChild(el('label', 'setting__label',
+                                  t('backups.tab.restore_onto')));
         const target = el('input', 'input');
         target.id = 'restore-target';
         target.value = restoreTarget === null ? MACHINE : restoreTarget;
@@ -610,22 +637,19 @@
         });
         targetWrap.appendChild(options);
         targetWrap.appendChild(el('p', 'setting__default',
-            'Another machine, if you are replacing this one. It needs to be in your '
-            + 'scope too, and its agent does the work.'));
+            t('backups.tab.other_machine_help')));
         grid.appendChild(targetWrap);
 
         const dirWrap = el('div');
-        dirWrap.appendChild(el('label', 'setting__label', 'Write to'));
+        dirWrap.appendChild(el('label', 'setting__label', t('backups.tab.write_to')));
         const dir = el('input', 'input');
         dir.id = 'restore-dir';
-        dir.placeholder = 'e.g. C:\\Restored — blank means the original locations';
+        dir.placeholder = t('backups.tab.write_to_placeholder');
         dir.value = restoreDir;
         dir.style.width = '100%';
         dir.addEventListener('input', () => { restoreDir = dir.value; });
         dirWrap.appendChild(dir);
-        dirWrap.appendChild(el('p', 'setting__default',
-            'A folder is the safe answer: files land under it in their original tree, '
-            + 'and nothing live is touched.'));
+        dirWrap.appendChild(el('p', 'setting__default', t('backups.tab.write_to_help')));
         grid.appendChild(dirWrap);
         wrap.appendChild(grid);
 
@@ -637,16 +661,17 @@
         overwrite.addEventListener('change', () => { restoreOverwrite = overwrite.checked; });
         overwriteLabel.appendChild(overwrite);
         overwriteLabel.appendChild(document.createTextNode(
-            ' Overwrite files that already exist'));
+            ' ' + t('backups.tab.overwrite')));
         wrap.appendChild(overwriteLabel);
 
         const actions = el('div', 'card-actions');
         const start = el('button', 'btn btn--primary',
-                         restoreBusy ? 'Starting…' : 'Restore selected');
+                         restoreBusy ? t('backups.tab.starting')
+                                     : t('backups.tab.restore_selected'));
         start.disabled = restoreBusy;
         start.addEventListener('click', startRestore);
         actions.appendChild(start);
-        const clear = el('button', 'btn', 'Clear selection');
+        const clear = el('button', 'btn', t('backups.tab.clear_selection'));
         clear.addEventListener('click', () => { selected = new Map(); render(); });
         actions.appendChild(clear);
         const status = el('span', 'settings-actions__status');
@@ -667,10 +692,12 @@
         // over the original locations rewrites live files on a running PC, and it is the
         // one action on this page that cannot be undone by pressing something else.
         if (!targetDir) {
-            const ok = window.confirm(
-                `Restore ${selected.size} item(s) back to their ORIGINAL locations on `
-                + `${targetMachine}?\n\nFiles there will be replaced`
-                + (overwrite ? '.' : ' only where they no longer exist.'));
+            const ok = window.confirm(t('backups.tab.confirm_restore', {
+                count: selected.size,
+                machine: targetMachine,
+                qualifier: overwrite ? t('backups.tab.confirm_overwrite_all')
+                                     : t('backups.tab.confirm_overwrite_missing'),
+            }));
             if (!ok) return;
         }
 
@@ -687,10 +714,13 @@
                     paths: [...selected.values()].map((item) => item.path),
                 }));
             selected = new Map();
-            restoreStatus = `Queued: ${body.file_count.toLocaleString()} file(s) from `
-                          + `${body.archives} archive(s).`
-                          + (body.missing && body.missing.length
-                             ? ` Nothing found for: ${body.missing.join(', ')}.` : '');
+            restoreStatus = t('backups.tab.queued', {
+                files: body.file_count.toLocaleString(),
+                archives: body.archives,
+            }) + (body.missing && body.missing.length
+                  ? t('backups.tab.queued_missing',
+                      { missing: body.missing.join(', ') })
+                  : '');
         } catch (e) {
             restoreStatus = e.message;
         }
@@ -703,11 +733,12 @@
         const restores = data.restores || [];
         if (!restores.length) return wrap;
 
-        wrap.appendChild(el('h3', 'perm-subhead', 'Restore history'));
+        wrap.appendChild(el('h3', 'perm-subhead', t('backups.tab.restore_history')));
         const table = el('table', 'data-table');
         const head = el('thead');
         const headRow = el('tr');
-        ['Started', 'Status', 'Files', 'From', 'To'].forEach(
+        [t('backups.col.started'), t('backups.col.status'), t('backups.col.files'),
+         t('backups.col.from'), t('backups.col.to')].forEach(
             (l) => headRow.appendChild(el('th', null, l)));
         head.appendChild(headRow);
         table.appendChild(head);
@@ -718,16 +749,20 @@
             row.appendChild(el('td', null, fmtTime(restore.started_at)));
             const statusCell = el('td');
             statusCell.appendChild(el('span', `bk-dot bk-dot--${restore.status}`));
-            statusCell.appendChild(document.createTextNode(restore.status));
+            statusCell.appendChild(document.createTextNode(runStatus(restore.status)));
             if (restore.error) statusCell.appendChild(el('div', 'bk-error', restore.error));
             row.appendChild(statusCell);
-            row.appendChild(el('td', null,
-                `${(restore.restored_count === null || restore.restored_count === undefined)
-                    ? '—' : restore.restored_count.toLocaleString()}`
-                + ` / ${(restore.file_count || 0).toLocaleString()}`));
+            row.appendChild(el('td', null, t('backups.restored_of', {
+                done: (restore.restored_count === null
+                       || restore.restored_count === undefined)
+                    ? t('backups.unknown') : restore.restored_count.toLocaleString(),
+                total: (restore.file_count || 0).toLocaleString(),
+            })));
             row.appendChild(el('td', null, restore.source_machine));
-            row.appendChild(el('td', null,
-                `${restore.machine}${restore.target_dir ? ' → ' + restore.target_dir : ''}`));
+            row.appendChild(el('td', null, restore.target_dir
+                ? t('backups.restore_to',
+                    { machine: restore.machine, dir: restore.target_dir })
+                : restore.machine));
             body.appendChild(row);
         });
         table.appendChild(body);
@@ -790,17 +825,17 @@
     function runsCard() {
         const card = el('div', 'card');
         card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', 'Backup history'));
+        card.appendChild(el('h2', 'section-title', t('backups.tab.history_title')));
 
         const actions = el('div', 'card-actions');
         const run = el('button', 'btn btn--primary',
-                       runBusy ? 'Working…' : 'Back up now');
+                       runBusy ? t('backups.tab.working') : t('backups.tab.run_now'));
         run.id = 'backup-run-now';
         run.disabled = runBusy;
         run.addEventListener('click', backupNow);
         actions.appendChild(run);
         if (cancellable()) {
-            const cancel = el('button', 'btn btn--danger', 'Cancel backup');
+            const cancel = el('button', 'btn btn--danger', t('backups.tab.cancel'));
             cancel.id = 'backup-cancel';
             cancel.disabled = runBusy;
             cancel.addEventListener('click', cancelBackup);
@@ -822,21 +857,21 @@
         const pendingAt = (data.config || {}).run_requested_at;
         if (pendingAt) {
             card.appendChild(el('p', 'setting__default',
-                `A backup was requested at ${fmtTime(pendingAt)} and will start as soon `
-                + 'as this PC is online.'));
+                t('backups.tab.requested', { when: fmtTime(pendingAt) })));
         }
 
         const runs = data.runs || [];
         if (!runs.length) {
             card.appendChild(el('p', 'setting__default',
-                'This machine has not been backed up yet.'));
+                t('backups.tab.never_backed_up')));
             return card;
         }
 
         const table = el('table', 'data-table');
         const head = el('thead');
         const headRow = el('tr');
-        ['Started', 'Status', 'Files', 'Size', 'Trigger'].forEach(
+        [t('backups.col.started'), t('backups.col.status'), t('backups.col.files'),
+         t('backups.col.size'), t('backups.col.trigger')].forEach(
             (l) => headRow.appendChild(el('th', null, l)));
         head.appendChild(headRow);
         table.appendChild(head);
@@ -847,16 +882,17 @@
             row.appendChild(el('td', null, fmtTime(run.started_at)));
             const statusCell = el('td');
             statusCell.appendChild(el('span', `bk-dot bk-dot--${run.status}`));
-            statusCell.appendChild(document.createTextNode(run.status));
+            statusCell.appendChild(document.createTextNode(runStatus(run.status)));
             if (run.status === 'failed' && run.error) {
                 statusCell.appendChild(el('div', 'bk-error', run.error));
             }
             row.appendChild(statusCell);
             row.appendChild(el('td', null,
                 run.file_count === null || run.file_count === undefined
-                    ? '—' : String(run.file_count)));
+                    ? t('backups.unknown') : String(run.file_count)));
             row.appendChild(el('td', null, fmtBytes(run.stored_bytes)));
-            row.appendChild(el('td', null, run.trigger || '—'));
+            row.appendChild(el('td', null, run.trigger
+                ? runTrigger(run.trigger) : t('backups.unknown')));
             body.appendChild(row);
         });
         table.appendChild(body);

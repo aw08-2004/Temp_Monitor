@@ -85,22 +85,13 @@ DETECT_INSTALLED_VERSION = "installed_version"
 DETECTION_KINDS = (DETECT_NONE, DETECT_FILE_EXISTS, DETECT_REGISTRY_VALUE,
                    DETECT_INSTALLED_VERSION)
 
-# Shown in the package form. Kept here rather than in the template for the same reason
-# permissions.CAPABILITY_LABELS is: the API describes itself, so adding a kind is one edit.
-DETECTION_LABELS = {
-    DETECT_NONE: ("No detection check",
-                  "Trust the exit code alone. Only sensible for installers you know "
-                  "report failure honestly."),
-    DETECT_FILE_EXISTS: ("File exists",
-                         "Succeed only if a path is present after the install, e.g. "
-                         "C:\\Program Files\\7-Zip\\7z.exe."),
-    DETECT_REGISTRY_VALUE: ("Registry value",
-                            "Succeed only if a registry value exists -- optionally "
-                            "matching an exact string."),
-    DETECT_INSTALLED_VERSION: ("Installed version",
-                               "Look the product up in Windows' installed-programs "
-                               "registry and require at least a given version."),
-}
+# The label and description each detection kind is shown with live in the translation
+# catalogs, under `packages.detection.<kind>.label` / `.description`; `packages_web`
+# resolves them in the caller's language when it serves the vocabulary. Same move, and
+# the same reasoning, as permissions.CAPABILITY_TEXT_KEY: the API stays self-describing,
+# but one string has one home, and `en.json` is that home. A kind added without entries
+# fails tests/test_i18n.py rather than captioning the package form with its own key.
+DETECTION_TEXT_KEY = "packages.detection"
 
 REGISTRY_ROOTS = ("HKLM", "HKCU", "HKCR", "HKU")
 

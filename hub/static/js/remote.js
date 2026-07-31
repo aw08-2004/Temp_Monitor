@@ -131,8 +131,8 @@
         els.start.disabled = true;
         els.stop.disabled = false;
         lockStartTimeControls(true);
-        setStatus('Starting…', 'warn');
-        hint('Waiting for the agent to bring up its capture helper…');
+        setStatus(t('machine.remote.starting'), 'warn');
+        hint(t('machine.remote.waiting_helper'));
         afterSeq = 0;
         remoteSet = false;
         pendingIce = [];
@@ -149,7 +149,7 @@
             createPeer(res.ice_servers || []);
             schedulePoll();
         } catch (e) {
-            hint('Could not start: ' + e.message);
+            hint(t('machine.remote.start_failed', { error: e.message }));
             teardown('failed');
         }
     }
@@ -204,10 +204,14 @@
         };
         pc.onconnectionstatechange = () => {
             switch (pc.connectionState) {
-                case 'connecting': setStatus('Connecting…', 'warn'); break;
-                case 'connected': setStatus('Live', 'ok'); hint(''); break;
-                case 'disconnected': setStatus('Reconnecting…', 'warn'); break;
-                case 'failed': hint('Connection failed.'); teardown('failed'); break;
+                case 'connecting':
+                    setStatus(t('machine.remote.connecting'), 'warn'); break;
+                case 'connected':
+                    setStatus(t('machine.remote.live'), 'ok'); hint(''); break;
+                case 'disconnected':
+                    setStatus(t('machine.remote.reconnecting'), 'warn'); break;
+                case 'failed':
+                    hint(t('machine.remote.connection_failed')); teardown('failed'); break;
                 case 'closed': break;
             }
         };
@@ -225,16 +229,25 @@
             const secure = msg.desktop && msg.desktop.toLowerCase() !== 'default';
             els.desktopBadge.hidden = !secure;
             if (secure) {
+                // 'Winlogon' is the desktop OBJECT's name, not prose -- any other value is
+                // shown verbatim because it came from Windows.
                 els.desktopBadge.lastChild.textContent =
-                    msg.desktop === 'Winlogon' ? 'Lock / logon screen' : msg.desktop;
+                    msg.desktop === 'Winlogon'
+                        ? t('machine.remote.logon_screen_desktop') : msg.desktop;
             }
             populateMonitors(msg.monitors, msg.monitor);
-            meta(`${msg.w}×${msg.h} · ${msg.encoder || ''} · desktop ${msg.desktop || '?'}`);
+            meta(t('machine.remote.geom', {
+                width: msg.w, height: msg.h, encoder: msg.encoder || '',
+                desktop: msg.desktop || t('machine.remote.desktop_unknown'),
+            }));
             hint('');
         } else if (msg.t === 'capture' && msg.state === 'stalled') {
-            hint('The agent is not getting any frames' +
-                 (msg.desktop ? ` on the ${msg.desktop} desktop` : '') +
-                 '. If this machine has no monitor, install a virtual display below.');
+            // Two whole sentences rather than one spliced around an optional clause:
+            // "on the X desktop" cannot be dropped into the middle of a translated
+            // sentence and still read as a sentence.
+            hint(msg.desktop
+                ? t('machine.remote.stalled_on_desktop', { desktop: msg.desktop })
+                : t('machine.remote.stalled'));
         }
     }
 
@@ -306,7 +319,7 @@
                 teardown('muted');
             }
         } catch (e) {
-            hint('Signaling error: ' + e.message);
+            hint(t('machine.remote.signaling_error', { error: e.message }));
         }
     }
 
@@ -446,16 +459,22 @@
     function renderSessions(sessions) {
         const selected = els.session.value;
         els.session.innerHTML = '';
-        els.session.appendChild(new Option('Auto (agent picks)', 'auto'));
+        els.session.appendChild(new Option(t('machine.remote.session_auto'), 'auto'));
         for (const s of sessions) {
             // A session with nobody signed in is the logon screen -- and on a headless machine
             // that is exactly the one the operator needs, so it is labelled, not hidden.
-            const who = s.is_logon_screen ? 'logon screen' : (s.account || 'no user');
+            const who = s.is_logon_screen
+                ? t('machine.remote.session_logon_screen')
+                : (s.account || t('machine.remote.session_no_user'));
+            // s.state is a Windows session state (Active/Disconnected/...) reported
+            // verbatim by the agent, so it stays as it came.
             const bits = [s.state];
-            if (s.is_console) bits.push('console');
+            if (s.is_console) bits.push(t('machine.remote.session_console'));
             if (s.client) bits.push(s.client);
-            els.session.appendChild(
-                new Option(`Session ${s.id} — ${who} (${bits.join(', ')})`, String(s.id)));
+            els.session.appendChild(new Option(
+                t('machine.remote.session_option',
+                  { id: s.id, who, details: bits.join(', ') }),
+                String(s.id)));
         }
         // Keep the operator's choice across refreshes when it still exists.
         els.session.value =
@@ -474,24 +493,22 @@
         els.vddUninstall.hidden = !present;
 
         if (present) {
-            els.vddText.textContent =
-                `A virtual display is installed${displays.virtual_display_started ? '' : ' but NOT started'}. ` +
-                `Physical monitors: ${displays.physical_monitors}.`;
+            els.vddText.textContent = displays.virtual_display_started
+                ? t('machine.remote.vdd_present',
+                    { monitors: displays.physical_monitors })
+                : t('machine.remote.vdd_present_stopped',
+                    { monitors: displays.physical_monitors });
         } else if (headless) {
             els.vddText.textContent = payloadAvailable
-                ? 'This machine reports no monitors, so there is nothing for the screen capture ' +
-                  'to duplicate and the stream will be black. Installing a virtual display gives ' +
-                  'the desktop and the logon screen somewhere to be drawn.'
-                : 'This machine reports no monitors, so the stream will be black. No virtual ' +
-                  'display driver has been uploaded yet — upload it on the Packages page and pin ' +
-                  'it in Settings › Remote.';
+                ? t('machine.remote.vdd_headless_ready')
+                : t('machine.remote.vdd_headless_no_payload');
             els.vddInstall.disabled = !payloadAvailable;
         }
     }
 
     async function refreshInventory() {
         els.refreshSessions.disabled = true;
-        hint('Asking the machine to re-report its sessions and displays…');
+        hint(t('machine.remote.refreshing'));
         try {
             await window.FleetApi.postJson(
                 `/api/remote/${encodeURIComponent(MACHINE)}/inventory/refresh`, {});
@@ -499,7 +516,7 @@
             // heartbeat, so give it a beat before reading back rather than showing stale data.
             setTimeout(() => { loadInventory(); hint(''); }, 4000);
         } catch (e) {
-            hint('Could not refresh: ' + e.message);
+            hint(t('machine.remote.refresh_failed', { error: e.message }));
         } finally {
             setTimeout(() => { els.refreshSessions.disabled = running; }, 4000);
         }
@@ -508,17 +525,16 @@
     async function virtualDisplay(mode) {
         const button = mode === 'install' ? els.vddInstall : els.vddUninstall;
         button.disabled = true;
-        hint(mode === 'install' ? 'Queuing the virtual display install…'
-                                : 'Queuing the virtual display removal…');
+        hint(mode === 'install' ? t('machine.remote.vdd_queuing_install')
+                                : t('machine.remote.vdd_queuing_remove'));
         try {
             await window.FleetApi.postJson(
                 `/api/remote/${encodeURIComponent(MACHINE)}/virtual-display`,
                 { mode, monitors: 1, resolutions: [{ width: 1920, height: 1080, hz: 60 }] });
-            hint('Queued. Watch the command result on the Commands tab; the machine page ' +
-                 'updates once the agent reports back.');
+            hint(t('machine.remote.vdd_queued'));
             setTimeout(loadInventory, 15000);
         } catch (e) {
-            hint('Could not queue: ' + e.message);
+            hint(t('machine.remote.vdd_queue_failed', { error: e.message }));
         } finally {
             button.disabled = false;
         }
@@ -529,14 +545,16 @@
         if (document.fullscreenElement) {
             document.exitFullscreen().catch(() => {});
         } else {
-            els.stage.requestFullscreen().catch((e) => hint('Fullscreen refused: ' + e.message));
+            els.stage.requestFullscreen().catch(
+                (e) => hint(t('machine.remote.fullscreen_refused', { error: e.message })));
         }
     }
 
     document.addEventListener('fullscreenchange', () => {
         const full = document.fullscreenElement === els.stage;
         els.overlay.hidden = !full;
-        els.fullscreen.textContent = full ? 'Exit fullscreen' : 'Fullscreen';
+        els.fullscreen.textContent = full ? t('machine.remote.exit_fullscreen')
+                                          : t('machine.remote.fullscreen');
         // Focus the video so keystrokes go to the remote machine rather than the page.
         if (full) els.video.focus();
     });
@@ -560,10 +578,7 @@
         el.addEventListener('change', sendConfig);
     });
     els.viewOnly.addEventListener('change', () => {
-        hint(els.viewOnly.checked
-            ? 'View only: input from this browser is suppressed. This is an accident guard, ' +
-              'not a permission — it does not stop anyone else driving the machine.'
-            : '');
+        hint(els.viewOnly.checked ? t('machine.remote.view_only_note') : '');
     });
 
     // Ending the session when the operator navigates away is best-effort -- the hub's TTL

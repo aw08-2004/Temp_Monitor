@@ -56,6 +56,17 @@ LANGUAGES = (
 
 LANGUAGE_CODES = tuple(code for code, _ in LANGUAGES)
 
+# "No opinion -- use the browser's." Deliberately NOT a member of LANGUAGE_CODES, so it
+# has no catalog and can never be resolved to: `is_supported("auto")` is False, which is
+# what makes `resolve()` fall past it.
+#
+# It exists because "unset" and "English" have to be distinguishable and a plain enum
+# cannot express that. `hub.default_language` ships as "auto" rather than "en" for exactly
+# that reason -- shipping "en" made the Accept-Language branch below unreachable on every
+# hub where nobody had touched the setting, i.e. all of them, so a German operator on a
+# German browser got an English console and the only fix was to set it per user.
+AUTO = "auto"
+
 # Every other language overlays this one, and every lookup falls back to it, so the
 # English catalog is the schema: a key that is not in en.json does not exist.
 DEFAULT_LANGUAGE = "en"
@@ -224,15 +235,31 @@ def negotiate(accept_language):
 def resolve(user_language=None, fleet_default=None, accept_language=None):
     """The precedence chain, in one place so every caller agrees on it:
 
-        the user's explicit choice  ->  the fleet default  ->  the browser  ->  English
+        the user's explicit choice
+          ->  the fleet default, IF an admin actually chose one
+          ->  the browser (Accept-Language)
+          ->  English
 
-    The browser sits BELOW the fleet default on purpose. An admin who sets the fleet to
-    German did so because that is the language of the office; a technician whose laptop
-    happens to be an English Windows install should still get German until they choose
-    otherwise. The header is there for the login page, where there is no user and no
-    session to have a preference in yet.
+    A *chosen* fleet default still outranks the browser, and that part has not changed:
+    an admin who sets the fleet to German did so because that is the language of the
+    office, and a technician whose laptop happens to be an English Windows install should
+    still get German until they say otherwise.
+
+    What changed is the middle step. `hub.default_language` used to ship as "en", which is
+    indistinguishable from an admin choosing English -- so the browser step below was
+    dead code on every hub where nobody had opened Settings, and someone on a German
+    browser got an English console with no way to fix it but picking a language by hand,
+    on every device. The setting now ships as `AUTO`, which is not a supported language
+    and therefore falls through to the header. "Unset" and "English" are different
+    answers and the value has to be able to say which one it is.
+
+    A user's own choice is still the top of the chain and is stored on their profile, so
+    it follows them to the next browser and the next device.
     """
     for candidate in (user_language, fleet_default):
+        # AUTO lands here as "not supported" and is skipped, which is the intent -- but
+        # the caller may equally pass None, or a code from a language this hub no longer
+        # ships. All three mean "no answer at this level".
         if candidate and is_supported(candidate):
             return candidate
     from_header = negotiate(accept_language)
@@ -252,8 +279,56 @@ def catalog_json(lang):
     return json.dumps(catalog_for(lang), ensure_ascii=False).replace("<", "\\u003c")
 
 
-def template_context(lang):
+# ------------------------------------------------- the language of the request in flight
+
+# Installed by app.py at startup. A callable, not an import of app.py's own function:
+# this module stays Flask-free (it never learns what a request is), and the bare test
+# apps that mount one blueprint can leave it unset and get English.
+_language_provider = None
+
+
+def set_language_provider(provider):
+    """Tell this module how to find the CURRENT request's language.
+
+    Server-rendered pages get their language passed down explicitly (see
+    `template_context`), which is the right shape there because a template renders once
+    in one language. JSON endpoints cannot: a blueprint like `permissions_web` serves
+    user-facing text (capability labels) with no template and no language argument
+    anywhere in its call chain, and threading one through every blueprint factory would
+    add a parameter to each of the ten of them for the two that need it.
+
+    So app.py installs its request-scoped resolver here once, and `current()` below is
+    what a web module asks. `provider` must be callable and return a language code.
+    """
+    global _language_provider
+    _language_provider = provider
+
+
+def current():
+    """The language for the request in flight, or English if that cannot be determined.
+
+    Never raises: a failure to resolve a language must degrade to English, not 500 an
+    API call. Outside a request (a background thread, a test) there is genuinely no
+    answer, and English is the honest one.
+    """
+    if _language_provider is None:
+        return DEFAULT_LANGUAGE
+    try:
+        lang = _language_provider()
+    except Exception:
+        return DEFAULT_LANGUAGE
+    return lang if is_supported(lang) else DEFAULT_LANGUAGE
+
+
+def template_context(lang, chosen_language=None):
     """Everything a template needs to render in `lang`, as a dict to merge into a context.
+
+    `chosen_language` is the language the signed-in user PICKED, which is not the same as
+    `lang` -- someone who has picked nothing renders in whatever the browser asked for,
+    and the topbar picker has to show "Automatic" rather than pre-selecting the language
+    that happened to win. Without the distinction the picker claims a choice the user
+    never made, and there is then no option left that means "go back to following my
+    browser".
 
     Lives here rather than being spelled out in app.py's context processor because every
     Flask app that renders base.html needs it -- app.py, and each of the bare test apps
@@ -271,6 +346,8 @@ def template_context(lang):
         "t": lambda key, **params: translate(key, lang, **params),
         "t_plural": lambda key, count, **params: plural(key, count, lang, **params),
         "current_language": lang,
+        "chosen_language": chosen_language if chosen_language in LANGUAGE_CODES else AUTO,
+        "auto_language": AUTO,
         "languages": LANGUAGES,
         "i18n_catalog_json": catalog_json(lang),
     }

@@ -77,19 +77,22 @@
     }
 
     function healthPill(status) {
-        if (!status.enabled) return pill('Off', 'muted');
-        if (!status.library_installed) return pill('Library missing', 'danger');
+        if (!status.enabled) return pill(t('settings.directory.health.off'), 'muted');
+        if (!status.library_installed) {
+            return pill(t('settings.directory.health.library_missing'), 'danger');
+        }
         const last = status.last_run;
-        if (!last) return pill('Never run', 'warn');
-        if (last.status === 'failed') return pill('Failing', 'danger');
-        return pill('OK', 'ok');
+        if (!last) return pill(t('settings.directory.health.never_run'), 'warn');
+        if (last.status === 'failed') return pill(t('settings.directory.health.failing'), 'danger');
+        return pill(t('settings.directory.health.ok'), 'ok');
     }
 
     function buildCard(status) {
         const card = el('div', { class: 'card', id: CARD_ID });
-        card.appendChild(el('h3', { class: 'perm-subhead', text: 'Sync status' }));
+        card.appendChild(el('h3', { class: 'perm-subhead',
+                                   text: t('settings.directory.sync_status') }));
 
-        card.appendChild(statRow('State', healthPill(status)));
+        card.appendChild(statRow(t('settings.directory.state'), healthPill(status)));
 
         // Named explicitly rather than left to a generic failure message: "you enabled it
         // but the library isn't installed" is a one-command fix, and it is otherwise
@@ -101,28 +104,28 @@
         // Same reasoning for the credential: the console can say whether it is set
         // without ever being able to read it.
         if (status.enabled && !status.bind_password_set) {
-            card.appendChild(el('p', { class: 'setting__error', text:
-                'No bind password is set. Add ' + status.bind_password_env + '=... to the '
-                + "hub's .env and restart -- it is a credential, so it is deliberately not "
-                + 'stored in hub settings.' }));
+            card.appendChild(el('p', { class: 'setting__error',
+                text: t('settings.directory.no_bind_password',
+                        { var: status.bind_password_env }) }));
         }
 
         const success = status.last_success;
-        card.appendChild(statRow('Last successful sync', el('span', {
-            text: success ? ago(success.finished_at || success.started_at) : 'never',
+        card.appendChild(statRow(t('settings.directory.last_success'), el('span', {
+            text: success ? ago(success.finished_at || success.started_at)
+                          : t('settings.directory.never'),
         })));
         if (success) {
-            card.appendChild(statRow('Found in AD', el('span', {
-                text: (success.objects_found || 0) + ' computer objects',
+            card.appendChild(statRow(t('settings.directory.found_in_ad'), el('span', {
+                text: tPlural('settings.directory.objects_found', success.objects_found || 0),
             })));
-            card.appendChild(statRow('Matched to machines', el('span', {
+            card.appendChild(statRow(t('settings.directory.matched'), el('span', {
                 text: String(success.matched || 0),
             })));
-            card.appendChild(statRow('Managed but not in AD', el('span', {
+            card.appendChild(statRow(t('settings.directory.unmatched'), el('span', {
                 text: String(success.unmatched || 0),
             })));
         }
-        card.appendChild(statRow('OUs in use', el('span', {
+        card.appendChild(statRow(t('settings.directory.ou_count'), el('span', {
             text: String(status.ou_count || 0),
         })));
 
@@ -130,28 +133,31 @@
         // something is currently broken. Otherwise it is a duplicate row.
         const last = status.last_run;
         if (last && last.status === 'failed') {
-            card.appendChild(statRow('Last attempt',
-                el('span', { text: ago(last.finished_at || last.started_at) + ' — failed' })));
+            card.appendChild(statRow(t('settings.directory.last_attempt'),
+                el('span', { text: t('settings.directory.attempt_failed',
+                                     { when: ago(last.finished_at || last.started_at) }) })));
             card.appendChild(el('p', { class: 'setting__error', text: last.error || '' }));
         }
 
         const actions = el('div', { class: 'chip-add', style: 'margin-top: var(--space-3);' });
         const button = el('button', { class: 'btn btn--primary', type: 'button',
-                                      text: 'Sync now' });
+                                      text: t('settings.directory.sync_now') });
         const note = el('span', { class: 'setting__help' });
         if (!status.enabled) {
             button.disabled = true;
-            note.textContent = 'Turn the sync on above to run a pass.';
+            note.textContent = t('settings.directory.enable_first');
         }
         button.addEventListener('click', async () => {
             button.disabled = true;
             note.className = 'setting__help';
-            note.textContent = 'Contacting the domain controller…';
+            note.textContent = t('settings.directory.contacting');
             try {
                 lastResult = await syncNow();
-                note.textContent = `Synced: ${lastResult.objects_found} objects in AD, `
-                    + `${lastResult.matched} machines matched, `
-                    + `${lastResult.unmatched.length} not found in AD.`;
+                note.textContent = t('settings.directory.sync_result', {
+                    found: lastResult.objects_found,
+                    matched: lastResult.matched,
+                    unmatched: lastResult.unmatched.length,
+                });
                 cachedStatus = await fetchStatus();
                 inject();
                 return;
@@ -166,14 +172,16 @@
         card.appendChild(actions);
 
         if (lastResult && lastResult.unmatched && lastResult.unmatched.length) {
-            card.appendChild(el('p', { class: 'setting__help', text:
-                'Not found in AD: ' + lastResult.unmatched.slice(0, 20).join(', ')
-                + (lastResult.unmatched.length > 20 ? '…' : '') }));
+            card.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.directory.not_found_list', {
+                    machines: lastResult.unmatched.slice(0, 20).join(', ')
+                              + (lastResult.unmatched.length > 20 ? '…' : ''),
+                }) }));
         }
         if (lastResult && lastResult.duplicates && lastResult.duplicates.length) {
-            card.appendChild(el('p', { class: 'setting__help', text:
-                'These hostnames have more than one computer object in AD; the first of '
-                + 'each was used: ' + lastResult.duplicates.join(', ') }));
+            card.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.directory.duplicates',
+                        { machines: lastResult.duplicates.join(', ') }) }));
         }
         return card;
     }

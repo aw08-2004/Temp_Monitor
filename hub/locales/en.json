@@ -38,7 +38,13 @@
     "toggle_theme": "Toggle color theme",
     "more": "More",
     "connecting": "Connecting…",
-    "language": "Language"
+    "language": "Language",
+    "_language_auto": [
+      "The topbar picker's first option, and the label for the same choice in Settings.",
+      "Means 'I have not chosen -- follow my browser', which is what a user is put back",
+      "on by picking it again."
+    ],
+    "language_auto": "Automatic (browser)"
   },
 
   "login": {
@@ -58,6 +64,65 @@
   "dashboard": {
     "heading": "Live CPU Monitor",
     "empty": "No machines have reported in yet."
+  },
+
+  "history": {
+    "heading": "Daily Temperature Summary",
+    "select_day": "Select day:",
+    "resolution": "Resolution:",
+    "_resolution_label": [
+      "The four bucket sizes the summary can be aggregated at. 'Raw' is prose and needs",
+      "translating; the other three are duration abbreviations, so translate them only if",
+      "your language abbreviates seconds/minutes differently. The VALUES sent to the API",
+      "are fixed strings ('raw', '10s', ...) and are not these labels."
+    ],
+    "resolution_label": {
+      "raw": "Raw",
+      "10s": "10s",
+      "1m": "1m",
+      "5m": "5m",
+      "unknown": "--"
+    },
+    "in_use": "In use: {value}",
+    "dynamic_on_zoom": "Dynamic on zoom",
+    "load_day": "Load Day",
+    "zoom_in": "Zoom In",
+    "zoom_out": "Zoom Out",
+    "reset_zoom": "Reset Zoom",
+    "overall_avg": "Overall Daily Average",
+    "temp_c": "{value} °C",
+    "temp_unknown": "-- °C",
+    "meta_prompt": "Select a day to load data.",
+    "_meta": [
+      "Not a sentence: three separate facts on one line, bullet-separated. {machines} and",
+      "{readings} arrive ALREADY pluralised (from machine_count/reading_count below),",
+      "because two independent counts in one string would need a four-way plural the",
+      "one/other helper cannot express. Reorder the parts freely; do not add words that",
+      "would have to agree with a count."
+    ],
+    "meta": "{date} • {machines} • {readings}",
+    "machine_count": {
+      "one": "{count} machine",
+      "other": "{count} machines"
+    },
+    "reading_count": {
+      "one": "{count} reading",
+      "other": "{count} readings"
+    },
+    "avg_by_machine": "Average by Machine",
+    "col": {
+      "machine": "Machine",
+      "average": "Average (°C)"
+    },
+    "no_data_loaded": "No data loaded.",
+    "no_data_for_day": "No data for selected day.",
+    "graph_title": "Daily Temperature Graph",
+    "zoom_hint": "Use mouse wheel or drag to zoom. Hover points to see exact temperatures.",
+    "no_readings": "No readings found for this day.",
+    "axis": {
+      "time": "Time",
+      "temperature": "Temperature (°C)"
+    }
   },
 
   "inventory": {
@@ -207,11 +272,586 @@
     "load_failed": "Could not load users: {error}"
   },
 
+  "permissions": {
+    "heading": "Permission Groups",
+    "intro": "A group grants a set of capabilities over a set of machines. A person's effective access is the union of every group they belong to.",
+    "_breakglass": [
+      "{allowed_emails} is the name of a .env key and is passed in verbatim -- it is a",
+      "configuration key, not a word, so it must not be translated. It is a placeholder",
+      "rather than part of the sentence so it cannot be translated by accident."
+    ],
+    "breakglass": "Addresses in {allowed_emails} are break-glass superusers: they hold every capability over every machine regardless of the groups below, and they can always sign in. That is what lets you create the first group here, and what stops a mistake on this page from locking everyone out. Everyone else must be in a group to sign in at all.",
+    "new_group": "New group",
+    "empty": "No permission groups yet.",
+    "empty_hint": "Until you create one, only the break-glass addresses above can sign in.",
+    "load_failed": "Could not load permission groups: {error}",
+    "capabilities_load_failed": "Could not load capabilities: {error}",
+    "col": {
+      "group": "Group",
+      "capabilities": "Capabilities",
+      "machines": "Machines",
+      "members": "Members"
+    },
+    "none": "None",
+    "every_machine": "Every machine",
+    "from_ou": "from AD OU: {ous}",
+    "from_ou_empty": "from AD OU: none selected",
+    "_directory_group_list": [
+      "Appears under a group's members. {groups} is the comma-separated list of tokens;",
+      "the count is what is pluralised."
+    ],
+    "directory_group_list": {
+      "one": "{count} directory group: {groups}",
+      "other": "{count} directory groups: {groups}"
+    },
+    "_confirm_delete": [
+      "Two variants because a group can grant access by name AND through a mapped",
+      "directory group, and the warning has to name both. In the second, {members}",
+      "arrives ALREADY pluralised (from member_count below) so the sentence needs to",
+      "agree with only one count -- the same device history.meta uses."
+    ],
+    "confirm_delete": {
+      "one": "Delete the permission group \"{group}\"?\n\n{count} member loses the access it granted. Anyone left with no groups at all can no longer sign in.",
+      "other": "Delete the permission group \"{group}\"?\n\n{count} members lose the access it granted. Anyone left with no groups at all can no longer sign in."
+    },
+    "confirm_delete_directory": {
+      "one": "Delete the permission group \"{group}\"?\n\n{members}, and anyone in {count} mapped directory group, lose the access it granted. Anyone left with no groups at all can no longer sign in.",
+      "other": "Delete the permission group \"{group}\"?\n\n{members}, and anyone in {count} mapped directory groups, lose the access it granted. Anyone left with no groups at all can no longer sign in."
+    },
+    "member_count": {
+      "one": "{count} member",
+      "other": "{count} members"
+    },
+    "delete_failed": "Could not delete \"{group}\": {error}",
+    "editor": {
+      "new_title": "New permission group",
+      "edit_title": "Edit {group}",
+      "name": "Name",
+      "name_placeholder": "Hospital IT",
+      "description": "Description",
+      "description_placeholder": "Manages the clinical PCs",
+      "capabilities": "Capabilities",
+      "machines": "Machines",
+      "scope_list": "Only the machines listed below",
+      "scope_all": "Every machine in the fleet",
+      "scope_ad_ou": "Machines in an Active Directory OU",
+      "machine_placeholder": "Search by name, asset tag, serial, service tag",
+      "machine_empty": "No matching machines — press Add to scope one that has not enrolled yet.",
+      "ou_help": "Machines are taken from Active Directory, and follow it: a PC moved into one of these OUs joins this group at the next directory sync, and one moved out leaves it. Nested OUs are included.",
+      "ou_placeholder": "OU=Clinical,DC=corp,DC=local",
+      "ou_empty": "No matching OUs — press Add to use exactly what you typed.",
+      "ou_none_selected": "No OUs selected — this group currently grants access to no machines.",
+      "ou_no_machines": "No machines are in these OUs yet. If Active Directory sync has not run since these PCs enrolled, they will appear after the next sync.",
+      "ou_in_scope": {
+        "one": "{count} machine in scope: {machines}",
+        "other": "{count} machines in scope: {machines}"
+      },
+      "members": "Members",
+      "member_placeholder": "Search registered users, or type an email",
+      "member_empty": "No matching users — press Add to invite this email.",
+      "directory_groups": "Directory groups",
+      "directory_help": "Anyone whose sign-in provider says they are in one of these groups gets this permission group, without being listed above by name. Paste the group's object ID (Entra), distinguished name, or name — whichever your provider sends. Membership is read once, at sign-in: a change in the directory takes effect the next time the person signs in.",
+      "directory_placeholder": "e.g. 8f4c1e02-1b7a-4a0d-9c31-2b6e5d0a7f11",
+      "directory_self": "Your own sign-in carried:",
+      "directory_add_token": "Add this directory group to this permission group",
+      "name_required": "Enter a name to create this group.",
+      "add": "Add",
+      "remove": "Remove {value}",
+      "asset": "Asset {value}",
+      "serial": "Serial {value}",
+      "service": "Service {value}"
+    },
+    "_capability": [
+      "One label + description per entry in permissions.CAPABILITIES. These are served by",
+      "GET /api/permissions/capabilities in the caller's language, so a capability with",
+      "no entry here would render its own key name in the group editor -- which is why",
+      "tests/test_i18n.py asserts the two sets match."
+    ],
+    "capability": {
+      "view": {
+        "label": "View",
+        "description": "See these machines, their history, and their command results."
+      },
+      "view_audit_log": {
+        "label": "View audit log",
+        "description": "Read the record of who did what on this hub. Security-sensitive entries are withheld unless the next capability is held too. The audit log is not machine-scoped."
+      },
+      "view_security_audit": {
+        "label": "View security audit entries",
+        "description": "Additionally see security-level audit entries: permission changes, backup-key access, remote sessions, commands run, and settings changes. Does nothing without 'View audit log'."
+      },
+      "issue_commands": {
+        "label": "Issue commands",
+        "description": "Run scripts and send restart/shutdown/install commands. This is code execution as SYSTEM on the machines in scope."
+      },
+      "remote_control": {
+        "label": "Remote control",
+        "description": "Start a remote view/control session."
+      },
+      "deploy_packages": {
+        "label": "Deploy packages",
+        "description": "Schedule software deployments."
+      },
+      "manage_backups": {
+        "label": "Manage backups",
+        "description": "Configure backups and trigger restores."
+      },
+      "manage_settings": {
+        "label": "Manage settings",
+        "description": "Change hub settings, and administer machine records (delete, merge, pin a sensor, dismiss alerts)."
+      },
+      "manage_users": {
+        "label": "Manage users",
+        "description": "Add, edit, and remove entries in the registered-users directory. This is a profile directory, not access -- membership in a permission group is what grants what someone can do."
+      },
+      "manage_permission_groups": {
+        "label": "Manage permission groups",
+        "description": "Create and edit permission groups -- i.e. grant anyone, including themselves, any of the above."
+      }
+    }
+  },
+
+  "settings": {
+    "heading": "Settings",
+    "intro": "Operational tuning for the hub and the fleet. Every setting shows its default, and anything you haven't changed behaves exactly as it did before this page existed.",
+    "section": {
+      "computer": "Computer",
+      "hub": "Hub",
+      "data": "Data & Retention",
+      "metrics": "History Metrics",
+      "fleet": "Fleet",
+      "deploy": "Package Deployment",
+      "backup": "Backups",
+      "remote": "Remote Control",
+      "directory": "Active Directory",
+      "signin": "Sign-in"
+    },
+    "_unit": [
+      "Rendered as a suffix after a number input, and inside the range messages",
+      "(\"must be at least 60 seconds\"). Keep them short -- they sit beside the input,",
+      "not in a sentence."
+    ],
+    "unit": {
+      "celsius": "°C",
+      "chains": "chains",
+      "days": "days",
+      "gb": "GB",
+      "generations": "generations",
+      "hours": "hours",
+      "mb": "MB",
+      "minutes": "minutes",
+      "pcs": "PCs",
+      "percent": "%",
+      "runs": "runs",
+      "seconds": "seconds"
+    },
+    "_field": [
+      "One label -- plus help, plus a placeholder where the field has one -- per entry",
+      "in settings.REGISTRY. The key after `field.` IS the setting key, so a knob added",
+      "without entries here would render `settings.field.<key>.label` on the page;",
+      "tests/test_i18n.py asserts the two sets match. Help is one or two sentences shown",
+      "under the field, and is where the CONSEQUENCES of a knob belong -- an operator",
+      "reading it is deciding whether to change it."
+    ],
+    "field": {
+      "computer.primary_sensor_preference": {
+        "label": "CPU temperature sensor preference",
+        "help": "Ordered, best first. The hub re-derives each machine's primary temperature from its reported sensor block, using the first name that matches. If none match, the temperature the agent picked is kept. Applies to new readings only -- history keeps the value recorded at the time."
+      },
+      "hub.high_temp_threshold": {
+        "label": "High temperature threshold",
+        "help": "When a machine's AVERAGE temperature over the window below is at or above this, a temperature alert is raised in the Alerts tab. The machine page also highlights a live reading at or above it."
+      },
+      "hub.high_temp_avg_window_seconds": {
+        "label": "High temperature averaging window",
+        "help": "A machine is flagged as running hot only when its AVERAGE temperature over this window is at or above the threshold above, so a brief spike doesn't raise an alert. 300 = five minutes."
+      },
+      "hub.low_load_threshold": {
+        "label": "Low-load threshold",
+        "help": "A high temperature recorded below this CPU load reads 'investigate' rather than 'expected' -- hot while idle is the interesting case."
+      },
+      "hub.live_status_cache_seconds": {
+        "label": "Live status fallback age",
+        "help": "After a hub restart the last known temperature and uptime are read back from the database. Past this age they are treated as unknown rather than shown as current."
+      },
+      "hub.live_default_window_hours": {
+        "label": "Default chart window",
+        "help": "How much history the live charts show before you pick a range."
+      },
+      "hub.auto_update": {
+        "label": "Hub auto-update",
+        "help": "Let the hub pull and apply its own updates from the main branch. Leave unset to follow HUB_AUTO_UPDATE in .env; set here to override that."
+      },
+      "hub.default_language": {
+        "label": "Default console language",
+        "help": "The console language for anyone who has not picked one in the topbar. Automatic follows each person's browser. A personal choice always wins over this, so changing it does not override operators who have already chosen."
+      },
+      "data.retention_days": {
+        "label": "Keep readings for",
+        "help": "Readings older than this are PERMANENTLY DELETED by the background pruner. Lowering this destroys history that cannot be recovered."
+      },
+      "data.prune_interval_seconds": {
+        "label": "Run the pruner every",
+        "help": "How often the retention pruner wakes up. Takes effect within 30 seconds, without a hub restart."
+      },
+      "data.ingest_max_backdate_days": {
+        "label": "Accept backdated reports up to",
+        "help": "An agent that was offline sends its buffered readings with their original timestamps; older than this they are treated as clock skew and stamped with the arrival time instead. Deliberately independent of the retention window -- shortening retention must not start silently flattening reconnect backfills."
+      },
+      "data.command_output_retention_seconds": {
+        "label": "Keep terminal scrollback for",
+        "help": "Live terminal output is kept this long so you can scroll back. The durable command result is not affected."
+      },
+      "metrics.collect_cpu_load": {
+        "label": "Record CPU load",
+        "help": "Chart CPU load % over time on the machine History dashboard."
+      },
+      "metrics.collect_memory": {
+        "label": "Record memory usage",
+        "help": "Chart memory usage % over time."
+      },
+      "metrics.collect_gpu": {
+        "label": "Record GPU temperature & load",
+        "help": "Chart discrete-GPU temperature and load. No effect on machines whose GPU reports nothing."
+      },
+      "metrics.collect_disk": {
+        "label": "Record disk usage",
+        "help": "Chart disk used-space % over time. The per-disk Storage cards are live readings and stay visible either way."
+      },
+      "metrics.collect_disk_io": {
+        "label": "Record disk read/write",
+        "help": "Chart disk read/write throughput (bytes per second, summed across all drives) over time."
+      },
+      "metrics.collect_network": {
+        "label": "Record network throughput",
+        "help": "Chart network in/out (bytes per second). Also tells the agent whether to collect the network sensor category at all."
+      },
+      "fleet.dashboard_online_window_seconds": {
+        "label": "Drop a machine off the Dashboard after",
+        "help": "A machine that hasn't reported a temperature within this window leaves the live Dashboard and reads as offline in Asset Inventory. Agents report every few seconds, so this tolerates a couple of missed reports without flapping."
+      },
+      "fleet.offline_after_seconds": {
+        "label": "Mark an agent offline after",
+        "help": "Separate from the Dashboard window above: this is the command channel's view of whether an agent is reachable, used when you issue commands. Agents poll every 10 seconds."
+      },
+      "fleet.command_ttl_seconds": {
+        "label": "Expire unclaimed commands after",
+        "help": "A command not picked up by its target within this window expires instead of running much later on a machine that just came back."
+      },
+      "deploy.default_max_attempts": {
+        "label": "Default attempts per machine",
+        "help": "How many times a deployment tries a machine before giving up. An attempt is spent when the install fails OR when the machine never picks the command up."
+      },
+      "deploy.default_retry_backoff_seconds": {
+        "label": "Default retry backoff",
+        "help": "Wait before the first retry. It doubles each attempt (15 min, 30 min, 1 h...), so a machine that's off for the weekend isn't retried every quarter hour."
+      },
+      "deploy.max_upload_mb": {
+        "label": "Largest package file",
+        "help": "Upload limit for a hub-hosted installer. Files are stored beside the database and shared between packages built from the same installer."
+      },
+      "deploy.scheduler_interval_seconds": {
+        "label": "Run the deploy scheduler every",
+        "help": "How often the hub checks for deployments that are due and reads finished attempts back. Also the floor on how quickly a scheduled window starts."
+      },
+      "backup.hub_enabled": {
+        "label": "Back up the hub database on a schedule",
+        "help": "Off until you have created a destination and stored the encryption key somewhere other than this server. Nothing is uploaded while this is off."
+      },
+      "backup.hub_destination": {
+        "label": "Back up to",
+        "help": "The id of the destination scheduled backups are written to. Set this from the Backups page, which offers the configured destinations by name -- this field is the raw id it writes."
+      },
+      "backup.hub_interval_hours": {
+        "label": "Back up every",
+        "help": "Measured from the last ATTEMPT, not the last success -- a destination that has been down for a week is retried on this cadence rather than on every scheduler tick."
+      },
+      "backup.hub_keep_generations": {
+        "label": "Keep this many backups",
+        "help": "After a successful upload, older backups beyond this count are DELETED from the destination. At the default daily cadence this is two weeks of history. Counted from what the destination actually holds, so a file you delete by hand is not silently replaced."
+      },
+      "backup.files_enabled": {
+        "label": "Back up files on managed PCs",
+        "help": "Off until you have chosen a destination and reviewed the included paths. Individual machines can opt out (or in) on their own Backup tab."
+      },
+      "backup.files_destination": {
+        "label": "Back up PC files to",
+        "help": "The id of the destination per-PC backups are written to. Set this from the Backups page; each machine gets its own folder under it."
+      },
+      "backup.files_include": {
+        "label": "Include these paths",
+        "help": "Tokens expand on each machine: %Users% (or %User%) covers every real profile -- %User%\\Scripts backs up everyone's Scripts folder -- and %Desktop%/%Documents% follow OneDrive folder redirection -- which a literal C:\\Users\\name\\Desktop does not, so it would back up an empty stub on any PC using Known Folder Move."
+      },
+      "backup.files_exclude": {
+        "label": "Never back up these",
+        "help": "Matched against the full path, case-insensitively. A pattern with no backslash matches on filename anywhere; ** crosses folders. Excluding a folder also excludes everything inside it."
+      },
+      "backup.files_interval_hours": {
+        "label": "Back up PC files every",
+        "help": "Measured from the last attempt on each machine, so a laptop that was off is picked up when it returns rather than skipped."
+      },
+      "backup.files_full_every": {
+        "label": "Take a full backup every",
+        "help": "Runs in between upload only files that changed. A shorter chain restores faster and survives a damaged archive better; a longer one uses less bandwidth."
+      },
+      "backup.files_keep_chains": {
+        "label": "Keep this many backup chains",
+        "help": "A chain is one full backup plus the incrementals that follow it. Whole chains are deleted together -- never a full on its own, which would strand every incremental depending on it."
+      },
+      "backup.files_max_file_mb": {
+        "label": "Skip files larger than",
+        "help": "Skipped files are named in the run result rather than failing the run. Stops one forgotten disk image from consuming a night's upload."
+      },
+      "backup.files_max_set_gb": {
+        "label": "Abort a run larger than",
+        "help": "A safety stop: if the selected paths add up to more than this, the run fails with a message instead of uploading for two days. Raise it deliberately rather than by accident."
+      },
+      "backup.files_use_vss": {
+        "label": "Use a shadow copy (VSS)",
+        "help": "Reads from a point-in-time snapshot so files that are open -- an Outlook PST, a document someone left up -- are captured consistently. If a snapshot cannot be created the run continues against the live filesystem and reports which files were locked."
+      },
+      "backup.files_max_concurrent": {
+        "label": "Back up at most this many PCs at once",
+        "help": "Machines that were offline are backed up as soon as they return, so a Monday morning can bring the whole fleet back at once. This spreads them out instead of saturating the connection. Others wait their turn and start within a minute of a slot freeing up; 0 removes the limit."
+      },
+      "remote.enabled": {
+        "label": "Allow remote view/control",
+        "help": "Master switch for starting remote sessions from a machine's Remote tab. Off means the Start button is refused fleet-wide, regardless of who holds the remote_control capability."
+      },
+      "remote.consent_mode": {
+        "label": "Consent mode",
+        "help": "Unattended connects immediately (standard RMM). Attended prompts the logged-in user to approve first, and does nothing if no one is signed in. A per-machine override lives on the machine's Remote tab."
+      },
+      "remote.session_ttl_seconds": {
+        "label": "End a session automatically after",
+        "help": "A remote session is force-ended past this age even if the tab is still open, which also bounds how long a minted TURN credential stays valid. Four hours by default."
+      },
+      "remote.turn_ttl_seconds": {
+        "label": "TURN credential lifetime",
+        "help": "How long the short-lived TURN credentials handed to each peer stay valid. Only needs to cover connection setup; media keeps flowing once ICE completes."
+      },
+      "remote.stun_urls": {
+        "label": "STUN servers",
+        "help": "STUN URLs offered to both peers for NAT discovery, e.g. stun:stun.l.google.com:19302. Optional; leave empty on a LAN. One entry is enough -- a STUN URL on a LAN address just returns a peer its own LAN address, duplicating a candidate it already has.",
+        "placeholder": "stun:relay.example.com:3478"
+      },
+      "remote.turn_urls": {
+        "label": "TURN servers",
+        "help": "TURN relay URLs, tried in order. Required for peers behind NATs that block direct connections. A relay behind NAT needs three: turn:PUBLIC-HOST:3478 for peers on the internet, turn:LAN-IP:3478 for a peer inside the relay's own network, and turn:LAN-IP:3479 for two peers both inside it -- see turn/README.md. Credentials are minted per session from REMOTE_TURN_SECRET in .env; TURN is skipped if that secret is unset.",
+        "placeholder": "turn:relay.example.com:3478"
+      },
+      "directory.enabled": {
+        "label": "Sync with Active Directory",
+        "help": "Read computer objects from an on-prem domain controller so machines carry their OU, owner and AD name. Off by default; nothing contacts a DC until this is on and the fields below are filled in."
+      },
+      "directory.server": {
+        "label": "Domain controller URL",
+        "help": "e.g. ldaps://dc1.corp.local. Use ldaps:// (port 636) -- a plain ldap:// bind sends the service account's password in cleartext and is refused unless you explicitly allow it below."
+      },
+      "directory.base_dn": {
+        "label": "Search base",
+        "help": "Where to search for computer objects, e.g. OU=Computers,DC=corp,DC=local. Narrow this to the OU your managed PCs live in rather than the domain root: it is faster and it keeps servers and other objects out of the results."
+      },
+      "directory.bind_dn": {
+        "label": "Bind account",
+        "help": "A READ-ONLY service account, e.g. CN=fleethub,OU=Service,DC=corp,DC=local (a user@corp.local UPN also works). Its password goes in .env as DIRECTORY_BIND_PASSWORD. Nothing here ever writes to the directory."
+      },
+      "directory.computer_filter": {
+        "label": "LDAP filter",
+        "help": "The LDAP filter for computer objects. Narrow it to exclude servers or stale accounts, e.g. (&(objectClass=computer)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))  to skip disabled ones."
+      },
+      "directory.sync_interval_minutes": {
+        "label": "Sync every",
+        "help": "How often to re-read the directory. Hourly is plenty -- OUs change rarely, and every pass is a full read of the search base."
+      },
+      "directory.page_size": {
+        "label": "LDAP page size",
+        "help": "Results per page. Searches are always paged; AD's default server limit is 1000 and it truncates silently rather than erroring, which would look like half the fleet vanishing from the directory."
+      },
+      "directory.timeout_seconds": {
+        "label": "Connection timeout",
+        "help": "How long to wait for the domain controller before giving up on a pass."
+      },
+      "directory.alert_on_unmatched": {
+        "label": "Alert on machines missing from AD",
+        "help": "Raise a review alert for a managed machine the directory has no computer object for -- usually a PC that was never domain-joined, was renamed, or is half-decommissioned. Auto-resolves when the machine reappears."
+      },
+      "directory.tls_verify": {
+        "label": "Verify the DC's certificate",
+        "help": "Validate the domain controller's LDAPS certificate. Turn off only for a lab with a self-signed cert -- with it off, anything that can intercept the connection can capture the service account's password."
+      },
+      "directory.allow_insecure": {
+        "label": "Allow plain (unencrypted) LDAP",
+        "help": "Permit binding over ldap:// without TLS. The bind password is then sent in CLEARTEXT across your network. Leave off unless this is an isolated lab."
+      }
+    },
+    "_choice": [
+      "Labels for the enum settings whose vocabulary is FIXED in code. Enums whose",
+      "choices come from data (a backup destination id) are shown verbatim and have no",
+      "entries here -- an operator's own name for a bucket is not ours to translate."
+    ],
+    "choice": {
+      "hub.default_language": {
+        "auto": "Automatic (each person's browser)",
+        "en": "English",
+        "es": "Espanol",
+        "de": "Deutsch"
+      },
+      "remote.consent_mode": {
+        "unattended": "Unattended - connect immediately",
+        "attended": "Attended - ask the signed-in user first"
+      }
+    },
+    "_error": [
+      "Validation messages, shown verbatim beside the offending field. Each is prefixed",
+      "with that field's own label by the caller, so write them to continue a sentence",
+      "that has already named the setting: 'Keep readings for: must be at least 1 day'."
+    ],
+    "error": {
+      "expected_bool": "expected true or false, got {value}",
+      "required": "a value is required",
+      "expected_whole_number": "expected a whole number, got {value}",
+      "expected_number": "expected a number, got {value}",
+      "min": "must be at least {min}",
+      "max": "must be at most {max}",
+      "not_a_choice": "{value} is not one of {choices}",
+      "expected_name_list": "expected a list of names",
+      "needs_entry": "needs at least one entry",
+      "expected_url_list": "expected a list of URLs",
+      "bad_url_scheme": "{value} must start with stun:, stuns:, turn: or turns:",
+      "url_without_host": "{value} has no host",
+      "expected_path_list": "expected a list of paths",
+      "unsupported_type": "unsupported setting type {type}"
+    },
+    "add_entry": "Add an entry",
+    "add_sensor": "Add a sensor…",
+    "no_sensors": "No sensors reported yet",
+    "custom_entry": "or type a sensor name",
+    "empty_list": "None configured.",
+    "remove_entry": "Remove",
+    "move_up": "Move up",
+    "move_down": "Move down",
+    "default_is": "Default: {value}",
+    "reset": "Reset",
+    "load_failed": "Could not load settings: {error}",
+    "save_failed": "Could not save: {error}",
+    "no_permission": "You do not have permission to change settings.",
+    "add": "Add",
+    "tristate": {
+      "env": "Use .env default",
+      "on": "On",
+      "off": "Off"
+    },
+    "describe": {
+      "env": "follow .env",
+      "on": "on",
+      "off": "off",
+      "list_join": " → ",
+      "with_unit": "{value} {unit}"
+    },
+    "reset_failed": "Could not reset: {error}",
+    "sections_nav": "Settings sections",
+    "directory": {
+      "sync_status": "Sync status",
+      "state": "State",
+      "health": {
+        "off": "Off",
+        "library_missing": "Library missing",
+        "never_run": "Never run",
+        "failing": "Failing",
+        "ok": "OK"
+      },
+      "no_bind_password": "No bind password is set. Add {var}=... to the hub's .env and restart -- it is a credential, so it is deliberately not stored in hub settings.",
+      "last_success": "Last successful sync",
+      "never": "never",
+      "found_in_ad": "Found in AD",
+      "objects_found": {
+        "one": "{count} computer object",
+        "other": "{count} computer objects"
+      },
+      "matched": "Matched to machines",
+      "unmatched": "Managed but not in AD",
+      "ou_count": "OUs in use",
+      "last_attempt": "Last attempt",
+      "attempt_failed": "{when} — failed",
+      "sync_now": "Sync now",
+      "enable_first": "Turn the sync on above to run a pass.",
+      "contacting": "Contacting the domain controller…",
+      "sync_result": "Synced: {found} objects in AD, {matched} machines matched, {unmatched} not found in AD.",
+      "not_found_list": "Not found in AD: {machines}",
+      "duplicates": "These hostnames have more than one computer object in AD; the first of each was used: {machines}"
+    },
+    "remote": {
+      "title": "TURN / STUN status",
+      "loading": "Loading TURN status…",
+      "remote_control": "Remote control",
+      "on": "On",
+      "off": "Off",
+      "secret_label": "TURN shared secret (REMOTE_TURN_SECRET)",
+      "secret_set": "Set",
+      "secret_unset": "Not set",
+      "stun_servers": "STUN servers",
+      "turn_servers": "TURN servers",
+      "ice_per_session": "ICE servers per session",
+      "cannot_write_env": "This deployment cannot write .env from the hub; set REMOTE_TURN_SECRET on the host and restart the hub.",
+      "secret_placeholder": "Paste an existing coturn secret, or leave blank to generate",
+      "set_secret": "Set secret",
+      "rotate_secret": "Rotate (generate)",
+      "secret_saved": "Saved and applied to the hub. Copy it now -- it is not shown again. coturn validates against its OWN copy, so set the SAME value as its --static-auth-secret (turn/.env REMOTE_TURN_SECRET) and restart coturn, or TURN will reject every allocation.",
+      "no_ice_warning": "A session hands peers 0 ICE servers, so anything not on the same LAN fails to connect (the agent logs \"ice_servers=0\"). Add a STUN and/or TURN URL below and, for TURN, set the shared secret.",
+      "urls_help": "Point TURN servers at the hub's coturn, e.g. turn:your-hub:3478 (and stun:your-hub:3478). The URLs are the fields below; this secret is what mints per-session credentials.",
+      "vdd_title": "Virtual display driver",
+      "vdd_help": "A machine with no monitor has no display output, so screen capture has nothing to duplicate and remote view shows a black screen. Upload the driver's \"Driver Only\" zip on the Packages page, then pin its SHA-256 here. Operators can then install it per machine from the Remote tab.",
+      "vdd_pinned": "Pinned payload",
+      "vdd_none": "None",
+      "vdd_detail": "sha256 {sha256} · {filename} · pinned by {who}",
+      "vdd_payload_fallback": "payload",
+      "vdd_version_placeholder": "Driver version, e.g. 25.7.23",
+      "vdd_sha_placeholder": "SHA-256 of the uploaded package (64 hex characters)",
+      "vdd_filename_placeholder": "File name (optional)",
+      "vdd_pin": "Pin payload",
+      "vdd_version": "Version",
+      "vdd_sha": "SHA-256",
+      "vdd_filename": "File name"
+    },
+    "signin": {
+      "providers": "Sign-in providers",
+      "denied": "Only the break-glass administrators listed in ALLOWED_EMAILS can change these. Whoever configures the identity provider decides who this hub believes you are, so it is deliberately not delegable through a permission group.",
+      "enabled_now": "Enabled now",
+      "none": "None",
+      "env_note": "These are written to the hub's .env and applied immediately — no restart. Client secrets are never shown again once saved.",
+      "google": "Google",
+      "google_help": "Create an OAuth 2.0 Client ID (Web application) in the Google Cloud Console and add this hub's /auth/callback as an authorised redirect URI. Leave both fields empty to turn Google sign-in off.",
+      "client_id": "Client ID",
+      "google_id_help": "Ends in .apps.googleusercontent.com",
+      "client_secret": "Client secret",
+      "secret_saved": "A secret is saved. Leave this untouched to keep it, or type a new one to replace it.",
+      "secret_unsaved": "No secret saved yet.",
+      "oidc": "OIDC provider",
+      "oidc_help": "Microsoft Entra ID, Okta, Authentik, Keycloak, Auth0 — any OIDC issuer. Register a confidential web application with this hub's /auth/oidc/callback as the redirect URI. Endpoints and signing keys come from discovery, so there is nothing vendor-specific to configure here.",
+      "issuer": "Issuer URL",
+      "issuer_help": "e.g. https://login.microsoftonline.com/TENANT-ID/v2.0 — the discovery URL is derived from this. Must be https.",
+      "metadata": "Discovery URL (optional)",
+      "metadata_help": "Only needed if your provider does not serve /.well-known/openid-configuration under the issuer. Clear it to have it re-derived from the issuer above.",
+      "button_label": "Button label",
+      "button_label_help": "What the sign-in button says. \"Microsoft\" reads far better than \"SSO\" to somebody looking at an unfamiliar login page.",
+      "scopes": "Scopes",
+      "scopes_help": "Must include openid. Add \"groups\" (or your provider's equivalent) if you map directory groups to permission groups.",
+      "save": "Save sign-in settings",
+      "no_provider_left": "That would leave no way to sign in to this hub. Configure Google or an OIDC provider before saving.",
+      "confirm": "Change how people sign in to this hub?\n\nThis takes effect immediately for new sign-ins. Existing sessions are not signed out. If the new settings are wrong, the break-glass administrators in ALLOWED_EMAILS can change them back — provided they can still sign in.",
+      "applying": "Applying…",
+      "saved_changed": "Saved. Updated: {fields}",
+      "saved_unchanged": "No changes to save."
+    }
+  },
+
   "common": {
     "loading": "Loading…",
     "optional": "optional",
     "save": "Save",
     "saving": "Saving…",
+    "saved": "Saved",
     "close": "Close",
     "edit": "Edit",
     "delete": "Delete",
@@ -229,6 +869,720 @@
     "high_temp_title": "High temperature",
     "high_temp_body": "{machine} is running hot: {temp} °C",
     "language_changed": "Language updated.",
-    "language_change_failed": "Could not change the language."
+    "language_change_failed": "Could not change the language.",
+    "cancel": "Cancel",
+    "no_matches": "No matches",
+    "no_matches_free_text": "No matches — type a value to use it as-is.",
+    "hub_error": "The hub returned an error (HTTP {status}).",
+    "request_failed": "{url} returned {status}"
+  },
+
+  "packages": {
+    "heading": "Packages",
+    "intro": "Describe an installer once -- payload, silent command line, and what proves it worked -- then deploy it to machines and watch it land.",
+    "new_package": "New package",
+    "views_nav": "Package views",
+    "tab_packages": "Packages",
+    "tab_deployments": "Deployments",
+    "empty": "No packages defined yet.",
+    "empty_hint": "A package is an installer plus how to run it silently and how to tell it worked.",
+    "col": {
+      "package": "Package",
+      "payload": "Payload",
+      "command": "Command",
+      "detection": "Detection"
+    },
+    "no_payload": "No payload",
+    "uploaded_file": "Uploaded file",
+    "winget_ref": "winget: {ref}",
+    "exit_summary": "exit {codes} · {timeout}s",
+    "detect_exit_only": "Exit code only",
+    "detect_registry": "{root}\\{key}\\{name}",
+    "detect_registry_equals": "{root}\\{key}\\{name} = {value}",
+    "detect_version_min": "{name} ≥ {version}",
+    "deploy": "Deploy",
+    "confirm_delete": "Delete the package \"{package}\"? Deployment history is kept.",
+    "http_413": "Upload rejected as too large (HTTP 413) before it reached the hub. This is the reverse proxy in front of the hub, not the hub's own limit -- raise client_max_body_size in nginx (or the equivalent: IIS maxAllowedContentLength, Apache LimitRequestBody) and reload it.",
+    "http_502": "The hub did not respond (HTTP {status}). A large upload can also hit the proxy's read timeout -- check the proxy log as well as the hub log.",
+    "http_other": "HTTP {status}",
+    "_source": [
+      "The four payload kinds a package can have. The KEY is the wire value and is fixed;",
+      "only label and help are shown. 'winget' is a product name and stays untranslated."
+    ],
+    "source": {
+      "upload": {
+        "label": "Upload a file to the hub",
+        "help": "Stored here, hash-pinned, served to agents over the authenticated channel."
+      },
+      "winget": {
+        "label": "winget package id",
+        "help": "winget resolves and verifies its own payload."
+      },
+      "url": {
+        "label": "Download from a URL",
+        "help": "The agent fetches it directly. Pin a hash if you can."
+      },
+      "unc": {
+        "label": "Copy from a UNC path",
+        "help": "The agent reads it from a share it can already reach."
+      }
+    },
+    "editor": {
+      "new_title": "New package",
+      "edit_title": "Edit {package}",
+      "name": "Name",
+      "name_placeholder": "7-Zip",
+      "version": "Version",
+      "version_placeholder": "24.09",
+      "timeout": "Timeout",
+      "description": "Description",
+      "description_placeholder": "File archiver, silent MSI",
+      "payload": "Payload",
+      "upload_help": "The hub stores the file and pins its SHA-256. Agents verify that hash before running anything.",
+      "current_payload": "Current payload: {file} ({size}). Choose a file to replace it.",
+      "uploading": "Uploading…",
+      "uploaded": "Uploaded {file} ({size}), sha256 {sha256}…",
+      "sha256": "SHA-256",
+      "sha256_hint": "optional -- pin it and the agent will refuse a payload that doesn't match",
+      "how_to_install": "How to install it",
+      "command": "Command",
+      "command_placeholder": "msiexec.exe",
+      "command_winget_placeholder": "winget (built by the agent)",
+      "args": "Arguments",
+      "cmd_help": "Use {placeholder} where the downloaded payload goes — it must appear in the command or the arguments.",
+      "cmd_help_winget": "The agent builds the winget command line. Anything here is appended as extra switches.",
+      "exit_codes": "Success exit codes",
+      "exit_codes_help": "Comma separated. 3010 means \"installed, reboot required\" -- drop it only if you want a pending reboot to count as a failure.",
+      "proof": "Proof it worked",
+      "proof_help": "An installer exiting 0 is evidence, not proof -- silent installers routinely return 0 having done nothing. This check runs after it and has to pass too.",
+      "path": "Path",
+      "root": "Root",
+      "value_name": "Value name",
+      "key": "Key",
+      "require_exact": "Require an exact value",
+      "product_name": "Product name",
+      "min_version": "Minimum version",
+      "version_help": "Matched against Windows' installed-programs list, in both the 64- and 32-bit registry views.",
+      "choose_file": "Choose a file to upload.",
+      "save": "Save package"
+    },
+    "deploy_editor": {
+      "title": "Deploy package",
+      "title_for": "Deploy {package}",
+      "machines": "Machines",
+      "machine_placeholder": "Add a machine by hostname",
+      "add": "Add",
+      "when": "When",
+      "start": "Start",
+      "start_hint": "blank = now",
+      "end": "Give up after",
+      "end_hint": "blank = no deadline",
+      "retries": "Retries",
+      "attempts": "Attempts per machine",
+      "backoff": "First retry after (seconds)",
+      "retry_help": "An attempt is spent when the install fails or when the machine never picks the command up. The wait doubles each time.",
+      "note": "Note",
+      "note_placeholder": "Q3 rollout",
+      "schedule": "Schedule"
+    },
+    "deployments": {
+      "empty": "Nothing has been deployed yet.",
+      "empty_hint": "Deploy a package from the Packages tab and its progress shows up here.",
+      "col": {
+        "package": "Package",
+        "scheduled": "Scheduled",
+        "by": "By",
+        "status": "Status",
+        "progress": "Progress"
+      },
+      "deleted_package": "(deleted package)",
+      "starts": "starts {when}",
+      "gives_up": "gives up {when}",
+      "view": "View",
+      "title": "Deployment",
+      "progress_title": "{package} — {status}",
+      "retries_at": "retries {when}",
+      "retry_failures": "Retry failures",
+      "cancel": "Cancel deployment",
+      "confirm_cancel": "Stop this deployment? Machines already running the installer will finish.",
+      "target_col": {
+        "machine": "Machine",
+        "status": "Status",
+        "attempts": "Attempts",
+        "detail": "Detail"
+      },
+      "tally": "{status}: {count}"
+    },
+    "_status": [
+      "Deployment and per-machine statuses. These are shown in tables and in the tally",
+      "under the progress bar, so keep them short."
+    ],
+    "status": {
+      "scheduled": "scheduled",
+      "running": "running",
+      "complete": "complete",
+      "cancelled": "cancelled",
+      "pending": "pending",
+      "in_flight": "in flight",
+      "succeeded": "succeeded",
+      "failed": "failed",
+      "expired": "expired"
+    },
+    "_detection": [
+      "One label + description per entry in packages.DETECTION_KINDS, served by",
+      "GET /api/packages in the caller's language. A kind added without entries here",
+      "fails tests/test_i18n.py rather than captioning the form with its own key."
+    ],
+    "detection": {
+      "none": {
+        "label": "No detection check",
+        "description": "Trust the exit code alone. Only sensible for installers you know report failure honestly."
+      },
+      "file_exists": {
+        "label": "File exists",
+        "description": "Succeed only if a path is present after the install, e.g. C:\\Program Files\\7-Zip\\7z.exe."
+      },
+      "registry_value": {
+        "label": "Registry value",
+        "description": "Succeed only if a registry value exists -- optionally matching an exact string."
+      },
+      "installed_version": {
+        "label": "Installed version",
+        "description": "Look the product up in Windows' installed-programs registry and require at least a given version."
+      }
+    }
+  },
+
+  "backups": {
+    "heading": "Backups",
+    "intro": "A consistent snapshot of the hub database, compressed, encrypted here, and pushed offsite on a schedule. The storage provider only ever sees ciphertext.",
+    "run_now": "Back up now",
+    "views_nav": "Backup views",
+    "tab_hub": "Hub database",
+    "tab_settings": "Backup Settings",
+    "tab_destinations": "Destinations",
+    "load_failed": "Could not load backup configuration",
+    "key": {
+      "missing_library_title": "Encryption library missing",
+      "missing_library_text": "The cryptography package is not installed, so backups cannot be encrypted or restored. Run: pip install -r requirements.txt, then restart the hub.",
+      "none_title": "No encryption key yet",
+      "none_text": "Backups are encrypted on this server before upload. Create the key to get started — you will be shown it once, and you must store it somewhere other than this machine.",
+      "create": "Create encryption key",
+      "unescrowed_title": "The encryption key has never been stored anywhere else",
+      "unescrowed_text": "If this server is lost, every backup it has taken becomes permanently unreadable. Reveal the key, store it in a password manager or a sealed envelope, and confirm.",
+      "reveal": "Reveal key",
+      "ok_title": "Encryption key configured",
+      "ok_text": "Key {id} — confirmed stored offline on {when}. Restore with restore_backup.py, which needs only this key and the backup file.",
+      "modal_title": "Backup encryption key",
+      "modal_warning": "This key is the only thing that can decrypt your backups. It is not stored in the hub database, and it is not recoverable — if this server is lost and you have not written this down somewhere else, every backup ever taken becomes unreadable.",
+      "modal_store": "Store it in a password manager or a sealed envelope — somewhere that does not depend on this machine. To restore, you need this key and the backup file, and nothing else:",
+      "copy": "Copy key",
+      "ack": "I have stored it safely",
+      "copied": "Copied. Paste it somewhere durable before closing this.",
+      "copy_failed": "Could not copy automatically — click the key to select it."
+    },
+    "schedule": {
+      "title": "Schedule",
+      "no_destination": "Add a destination first — there is nowhere to put a backup yet.",
+      "enabled": "Back up automatically",
+      "off": "Nothing is uploaded while this is off.",
+      "due_now": "Due now — the next scheduler pass will take it.",
+      "next_due": "Next due {when}.",
+      "destination": "Destination",
+      "choose_destination": "Choose a destination…",
+      "interval": "Back up every (hours)",
+      "keep": "Keep this many backups",
+      "rotation_note": "Older backups beyond that count are deleted from the destination after each successful upload."
+    },
+    "runs": {
+      "title": "Recent backups",
+      "empty": "No backups have run yet.",
+      "empty_hint": "Press \"Back up now\" to take one immediately, or turn the schedule on.",
+      "col": {
+        "started": "Started",
+        "status": "Status",
+        "destination": "Destination",
+        "size": "Size",
+        "took": "Took",
+        "trigger": "Trigger"
+      },
+      "deleted_destination": "(deleted destination)",
+      "from_size": "from {size}",
+      "add_destination_first": "Add a destination first."
+    },
+    "status": {
+      "running": "running",
+      "succeeded": "succeeded",
+      "failed": "failed",
+      "cancelled": "cancelled"
+    },
+    "trigger": {
+      "schedule": "schedule",
+      "manual": "manual"
+    },
+    "files": {
+      "title": "What gets backed up on managed PCs",
+      "intro": "Applies to every machine unless that machine overrides it on its own Backup tab. Paths are expanded on each PC, so one pattern covers everyone — including people who sign in for the first time next week.",
+      "enabled": "Back up files on managed PCs",
+      "on_note": "Machines are backed up on the schedule below.",
+      "off_note": "Nothing on any PC is backed up while this is off.",
+      "interval": "Back up every (hours)",
+      "full_every": "Full backup every (runs)",
+      "keep_chains": "Keep this many chains",
+      "max_file": "Skip files bigger than (MB)",
+      "max_set": "Abort a run bigger than (GB)",
+      "max_concurrent": "Back up at most (PCs at once)",
+      "vss": "Use a shadow copy (VSS)",
+      "vss_note": "Captures files that are open, like an Outlook PST.",
+      "paths": "Paths",
+      "include": "Include",
+      "include_help": "A folder to back up. Use %Users% (or %User%) to cover every profile, or %Desktop% to follow each user's real Desktop even when OneDrive has redirected it.",
+      "include_placeholder": "e.g. %Desktop% or %User%\\Scripts",
+      "exclude": "Never back up",
+      "exclude_help": "Matched against the whole path, case-insensitively. A pattern with no backslash matches on filename anywhere; ** crosses folders. Excluding a folder also excludes everything inside it.",
+      "exclude_placeholder": "e.g. *.tmp or **\\node_modules\\**",
+      "add": "Add",
+      "remove": "Remove {value}",
+      "tokens": "Available tokens"
+    },
+    "fleet_run": {
+      "title": "Back up now",
+      "intro": "Asks every PC you can see to back up, without waiting for its next scheduled run. Machines that are switched off are not skipped — each one backs up the moment it comes online again.",
+      "working": "Working…",
+      "run_all": "Back up all PCs now",
+      "cancel_all": "Cancel all backups",
+      "queued_dropped": "{count} queued dropped",
+      "stopped_before_start": "{count} stopped before starting",
+      "stopped_in_flight": "{count} already uploading (will finish, then be discarded)",
+      "nothing_to_cancel": "Nothing was running to cancel.",
+      "started": "{count} started",
+      "queued": "{count} queued (offline or waiting for a free slot)",
+      "skipped": "{count} skipped (backups off, or nothing selected)",
+      "none_configured": "No machines are set up to back up yet."
+    },
+    "preview": {
+      "title": "Preview",
+      "intro": "What these patterns resolve to on a real machine, using the profiles its agent last reported. This is the only way to see that a folder is redirected into OneDrive before a restore comes up empty.",
+      "machine_placeholder": "Machine name",
+      "choose_machine": "Choose a machine to see what these patterns actually cover on it.",
+      "no_profiles": "{machine} has not reported its user profiles yet — its agent sends them on the next heartbeat after an upgrade. Until then these patterns cannot be resolved here; they will still expand correctly on the machine.",
+      "col": {
+        "folder": "Folder",
+        "user": "User",
+        "from": "From"
+      },
+      "no_user": "—",
+      "covers_nothing": "These patterns cover nothing on this machine."
+    },
+    "exceptions": {
+      "title": "Machines with their own settings",
+      "none": "Every machine follows the settings above. Override one from its own Backup tab.",
+      "col": {
+        "machine": "Machine",
+        "backups": "Backups",
+        "destination": "Destination",
+        "extra": "Extra paths"
+      },
+      "on_override": "on (override)",
+      "off_override": "OFF (override)",
+      "on": "on",
+      "off": "off",
+      "fleet_default": "fleet default",
+      "none_extra": "—"
+    },
+    "destinations": {
+      "new": "New destination",
+      "empty": "No destinations configured.",
+      "empty_hint": "A destination is an S3-compatible bucket or a WebDAV share. Credentials are encrypted on this server and never shown again.",
+      "col": {
+        "destination": "Destination",
+        "kind": "Kind",
+        "where": "Where",
+        "credentials": "Credentials"
+      },
+      "scheduled_here": "scheduled backups go here",
+      "stored": "stored",
+      "missing": "MISSING",
+      "confirm_delete": "Delete destination \"{name}\"? Backups already uploaded to it are NOT deleted, but the hub will no longer be able to reach them.",
+      "editor": {
+        "new_title": "New destination",
+        "edit_title": "Edit {name}",
+        "name": "Name",
+        "name_placeholder": "Offsite S3",
+        "storage": "Storage",
+        "endpoint": "Endpoint",
+        "region": "Region",
+        "bucket": "Bucket",
+        "prefix": "Prefix",
+        "prefix_s3_placeholder": "hub-a",
+        "prefix_dav_placeholder": "fleethub",
+        "path_style": "Path-style addressing",
+        "path_style_help": "On for MinIO and most self-hosted gateways (host/bucket/key); off for AWS (bucket.host/key). Getting it wrong shows up as a signature error, not a 404.",
+        "base_url": "Base URL",
+        "credentials": "Credentials",
+        "access_key_id": "Access key id",
+        "secret_access_key": "Secret access key",
+        "username": "Username",
+        "password": "Password",
+        "keep_credentials": "Leave both blank to keep the stored credentials unchanged.",
+        "new_credentials": "Stored encrypted on this server with the backup master key. Never shown again.",
+        "test": "Test connection",
+        "testing": "Testing…",
+        "save": "Save destination"
+      }
+    },
+    "_kind": [
+      "One label + description per entry in backups.DESTINATION_KINDS, served by",
+      "GET /api/backups in the caller's language. Product names (S3, WebDAV, MinIO) stay",
+      "as they are."
+    ],
+    "kind": {
+      "s3": {
+        "label": "S3-compatible",
+        "description": "AWS S3, MinIO, Backblaze B2, Wasabi -- anything speaking the S3 API. Signed with SigV4; the hub can also mint scoped upload URLs from it."
+      },
+      "webdav": {
+        "label": "WebDAV",
+        "description": "Nextcloud, ownCloud, IIS, or any WebDAV share. Authenticated with a username and password over HTTPS."
+      }
+    },
+    "_token": [
+      "The %Token% names themselves are the grammar and are NOT translated -- they are what",
+      "an operator types. Only the explanation beside each one is."
+    ],
+    "token": {
+      "users": "Every real user profile on the machine (skips Public, Default and service accounts). One pattern covers everyone, including people who sign in for the first time next week.",
+      "user": "The same as %Users% -- one path per real profile. Reads better for a custom subfolder: %User%\\Scripts backs up every user's Scripts folder. It does NOT mean 'whoever is logged in now'; backups run with nobody signed in, so every per-user token covers all of them.",
+      "desktop": "Each user's actual Desktop -- follows OneDrive folder redirection, unlike a literal C:\\Users\\name\\Desktop.",
+      "documents": "Each user's actual Documents folder.",
+      "downloads": "Each user's actual Downloads folder.",
+      "pictures": "Each user's actual Pictures folder.",
+      "favorites": "Each user's browser favourites folder.",
+      "appdata": "Each user's roaming AppData.",
+      "localappdata": "Each user's local AppData.",
+      "programdata": "C:\\ProgramData -- machine-wide, no per-user expansion.",
+      "systemdrive": "Usually C:."
+    },
+    "tab": {
+      "policy": "Backup policy",
+      "follow_on": "Following the fleet policy: this machine IS backed up.",
+      "follow_off": "Following the fleet policy: nothing on this machine is backed up.",
+      "override_on": "Overridden: this machine is backed up even if the fleet policy is off.",
+      "override_off": "Overridden: this machine is NOT backed up, even though the fleet policy is on.",
+      "mode": "Back up this machine",
+      "mode_follow": "Follow the fleet policy",
+      "mode_on": "Always back up",
+      "mode_off": "Never back up",
+      "extra_include": "Extra folders for this machine",
+      "extra_include_help": "ADDED to the fleet list below, not replacing it. Use it for something only this PC has — a local project folder, a line-of-business data directory.",
+      "extra_include_placeholder": "e.g. D:\\Finance or %User%\\Scripts",
+      "extra_exclude": "Extra exclusions for this machine",
+      "extra_exclude_help": "Also added to the fleet exclusions.",
+      "inherited": "Fleet policy this machine inherits",
+      "inherited_includes": "Includes: {paths}",
+      "inherited_excludes": "Excludes: {paths}",
+      "none": "none",
+      "resolves_to": "What this resolves to",
+      "no_profiles": "This machine has not reported its user profiles yet — its agent sends them on the next heartbeat after an upgrade. The patterns will still expand correctly on the machine itself.",
+      "covers_nothing": "These patterns cover nothing on this machine.",
+      "restore_title": "Restore files",
+      "nothing_to_restore": "Nothing to restore yet — this machine has no completed file backups. Once one finishes, its contents are browsable here.",
+      "recoverable": "{files} file(s), {size} recoverable across {chains} chain(s) — newest {when}.",
+      "browse": "Browse backed-up files",
+      "search_placeholder": "Find a file across every folder…",
+      "nothing_matched": "Nothing matched.",
+      "folder_empty": "This folder holds no backed-up files.",
+      "folder_files": "{count} file(s)",
+      "folder_truncated": "Only the first part of this folder is shown. Tick the folder itself to restore all of it, or use Find to narrow down.",
+      "tick_hint": "Tick files or folders above to restore them. A ticked folder restores everything under it, including files that are no longer in the folders you can see here.",
+      "selected": "{count} item(s) selected",
+      "deselect": "Deselect {path}",
+      "and_more": "and {count} more",
+      "restore_onto": "Restore onto",
+      "other_machine_help": "Another machine, if you are replacing this one. It needs to be in your scope too, and its agent does the work.",
+      "write_to": "Write to",
+      "write_to_placeholder": "e.g. C:\\Restored — blank means the original locations",
+      "write_to_help": "A folder is the safe answer: files land under it in their original tree, and nothing live is touched.",
+      "overwrite": "Overwrite files that already exist",
+      "starting": "Starting…",
+      "restore_selected": "Restore selected",
+      "clear_selection": "Clear selection",
+      "confirm_restore": "Restore {count} item(s) back to their ORIGINAL locations on {machine}?\n\nFiles there will be replaced{qualifier}",
+      "confirm_overwrite_all": ".",
+      "confirm_overwrite_missing": " only where they no longer exist.",
+      "queued": "Queued: {files} file(s) from {archives} archive(s).",
+      "queued_missing": " Nothing found for: {missing}.",
+      "restore_history": "Restore history",
+      "history_title": "Backup history",
+      "working": "Working…",
+      "run_now": "Back up now",
+      "cancel": "Cancel backup",
+      "requested": "A backup was requested at {when} and will start as soon as this PC is online.",
+      "never_backed_up": "This machine has not been backed up yet.",
+      "search_crumb": "search: {query}"
+    },
+    "col": {
+      "started": "Started",
+      "status": "Status",
+      "files": "Files",
+      "size": "Size",
+      "trigger": "Trigger",
+      "from": "From",
+      "to": "To",
+      "name": "Name",
+      "modified": "Modified",
+      "folder": "Folder",
+      "user": "User"
+    },
+    "restored_of": "{done} / {total}",
+    "restore_to": "{machine} → {dir}",
+    "unknown": "—"
+  },
+
+  "machine": {
+    "views_nav": "Machine views",
+    "tab": {
+      "overview": "Overview",
+      "terminal": "Terminal",
+      "backup": "Backup",
+      "remote": "Remote"
+    },
+    "live_temp": "Live Temperature",
+    "uptime": "Uptime",
+    "cpu_load": "CPU Load",
+    "cpu_clock": "CPU Clock",
+    "gpu": "GPU",
+    "gpu_temp": "Temp: {value}",
+    "gpu_load": "Load: {value}",
+    "gpu_clock": "Clock: {value}",
+    "companion_version": "Companion Version",
+    "identity": "Identity",
+    "model": "Model: {value}",
+    "serial": "Serial: {value}",
+    "service_tag": "Service tag: {value}",
+    "asset_tag": "Asset tag: {value}",
+    "ad_ou": "OU: {value}",
+    "ad_owner": "Managed by: {value}",
+    "unknown": "--",
+    "temp_c": "{value} °C",
+    "percent": "{value} %",
+    "mhz": "{value} MHz",
+    "storage": "Storage",
+    "no_disks": "No disks reported yet.",
+    "sensor": {
+      "title": "Primary temperature sensor",
+      "use": "Use sensor:",
+      "follow_fleet": "Follow the fleet preference order",
+      "help_before": "Which sensor this machine's headline temperature comes from. Leave it on the default to follow the order configured in",
+      "settings_link": "Settings → Computer",
+      "help_after": "Applies to new readings; history keeps the value recorded at the time."
+    },
+    "history": {
+      "title": "Historical",
+      "day": "Day:",
+      "zoom_hint": "Wheel or drag to zoom a panel; the time range stays in sync across every chart.",
+      "no_readings": "No readings found for this day."
+    },
+    "terminal": {
+      "title": "Terminal",
+      "idle": "Idle",
+      "shell": "Shell",
+      "timeout": "Timeout (s)",
+      "timeout_title": "Per-command timeout in seconds",
+      "favorites": "★ Favorites",
+      "save_favorite": "Save as favorite",
+      "stop": "Stop",
+      "stop_title": "Stop the running command (Ctrl-C); keeps the shell",
+      "reset": "Reset session",
+      "reset_title": "Discard the shell and start a fresh one",
+      "clear": "Clear",
+      "open_consoles": "Open consoles",
+      "add_console": "Open another console",
+      "add_console_title": "Open another console on this machine",
+      "no_console": "No console is open on this machine. Press + to start one.",
+      "output_label": "Command output",
+      "script_label": "Script to run on {machine}",
+      "script_placeholder": "Get-Service Spooler",
+      "run": "Run",
+      "how_interactive": "One persistent shell per operator; cd and variables persist. Commands run as SYSTEM.",
+      "how_oneshot": "Commands run as SYSTEM.",
+      "connected": "Connected to {machine}. {how}",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "error": "Error",
+      "expired": "Expired",
+      "unknown": "Unknown",
+      "send_failed": "[could not send input: {error}]",
+      "stop_failed": "[stop failed: {error}]",
+      "session_reset": "[session reset — a fresh shell will start on your next command]",
+      "reset_failed": "[reset failed: {error}]",
+      "lost_hub": "Lost contact with the hub: {error}",
+      "truncated": "(output truncated — the command produced more than the hub stores)",
+      "no_output": "(no output)",
+      "command_expired": "Command expired — the agent never picked it up.",
+      "completed_at": "[completed at {when}]",
+      "failed_at": "[failed at {when}]",
+      "gave_up": "No response from the agent — giving up watching. The command may still be running on the machine.",
+      "hint": "Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears. Scripts run as SYSTEM. cd and variables persist; set a per-run timeout above.",
+      "hint_old_streaming": "This machine reports agent v{version}. Live output and run_script need v{required} — it will refuse scripts until it self-updates. {base}",
+      "hint_old_interactive": "This machine reports agent v{version}. A persistent shell (cd persistence, answering prompts) needs v{required}; until it self-updates, each command runs in a fresh process. {base}",
+      "running_favorite": "[running favorite \"{name}\" ({type})]",
+      "favorite_queued": "Queued — the agent picks it up within ~10s. This kind of command reports no output here.",
+      "loaded_favorite": "[loaded favorite \"{name}\" — review it, then press Enter]",
+      "nothing_to_save": "Nothing to save — type a script first."
+    },
+    "remote": {
+      "title": "Remote view",
+      "idle": "Idle",
+      "secure_desktop": "Secure desktop",
+      "no_display": "No display outputs",
+      "cad": "Ctrl+Alt+Del",
+      "cad_title": "Send Ctrl+Alt+Del to the remote machine",
+      "start": "Start",
+      "stop": "Stop",
+      "session": "Session",
+      "session_auto": "Auto (agent picks)",
+      "refresh": "Refresh",
+      "refresh_title": "Ask the machine to re-report its logon sessions and displays",
+      "codec": "Codec",
+      "codec_vp8": "VP8 (compatibility)",
+      "encoder": "Encoder",
+      "encoder_auto": "Auto",
+      "encoder_hardware": "Hardware",
+      "encoder_software": "Software",
+      "before_connecting": "Chosen before connecting",
+      "monitor": "Monitor",
+      "quality": "Quality",
+      "preset_quality": "Quality",
+      "preset_balanced": "Balanced",
+      "preset_speed": "Speed",
+      "preset_custom": "Custom…",
+      "fps": "FPS",
+      "kbps": "kbps",
+      "scale": "Scale",
+      "view_only": "View only",
+      "fullscreen": "Fullscreen",
+      "fullscreen_title": "Fullscreen (Esc to exit)",
+      "live": "Live",
+      "exit_fullscreen": "Exit fullscreen",
+      "vdd_install": "Install virtual display",
+      "vdd_remove": "Remove virtual display",
+      "starting": "Starting…",
+      "waiting_helper": "Waiting for the agent to bring up its capture helper…",
+      "start_failed": "Could not start: {error}",
+      "connecting": "Connecting…",
+      "reconnecting": "Reconnecting…",
+      "connection_failed": "Connection failed.",
+      "logon_screen_desktop": "Lock / logon screen",
+      "geom": "{width}×{height} · {encoder} · desktop {desktop}",
+      "desktop_unknown": "?",
+      "stalled": "The agent is not getting any frames. If this machine has no monitor, install a virtual display below.",
+      "stalled_on_desktop": "The agent is not getting any frames on the {desktop} desktop. If this machine has no monitor, install a virtual display below.",
+      "signaling_error": "Signaling error: {error}",
+      "session_logon_screen": "logon screen",
+      "session_no_user": "no user",
+      "session_console": "console",
+      "session_option": "Session {id} — {who} ({details})",
+      "vdd_present": "A virtual display is installed. Physical monitors: {monitors}.",
+      "vdd_present_stopped": "A virtual display is installed but NOT started. Physical monitors: {monitors}.",
+      "vdd_headless_ready": "This machine reports no monitors, so there is nothing for the screen capture to duplicate and the stream will be black. Installing a virtual display gives the desktop and the logon screen somewhere to be drawn.",
+      "vdd_headless_no_payload": "This machine reports no monitors, so the stream will be black. No virtual display driver has been uploaded yet — upload it on the Packages page and pin it in Settings › Remote.",
+      "refreshing": "Asking the machine to re-report its sessions and displays…",
+      "refresh_failed": "Could not refresh: {error}",
+      "vdd_queuing_install": "Queuing the virtual display install…",
+      "vdd_queuing_remove": "Queuing the virtual display removal…",
+      "vdd_queued": "Queued. Watch the command result on the Commands tab; the machine page updates once the agent reports back.",
+      "vdd_queue_failed": "Could not queue: {error}",
+      "fullscreen_refused": "Fullscreen refused: {error}",
+      "view_only_note": "View only: input from this browser is suppressed. This is an accident guard, not a permission — it does not stop anyone else driving the machine."
+    },
+    "favorites": {
+      "title": "Favorites",
+      "close": "Close",
+      "empty_script": "(empty script)",
+      "shared_by_you": "shared by you",
+      "shared_by": "shared by {who}",
+      "use": "Use",
+      "confirm_delete": "Delete favorite \"{name}\"?",
+      "group": "{title} ({count})",
+      "mine": "Mine",
+      "shared_with_me": "Shared with me",
+      "load_failed": "Could not load favorites: {error}",
+      "empty": "No favorites yet. Run something in the terminal, then use \"Save as favorite\".",
+      "edit_title": "Edit favorite",
+      "save_title": "Save as favorite",
+      "name": "Name",
+      "name_placeholder": "Fix printer spooler",
+      "script": "Script",
+      "share": "Share with the team (they can run it, only you can edit it)",
+      "name_required": "Enter a name to save this favorite.",
+      "done": "Done"
+    },
+    "last_seen": "Last seen",
+    "ago": {
+      "seconds": "{value}s ago",
+      "minutes": "{value}m ago",
+      "hours": "{value}h ago",
+      "days": "{value}d ago"
+    },
+    "metric": {
+      "cpu_load": "CPU Load",
+      "memory": "Memory",
+      "disk": "Disk",
+      "net_rx": "Network In",
+      "net_tx": "Network Out",
+      "disk_read": "Disk Read",
+      "disk_write": "Disk Write",
+      "gpu_temp": "GPU Temp",
+      "gpu_load": "GPU Load",
+      "temp": "Temperature"
+    },
+    "memory_with_total": "Memory ({total} GB)",
+    "memory_tooltip": "{used} / {total} GB  ({percent}%)",
+    "per_second": "per second",
+    "no_data_range": "No data for this range.",
+    "disk_fallback": "Disk",
+    "disk_usage": "{used} of {total} used · {free} free",
+    "disk_no_size": "Used space only — size needs agent 3.10.0+",
+    "ad_disabled": "AD account disabled",
+    "sensor_order": " (currently {order})",
+    "sensor_with_temp": "{name} — {value} °C",
+    "sensor_missing": "{name} — not currently reported",
+    "sensor_none": "No CPU temperature sensors reported yet.",
+    "sensor_saved": "Saved. Applies from the next reading.",
+    "sensor_save_failed": "Could not save: {error}",
+    "pty": {
+      "close_console": "Close this console",
+      "close_console_title": "Close this console (or middle-click the tab)",
+      "tab_numbered": "{name} {index}",
+      "tab_ended": "This console has ended — close the tab to clear it",
+      "tab_title": "{name} console on {machine}",
+      "max_consoles": "You already have {max} consoles open on this machine — close one before opening another",
+      "screen_label": "{name} console",
+      "pill_none": "No console",
+      "pill_closed": "Closed",
+      "pill_connecting": "Connecting",
+      "pill_connected": "Connected",
+      "opening": "Opening a {shell} console on {machine}…",
+      "open_failed_note": "[could not open a console: {error}]",
+      "open_failed": "Could not open a console: {error}",
+      "closed_default": "the terminal closed",
+      "closed_by_you": "this console was closed",
+      "input_failed": "[input not delivered: {error}]",
+      "hub_lost": "[lost contact with the hub: {error} — retrying]",
+      "reconnected": "[reconnected — some output was skipped]",
+      "replay_truncated": "[earlier output from this session is no longer buffered]",
+      "favorite_wrong_kind": "[{type} favorites are issued from the command channel, not typed at a shell]",
+      "console_ended": "[this console has ended — open a new one with +]",
+      "favorite_no_script": "[favorite \"{name}\" has no script in it]",
+      "favorite_wrong_shell": "[this favorite was saved for {saved}; this console is {actual}]",
+      "favorite_pasted": "[favorite \"{name}\": {lines} lines pasted, the first {ran} ran as they arrived — the last is waiting for Enter]",
+      "favorite_loaded": "[loaded favorite \"{name}\" — review it, then press Enter]",
+      "hint": "Real consoles on the machine, running as SYSTEM. Enter, Ctrl-C, Tab completion and interactive prompts all work. Ctrl-Shift-C / Ctrl-Shift-V copy and paste (Ctrl-C is passed through to the shell). \"+\" opens another console (up to {max}); \"×\" or a middle-click on a tab ends one. Sessions survive leaving this page and are listed on every computer you sign in from — come back and your shells, working directories and scrollback are still there.",
+      "clear_title": "Clear the front console's scrollback",
+      "save_fav_title": "Save a script as a favorite (any selected text is used as a starting point)",
+      "shell_title": "Shell used when you open another console with +"
+    }
   }
 }

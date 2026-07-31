@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings - FleetHub{% endblock %}
+{% block title %}{{ t('nav.settings') }} - FleetHub{% endblock %}
 {% block content %}
 {#
    Deliberately near-empty. The section list is fixed markup (sections are an
@@ -7,34 +7,37 @@
    settings.js from GET /api/settings. That's what lets a new knob be one line in
    settings.py's REGISTRY with no change here and none in the JS.
 #}
-<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">Settings</h1>
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('settings.heading') }}</h1>
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">
-    Operational tuning for the hub and the fleet. Every setting shows its default, and
-    anything you haven't changed behaves exactly as it did before this page existed.
+    {{ t('settings.intro') }}
 </p>
 
+{# The tab labels come from settings.section.* -- the same keys settings.schema() uses
+   for the section headings it serves, so a tab and the panel it opens cannot end up
+   worded differently. Sign-in is the exception and has its own key: it has no schema
+   fields and therefore no section in the registry. #}
 <div class="settings-layout">
-    <div class="tabs tabs--vertical" role="tablist" aria-label="Settings sections"
+    <div class="tabs tabs--vertical" role="tablist" aria-label="{{ t('settings.sections_nav') }}"
          aria-orientation="vertical" data-tabs-key="settings">
         <button class="tabs__tab tabs__tab--active" type="button" role="tab"
-                id="tab-btn-computer" aria-controls="tab-computer" aria-selected="true">Computer</button>
+                id="tab-btn-computer" aria-controls="tab-computer" aria-selected="true">{{ t('settings.section.computer') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-hub"
-                aria-controls="tab-hub" aria-selected="false" tabindex="-1">Hub</button>
+                aria-controls="tab-hub" aria-selected="false" tabindex="-1">{{ t('settings.section.hub') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-data"
-                aria-controls="tab-data" aria-selected="false" tabindex="-1">Data &amp; Retention</button>
+                aria-controls="tab-data" aria-selected="false" tabindex="-1">{{ t('settings.section.data') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-metrics"
-                aria-controls="tab-metrics" aria-selected="false" tabindex="-1">History Metrics</button>
+                aria-controls="tab-metrics" aria-selected="false" tabindex="-1">{{ t('settings.section.metrics') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-fleet"
-                aria-controls="tab-fleet" aria-selected="false" tabindex="-1">Fleet</button>
+                aria-controls="tab-fleet" aria-selected="false" tabindex="-1">{{ t('settings.section.fleet') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
-                aria-controls="tab-remote" aria-selected="false" tabindex="-1">Remote Control</button>
+                aria-controls="tab-remote" aria-selected="false" tabindex="-1">{{ t('settings.section.remote') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-directory"
-                aria-controls="tab-directory" aria-selected="false" tabindex="-1">Active Directory</button>
+                aria-controls="tab-directory" aria-selected="false" tabindex="-1">{{ t('settings.section.directory') }}</button>
         {# Sign-in has no schema-rendered fields at all -- its settings live in .env, not
            the settings table, because they are credentials and the perimeter itself.
            settings-auth.js builds the whole panel. #}
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-signin"
-                aria-controls="tab-signin" aria-selected="false" tabindex="-1">Sign-in</button>
+                aria-controls="tab-signin" aria-selected="false" tabindex="-1">{{ t('settings.section.signin') }}</button>
     </div>
     <div class="settings-layout__panels">
         <div class="tab-panel" id="tab-computer" role="tabpanel" aria-labelledby="tab-btn-computer"></div>

@@ -86,10 +86,9 @@
 
     function clearScrollback() {
         scrollbackEl.textContent = '';
-        const how = interactive
-            ? 'One persistent shell per operator; cd and variables persist. Commands run as SYSTEM.'
-            : 'Commands run as SYSTEM.';
-        append(`Connected to ${MACHINE}. ${how}\n`, 'meta');
+        const how = interactive ? t('machine.terminal.how_interactive')
+                                : t('machine.terminal.how_oneshot');
+        append(t('machine.terminal.connected', { machine: MACHINE, how }) + '\n', 'meta');
     }
 
     // The prompt reflects the shell's real working directory once we've heard one back;
@@ -203,7 +202,7 @@
         inputEl.value = '';
         autoGrow();
         setBusy(true);
-        setStatusPill(statusEl, 'warn', 'Running');
+        setStatusPill(statusEl, 'warn', t('machine.terminal.running'));
 
         const params = { script, shell };
         const timeout = readTimeout();
@@ -214,7 +213,7 @@
             schedulePoll(POLL_FAST_MS);
         } catch (e) {
             append(`${e.message}\n`, 'err');
-            setStatusPill(statusEl, 'danger', 'Failed');
+            setStatusPill(statusEl, 'danger', t('machine.terminal.failed'));
             setBusy(false);
         }
     }
@@ -229,7 +228,7 @@
         try {
             await FleetApi.issueCommand('shell_input', { data, shell: shellEl.value });
         } catch (e) {
-            append(`[could not send input: ${e.message}]\n`, 'err');
+            append(t('machine.terminal.send_failed', { error: e.message }) + '\n', 'err');
         }
     }
 
@@ -237,7 +236,9 @@
         if (!active) return;
         append('\n^C\n', 'meta');
         try { await FleetApi.issueCommand('shell_signal', { shell: shellEl.value }); }
-        catch (e) { append(`[stop failed: ${e.message}]\n`, 'err'); }
+        catch (e) {
+            append(t('machine.terminal.stop_failed', { error: e.message }) + '\n', 'err');
+        }
     }
 
     async function resetSession() {
@@ -245,9 +246,9 @@
             await FleetApi.issueCommand('shell_reset', { shell: shellEl.value });
             cwd = null;
             updatePrompt();
-            append('\n[session reset — a fresh shell will start on your next command]\n', 'meta');
+            append('\n' + t('machine.terminal.session_reset') + '\n', 'meta');
         } catch (e) {
-            append(`[reset failed: ${e.message}]\n`, 'err');
+            append(t('machine.terminal.reset_failed', { error: e.message }) + '\n', 'err');
         }
     }
 
@@ -270,8 +271,8 @@
         try {
             body = await FleetApi.fetchOutput(active.commandId, active.cursor);
         } catch (e) {
-            append(`Lost contact with the hub: ${e.message}\n`, 'err');
-            finish('danger', 'Error');
+            append(t('machine.terminal.lost_hub', { error: e.message }) + '\n', 'err');
+            finish('danger', t('machine.terminal.error'));
             return;
         }
         if (!active) return;   // cleared while the request was in flight
@@ -287,15 +288,15 @@
         // through can't cut off the tail.
         if (terminal && !body.chunks.length) {
             if (body.truncated) {
-                append('\n(output truncated — the command produced more than the hub stores)\n', 'meta');
+                append('\n' + t('machine.terminal.truncated') + '\n', 'meta');
             }
             if (body.next_seq === 0 && body.result) {
                 // Non-streaming agent: nothing was printed live, so print it all now.
-                append(`${body.result.output || '(no output)'}\n`);
+                append(`${body.result.output || t('machine.terminal.no_output')}\n`);
             }
             if (body.status === 'expired') {
-                append('\nCommand expired — the agent never picked it up.\n', 'err');
-                finish('muted', 'Expired');
+                append('\n' + t('machine.terminal.command_expired') + '\n', 'err');
+                finish('muted', t('machine.terminal.expired'));
                 return;
             }
             // Adopt the shell's real working directory for the prompt, if the agent reported one.
@@ -304,9 +305,15 @@
                 updatePrompt();
             }
             const ok = body.status === 'done';
-            append(`\n[${ok ? 'completed' : 'failed'} at ${FleetApi.formatTime(
-                body.result ? body.result.completed_at : Date.now() / 1000)}]\n`, ok ? 'meta' : 'err');
-            finish(ok ? 'ok' : 'danger', ok ? 'Done' : 'Failed');
+            // Two whole sentences rather than one with 'completed'/'failed' spliced in:
+            // the verb agrees with the rest of the line in most languages.
+            const when = FleetApi.formatTime(
+                body.result ? body.result.completed_at : Date.now() / 1000);
+            append('\n' + (ok ? t('machine.terminal.completed_at', { when })
+                               : t('machine.terminal.failed_at', { when })) + '\n',
+                   ok ? 'meta' : 'err');
+            finish(ok ? 'ok' : 'danger',
+                   ok ? t('machine.terminal.done') : t('machine.terminal.failed'));
             return;
         }
 
@@ -314,9 +321,8 @@
         // died stays "claimed" forever. Give up client-side rather than poll until the
         // tab closes.
         if (Date.now() - active.startedAt > GIVE_UP_MS) {
-            append('\nNo response from the agent — giving up watching. The command may still ' +
-                   'be running on the machine.\n', 'err');
-            finish('muted', 'Unknown');
+            append('\n' + t('machine.terminal.gave_up') + '\n', 'err');
+            finish('muted', t('machine.terminal.unknown'));
             return;
         }
 
@@ -345,8 +351,7 @@
     }
 
     async function refreshHint() {
-        const base = `Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears. ` +
-                     `Scripts run as SYSTEM. cd and variables persist; set a per-run timeout above.`;
+        const base = t('machine.terminal.hint');
         hintEl.className = 'terminal__hint';
         hintEl.textContent = base;
         try {
@@ -363,18 +368,15 @@
                 // Pre-3.1: refuses run_script outright.
                 setInteractive(false);
                 hintEl.className = 'terminal__hint terminal__hint--warn';
-                hintEl.textContent =
-                    `This machine reports agent v${version}. Live output and run_script need ` +
-                    `v${MIN_STREAMING_AGENT} — it will refuse scripts until it self-updates. ` + base;
+                hintEl.textContent = t('machine.terminal.hint_old_streaming',
+                    { version, required: MIN_STREAMING_AGENT, base });
             } else if (version && versionLess(version, MIN_INTERACTIVE_AGENT)) {
                 // 3.1.x: streams, but each command is a fresh process (no cd persistence, no
                 // stdin). Fall back to one-shot behavior and say so.
                 setInteractive(false);
                 hintEl.className = 'terminal__hint terminal__hint--warn';
-                hintEl.textContent =
-                    `This machine reports agent v${version}. A persistent shell (cd persistence, ` +
-                    `answering prompts) needs v${MIN_INTERACTIVE_AGENT}; until it self-updates, each ` +
-                    `command runs in a fresh process. ` + base;
+                hintEl.textContent = t('machine.terminal.hint_old_interactive',
+                    { version, required: MIN_INTERACTIVE_AGENT, base });
             } else {
                 setInteractive(true);
             }
@@ -402,10 +404,11 @@
     // issued directly.
     function usePick(favorite) {
         if (favorite.command_type !== 'run_script') {
-            append(`\n[running favorite "${favorite.name}" (${favorite.command_type})]\n`, 'meta');
+            append('\n' + t('machine.terminal.running_favorite',
+                             { name: favorite.name, type: favorite.command_type })
+                   + '\n', 'meta');
             FleetApi.issueCommand(favorite.command_type, favorite.params)
-                .then(() => append('Queued — the agent picks it up within ~10s. This kind of ' +
-                                   'command reports no output here.\n', 'meta'))
+                .then(() => append(t('machine.terminal.favorite_queued') + '\n', 'meta'))
                 .catch((e) => append(`${e.message}\n`, 'err'));
             return;
         }
@@ -413,13 +416,14 @@
         if (favorite.params.shell) shellEl.value = favorite.params.shell;
         autoGrow();
         inputEl.focus();
-        append(`\n[loaded favorite "${favorite.name}" — review it, then press Enter]\n`, 'meta');
+        append('\n' + t('machine.terminal.loaded_favorite', { name: favorite.name })
+               + '\n', 'meta');
     }
 
     function saveCurrent() {
         const script = inputEl.value.trim();
         if (!script) {
-            append('\nNothing to save — type a script first.\n', 'meta');
+            append('\n' + t('machine.terminal.nothing_to_save') + '\n', 'meta');
             inputEl.focus();
             return;
         }

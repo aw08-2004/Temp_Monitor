@@ -55,7 +55,7 @@
     window.attachAutocomplete = function attachAutocomplete(input, options) {
         const opts = options || {};
         const minChars = opts.minChars != null ? opts.minChars : 0;
-        const emptyText = opts.emptyText || 'No matches';
+        const emptyText = opts.emptyText || t('common.no_matches');
         const renderItem = opts.renderItem || defaultRenderItem;
         const id = 'ac-list-' + (++widgetSeq);
 
@@ -277,7 +277,7 @@
 
         const ac = attachAutocomplete(input, {
             minChars: 0,
-            emptyText: opts.emptyText || 'No matches',
+            emptyText: opts.emptyText || t('common.no_matches'),
             source: (q) => optionItems(select, q),
             onSelect: (item) => {
                 select.selectedIndex = item.index;
@@ -337,7 +337,7 @@
 
         return attachAutocomplete(input, {
             minChars: 0,
-            emptyText: input.dataset.emptyText || 'No matches — type a value to use it as-is.',
+            emptyText: input.dataset.emptyText || t('common.no_matches_free_text'),
             source: (q) => {
                 const query = q.toLowerCase();
                 return Array.prototype.map.call(datalist.options, (opt) => ({

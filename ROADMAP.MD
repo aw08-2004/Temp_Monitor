@@ -960,7 +960,7 @@ present.
 
 ---
 
-## 🚧 7. Localization / multi-language UI   ·   engine + chrome hub 1.51.0; Inventory/Alerts/Audit/Users hub 1.54.0; page conversion ongoing
+## ✅ 7. Localization / multi-language UI   ·   engine + chrome hub 1.51.0; Inventory/Alerts/Audit/Users 1.54.0; History + Permission Groups 1.55.0; Settings/Packages/Backups/Machine + browser-language fix 1.56.0
 
 Shipped languages **English, Spanish, German**. A language is data — one JSON file in
 `hub/locales/` plus a row in `i18n.LANGUAGES` — so a fourth needs no schema or code-shape
@@ -1013,10 +1013,13 @@ the console.
 shipped languages, and explicitly wrong for languages with more forms (Polish, Russian,
 Arabic) — adding one means adding a rule table, not just a catalog.
 
-**Converted so far.** Chrome (sidebar, topbar, language picker) plus login, denied and
-dashboard in 1.51.0; **Asset Inventory, Alerts, Audit Log and Users in 1.54.0** — template
-and JS together, since a page converted by halves is a page that reads in two languages at
-once. Three conventions came out of that first batch and are worth following in the rest:
+**Every page is converted (hub 1.56.0).** Chrome (sidebar, topbar, language picker) plus
+login, denied and dashboard in 1.51.0; Asset Inventory, Alerts, Audit Log and Users in
+1.54.0; History and Permission Groups in 1.55.0; **Settings, Packages, Backups and the
+Machine page — with `machine.js`, `remote.js`, `fleet-terminal.js`, `fleet-pty.js` and
+`fleet-favorites.js` — in 1.56.0.** Template and JS together throughout, since a page
+converted by halves is a page that reads in two languages at once. Three conventions came
+out of the first batch and held for the rest:
 
 - **A sentence is a catalog entry; a sentence assembled from clauses is not.** The
   high-temperature alert body was built by `+` from five fragments (`'Windowed'` /
@@ -1037,11 +1040,90 @@ once. Three conventions came out of that first batch and are worth following in 
   Inventory and Audit already had; anything that reads the same in English but differently
   in context stays page-scoped.
 
-**Remaining work — mechanical.** Still English-only: 6 templates (history, settings,
-permissions, backups, packages, machine), ~17 JS files, and the settings `REGISTRY`
-`label`/`help`/`unit` strings — Python-side UI text that no template scan will catch. Each
-is a self-contained increment; the key-scan test starts covering a file the moment its
-first string moves.
+**Server-supplied UI text — resolved in 1.55.0, and no longer just "mechanical".** The
+Permission Groups page turned out not to be convertible from the template alone: its
+capability list is rendered from `GET /api/permissions/capabilities`, so the labels and
+descriptions an admin reads before granting `issue_commands` lived in a Python dict
+(`permissions.CAPABILITY_LABELS`). The settings `REGISTRY`'s `label`/`help`/`unit` are the
+same shape and the larger instance of it. Three decisions, which the settings conversion
+should follow rather than re-litigate:
+
+- **The English text moves into `en.json`; the Python module keeps only the vocabulary.**
+  The alternative — keep the dict as the English source and let a catalog entry override
+  it — needs the same string in two files, which is exactly how a catalog rots, and it
+  fails the key-parity test besides (`es.json` would carry keys `en.json` does not).
+  `en.json` is already the schema, so it is where the string belongs. `CAPABILITY_LABELS`
+  is gone; `permissions.CAPABILITY_TEXT_KEY` names the catalog prefix instead.
+- **Resolved server-side, in the caller's language, not in the browser.** The key is built
+  from the capability *name*, and a key assembled in JS is invisible to the literal-key
+  scan — so a capability added with no catalog entries would render
+  `permissions.capability.foo.label` on screen with nothing to catch it. Doing it in
+  `permissions_web.py` turns that same omission into a failing test
+  (`test_server_supplied_ui_text_is_in_the_catalog`), which is the whole point: this is
+  the one page where the text says what an operator is about to grant.
+- **`i18n.set_language_provider()` / `i18n.current()`** is how a JSON blueprint learns the
+  language of the request in flight. Templates are handed their language explicitly
+  (`template_context`), which is right for something that renders once in one language;
+  a blueprint serving user-facing text has no language argument anywhere in its call
+  chain, and threading one through all ten blueprint factories to serve the two that need
+  it is worse than one hook installed by `app.py`. `i18n` stays Flask-free — it calls a
+  callable it was handed, and returns English when nobody installed one (the bare test
+  apps, background threads).
+
+**Two more conventions from the 1.55.0 batch:**
+
+- **Markup around a string does not survive translation — restructure rather than split.**
+  The break-glass note wrapped `ALLOWED_EMAILS` in `<code>`. Catalog values are plain text
+  by test (`t()` is autoescaped, so a tag in a translation renders as visible angle
+  brackets), and splitting the sentence around the tag is the clause-assembly mistake in
+  another form. It became one sentence with the `.env` key name passed in as a
+  placeholder — which also stops the key from being translated by accident.
+- **A line carrying two independent counts takes pre-pluralised fragments.** `plural()` is
+  one/other over a single count, so "{date} • N machines • M readings" cannot be one entry
+  without a four-way plural. Each count is pluralised on its own and dropped into a
+  container string (`history.meta`, `permissions.confirm_delete_directory`), with a `_`-
+  prefixed authoring note in `en.json` saying so. The precedent is `alerts.high_temp._window`.
+
+**Four more from the 1.56.0 batch:**
+
+- **A wire value shown to an operator needs a display name, and the map is spelled out.**
+  Deployment statuses (`in_flight`), backup run statuses and triggers, remote session
+  states — each gets one literal `t()` per value in a small lookup object rather than a key
+  built by concatenation, because only literal keys are visible to the key scan. An
+  unrecognised value falls back to showing itself, which beats showing a key name when a
+  newer hub adds one.
+- **Panel titles and metric labels are functions, not strings.** `machine.js`'s `METRICS`
+  table is built at module load; a string captured there would be whatever language the
+  file was written in. `label: () => t(...)` defers it to render time.
+- **Inline markup inside a sentence goes, or the sentence splits at the tag.** Three cases:
+  `<code>ALLOWED_EMAILS</code>` became a placeholder (above), the `<em>or</em>` in the
+  deploy retry note was decorative and was dropped, and the sensor help wrapped around a
+  real `<a>` split into two complete clauses plus a link-text key.
+- **Product names, config keys and protocol tokens are not prose.** `REMOTE_TURN_SECRET`,
+  `winget`, `H.264`, `Winlogon`, a Windows session state, an operator's own name for a
+  backup destination — all deliberately left untranslated, and the ones that could be
+  mistaken for prose say so in a `_`-prefixed note beside them.
+
+**The browser's language is finally reachable (1.56.0).** `resolve()` always ranked
+`Accept-Language` third, but `hub.default_language` shipped as `"en"` — indistinguishable
+from an admin *choosing* English — so on every hub where nobody had opened Settings the
+header was dead code, and a German operator on a German browser got an English console
+with no fix but picking a language by hand on every device. The setting now ships as
+`i18n.AUTO`, which is deliberately not a supported language and therefore falls through.
+A *chosen* fleet default still outranks the browser; that part was never the bug.
+
+The topbar picker gained an **Automatic** option for the same reason in reverse: a choice
+used to be one-way, with nothing meaning "follow my browser again". It selects against the
+user's STORED choice (`chosen_language`), not the language that won — pre-selecting the
+resolved language would claim a choice they never made. `POST /api/language` maps `auto`
+back to `users.set_language(None)`. A real choice is still stored on the profile, so it
+follows the operator to the next browser and the next device.
+
+**Remaining work: none for the shipped pages.** What is left is the standing obligation
+rather than a backlog — a new string goes in `en.json` first (the schema), and
+`tests/test_i18n.py` names it as untranslated in `es`/`de` until someone fills it in. The
+one real limitation is unchanged: `plural()` implements one/other only, so a fourth
+language with more forms needs a rule table, not just a catalog.
 
 ---
 
@@ -1199,13 +1281,16 @@ comes online.
 7. ~~**#4 Active Directory**~~ — done: OIDC/Entra login (1.44.0), directory-group →
    permission-group mapping (1.49.0), on-prem LDAP computer sync + the `ad_ou`
    machine-scope mode (1.50.0). Never run against a real DC — see the note above.
-8. **#7 Localization ← in progress** — engine, catalogs and all shared chrome done in hub
+8. ~~**#7 Localization**~~ — done, hub 1.56.0. Engine, catalogs and shared chrome in
    1.51.0; both open parameters resolved (in-house JSON string table; per-user preference
-   over a fleet default). Inventory, Alerts, Audit Log and Users converted in 1.54.0. What
-   is left is the page-by-page string conversion of history, settings, permissions,
-   backups, packages and machine (plus the settings `REGISTRY` strings), which is
-   mechanical and needs no further decisions.
-9. **#9 BIOS settings + firmware management** — planned. Fills in the `update_bios` stub
+   over a fleet default). Every page converted by 1.56.0, including the settings
+   `REGISTRY` and the other **server-supplied UI text** (capability labels, detection
+   kinds, destination kinds, path tokens): the English moves into `en.json`, the web layer
+   resolves it in the caller's language via `i18n.current()`, and `tests/test_i18n.py`
+   asserts catalog coverage so a vocabulary entry added without words fails a test instead
+   of captioning a page with its own key. 1.56.0 also fixed the browser-language fallback,
+   which had been unreachable since the feature shipped.
+9. **#9 BIOS settings + firmware management ← next** — planned. Fills in the `update_bios` stub
    that has been queued-but-unimplemented since the signing removal, and adds the settings
    half it never had. Needs `manufacturer` on `machine_info` before anything else.
 10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a

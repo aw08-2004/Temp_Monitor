@@ -38,6 +38,7 @@ from flask import Blueprint, Response, jsonify, render_template, request, sessio
 import backup_paths
 import backups
 import fleet
+import i18n
 import permissions
 import settings
 
@@ -240,18 +241,25 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             "runs": backups.list_runs(db_path, limit=25, kind=backups.BACKUP_HUB_DB),
             "schedule": _schedule_state(),
             "files": _files_state(),
-            # The token reference the Backup Settings tab renders. From backup_paths so
-            # adding a token is one edit, like DETECTION_LABELS and CAPABILITY_LABELS.
-            "path_tokens": [{"token": t, "help": h}
-                            for t, h in backup_paths.TOKEN_HELP],
+            # The token reference the Backup Settings tab renders. The token names come
+            # from backup_paths (adding one is a single edit there); the prose comes from
+            # the catalog in the caller's language.
+            "path_tokens": [
+                {"token": token,
+                 "help": i18n.translate(
+                     f"{backup_paths.TOKEN_HELP_KEY}.{slug}", i18n.current())}
+                for token, slug in backup_paths.TOKEN_REFERENCE
+            ],
             "key": _key_state(),
             # The form renders itself from these, so adding a destination kind is one
             # edit in backups.py -- the same self-describing-API discipline as
             # /api/packages and /api/permissions/capabilities.
             "destination_kinds": [
                 {"name": kind,
-                 "label": backups.DESTINATION_LABELS[kind][0],
-                 "description": backups.DESTINATION_LABELS[kind][1]}
+                 "label": i18n.translate(
+                     f"{backups.KIND_TEXT_KEY}.{kind}.label", i18n.current()),
+                 "description": i18n.translate(
+                     f"{backups.KIND_TEXT_KEY}.{kind}.description", i18n.current())}
                 for kind in backups.DESTINATION_KINDS
             ],
         }), 200

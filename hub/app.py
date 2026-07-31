@@ -74,7 +74,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.54.1"
+HUB_VERSION = "1.56.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3238,15 +3238,34 @@ def current_language():
         email = (session.get("user") or {}).get("email")
         if email:
             chosen = users.get_language(DB_PATH, email)
-        # Only reaches the decision when nobody has chosen and the fleet has no default
-        # -- see i18n.resolve for why the browser ranks below an admin's fleet setting.
+        # Read unconditionally: the fleet default ships as i18n.AUTO, so on a hub where
+        # nobody has set one this header IS the answer for anyone who has not chosen.
         accept = request.headers.get("Accept-Language")
     except Exception:
         pass
     language = i18n.resolve(user_language=chosen, fleet_default=fleet_default,
                             accept_language=accept)
     g._hub_language = language
+    # Memoised alongside the resolved language because the topbar picker needs the
+    # CHOICE, not the outcome -- see i18n.template_context.
+    g._hub_chosen_language = chosen
     return language
+
+
+def chosen_language():
+    """The signed-in user's stored language choice, or None if they follow the browser.
+
+    Resolving the language is what discovers this, so it is read back off `g` rather
+    than queried a second time; calling `current_language()` first guarantees it is there.
+    """
+    current_language()
+    return getattr(g, "_hub_chosen_language", None)
+
+
+# Hand the resolver to i18n so the JSON blueprints can localise the user-facing text they
+# serve (capability labels, setting labels/help) without a language parameter threaded
+# through ten blueprint factories. Templates still get their language passed explicitly.
+i18n.set_language_provider(current_language)
 
 
 @app.route("/api/language", methods=["POST"])
@@ -3261,11 +3280,15 @@ def set_language():
     """
     payload = request.get_json(silent=True) or {}
     language = str(payload.get("language") or "").strip()
-    if not i18n.is_supported(language):
+    # i18n.AUTO clears the stored choice rather than storing a language, putting the user
+    # back on the fleet default / their browser. Without it a choice is one-way: the
+    # picker would have no option meaning "follow my browser again".
+    if language != i18n.AUTO and not i18n.is_supported(language):
         return jsonify({"error": f"{language!r} is not a supported language."}), 400
     email = (session.get("user") or {}).get("email")
     try:
-        users.set_language(DB_PATH, email, language)
+        users.set_language(DB_PATH, email,
+                           None if language == i18n.AUTO else language)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     # The response is not what applies it -- the client reloads, and the next render
@@ -3296,7 +3319,7 @@ def inject_nav_context():
                "hub_version": HUB_VERSION,
                "latest_companion_version": get_latest_companion_version(),
                "latest_agent_version": get_latest_agent_version()}
-    context.update(i18n.template_context(current_language()))
+    context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
         return context
     try:

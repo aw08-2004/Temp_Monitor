@@ -88,81 +88,69 @@
 
     function deniedCard() {
         const card = el('div', { class: 'card', id: CARD_ID });
-        card.appendChild(el('h3', { class: 'perm-subhead', text: 'Sign-in providers' }));
-        card.appendChild(el('p', { class: 'setting__help', text:
-            'Only the break-glass administrators listed in ALLOWED_EMAILS can change these. '
-            + 'Whoever configures the identity provider decides who this hub believes you '
-            + 'are, so it is deliberately not delegable through a permission group.' }));
+        card.appendChild(el('h3', { class: 'perm-subhead',
+                                   text: t('settings.signin.providers') }));
+        card.appendChild(el('p', { class: 'setting__help',
+                                   text: t('settings.signin.denied') }));
         return card;
     }
 
     function buildCard() {
         const card = el('div', { class: 'card', id: CARD_ID });
-        card.appendChild(el('h3', { class: 'perm-subhead', text: 'Sign-in providers' }));
+        card.appendChild(el('h3', { class: 'perm-subhead',
+                                   text: t('settings.signin.providers') }));
 
         const state = el('div', { class: 'turn-stat' }, [
-            el('span', { class: 'turn-stat__label', text: 'Enabled now' }),
+            el('span', { class: 'turn-stat__label', text: t('settings.signin.enabled_now') }),
             el('span', { class: 'turn-stat__value' }, [
                 cached.google_enabled ? pill('Google', 'ok') : null,
                 cached.oidc_enabled
                     ? pill(cached.oidc_display_name || 'OIDC', 'ok') : null,
                 (!cached.google_enabled && !cached.oidc_enabled)
-                    ? pill('None', 'danger') : null,
+                    ? pill(t('settings.signin.none'), 'danger') : null,
             ]),
         ]);
         card.appendChild(state);
 
-        card.appendChild(el('p', { class: 'setting__help', text:
-            'These are written to the hub\'s .env and applied immediately — no restart. '
-            + 'Client secrets are never shown again once saved.' }));
+        card.appendChild(el('p', { class: 'setting__help',
+                                   text: t('settings.signin.env_note') }));
 
         // ---- Google
-        card.appendChild(el('h3', { class: 'perm-subhead', text: 'Google' }));
-        card.appendChild(el('p', { class: 'setting__help', text:
-            'Create an OAuth 2.0 Client ID (Web application) in the Google Cloud Console '
-            + 'and add this hub\'s /auth/callback as an authorised redirect URI. '
-            + 'Leave both fields empty to turn Google sign-in off.' }));
-        card.appendChild(field('auth-google-id', 'Client ID', cached.google_client_id,
-            'Ends in .apps.googleusercontent.com'));
-        card.appendChild(field('auth-google-secret', 'Client secret',
+        card.appendChild(el('h3', { class: 'perm-subhead', text: t('settings.signin.google') }));
+        card.appendChild(el('p', { class: 'setting__help',
+                                   text: t('settings.signin.google_help') }));
+        card.appendChild(field('auth-google-id', t('settings.signin.client_id'),
+            cached.google_client_id, t('settings.signin.google_id_help')));
+        card.appendChild(field('auth-google-secret', t('settings.signin.client_secret'),
             cached.google_client_secret_set ? cached.unchanged_placeholder : '',
-            cached.google_client_secret_set
-                ? 'A secret is saved. Leave this untouched to keep it, or type a new one to replace it.'
-                : 'No secret saved yet.',
+            cached.google_client_secret_set ? t('settings.signin.secret_saved')
+                                            : t('settings.signin.secret_unsaved'),
             { password: true }));
 
         // ---- OIDC
-        card.appendChild(el('h3', { class: 'perm-subhead', text: 'OIDC provider' }));
-        card.appendChild(el('p', { class: 'setting__help', text:
-            'Microsoft Entra ID, Okta, Authentik, Keycloak, Auth0 — any OIDC issuer. '
-            + 'Register a confidential web application with this hub\'s /auth/oidc/callback '
-            + 'as the redirect URI. Endpoints and signing keys come from discovery, so there '
-            + 'is nothing vendor-specific to configure here.' }));
-        card.appendChild(field('auth-oidc-issuer', 'Issuer URL', cached.oidc_issuer,
-            'e.g. https://login.microsoftonline.com/<tenant-id>/v2.0 — the discovery URL is '
-            + 'derived from this. Must be https.'));
-        card.appendChild(field('auth-oidc-metadata', 'Discovery URL (optional)',
-            cached.oidc_metadata_url,
-            'Only needed if your provider does not serve /.well-known/openid-configuration '
-            + 'under the issuer. Clear it to have it re-derived from the issuer above.'));
-        card.appendChild(field('auth-oidc-id', 'Client ID', cached.oidc_client_id, ''));
-        card.appendChild(field('auth-oidc-secret', 'Client secret',
+        card.appendChild(el('h3', { class: 'perm-subhead', text: t('settings.signin.oidc') }));
+        card.appendChild(el('p', { class: 'setting__help',
+                                   text: t('settings.signin.oidc_help') }));
+        card.appendChild(field('auth-oidc-issuer', t('settings.signin.issuer'),
+            cached.oidc_issuer, t('settings.signin.issuer_help')));
+        card.appendChild(field('auth-oidc-metadata', t('settings.signin.metadata'),
+            cached.oidc_metadata_url, t('settings.signin.metadata_help')));
+        card.appendChild(field('auth-oidc-id', t('settings.signin.client_id'),
+            cached.oidc_client_id, ''));
+        card.appendChild(field('auth-oidc-secret', t('settings.signin.client_secret'),
             cached.oidc_client_secret_set ? cached.unchanged_placeholder : '',
-            cached.oidc_client_secret_set
-                ? 'A secret is saved. Leave this untouched to keep it, or type a new one to replace it.'
-                : 'No secret saved yet.',
+            cached.oidc_client_secret_set ? t('settings.signin.secret_saved')
+                                          : t('settings.signin.secret_unsaved'),
             { password: true }));
-        card.appendChild(field('auth-oidc-name', 'Button label', cached.oidc_display_name,
-            'What the sign-in button says. "Microsoft" reads far better than "SSO" to '
-            + 'somebody looking at an unfamiliar login page.'));
-        card.appendChild(field('auth-oidc-scopes', 'Scopes', cached.oidc_scopes,
-            'Must include openid. Add "groups" (or your provider\'s equivalent) if you map '
-            + 'directory groups to permission groups.'));
+        card.appendChild(field('auth-oidc-name', t('settings.signin.button_label'),
+            cached.oidc_display_name, t('settings.signin.button_label_help')));
+        card.appendChild(field('auth-oidc-scopes', t('settings.signin.scopes'),
+            cached.oidc_scopes, t('settings.signin.scopes_help')));
 
         // ---- Save
         const actions = el('div', { class: 'chip-add', style: 'margin-top: var(--space-4);' });
         const button = el('button', { class: 'btn btn--primary', type: 'button',
-                                      text: 'Save sign-in settings' });
+                                      text: t('settings.signin.save') });
         const note = el('span', { class: 'setting__help' });
         button.addEventListener('click', async () => {
             const payload = {
@@ -182,25 +170,20 @@
                 && (payload.oidc_issuer || payload.oidc_metadata_url);
             if (!googleOn && !oidcOn) {
                 note.className = 'setting__error';
-                note.textContent = 'That would leave no way to sign in to this hub. '
-                    + 'Configure Google or an OIDC provider before saving.';
+                note.textContent = t('settings.signin.no_provider_left');
                 return;
             }
-            if (!window.confirm(
-                'Change how people sign in to this hub?\n\n'
-                + 'This takes effect immediately for new sign-ins. Existing sessions are '
-                + 'not signed out. If the new settings are wrong, the break-glass '
-                + 'administrators in ALLOWED_EMAILS can change them back — provided they '
-                + 'can still sign in.')) return;
+            if (!window.confirm(t('settings.signin.confirm'))) return;
 
             button.disabled = true;
             note.className = 'setting__help';
-            note.textContent = 'Applying…';
+            note.textContent = t('settings.signin.applying');
             try {
                 cached = await save(payload);
                 note.textContent = cached.changed && cached.changed.length
-                    ? 'Saved. Updated: ' + cached.changed.join(', ')
-                    : 'No changes to save.';
+                    ? t('settings.signin.saved_changed',
+                        { fields: cached.changed.join(', ') })
+                    : t('settings.signin.saved_unchanged');
                 inject();
                 return;
             } catch (e) {

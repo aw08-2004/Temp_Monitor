@@ -28,24 +28,24 @@ function formatRelativeTime(updatedAt) {
     const then = new Date(String(updatedAt).replace(' ', 'T'));
     if (Number.isNaN(then.getTime())) return updatedAt;
     const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
-    if (secs < 60) return `${secs}s ago`;
+    if (secs < 60) return t('machine.ago.seconds', { value: secs });
     const mins = Math.floor(secs / 60);
-    if (mins < 60) return `${mins}m ago`;
+    if (mins < 60) return t('machine.ago.minutes', { value: mins });
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
+    if (hrs < 24) return t('machine.ago.hours', { value: hrs });
+    return t('machine.ago.days', { value: Math.floor(hrs / 24) });
 }
 
 // The Uptime card doubles as a "Last seen" card when the machine is offline -- a stale
 // uptime is meaningless, and last-seen is what you actually want for a machine that's gone quiet.
 function showUptime(uptimeSeconds) {
-    uptimeLabelEl.textContent = 'Uptime';
+    uptimeLabelEl.textContent = t('machine.uptime');
     uptimeValueEl.textContent = formatUptime(uptimeSeconds);
     uptimeValueEl.removeAttribute('title');
 }
 
 function showLastSeen(updatedAt) {
-    uptimeLabelEl.textContent = 'Last seen';
+    uptimeLabelEl.textContent = t('machine.last_seen');
     uptimeValueEl.textContent = formatRelativeTime(updatedAt);
     if (updatedAt) uptimeValueEl.title = updatedAt; else uptimeValueEl.removeAttribute('title');
 }
@@ -94,7 +94,8 @@ function getSelectedResolution(spanMs) {
 }
 
 function setResolutionInUse(resolution) {
-    resolutionInUseEl.textContent = `In use: ${resolution || '--'}`;
+    resolutionInUseEl.textContent = t('history.in_use',
+        { value: resolution || t('history.resolution_label.unknown') });
 }
 
 function toChartTimestamp(value) {
@@ -143,18 +144,25 @@ const ENABLED_METRICS = (() => {
 // and tooltip through formatRate() instead of pinning a fixed "B/s", so a 400 MB/s NVMe
 // and a 2 KB/s idle NIC are both readable -- at a fixed B/s the former is an unreadable
 // nine-digit tick and the latter is a flat line at the bottom of the axis.
+// `label` is a function, not a string: this table is built at module load, and a panel
+// title has to be the operator's language rather than whatever the file was written in.
+// One literal key per metric, so the key scan in tests/test_i18n.py can see them all.
 const METRICS = [
-    { key: 'cpu_load',   label: 'CPU Load',    unit: '%',   color: '#10b981', max: 100, diag: 'cpu_load_pct' },
-    { key: 'memory',     label: 'Memory',      unit: '%',   color: '#f59e0b', max: 100, diag: 'memory_load_pct' },
-    { key: 'disk',       label: 'Disk',        unit: '%',   color: '#3b82f6', max: 100, diag: 'disk_load_pct' },
-    { key: 'net_rx',     label: 'Network In',  unit: 'B/s', color: '#22d3ee', rate: true, diag: 'net_rx_bps' },
-    { key: 'net_tx',     label: 'Network Out', unit: 'B/s', color: '#ec4899', rate: true, diag: 'net_tx_bps' },
-    { key: 'disk_read',  label: 'Disk Read',   unit: 'B/s', color: '#14b8a6', rate: true, diag: 'disk_read_bps' },
-    { key: 'disk_write', label: 'Disk Write',  unit: 'B/s', color: '#f43f5e', rate: true, diag: 'disk_write_bps' },
-    { key: 'gpu_temp',   label: 'GPU Temp',    unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
-    { key: 'gpu_load',   label: 'GPU Load',    unit: '%',   color: '#a855f7', max: 100, diag: 'gpu_load_pct' },
-    { key: 'temp',       label: 'Temperature', unit: '°C',  color: '#f97316' },
+    { key: 'cpu_load',   label: () => t('machine.metric.cpu_load'),   unit: '%',   color: '#10b981', max: 100, diag: 'cpu_load_pct' },
+    { key: 'memory',     label: () => t('machine.metric.memory'),     unit: '%',   color: '#f59e0b', max: 100, diag: 'memory_load_pct' },
+    { key: 'disk',       label: () => t('machine.metric.disk'),       unit: '%',   color: '#3b82f6', max: 100, diag: 'disk_load_pct' },
+    { key: 'net_rx',     label: () => t('machine.metric.net_rx'),     unit: 'B/s', color: '#22d3ee', rate: true, diag: 'net_rx_bps' },
+    { key: 'net_tx',     label: () => t('machine.metric.net_tx'),     unit: 'B/s', color: '#ec4899', rate: true, diag: 'net_tx_bps' },
+    { key: 'disk_read',  label: () => t('machine.metric.disk_read'),  unit: 'B/s', color: '#14b8a6', rate: true, diag: 'disk_read_bps' },
+    { key: 'disk_write', label: () => t('machine.metric.disk_write'), unit: 'B/s', color: '#f43f5e', rate: true, diag: 'disk_write_bps' },
+    { key: 'gpu_temp',   label: () => t('machine.metric.gpu_temp'),   unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
+    { key: 'gpu_load',   label: () => t('machine.metric.gpu_load'),   unit: '%',   color: '#a855f7', max: 100, diag: 'gpu_load_pct' },
+    { key: 'temp',       label: () => t('machine.metric.temp'),       unit: '°C',  color: '#f97316' },
 ];
+
+function metricLabel(metric) {
+    return typeof metric.label === 'function' ? metric.label() : String(metric.label);
+}
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 
@@ -198,9 +206,11 @@ let syncingXRange = false;      // guards the cross-panel zoom/pan mirroring bel
 let memTotalGb = null;
 
 function formatMemTooltip(pct) {
-    if (!Number.isFinite(memTotalGb)) return `${pct.toFixed(1)} %`;
+    if (!Number.isFinite(memTotalGb)) return t('machine.percent', { value: pct.toFixed(1) });
     const usedGb = (pct / 100) * memTotalGb;
-    return `${usedGb.toFixed(1)} / ${memTotalGb.toFixed(0)} GB  (${pct.toFixed(0)}%)`;
+    return t('machine.memory_tooltip', {
+        used: usedGb.toFixed(1), total: memTotalGb.toFixed(0), percent: pct.toFixed(0),
+    });
 }
 
 // Reflect the machine's total RAM into the Memory panel: title becomes "Memory (16 GB)"
@@ -209,7 +219,10 @@ function updateMemoryTotal(totalGb) {
     if (!Number.isFinite(totalGb)) return;
     memTotalGb = totalGb;
     const panel = panels.find((p) => p.metric.key === 'memory');
-    if (panel && panel.titleEl) panel.titleEl.textContent = `Memory (${totalGb.toFixed(0)} GB)`;
+    if (panel && panel.titleEl) {
+        panel.titleEl.textContent = t('machine.memory_with_total',
+                                      { total: totalGb.toFixed(0) });
+    }
 }
 
 function metricEnabled(metric) {
@@ -223,14 +236,14 @@ function panelConfig(metric) {
         // Each tick scales on its own value, so the axis stays readable whatever range the
         // zoom lands on. The axis title drops the unit -- it now lives on every tick.
         yScale.min = 0;
-        yScale.title.text = 'per second';
+        yScale.title.text = t('machine.per_second');
         yScale.ticks = { callback: (value) => formatRate(value) };
     }
     return {
         type: 'line',
         data: {
             datasets: [{
-                label: metric.label, data: [], parsing: false,
+                label: metricLabel(metric), data: [], parsing: false,
                 borderColor: metric.color, backgroundColor: 'transparent',
                 borderWidth: 2, tension: 0.25, pointRadius: 0,
                 pointHoverRadius: 6, pointHitRadius: 20,
@@ -285,7 +298,7 @@ function buildPanels() {
         head.className = 'metric-panel__head';
         const title = document.createElement('span');
         title.className = 'metric-panel__title';
-        title.textContent = metric.label;
+        title.textContent = metricLabel(metric);
         head.appendChild(title);
         container.appendChild(head);
 
@@ -297,7 +310,7 @@ function buildPanels() {
 
         const emptyEl = document.createElement('div');
         emptyEl.className = 'stat-card__meta metric-panel__empty';
-        emptyEl.textContent = 'No data for this range.';
+        emptyEl.textContent = t('machine.no_data_range');
         emptyEl.style.display = 'none';
         container.appendChild(emptyEl);
 
@@ -449,12 +462,14 @@ let lastCpuLoadPct = null;
 
 function applyTemp(temp) {
     if (temp === undefined || temp === null) return;
-    document.getElementById('stat-temp').textContent = Number(temp).toFixed(1) + ' °C';
+    document.getElementById('stat-temp').textContent =
+        t('machine.temp_c', { value: Number(temp).toFixed(1) });
     tempCard.classList.remove('stat-card--high-temp');
 }
 
 function formatMetric(value, suffix) {
-    return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} ${suffix}` : '--';
+    return typeof value === 'number' && Number.isFinite(value)
+        ? `${value.toFixed(1)} ${suffix}` : t('machine.unknown');
 }
 
 // ---- Storage cards ------------------------------------------------------------
@@ -492,11 +507,11 @@ function renderDisks(disks) {
         const name = document.createElement('span');
         name.className = 'disk-tile__name';
         // textContent: volume labels come from the agent, and /api/report is unauthenticated.
-        name.textContent = disk.name || 'Disk';
+        name.textContent = disk.name || t('machine.disk_fallback');
         name.title = name.textContent;
         const value = document.createElement('span');
         value.className = 'disk-tile__pct';
-        value.textContent = hasPct ? `${pct.toFixed(0)}%` : '--';
+        value.textContent = hasPct ? `${pct.toFixed(0)}%` : t('machine.unknown');
         head.append(name, value);
 
         const bar = document.createElement('div');
@@ -512,10 +527,13 @@ function renderDisks(disks) {
         // percentage, so show the bar and say what's missing instead of an empty tile.
         if (Number.isFinite(Number(disk.used_gb)) && Number.isFinite(Number(disk.total_gb))) {
             const free = Number(disk.total_gb) - Number(disk.used_gb);
-            meta.textContent =
-                `${formatGb(disk.used_gb)} of ${formatGb(disk.total_gb)} used · ${formatGb(free)} free`;
+            meta.textContent = t('machine.disk_usage', {
+                used: formatGb(disk.used_gb),
+                total: formatGb(disk.total_gb),
+                free: formatGb(free),
+            });
         } else {
-            meta.textContent = 'Used space only — size needs agent 3.10.0+';
+            meta.textContent = t('machine.disk_no_size');
         }
 
         tile.append(head, bar, meta);
@@ -547,11 +565,16 @@ async function loadMachineInfo() {
         } else {
             showUptime(info.uptime_seconds);
         }
-        document.getElementById('stat-version').textContent = info.companion_version || '--';
-        document.getElementById('stat-model').textContent = 'Model: ' + (info.model || '--');
-        document.getElementById('stat-serial').textContent = 'Serial: ' + (info.serial_number || '--');
-        document.getElementById('stat-service').textContent = 'Service tag: ' + (info.service_tag || '--');
-        document.getElementById('stat-asset').textContent = 'Asset tag: ' + (info.asset_tag || '--');
+        const dash = t('machine.unknown');
+        document.getElementById('stat-version').textContent = info.companion_version || dash;
+        document.getElementById('stat-model').textContent =
+            t('machine.model', { value: info.model || dash });
+        document.getElementById('stat-serial').textContent =
+            t('machine.serial', { value: info.serial_number || dash });
+        document.getElementById('stat-service').textContent =
+            t('machine.service_tag', { value: info.service_tag || dash });
+        document.getElementById('stat-asset').textContent =
+            t('machine.asset_tag', { value: info.asset_tag || dash });
         showDirectoryFacts(info);
     } catch (e) { /* non-critical */ }
 }
@@ -566,10 +589,10 @@ function showDirectoryFacts(info) {
     if (!ouEl || !ownerEl || !statusEl) return;
 
     ouEl.hidden = !info.ad_ou;
-    if (info.ad_ou) ouEl.textContent = 'OU: ' + info.ad_ou;
+    if (info.ad_ou) ouEl.textContent = t('machine.ad_ou', { value: info.ad_ou });
 
     ownerEl.hidden = !info.ad_owner;
-    if (info.ad_owner) ownerEl.textContent = 'Managed by: ' + info.ad_owner;
+    if (info.ad_owner) ownerEl.textContent = t('machine.ad_owner', { value: info.ad_owner });
 
     // Worth calling out: a machine still reporting telemetry whose computer account has
     // been disabled is usually a half-finished decommission, and nothing else on this
@@ -581,7 +604,7 @@ function showDirectoryFacts(info) {
         pill.className = 'status-pill status-pill--danger';
         const dot = document.createElement('span');
         dot.className = 'status-pill__dot';
-        pill.append(dot, document.createTextNode('AD account disabled'));
+        pill.append(dot, document.createTextNode(t('machine.ad_disabled')));
         statusEl.appendChild(pill);
     }
 }
@@ -608,11 +631,11 @@ async function loadPrimarySensor() {
     primarySensorSelect.replaceChildren();
     const followOpt = document.createElement('option');
     followOpt.value = '';
-    followOpt.textContent = 'Follow the fleet preference order';
+    followOpt.textContent = t('machine.sensor.follow_fleet');
     primarySensorSelect.appendChild(followOpt);
 
     primarySensorOrder.textContent = (body.preference && body.preference.length)
-        ? ` (currently ${body.preference.join(' → ')})`
+        ? t('machine.sensor_order', { order: body.preference.join(' → ') })
         : '';
 
     for (const s of body.sensors || []) {
@@ -622,7 +645,7 @@ async function loadPrimarySensor() {
         // is unauthenticated.
         opt.textContent = s.value === null || s.value === undefined
             ? s.name
-            : `${s.name} — ${s.value} °C`;
+            : t('machine.sensor_with_temp', { name: s.name, value: s.value });
         primarySensorSelect.appendChild(opt);
     }
 
@@ -632,14 +655,14 @@ async function loadPrimarySensor() {
     if (savedPrimarySensor && !(body.sensors || []).some((s) => s.name === savedPrimarySensor)) {
         const missing = document.createElement('option');
         missing.value = savedPrimarySensor;
-        missing.textContent = `${savedPrimarySensor} — not currently reported`;
+        missing.textContent = t('machine.sensor_missing', { name: savedPrimarySensor });
         primarySensorSelect.appendChild(missing);
     }
 
     primarySensorSelect.value = savedPrimarySensor;
     primarySensorSave.hidden = true;
     primarySensorStatus.textContent = (!body.sensors || !body.sensors.length)
-        ? 'No CPU temperature sensors reported yet.'
+        ? t('machine.sensor_none')
         : '';
 }
 
@@ -665,10 +688,10 @@ async function savePrimarySensor() {
         }
         if (seq !== primarySensorSaveSeq) return;
         await loadPrimarySensor();
-        primarySensorStatus.textContent = 'Saved. Applies from the next reading.';
+        primarySensorStatus.textContent = t('machine.sensor_saved');
     } catch (e) {
         if (seq !== primarySensorSaveSeq) return;
-        primarySensorStatus.textContent = `Could not save: ${e.message}`;
+        primarySensorStatus.textContent = t('machine.sensor_save_failed', { error: e.message });
     }
 }
 

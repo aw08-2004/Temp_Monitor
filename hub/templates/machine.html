@@ -25,22 +25,22 @@
 <div id="machine-config" data-machine="{{ machine }}" data-high-temp-threshold="{{ high_temp_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}'>
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
-    <div class="tabs" role="tablist" aria-label="Machine views" data-tabs-key="machine">
+    <div class="tabs" role="tablist" aria-label="{{ t('machine.views_nav') }}" data-tabs-key="machine">
         <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-overview"
-                aria-controls="tab-overview" aria-selected="true">Overview</button>
+                aria-controls="tab-overview" aria-selected="true">{{ t('machine.tab.overview') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-terminal"
-                aria-controls="tab-terminal" aria-selected="false" tabindex="-1">Terminal</button>
+                aria-controls="tab-terminal" aria-selected="false" tabindex="-1">{{ t('machine.tab.terminal') }}</button>
         {# Hidden without the capability, like the sidebar links -- the routes behind it
            are gated server-side on manage_backups AND this machine being in scope. #}
         {% if cap.MANAGE_BACKUPS in user_capabilities %}
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-backup"
-                aria-controls="tab-backup" aria-selected="false" tabindex="-1">Backup</button>
+                aria-controls="tab-backup" aria-selected="false" tabindex="-1">{{ t('machine.tab.backup') }}</button>
         {% endif %}
         {# Gated on remote_control, like the sidebar links -- the start/signal routes behind
            it are gated server-side on remote_control AND this machine being in scope. #}
         {% if cap.REMOTE_CONTROL in user_capabilities %}
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
-                aria-controls="tab-remote" aria-selected="false" tabindex="-1">Remote</button>
+                aria-controls="tab-remote" aria-selected="false" tabindex="-1">{{ t('machine.tab.remote') }}</button>
         {% endif %}
     </div>
 
@@ -49,42 +49,42 @@
     <div class="tab-panel" id="tab-overview" role="tabpanel" aria-labelledby="tab-btn-overview">
     <div class="card-grid">
         <div class="card stat-card" id="temp-card">
-            <div class="stat-card__label">Live Temperature</div>
-            <div class="stat-card__value" id="stat-temp">-- °C</div>
+            <div class="stat-card__label">{{ t('machine.live_temp') }}</div>
+            <div class="stat-card__value" id="stat-temp">{{ t('machine.temp_c', value=t('machine.unknown')) }}</div>
         </div>
         <div class="card stat-card">
-            <div class="stat-card__label" id="stat-uptime-label">Uptime</div>
-            <div class="stat-card__value" id="stat-uptime">--</div>
+            <div class="stat-card__label" id="stat-uptime-label">{{ t('machine.uptime') }}</div>
+            <div class="stat-card__value" id="stat-uptime">{{ t('machine.unknown') }}</div>
         </div>
         <div class="card stat-card">
-            <div class="stat-card__label">CPU Load</div>
-            <div class="stat-card__value" id="stat-cpu-load">-- %</div>
+            <div class="stat-card__label">{{ t('machine.cpu_load') }}</div>
+            <div class="stat-card__value" id="stat-cpu-load">{{ t('machine.percent', value=t('machine.unknown')) }}</div>
         </div>
         <div class="card stat-card">
-            <div class="stat-card__label">CPU Clock</div>
-            <div class="stat-card__value" id="stat-cpu-clock">-- MHz</div>
+            <div class="stat-card__label">{{ t('machine.cpu_clock') }}</div>
+            <div class="stat-card__value" id="stat-cpu-clock">{{ t('machine.mhz', value=t('machine.unknown')) }}</div>
         </div>
         <div class="card stat-card identity-block">
-            <div class="stat-card__label">GPU</div>
-            <div class="stat-card__meta" id="stat-gpu-temp">Temp: --</div>
-            <div class="stat-card__meta" id="stat-gpu-load">Load: --</div>
-            <div class="stat-card__meta" id="stat-gpu-clock">Clock: --</div>
+            <div class="stat-card__label">{{ t('machine.gpu') }}</div>
+            <div class="stat-card__meta" id="stat-gpu-temp">{{ t('machine.gpu_temp', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-gpu-load">{{ t('machine.gpu_load', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-gpu-clock">{{ t('machine.gpu_clock', value=t('machine.unknown')) }}</div>
         </div>
         <div class="card stat-card">
-            <div class="stat-card__label">Companion Version</div>
-            <div class="stat-card__value" id="stat-version">--</div>
+            <div class="stat-card__label">{{ t('machine.companion_version') }}</div>
+            <div class="stat-card__value" id="stat-version">{{ t('machine.unknown') }}</div>
         </div>
         <div class="card stat-card identity-block">
-            <div class="stat-card__label">Identity</div>
-            <div class="stat-card__meta" id="stat-model">Model: --</div>
-            <div class="stat-card__meta" id="stat-serial">Serial: --</div>
-            <div class="stat-card__meta" id="stat-service">Service tag: --</div>
-            <div class="stat-card__meta" id="stat-asset">Asset tag: --</div>
+            <div class="stat-card__label">{{ t('machine.identity') }}</div>
+            <div class="stat-card__meta" id="stat-model">{{ t('machine.model', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-serial">{{ t('machine.serial', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-service">{{ t('machine.service_tag', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-asset">{{ t('machine.asset_tag', value=t('machine.unknown')) }}</div>
             {# AD fields (roadmap #4). Hidden entirely unless a directory sync has matched
                this machine -- on a hub with no AD configured these would otherwise be
                four permanent "--" rows suggesting something is broken. #}
-            <div class="stat-card__meta" id="stat-ad-ou" hidden>OU: --</div>
-            <div class="stat-card__meta" id="stat-ad-owner" hidden>Managed by: --</div>
+            <div class="stat-card__meta" id="stat-ad-ou" hidden>{{ t('machine.ad_ou', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-ad-owner" hidden>{{ t('machine.ad_owner', value=t('machine.unknown')) }}</div>
             <div class="stat-card__meta" id="stat-ad-status" hidden></div>
         </div>
     </div>
@@ -93,87 +93,91 @@
        diagnostics `disks` list. Live state rather than history, so it is a card and not a
        chart panel -- how many disks a machine has is per-machine and changes over its life. #}
     <div class="card storage-card">
-        <div class="section-title">Storage</div>
+        <div class="section-title">{{ t('machine.storage') }}</div>
         <div class="disk-grid" id="disk-grid"></div>
-        <div id="disk-empty" class="stat-card__meta">No disks reported yet.</div>
+        <div id="disk-empty" class="stat-card__meta">{{ t('machine.no_disks') }}</div>
     </div>
 
     {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is
        per-machine state, like the asset tag -- Settings holds the fleet-wide preference
        order this overrides. #}
     <div class="card sensor-card">
-        <div class="section-title">Primary temperature sensor</div>
+        <div class="section-title">{{ t('machine.sensor.title') }}</div>
         <div class="toolbar" style="margin-bottom: var(--space-2);">
-            <label for="primary-sensor">Use sensor:</label>
+            <label for="primary-sensor">{{ t('machine.sensor.use') }}</label>
             <select id="primary-sensor" class="select">
-                <option value="">Follow the fleet preference order</option>
+                <option value="">{{ t('machine.sensor.follow_fleet') }}</option>
             </select>
-            <button id="primary-sensor-save" type="button" class="btn btn--primary" hidden>Save</button>
+            <button id="primary-sensor-save" type="button" class="btn btn--primary" hidden>{{ t('common.save') }}</button>
             <span id="primary-sensor-status" class="stat-card__meta"></span>
         </div>
+        {# Split around the link rather than kept as one catalog entry: the sentence has a
+           real <a> in the middle of it, and a catalog value is plain text by test. Each
+           half is a complete clause, and the link text is its own entry. #}
         <p class="stat-card__meta" style="max-width: 70ch;">
-            Which sensor this machine's headline temperature comes from. Leave it on the
-            default to follow the order configured in
-            <a href="{{ url_for('settings_page') }}#tab-computer">Settings &rarr; Computer</a>{#
+            {{ t('machine.sensor.help_before') }}
+            <a href="{{ url_for('settings_page') }}#tab-computer">{{ t('machine.sensor.settings_link') }}</a>{#
             #}<span id="primary-sensor-order"></span>.
-            Applies to new readings; history keeps the value recorded at the time.
+            {{ t('machine.sensor.help_after') }}
         </p>
     </div>
 
     <div class="card chart-card">
-        <div class="section-title">Historical</div>
+        <div class="section-title">{{ t('machine.history.title') }}</div>
+        {# The resolution vocabulary is shared with the History page -- same buckets, same
+           labels, one set of keys. #}
         <div class="toolbar">
-            <label for="day-picker">Day:</label>
+            <label for="day-picker">{{ t('machine.history.day') }}</label>
             <input id="day-picker" class="input" type="date">
-            <label for="resolution">Resolution:</label>
+            <label for="resolution">{{ t('history.resolution') }}</label>
             <select id="resolution" class="select">
-                <option value="raw">Raw</option>
-                <option value="10s">10s</option>
-                <option value="1m">1m</option>
-                <option value="5m">5m</option>
+                <option value="raw">{{ t('history.resolution_label.raw') }}</option>
+                <option value="10s">{{ t('history.resolution_label.10s') }}</option>
+                <option value="1m">{{ t('history.resolution_label.1m') }}</option>
+                <option value="5m">{{ t('history.resolution_label.5m') }}</option>
             </select>
-            <span id="resolution-in-use" class="stat-card__meta">In use: --</span>
+            <span id="resolution-in-use" class="stat-card__meta">{{ t('history.in_use', value=t('history.resolution_label.unknown')) }}</span>
             <input id="dynamic-resolution" class="checkbox" type="checkbox" checked>
-            <label for="dynamic-resolution">Dynamic on zoom</label>
-            <button id="zoom-in" type="button" class="btn">Zoom In</button>
-            <button id="zoom-out" type="button" class="btn">Zoom Out</button>
-            <button id="reset-zoom" type="button" class="btn">Reset Zoom</button>
+            <label for="dynamic-resolution">{{ t('history.dynamic_on_zoom') }}</label>
+            <button id="zoom-in" type="button" class="btn">{{ t('history.zoom_in') }}</button>
+            <button id="zoom-out" type="button" class="btn">{{ t('history.zoom_out') }}</button>
+            <button id="reset-zoom" type="button" class="btn">{{ t('history.reset_zoom') }}</button>
         </div>
         <div class="history-hint stat-card__meta" style="margin-bottom: var(--space-3);">
-            Wheel or drag to zoom a panel; the time range stays in sync across every chart.
+            {{ t('machine.history.zoom_hint') }}
         </div>
         {# One canvas per enabled metric, built by machine.js from its METRICS config and
            the machine-config data-enabled-metrics flags. #}
         <div class="metric-grid" id="metric-grid"></div>
-        <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">No readings found for this day.</div>
+        <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">{{ t('machine.history.no_readings') }}</div>
     </div>
     </div>{# /tab-overview #}
 
     <div class="tab-panel" id="tab-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal" hidden>
         <div class="card terminal-card">
             <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">Terminal</div>
-                <span class="status-pill status-pill--muted" id="terminal-status"><span class="status-pill__dot"></span>Idle</span>
+                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.terminal.title') }}</div>
+                <span class="status-pill status-pill--muted" id="terminal-status"><span class="status-pill__dot"></span>{{ t('machine.terminal.idle') }}</span>
                 <div class="terminal__head-actions">
-                    <label for="terminal-shell" class="fleet-field__label">Shell</label>
+                    <label for="terminal-shell" class="fleet-field__label">{{ t('machine.terminal.shell') }}</label>
                     <select id="terminal-shell" class="select">
                         <option value="powershell">PowerShell</option>
                         <option value="cmd">cmd</option>
                     </select>
-                    <label for="terminal-timeout" id="terminal-timeout-label" class="fleet-field__label">Timeout (s)</label>
+                    <label for="terminal-timeout" id="terminal-timeout-label" class="fleet-field__label">{{ t('machine.terminal.timeout') }}</label>
                     <input id="terminal-timeout" class="input terminal__timeout" type="number"
-                           min="1" value="600" title="Per-command timeout in seconds">
+                           min="1" value="600" title="{{ t('machine.terminal.timeout_title') }}">
                     {# Opening and ending consoles is the tab strip's job in ConPTY mode
                        (+ and ×), so there is no New console / Reconnect button here: a
                        terminal survives leaving the page, and ending one must be something
                        the operator ASKS for on the tab they mean. #}
-                    <button id="terminal-favorites" type="button" class="btn">★ Favorites</button>
-                    <button id="terminal-save-fav" type="button" class="btn btn--ghost">Save as favorite</button>
+                    <button id="terminal-favorites" type="button" class="btn">{{ t('machine.terminal.favorites') }}</button>
+                    <button id="terminal-save-fav" type="button" class="btn btn--ghost">{{ t('machine.terminal.save_favorite') }}</button>
                     <button id="terminal-stop" type="button" class="btn btn--ghost" disabled
-                            title="Stop the running command (Ctrl-C); keeps the shell">Stop</button>
+                            title="{{ t('machine.terminal.stop_title') }}">{{ t('machine.terminal.stop') }}</button>
                     <button id="terminal-reset" type="button" class="btn btn--ghost"
-                            title="Discard the shell and start a fresh one">Reset session</button>
-                    <button id="terminal-clear" type="button" class="btn btn--ghost">Clear</button>
+                            title="{{ t('machine.terminal.reset_title') }}">{{ t('machine.terminal.reset') }}</button>
+                    <button id="terminal-clear" type="button" class="btn btn--ghost">{{ t('machine.terminal.clear') }}</button>
                 </div>
             </div>
 
@@ -187,17 +191,17 @@
                    console opened on another computer shows up here too -- see
                    fleet-pty.js:syncSessions. Empty in the markup; fleet-pty.js fills it. #}
                 <div id="terminal-tabs" class="pty-tabs" role="tablist"
-                     aria-label="Open consoles">
+                     aria-label="{{ t('machine.terminal.open_consoles') }}">
                     <button id="terminal-add" type="button" class="pty-tabs__add"
-                            aria-label="Open another console"
-                            title="Open another console on this machine">+</button>
+                            aria-label="{{ t('machine.terminal.add_console') }}"
+                            title="{{ t('machine.terminal.add_console_title') }}">+</button>
                 </div>
                 {# xterm.js owns each screen it is given and measures it on open, so a screen
                    must have a real size before its terminal is built -- which is why
                    fleet-pty.js builds a console when its tab is first shown, not on load. #}
                 <div id="terminal-screens" class="pty-screens">
                     <div id="terminal-empty" class="pty-empty" hidden>
-                        No console is open on this machine. Press + to start one.
+                        {{ t('machine.terminal.no_console') }}
                     </div>
                 </div>
             </div>
@@ -206,15 +210,15 @@
                 {# aria-live=polite so a screen reader announces streamed output as it lands.
                    Rendered with textContent only -- this is untrusted agent-side text. #}
                 <pre class="console-surface terminal__scrollback" id="terminal-scrollback" tabindex="0"
-                     aria-live="polite" aria-label="Command output"></pre>
+                     aria-live="polite" aria-label="{{ t('machine.terminal.output_label') }}"></pre>
 
                 <div class="terminal__promptline">
                     <span class="terminal__ps" id="terminal-ps" aria-hidden="true">PS {{ machine }}&gt;</span>
-                    <label for="terminal-input" class="sr-only">Script to run on {{ machine }}</label>
+                    <label for="terminal-input" class="sr-only">{{ t('machine.terminal.script_label', machine=machine) }}</label>
                     <textarea id="terminal-input" class="terminal__input" rows="1" spellcheck="false"
                               autocomplete="off" autocapitalize="off"
-                              placeholder="Get-Service Spooler"></textarea>
-                    <button id="terminal-run" type="button" class="btn btn--primary">Run</button>
+                              placeholder="{{ t('machine.terminal.script_placeholder') }}"></textarea>
+                    <button id="terminal-run" type="button" class="btn btn--primary">{{ t('machine.terminal.run') }}</button>
                 </div>
             </div>
             <div id="terminal-hint" class="terminal__hint"></div>
@@ -239,75 +243,76 @@
     <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote" hidden>
         <div class="card remote-card" id="remote-card">
             <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">Remote view</div>
-                <span class="status-pill status-pill--muted" id="remote-status"><span class="status-pill__dot"></span>Idle</span>
+                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.remote.title') }}</div>
+                <span class="status-pill status-pill--muted" id="remote-status"><span class="status-pill__dot"></span>{{ t('machine.remote.idle') }}</span>
                 <span class="status-pill status-pill--warn remote-badge" id="remote-desktop-badge" hidden>
-                    <span class="status-pill__dot"></span>Secure desktop</span>
+                    <span class="status-pill__dot"></span>{{ t('machine.remote.secure_desktop') }}</span>
                 <span class="status-pill status-pill--danger remote-badge" id="remote-headless-badge" hidden>
-                    <span class="status-pill__dot"></span>No display outputs</span>
+                    <span class="status-pill__dot"></span>{{ t('machine.remote.no_display') }}</span>
                 <div class="terminal__head-actions">
                     <button id="remote-cad" type="button" class="btn btn--ghost" disabled
-                            title="Send Ctrl+Alt+Del to the remote machine">Ctrl+Alt+Del</button>
-                    <button id="remote-start" type="button" class="btn btn--primary">Start</button>
-                    <button id="remote-stop" type="button" class="btn btn--ghost" disabled>Stop</button>
+                            title="{{ t('machine.remote.cad_title') }}">{{ t('machine.remote.cad') }}</button>
+                    <button id="remote-start" type="button" class="btn btn--primary">{{ t('machine.remote.start') }}</button>
+                    <button id="remote-stop" type="button" class="btn btn--ghost" disabled>{{ t('machine.remote.stop') }}</button>
                 </div>
             </div>
 
             <div class="remote-toolbar" id="remote-toolbar-start">
                 <label class="remote-field">
-                    <span class="remote-field__label">Session</span>
+                    <span class="remote-field__label">{{ t('machine.remote.session') }}</span>
                     <select id="remote-session" class="remote-field__control">
-                        <option value="auto">Auto (agent picks)</option>
+                        <option value="auto">{{ t('machine.remote.session_auto') }}</option>
                     </select>
                 </label>
                 <button id="remote-refresh-sessions" type="button" class="btn btn--ghost"
-                        title="Ask the machine to re-report its logon sessions and displays">Refresh</button>
+                        title="{{ t('machine.remote.refresh_title') }}">{{ t('machine.remote.refresh') }}</button>
                 <label class="remote-field">
-                    <span class="remote-field__label">Codec</span>
+                    <span class="remote-field__label">{{ t('machine.remote.codec') }}</span>
+                    {# H.264 is a standard's name, not prose, so it has no catalog entry. #}
                     <select id="remote-codec" class="remote-field__control">
                         <option value="h264">H.264</option>
-                        <option value="vp8">VP8 (compatibility)</option>
+                        <option value="vp8">{{ t('machine.remote.codec_vp8') }}</option>
                     </select>
                 </label>
                 <label class="remote-field">
-                    <span class="remote-field__label">Encoder</span>
+                    <span class="remote-field__label">{{ t('machine.remote.encoder') }}</span>
                     <select id="remote-encoder" class="remote-field__control">
-                        <option value="auto">Auto</option>
-                        <option value="hardware">Hardware</option>
-                        <option value="software">Software</option>
+                        <option value="auto">{{ t('machine.remote.encoder_auto') }}</option>
+                        <option value="hardware">{{ t('machine.remote.encoder_hardware') }}</option>
+                        <option value="software">{{ t('machine.remote.encoder_software') }}</option>
                     </select>
                 </label>
-                <span class="remote-field__note">Chosen before connecting</span>
+                <span class="remote-field__note">{{ t('machine.remote.before_connecting') }}</span>
             </div>
 
             <div class="remote-toolbar" id="remote-toolbar-live">
                 <label class="remote-field">
-                    <span class="remote-field__label">Monitor</span>
+                    <span class="remote-field__label">{{ t('machine.remote.monitor') }}</span>
                     <select id="remote-monitor" class="remote-field__control">
                         <option value="0">1</option>
                     </select>
                 </label>
                 <label class="remote-field">
-                    <span class="remote-field__label">Quality</span>
+                    <span class="remote-field__label">{{ t('machine.remote.quality') }}</span>
                     <select id="remote-preset" class="remote-field__control">
-                        <option value="quality">Quality</option>
-                        <option value="balanced" selected>Balanced</option>
-                        <option value="speed">Speed</option>
-                        <option value="custom">Custom…</option>
+                        <option value="quality">{{ t('machine.remote.preset_quality') }}</option>
+                        <option value="balanced" selected>{{ t('machine.remote.preset_balanced') }}</option>
+                        <option value="speed">{{ t('machine.remote.preset_speed') }}</option>
+                        <option value="custom">{{ t('machine.remote.preset_custom') }}</option>
                     </select>
                 </label>
                 <label class="remote-field remote-field--custom" hidden>
-                    <span class="remote-field__label">FPS</span>
+                    <span class="remote-field__label">{{ t('machine.remote.fps') }}</span>
                     <input id="remote-fps" class="remote-field__control remote-field__control--num"
                            type="number" min="1" max="60" value="15">
                 </label>
                 <label class="remote-field remote-field--custom" hidden>
-                    <span class="remote-field__label">kbps</span>
+                    <span class="remote-field__label">{{ t('machine.remote.kbps') }}</span>
                     <input id="remote-bitrate" class="remote-field__control remote-field__control--num"
                            type="number" min="100" max="50000" step="100" value="4000">
                 </label>
                 <label class="remote-field remote-field--custom" hidden>
-                    <span class="remote-field__label">Scale</span>
+                    <span class="remote-field__label">{{ t('machine.remote.scale') }}</span>
                     <select id="remote-scale" class="remote-field__control">
                         <option value="100">100%</option>
                         <option value="75">75%</option>
@@ -317,10 +322,10 @@
                 </label>
                 <label class="remote-toggle">
                     <input type="checkbox" id="remote-viewonly">
-                    <span>View only</span>
+                    <span>{{ t('machine.remote.view_only') }}</span>
                 </label>
                 <button id="remote-fullscreen" type="button" class="btn btn--ghost"
-                        title="Fullscreen (Esc to exit)">Fullscreen</button>
+                        title="{{ t('machine.remote.fullscreen_title') }}">{{ t('machine.remote.fullscreen') }}</button>
             </div>
 
             {# The video is wrapped so fullscreen can take the stage AND its overlay toolbar,
@@ -331,8 +336,8 @@
                    click coordinates against the rendered content box, not the element box. #}
                 <video id="remote-video" class="remote-stage__video" playsinline autoplay muted></video>
                 <div class="remote-stage__overlay" id="remote-overlay" hidden>
-                    <span class="remote-stage__badge" id="remote-overlay-status">Live</span>
-                    <button type="button" class="btn btn--ghost" id="remote-exit-fullscreen">Exit fullscreen</button>
+                    <span class="remote-stage__badge" id="remote-overlay-status">{{ t('machine.remote.live') }}</span>
+                    <button type="button" class="btn btn--ghost" id="remote-exit-fullscreen">{{ t('machine.remote.exit_fullscreen') }}</button>
                 </div>
             </div>
             <div id="remote-hint" class="terminal__hint"></div>
@@ -341,8 +346,8 @@
             <div class="remote-vdd" id="remote-vdd" hidden>
                 <div class="remote-vdd__text" id="remote-vdd-text"></div>
                 <div class="remote-vdd__actions">
-                    <button id="remote-vdd-install" type="button" class="btn btn--primary">Install virtual display</button>
-                    <button id="remote-vdd-uninstall" type="button" class="btn btn--ghost" hidden>Remove virtual display</button>
+                    <button id="remote-vdd-install" type="button" class="btn btn--primary">{{ t('machine.remote.vdd_install') }}</button>
+                    <button id="remote-vdd-uninstall" type="button" class="btn btn--ghost" hidden>{{ t('machine.remote.vdd_remove') }}</button>
                 </div>
             </div>
         </div>
@@ -354,8 +359,8 @@
    the top layer regardless of where it sits in the DOM. #}
 <dialog class="modal" id="favorites-dialog" aria-labelledby="favorites-title">
     <div class="modal__head">
-        <div class="modal__title" id="favorites-title">Favorites</div>
-        <button type="button" id="favorites-close" class="btn btn--icon" aria-label="Close">&times;</button>
+        <div class="modal__title" id="favorites-title">{{ t('machine.favorites.title') }}</div>
+        <button type="button" id="favorites-close" class="btn btn--icon" aria-label="{{ t('machine.favorites.close') }}">&times;</button>
     </div>
     <div class="modal__body" id="favorites-body"></div>
     <div class="modal__foot" id="favorites-foot"></div>

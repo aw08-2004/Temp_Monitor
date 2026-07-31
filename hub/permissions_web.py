@@ -24,6 +24,7 @@ import functools
 
 from flask import Blueprint, g, jsonify, render_template, request, session
 
+import i18n
 import permissions
 import users
 
@@ -256,12 +257,22 @@ def create_permissions_blueprint(db_path, login_required, access):
     @manage
     def permissions_capabilities():
         """The capability vocabulary, so the admin form renders itself from the
-        server's list rather than a hardcoded copy in JS that can drift."""
+        server's list rather than a hardcoded copy in JS that can drift.
+
+        Labels are resolved here, in the caller's language, rather than in the browser:
+        the key is built from the capability name, and a key assembled in JS is invisible
+        to the literal-key scan in tests/test_i18n.py -- so a capability added without
+        catalog entries would render its own key on the page with nothing to catch it.
+        Resolved server-side, the same omission fails a test instead.
+        """
+        lang = i18n.current()
         return jsonify({
             "capabilities": [
                 {"name": name,
-                 "label": permissions.CAPABILITY_LABELS[name][0],
-                 "description": permissions.CAPABILITY_LABELS[name][1]}
+                 "label": i18n.translate(f"{permissions.CAPABILITY_TEXT_KEY}.{name}.label",
+                                         lang),
+                 "description": i18n.translate(
+                     f"{permissions.CAPABILITY_TEXT_KEY}.{name}.description", lang)}
                 for name in permissions.CAPABILITIES
             ],
             "scope_modes": list(permissions.SCOPE_MODES),

@@ -71,9 +71,8 @@ function renderGroups(groups) {
     groupsHost.replaceChildren();
     if (!groups.length) {
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, 'No permission groups yet.'));
-        empty.appendChild(el('p', 'stat-card__meta',
-            'Until you create one, only the break-glass addresses above can sign in.'));
+        empty.appendChild(el('p', null, t('permissions.empty')));
+        empty.appendChild(el('p', 'stat-card__meta', t('permissions.empty_hint')));
         groupsHost.appendChild(empty);
         return;
     }
@@ -82,7 +81,8 @@ function renderGroups(groups) {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Group', 'Capabilities', 'Machines', 'Members', ''].forEach((label) => {
+    [t('permissions.col.group'), t('permissions.col.capabilities'),
+     t('permissions.col.machines'), t('permissions.col.members'), ''].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -107,7 +107,7 @@ function renderGroupRow(group) {
 
     const capsCell = el('td');
     if (!group.capabilities.length) {
-        capsCell.appendChild(el('span', 'stat-card__meta', 'None'));
+        capsCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
     }
     group.capabilities.forEach((name) => {
         // The one capability worth calling out visually: it lets its holder grant
@@ -121,9 +121,10 @@ function renderGroupRow(group) {
 
     const machinesCell = el('td');
     if (group.scope_mode === 'all') {
-        machinesCell.appendChild(el('span', 'cap-badge cap-badge--admin', 'Every machine'));
+        machinesCell.appendChild(
+            el('span', 'cap-badge cap-badge--admin', t('permissions.every_machine')));
     } else if (!group.machines.length) {
-        machinesCell.appendChild(el('span', 'stat-card__meta', 'None'));
+        machinesCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
     } else {
         machinesCell.appendChild(el('span', null, String(group.machines.length)));
         machinesCell.appendChild(el('div', 'stat-card__meta', group.machines.join(', ')));
@@ -134,14 +135,15 @@ function renderGroupRow(group) {
         // its own when someone re-files a PC in AD.
         const ous = group.ous || [];
         machinesCell.appendChild(el('div', 'stat-card__meta',
-            ous.length ? `from AD OU: ${ous.join(', ')}` : 'from AD OU: none selected'));
+            ous.length ? t('permissions.from_ou', { ous: ous.join(', ') })
+                       : t('permissions.from_ou_empty')));
     }
     tr.appendChild(machinesCell);
 
     const membersCell = el('td');
     const dirGroups = group.directory_groups || [];
     if (!group.members.length && !dirGroups.length) {
-        membersCell.appendChild(el('span', 'stat-card__meta', 'None'));
+        membersCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
     }
     if (group.members.length) {
         membersCell.appendChild(el('div', 'stat-card__meta', group.members.join(', ')));
@@ -151,17 +153,17 @@ function renderGroupRow(group) {
         // membership is a directory mapping would otherwise read as "nobody has this"
         // when it may in fact be the widest grant on the page.
         membersCell.appendChild(el('div', 'stat-card__meta',
-            `${dirGroups.length} directory group${dirGroups.length === 1 ? '' : 's'}: `
-            + dirGroups.join(', ')));
+            tPlural('permissions.directory_group_list', dirGroups.length,
+                    { groups: dirGroups.join(', ') })));
     }
     tr.appendChild(membersCell);
 
     const actions = el('td');
     const wrap = el('div', 'perm-row-actions');
-    const edit = el('button', 'btn', 'Edit');
+    const edit = el('button', 'btn', t('common.edit'));
     edit.type = 'button';
     edit.addEventListener('click', () => openEditor(group));
-    const remove = el('button', 'btn', 'Delete');
+    const remove = el('button', 'btn', t('common.delete'));
     remove.type = 'button';
     remove.addEventListener('click', () => deleteGroup(group, remove));
     wrap.append(edit, remove);
@@ -172,14 +174,17 @@ function renderGroupRow(group) {
 }
 
 async function deleteGroup(group, btn) {
+    // Two whole sentences rather than one built from clauses: which counts the warning
+    // has to name depends on whether the group grants access through a directory mapping
+    // as well as by name, and a sentence spliced together around that reads as English
+    // word order in every other language.
     const dirCount = (group.directory_groups || []).length;
-    const who = dirCount
-        ? `${group.members.length} member(s) and anyone in ${dirCount} mapped directory `
-          + 'group(s) lose'
-        : `${group.members.length} member(s) lose`;
-    const warning = `Delete the permission group "${group.name}"?\n\n`
-        + `${who} the access it granted. `
-        + 'Anyone left with no groups at all can no longer sign in.';
+    const warning = dirCount
+        ? tPlural('permissions.confirm_delete_directory', dirCount, {
+            group: group.name,
+            members: tPlural('permissions.member_count', group.members.length),
+          })
+        : tPlural('permissions.confirm_delete', group.members.length, { group: group.name });
     if (!window.confirm(warning)) return;
     btn.disabled = true;
     try {
@@ -188,7 +193,7 @@ async function deleteGroup(group, btn) {
         await loadGroups();
     } catch (e) {
         btn.disabled = false;
-        window.alert(`Could not delete "${group.name}": ${e.message}`);
+        window.alert(t('permissions.delete_failed', { group: group.name, error: e.message }));
     }
 }
 
@@ -198,7 +203,7 @@ async function loadGroups() {
     } catch (e) {
         groupsHost.replaceChildren();
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, `Could not load permission groups: ${e.message}`));
+        empty.appendChild(el('p', null, t('permissions.load_failed', { error: e.message })));
         groupsHost.appendChild(empty);
     }
 }
@@ -212,7 +217,7 @@ function renderChips(host, values, onRemove) {
         chip.appendChild(el('span', 'chip__name', value));
         const x = el('button', 'chip__remove', '×');
         x.type = 'button';
-        x.setAttribute('aria-label', `Remove ${value}`);
+        x.setAttribute('aria-label', t('permissions.editor.remove', { value }));
         x.addEventListener('click', () => onRemove(value));
         chip.appendChild(x);
         host.appendChild(chip);
@@ -250,20 +255,18 @@ function renderOuResolved(group) {
     ouResolvedEl.replaceChildren();
     if (scopeMode() !== 'ad_ou') return;
     if (!draftOus.length) {
-        ouResolvedEl.appendChild(el('span', null,
-            'No OUs selected — this group currently grants access to no machines.'));
+        ouResolvedEl.appendChild(el('span', null, t('permissions.editor.ou_none_selected')));
         return;
     }
     const machines = (group && group.machines) || [];
     if (!machines.length) {
-        ouResolvedEl.appendChild(el('span', null,
-            'No machines are in these OUs yet. If Active Directory sync has not run '
-            + 'since these PCs enrolled, they will appear after the next sync.'));
+        ouResolvedEl.appendChild(el('span', null, t('permissions.editor.ou_no_machines')));
         return;
     }
     ouResolvedEl.appendChild(el('span', null,
-        `${machines.length} machine${machines.length === 1 ? '' : 's'} in scope: `
-        + machines.slice(0, 12).join(', ') + (machines.length > 12 ? '…' : '')));
+        tPlural('permissions.editor.ou_in_scope', machines.length, {
+            machines: machines.slice(0, 12).join(', ') + (machines.length > 12 ? '…' : ''),
+        })));
 }
 
 function renderDirGroupChips() {
@@ -282,12 +285,12 @@ function renderDirGroupChips() {
 function renderDirGroupHint() {
     dirGroupSelfEl.replaceChildren();
     if (!myDirGroups.length) return;
-    dirGroupSelfEl.appendChild(el('span', null, 'Your own sign-in carried: '));
+    dirGroupSelfEl.appendChild(el('span', null, t('permissions.editor.directory_self') + ' '));
     myDirGroups.forEach((token, i) => {
         if (i) dirGroupSelfEl.appendChild(el('span', null, ', '));
         const btn = el('button', 'dirgroup-token', token);
         btn.type = 'button';
-        btn.title = 'Add this directory group to this permission group';
+        btn.title = t('permissions.editor.directory_add_token');
         btn.addEventListener('click', () => {
             addValue(draftDirGroups, token, renderDirGroupChips);
         });
@@ -331,7 +334,9 @@ function syncScopeMode() {
 
 function openEditor(group) {
     editingId = group ? group.id : null;
-    modalTitle.textContent = group ? `Edit ${group.name}` : 'New permission group';
+    modalTitle.textContent = group
+        ? t('permissions.editor.edit_title', { group: group.name })
+        : t('permissions.editor.new_title');
     nameInput.value = group ? group.name : '';
     descriptionInput.value = (group && group.description) || '';
     draftMachines = group ? group.machines.slice() : [];
@@ -355,7 +360,7 @@ function openEditor(group) {
     groupSaving = false;
     groupPending = false;
     if (groupDebounce) { clearTimeout(groupDebounce); groupDebounce = null; }
-    setGroupStatus(group ? '' : 'Enter a name to create this group.', '');
+    setGroupStatus(group ? '' : t('permissions.editor.name_required'), '');
     modal.showModal();
     nameInput.focus();
 }
@@ -399,7 +404,7 @@ async function flushGroup() {
     // call it. Editing an existing group with the name cleared is a real (rejected) edit,
     // so only short-circuit while still creating.
     if (!editingId && !name) {
-        setGroupStatus('Enter a name to create this group.', '');
+        setGroupStatus(t('permissions.editor.name_required'), '');
         return;
     }
     const payload = {
@@ -420,7 +425,7 @@ async function flushGroup() {
     groupSaving = true;
     groupPending = false;
     errorEl.textContent = '';
-    setGroupStatus('Saving…', '');
+    setGroupStatus(t('common.saving'), '');
     try {
         let group;
         if (editingId) {
@@ -438,9 +443,9 @@ async function flushGroup() {
             // From here on this is an existing group: hold its id and update in place, so a
             // second change doesn't create a duplicate.
             editingId = group.id;
-            modalTitle.textContent = `Edit ${group.name}`;
+            modalTitle.textContent = t('permissions.editor.edit_title', { group: group.name });
         }
-        setGroupStatus('Saved', 'autosave--saved');
+        setGroupStatus(t('common.saved'), 'autosave--saved');
         // The saved group carries its freshly re-derived machine list, so an OU edit
         // shows its effect immediately rather than at the next time the editor is opened.
         renderOuResolved(group);
@@ -483,9 +488,9 @@ function machineSublabel(row) {
     // Show whichever identifiers the row has, so a search hit on serial/asset/service is
     // visible in the suggestion rather than looking like a bare name match.
     return [
-        row.asset_tag && `Asset ${row.asset_tag}`,
-        row.serial_number && `Serial ${row.serial_number}`,
-        row.service_tag && `Service ${row.service_tag}`,
+        row.asset_tag && t('permissions.editor.asset', { value: row.asset_tag }),
+        row.serial_number && t('permissions.editor.serial', { value: row.serial_number }),
+        row.service_tag && t('permissions.editor.service', { value: row.service_tag }),
     ].filter(Boolean).join('  ·  ');
 }
 
@@ -502,7 +507,7 @@ function machineMatches(query) {
 function attachPickers() {
     attachAutocomplete(machineInput, {
         minChars: 0,
-        emptyText: 'No matching machines — press Add to scope one that has not enrolled yet.',
+        emptyText: t('permissions.editor.machine_empty'),
         source: (query) => machineMatches(query),
         onSelect: (item) => {
             addValue(draftMachines, item.value, renderMachineChips);
@@ -512,7 +517,7 @@ function attachPickers() {
     });
     attachAutocomplete(memberInput, {
         minChars: 1,
-        emptyText: 'No matching users — press Add to invite this email.',
+        emptyText: t('permissions.editor.member_empty'),
         source: async (query) => {
             const body = await api(`/api/permissions/directory?q=${encodeURIComponent(query)}`);
             return (body.users || []).map((u) => ({
@@ -532,7 +537,7 @@ function attachPickers() {
     // still works, so an OU that has no machines in it yet can be scoped ahead of time.
     attachAutocomplete(ouInput, {
         minChars: 0,
-        emptyText: 'No matching OUs — press Add to use exactly what you typed.',
+        emptyText: t('permissions.editor.ou_empty'),
         source: (query) => {
             const q = query.toLowerCase();
             return fleetOus
@@ -608,7 +613,7 @@ async function init() {
         const doc = await api('/api/permissions/capabilities');
         capabilities = doc.capabilities || [];
     } catch (e) {
-        errorEl.textContent = `Could not load capabilities: ${e.message}`;
+        errorEl.textContent = t('permissions.capabilities_load_failed', { error: e.message });
     }
     // Suggestions only -- a hostname that hasn't reported yet can still be typed in,
     // so a machine can be scoped before it enrolls. /api/machines is itself scope

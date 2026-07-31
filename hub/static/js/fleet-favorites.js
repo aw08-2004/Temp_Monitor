@@ -47,7 +47,8 @@
     /** One-line summary of what a favorite actually does, for the list. */
     function preview(favorite) {
         if (favorite.command_type === 'run_script') {
-            return (favorite.params.script || '').replace(/\s+/g, ' ').trim() || '(empty script)';
+            return (favorite.params.script || '').replace(/\s+/g, ' ').trim()
+                   || t('machine.favorites.empty_script');
         }
         const params = JSON.stringify(favorite.params || {});
         return params === '{}' ? favorite.command_type : `${favorite.command_type} ${params}`;
@@ -76,7 +77,9 @@
             const sharedBadge = document.createElement('span');
             sharedBadge.className = 'badge';
             // Who shared it matters when it's about to run as SYSTEM on your machine.
-            sharedBadge.textContent = favorite.owned ? 'shared by you' : `shared by ${favorite.owner_email}`;
+            sharedBadge.textContent = favorite.owned
+                ? t('machine.favorites.shared_by_you')
+                : t('machine.favorites.shared_by', { who: favorite.owner_email });
             name.appendChild(sharedBadge);
         }
         main.appendChild(name);
@@ -90,16 +93,18 @@
 
         const actions = document.createElement('div');
         actions.className = 'favorites__row-actions';
-        actions.appendChild(button('Use', 'primary', () => {
+        actions.appendChild(button(t('machine.favorites.use'), 'primary', () => {
             dialog.close();
             if (onPick) onPick(favorite);
         }));
         // Sharing grants read, not write -- the hub enforces this too (403), this just
         // avoids offering a button that would fail.
         if (favorite.owned) {
-            actions.appendChild(button('Edit', 'ghost', () => renderForm(favorite)));
-            actions.appendChild(button('Delete', 'ghost', async () => {
-                if (!window.confirm(`Delete favorite "${favorite.name}"?`)) return;
+            actions.appendChild(button(t('common.edit'), 'ghost',
+                                       () => renderForm(favorite)));
+            actions.appendChild(button(t('common.delete'), 'ghost', async () => {
+                if (!window.confirm(t('machine.favorites.confirm_delete',
+                                      { name: favorite.name }))) return;
                 try {
                     await FleetApi.favorites.remove(favorite.id);
                     await renderList();
@@ -117,17 +122,18 @@
         group.className = 'favorites__group';
         const heading = document.createElement('div');
         heading.className = 'favorites__group-title';
-        heading.textContent = `${title} (${favorites.length})`;
+        heading.textContent = t('machine.favorites.group',
+                                { title, count: favorites.length });
         group.appendChild(heading);
         for (const favorite of favorites) group.appendChild(renderRow(favorite));
         return group;
     }
 
     async function renderList() {
-        reset('Favorites');
+        reset(t('machine.favorites.title'));
         const loading = document.createElement('div');
         loading.className = 'stat-card__meta';
-        loading.textContent = 'Loading…';
+        loading.textContent = t('common.loading');
         bodyEl.appendChild(loading);
 
         let favorites;
@@ -135,7 +141,7 @@
             favorites = await FleetApi.favorites.list();
         } catch (e) {
             bodyEl.textContent = '';
-            showError(`Could not load favorites: ${e.message}`);
+            showError(t('machine.favorites.load_failed', { error: e.message }));
             return;
         }
 
@@ -143,32 +149,36 @@
         if (!favorites.length) {
             const empty = document.createElement('div');
             empty.className = 'empty-state';
-            empty.textContent = 'No favorites yet. Run something in the terminal, then ' +
-                                'use "Save as favorite".';
+            empty.textContent = t('machine.favorites.empty');
             bodyEl.appendChild(empty);
         } else {
             const mine = favorites.filter((f) => f.owned);
             const team = favorites.filter((f) => !f.owned);
-            if (mine.length) bodyEl.appendChild(renderGroup('Mine', mine));
-            if (team.length) bodyEl.appendChild(renderGroup('Shared with me', team));
+            if (mine.length) {
+                bodyEl.appendChild(renderGroup(t('machine.favorites.mine'), mine));
+            }
+            if (team.length) {
+                bodyEl.appendChild(renderGroup(t('machine.favorites.shared_with_me'), team));
+            }
         }
-        footEl.appendChild(button('Close', 'ghost', () => dialog.close()));
+        footEl.appendChild(button(t('common.close'), 'ghost', () => dialog.close()));
     }
 
     // ---------------- Create / edit ----------------
     function renderForm(existing) {
-        reset(existing ? 'Edit favorite' : 'Save as favorite');
+        reset(existing ? t('machine.favorites.edit_title')
+                       : t('machine.favorites.save_title'));
 
         const nameField = document.createElement('label');
         nameField.className = 'favorites__field';
         const nameLabel = document.createElement('span');
         nameLabel.className = 'favorites__field-label';
-        nameLabel.textContent = 'Name';
+        nameLabel.textContent = t('machine.favorites.name');
         const nameInput = document.createElement('input');
         nameInput.className = 'input';
         nameInput.type = 'text';
         nameInput.value = existing ? existing.name : '';
-        nameInput.placeholder = 'Fix printer spooler';
+        nameInput.placeholder = t('machine.favorites.name_placeholder');
         nameField.append(nameLabel, nameInput);
         bodyEl.appendChild(nameField);
 
@@ -181,7 +191,7 @@
             scriptField.className = 'favorites__field';
             const scriptLabel = document.createElement('span');
             scriptLabel.className = 'favorites__field-label';
-            scriptLabel.textContent = 'Script';
+            scriptLabel.textContent = t('machine.favorites.script');
             scriptInput = document.createElement('textarea');
             scriptInput.className = 'input';
             scriptInput.spellcheck = false;
@@ -197,7 +207,7 @@
         sharedInput.className = 'checkbox';
         sharedInput.checked = existing ? existing.shared : false;
         const sharedLabel = document.createElement('span');
-        sharedLabel.textContent = 'Share with the team (they can run it, only you can edit it)';
+        sharedLabel.textContent = t('machine.favorites.share');
         sharedField.append(sharedInput, sharedLabel);
         bodyEl.appendChild(sharedField);
 
@@ -213,7 +223,7 @@
 
         const status = document.createElement('span');
         status.className = 'autosave';
-        if (!current) status.textContent = 'Enter a name to save this favorite.';
+        if (!current) status.textContent = t('machine.favorites.name_required');
 
         function setStatus(text, cls) {
             status.textContent = text;
@@ -231,7 +241,7 @@
         async function flush() {
             const name = nameInput.value.trim();
             if (!current && !name) {
-                setStatus('Enter a name to save this favorite.', '');
+                setStatus(t('machine.favorites.name_required'), '');
                 return;
             }
             const payload = {
@@ -242,16 +252,16 @@
             };
             favSaving = true;
             favPending = false;
-            setStatus('Saving…', '');
+            setStatus(t('common.saving'), '');
             try {
                 if (current) {
                     await FleetApi.favorites.update(current.id, payload);
                 } else {
                     const created = await FleetApi.favorites.create(payload);
                     current = { id: created.favorite_id };
-                    titleEl.textContent = 'Edit favorite';
+                    titleEl.textContent = t('machine.favorites.edit_title');
                 }
-                setStatus('Saved', 'autosave--saved');
+                setStatus(t('common.saved'), 'autosave--saved');
             } catch (e) {
                 setStatus(e.message, 'autosave--error');   // duplicate name, blank name, bad type
             } finally {
@@ -266,7 +276,8 @@
 
         // "Done" just returns to the list -- the favorite is already saved. The dialog's
         // own header close button (favorites-close) still dismisses the whole thing.
-        footEl.append(status, button('Done', 'ghost', () => renderList()));
+        footEl.append(status, button(t('machine.favorites.done'), 'ghost',
+                                    () => renderList()));
         nameInput.focus();
     }
 

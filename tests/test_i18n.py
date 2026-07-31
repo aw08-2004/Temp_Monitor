@@ -146,6 +146,84 @@ def test_keys_used_in_the_app_exist():
     check(f"every literal t() key exists in en.json ({sorted(unknown)[:5]})", not unknown)
 
 
+def test_server_supplied_ui_text_is_in_the_catalog():
+    """Every capability has a label and a description in en.json.
+
+    This is the other half of the key scan above, for text no scan can see: the group
+    editor's capability list is served by GET /api/permissions/capabilities, which builds
+    its key from the capability NAME. A computed key is invisible to a regex, so a
+    capability added to permissions.CAPABILITIES without catalog entries would reach the
+    admin UI showing `permissions.capability.foo.label` as its own name -- on the one page
+    where the text says what an operator is about to grant. Checked against en.json
+    specifically, because that file is the schema; the other catalogs are covered by key
+    parity above.
+    """
+    import permissions
+    import settings as settings_module
+
+    english = set(_raw("en"))
+    missing = []
+    for name in permissions.CAPABILITIES:
+        for part in ("label", "description"):
+            key = f"{permissions.CAPABILITY_TEXT_KEY}.{name}.{part}"
+            if key not in english:
+                missing.append(key)
+    check(f"every capability has catalog text ({missing[:5]})", not missing)
+
+    # Same argument, and the larger surface: settings.schema() builds every one of these
+    # keys from the setting key. A label is required; help and placeholder are optional
+    # by design (a boolean whose label says it all needs no help), and settings.py returns
+    # "" rather than the key for those -- so only the label is asserted.
+    missing = [f"{settings_module.FIELD_TEXT_KEY}.{s.key}.label"
+               for s in settings_module.REGISTRY
+               if f"{settings_module.FIELD_TEXT_KEY}.{s.key}.label" not in english]
+    check(f"every setting has a catalog label ({missing[:5]})", not missing)
+
+    # A unit is a SLUG resolved through settings.unit.*, not the symbol itself. Getting
+    # this wrong prints "must be at least 60 settings.unit.secnods" into a range message.
+    missing = sorted({f"{settings_module.UNIT_TEXT_KEY}.{s.unit}"
+                      for s in settings_module.REGISTRY if s.unit}
+                     - english)
+    check(f"every unit slug resolves ({missing[:5]})", not missing)
+
+    missing = [f"{settings_module.SECTION_TEXT_KEY}.{name}"
+               for name in settings_module.SECTIONS
+               if f"{settings_module.SECTION_TEXT_KEY}.{name}" not in english]
+    check(f"every settings section has a label ({missing[:5]})", not missing)
+
+    # Only the enums whose vocabulary is FIXED in code. A data-driven enum (a backup
+    # destination id) is shown verbatim by choice_label(), deliberately.
+    fixed_enums = [s for s in settings_module.REGISTRY
+                   if s.type == "enum" and isinstance(s.choices, (list, tuple))]
+    missing = [f"{settings_module.CHOICE_TEXT_KEY}.{s.key}.{c}"
+               for s in fixed_enums for c in s.choices
+               if f"{settings_module.CHOICE_TEXT_KEY}.{s.key}.{c}" not in english]
+    check(f"every fixed enum choice has a label ({missing[:5]})", not missing)
+
+    # The package form's detection vocabulary, served the same way by packages_web.
+    import packages as packages_module
+
+    missing = [f"{packages_module.DETECTION_TEXT_KEY}.{kind}.{part}"
+               for kind in packages_module.DETECTION_KINDS for part in ("label", "description")
+               if f"{packages_module.DETECTION_TEXT_KEY}.{kind}.{part}" not in english]
+    check(f"every detection kind has catalog text ({missing[:5]})", not missing)
+
+    # Backup destination kinds and the path-token reference, same discipline again.
+    import backups as backups_module
+    import backup_paths
+
+    missing = [f"{backups_module.KIND_TEXT_KEY}.{kind}.{part}"
+               for kind in backups_module.DESTINATION_KINDS
+               for part in ("label", "description")
+               if f"{backups_module.KIND_TEXT_KEY}.{kind}.{part}" not in english]
+    check(f"every destination kind has catalog text ({missing[:5]})", not missing)
+
+    missing = [f"{backup_paths.TOKEN_HELP_KEY}.{slug}"
+               for _token, slug in backup_paths.TOKEN_REFERENCE
+               if f"{backup_paths.TOKEN_HELP_KEY}.{slug}" not in english]
+    check(f"every path token has catalog help ({missing[:5]})", not missing)
+
+
 # ============================== lookup ==============================
 
 def test_lookup_and_interpolation():
@@ -233,15 +311,44 @@ def test_resolve_precedence():
 
 
 def test_settings_choices_match_the_shipped_catalogs():
-    """hub.default_language's enum must offer exactly the languages that have catalogs --
-    an option with no locale file would be selectable and then silently render English."""
+    """hub.default_language must offer AUTO plus exactly the languages that have catalogs
+    -- an option with no locale file would be selectable and then silently render English.
+
+    It must also DEFAULT to AUTO. A concrete default is indistinguishable from an admin
+    choosing that language, which is what made resolve()'s Accept-Language branch
+    unreachable: every untouched hub looked like one where English had been chosen on
+    purpose, so a German browser got an English console.
+    """
     import settings as settings_module
     setting = next(s for s in settings_module.REGISTRY
                    if s.key == "hub.default_language")
-    check("setting choices == LANGUAGE_CODES",
-          tuple(setting.choices) == i18n.LANGUAGE_CODES)
-    check("setting default is the fallback language",
-          setting.default == i18n.DEFAULT_LANGUAGE)
+    check("setting choices == AUTO + LANGUAGE_CODES",
+          tuple(setting.choices) == (i18n.AUTO,) + i18n.LANGUAGE_CODES)
+    check("setting defaults to AUTO, not a language",
+          setting.default == i18n.AUTO)
+    check("AUTO is not itself a supported language",
+          not i18n.is_supported(i18n.AUTO))
+
+
+def test_browser_language_is_reachable():
+    """The regression this shipped for: an untouched hub follows the browser.
+
+    Written as the whole chain rather than as a unit on resolve(), because the bug was
+    never in resolve() -- it was that the value it received could not express "unset".
+    """
+    import settings as settings_module
+    setting = next(s for s in settings_module.REGISTRY
+                   if s.key == "hub.default_language")
+    check("untouched hub + German browser -> German",
+          i18n.resolve(None, setting.default, "de-DE,de;q=0.9") == "de")
+    check("untouched hub + unsupported browser -> English",
+          i18n.resolve(None, setting.default, "fr-FR") == "en")
+    check("an admin's fleet choice still outranks the browser",
+          i18n.resolve(None, "es", "de-DE") == "es")
+    check("a personal choice still outranks both",
+          i18n.resolve("de", "es", "fr") == "de")
+    check("clearing a personal choice falls back to the browser",
+          i18n.resolve(None, i18n.AUTO, "es-MX") == "es")
 
 
 if __name__ == "__main__":
@@ -250,6 +357,7 @@ if __name__ == "__main__":
     test_placeholder_parity()
     test_catalogs_are_plain_text()
     test_keys_used_in_the_app_exist()
+    test_server_supplied_ui_text_is_in_the_catalog()
     test_lookup_and_interpolation()
     test_missing_key_returns_the_key()
     test_missing_translation_falls_back_to_english()
@@ -259,5 +367,6 @@ if __name__ == "__main__":
     test_negotiate()
     test_resolve_precedence()
     test_settings_choices_match_the_shipped_catalogs()
+    test_browser_language_is_reachable()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

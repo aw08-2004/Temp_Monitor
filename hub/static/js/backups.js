@@ -141,32 +141,27 @@ function renderKeyBanner() {
 
     if (key.crypto_available === false) {
         modifier = 'bk-banner--danger';
-        title = 'Encryption library missing';
-        text = 'The cryptography package is not installed, so backups cannot be encrypted '
-             + 'or restored. Run: pip install -r requirements.txt, then restart the hub.';
+        title = t('backups.key.missing_library_title');
+        text = t('backups.key.missing_library_text');
     } else if (!key.configured) {
-        title = 'No encryption key yet';
-        text = 'Backups are encrypted on this server before upload. Create the key to get '
-             + 'started — you will be shown it once, and you must store it somewhere other '
-             + 'than this machine.';
-        const create = el('button', 'btn btn--primary', 'Create encryption key');
+        title = t('backups.key.none_title');
+        text = t('backups.key.none_text');
+        const create = el('button', 'btn btn--primary', t('backups.key.create'));
         create.addEventListener('click', createKey);
         actions.push(create);
     } else if (!key.escrowed_at) {
         modifier = 'bk-banner--danger';
-        title = 'The encryption key has never been stored anywhere else';
-        text = 'If this server is lost, every backup it has taken becomes permanently '
-             + 'unreadable. Reveal the key, store it in a password manager or a sealed '
-             + 'envelope, and confirm.';
-        const reveal = el('button', 'btn btn--primary', 'Reveal key');
+        title = t('backups.key.unescrowed_title');
+        text = t('backups.key.unescrowed_text');
+        const reveal = el('button', 'btn btn--primary', t('backups.key.reveal'));
         reveal.addEventListener('click', revealKey);
         actions.push(reveal);
     } else {
         modifier = '';
-        title = 'Encryption key configured';
-        text = `Key ${key.key_id} — confirmed stored offline on ${fmtTime(key.escrowed_at)}. `
-             + 'Restore with restore_backup.py, which needs only this key and the backup file.';
-        const reveal = el('button', 'btn', 'Reveal key');
+        title = t('backups.key.ok_title');
+        text = t('backups.key.ok_text',
+                 { id: key.key_id, when: fmtTime(key.escrowed_at) });
+        const reveal = el('button', 'btn', t('backups.key.reveal'));
         reveal.addEventListener('click', revealKey);
         actions.push(reveal);
     }
@@ -213,12 +208,12 @@ function showKey(key) {
 document.getElementById('key-copy').addEventListener('click', async () => {
     try {
         await navigator.clipboard.writeText(keyValue.textContent);
-        keyError.textContent = 'Copied. Paste it somewhere durable before closing this.';
+        keyError.textContent = t('backups.key.copied');
     } catch (e) {
         // Clipboard access is refused outside a secure context, and a hub reached over
         // plain http on a lab network is exactly that. Selecting the text is the fallback,
         // and .bk-key is user-select: all so one click takes the whole key.
-        keyError.textContent = 'Could not copy automatically — click the key to select it.';
+        keyError.textContent = t('backups.key.copy_failed');
     }
 });
 
@@ -248,11 +243,10 @@ function renderHubPane() {
 function renderScheduleCard() {
     const schedule = state.schedule || {};
     const card = el('div', 'card');
-    card.appendChild(el('h2', 'section-title', 'Schedule'));
+    card.appendChild(el('h2', 'section-title', t('backups.schedule.title')));
 
     if (!state.destinations.length) {
-        card.appendChild(el('p', 'stat-card__meta',
-            'Add a destination first — there is nowhere to put a backup yet.'));
+        card.appendChild(el('p', 'stat-card__meta', t('backups.schedule.no_destination')));
         return card;
     }
 
@@ -266,27 +260,27 @@ function renderScheduleCard() {
     enabled.checked = !!schedule.enabled;
     enabled.addEventListener('change', saveSchedule);
     enabledLabel.appendChild(enabled);
-    enabledLabel.appendChild(document.createTextNode(' Back up automatically'));
+    enabledLabel.appendChild(document.createTextNode(' ' + t('backups.schedule.enabled')));
     enabledWrap.appendChild(enabledLabel);
     // next_due_at is 0 for "never run, so due immediately" — a falsy number that would
     // otherwise render as the "it's off" message on a schedule that is very much on.
     let dueText;
     if (!schedule.enabled) {
-        dueText = 'Nothing is uploaded while this is off.';
+        dueText = t('backups.schedule.off');
     } else if (!schedule.next_due_at || schedule.next_due_at * 1000 <= Date.now()) {
-        dueText = 'Due now — the next scheduler pass will take it.';
+        dueText = t('backups.schedule.due_now');
     } else {
-        dueText = `Next due ${fmtTime(schedule.next_due_at)}.`;
+        dueText = t('backups.schedule.next_due', { when: fmtTime(schedule.next_due_at) });
     }
     enabledWrap.appendChild(el('p', 'setting__default', dueText));
     grid.appendChild(enabledWrap);
 
     const destWrap = el('div');
-    destWrap.appendChild(el('label', 'setting__label', 'Destination'));
+    destWrap.appendChild(el('label', 'setting__label', t('backups.schedule.destination')));
     const select = el('select', 'input');
     select.id = 'schedule-destination';
     select.style.width = '100%';
-    const blank = el('option', null, 'Choose a destination…');
+    const blank = el('option', null, t('backups.schedule.choose_destination'));
     blank.value = '';
     select.appendChild(blank);
     state.destinations.forEach((d) => {
@@ -299,15 +293,13 @@ function renderScheduleCard() {
     destWrap.appendChild(select);
     grid.appendChild(destWrap);
 
-    grid.appendChild(numberField('schedule-interval', 'Back up every (hours)',
+    grid.appendChild(numberField('schedule-interval', t('backups.schedule.interval'),
                                  schedule.interval_hours, 1, 720, saveSchedule));
-    grid.appendChild(numberField('schedule-keep', 'Keep this many backups',
+    grid.appendChild(numberField('schedule-keep', t('backups.schedule.keep'),
                                  schedule.keep_generations, 1, 365, saveSchedule));
     card.appendChild(grid);
 
-    card.appendChild(el('p', 'setting__default',
-        'Older backups beyond that count are deleted from the destination after each '
-        + 'successful upload.'));
+    card.appendChild(el('p', 'setting__default', t('backups.schedule.rotation_note')));
 
     // No Save button -- the checkbox, destination and numbers above save themselves. This
     // span is the feedback.
@@ -334,7 +326,7 @@ function setScheduleStatus(text, cls) {
 
 async function saveSchedule() {
     const seq = ++scheduleSaveSeq;
-    setScheduleStatus('Saving…', '');
+    setScheduleStatus(t('common.saving'), '');
     try {
         const result = await api('/api/backups/schedule', json('PUT', {
             'backup.hub_enabled': document.getElementById('schedule-enabled').checked,
@@ -344,7 +336,7 @@ async function saveSchedule() {
         }));
         if (seq !== scheduleSaveSeq) return;
         state.schedule = result.schedule;
-        scheduleStatus = { text: 'Saved', cls: 'autosave--saved' };
+        scheduleStatus = { text: t('common.saved'), cls: 'autosave--saved' };
         render();
     } catch (e) {
         if (seq !== scheduleSaveSeq) return;
@@ -374,13 +366,12 @@ function numberField(id, label, value, min, max, onCommit) {
 function renderRunsCard() {
     const card = el('div', 'card');
     card.style.marginTop = 'var(--space-5)';
-    card.appendChild(el('h2', 'section-title', 'Recent backups'));
+    card.appendChild(el('h2', 'section-title', t('backups.runs.title')));
 
     if (!state.runs.length) {
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, 'No backups have run yet.'));
-        empty.appendChild(el('p', 'stat-card__meta',
-            'Press "Back up now" to take one immediately, or turn the schedule on.'));
+        empty.appendChild(el('p', null, t('backups.runs.empty')));
+        empty.appendChild(el('p', 'stat-card__meta', t('backups.runs.empty_hint')));
         card.appendChild(empty);
         return card;
     }
@@ -388,7 +379,9 @@ function renderRunsCard() {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Started', 'Status', 'Destination', 'Size', 'Took', 'Trigger'].forEach((label) => {
+    [t('backups.runs.col.started'), t('backups.runs.col.status'),
+     t('backups.runs.col.destination'), t('backups.runs.col.size'),
+     t('backups.runs.col.took'), t('backups.runs.col.trigger')].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -401,13 +394,38 @@ function renderRunsCard() {
     return card;
 }
 
+// Run status and trigger are wire values, so they need display names. Literal keys per
+// value rather than a computed one -- only literals are visible to the key scan in
+// tests/test_i18n.py, and an unknown value showing itself beats showing a key.
+const RUN_STATUS_LABELS = {
+    running: () => t('backups.status.running'),
+    succeeded: () => t('backups.status.succeeded'),
+    failed: () => t('backups.status.failed'),
+    cancelled: () => t('backups.status.cancelled'),
+};
+
+function runStatusLabel(status) {
+    const get = RUN_STATUS_LABELS[status];
+    return get ? get() : String(status || '');
+}
+
+const TRIGGER_LABELS = {
+    schedule: () => t('backups.trigger.schedule'),
+    manual: () => t('backups.trigger.manual'),
+};
+
+function triggerLabel(trigger) {
+    const get = TRIGGER_LABELS[trigger];
+    return get ? get() : String(trigger || '');
+}
+
 function renderRunRow(run) {
     const row = el('tr');
     row.appendChild(el('td', null, fmtTime(run.started_at)));
 
     const statusCell = el('td');
     statusCell.appendChild(el('span', `bk-dot bk-dot--${run.status}`));
-    statusCell.appendChild(document.createTextNode(run.status));
+    statusCell.appendChild(document.createTextNode(runStatusLabel(run.status)));
     if (run.status === 'failed' && run.error) {
         // The provider's own words, not a paraphrase: "SignatureDoesNotMatch" is the
         // whole diagnosis, and rewording it into "upload failed" throws that away.
@@ -417,17 +435,18 @@ function renderRunRow(run) {
     }
     row.appendChild(statusCell);
 
-    row.appendChild(el('td', null, run.destination_name || '(deleted destination)'));
+    row.appendChild(el('td', null,
+        run.destination_name || t('backups.runs.deleted_destination')));
 
     const sizeCell = el('td', null, fmtBytes(run.stored_bytes));
     if (run.source_bytes && run.stored_bytes) {
         sizeCell.appendChild(el('div', 'setting__default',
-            `from ${fmtBytes(run.source_bytes)}`));
+            t('backups.runs.from_size', { size: fmtBytes(run.source_bytes) })));
     }
     row.appendChild(sizeCell);
 
     row.appendChild(el('td', null, fmtDuration(run.started_at, run.finished_at)));
-    row.appendChild(el('td', null, run.trigger));
+    row.appendChild(el('td', null, triggerLabel(run.trigger)));
     return row;
 }
 
@@ -435,7 +454,7 @@ document.getElementById('run-now').addEventListener('click', async () => {
     const destination = (state.schedule && state.schedule.destination_id)
         || (state.destinations[0] && state.destinations[0].id);
     if (!destination) {
-        alert('Add a destination first.');
+        alert(t('backups.runs.add_destination_first'));
         return;
     }
     try {
@@ -469,11 +488,8 @@ function renderSettingsPane() {
 
     // ---- policy card ----
     const policy = el('div', 'card');
-    policy.appendChild(el('h2', 'section-title', 'What gets backed up on managed PCs'));
-    policy.appendChild(el('p', 'stat-card__meta',
-        'Applies to every machine unless that machine overrides it on its own Backup tab. '
-        + 'Paths are expanded on each PC, so one pattern covers everyone — including '
-        + 'people who sign in for the first time next week.'));
+    policy.appendChild(el('h2', 'section-title', t('backups.files.title')));
+    policy.appendChild(el('p', 'stat-card__meta', t('backups.files.intro')));
 
     const grid = el('div', 'bk-schedule-grid');
 
@@ -485,31 +501,30 @@ function renderSettingsPane() {
     enabled.checked = !!files.enabled;
     enabled.addEventListener('change', saveFileSettings);
     enabledLabel.appendChild(enabled);
-    enabledLabel.appendChild(document.createTextNode(' Back up files on managed PCs'));
+    enabledLabel.appendChild(document.createTextNode(' ' + t('backups.files.enabled')));
     enabledWrap.appendChild(enabledLabel);
     enabledWrap.appendChild(el('p', 'setting__default',
-        files.enabled ? 'Machines are backed up on the schedule below.'
-                      : 'Nothing on any PC is backed up while this is off.'));
+        files.enabled ? t('backups.files.on_note') : t('backups.files.off_note')));
     grid.appendChild(enabledWrap);
 
     const destWrap = el('div');
-    destWrap.appendChild(el('label', 'setting__label', 'Destination'));
+    destWrap.appendChild(el('label', 'setting__label', t('backups.schedule.destination')));
     const filesDest = destinationSelect('files-destination', files.destination_id);
     filesDest.addEventListener('change', saveFileSettings);
     destWrap.appendChild(filesDest);
     grid.appendChild(destWrap);
 
-    grid.appendChild(numberField('files-interval', 'Back up every (hours)',
+    grid.appendChild(numberField('files-interval', t('backups.files.interval'),
                                  files.interval_hours, 1, 720, saveFileSettings));
-    grid.appendChild(numberField('files-full-every', 'Full backup every (runs)',
+    grid.appendChild(numberField('files-full-every', t('backups.files.full_every'),
                                  files.full_every, 1, 90, saveFileSettings));
-    grid.appendChild(numberField('files-keep-chains', 'Keep this many chains',
+    grid.appendChild(numberField('files-keep-chains', t('backups.files.keep_chains'),
                                  files.keep_chains, 1, 52, saveFileSettings));
-    grid.appendChild(numberField('files-max-file', 'Skip files bigger than (MB)',
+    grid.appendChild(numberField('files-max-file', t('backups.files.max_file'),
                                  files.max_file_mb, 1, 102400, saveFileSettings));
-    grid.appendChild(numberField('files-max-set', 'Abort a run bigger than (GB)',
+    grid.appendChild(numberField('files-max-set', t('backups.files.max_set'),
                                  files.max_set_gb, 1, 10240, saveFileSettings));
-    grid.appendChild(numberField('files-max-concurrent', 'Back up at most (PCs at once)',
+    grid.appendChild(numberField('files-max-concurrent', t('backups.files.max_concurrent'),
                                  files.max_concurrent, 0, 100, saveFileSettings));
 
     const vssWrap = el('div');
@@ -520,10 +535,9 @@ function renderSettingsPane() {
     vss.checked = files.use_vss !== false;
     vss.addEventListener('change', saveFileSettings);
     vssLabel.appendChild(vss);
-    vssLabel.appendChild(document.createTextNode(' Use a shadow copy (VSS)'));
+    vssLabel.appendChild(document.createTextNode(' ' + t('backups.files.vss')));
     vssWrap.appendChild(vssLabel);
-    vssWrap.appendChild(el('p', 'setting__default',
-        'Captures files that are open, like an Outlook PST.'));
+    vssWrap.appendChild(el('p', 'setting__default', t('backups.files.vss_note')));
     grid.appendChild(vssWrap);
 
     policy.appendChild(grid);
@@ -532,18 +546,13 @@ function renderSettingsPane() {
     // ---- path editors ----
     const paths = el('div', 'card');
     paths.style.marginTop = 'var(--space-5)';
-    paths.appendChild(el('h2', 'section-title', 'Paths'));
+    paths.appendChild(el('h2', 'section-title', t('backups.files.paths')));
     paths.appendChild(pathEditor(
-        'Include', 'include', draftInclude,
-        'A folder to back up. Use %Users% (or %User%) to cover every profile, or %Desktop% to follow '
-        + 'each user’s real Desktop even when OneDrive has redirected it.',
-        'e.g. %Desktop% or %User%\\Scripts'));
+        t('backups.files.include'), 'include', draftInclude,
+        t('backups.files.include_help'), t('backups.files.include_placeholder')));
     paths.appendChild(pathEditor(
-        'Never back up', 'exclude', draftExclude,
-        'Matched against the whole path, case-insensitively. A pattern with no backslash '
-        + 'matches on filename anywhere; ** crosses folders. Excluding a folder also '
-        + 'excludes everything inside it.',
-        'e.g. *.tmp or **\\node_modules\\**'));
+        t('backups.files.exclude'), 'exclude', draftExclude,
+        t('backups.files.exclude_help'), t('backups.files.exclude_placeholder')));
     paths.appendChild(tokenReference());
     settingsPane.appendChild(paths);
 
@@ -574,7 +583,7 @@ function destinationSelect(id, selected) {
     const select = el('select', 'input');
     select.id = id;
     select.style.width = '100%';
-    const blank = el('option', null, 'Choose a destination…');
+    const blank = el('option', null, t('backups.schedule.choose_destination'));
     blank.value = '';
     select.appendChild(blank);
     state.destinations.forEach((d) => {
@@ -601,7 +610,7 @@ function pathEditor(title, kind, values, help, placeholder) {
         const remove = el('button', 'chip__remove');
         remove.type = 'button';
         remove.textContent = '×';
-        remove.setAttribute('aria-label', `Remove ${value}`);
+        remove.setAttribute('aria-label', t('backups.files.remove', { value }));
         remove.addEventListener('click', () => {
             values.splice(index, 1);
             draftDirty = true;
@@ -620,7 +629,7 @@ function pathEditor(title, kind, values, help, placeholder) {
     input.placeholder = placeholder;
     input.autocomplete = 'off';
     input.spellcheck = false;
-    const add = el('button', 'btn', 'Add');
+    const add = el('button', 'btn', t('backups.files.add'));
     const commit = () => {
         const value = input.value.trim();
         if (!value) return;
@@ -643,7 +652,7 @@ function pathEditor(title, kind, values, help, placeholder) {
 
 function tokenReference() {
     const wrap = el('details', 'bk-tokens');
-    const summary = el('summary', null, 'Available tokens');
+    const summary = el('summary', null, t('backups.files.tokens'));
     wrap.appendChild(summary);
     const table = el('table', 'data-table');
     const body = el('tbody');
@@ -669,15 +678,13 @@ let fleetRunError = '';
 function renderRunFleetCard() {
     const card = el('div', 'card');
     card.style.marginTop = 'var(--space-5)';
-    card.appendChild(el('h2', 'section-title', 'Back up now'));
-    card.appendChild(el('p', 'stat-card__meta',
-        'Asks every PC you can see to back up, without waiting for its next scheduled '
-        + 'run. Machines that are switched off are not skipped — each one backs up the '
-        + 'moment it comes online again.'));
+    card.appendChild(el('h2', 'section-title', t('backups.fleet_run.title')));
+    card.appendChild(el('p', 'stat-card__meta', t('backups.fleet_run.intro')));
 
     const actions = el('div', 'card-actions');
     const run = el('button', 'btn btn--primary',
-                   fleetRunBusy ? 'Working…' : 'Back up all PCs now');
+                   fleetRunBusy ? t('backups.fleet_run.working')
+                                : t('backups.fleet_run.run_all'));
     run.id = 'files-run-fleet';
     run.disabled = fleetRunBusy;
     run.addEventListener('click', runFleetBackup);
@@ -687,7 +694,8 @@ function renderRunFleetCard() {
     // live per-machine state on this page, and a cancel with nothing to stop is a
     // harmless no-op that says so. The counterpart to "Back up all PCs now".
     const cancel = el('button', 'btn btn--danger',
-                      fleetRunBusy ? 'Working…' : 'Cancel all backups');
+                      fleetRunBusy ? t('backups.fleet_run.working')
+                                   : t('backups.fleet_run.cancel_all'));
     cancel.id = 'files-cancel-fleet';
     cancel.disabled = fleetRunBusy;
     cancel.addEventListener('click', cancelFleetBackup);
@@ -710,18 +718,22 @@ async function cancelFleetBackup() {
     try {
         const result = await api('/api/backups/files/cancel', json('POST', {}));
         const parts = [];
-        if (result.requests_cleared) parts.push(`${result.requests_cleared} queued dropped`);
+        if (result.requests_cleared) {
+            parts.push(t('backups.fleet_run.queued_dropped',
+                         { count: result.requests_cleared }));
+        }
         if (result.stopped_before_start) {
-            parts.push(`${result.stopped_before_start} stopped before starting`);
+            parts.push(t('backups.fleet_run.stopped_before_start',
+                         { count: result.stopped_before_start }));
         }
         // Named separately because these are the ones cancel cannot fully stop: the PC
         // is already uploading and will finish, with its result discarded.
         if (result.stopped_in_flight) {
-            parts.push(`${result.stopped_in_flight} already uploading (will finish, `
-                       + `then be discarded)`);
+            parts.push(t('backups.fleet_run.stopped_in_flight',
+                         { count: result.stopped_in_flight }));
         }
         fleetRunMessage = parts.length ? parts.join(', ') + '.'
-                                       : 'Nothing was running to cancel.';
+                                       : t('backups.fleet_run.nothing_to_cancel');
     } catch (e) {
         fleetRunError = e.message;
     } finally {
@@ -742,15 +754,17 @@ async function runFleetBackup() {
         // success while nothing had actually started, and "skipped" is the number that
         // tells an operator their policy excludes machines they thought it covered.
         const parts = [];
-        if (result.started) parts.push(`${result.started} started`);
+        if (result.started) {
+            parts.push(t('backups.fleet_run.started', { count: result.started }));
+        }
         if (result.queued) {
-            parts.push(`${result.queued} queued (offline or waiting for a free slot)`);
+            parts.push(t('backups.fleet_run.queued', { count: result.queued }));
         }
         if (result.skipped) {
-            parts.push(`${result.skipped} skipped (backups off, or nothing selected)`);
+            parts.push(t('backups.fleet_run.skipped', { count: result.skipped }));
         }
         fleetRunMessage = parts.length ? parts.join(', ') + '.'
-                                       : 'No machines are set up to back up yet.';
+                                       : t('backups.fleet_run.none_configured');
     } catch (e) {
         fleetRunError = e.message;
     } finally {
@@ -774,7 +788,7 @@ function setFilesStatus(text, cls) {
 
 async function saveFileSettings() {
     const seq = ++filesSaveSeq;
-    setFilesStatus('Saving…', '');
+    setFilesStatus(t('common.saving'), '');
     try {
         const result = await api('/api/backups/schedule', json('PUT', {
             'backup.files_enabled': document.getElementById('files-enabled').checked,
@@ -798,7 +812,7 @@ async function saveFileSettings() {
         draftInclude = (result.files.include || []).slice();
         draftExclude = (result.files.exclude || []).slice();
         draftDirty = false;
-        filesStatus = { text: 'Saved', cls: 'autosave--saved' };
+        filesStatus = { text: t('common.saved'), cls: 'autosave--saved' };
         renderSettingsPane();
         refreshPreview();
     } catch (e) {
@@ -812,16 +826,13 @@ async function saveFileSettings() {
 function renderPreviewCard() {
     const card = el('div', 'card');
     card.style.marginTop = 'var(--space-5)';
-    card.appendChild(el('h2', 'section-title', 'Preview'));
-    card.appendChild(el('p', 'stat-card__meta',
-        'What these patterns resolve to on a real machine, using the profiles its agent '
-        + 'last reported. This is the only way to see that a folder is redirected into '
-        + 'OneDrive before a restore comes up empty.'));
+    card.appendChild(el('h2', 'section-title', t('backups.preview.title')));
+    card.appendChild(el('p', 'stat-card__meta', t('backups.preview.intro')));
 
     const picker = el('div', 'chip-add');
     const input = el('input', 'input');
     input.id = 'preview-machine';
-    input.placeholder = 'Machine name';
+    input.placeholder = t('backups.preview.machine_placeholder');
     input.setAttribute('list', 'preview-machine-options');
     input.autocomplete = 'off';
     input.value = previewMachine;
@@ -869,15 +880,12 @@ function refreshPreview() {
 function renderPreview(body, result) {
     body.replaceChildren();
     if (!previewMachine) {
-        body.appendChild(el('p', 'setting__default',
-            'Choose a machine to see what these patterns actually cover on it.'));
+        body.appendChild(el('p', 'setting__default', t('backups.preview.choose_machine')));
         return;
     }
     if (!result.has_profiles) {
         body.appendChild(el('p', 'setting__default',
-            `${previewMachine} has not reported its user profiles yet — its agent sends `
-            + 'them on the next heartbeat after an upgrade. Until then these patterns '
-            + 'cannot be resolved here; they will still expand correctly on the machine.'));
+            t('backups.preview.no_profiles', { machine: previewMachine })));
         return;
     }
 
@@ -886,22 +894,23 @@ function renderPreview(body, result) {
         const table = el('table', 'data-table');
         const head = el('thead');
         const headRow = el('tr');
-        ['Folder', 'User', 'From'].forEach((label) => headRow.appendChild(el('th', null, label)));
+        [t('backups.preview.col.folder'), t('backups.preview.col.user'),
+         t('backups.preview.col.from')].forEach(
+            (label) => headRow.appendChild(el('th', null, label)));
         head.appendChild(headRow);
         table.appendChild(head);
         const tbody = el('tbody');
         preview.roots.forEach((root) => {
             const row = el('tr');
             row.appendChild(el('td', null, root.path));
-            row.appendChild(el('td', null, root.user || '—'));
+            row.appendChild(el('td', null, root.user || t('backups.preview.no_user')));
             row.appendChild(el('td', null, root.pattern));
             tbody.appendChild(row);
         });
         table.appendChild(tbody);
         body.appendChild(table);
     } else {
-        body.appendChild(el('p', 'setting__default',
-            'These patterns cover nothing on this machine.'));
+        body.appendChild(el('p', 'setting__default', t('backups.preview.covers_nothing')));
     }
 
     (preview.problems || []).forEach((problem) => {
@@ -914,10 +923,10 @@ function renderPreview(body, result) {
 function renderExceptionsCard() {
     const card = el('div', 'card');
     card.style.marginTop = 'var(--space-5)';
-    card.appendChild(el('h2', 'section-title', 'Machines with their own settings'));
+    card.appendChild(el('h2', 'section-title', t('backups.exceptions.title')));
     const body = el('div');
     body.id = 'exceptions-body';
-    body.appendChild(el('p', 'setting__default', 'Loading…'));
+    body.appendChild(el('p', 'setting__default', t('common.loading')));
     card.appendChild(body);
     loadExceptions();
     return card;
@@ -934,14 +943,14 @@ async function loadExceptions() {
     if (!body) return;
     body.replaceChildren();
     if (!result.machines.length) {
-        body.appendChild(el('p', 'setting__default',
-            'Every machine follows the settings above. Override one from its own Backup tab.'));
+        body.appendChild(el('p', 'setting__default', t('backups.exceptions.none')));
         return;
     }
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Machine', 'Backups', 'Destination', 'Extra paths'].forEach(
+    [t('backups.exceptions.col.machine'), t('backups.exceptions.col.backups'),
+     t('backups.exceptions.col.destination'), t('backups.exceptions.col.extra')].forEach(
         (label) => headRow.appendChild(el('th', null, label)));
     head.appendChild(headRow);
     table.appendChild(head);
@@ -953,13 +962,16 @@ async function loadExceptions() {
         link.href = `/machine/${encodeURIComponent(m.machine)}#backup`;
         nameCell.appendChild(link);
         row.appendChild(nameCell);
-        row.appendChild(el('td', null,
-            m.overridden.enabled ? (m.enabled ? 'on (override)' : 'OFF (override)')
-                                 : (m.enabled ? 'on' : 'off')));
+        row.appendChild(el('td', null, m.overridden.enabled
+            ? (m.enabled ? t('backups.exceptions.on_override')
+                         : t('backups.exceptions.off_override'))
+            : (m.enabled ? t('backups.exceptions.on') : t('backups.exceptions.off'))));
         row.appendChild(el('td', null, m.overridden.destination_id
-            ? destinationName(m.destination_id) : 'fleet default'));
+            ? destinationName(m.destination_id)
+            : t('backups.exceptions.fleet_default')));
         const extra = (m.extra_include || []).concat(m.extra_exclude || []);
-        row.appendChild(el('td', null, extra.length ? extra.join(', ') : '—'));
+        row.appendChild(el('td', null,
+            extra.length ? extra.join(', ') : t('backups.exceptions.none_extra')));
         tbody.appendChild(row);
     });
     table.appendChild(tbody);
@@ -968,7 +980,7 @@ async function loadExceptions() {
 
 function destinationName(id) {
     const found = state.destinations.find((d) => d.id === id);
-    return found ? found.name : '(deleted destination)';
+    return found ? found.name : t('backups.runs.deleted_destination');
 }
 
 // Populated from /api/machines, which is already scope-filtered — the same source the
@@ -992,17 +1004,15 @@ function renderDestinations() {
     const bar = el('div', 'toolbar');
     bar.style.justifyContent = 'flex-end';
     bar.style.marginBottom = 'var(--space-4)';
-    const add = el('button', 'btn btn--primary', 'New destination');
+    const add = el('button', 'btn btn--primary', t('backups.destinations.new'));
     add.addEventListener('click', () => openDestination(null));
     bar.appendChild(add);
     destinationsPane.appendChild(bar);
 
     if (!state.destinations.length) {
         const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, 'No destinations configured.'));
-        empty.appendChild(el('p', 'stat-card__meta',
-            'A destination is an S3-compatible bucket or a WebDAV share. Credentials are '
-            + 'encrypted on this server and never shown again.'));
+        empty.appendChild(el('p', null, t('backups.destinations.empty')));
+        empty.appendChild(el('p', 'stat-card__meta', t('backups.destinations.empty_hint')));
         destinationsPane.appendChild(empty);
         return;
     }
@@ -1011,7 +1021,9 @@ function renderDestinations() {
     const table = el('table', 'data-table');
     const head = el('thead');
     const headRow = el('tr');
-    ['Destination', 'Kind', 'Where', 'Credentials', ''].forEach((label) => {
+    [t('backups.destinations.col.destination'), t('backups.destinations.col.kind'),
+     t('backups.destinations.col.where'), t('backups.destinations.col.credentials'),
+     ''].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
@@ -1039,21 +1051,22 @@ function renderDestinationRow(dest) {
     const nameCell = el('td');
     nameCell.appendChild(el('div', null, dest.name));
     if (state.schedule && state.schedule.destination_id === dest.id) {
-        nameCell.appendChild(el('div', 'setting__default', 'scheduled backups go here'));
+        nameCell.appendChild(el('div', 'setting__default',
+            t('backups.destinations.scheduled_here')));
     }
     row.appendChild(nameCell);
     row.appendChild(el('td', null, dest.kind));
     row.appendChild(el('td', null, whereSummary(dest)));
-    row.appendChild(el('td', null, dest.has_credentials ? 'stored' : 'MISSING'));
+    row.appendChild(el('td', null, dest.has_credentials
+        ? t('backups.destinations.stored') : t('backups.destinations.missing')));
 
     const actions = el('td');
-    const edit = el('button', 'btn', 'Edit');
+    const edit = el('button', 'btn', t('common.edit'));
     edit.addEventListener('click', () => openDestination(dest));
-    const remove = el('button', 'btn', 'Delete');
+    const remove = el('button', 'btn', t('common.delete'));
     remove.style.marginLeft = 'var(--space-2)';
     remove.addEventListener('click', async () => {
-        if (!confirm(`Delete destination "${dest.name}"? Backups already uploaded to it `
-                     + 'are NOT deleted, but the hub will no longer be able to reach them.')) return;
+        if (!confirm(t('backups.destinations.confirm_delete', { name: dest.name }))) return;
         try {
             await api(`/api/backups/destinations/${dest.id}`, json('DELETE'));
             await load();
@@ -1097,11 +1110,15 @@ function syncKindPanes() {
     document.getElementById('dest-s3').hidden = draftKind !== 's3';
     document.getElementById('dest-webdav').hidden = draftKind !== 'webdav';
     const isS3 = draftKind === 's3';
-    document.getElementById('dest-user-label').textContent = isS3 ? 'Access key id' : 'Username';
-    document.getElementById('dest-secret-label').textContent = isS3 ? 'Secret access key' : 'Password';
+    document.getElementById('dest-user-label').textContent = isS3
+        ? t('backups.destinations.editor.access_key_id')
+        : t('backups.destinations.editor.username');
+    document.getElementById('dest-secret-label').textContent = isS3
+        ? t('backups.destinations.editor.secret_access_key')
+        : t('backups.destinations.editor.password');
     document.getElementById('dest-secret-help').textContent = editingDestinationId
-        ? 'Leave both blank to keep the stored credentials unchanged.'
-        : 'Stored encrypted on this server with the backup master key. Never shown again.';
+        ? t('backups.destinations.editor.keep_credentials')
+        : t('backups.destinations.editor.new_credentials');
 }
 
 function openDestination(dest) {
@@ -1111,8 +1128,9 @@ function openDestination(dest) {
     destinationStatus.textContent = '';
 
     const config = (dest && dest.config) || {};
-    document.getElementById('destination-modal-title').textContent =
-        dest ? `Edit ${dest.name}` : 'New destination';
+    document.getElementById('destination-modal-title').textContent = dest
+        ? t('backups.destinations.editor.edit_title', { name: dest.name })
+        : t('backups.destinations.editor.new_title');
     document.getElementById('dest-name').value = dest ? dest.name : '';
     document.getElementById('dest-endpoint').value = config.endpoint || '';
     document.getElementById('dest-region').value = config.region || '';
@@ -1173,7 +1191,7 @@ document.getElementById('destination-save').addEventListener('click', async () =
 
 document.getElementById('destination-test').addEventListener('click', async () => {
     destinationError.textContent = '';
-    destinationStatus.textContent = 'Testing…';
+    destinationStatus.textContent = t('backups.destinations.editor.testing');
     try {
         const result = await api(
             `/api/backups/destinations/${editingDestinationId}/test`, json('POST'));
@@ -1193,7 +1211,7 @@ load().catch((e) => {
     keyBanner.replaceChildren();
     const banner = el('div', 'bk-banner bk-banner--danger');
     const body = el('div', 'bk-banner__body');
-    body.appendChild(el('div', 'bk-banner__title', 'Could not load backup configuration'));
+    body.appendChild(el('div', 'bk-banner__title', t('backups.load_failed')));
     body.appendChild(el('div', 'bk-banner__text', e.message));
     banner.appendChild(body);
     keyBanner.appendChild(banner);

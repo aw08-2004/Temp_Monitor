@@ -47,10 +47,13 @@ def main():
         superusers = {"root@x.com"}
 
         print("\n== The capability registry is self-consistent ==")
-        # permissions_web.permissions_capabilities indexes CAPABILITY_LABELS by name, so a
-        # capability added without a label is a 500 on the group editor, not a missing row.
-        check("every capability has a label",
-              set(permissions.CAPABILITY_LABELS) == set(permissions.CAPABILITIES))
+        # The label and description each capability is shown with live in the translation
+        # catalogs now, so "every capability has a label" is a catalog-coverage question
+        # and is asserted in tests/test_i18n.py, against en.json. What is still worth
+        # pinning here is that the vocabulary has no duplicates -- CAPABILITIES is a
+        # tuple, and a name repeated in it would render the checkbox twice.
+        check("the capability vocabulary has no duplicates",
+              len(set(permissions.CAPABILITIES)) == len(permissions.CAPABILITIES))
 
         print("\n== Break-glass ==")
         p = permissions.effective_permissions(db_path, "root@x.com", superusers)

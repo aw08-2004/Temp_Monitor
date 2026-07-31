@@ -14,7 +14,10 @@
 
     async function getJson(url) {
         const response = await fetch(url);
-        if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+        if (!response.ok) {
+            throw new Error(t('common.request_failed',
+                              { url, status: response.status }));
+        }
         return response.json();
     }
 
@@ -27,7 +30,12 @@
         if (body !== undefined) init.body = JSON.stringify(body);
         const response = await fetch(url, init);
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || `Hub returned ${response.status}.`);
+        // The hub's own `error` wins when it sent one -- it names the actual problem,
+        // and it was already built in the caller's language server-side.
+        if (!response.ok) {
+            throw new Error(data.error
+                            || t('common.hub_error', { status: response.status }));
+        }
         return data;
     }
 

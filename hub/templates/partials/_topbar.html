@@ -28,12 +28,18 @@
            the theme toggle. Options are ENDONYMS -- someone hunting for their own language
            is looking for "Deutsch", not for "German" spelled in a language they can't read.
            Rendered only with a session because there is nowhere to persist a choice
-           without one; the login page follows Accept-Language instead. #}
+           without one; the login page follows Accept-Language instead.
+
+           Selected against `chosen_language`, NOT `current_language`: the latter is the
+           language that won, which for someone who has picked nothing is whatever their
+           browser asked for. Pre-selecting that would claim a choice they never made and
+           leave no way back to following the browser. #}
         <label class="topbar__language">
             <span class="sr-only">{{ t('topbar.language') }}</span>
             <select id="language-picker" class="input" aria-label="{{ t('topbar.language') }}">
+                <option value="{{ auto_language }}" {{ 'selected' if chosen_language == auto_language else '' }}>{{ t('topbar.language_auto') }}</option>
                 {% for code, name in languages %}
-                <option value="{{ code }}" {{ 'selected' if code == current_language else '' }}>{{ name }}</option>
+                <option value="{{ code }}" {{ 'selected' if code == chosen_language else '' }}>{{ name }}</option>
                 {% endfor %}
             </select>
         </label>
