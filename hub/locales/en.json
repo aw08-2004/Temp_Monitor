@@ -1520,6 +1520,8 @@
       "unknown_help": "This machine has not reported its firmware settings yet. It needs an agent that supports firmware inventory; one will arrive on its next check-in after the agent updates.",
       "unsupported_help": "This machine has no manageable firmware interface. Virtual machines and self-built PCs report this, and it is the expected, permanent answer for them rather than a fault.",
       "error_unknown": "The machine has a firmware interface but reading it failed, and it did not say why.",
+      "_error_from_machine": "Explains why an error can appear in a language the console is not set to. The message is Windows' own text on the reporting machine, so it arrives in that machine's language; translating it would mean inventing words the machine never said.",
+      "error_from_machine": "This message comes from Windows on that machine, so it appears in that machine's language rather than yours.",
       "password_set": "A BIOS setup password is set on this machine. Changing a setting will need that password.",
       "no_matches": "No settings match your search.",
       "read_only": "read-only",

@@ -1420,6 +1420,7 @@
       "unknown_help": "Este equipo aún no ha reportado sus ajustes de firmware. Necesita un agente compatible con el inventario de firmware; llegará en su próxima conexión tras la actualización del agente.",
       "unsupported_help": "Este equipo no tiene una interfaz de firmware administrable. Las máquinas virtuales y los PC de montaje propio reportan esto, y para ellos es la respuesta esperada y permanente, no un fallo.",
       "error_unknown": "El equipo tiene una interfaz de firmware pero su lectura falló, y no indicó el motivo.",
+      "error_from_machine": "Este mensaje procede de Windows en ese equipo, por lo que aparece en el idioma de ese equipo y no en el suyo.",
       "password_set": "Este equipo tiene una contraseña de configuración del BIOS. Cambiar un ajuste requerirá esa contraseña.",
       "no_matches": "Ningún ajuste coincide con tu búsqueda.",
       "read_only": "solo lectura",

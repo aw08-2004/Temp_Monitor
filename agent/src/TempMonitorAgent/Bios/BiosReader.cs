@@ -60,7 +60,7 @@ public static class BiosReader
         }
         catch (Exception e)
         {
-            return BiosReport.Failed(source.Vendor, source.Namespace, e.Message, biosVersion);
+            return BiosReport.Failed(source.Vendor, source.Namespace, Describe(e), biosVersion);
         }
 
         if (result.Settings.Count == 0)
@@ -78,11 +78,17 @@ public static class BiosReader
 
     /// <summary>The real WMI adapter. Distinguishes a missing namespace (unsupported) from
     /// every other failure (an error), which is the whole reason this is not just a lambda
-    /// over ManagementObjectSearcher at the call site.</summary>
-    public static IEnumerable<IReadOnlyDictionary<string, object?>> Query(
+    /// over ManagementObjectSearcher at the call site.
+    ///
+    /// **Materialised, not an iterator, on purpose.** A WMI query does not run at
+    /// <c>searcher.Get()</c> -- that hands back a collection which executes on first MoveNext.
+    /// A missing class therefore throws while the CALLER enumerates, and in an iterator method
+    /// that is outside any try/catch this method could write. The list is small (a few hundred
+    /// rows), and reading it eagerly is what makes "this model has no DCIM_BIOSInteger"
+    /// catchable at all.</summary>
+    public static IReadOnlyList<IReadOnlyDictionary<string, object?>> Query(
         string namespacePath, string wql)
     {
-        ManagementObjectCollection collection;
         var scope = new ManagementScope(namespacePath);
         try
         {
@@ -97,22 +103,11 @@ public static class BiosReader
             throw new BiosInterfaceMissingException($"{namespacePath} has no BIOS classes");
         }
 
-        using var searcher = new ManagementObjectSearcher(scope, new ObjectQuery(wql));
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
         try
         {
-            collection = searcher.Get();
-        }
-        catch (ManagementException e) when (e.ErrorCode is ManagementStatus.InvalidClass
-                                                        or ManagementStatus.InvalidNamespace)
-        {
-            // A vendor namespace that exists but lacks one of the three per-type classes is
-            // ordinary: HP machines without an integer setting have no HP_BIOSInteger. Empty,
-            // not fatal -- the other classes still make a supported report.
-            yield break;
-        }
-
-        using (collection)
-        {
+            using var searcher = new ManagementObjectSearcher(scope, new ObjectQuery(wql));
+            using var collection = searcher.Get();
             foreach (ManagementBaseObject item in collection)
             {
                 using (item)
@@ -120,11 +115,31 @@ public static class BiosReader
                     var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     foreach (PropertyData property in item.Properties)
                         row[property.Name] = property.Value;
-                    yield return row;
+                    rows.Add(row);
                 }
             }
         }
+        catch (ManagementException e) when (e.ErrorCode is ManagementStatus.InvalidClass
+                                                        or ManagementStatus.InvalidNamespace
+                                                        or ManagementStatus.NotFound)
+        {
+            // A vendor namespace that exists but lacks one of the per-type classes is ordinary:
+            // an HP with no integer setting has no HP_BIOSInteger, and plenty of Dell models
+            // carry no DCIM_BIOSPassword. Empty, not fatal -- the other classes still make a
+            // supported report. Getting this wrong is what turned a working Dell into
+            // "Could not read: Invalid class".
+            return Array.Empty<IReadOnlyDictionary<string, object?>>();
+        }
+        return rows;
     }
+
+    /// <summary>A failure message an operator elsewhere can act on. WMI messages come from
+    /// Windows on the reporting machine and arrive in THAT machine's language -- a Spanish
+    /// "Clase no válida" in an English console is the normal case, not a bug. The
+    /// locale-independent ErrorCode is prefixed so the fault is still identifiable, and
+    /// searchable, whatever language the machine speaks.</summary>
+    internal static string Describe(Exception e) =>
+        e is ManagementException m ? $"{m.ErrorCode}: {m.Message.Trim()}" : e.Message;
 
     /// <summary>SMBIOS BIOS version, for the console's header line. Its own try/catch because
     /// a machine with no readable Win32_BIOS still has firmware settings worth reporting.</summary>

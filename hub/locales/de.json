@@ -1420,6 +1420,7 @@
       "unknown_help": "Dieser Computer hat seine Firmware-Einstellungen noch nicht gemeldet. Dafür ist ein Agent mit Firmware-Inventar nötig; die Meldung kommt bei der nächsten Verbindung nach dem Agent-Update.",
       "unsupported_help": "Dieser Computer hat keine verwaltbare Firmware-Schnittstelle. Virtuelle Maschinen und selbst gebaute PCs melden das; für sie ist es die erwartete, dauerhafte Antwort und kein Fehler.",
       "error_unknown": "Der Computer hat eine Firmware-Schnittstelle, das Lesen ist jedoch fehlgeschlagen, ohne einen Grund zu nennen.",
+      "error_from_machine": "Diese Meldung stammt von Windows auf diesem Computer und erscheint daher in dessen Sprache, nicht in Ihrer.",
       "password_set": "Für diesen Computer ist ein BIOS-Setup-Kennwort gesetzt. Eine Änderung erfordert dieses Kennwort.",
       "no_matches": "Keine Einstellung passt zu deiner Suche.",
       "read_only": "schreibgeschützt",

@@ -89,6 +89,44 @@ public class BiosReaderTests
         Assert.Equal(BiosSupport.Error, report.Support);
     }
 
+    [Fact]
+    public void A_class_this_model_does_not_carry_is_caught_while_the_rows_are_read()
+    {
+        // Regression guard for a Dell that reported "Could not read: Clase no válida".
+        //
+        // A WMI query does not execute at searcher.Get() -- that returns a collection which
+        // runs on first MoveNext. While Query was an iterator method, a missing class threw
+        // during the CALLER's foreach, outside the try/catch, so the tolerance for "this model
+        // has no DCIM_BIOSPassword" never applied and a perfectly readable machine came back
+        // as an error.
+        //
+        // Nothing here can call WMI, so what is asserted is the property that makes the bug
+        // impossible: Query hands back a materialised list, which means every row was read
+        // inside the method that knows which failures are ordinary.
+        var returnType = typeof(BiosReader).GetMethod(nameof(BiosReader.Query))!.ReturnType;
+        Assert.True(returnType.IsGenericType
+                    && returnType.GetGenericTypeDefinition() == typeof(IReadOnlyList<>),
+                    "Query must materialise its rows; a lazy IEnumerable puts the enumeration "
+                    + "-- and therefore the InvalidClass -- outside its own try/catch.");
+    }
+
+    [Fact]
+    public void A_wmi_failure_carries_its_locale_independent_error_code()
+    {
+        // WMI messages come from Windows on the reporting machine, in that machine's language:
+        // a Spanish "Clase no válida" arriving in an English console is normal, not a bug. The
+        // ErrorCode is the part an operator in another language can still act on and search
+        // for, so it is prefixed rather than left to the prose.
+        var described = BiosReader.Describe(
+            new System.Management.ManagementException("Clase no válida"));
+        Assert.Contains("Clase no válida", described);
+        Assert.Contains(":", described);
+        Assert.DoesNotContain(":", described[..described.IndexOf(':')]);   // a code, not prose
+
+        // Anything that is not a WMI fault keeps its own message unchanged.
+        Assert.Equal("access denied", BiosReader.Describe(new InvalidOperationException("access denied")));
+    }
+
     // ------------------------------------------------------------------ Dell
 
     [Fact]

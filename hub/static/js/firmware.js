@@ -139,6 +139,14 @@
             setStatus('danger', t('machine.firmware.state.error'));
             body.appendChild(el('p', 'setting__error',
                                data.error || t('machine.firmware.error_unknown')));
+            // Said explicitly because it looks like a bug otherwise: firmware errors are
+            // Windows' own words on the reporting machine, so a Spanish message shows up in an
+            // English console whenever that PC runs a Spanish Windows. Translating it is not
+            // an option -- we would be inventing text the machine never said.
+            if (data.error) {
+                body.appendChild(el('p', 'stat-card__meta',
+                                    t('machine.firmware.error_from_machine')));
+            }
             return;
         }
 
