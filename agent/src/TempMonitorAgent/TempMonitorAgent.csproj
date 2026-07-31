@@ -11,6 +11,14 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>TempMonitorAgent</AssemblyName>
 
+    <!-- WinForms is here for exactly one screen: the attended-consent prompt the remote helper
+         shows on the end user's desktop (Remote/ConsentDialog.cs). The service itself stays
+         headless; no window is ever created outside that prompt. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- The SDK's generated Main/ApplicationConfiguration is for WinForms apps; this is a
+         Worker with its own Program.cs, and the dialog initialises visual styles itself. -->
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+
     <!-- Release/publish defaults (self-contained single-file win-x64 so the
          fleet needs no .NET runtime install). Override on the CLI as needed. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -23,6 +31,13 @@
          sync with AgentConfig.Version. -->
     <Version>3.19.1</Version>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UseWindowsForms makes System.Windows.Forms an implicit global using, which collides
+         with our own names (Fleet's ICommandExecutor, System.Threading.Timer) across the whole
+         headless codebase. Only ConsentDialog.cs wants those types, and it imports them itself. -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />

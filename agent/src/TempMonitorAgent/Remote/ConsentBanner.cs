@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace TempMonitorAgent.Remote;
 
@@ -21,6 +22,10 @@ namespace TempMonitorAgent.Remote;
 public static class ConsentBanner
 {
     private const int DefaultTimeoutSeconds = 30;
+
+    // Visual styles and DPI mode are process-wide and must be set before the first window
+    // exists, so they happen once, lazily, on whichever consent prompt comes first.
+    private static int _uiInitialised;
 
     /// <summary>Show the prompt on a dedicated thread and await the answer. Always use this
     /// rather than wrapping <see cref="RequestConsent"/> in Task.Run.</summary>
@@ -52,6 +57,36 @@ public static class ConsentBanner
     public static bool RequestConsent(string machine, string operatorEmail, int timeoutSeconds = DefaultTimeoutSeconds)
     {
         var who = string.IsNullOrWhiteSpace(operatorEmail) ? "An IT operator" : operatorEmail;
+        try
+        {
+            InitialiseUi();
+            using var dialog = new ConsentDialog(machine, who, timeoutSeconds);
+            dialog.ShowDialog();
+            return dialog.Approved;
+        }
+        catch
+        {
+            // The styled dialog is the nice path, not the load-bearing one. If WinForms cannot
+            // put a window up here (an unusual desktop, a GDI+ failure), fall back to the plain
+            // system prompt rather than silently denying a session the user would have allowed.
+            return RequestConsentFallback(machine, who, timeoutSeconds);
+        }
+    }
+
+    private static void InitialiseUi()
+    {
+        if (Interlocked.Exchange(ref _uiInitialised, 1) != 0) return;
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        // Per-monitor DPI so the card is crisp on a scaled laptop panel. Non-fatal if the host
+        // already fixed the mode -- the dialog just renders system-scaled.
+        try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
+    }
+
+    /// <summary>The original MessageBox prompt, kept as the last resort behind
+    /// <see cref="ConsentDialog"/>. Same fail-closed contract.</summary>
+    private static bool RequestConsentFallback(string machine, string who, int timeoutSeconds)
+    {
         var text =
             $"{who} is requesting to view and control this computer ({machine}).\n\n" +
             "Do you want to allow this remote session?\n\n" +
