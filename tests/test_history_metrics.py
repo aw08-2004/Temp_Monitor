@@ -171,8 +171,8 @@ def test_disk_throughput_sums_every_disk():
 
 def test_disk_volumes():
     """The Storage cards. GB comes from the agent's synthetic /volume/ sensors, because LHM
-    reports used space only as a percentage -- so a machine without them (companion.py, or
-    an agent below 3.10.0) must still get a percentage rather than an empty card."""
+    reports used space only as a percentage -- so a machine without them (an agent below
+    3.10.0) must still get a percentage rather than an empty card."""
     print("\n-- per-volume space usage, with a percentage-only fallback --")
     disks = app.extract_diagnostics(BLOCK)["disks"]
     check("one entry per volume", len(disks) == 1)

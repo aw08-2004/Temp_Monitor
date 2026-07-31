@@ -6,9 +6,9 @@ namespace TempMonitorAgent.Fleet;
 /// <summary>
 /// The agent's update trust root: verifies the Ed25519 signature over the self-update
 /// manifest before any downloaded binary is allowed to replace the running one (see
-/// SelfUpdater + AgentConfig.UpdatePublicKeyHex). Fails closed exactly like
-/// companion.verify_signature — an unset key, missing signature, malformed hex, or a
-/// bad signature all return false, and no exception ever escapes as "valid".
+/// SelfUpdater + AgentConfig.UpdatePublicKeyHex). Fails closed — an unset key, missing
+/// signature, malformed hex, or a bad signature all return false, and no exception ever
+/// escapes as "valid".
 ///
 /// This once also verified signed fleet commands. Commands are no longer signed (the
 /// hub authorizes them on the console session instead), but this path is unrelated to

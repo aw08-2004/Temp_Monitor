@@ -2,7 +2,7 @@ using TempMonitorAgent.Update;
 
 namespace TempMonitorAgent.Tests;
 
-/// <summary>Mirrors companion.py _cmp_versions / version_tuple behaviour.</summary>
+/// <summary>Mirrors the hub's cmp_versions / version_tuple behaviour.</summary>
 public class VersionUtilTests
 {
     [Theory]

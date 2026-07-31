@@ -8,7 +8,7 @@ namespace TempMonitorAgent.Telemetry;
 /// Reads sensors in-process via LibreHardwareMonitorLib (no separate
 /// LibreHardwareMonitor.exe / :8085 web server). Requires the PawnIO kernel driver
 /// (installed by the installer) and runs fine under a SYSTEM service. Faithfully
-/// mirrors companion.py's flatten_sensors + _walk/pick_cpu_temp selection.
+/// flattens the sensor tree and picks the primary CPU temperature by preferred name.
 /// </summary>
 public sealed class SensorReader : ISensorSource
 {
@@ -149,7 +149,7 @@ public sealed class SensorReader : ISensorSource
     }
 
     // Lenient parse for the general list: keep legitimate 0/negative, reject only
-    // NaN/missing (companion.py _parse_sensor_value).
+    // NaN/missing.
     private static double? LenientValue(float? raw)
     {
         if (raw is not float f || float.IsNaN(f)) return null;

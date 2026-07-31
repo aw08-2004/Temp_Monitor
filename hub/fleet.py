@@ -2,7 +2,7 @@
 command queue, and online/offline status.
 
 This is the foundation that turns Temp_Monitor from one-directional telemetry
-(companion -> hub) into an RMM: the hub can now queue commands FOR a machine, and
+(agent -> hub) into an RMM: the hub can now queue commands FOR a machine, and
 an authenticated agent pulls and executes them. The moment that channel exists,
 the open `/api/report` trust model is no longer enough -- anyone who can talk to
 the command endpoints could restart or reprogram the whole fleet. Two controls
@@ -29,10 +29,9 @@ high-risk command was refused outright). It is gone; ALLOWED_EMAILS is now the
 whole perimeter for running code as SYSTEM across the fleet.
 
 This does NOT touch the release/self-update trust root, which is a SEPARATE
-Ed25519 key and is still fully enforced: see sign_release.py (sign / sign_agent),
-companion.py verify_signature, and the agent's SelfUpdater +
-AgentConfig.UpdatePublicKeyHex. A compromised hub still cannot push a malicious
-binary to the fleet.
+Ed25519 key and is still fully enforced: see sign_release.py (--sign-agent) and
+the agent's SignatureVerifier + SelfUpdater + AgentConfig.UpdatePublicKeyHex. A
+compromised hub still cannot push a malicious binary to the fleet.
 
 Kept deliberately free of Flask so it can be unit-tested in isolation; app.py
 wires thin HTTP endpoints on top of these functions.
@@ -143,7 +142,7 @@ STATUS_EXPIRED = "expired"    # TTL elapsed before an agent claimed it
 DEFAULT_COMMAND_TTL_SECONDS = 15 * 60
 # A machine is "online" if we've heard from it within this window. Heartbeats and
 # ordinary temp reports both refresh last_seen, so this is really "seconds since
-# any contact". Kept a bit above the companion's report cadence so a single missed
+# any contact". Kept a bit above the agent's report cadence so a single missed
 # report doesn't flap the status.
 DEFAULT_OFFLINE_AFTER_SECONDS = 90
 

@@ -28,7 +28,7 @@ jobs:
           # C# sources directly and skips the compile.
           - language: csharp
             build-mode: none
-          # hub/ (Flask) plus companion.py, sign_release.py and tests/.
+          # hub/ (Flask) plus sign_release.py and tests/.
           - language: python
             build-mode: none
           # hub/static/ frontend.

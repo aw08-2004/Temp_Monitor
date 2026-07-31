@@ -33,7 +33,7 @@ function requestNotificationPermission() {
 
 // Distinguishes "hot because it's under heavy load" (expected) from "hot while
 // mostly idle" (worth investigating -- possible cooling/thermal-paste/dust issue).
-// Unknown load (older companion, no sensors yet) conservatively reads as "investigate".
+// Unknown load (older agent, no sensors yet) conservatively reads as "investigate".
 function classifyTemperatureStatus(temp, highTempThreshold, cpuLoadPct, lowLoadThreshold) {
     if (temp === undefined || temp === null || temp < highTempThreshold) return 'normal';
     if (typeof cpuLoadPct === 'number' && cpuLoadPct >= lowLoadThreshold) return 'high-temp-expected';

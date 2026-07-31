@@ -11,8 +11,7 @@ namespace TempMonitorAgent.Telemetry;
 ///
 /// These ride in the existing `sensors` list rather than a new /api/report field on
 /// purpose. The hub already stores, caches and forwards that list, an older hub ignores
-/// unfamiliar entries harmlessly, and the payload stays one shape for both the agent and
-/// companion.py.
+/// unfamiliar entries harmlessly, and the payload keeps its single shape.
 ///
 /// The identifier prefix "/volume/" is the contract with the hub (see app.py's
 /// _disk_volumes): nothing LHM emits starts with it, so the hub can tell our synthetic

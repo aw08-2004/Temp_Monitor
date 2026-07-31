@@ -9,8 +9,8 @@ public readonly record struct ReportResult(bool Sent, int? StatusCode, string? L
 
 /// <summary>
 /// Builds the telemetry payload and POSTs it to the hub's open /api/report endpoint
-/// (no auth, 3s timeout, no redirects), with an offline buffer that mirrors
-/// companion.py: on a connectivity failure a sensor-stripped copy is queued (bounded
+/// (no auth, 3s timeout, no redirects), with an offline buffer: on a
+/// connectivity failure a sensor-stripped copy is queued (bounded
 /// at 1000, oldest dropped) and flushed oldest-first on the next success — stopping on
 /// a connectivity error or HTTP >= 500, dropping an unretryable 4xx.
 /// </summary>

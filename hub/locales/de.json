@@ -23,7 +23,6 @@
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agent v{version}",
-    "companion_version": "Companion v{version}",
     "sign_out": "Abmelden",
     "toggle_theme": "Farbschema umschalten",
     "more": "Mehr",

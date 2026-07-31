@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace TempMonitorAgent.Update;
 
-/// <summary>Tolerant dotted-numeric version compare, matching companion.py
+/// <summary>Tolerant dotted-numeric version compare, matching the hub's
 /// version_tuple/_cmp_versions: reads the leading numeric prefix, ignores any suffix
 /// ("3.0.1-rc1" → 3.0.1), and pads so "3.0" == "3.0.0".</summary>
 public static partial class VersionUtil

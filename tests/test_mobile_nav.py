@@ -73,7 +73,6 @@ def build_app():
         context = {"cap": permissions, "hub_version": "test",
                    "user_capabilities": set(permissions.CAPABILITIES),
                    "open_alert_count": 3, "is_superuser": True,
-                   "latest_companion_version": "9.9.9",
                    "latest_agent_version": "8.8.8"}
         context.update(i18n.template_context("en"))
         return context
@@ -110,8 +109,7 @@ def test_topbar_overflow_markup():
 
     panel = body.split('id="topbar-meta"', 1)[1].split("</div>", 1)[0]
     check("the version badge moved inside the panel", "Hub vtest" in panel)
-    check("...along with the agent/companion badges",
-          "Agent v8.8.8" in panel and "Companion v9.9.9" in panel)
+    check("...along with the agent badge", "Agent v8.8.8" in panel)
     check("...and the signed-in user", "root@x.com" in panel and "Sign out" in panel)
     # These two are glanceable state; putting them behind a tap defeats the point.
     check("the theme toggle stays out of the panel", "theme-toggle" not in panel)

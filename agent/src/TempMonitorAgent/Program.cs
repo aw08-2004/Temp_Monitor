@@ -28,7 +28,7 @@ if (RemoteHelper.IsDesktopProbe(args))
     return RemoteHelper.RunDesktopProbe(args);
 
 // Rotating file log under %ProgramData% so field issues on client machines are
-// diagnosable (parity with companion.py's RotatingFileHandler). Console sink too,
+// diagnosable. Console sink too,
 // useful when run interactively for testing.
 Directory.CreateDirectory(AgentConfig.ProgramDataDir);
 Log.Logger = new LoggerConfiguration()

@@ -2,6 +2,11 @@
 
 Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
+> **Note on `companion.py`.** The Python companion agent has been removed from the repo;
+> the C#/.NET agent in `agent/` is the only telemetry client. Entries below that credit a
+> companion release (e.g. "agent 3.18.0 / companion 2.12.0") are kept as accurate release
+> history — they record what shipped at the time. Nothing new goes into that column.
+
 ---
 
 ## ✅ 6. History page
@@ -27,7 +32,7 @@ its life. **The GB has to come from the agent**: LHM reports storage used space 
 percentage, with the absolute size nowhere in its sensor set, so `VolumeReader.cs` walks
 `DriveInfo` and appends synthetic `/volume/<letter>` Data sensors to the ordinary sensor
 block — no new `/api/report` field, and an older hub ignores them. A machine that isn't
-sending them (companion.py, or an agent below 3.10.0) falls back to LHM's per-device
+sending them (an agent below 3.10.0) falls back to LHM's per-device
 percentage and shows the bar without the GB line.
 
 ## 🚧 3. Settings: which sensors to read, data retention, etc.
@@ -672,8 +677,9 @@ parameters were resolved as:
 
 **Agent halves pending a signed release**: the C# agent's `service_tag` reporting ships in
 source (3.11.0) but needs the usual build + `sign_release.py --sign-agent` + asset upload
-before the fleet gains it; companion.py 2.11.0 is re-signed and ready. Until then, machines
-show a blank Service Tag, which is exactly the older-agent fallback above.
+before the fleet gains it. Until then, machines show a blank Service Tag, which is exactly
+the older-agent fallback above. (companion.py 2.11.0 carried its half too; the script has
+since been removed from the repo entirely.)
 
 <details>
 <summary>Original spec</summary>
@@ -1316,8 +1322,7 @@ comes online.
    vendor dispatch now has something to dispatch on. Next is the change-only BIOS
    settings inventory on the heartbeat, then the `set_bios_settings` command, then the
    `update_bios` executor. **The agent half is pending a signed release** (build +
-   `sign_release.py --sign-agent` + asset upload); companion.py 2.12.0 is re-signed and
-   ready.
+   `sign_release.py --sign-agent` + asset upload).
 10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
     NIC inventory (MAC + subnet) the hub does not collect today.
 

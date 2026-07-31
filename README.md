@@ -5,30 +5,32 @@ machine runs an agent that reads sensors and reports them to a central **hub**
 (Flask + Socket.IO) for live charts, history, and remote commands.
 
 - Hub: `hub/app.py` (served via `hub/wsgi.py`), live at https://your.domain.com
-- **Agent (recommended, new machines):** `agent/` — a C#/.NET Windows Service.
-  See [agent/README.md](agent/README.md).
-- **Companion (legacy, existing installs):** `companion.py` — a Python scheduled-task
-  agent. Self-updates now migrate it to the C# agent automatically (see below).
-- Unified installer (Agent / Companion / Hub / TURN relay): `install.ps1`
+- **Agent:** `agent/` — a C#/.NET Windows Service. See [agent/README.md](agent/README.md).
+- Unified installer (Agent / Hub / TURN relay): `install.ps1`
 
-## Two agents, one hub
+## The legacy Python companion is gone
 
-The hub accepts telemetry and fleet commands from either agent — they speak the
-same wire protocol (`POST /api/report` for telemetry; `/api/agent/*` for the fleet
-command channel). You don't need to run both on the same machine; the migration
-path below moves each machine from one to the other automatically.
+Machines used to run `companion.py`, a Python scheduled task that did telemetry only.
+It has been **removed from the repo**. The C#/.NET agent replaced it: it runs as a
+Windows Service under SYSTEM (so it works with nobody logged on), reads sensors
+in-process instead of shelling out to LibreHardwareMonitor's `:8085` web server, and
+speaks the fleet command channel the companion never implemented.
 
-|                              | Companion (`companion.py`)         | Agent (`agent/`)                          |
-|------------------------------|-------------------------------------|--------------------------------------------|
-| Language / runtime           | Python, needs a Python install      | C#/.NET, self-contained single-file exe    |
-| Runs as                      | Per-logon Scheduled Task (user session) | Windows Service (**SYSTEM**, session 0) |
-| Sensors                      | LibreHardwareMonitor.exe + its `:8085` web server | LibreHardwareMonitorLib, in-process |
-| Telemetry (`/api/report`)    | Yes                                  | Yes (parity)                                |
-| Fleet commands (restart/rename/scripts/etc.) | No                    | Yes — enroll/heartbeat/poll/execute/report |
-| Self-update                  | Signed Python source swap           | Signed binary swap (manifest + sha256)      |
-| Status                       | Legacy — auto-migrates away          | Recommended for all new installs            |
+Consequences of the removal, in case an unmigrated machine turns up:
 
-## Installing the agent (recommended, new machines)
+- **Nothing self-updates a companion anymore.** The hub no longer advertises a 2.x
+  version, and `raw.githubusercontent.com/.../companion.py` now 404s, so a surviving
+  companion just keeps reporting telemetry at its pinned version forever.
+- **It can no longer be installed.** `install.ps1` dropped that path.
+- **It can still be uninstalled**, which is what such a machine needs — see below —
+  and then given the agent.
+
+Note the wire field is still named `companion_version` (and the agent still writes
+`companion.log`). Those names are deliberately unchanged: every agent in the field
+sends that key, and renaming one side alone would break exactly the machines that
+are already deployed.
+
+## Installing the agent
 
 See [agent/README.md](agent/README.md) for the full C#/.NET agent: build/publish,
 signing/release process, and `agent/install/agent-install.ps1` (installs the Windows
@@ -37,7 +39,7 @@ Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 ## Unified installer
 
 `install.ps1` at the repo root is a single menu-driven installer covering every
-component -- Agent, Companion, Hub, and the TURN relay. Run it with no arguments
+component -- Agent, Hub, and the TURN relay. Run it with no arguments
 for an interactive menu; it prompts for whatever the chosen path needs
 (enrollment secret, hub URL, OAuth creds, ...), defaulting to values already in
 a local `.env` when run from a clone. The installer elevates itself
@@ -71,23 +73,22 @@ URL and used as such, with a warning.
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1                                   # interactive menu
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent
-powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn                    # TURN relay only, no hub
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -InstallDir "D:\Apps\FleetHub\Agent"
 powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -Uninstall
-powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                        # bare -Uninstall = legacy companion, for back-compat
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion -Uninstall    # remove a legacy Python companion
+powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                        # bare -Uninstall = the same, for back-compat
 ```
 
 `-InstallDir <path>` applies to whichever component is being installed. Left
 out, each uses its own default — Agent `C:\Program Files\FleetHub\Agent`, Hub
-`C:\Program Files\FleetHub\Hub`, Companion `C:\Program Files\TempMonitor`.
+`C:\Program Files\FleetHub\Hub`, legacy Companion `C:\Program Files\TempMonitor`.
 Passed explicitly, it redirects the install *and* the Windows Defender
 exclusion offered for it. Pass the same `-InstallDir` to `-Uninstall` so the
 right directory is cleaned up.
 
-Component-specific parameters: `-Port <port>` (Companion, default `8085`);
-`-HubUrl` / `-EnrollmentSecret` / `-AgentUrl` / `-AgentExe` /
+Component-specific parameters: `-HubUrl` / `-EnrollmentSecret` / `-AgentUrl` / `-AgentExe` /
 `-AddDefenderExclusion` / `-SkipDefenderExclusion` (Agent); `-HubPort <port>`
 (default `3001`) and `-HubInstallDir <path>` (Hub — takes precedence over
 `-InstallDir`); `-TurnHost` / `-TurnSecret` / `-TurnDistro` / `-TurnPort` /
@@ -130,41 +131,39 @@ Installs made before the FleetHub rename are detected and migrated: the old serv
 removed, `.env` and `logs/` (including the telemetry DB) are moved to the new root, and
 an existing agent's binary is moved with its service re-pointed at the new path.
 
-## Installing the companion agent (legacy)
+## Removing a legacy Python companion
 
-Existing installs keep working as-is; new installs should use the agent above
-instead. Run on the Windows machine you want to monitor. The installer needs an
-elevated (admin) PowerShell, since LibreHardwareMonitor needs admin rights to
-read sensors and the agent runs via scheduled tasks.
-
-### What it installs
-
-- Python 3 (via `winget`, if missing) + the `requests`/`cryptography` packages
-- LibreHardwareMonitor (latest GitHub release), configured to run its web
-  server on the configured port
-- PawnIO (skipped if the `PawnIO` service already exists) -- the kernel
-  driver LibreHardwareMonitor needs to read sensors on modern Windows
-- `companion.py`, pulled from `main`
-- Two scheduled tasks (run at logon, admin rights): LibreHardwareMonitor,
-  then the companion agent 30s later
-
-### Uninstalling
+`companion.py` can no longer be installed, but machines that never migrated still
+carry one. To clean one up:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
+powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion -Uninstall
 ```
 
-Removes the scheduled tasks, stops the running processes, and deletes the
-install directory. Python itself is left alone.
+This unregisters both of its scheduled tasks (`TempMonitor - Companion` and
+`TempMonitor - LibreHardwareMonitor`), stops the running Python and
+LibreHardwareMonitor processes, and deletes the install directory (default
+`C:\Program Files\TempMonitor` — pass `-InstallDir` if it went somewhere else).
+Python itself is left alone. Bare `-Uninstall` with no `-Component` does the same
+thing, for back-compat with the way this was always documented.
+
+Then install the agent on that machine as above. Do it in that order: both report
+the same machine name, so running the two at once doubles every reading.
 
 ## Self-updates
 
-`companion.py` checks `VERSION` against the copy on `main` every start, and
-weekly thereafter while running, swapping itself for the newer version when
-found. No separate version file is needed — bump the `VERSION` constant near
-the top of `companion.py` on every push to `main`, or nothing will update.
-From **2.8.0** onward, updates are Ed25519-signed (see [Signing releases](#signing-releases)
-below) — an unsigned or tampered `companion.py` is refused, not applied.
+The agent checks its version against the signed release manifest on `main` and swaps
+its own binary for a newer one when it finds it — see [agent/README.md](agent/README.md)
+for the release process. Updates are Ed25519-verified fail-closed (see
+[Signing releases](#signing-releases) below): an unsigned or tampered manifest is
+refused, not applied.
+
+The hub nudges this along: `/api/report` echoes back the newest agent version it has
+read from the manifest, so an agent goes and checks as soon as it sees a number ahead
+of its own instead of waiting for its own weekly poll. Clients below 3.0.0 are
+deliberately sent nothing at all — there is no 2.x release left to point them at, and
+handing a companion a 3.x number would make it try to install an agent binary as if it
+were a Python script.
 
 ### Hub self-updates (opt-in)
 
@@ -189,7 +188,7 @@ How it updates depends on the layout, decided by whether a `.git` directory is p
   `git reset --hard origin/main`, mirroring `main` exactly — **local changes on the
   hub box are discarded**. Requires `git` on `PATH`.
 
-Unlike the companion/agent trains, neither path uses the Ed25519 release key: both
+Unlike the agent train, neither path uses the Ed25519 release key: both
 trust GitHub over HTTPS plus push access to `main` (the pinned git origin for a clone,
 the branch archive over TLS for a files-only install). The Ed25519 trust root still
 gates agent binaries and is untouched by this. As with every hub change, bump
@@ -198,30 +197,15 @@ to update. (The installer offers to set
 `HUB_AUTO_UPDATE=1` for you; on hubs still on the older scheduled-task deployment the
 same exit instead relies on the task's 2-minute repetition.)
 
-### Migration to the C# agent (automatic, from companion 2.10.0)
+### Migration to the C# agent (historical)
 
-From companion **2.10.0**, every machine that self-updates checks whether the
-C#/.NET agent (`TempMonitorAgent` Windows Service) is already installed. If not, it:
+Companion releases 2.10.0 through 2.12.0 migrated themselves: on a self-update they
+verified the agent's signed manifest, ran `agent/install/agent-install.ps1`, confirmed
+the service reached `RUNNING`, and only then unregistered their own scheduled tasks and
+exited. That is how essentially the whole fleet moved over.
 
-1. Fetches the agent's signed release manifest (`agent/agent.manifest.json` + `.sig`,
-   same Ed25519 trust root as companion's own self-update) and verifies it — fail
-   closed, same as every other signed artifact in this repo.
-2. Downloads and runs `agent/install/agent-install.ps1` (companion already runs
-   elevated, so no extra UAC prompt) to install the Windows Service. No enrollment
-   secret is passed — the new agent runs telemetry-only until an operator enrolls it
-   separately, exactly like a fresh manual install.
-3. Confirms the service reaches `RUNNING` before trusting it.
-4. Once confirmed, **decommissions companion.py**: unregisters its own scheduled
-   tasks, stops LibreHardwareMonitor (the agent reads sensors in-process and doesn't
-   need it), and exits. This is a clean handoff, not a dual-run period — both agents
-   report the same machine name, so running both at once would double every reading.
-
-This is fully automatic and fleet-wide: it is **not** gated behind a flag. It's
-designed to fail safe at every step — a failed install (network issue, blocked
-driver install, etc.) just leaves companion.py running normally and retries (capped
-at 5 attempts, once a day) on the next check; nothing removes the fallback until the
-new agent is confirmed running. Set `MIGRATION_ENABLED = False` near the top of
-`companion.py` and push as a hotfix if this ever needs to be paused fleet-wide.
+That path is gone with the script. Anything still running a companion has to be
+migrated by hand — see [Removing a legacy Python companion](#removing-a-legacy-python-companion).
 
 ## Hub
 
@@ -538,9 +522,9 @@ Beyond telemetry, the hub can queue **commands** for a machine that its agent
 pulls and executes (restart, rename, install, etc.). This is the hub→agent
 direction, added by [fleet.py](hub/fleet.py) (core logic) and
 [fleet_web.py](hub/fleet_web.py) (HTTP surface), with state in the same SQLite DB
-(`agents`, `commands`, `command_results`, `audit_log`). **The C#/.NET agent
-(`agent/`) implements the client side of this channel; `companion.py` does not**
-(it's telemetry-only, which is why it migrates itself away — see above).
+(`agents`, `commands`, `command_results`, `audit_log`). The C#/.NET agent
+(`agent/`) implements the client side of this channel. The removed Python companion
+never did — it was telemetry-only, which is why it was replaced.
 
 **Security model.**
 
@@ -1116,20 +1100,22 @@ the operator's scope; every session start/stop is in the audit log.
 
 ## Signing releases
 
-Two artifacts in this repo are Ed25519-signed so a compromised hub or repo commit
+One artifact in this repo is Ed25519-signed so a compromised hub or repo commit
 can't push code that runs as admin fleet-wide unverified:
 
-- **`companion.py`** — re-sign with `python sign_release.py` after every edit, then
-  commit `companion.py` + `companion.py.sig` together. `.gitattributes` pins both
-  `-text` so git never rewrites line endings (the signed bytes must match exactly
-  what clients download).
-- **The C# agent** (`agent/`) — see [agent/README.md](agent/README.md) for
-  `agent/release.ps1` (automates the whole release: version bump, publish,
-  GitHub release, sign, upload) or the manual `sign_release.py --sign-agent` steps.
+- **The C# agent** (`agent/`) — the self-update manifest `agent/agent.manifest.json`
+  carries the version, the exe's sha256 and its download URL, and is signed
+  byte-for-byte. See [agent/README.md](agent/README.md) for `agent/release.ps1`
+  (automates the whole release: version bump, publish, GitHub release, sign, upload)
+  or the manual `sign_release.py --sign-agent` steps. `.gitattributes` pins the
+  manifest and its `.sig` to `-text` so git never rewrites line endings — the signed
+  bytes must match exactly what the fleet downloads.
+
+(`companion.py` was signed with the same key until it was removed from the repo.
+Nothing signs a loose file anymore.)
 
 One-time setup: `python sign_release.py --genkey`, keep the private key OFF the
-repo, paste the printed public key into `companion.py`'s `UPDATE_PUBLIC_KEY_HEX`
-(the C# agent's `AgentConfig.UpdatePublicKeyHex` reuses the same key/trust root).
+repo, paste the printed public key into the agent's `AgentConfig.UpdatePublicKeyHex`.
 
 This is the **release** trust root: it governs what *code* the fleet is allowed to run,
 and it is fully enforced. It is unrelated to fleet *commands*, which are no longer signed

@@ -141,7 +141,7 @@ def _error(key, lang=None, **params):
 
 
 # Default for computer.primary_sensor_preference. Mirrors SensorReader.cs's
-# PreferredSensors (and companion.py's PREFERRED_SENSORS) exactly -- best first,
+# PreferredSensors exactly -- best first,
 # matched as a lowercased substring of the sensor name.
 DEFAULT_SENSOR_PREFERENCE = [
     "cpu package",

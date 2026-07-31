@@ -3,15 +3,16 @@
     https://github.com/aw08-2004/Temp_Monitor
 
     Interactive menu over the three install paths:
-      1) Agent      - C#/.NET Windows Service (recommended for new machines)
-      2) Companion  - legacy Python scheduled-task agent (UNSUPPORTED; dimmed in the
-                      menu and gated behind a confirmation, since it migrates itself
-                      to the agent on its first self-update anyway)
-      3) Hub        - Flask/Socket.IO server (this machine becomes the fleet hub)
-      4) Turn       - coturn WebRTC relay only, in a dedicated Ubuntu WSL2 distro.
+      1) Agent      - C#/.NET Windows Service (the only telemetry client)
+      2) Hub        - Flask/Socket.IO server (this machine becomes the fleet hub)
+      3) Turn       - coturn WebRTC relay only, in a dedicated Ubuntu WSL2 distro.
                       Installing the hub can set this up too; this option exists for
                       when the relay belongs on a different machine from the hub
                       (typically one with a better public address).
+
+    The legacy Python companion (companion.py) has been removed from the repo and can
+    no longer be installed. Uninstalling one is still supported, for machines that were
+    never migrated -- see the Uninstall menu, or -Component Companion -Uninstall.
 
     Prompts for whatever each path needs (enrollment secret, hub URL, OAuth
     creds, etc.), defaulting to values already present in a local .env when run
@@ -23,10 +24,10 @@
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -HubUrl <hub-url> -EnrollmentSecret <secret>
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -HubUrl <hub-url> -EnrollmentSecret <secret> `
             -InstallDir "D:\Apps\FleetHub\Agent" -AddDefenderExclusion     # fully unattended
-        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -TurnHost <public-ip> -TurnSecret <secret>
         powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall                    # legacy companion (back-compat)
+        powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion -Uninstall
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Agent -Uninstall
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Hub -Uninstall
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -Uninstall
@@ -36,18 +37,18 @@
 #>
 
 param(
+    # "Companion" is accepted for -Uninstall only: the legacy Python agent can no longer be
+    # installed, but machines that still run one need a way to be cleaned up.
     [ValidateSet("Agent", "Companion", "Hub", "Turn")]
     [string]$Component,
     [switch]$Uninstall,
 
     # Where the selected component is installed. Left unbound, each component uses its own
-    # default (Agent -> C:\Program Files\FleetHub\Agent, Hub -> ...\FleetHub\Hub, Companion ->
-    # C:\Program Files\TempMonitor). Passing it explicitly overrides that default for whichever
-    # component is being installed -- including the path offered for the Defender exclusion.
+    # default (Agent -> C:\Program Files\FleetHub\Agent, Hub -> ...\FleetHub\Hub, legacy
+    # Companion -> C:\Program Files\TempMonitor). Passing it explicitly overrides that default
+    # for whichever component is being acted on -- including the path offered for the Defender
+    # exclusion, and the directory a Companion uninstall deletes.
     [string]$InstallDir = "C:\Program Files\TempMonitor",
-
-    # --- Companion (legacy) ---
-    [int]$Port = 8085,
 
     # --- Agent ---
     [string]$AgentUrl,                  # download URL for the agent exe (a release asset)
@@ -91,19 +92,15 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 # Invoke-WebRequest renders a progress bar on PowerShell 5.1 that costs more time than the
-# transfer itself on the bigger downloads here (the ~25 MB Python installer, the LHM zip).
+# transfer itself on the bigger downloads here (the ~25 MB Python installer, the agent exe).
 # Silencing it keeps the run moving and the log readable.
 $ProgressPreference = "SilentlyContinue"
 
 $Repo           = "aw08-2004/Temp_Monitor"
 $InstallerUrl   = "https://raw.githubusercontent.com/$Repo/main/install.ps1"
-$CompanionUrl   = "https://raw.githubusercontent.com/$Repo/main/companion.py"
 $AgentInstallUrl= "https://raw.githubusercontent.com/$Repo/main/agent/install/agent-install.ps1"
-$LhmApi         = "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
-$LhmFallback    = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v0.9.6/LibreHardwareMonitor.zip"
 $PythonFallback = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"
-$PawnIoUrl      = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/refs/heads/master/LibreHardwareMonitor.Windows.Forms/Resources/PawnIO_setup.exe"
-$LhmDir         = Join-Path $InstallDir "LibreHardwareMonitor"
+# Legacy Companion leftovers, referenced only by Uninstall-Companion.
 $TaskLhm        = "TempMonitor - LibreHardwareMonitor"
 $TaskCompanion  = "TempMonitor - Companion"
 $TaskHub        = "TempMonitor - Hub"          # legacy scheduled task (pre-service), cleaned up on install/uninstall
@@ -138,7 +135,7 @@ if ($InstallDirGiven) {
 
 # --- Hub-as-Windows-Service ---
 # WinSW wraps the Python/waitress process as a real Windows Service (Python can't be one on
-# its own). Pinned to a stable v2 release; same "download a pinned asset" pattern as LHM/PawnIO.
+# its own). Pinned to a stable v2 release; same "download a pinned asset" pattern as the agent exe.
 $WinSwUrl            = "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe"
 $HubServiceId        = "FleetHub"
 $HubServiceName      = "FleetHub - Hub"
@@ -458,8 +455,8 @@ function Install-Python {
 function Ensure-Python {
     <#
       Resolve a Python 3 interpreter, offering to install one when the machine hasn't got it.
-      A missing prerequisite is a question, not a dead end: both Python paths (hub and
-      companion) go through here so neither aborts the run on a bare machine.
+      A missing prerequisite is a question, not a dead end: the hub path goes through
+      here rather than aborting the run on a bare machine.
     #>
     Step "Checking Python"
     $py = Resolve-Python
@@ -491,50 +488,27 @@ function Get-LatestAgentAssetUrl {
     return $null
 }
 
-function Confirm-CompanionChoice {
-    <#
-      The companion is the pre-agent Python scheduled task: it only runs inside a logged-on
-      user's session, and from companion 2.10.0 a machine that installs it self-updates
-      straight onto the C# agent anyway. Installing it today is almost always a misclick by
-      someone reaching for "the Python one" out of habit, so it costs a deliberate yes.
-      Returns $true if they mean it, $false to go back to the menu.
-    #>
-    Write-Host ""
-    Warn "The Companion is no longer supported."
-    Say "It runs only while a user is logged on, and from version 2.10.0 it migrates"
-    Say "itself to the C# agent on its first self-update -- so this mostly installs a"
-    Say "detour to option 1. Pick it only for a machine that genuinely can't run the agent."
-    Write-Host ""
-    if (Prompt-YesNo "Do you really want to install the unsupported Companion?" -Default No) { return $true }
-    Say "Cancelled -- back to the menu."
-    return $false
-}
-
 function Show-Menu {
     # Loops rather than recursing on a rejected answer: every "ask again" used to be another
     # `return Show-Menu` stack frame, so enough invalid input (or a redirected stdin handing
     # back an endless stream of empty answers) walked the menu into PowerShell's call-depth
     # limit instead of just asking again.
     while ($true) {
-        # Written line by line rather than as one here-string so the deprecated entry can be
-        # dimmed on its own.
         Write-Host ""
         Write-Host "  FleetHub - Unified Installer"                                                  -ForegroundColor Cyan
         Write-Host "  ================================="                                             -ForegroundColor Cyan
         Write-Host "   1) Install Agent      (C#/.NET Windows Service - recommended)"                 -ForegroundColor Cyan
-        Write-Host "   2) Install Companion  (legacy Python scheduled-task agent - UNSUPPORTED)"      -ForegroundColor DarkGray
-        Write-Host "   3) Install Hub        (Flask/Socket.IO server - this machine becomes the hub)" -ForegroundColor Cyan
-        Write-Host "   4) Install TURN       (coturn relay only - for remote control, no hub)"        -ForegroundColor Cyan
-        Write-Host "   5) Uninstall..."                                                               -ForegroundColor Cyan
+        Write-Host "   2) Install Hub        (Flask/Socket.IO server - this machine becomes the hub)" -ForegroundColor Cyan
+        Write-Host "   3) Install TURN       (coturn relay only - for remote control, no hub)"        -ForegroundColor Cyan
+        Write-Host "   4) Uninstall..."                                                               -ForegroundColor Cyan
         Write-Host "   0) Exit"                                                                       -ForegroundColor Cyan
         Write-Host ""
         $choice = Read-Host "Choose an option"
         switch ($choice) {
             "1" { return "Agent" }
-            "2" { if (Confirm-CompanionChoice) { return "Companion" } }
-            "3" { return "Hub" }
-            "4" { return "Turn" }
-            "5" { return "UninstallMenu" }
+            "2" { return "Hub" }
+            "3" { return "Turn" }
+            "4" { return "UninstallMenu" }
             "0" { return "Exit" }
             default { Warn "Invalid choice." }
         }
@@ -542,12 +516,13 @@ function Show-Menu {
 }
 
 function Show-UninstallMenu {
-    # Companion is deliberately NOT dimmed here: it's deprecated to install, but removing one
-    # is exactly what an operator should be doing, so that path stays friction-free.
+    # Companion is listed here even though it can no longer be installed: the legacy Python
+    # scheduled task is still out there on unmigrated machines, and cleaning one up is exactly
+    # what an operator should be doing, so that path stays friction-free.
     while ($true) {
         Write-Host "`n  Which component do you want to uninstall?" -ForegroundColor Cyan
         Write-Host "   1) Agent"
-        Write-Host "   2) Companion"
+        Write-Host "   2) Companion     (legacy Python scheduled-task agent)"
         Write-Host "   3) Hub            (also removes the TURN relay, if this box has one)"
         Write-Host "   4) TURN relay     (leaves the hub alone)"
         Write-Host "   0) Cancel"
@@ -564,7 +539,7 @@ function Show-UninstallMenu {
 }
 
 # ----------------------------------------------------------------------
-# Elevate: every path below needs admin (LHM/service/task registration)
+# Elevate: every path below needs admin (service/task registration)
 # ----------------------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -597,7 +572,9 @@ if (-not $isAdmin) {
 }
 
 # ========================================================================
-# Companion (legacy Python scheduled-task agent)
+# Companion (legacy Python scheduled-task agent) -- UNINSTALL ONLY
+# companion.py no longer exists in the repo; this only cleans up machines that
+# still carry an install from before it was removed.
 # ========================================================================
 function Uninstall-Companion {
     Step "Uninstalling FleetHub Companion"
@@ -621,257 +598,6 @@ function Uninstall-Companion {
     }
 
     Write-Host "`nDone. Python itself was left alone.`n" -ForegroundColor Green
-}
-
-function Install-Companion {
-    Write-Host @"
-
-  FleetHub - Companion Agent Installer (UNSUPPORTED)
-  Machine: $env:COMPUTERNAME
-  Target : $InstallDir
-
-"@ -ForegroundColor Cyan
-
-    # The menu already made an interactive operator confirm this. Repeat it as a plain
-    # warning -- not a prompt -- so `-Component Companion` still runs unattended from a
-    # script while the log says plainly what got installed.
-    Warn "The Companion is legacy and no longer supported; the Agent replaces it."
-
-    # ------------------------------------------------------------------
-    # 1. Python
-    # ------------------------------------------------------------------
-    $py = Ensure-Python
-
-    # Resolve the real interpreter path (so scheduled tasks don't depend on PATH)
-    $pythonExe = & $py.Exe $py.Args -c "import sys; print(sys.executable)"
-    $pythonwExe = Join-Path (Split-Path $pythonExe) "pythonw.exe"   # windowless, no console popup
-    if (-not (Test-Path $pythonwExe)) { $pythonwExe = $pythonExe }
-    Ok "Interpreter: $pythonExe"
-
-    Step "Installing Python packages"
-    & $pythonExe -m pip install --upgrade pip --quiet
-    # cryptography is needed so the companion can verify signed self-updates (Ed25519).
-    & $pythonExe -m pip install requests cryptography --quiet
-    if ($LASTEXITCODE -ne 0) { Die "pip install failed." }
-    Ok "requests + cryptography installed"
-
-    # ------------------------------------------------------------------
-    # 2. Files
-    # ------------------------------------------------------------------
-    Step "Setting up $InstallDir"
-    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    New-Item -ItemType Directory -Force -Path $LhmDir     | Out-Null
-    Ok "Directories ready"
-
-    # ------------------------------------------------------------------
-    # 3. LibreHardwareMonitor
-    # ------------------------------------------------------------------
-    Step "Installing LibreHardwareMonitor"
-
-    $lhmExe = Join-Path $LhmDir "LibreHardwareMonitor.exe"
-
-    if (Test-Path $lhmExe) {
-        Ok "Already present, skipping download"
-    } else {
-        $zipUrl = $LhmFallback
-        try {
-            $rel = Invoke-RestMethod -Uri $LhmApi -Headers @{ "User-Agent" = "FleetHub-Installer" } -TimeoutSec 15
-            $asset = $rel.assets | Where-Object { $_.name -like "*net472*.zip" } | Select-Object -First 1
-            if ($asset) {
-                $zipUrl = $asset.browser_download_url
-                Say "Latest release: $($rel.tag_name)"
-            }
-        } catch {
-            Warn "GitHub API unreachable (rate limit?). Using pinned v0.9.6."
-        }
-
-        $zipPath = Join-Path $env:TEMP "LibreHardwareMonitor.zip"
-        Say "Downloading $zipUrl"
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-        Expand-Archive -Path $zipPath -DestinationPath $LhmDir -Force
-        Remove-Item $zipPath -Force
-
-        # Some releases nest everything one folder deep
-        if (-not (Test-Path $lhmExe)) {
-            $found = Get-ChildItem $LhmDir -Recurse -Filter "LibreHardwareMonitor.exe" | Select-Object -First 1
-            if ($found) {
-                Get-ChildItem $found.DirectoryName | Move-Item -Destination $LhmDir -Force
-            }
-        }
-        if (-not (Test-Path $lhmExe)) { Die "LibreHardwareMonitor.exe not found after extraction." }
-
-        Unblock-File -Path (Join-Path $LhmDir "*") -ErrorAction SilentlyContinue
-        Ok "Extracted to $LhmDir"
-    }
-
-    # ------------------------------------------------------------------
-    # 4. PawnIO -- kernel driver LHM needs for sensor access (replaces WinRing0)
-    # ------------------------------------------------------------------
-    Step "Installing PawnIO driver"
-
-    if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
-        Ok "Already installed, skipping"
-    } else {
-        $pawnioPath = Join-Path $env:TEMP "PawnIO_setup.exe"
-        Say "Downloading $PawnIoUrl"
-        Invoke-WebRequest -Uri $PawnIoUrl -OutFile $pawnioPath -UseBasicParsing
-        Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
-
-        $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install", "-silent" -Wait -PassThru -NoNewWindow
-        Remove-Item $pawnioPath -Force -ErrorAction SilentlyContinue
-
-        if ($proc.ExitCode -ne 0) {
-            Warn "PawnIO installer exited with code $($proc.ExitCode). Sensors may not be readable."
-        } else {
-            Ok "PawnIO installed"
-        }
-    }
-
-    # ------------------------------------------------------------------
-    # 5. LHM config -- web server ON, start minimized, live in the tray
-    #    LHM reads <exe name>.config from its own folder (PersistentSettings)
-    # ------------------------------------------------------------------
-    Step "Configuring LibreHardwareMonitor web server (port $Port)"
-
-    $lhmConfig = Join-Path $LhmDir "LibreHardwareMonitor.config"
-    @"
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <appSettings>
-    <add key="runWebServerMenuItem" value="true" />
-    <add key="listenerPort" value="$Port" />
-    <add key="authenticationEnabled" value="false" />
-    <add key="startMinMenuItem" value="true" />
-    <add key="minTrayMenuItem" value="true" />
-    <add key="minCloseMenuItem" value="true" />
-    <add key="cpuMenuItem" value="true" />
-    <add key="mainForm.Location.X" value="100" />
-    <add key="mainForm.Location.Y" value="100" />
-  </appSettings>
-</configuration>
-"@ | Set-Content -Path $lhmConfig -Encoding UTF8
-
-    Ok "Wrote $lhmConfig"
-
-    # ------------------------------------------------------------------
-    # 6. companion.py
-    # ------------------------------------------------------------------
-    Step "Downloading companion.py"
-    $companionPath = Join-Path $InstallDir "companion.py"
-    Invoke-WebRequest -Uri $CompanionUrl -OutFile $companionPath -UseBasicParsing
-    $ver = (Select-String -Path $companionPath -Pattern '^VERSION\s*=\s*"([\d.]+)"').Matches.Groups[1].Value
-    Ok "companion.py v$ver -> $companionPath"
-
-    # ------------------------------------------------------------------
-    # 7. Scheduled tasks (RunLevel Highest = admin without a UAC prompt every logon)
-    # ------------------------------------------------------------------
-    Step "Registering scheduled tasks"
-
-    # Pass the SID directly rather than a "DOMAIN\User" string -- some machines
-    # (seen on ones with a leftover/corrupted HomeGroup profile) fail the internal
-    # name-to-SID lookup Register-ScheduledTask does for a name string, with
-    # "No mapping between account names and security IDs was done" (0x80070534).
-    # The SID is already resolved, so it skips that lookup entirely.
-    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $principal = New-ScheduledTaskPrincipal -UserId $currentUserSid `
-                                            -LogonType Interactive -RunLevel Highest
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-                                              -DontStopIfGoingOnBatteries `
-                                              -StartWhenAvailable `
-                                              -ExecutionTimeLimit ([TimeSpan]::Zero) `
-                                              -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-
-    # LHM first
-    Register-ScheduledTask -TaskName $TaskLhm -Force `
-        -Action    (New-ScheduledTaskAction -Execute $lhmExe -WorkingDirectory $LhmDir) `
-        -Trigger   (New-ScheduledTaskTrigger -AtLogOn) `
-        -Principal $principal -Settings $settings `
-        -Description "Hardware sensor daemon for FleetHub. Serves JSON on localhost:$Port." | Out-Null
-    Ok "Task: $TaskLhm"
-
-    # Companion 30s later, so LHM's web server is up. Also repeats every 2 minutes
-    # (indefinitely) as a self-heal mechanism: Task Scheduler puts the task in a job
-    # object that kills any child we spawn when we exit, so neither a "detached"
-    # relaunch helper nor the -RestartCount/-RestartInterval settings above reliably
-    # bring the task back after companion.py swaps itself during a self-update (verified
-    # empirically -- RestartCount/RestartInterval do not fire on a plain nonzero exit,
-    # they're for a narrower "task failed to launch" class). The repetition trigger is
-    # the one relaunch path that's actually reliable, since it's driven by the Task
-    # Scheduler service itself, not a descendant of our job. -MultipleInstances
-    # IgnoreNew (the default) means a tick while we're already running is a no-op; it
-    # only actually starts a new instance once we've exited.
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $trigger.Delay = "PT30S"
-    $trigger.Repetition.Interval = "PT2M"
-    # Duration deliberately left empty: Task Scheduler rejects year/month designators
-    # there (e.g. "P10Y" errors as "incorrectly formatted or out of range"), and an
-    # empty Duration already means "repeat every Interval indefinitely".
-    Register-ScheduledTask -TaskName $TaskCompanion -Force `
-        -Action    (New-ScheduledTaskAction -Execute $pythonwExe -Argument "`"$companionPath`"" -WorkingDirectory $InstallDir) `
-        -Trigger   $trigger `
-        -Principal $principal -Settings $settings `
-        -Description "Reports CPU temperature to the FleetHub hub." | Out-Null
-    Ok "Task: $TaskCompanion (30s delay, repeats every 2min as a self-heal restart path)"
-
-    # ------------------------------------------------------------------
-    # 8. Start and verify
-    # ------------------------------------------------------------------
-    Step "Starting services"
-
-    if (-not (Get-Process -Name "LibreHardwareMonitor" -ErrorAction SilentlyContinue)) {
-        Start-ScheduledTask -TaskName $TaskLhm
-    }
-
-    Say "Waiting for the sensor web server..."
-    $live = $false
-    foreach ($i in 1..20) {
-        Start-Sleep -Seconds 1
-        try {
-            $r = Invoke-RestMethod -Uri "http://localhost:$Port/data.json" -TimeoutSec 2
-            $live = $true
-            break
-        } catch { }
-    }
-
-    if (-not $live) {
-        Warn "No response on port $Port after 20s."
-        Warn "Open $lhmExe manually and check Options > Run web server."
-    } else {
-        Ok "Web server responding on http://localhost:$Port/data.json"
-
-        # Show what the companion will actually pick up
-        function Find-Temps($node, $inCpu) {
-            if ("$($node.HardwareId)" -like "*cpu*") { $inCpu = $true }
-            if ($inCpu -and $node.Type -eq "Temperature") {
-                $script:temps += [pscustomobject]@{ Sensor = $node.Text; Value = $node.Value }
-            }
-            foreach ($c in $node.Children) { Find-Temps $c $inCpu }
-        }
-        $script:temps = @()
-        Find-Temps $r $false
-        if ($script:temps.Count -gt 0) {
-            Say "CPU sensors detected:"
-            $script:temps | ForEach-Object { Say "   $($_.Sensor): $($_.Value)" }
-        } else {
-            Warn "No CPU temperature sensors visible. LHM may need a reboot to load its kernel driver."
-        }
-
-        Start-ScheduledTask -TaskName $TaskCompanion
-        Ok "Companion started"
-    }
-
-    Write-Host @"
-
-  Done.
-
-  Machine name reported to the hub: $env:COMPUTERNAME
-  Sensors : http://localhost:$Port/data.json
-  Files   : $InstallDir
-
-  companion.py updates itself from GitHub on every start, and weekly if left running.
-  Uninstall: powershell -ExecutionPolicy Bypass -File install.ps1 -Component Companion -Uninstall
-
-"@ -ForegroundColor Green
 }
 
 # ========================================================================
@@ -2613,7 +2339,9 @@ if ($Component -eq "Exit" -or -not $Component) {
 try {
     switch ($Component) {
         "Agent"     { if ($Uninstall) { Uninstall-Agent }     else { Install-Agent } }
-        "Companion" { if ($Uninstall) { Uninstall-Companion } else { Install-Companion } }
+        # Companion is uninstall-only: the Python agent is gone from the repo, so there is
+        # nothing left to install -- but legacy machines still need a way to be cleaned up.
+        "Companion" { if ($Uninstall) { Uninstall-Companion } else { Die "The Companion has been removed. Install the Agent instead: -Component Agent" } }
         "Hub"       { if ($Uninstall) { Uninstall-Hub }       else { Install-Hub } }
         "Turn"      { if ($Uninstall) { Uninstall-Turn }      else { Install-Turn } }
     }

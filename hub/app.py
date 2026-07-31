@@ -74,7 +74,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.57.0"
+HUB_VERSION = "1.58.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -185,8 +185,8 @@ def get_latest_sensors(machine):
 
 def _find_sensor_value(sensors, hardware_substr, sensor_type, preferred_name_substrs=None):
     """Fuzzy-matches one numeric value out of a flattened LHM sensor list -- same
-    preferred-name-first-match style as companion.py's PREFERRED_SENSORS, since
-    sensor naming varies across CPU/GPU vendors."""
+    preferred-name-first-match style as the agent's SensorReader.PreferredSensors,
+    since sensor naming varies across CPU/GPU vendors."""
     def matches_hardware(s):
         # hardware_id (e.g. "/amdcpu/0", "/gpu-nvidia/0", "/ram") is what reliably
         # identifies the category -- the display name ("AMD Ryzen 7 5800X") never
@@ -466,7 +466,7 @@ def _disk_volumes(sensors):
     its sensor set, so GB has to come from the agent's own DriveInfo walk.
 
     Falls back to LHM's per-device "Used Space" Load sensors for a machine that isn't
-    sending volume sensors (companion.py, or an agent older than 3.10.0). Those carry a
+    sending volume sensors (an agent older than 3.10.0). Those carry a
     percentage and no size, so used_gb/total_gb come back None and the UI shows the bar
     without the GB line -- degraded, not broken.
     """
@@ -548,8 +548,8 @@ def _memory_gb(sensors):
 
 def extract_diagnostics(sensors):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
-    list (see companion.py's flatten_sensors). Every field is None when not
-    found -- e.g. no discrete GPU, or an older companion that sent no sensors."""
+    list (see the agent's SensorReader flattening). Every field is None when not
+    found -- e.g. no discrete GPU, or an older client that sent no sensors."""
     if not sensors:
         return {
             "cpu_load_pct": None, "cpu_clock_mhz": None,
@@ -706,46 +706,39 @@ def derive_machine_status(updated_at):
     return "online" if (datetime.now() - parsed).total_seconds() <= window else "offline"
 
 # ================================
-# VERSION WATCHER  --  lets clients self-update promptly instead of waiting for
-# their own weekly GitHub poll. We periodically check the same sources they
-# update from, and echo the newest version *that client should be running* back
-# in /api/report's response; both companion.py and the agent check for an update
-# as soon as they see a number ahead of their own.
+# VERSION WATCHER  --  lets agents self-update promptly instead of waiting for
+# their own weekly GitHub poll. We periodically check the same source they update
+# from, and echo the newest version *that client should be running* back in
+# /api/report's response; the agent checks for an update as soon as it sees a
+# number ahead of its own.
 #
-# The fleet runs two trains that share the companion_version field:
-#   * companion.py (2.x), which self-updates from the raw script on main, and
-#   * TempMonitorAgent (3.x), the C# service, which self-updates from a signed
-#     manifest.
-# A companion can only reach the agent by first updating to 2.10.1 -- that's the
-# release whose migration path installs the service and decommissions itself. So
-# 2.x clients are climbed to 2.10.1 and then left alone, 3.x clients get the
-# latest agent. Advertising one global number strands one train or the other.
+# One train remains: TempMonitorAgent (3.x), the C# service, which self-updates
+# from a signed manifest. The Python companion (2.x) that used to share the
+# `companion_version` field is gone from the repo, so there is no 2.x release
+# left to advertise -- see get_advertised_version for what pre-agent clients get
+# instead. The wire field keeps its name: renaming it would break every agent
+# already in the field.
 # ================================
-COMPANION_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/companion.py"
 AGENT_MANIFEST_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
 # The hub reads its own latest version straight out of app.py on main -- same source-of-truth
 # and raw-GitHub trust as the client version hints above. Used only by the opt-in self-updater.
 HUB_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/hub/app.py"
 HUB_UPDATE_CHECK_INTERVAL = 15 * 60  # 15 minutes
-COMPANION_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
-# First version of the C# agent. A client reporting >= this is on the agent train
-# and must never be pointed back at a 2.x companion number.
+AGENT_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
+# First version of the C# agent. A client reporting >= this is on the agent train.
 AGENT_TRAIN_MIN_VERSION = "3.0.0"
-# Last stop on the companion train: the release that installs the agent and
-# decommissions itself. A companion that reaches this is done taking version
-# hints -- it now waits to be replaced by the agent, on its own migration
-# schedule. Only bump this if a 2.10.x hotfix ever has to reach the machines
-# that haven't migrated yet; companion.py is otherwise end-of-life.
+# Last companion release ever published: the one whose migration path installs the
+# agent and decommissions itself. Pinned here purely as the documented end of that
+# train -- nothing is served from it, since companion.py no longer exists on main.
 COMPANION_FINAL_VERSION = "2.10.1"
 
-latest_companion_version = None
 latest_agent_version = None
 latest_version_lock = threading.Lock()
 
 def version_tuple(v):
     """Tolerant version parse: reads the leading dotted-numeric prefix and ignores
-    any suffix (e.g. '2.8.0-rc1' -> (2, 8, 0)). Never raises. Mirrors the
-    identically-named helper in companion.py."""
+    any suffix (e.g. '2.8.0-rc1' -> (2, 8, 0)). Never raises. Mirrors the agent's
+    VersionUtil (see agent/src/TempMonitorAgent/Update/VersionUtil.cs)."""
     match = re.match(r"\s*(\d+(?:\.\d+)*)", str(v))
     if not match:
         return (0,)
@@ -760,10 +753,6 @@ def cmp_versions(a, b):
     tb += (0,) * (n - len(tb))
     return (ta > tb) - (ta < tb)
 
-def get_latest_companion_version():
-    with latest_version_lock:
-        return latest_companion_version
-
 def get_latest_agent_version():
     with latest_version_lock:
         return latest_agent_version
@@ -771,32 +760,19 @@ def get_latest_agent_version():
 def get_advertised_version(reported_version):
     """The version to echo back to a client currently running `reported_version`.
 
-    Agent-train clients (3.x) get the latest agent. Companions get climbed to
-    COMPANION_FINAL_VERSION and then deliberately go quiet: once a companion is
-    there it has everything it needs to install the agent, so we stop hinting and
-    let its migration replace it with 3.x. Clients too old to report a version at
-    all are treated as companions.
+    Agent-train clients (3.x) get the latest agent. Anything below that -- a
+    surviving 2.x companion, or a client too old to report a version at all --
+    deliberately gets nothing: companion.py is gone from main so there is no 2.x
+    release left to serve, and handing one a 3.x number would make it try to
+    install an agent build as if it were a Python script. Those machines have to
+    be moved over with install.ps1 by hand.
 
-    Returns None when there is nothing useful to say -- a companion waiting on
-    migration, or a train we haven't read yet -- in which case /api/report omits
-    latest_version entirely and the client falls back to its own poll."""
+    Returns None when there is nothing useful to say -- a pre-agent client, or a
+    manifest we haven't read yet -- in which case /api/report omits latest_version
+    entirely and the client falls back to its own poll."""
     if reported_version and cmp_versions(reported_version, AGENT_TRAIN_MIN_VERSION) >= 0:
         return get_latest_agent_version()
-    if reported_version and cmp_versions(reported_version, COMPANION_FINAL_VERSION) >= 0:
-        return None
-    return get_latest_companion_version()
-
-def refresh_latest_companion_version():
-    global latest_companion_version
-    try:
-        resp = requests.get(COMPANION_SOURCE_URL, timeout=10)
-        resp.raise_for_status()
-        match = re.search(r'^VERSION\s*=\s*["\']([\d.]+)["\']', resp.text, re.MULTILINE)
-        if match:
-            with latest_version_lock:
-                latest_companion_version = match.group(1)
-    except Exception as e:
-        print(f"[companion-version] Could not refresh latest version: {e}")
+    return None
 
 def refresh_latest_agent_version():
     """Read the agent's version straight out of the signed release manifest, so the
@@ -814,24 +790,23 @@ def refresh_latest_agent_version():
     except Exception as e:
         print(f"[agent-version] Could not refresh latest version: {e}")
 
-def companion_version_watcher():
+def agent_version_watcher():
     while True:
-        refresh_latest_companion_version()
         refresh_latest_agent_version()
-        time.sleep(COMPANION_VERSION_CHECK_INTERVAL)
+        time.sleep(AGENT_VERSION_CHECK_INTERVAL)
 
-companion_version_watcher_thread = None
-companion_version_watcher_lock = threading.Lock()
+agent_version_watcher_thread = None
+agent_version_watcher_lock = threading.Lock()
 
-def start_companion_version_watcher():
-    global companion_version_watcher_thread
-    with companion_version_watcher_lock:
-        if companion_version_watcher_thread and companion_version_watcher_thread.is_alive():
+def start_agent_version_watcher():
+    global agent_version_watcher_thread
+    with agent_version_watcher_lock:
+        if agent_version_watcher_thread and agent_version_watcher_thread.is_alive():
             return
-        companion_version_watcher_thread = threading.Thread(
-            target=companion_version_watcher, daemon=True, name="companion_version_watcher"
+        agent_version_watcher_thread = threading.Thread(
+            target=agent_version_watcher, daemon=True, name="agent_version_watcher"
         )
-        companion_version_watcher_thread.start()
+        agent_version_watcher_thread.start()
 
 # ================================
 # HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). Update in place, then exit; the
@@ -858,7 +833,7 @@ HUB_ARCHIVE_SUBDIR = "hub"
 
 def parse_hub_version(text):
     """Pull the HUB_VERSION string out of an app.py source blob, or None. Pure; mirrors
-    the VERSION parse in refresh_latest_companion_version()."""
+    the version parse in refresh_latest_agent_version()."""
     match = re.search(r'^HUB_VERSION\s*=\s*["\']([\d.]+)["\']', str(text or ""), re.MULTILINE)
     return match.group(1) if match else None
 
@@ -1859,7 +1834,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     # receive config. Reports without a sensor block keep the agent's own pick.
     temp_value = float(resolve_primary_temp(machine_name, float(temp), sensors))
     now = datetime.now()
-    # A reading may carry the companion's own timestamp (client_ts) -- e.g. a
+    # A reading may carry the client's own timestamp (client_ts) -- e.g. a
     # backfilled reading that was buffered while the hub was unreachable. Store it
     # under its real time; only treat "current" readings as live status.
     if timestamp_epoch is not None:
@@ -1891,7 +1866,7 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
 
     # Emit via WebSocket. Diagnostics come from the freshest cached sensors, not
     # this report's raw `sensors`, so a report that arrived without a sensor block
-    # (an older companion, or a second stale instance double-reporting for the same
+    # (an older client, or a second stale instance double-reporting for the same
     # machine) doesn't blank out CPU/GPU Load & Clock in the UI every other update.
     # set_latest_sensors() above only overwrites the cache when sensors are present.
     payload = {
@@ -2622,7 +2597,7 @@ try:
     resolve_all_duplicate_serials()
 except Exception as e:
     print(f"[dedup] Startup duplicate sweep failed: {e}")
-start_companion_version_watcher()
+start_agent_version_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
@@ -2727,7 +2702,7 @@ def report_temp():
     sensors = data.get('sensors')
     if not isinstance(sensors, list):
         sensors = None
-    # Optional companion-supplied timestamp (used to backfill readings buffered
+    # Optional client-supplied timestamp (used to backfill readings buffered
     # while the hub was down). Ignore values that are in the future or older than
     # our retention window -- those are clock-skew garbage, fall back to now().
     client_ts = data.get('client_ts')
@@ -2780,8 +2755,8 @@ def report_temp():
 @login_required
 @access.require(permissions.VIEW)
 def get_machines():
-    """Machine identity info (asset tag / serial number / model / companion version)
-    reported by companions, plus their latest known live temp and uptime.
+    """Machine identity info (asset tag / serial number / model / agent version)
+    reported by agents, plus their latest known live temp and uptime.
 
     Filtered to the caller's machine scope: an HR operator must not even SEE Hospital
     machines here, since this list is what the Dashboard and Asset Inventory render."""
@@ -2794,7 +2769,7 @@ def get_machines():
     result = [dict(row) for row in rows]
     known_machines = {row['machine'] for row in result}
     # Also surface machines that have reported temps but no identity fields yet
-    # (e.g. an older companion, or the very first report before a DB write lands).
+    # (e.g. an older client, or the very first report before a DB write lands).
     for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
         if machine not in known_machines:
             result.append({
@@ -2921,7 +2896,7 @@ def put_machine_primary_sensor(machine):
 @access.require_machine(permissions.MANAGE_SETTINGS)
 def delete_machine(machine):
     """Hard-delete a decommissioned machine: its identity row, all temperature history,
-    and its fleet agent enrollment. Irreversible. If the machine's companion is still
+    and its fleet agent enrollment. Irreversible. If the machine's agent is still
     running it will re-enroll and reappear on its next report -- this is meant for
     machines that are actually gone."""
     machine_name = str(machine).strip()
@@ -3332,7 +3307,6 @@ def inject_nav_context():
     context = {"open_alert_count": 0, "user_capabilities": set(),
                "is_superuser": False, "cap": permissions,
                "hub_version": HUB_VERSION,
-               "latest_companion_version": get_latest_companion_version(),
                "latest_agent_version": get_latest_agent_version()}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
@@ -3367,7 +3341,6 @@ def index():
     # The Dashboard no longer classifies high temperatures (that is the Alerts tab now, from a
     # server-side average), so the threshold values it used to embed are gone.
     return render_template("index.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/history")
@@ -3375,7 +3348,6 @@ def index():
 @access.require(permissions.VIEW)
 def history_page():
     return render_template("history.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/inventory")
@@ -3383,7 +3355,6 @@ def history_page():
 @access.require(permissions.VIEW)
 def inventory_page():
     return render_template("inventory.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/alerts")
@@ -3391,7 +3362,6 @@ def inventory_page():
 @access.require(permissions.VIEW)
 def alerts_page():
     return render_template("alerts.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/settings")
@@ -3399,7 +3369,6 @@ def alerts_page():
 @access.require(permissions.MANAGE_SETTINGS)
 def settings_page():
     return render_template("settings.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/permissions")
@@ -3407,7 +3376,6 @@ def settings_page():
 @access.require(permissions.MANAGE_PERMISSION_GROUPS)
 def permissions_page():
     return render_template("permissions.html", hub_version=HUB_VERSION,
-                           latest_companion_version=get_latest_companion_version(),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/machine/<machine>")
@@ -3420,7 +3388,6 @@ def machine_page(machine):
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
         enabled_metrics=enabled_history_metrics(),
         hub_version=HUB_VERSION,
-        latest_companion_version=get_latest_companion_version(),
         latest_agent_version=get_latest_agent_version()
     )
 
@@ -3430,10 +3397,10 @@ def machine_page(machine):
 application = app
 
 if __name__ == "__main__":
-    # Local self-reporting is intentionally disabled: the companion agent runs on
-    # the hub machine too and reports this host with full sensor data, so starting
+    # Local self-reporting is intentionally disabled: the fleet agent runs on the
+    # hub machine too and reports this host with full sensor data, so starting
     # local_logger here would double-report the hostname and make the dashboard's
-    # Load/Clock flicker. See wsgi.py for how to re-enable on a companion-less box.
+    # Load/Clock flicker. See wsgi.py for how to re-enable on an agent-less box.
     # start_local_logger()
 
     # Use socketio.run instead of app.run

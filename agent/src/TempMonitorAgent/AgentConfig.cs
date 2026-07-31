@@ -2,12 +2,12 @@ namespace TempMonitorAgent;
 
 /// <summary>
 /// Static configuration for the agent: versions, intervals, endpoints, embedded
-/// trust roots, and %ProgramData% state paths. Mirrors the constants at the top of
-/// companion.py so the wire behaviour stays in parity.
+/// trust roots, and %ProgramData% state paths.
 /// </summary>
 public static class AgentConfig
 {
-    /// <summary>Reported to the hub as companion_version; also the self-update baseline.
+    /// <summary>Reported to the hub as companion_version -- the field keeps that name
+    /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
     public const string Version = "3.18.0";
 
@@ -27,7 +27,7 @@ public static class AgentConfig
 
     // --- Hub endpoints -----------------------------------------------------
     // Base URL is overridable via FLEETHUB_HUB (legacy: TEMP_MONITOR_HUB) for local
-    // testing (e.g. http://localhost:3001). Production default matches companion.py.
+    // testing (e.g. http://localhost:3001).
     public static string HubBase =>
         (Env("HUB", "HUB") ?? "https://temp.arkeanos.net").TrimEnd('/');
 
@@ -158,8 +158,8 @@ public static class AgentConfig
     //
     // The UPDATE trust root below is separate and still fully enforced.
 
-    // Ed25519 public key that verifies the signed self-update manifest. Reuses
-    // the existing companion update key (UPDATE_PUBLIC_KEY_HEX in companion.py).
+    // Ed25519 public key that verifies the signed self-update manifest. This is the
+    // fleet's release trust root -- see sign_release.py --sign-agent.
     public const string UpdatePublicKeyHex =
         "9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c";
 
@@ -253,7 +253,7 @@ public static class AgentConfig
     // file rather than the command line, so single-use secrets never show up in the
     // process list. Written by the executor, read-then-deleted by the helper.
     public static string RemoteStateDir => Path.Combine(ProgramDataDir, "remote");
-    // The helper logs to its own file rather than companion.log: it runs in a different
+    // The helper logs to its own file rather than the agent log: it runs in a different
     // session, and keeping its diagnostics separate makes a field capture issue legible.
     public static string RemoteHelperLogPath => Path.Combine(ProgramDataDir, "remote-helper.log");
 

@@ -215,6 +215,6 @@ Write-Host @"
   Done. Agent v$Version released as $Tag.
   Asset : $AssetUrl
   Fleet agents will pick this up on their next manifest check (weekly, or
-  sooner if the hub echoes a newer companion_version).
+  sooner if the hub echoes a newer version in its /api/report reply).
 
 "@ -ForegroundColor Green

@@ -50,7 +50,7 @@ public readonly record struct CommandResult(bool Success, string? Output, string
     public static CommandResult Fail(string output) => new(false, output);
 }
 
-/// <summary>One flattened leaf sensor, matching companion.py's flatten_sensors dict.</summary>
+/// <summary>One flattened leaf sensor, matching the hub's flattened LHM sensor shape.</summary>
 public sealed class SensorReading
 {
     [JsonPropertyName("hardware")] public string? Hardware { get; set; }

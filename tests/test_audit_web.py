@@ -79,7 +79,7 @@ def build_app(db_path):
                    "user_capabilities": permissions.effective_permissions(
                        db_path, email, superusers=SUPERUSERS)["capabilities"],
                    "open_alert_count": 0, "is_superuser": email in SUPERUSERS,
-                   "latest_companion_version": None, "latest_agent_version": None}
+                   "latest_agent_version": None}
         # The real t(), in English -- not a stub. A no-op t() here would let a page ship
         # with a mistyped key that this test renders happily.
         context.update(i18n.template_context("en"))

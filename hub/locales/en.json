@@ -33,7 +33,6 @@
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agent v{version}",
-    "companion_version": "Companion v{version}",
     "sign_out": "Sign out",
     "toggle_theme": "Toggle color theme",
     "more": "More",

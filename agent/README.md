@@ -1,8 +1,9 @@
 # FleetHub — C#/.NET Fleet Agent
 
-A Windows Service (runs under **LocalSystem**) that replaces the Python `companion.py`
-for RMM. It reaches telemetry parity with the companion **and** speaks the hub's fleet
-command channel: it enrolls, heartbeats, polls for commands, executes them, reports
+The fleet's only telemetry client: a Windows Service (runs under **LocalSystem**) that
+replaced the Python `companion.py`, since removed from the repo. It reaches telemetry
+parity with the companion **and** speaks the hub's fleet command channel: it enrolls,
+heartbeats, polls for commands, executes them, reports
 results, and updates itself from a **signed** manifest (verified fail-closed). It also
 carries the client half of the interactive terminal (ConPTY), package deployment,
 per-PC file backup/restore, and remote view/control.
@@ -122,8 +123,8 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
    the exe to that exact release-asset URL. The running service checks the manifest
    weekly (and on a hub `latest_version` hint), verifies the signature, hash-checks the
    binary, renames the running exe aside, drops the new one in, and exits code 17 so the
-   SCM restarts onto it. **If you skip signing, fleet updates stall** (same rule as
-   `companion.py`).
+   SCM restarts onto it. **If you skip signing, fleet updates stall** — the signature
+   check fails closed.
 
 ## Install (elevated PowerShell)
 ```powershell
@@ -137,9 +138,10 @@ still registered as **`TempMonitorAgent`** on purpose: .NET takes the service na
 the assembly, and a self-updating agent swaps its binary without re-registering, so
 renaming one side alone would break exactly the machines already in the field.
 
-Logs: `%ProgramData%\FleetHub\Agent\companion.log`, plus
-`remote-helper.log` beside it for the remote view/control helper (it runs in a
-different session, so it gets its own file).
+Logs: `%ProgramData%\FleetHub\Agent\companion.log` — kept under that name for the same
+reason as the service name and the `companion_version` wire field: it is what's already
+on disk across the fleet. Plus `remote-helper.log` beside it for the remote view/control
+helper (it runs in a different session, so it gets its own file).
 
 Self-tests runnable on the machine, no hub or browser involved:
 `--desktop-probe [seconds]` (which input desktop, and can this process attach to it)

@@ -4,7 +4,7 @@ __pycache__
 .env
 sign_release.py
 
-# Private signing key for companion self-updates -- MUST never be committed.
+# Private signing key for agent self-updates -- MUST never be committed.
 .temp_monitor_signing_key
 *.temp_monitor_signing_key
 

@@ -5,8 +5,8 @@ namespace TempMonitorAgent.Telemetry;
 
 /// <summary>
 /// Reads BIOS/chassis identity via WMI once at startup (values don't change at
-/// runtime). Mirrors companion.py get_system_info: serial (Win32_BIOS), model and
-/// manufacturer (Win32_ComputerSystem), asset tag (Win32_SystemEnclosure.SMBIOSAssetTag),
+/// runtime). Reads serial (Win32_BIOS), model and manufacturer (Win32_ComputerSystem),
+/// asset tag (Win32_SystemEnclosure.SMBIOSAssetTag),
 /// and service tag (Win32_SystemEnclosure.SerialNumber -- the chassis serial, distinct
 /// from the BIOS serial, and where Dell's Service Tag lives) with the same placeholder
 /// filtering. Also exposes system uptime.
@@ -16,9 +16,9 @@ public static class SystemInfo
     private static readonly string[] PlaceholderAssetTags =
         { "default string", "no asset", "to be filled", "invalid" };
 
-    /// <summary>Whitebox/OEM-unset values for Win32_ComputerSystem.Manufacturer. Kept in
-    /// step with companion.py's _PLACEHOLDER_MANUFACTURERS: manufacturer is what BIOS and
-    /// firmware management dispatches on, so an unknown vendor must read as unknown
+    /// <summary>Whitebox/OEM-unset values for Win32_ComputerSystem.Manufacturer:
+    /// manufacturer is what BIOS and firmware management dispatches on, so an
+    /// unknown vendor must read as unknown
     /// rather than as a brand nobody can query.</summary>
     private static readonly string[] PlaceholderManufacturers =
         PlaceholderAssetTags.Concat(new[] { "system manufacturer", "o.e.m." }).ToArray();

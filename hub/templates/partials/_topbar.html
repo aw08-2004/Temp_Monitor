@@ -19,9 +19,6 @@
         {% if latest_agent_version %}
         <span class="badge">{{ t('topbar.agent_version', version=latest_agent_version) }}</span>
         {% endif %}
-        {% if latest_companion_version %}
-        <span class="badge">{{ t('topbar.companion_version', version=latest_companion_version) }}</span>
-        {% endif %}
         {% if session.user %}
         {# In the overflow wrapper with the other account chrome: changing your language is
            account-level, not glanceable state, so it sits with Sign out rather than beside

@@ -22,7 +22,7 @@ namespace TempMonitorAgent.State;
 public sealed record RuntimeConfig
 {
     /// <summary>Best-first CPU temperature preference, matched as a lowercased substring
-    /// of the sensor name. Default mirrors companion.py's PREFERRED_SENSORS.</summary>
+    /// of the sensor name. Mirrored by the hub's settings.DEFAULT_SENSOR_PREFERENCE.</summary>
     public IReadOnlyList<string> PreferredSensors { get; init; } = new[]
     {
         "cpu package",

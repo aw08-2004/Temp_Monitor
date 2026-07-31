@@ -11,8 +11,8 @@
         exits with code 17 to swap onto a new binary.
       - The one-time enrollment secret into HKLM\SOFTWARE\TempMonitorAgent
 
-    Unlike the Python companion (per-logon Scheduled Task in a user session), this
-    runs in session 0 as SYSTEM, so restart/rename/gpupdate/scripts work with no one
+    Unlike the removed Python companion (a per-logon Scheduled Task in a user session),
+    this runs in session 0 as SYSTEM, so restart/rename/gpupdate/scripts work with no one
     logged in.
 
     Usage (elevated PowerShell):
