@@ -16,6 +16,12 @@ public interface IScreenCapture : IDisposable
     int Stride { get; }
     /// <summary>BGRA pixels; valid only after <see cref="TryCapture"/> returns true.</summary>
     byte[] Frame { get; }
+    /// <summary>True once this capture has produced at least one frame, so <see cref="Frame"/>,
+    /// <see cref="Width"/> and <see cref="Height"/> describe a real picture. A caller must not
+    /// read "TryCapture returned false" as "there is nothing here" -- on Desktop Duplication
+    /// false is overwhelmingly "the screen has not changed", and the screen we most need to
+    /// capture (the logon screen) never changes on its own.</summary>
+    bool HasFrame { get; }
     /// <summary>Capture the next frame. Returns false on a timeout with no screen change
     /// (nothing new to send) so the caller can hold the previous frame.</summary>
     bool TryCapture(int timeoutMs);
@@ -52,6 +58,12 @@ public sealed class DxgiScreenCapture : IScreenCapture
     public int Height { get; private set; }
     public int Stride { get; private set; }
     public byte[] Frame { get; private set; } = Array.Empty<byte>();
+    public bool HasFrame { get; private set; }
+
+    /// <summary>The duplication object exists, i.e. this adapter/output pair let us duplicate it.
+    /// Distinct from <see cref="HasFrame"/>: a duplication of a perfectly static desktop is
+    /// working and will simply time out until something moves.</summary>
+    public bool IsDuplicating => _duplication is not null;
 
     public DxgiScreenCapture(int monitorIndex) => _monitorIndex = monitorIndex;
 
@@ -87,6 +99,7 @@ public sealed class DxgiScreenCapture : IScreenCapture
                 int needed = Stride * Height;
                 if (Frame.Length < needed) Frame = new byte[needed];
                 Marshal.Copy(mapped.DataPointer, Frame, 0, needed);
+                HasFrame = true;
                 return true;
             }
             finally
@@ -189,6 +202,7 @@ public sealed class GdiScreenCapture : IScreenCapture
     public int Height { get; private set; }
     public int Stride { get; private set; }
     public byte[] Frame { get; private set; } = Array.Empty<byte>();
+    public bool HasFrame { get; private set; }
 
     public bool TryCapture(int timeoutMs)
     {
@@ -224,6 +238,7 @@ public sealed class GdiScreenCapture : IScreenCapture
             finally { handle.Free(); }
 
             SelectObject(memDc, old);
+            HasFrame = true;
             return true;
         }
         catch { return false; }

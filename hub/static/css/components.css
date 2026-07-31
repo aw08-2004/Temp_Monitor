@@ -284,6 +284,12 @@
     flex-shrink: 0;
 }
 
+/* Same [hidden] caveat as .btn and .tab-panel: display:inline-flex above beats the UA
+   stylesheet's [hidden] rule, so `badge.hidden = true` set the attribute and changed nothing --
+   which left the remote tab permanently showing "Secure desktop" and "No display outputs" on
+   every machine, whatever the agent actually reported. */
+.status-pill[hidden] { display: none; }
+
 .status-pill--ok { color: var(--success); }
 .status-pill--warn { color: var(--warning); }
 .status-pill--danger { color: var(--danger); }

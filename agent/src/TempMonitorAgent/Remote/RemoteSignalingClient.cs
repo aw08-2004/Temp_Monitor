@@ -30,12 +30,25 @@ public sealed class RemoteSignalingClient : IDisposable
         _endedUrl = $"{baseUrl}/api/agent/remote/{enc}/ended";
     }
 
-    /// <summary>Send one signal (offer/ice/bye) to the console side.</summary>
-    public async Task PostSignalAsync(string kind, object payload, CancellationToken ct)
+    /// <summary>Send one signal (offer/ice/bye) to the console side. Returns the hub's sequence
+    /// number for it, or 0 if the hub did not report one -- see <see cref="RemoteHelper"/> for
+    /// why the offer's seq matters.</summary>
+    public async Task<int> PostSignalAsync(string kind, object payload, CancellationToken ct)
     {
         using var resp = await _http.PostAsJsonAsync(
             _signalUrl, new { kind, payload }, ct);
         resp.EnsureSuccessStatusCode();
+        try
+        {
+            var body = await resp.Content.ReadFromJsonAsync<PostResult>(cancellationToken: ct);
+            return body?.Seq ?? 0;
+        }
+        catch
+        {
+            // A hub too old to report the seq, or a body we cannot parse. 0 means "start from
+            // the beginning", which is the behaviour we had before this returned anything.
+            return 0;
+        }
     }
 
     /// <summary>Fetch console signals newer than <paramref name="afterSeq"/>, plus the session
@@ -57,6 +70,11 @@ public sealed class RemoteSignalingClient : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+
+    private sealed class PostResult
+    {
+        [JsonPropertyName("seq")] public int Seq { get; set; }
+    }
 
     public sealed class PollResult
     {

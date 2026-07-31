@@ -28,6 +28,12 @@ public sealed class CaptureEncodePipeline
     /// staring at a frozen frame gets an explanation.</summary>
     private const int StallThresholdMs = 5000;
 
+    /// <summary>How long a capture that HAS a picture may go without a new one before we rebuild
+    /// it anyway. This is a backstop for a wedged driver, not stall detection: a desktop nobody
+    /// is touching legitimately produces no frames for hours, so this must never be short enough
+    /// to churn an idle session.</summary>
+    private const int IdleRebuildMs = 30_000;
+
     /// <summary>Reported to the caller whenever the stream's shape changes, so the browser can
     /// be told what it is now looking at.</summary>
     public readonly record struct Geometry(
@@ -142,18 +148,26 @@ public sealed class CaptureEncodePipeline
                     continue;
                 }
 
-                // 4. Duplication that died and has stayed dead is not going to fix itself from
-                //    inside; rebuild it (which also re-runs the DXGI-then-GDI fallback).
-                if (!fresh && session.DeadFor(StallThresholdMs))
+                // 4. Nothing arriving is two different situations, and treating them the same
+                //    is what made the logon screen unusable. A capture that has never produced
+                //    a picture is broken: rebuild it quickly and say so. A capture that HAS a
+                //    picture and has merely stopped changing is an idle desktop -- the normal
+                //    state of a logon screen -- so keep encoding the frame we hold, stay quiet,
+                //    and only rebuild much later as a backstop against a wedged driver.
+                bool blind = !session.HasFrame;
+                int deadline = blind ? StallThresholdMs : IdleRebuildMs;
+                if (!fresh && session.DeadFor(deadline))
                 {
-                    log("capture produced nothing for " + StallThresholdMs + "ms; rebuilding");
+                    log($"capture produced nothing for {deadline}ms " +
+                        $"({(blind ? "no frame ever" : "screen idle")}); rebuilding");
                     session.Dispose();
                     session = null;
                     continue;
                 }
 
                 if (fresh) { sinceLastFrame.Restart(); stallReported = false; }
-                else ReportStallOnce(ref stallReported, sinceLastFrame, onStall, binder?.AttachedName);
+                else if (blind)
+                    ReportStallOnce(ref stallReported, sinceLastFrame, onStall, binder?.AttachedName);
 
                 long frameDuration100ns = 10_000_000L / wanted.Fps;
                 var encoded = session.Encode(timestamp, frameDuration100ns);
@@ -211,6 +225,9 @@ public sealed class CaptureEncodePipeline
         public int SourceHeight { get; }
         public int MonitorCount { get; }
         public string EncoderDescription => _encoder.Description;
+        /// <summary>The capture has a real picture in hand (see <see cref="IScreenCapture.HasFrame"/>),
+        /// so silence from it means "nothing moved", not "nothing works".</summary>
+        public bool HasFrame => _capture.HasFrame;
         /// <summary>The capture started handing back a different resolution than we sized for.</summary>
         public bool SourceSizeChanged { get; private set; }
 
@@ -257,8 +274,13 @@ public sealed class CaptureEncodePipeline
                     _ => new H264Encoder(dstW, dstH, settings.Fps, settings.BitrateBps,
                                          settings.Preference, log),
                 };
-                return new CaptureSession(settings, capture, encoder, srcW, srcH, dstW, dstH,
-                                          DisplayProbe.OutputCount());
+                var session = new CaptureSession(settings, capture, encoder, srcW, srcH, dstW, dstH,
+                                                 DisplayProbe.OutputCount());
+                // Convert what the capture already holds. An idle desktop hands us nothing more
+                // until something moves, so without this the first seconds -- possibly all of
+                // them, on a logon screen -- would encode a buffer of zeros.
+                session.PrimeFromHeldFrame();
+                return session;
             }
             catch
             {
@@ -289,13 +311,30 @@ public sealed class CaptureEncodePipeline
                 return false;
             }
 
+            Convert();
+            return true;
+        }
+
+        /// <summary>Convert the frame the capture is already holding, without waiting for a new
+        /// one. Safe to call only when the held frame matches the geometry we were built for.</summary>
+        internal void PrimeFromHeldFrame()
+        {
+            if (!_capture.HasFrame) return;
+            // The odd-pixel trim Open applies means the held frame can be one pixel wider or
+            // taller than what we were sized for; anything more than that is a real mismatch.
+            if ((_capture.Width & ~1) != SourceWidth || (_capture.Height & ~1) != SourceHeight)
+                return;
+            Convert();
+        }
+
+        private void Convert()
+        {
             if (_scratch.Length == 0)
                 ColorConvert.BgraToNv12(_capture.Frame, _capture.Stride, Width, Height, _nv12);
             else
                 ColorConvert.BgraToNv12Scaled(_capture.Frame, _capture.Stride,
                                               SourceWidth, SourceHeight, Width, Height,
                                               _nv12, _scratch);
-            return true;
         }
 
         public bool DeadFor(int ms) => _sinceFresh.ElapsedMilliseconds >= ms;
@@ -311,21 +350,46 @@ public sealed class CaptureEncodePipeline
         }
     }
 
+    /// <summary>
+    /// Choose the capture path. The test is "can Desktop Duplication duplicate this output",
+    /// NOT "did it hand us a frame in the next second": a duplication of an unchanging screen
+    /// times out and is still perfectly healthy. Falling back on that alone was catastrophic on
+    /// exactly the screen this feature exists for -- the logon screen is static by nature, and
+    /// GDI cannot see the secure desktop at all, so the fallback traded a working capture for a
+    /// permanently black one.
+    /// </summary>
     private static IScreenCapture OpenCapture(int monitor, Action<string> log)
     {
         var dxgi = new DxgiScreenCapture(monitor);
         for (int i = 0; i < 10; i++)
             if (dxgi.TryCapture(100)) { log("using DXGI Desktop Duplication"); return dxgi; }
+
+        if (dxgi.IsDuplicating)
+        {
+            log("using DXGI Desktop Duplication (no screen change yet -- an idle desktop or " +
+                "logon screen looks like this)");
+            return dxgi;
+        }
+
         dxgi.Dispose();
-        log("DXGI unavailable; using GDI BitBlt fallback");
+        log("DXGI unavailable; using GDI BitBlt fallback (this cannot see the secure desktop)");
         return new GdiScreenCapture();
     }
 
-    private static bool WaitForFirstFrame(IScreenCapture capture, out int width, out int height)
+    /// <summary>
+    /// Wait until the capture has a picture to size the encoder against. It counts frames the
+    /// capture already had -- <see cref="OpenCapture"/> above spends up to a second asking for
+    /// one, and on a static screen that is the only frame we are going to be handed until
+    /// something moves. Discarding it here is what used to leave an operator staring at black
+    /// with "the agent is not getting any frames" on a machine whose monitor was showing the
+    /// logon screen perfectly well.
+    /// </summary>
+    internal static bool WaitForFirstFrame(IScreenCapture capture, out int width, out int height)
     {
         for (int i = 0; i < 50; i++) // ~5s at 100ms
         {
-            if (capture.TryCapture(100) && capture.Width > 0 && capture.Height > 0)
+            if ((capture.TryCapture(100) || capture.HasFrame)
+                && capture.Width > 0 && capture.Height > 0)
             {
                 width = capture.Width;
                 height = capture.Height;

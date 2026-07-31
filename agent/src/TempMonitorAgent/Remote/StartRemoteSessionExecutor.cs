@@ -66,8 +66,11 @@ public sealed class StartRemoteSessionExecutor : ICommandExecutor
         }
 
         // Track it so the supervisor can bring the helper back if its Windows session goes away
-        // -- which is exactly what happens the moment the operator signs in at the logon screen.
-        RemoteSessionSupervisor.Track(session.SessionId, session.ToJson(), result.Pid);
+        // -- which is exactly what happens the moment the operator signs in at the logon screen
+        // -- and, when the session was auto-selected, follow the interactive session if it moves
+        // to another one (switch user, RDP taking the console).
+        RemoteSessionSupervisor.Track(session.SessionId, session.ToJson(), result.Pid,
+                                      result.SessionId, auto: session.TargetSession is null);
 
         _log.LogInformation(
             "start_remote_session {SessionId}: helper launched pid={Pid} in session {Session}",

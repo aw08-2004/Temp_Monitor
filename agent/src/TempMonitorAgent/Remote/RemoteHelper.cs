@@ -282,8 +282,9 @@ public static class RemoteHelper
 
         // Offer first, then start streaming, then poll for the answer + remote ICE.
         var offer = await peer.CreateOfferAsync();
-        await signaling.PostSignalAsync("offer", offer, cts.Token);
-        Log.Information("Posted offer; starting capture and awaiting the console's answer.");
+        int offerSeq = await signaling.PostSignalAsync("offer", offer, cts.Token);
+        Log.Information("Posted offer (seq {Seq}); starting capture and awaiting the console's answer.",
+                        offerSeq);
 
         // Geometry the capture loop last reported, read by the input thread so its coordinate
         // mapping follows the stream. A plain volatile cell rather than a callback: resolving
@@ -326,7 +327,14 @@ public static class RemoteHelper
         var inputThread = StartThread("remote-input",
             () => RunInputLoop(inputQueue, settings, pendingGeometry, desktops, cts.Token), cts);
 
-        int afterSeq = 0;
+        // Start reading AFTER our own offer, not from the beginning. The hub keeps every signal
+        // for the life of the session, and this helper may be a replacement for one the
+        // supervisor stopped or that died with its Windows session (sign-in, sign-out, switch
+        // user). Those signals answer the PREVIOUS peer: applying that stale answer to this
+        // brand-new peer sets the wrong ICE credentials and DTLS fingerprint on it, and the real
+        // answer that follows is then rejected as a second remote description -- a reconnect
+        // that hangs forever rather than one that fails visibly.
+        int afterSeq = offerSeq;
         while (!cts.IsCancellationRequested)
         {
             RemoteSignalingClient.PollResult poll;

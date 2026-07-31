@@ -1011,6 +1011,23 @@ the operator's scope; every session start/stop is in the audit log.
   screen visible and typeable. Signing in destroys the Windows session the helper lives in, so
   the service supervises the helper and re-injects it into the new session — the view comes back
   on its own a few seconds after the remote login succeeds.
+- **Auto follows the session; a pinned session stays pinned.** Sign-out and *switch user* move
+  the interactive desktop into a different Windows session, and only sometimes by killing the
+  one the helper is in. On a switch-user the old session survives, disconnected but intact, so
+  the helper keeps streaming a live picture of a desktop that is no longer on the monitor and no
+  longer where the operator's keystrokes land. With **Auto** selected the service re-asks which
+  session is interactive every few seconds and moves the helper when the answer changes (the
+  browser reconnects on its own, as it does after a sign-in). A session the operator picked by
+  hand is never moved — watching one user's session while somebody else uses the console is a
+  legitimate thing to be doing.
+- **A screen nobody is touching is not a broken capture.** Desktop Duplication reports "no new
+  frame" for a desktop that has not changed, which is the permanent state of a logon screen.
+  Treating that as a failure is how the remote view used to end up black with *"the agent is not
+  getting any frames"* on a machine whose monitor was showing the logon prompt perfectly well —
+  the pipeline discarded the frame it already held, and its fallback to GDI (which cannot see
+  the secure desktop at all) guaranteed black. The pipeline now keeps the picture it has, only
+  reports a stall when it has never had one, and only leaves Desktop Duplication when the
+  duplication itself cannot be built.
 - **Headless machines need a virtual display.** Desktop Duplication duplicates a display
   *output*; a machine with no monitor has none, so there is genuinely nothing to capture and the
   stream is black. The Remote tab shows a **No display outputs** badge on such a machine and

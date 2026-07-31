@@ -34,8 +34,19 @@ internal static class SessionInjector
 
     /// <summary>Sentinel returned by WTSGetActiveConsoleSessionId when no user is at the
     /// physical console (locked at the logon screen counts as a session; fully logged off
-    /// does not).</summary>
-    private const uint NoActiveSession = 0xFFFFFFFF;
+    /// does not). Also what <see cref="AutoSelectSession"/> returns when there is nothing to
+    /// capture at all.</summary>
+    internal const uint NoActiveSession = 0xFFFFFFFF;
+
+    /// <summary>
+    /// The session "auto" resolves to right now -- the same choice <see cref="Launch"/> makes
+    /// when the operator did not pin one.
+    ///
+    /// Exposed so <see cref="RemoteSessionSupervisor"/> can notice that the answer has changed
+    /// underneath a running session (somebody signed out, switched user, or connected over RDP)
+    /// and move the helper. Cheap enough to call every few seconds: one WTS enumeration.
+    /// </summary>
+    internal static uint AutoSelectSession() => FindInteractiveSession();
 
     /// <summary>Launch <paramref name="applicationPath"/> with <paramref name="arguments"/>
     /// as SYSTEM in an interactive session, on winsta0\default.
