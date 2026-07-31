@@ -2168,14 +2168,30 @@ print("ok")
 
     Step "Installing the $HubServiceName service"
     # Serve via waitress; prefer its console script, fall back to `python -m waitress`.
+    #
+    # --threads is NOT optional here, and waitress's default of 4 is far too low for this app.
+    # The hub speaks Socket.IO in engineio's `threading` async_mode over the polling transport
+    # (app.py: async_mode="threading", transports=["polling"], allow_upgrades=False -- waitress
+    # cannot do WebSockets, so that is deliberate). In that mode a poll is served by BLOCKING a
+    # worker thread on a queue until a packet arrives or the ping cycle expires (~25s). Both
+    # index.html and machine.html open a socket, so every dashboard/machine tab an operator
+    # leaves open parks one worker more or less permanently.
+    #
+    # At the default 4 that left ~3 threads for the entire rest of the hub -- static assets,
+    # agent heartbeats, PTY polls (~7 req/s per active terminal) -- and a fast page reload
+    # would stall: the reloaded page's new socket connects before the hub notices the old
+    # one's parked poll is dead, and everything else queues in the backlog until a poll times
+    # out. The threads are blocked on a queue rather than burning CPU, so a generous pool is
+    # nearly free; size it by expected concurrent operator TABS, not by request rate.
+    $HubThreads  = 32
     $scriptsDir  = Join-Path (Split-Path $pythonExe -Parent) "Scripts"
     $waitressExe = Join-Path $scriptsDir "waitress-serve.exe"
     if (Test-Path $waitressExe) {
         $hubExec = $waitressExe
-        $hubArgs = "--host=0.0.0.0 --port=$HubPort wsgi:application"
+        $hubArgs = "--host=0.0.0.0 --port=$HubPort --threads=$HubThreads wsgi:application"
     } else {
         $hubExec = $pythonExe
-        $hubArgs = "-m waitress --host=0.0.0.0 --port=$HubPort wsgi:application"
+        $hubArgs = "-m waitress --host=0.0.0.0 --port=$HubPort --threads=$HubThreads wsgi:application"
     }
 
     # Retire the legacy scheduled task if this box predates the service, so the two don't

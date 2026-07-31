@@ -76,7 +76,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.59.1"
+HUB_VERSION = "1.59.2"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1205,6 +1205,14 @@ print(f"[hub] Configured public URL: {HUB_URL}")
 # operator's session. SameSite=Lax happens to withhold the cookie from those requests
 # today, but that is the browser's default doing the work, not ours. The socket carries
 # live telemetry for the whole fleet and is same-origin in every real deployment.
+#
+# THIS CONFIG COSTS ONE WAITRESS THREAD PER OPEN TAB. polling + threading means engineio
+# serves a poll by blocking a worker on a queue until a packet arrives or the ping cycle
+# expires (~25s), and index.html/machine.html both open a socket -- so the serving thread
+# pool has to be sized by concurrent operator tabs, not by request rate. waitress's default
+# of 4 starves the hub outright; install.ps1 passes --threads explicitly and explains why.
+# Don't drop the transport pin to "fix" this: waitress has no WebSocket support, so
+# allowing upgrades here just breaks the socket.
 socketio = SocketIO(
     app,
     cors_allowed_origins=[HUB_URL.rstrip("/")],
