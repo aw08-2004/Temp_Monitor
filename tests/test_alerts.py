@@ -208,6 +208,16 @@ def test_alert_auto_resolves_when_one_goes_offline():
     report("flapB", "SER-AL-3")
     check("alert raised while both online", open_alert_for("SER-AL-3") is not None)
 
+    # The survivor has to be an ENROLLED machine or resolve_serial_group refuses to merge:
+    # its trigger is the unauthenticated /api/report, so an unenrolled hostname is an
+    # identity claim nobody vouched for. Real machines are always enrolled; see
+    # test_dedup.test_unenrolled_survivor_never_absorbs_a_real_machine for the case this
+    # guards against.
+    with app.get_db_conn() as conn:
+        conn.execute(
+            "INSERT INTO agents(agent_id, machine, token_hash, enrolled_at, last_seen, "
+            "revoked) VALUES ('agent-flapA', 'flapA', 'h', 0, 0, 0)")
+
     make_offline("flapB")
     report("flapA", "SER-AL-3")              # flapB now offline -> auto-merge, resolve
     check("alert cleared", open_alert_for("SER-AL-3") is None)
@@ -224,10 +234,10 @@ def test_dismiss_endpoint():
     report("dismB", "SER-AL-4")
     a = open_alert_for("SER-AL-4")
     check("alert raised", a is not None)
-    resp = client.post(f"/api/alerts/{a['id']}/dismiss")
+    resp = client.post(f"/api/alerts/{a['id']}/dismiss", json={})
     check("dismiss 200", resp.status_code == 200)
     check("alert closed", open_alert_for("SER-AL-4") is None)
-    resp = client.post(f"/api/alerts/{a['id']}/dismiss")
+    resp = client.post(f"/api/alerts/{a['id']}/dismiss", json={})
     check("dismiss again -> 404", resp.status_code == 404)
 
 
@@ -370,7 +380,7 @@ def test_high_temp_api_and_scope():
     check("high-temp alert is returned with its detail",
           row is not None and row["detail"]["avg_temp"] == 88.0)
 
-    resp = client.post(f"/api/alerts/{row['id']}/dismiss")
+    resp = client.post(f"/api/alerts/{row['id']}/dismiss", json={})
     check("a high-temp alert can be dismissed", resp.status_code == 200
           and _open_high_temp("apiHot") is None)
 

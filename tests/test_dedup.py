@@ -28,6 +28,7 @@ os.chdir(_TMPDIR)
 # already-set env var, so this beats the real .env.
 os.environ["ALLOWED_EMAILS"] = "tester@example.com"
 
+import alerts
 import app
 import settings
 
@@ -52,6 +53,23 @@ def report(machine, serial, temp=42.0):
     return client.post("/api/report", json={
         "machine": machine, "temp": temp, "serial_number": serial, "model": "TestModel",
     })
+
+
+def enroll(machine):
+    """Give `machine` a live agent enrollment.
+
+    Not decoration: resolve_serial_group refuses to merge INTO a hostname that has none,
+    because the merge is triggered from the unauthenticated /api/report and an
+    unenrolled hostname is an identity claim nobody vouched for. The legitimate rename
+    case always has this -- the box that renamed itself is the box already enrolled --
+    so a dedup test that omits it is testing a case that cannot happen in the field.
+    """
+    with app.get_db_conn() as conn:
+        conn.execute(
+            "INSERT INTO agents(agent_id, machine, token_hash, enrolled_at, last_seen, "
+            "revoked) VALUES (?, ?, 'h', 0, 0, 0)",
+            (f"agent-{machine}", machine),
+        )
 
 
 def make_offline(machine, seconds_ago=None):
@@ -105,6 +123,7 @@ def test_valid_serial():
 def test_offline_overwrite_preserves_history():
     print("\n-- offline duplicate merges into the online one, history preserved --")
     report("OpenClaw", "SER-RENAME-1")
+    enroll("OPENCLAW")                     # the renamed box is a real, enrolled machine
     seed_readings("OpenClaw", 3)          # pre-rename history
     make_offline("OpenClaw")               # old hostname went offline
     report("OPENCLAW", "SER-RENAME-1")     # new hostname reports -> triggers dedup
@@ -131,6 +150,7 @@ def test_all_offline_keeps_newest():
     print("\n-- all-offline duplicates collapse to the most recently updated --")
     report("boxOld", "SER-OFFLINE-1")
     report("boxNew", "SER-OFFLINE-1")
+    enroll("boxNew")
     make_offline("boxOld", seconds_ago=600)
     make_offline("boxNew", seconds_ago=300)
     app.resolve_all_duplicate_serials()    # startup-style sweep
@@ -223,6 +243,69 @@ def test_merge_survives_identical_readings():
     check("a reading only the dropped host had is preserved", unique_row == 1)
 
 
+def test_unenrolled_survivor_never_absorbs_a_real_machine():
+    """The merge trigger lives on /api/report, which is unauthenticated by design.
+
+    Without a corroboration check that made the dedup a weapon: invent a hostname, claim
+    an offline machine's serial, and the merge hands you its identity -- deleting its
+    agent enrollment and re-pointing every permission group scoped to it onto the name
+    you chose. Enrollment is the one thing an attacker cannot forge without
+    AGENT_ENROLLMENT_SECRET, so it is what the merge now requires of its survivor.
+    """
+    print("\n-- an unenrolled hostname cannot absorb an enrolled machine --")
+    report("REAL-PC", "SER-HIJACK-1")
+    enroll("REAL-PC")
+    make_offline("REAL-PC")                # powered off overnight
+    report("EVIL-BOX", "SER-HIJACK-1")     # attacker claims the serial, unauthenticated
+
+    check("the real machine survives", machine_exists("REAL-PC"))
+    check("the invented hostname did not absorb it", machine_exists("EVIL-BOX"))
+    with app.get_db_conn() as conn:
+        agent_rows = conn.execute(
+            "SELECT COUNT(*) AS c FROM agents WHERE machine='REAL-PC' AND revoked=0"
+        ).fetchone()["c"]
+    check("the real machine keeps its enrollment", agent_rows == 1)
+    check("resolve reports both as still present",
+          set(app.resolve_serial_group("SER-HIJACK-1")) == {"REAL-PC", "EVIL-BOX"})
+    # The collision is surfaced rather than swallowed -- an operator has to be able to see
+    # that two records claim one serial, whichever of them is lying.
+    open_alerts = alerts.list_open(app.DB_PATH)
+    check("the refused collision raises a duplicate_serial alert",
+          any(a.get("serial_number", "").upper() == "SER-HIJACK-1" for a in open_alerts))
+
+
+def test_report_cannot_rewrite_an_established_serial():
+    """A BIOS serial is immutable hardware identity -- that is why dedup keys on it.
+
+    Letting the open ingress retype one is what lets an attacker MANUFACTURE the
+    collision the merge acts on, so a serial is write-once: a blank can be filled (a
+    machine's first report describing itself), an established one cannot be replaced.
+    """
+    print("\n-- /api/report cannot overwrite a serial that is already set --")
+    report("SERIAL-PC", "SER-TRUE-1")
+    check("first report establishes the serial", _serial("SERIAL-PC") == "SER-TRUE-1")
+
+    report("SERIAL-PC", "SER-ATTACKER-1")  # unauthenticated overwrite attempt
+    check("a later report cannot change it", _serial("SERIAL-PC") == "SER-TRUE-1")
+
+    # Other identity fields stay last-write-wins: they legitimately change (a machine is
+    # re-tagged, a model string is corrected) and none of them keys the merge.
+    client.post("/api/report", json={"machine": "SERIAL-PC", "temp": 42.0,
+                                     "asset_tag": "ASSET-2"})
+    with app.get_db_conn() as conn:
+        row = conn.execute("SELECT asset_tag FROM machine_info WHERE machine='SERIAL-PC'"
+                           ).fetchone()
+    check("asset tag still updates", row["asset_tag"] == "ASSET-2")
+
+
+def _serial(machine):
+    with app.get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT serial_number FROM machine_info WHERE machine=?", (machine,)
+        ).fetchone()
+    return row["serial_number"] if row else None
+
+
 def _updated_at(machine):
     with app.get_db_conn() as conn:
         row = conn.execute(
@@ -239,5 +322,7 @@ if __name__ == "__main__":
     test_junk_serial_not_merged()
     test_merge_cleans_fleet_and_caches()
     test_merge_survives_identical_readings()
+    test_unenrolled_survivor_never_absorbs_a_real_machine()
+    test_report_cannot_rewrite_an_established_serial()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

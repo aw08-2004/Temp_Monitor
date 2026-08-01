@@ -433,8 +433,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             // Only our own hub gets the agent's bearer token. A package pulled from an
-            // arbitrary operator-supplied URL must not have it attached.
-            if (url.StartsWith(AgentConfig.HubBase, StringComparison.OrdinalIgnoreCase))
+            // arbitrary operator-supplied URL must not have it attached — compared on the
+            // parsed origin, because a string prefix test also matches
+            // `https://<hub>.attacker.net` and `https://<hub>@attacker.net`. See
+            // AgentConfig.IsHubUrl.
+            if (AgentConfig.IsHubUrl(url))
                 req.Headers.Authorization =
                     new AuthenticationHeaderValue("Bearer", _identity.BearerValue);
 

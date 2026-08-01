@@ -750,15 +750,19 @@ document.getElementById('progress-close').addEventListener('click', () => {
 document.getElementById('progress-cancel-deploy').addEventListener('click', async () => {
     if (!confirm(t('packages.deployments.confirm_cancel'))) return;
     try {
+        // Content-Type is load-bearing, not habit: app.login_required refuses a POST
+        // without it, which is what keeps a cross-site form from cancelling a deploy.
         renderProgress(await api(
-            `/api/deployments/${encodeURIComponent(openDeploymentId)}/cancel`, { method: 'POST' }));
+            `/api/deployments/${encodeURIComponent(openDeploymentId)}/cancel`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
     } catch (e) { alert(e.message); }
 });
 
 document.getElementById('progress-retry').addEventListener('click', async () => {
     try {
         renderProgress(await api(
-            `/api/deployments/${encodeURIComponent(openDeploymentId)}/retry`, { method: 'POST' }));
+            `/api/deployments/${encodeURIComponent(openDeploymentId)}/retry`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
     } catch (e) { alert(e.message); }
 });
 

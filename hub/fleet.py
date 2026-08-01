@@ -705,6 +705,31 @@ def list_agent_status(db_path, now=None, offline_after=DEFAULT_OFFLINE_AFTER_SEC
     return result
 
 
+def is_enrolled(db_path, machine):
+    """Does this hostname have a live (non-revoked) agent enrollment?
+
+    The corroboration test for anything that acts on an identity claim made over the OPEN
+    telemetry ingress. `/api/report` is unauthenticated by design, so the hostname and the
+    BIOS serial in a report are attacker-controlled: anyone who can reach the hub can
+    invent a machine, or claim another one's serial. Enrollment is the one thing they
+    cannot forge without AGENT_ENROLLMENT_SECRET, so a destructive, irreversible action
+    driven by a report -- today that means the duplicate-serial merge in
+    app.resolve_serial_group -- must require it.
+
+    Deliberately "has an enrollment", not "is online": a machine that is merely powered
+    off is still a real machine, and requiring liveness would refuse exactly the merge the
+    dedup exists for (the old hostname is offline by definition).
+    """
+    machine = str(machine or "").strip()
+    if not machine:
+        return False
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM agents WHERE machine = ? AND revoked = 0 LIMIT 1", (machine,)
+        ).fetchone()
+    return row is not None
+
+
 def delete_machine(db_path, machine):
     """Remove all fleet rows for a machine: its agent enrollments, its queued/past
     commands, and the command_results / command_output_chunks tied to those commands.

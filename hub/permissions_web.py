@@ -298,6 +298,12 @@ def create_permissions_blueprint(db_path, login_required, access):
                 machines=data.get("machines") or [],
                 members=data.get("members") or [],
                 directory_groups=data.get("directory_groups") or [],
+                # The OU list an `ad_ou` group derives its machines from. Without this a
+                # group saved in that mode stored no rule at all, so it resolved to an
+                # empty machine set and granted nothing -- silently, since the editor
+                # showed the OUs the operator had just typed back to them from their own
+                # unsaved draft.
+                ous=data.get("ous") or [],
                 scope_mode=data.get("scope_mode") or permissions.SCOPE_LIST,
                 actor=access.email(),
             )
@@ -330,6 +336,7 @@ def create_permissions_blueprint(db_path, login_required, access):
                 # None (key absent) means "leave alone"; [] clears the mappings. Same
                 # semantics as machines/members above -- see update_group's docstring.
                 directory_groups=data.get("directory_groups"),
+                ous=data.get("ous"),
                 scope_mode=data.get("scope_mode"),
                 actor=access.email(),
             )

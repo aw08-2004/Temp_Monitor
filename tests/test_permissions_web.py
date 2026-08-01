@@ -383,6 +383,40 @@ def main():
               c.get("/api/permissions/directory").status_code == 403)
         CURRENT_USER = "root@x.com"     # the 404 checks below need an admin
 
+        print("\n== ad_ou scope round-trips through the API ==")
+        # test_permissions.py covers create_group(ous=...) at the model layer, which is
+        # exactly why this gap survived: the HTTP layer accepted the field the editor
+        # sends and then dropped it, so an ad_ou group saved with no rule at all and
+        # resolved to an empty machine set. Silently -- the form echoed back the
+        # operator's own unsaved draft.
+        r = c.post("/api/permissions/groups", json={
+            "name": "Clinical OU",
+            "capabilities": [permissions.VIEW],
+            "scope_mode": permissions.SCOPE_AD_OU,
+            "ous": ["OU=Clinical,DC=corp,DC=local"],
+            "members": ["ann@x.com"],
+        })
+        check("creating an ad_ou group 201s", r.status_code == 201)
+        ou_group_id = r.get_json()["id"]
+        check("the OU rule is stored, not dropped",
+              c.get(f"/api/permissions/groups/{ou_group_id}").get_json()["ous"]
+              == ["OU=Clinical,DC=corp,DC=local"])
+
+        r = c.put(f"/api/permissions/groups/{ou_group_id}",
+                  json={"ous": ["OU=Wards,DC=corp,DC=local"]})
+        check("editing the OU list updates it",
+              r.get_json()["ous"] == ["OU=Wards,DC=corp,DC=local"])
+        # Same semantics as machines/members: absent means leave alone, [] clears.
+        r = c.put(f"/api/permissions/groups/{ou_group_id}", json={"name": "Clinical OU"})
+        check("a save that omits ous leaves them alone",
+              r.get_json()["ous"] == ["OU=Wards,DC=corp,DC=local"])
+        r = c.put(f"/api/permissions/groups/{ou_group_id}", json={"ous": []})
+        check("an empty ous list clears them", r.get_json()["ous"] == [])
+        check("a bad OU is rejected with 400",
+              c.put(f"/api/permissions/groups/{ou_group_id}",
+                    json={"ous": ["not-a-dn"]}).status_code == 400)
+        c.delete(f"/api/permissions/groups/{ou_group_id}")
+
         print("\n== 404s ==")
         check("unknown group GET 404",
               c.get("/api/permissions/groups/nope").status_code == 404)

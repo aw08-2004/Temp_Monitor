@@ -286,7 +286,9 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         encrypted with the first, and a hub that quietly replaced it would turn every
         backup taken so far into noise.
         """
-        request.get_json(silent=True)      # CSRF: a JSON body is required, see docstring
+        # The JSON content type this endpoint requires is enforced in app.login_required,
+        # not here: `request.get_json(silent=True)` returns None on a wrong content type
+        # rather than refusing, so the line that used to sit here checked nothing at all.
         try:
             key_b64, created = backups.ensure_master_key(env_path)
         except ValueError as e:
@@ -308,7 +310,6 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         (see the module docstring). Audited every single time, because "who has seen the
         key that decrypts every backup" is exactly the question an incident asks.
         """
-        request.get_json(silent=True)
         key_b64 = backups.master_key_b64()
         if not key_b64:
             return jsonify({"error": "No backup encryption key exists yet."}), 409
@@ -329,7 +330,6 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         has ever copied the one thing that decrypts them, and that the audit log names
         who said otherwise.
         """
-        request.get_json(silent=True)
         key, error = _master_key_or_error()
         if error:
             return error
@@ -409,7 +409,6 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     def test_destination(destination_id):
         """Round-trip a probe object. Synchronous on purpose: it is small, and an
         operator who just typed a credential is waiting for exactly this answer."""
-        request.get_json(silent=True)
         try:
             summary = backups.probe_destination(db_path, log_dir, destination_id,
                                                 actor=_current_email())

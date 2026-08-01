@@ -40,6 +40,34 @@ public static class AgentConfig
     public static string CommandOutputUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
 
+    /// <summary>
+    /// Does <paramref name="url"/> actually address OUR hub?
+    ///
+    /// The question that decides whether a request carries this agent's bearer token, so it
+    /// has to be answered on the URL's parsed ORIGIN and never on its spelling. A plain
+    /// <c>url.StartsWith(HubBase)</c> — which is what this replaces — says yes to
+    /// <c>https://hub.example.com.attacker.net/x</c> and to
+    /// <c>https://hub.example.com@attacker.net/x</c>, whose real hosts are
+    /// <c>attacker.net</c> in both cases. Either one hands the agent's credential to
+    /// whoever supplied the URL, and package/UNC payload URLs are operator-supplied by
+    /// design (see hub packages.validate_source).
+    ///
+    /// Scheme, host and port must all match. Port comparison uses Uri.Port, so the default
+    /// for the scheme is filled in and <c>https://h</c> matches <c>https://h:443</c>. Host
+    /// comparison is ordinal-ignore-case because DNS names are case-insensitive, and Uri has
+    /// already normalised any percent-encoding or IDN form that would otherwise let two
+    /// spellings of one host compare unequal.
+    /// </summary>
+    public static bool IsHubUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var target)) return false;
+        if (!Uri.TryCreate(HubBase, UriKind.Absolute, out var hub)) return false;
+        return string.Equals(target.Scheme, hub.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(target.Host, hub.Host, StringComparison.OrdinalIgnoreCase)
+            && target.Port == hub.Port;
+    }
+
     /// <summary>Machine identity sent to the hub (the "machine" field).</summary>
     public static string MachineName =>
         Env("MACHINE", "MACHINE") is { Length: > 0 } n ? n : Environment.MachineName;

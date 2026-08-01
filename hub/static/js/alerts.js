@@ -55,7 +55,13 @@ async function mergeAlert(survivor, victims, cardEl, btnEl) {
 async function dismissAlert(alertId, cardEl, btnEl) {
     btnEl.disabled = true;
     try {
-        const resp = await fetch('/api/alerts/' + encodeURIComponent(alertId) + '/dismiss', { method: 'POST' });
+        // The JSON content type is not decoration: app.login_required refuses a POST
+        // without it, which is what stops a cross-site form from dismissing alerts.
+        const resp = await fetch('/api/alerts/' + encodeURIComponent(alertId) + '/dismiss', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         loadAlerts();
     } catch (e) {

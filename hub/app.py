@@ -77,7 +77,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.61.0"
+HUB_VERSION = "1.62.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1293,14 +1293,73 @@ configure_oauth(AUTH_CONFIG)
 print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 
 
+# ================================
+# CSRF
+# ================================
+# A console session can run arbitrary code as SYSTEM on any enrolled machine, so a CSRF
+# against a signed-in operator is fleet-wide RCE. Two controls carry that, and this is the
+# second one (the first is SESSION_COOKIE_SAMESITE="Lax", pinned above).
+#
+# Every blueprint's docstring says the JSON content type is what stops a cross-site POST:
+# it is not CORS-safelisted, so a cross-origin fetch preflights and fails, and an HTML form
+# -- the one cross-site POST needing no preflight -- cannot produce it. That reasoning is
+# right, but until this was enforced here it was only INCIDENTALLY true. Bodies are read
+# with request.get_json(silent=True), which returns None rather than refusing when the
+# content type is wrong, so the requirement held only for views that went on to fail over a
+# missing field. Around fifteen state-changing endpoints read no body at all -- every
+# /cancel, /retry, /refresh, /sync and /run route, plus the backup-key routes whose
+# `request.get_json(silent=True)` line was a no-op with a comment claiming otherwise -- and
+# for those the documented control did not exist.
+#
+# Enforced in login_required rather than a global before_request because that is exactly
+# the set of requests it applies to: CSRF rides an AMBIENT credential, and the session
+# cookie is the only ambient credential here. The agent-facing /api/agent/* endpoints
+# authenticate with a bearer token that no browser attaches on its own, so they are not
+# CSRF-able and correctly do not pass through this.
+#
+# POST is the only method checked, and that is the whole rule rather than an oversight: a
+# cross-site HTML form is the one request that reaches us without a preflight, and a form
+# can only issue GET or POST. A cross-origin PUT, PATCH or DELETE has to go through
+# fetch/XHR, which preflights and fails here (no ACAO on these routes), so requiring a
+# content type on those would break working callers to defend against a request no browser
+# will send.
+CSRF_CHECKED_METHODS = frozenset({"POST"})
+# The two console endpoints that legitimately post something other than JSON: a file.
+# multipart/form-data IS form-producible, so these stay reachable cross-site -- but both
+# are deliberately inert (they store bytes and return a digest, creating no package, no
+# payload record and no deployment), and the JSON call that would give those bytes meaning
+# is covered. Named explicitly rather than allowing multipart everywhere, so a future
+# endpoint does not inherit the exemption by accident.
+CSRF_UPLOAD_ENDPOINTS = frozenset({
+    "packages.upload_package_file",
+    "bios.upload_firmware_image",
+})
+
+
+def _csrf_content_type_ok():
+    """May this state-changing, cookie-authenticated request proceed?"""
+    if request.method not in CSRF_CHECKED_METHODS:
+        return True
+    if request.endpoint in CSRF_UPLOAD_ENDPOINTS:
+        return True
+    # mimetype, not the raw header: it strips any charset parameter, so
+    # "application/json; charset=utf-8" is accepted as the same thing.
+    return request.mimetype == "application/json"
+
+
 def login_required(view):
-    """Gate a route behind an authenticated + allow-listed session. Never applied to /api/report."""
+    """Gate a route behind an authenticated + allow-listed session, and require a JSON
+    content type on anything that changes state (see the CSRF note above). Never applied
+    to /api/report."""
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("user"):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Authentication required"}), 401
             return redirect(url_for("login"))
+        if not _csrf_content_type_ok():
+            return jsonify({"error": "This endpoint requires Content-Type: "
+                                     "application/json."}), 415
         return view(*args, **kwargs)
     return wrapped
 
@@ -1932,7 +1991,17 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 asset_tag = COALESCE(excluded.asset_tag, machine_info.asset_tag),
-                serial_number = COALESCE(excluded.serial_number, machine_info.serial_number),
+                -- WRITE-ONCE, unlike every other field here, and the argument order is the
+                -- whole difference: the EXISTING value wins. A BIOS serial is immutable
+                -- hardware identity -- that is the entire premise of keying dedup on it --
+                -- and this function's only caller is /api/report, which is unauthenticated
+                -- by design. Last-write-wins let anyone who could reach the hub retype a
+                -- real machine's serial to collide with another's and drive
+                -- resolve_serial_group into merging them, which destroys an identity row
+                -- and re-points its permission-group scope. Filling a blank is still
+                -- allowed: that is the first report of a machine describing itself, not an
+                -- overwrite of something already established.
+                serial_number = COALESCE(machine_info.serial_number, excluded.serial_number),
                 model = COALESCE(excluded.model, machine_info.model),
                 companion_version = COALESCE(excluded.companion_version, machine_info.companion_version),
                 service_tag = COALESCE(excluded.service_tag, machine_info.service_tag),
@@ -2082,6 +2151,7 @@ def resolve_serial_group(serial, actor="system:dedup"):
       - exactly one online  -> merge the offline duplicate(s) into it
       - all offline         -> merge into the most recently updated row
       - two or more online   -> leave them separate (a genuine conflict)
+      - survivor not enrolled -> leave them separate (an unverified identity claim)
     Returns the machines still present for that serial afterwards."""
     if not is_valid_serial(serial):
         return []
@@ -2109,6 +2179,28 @@ def resolve_serial_group(serial, actor="system:dedup"):
         # All offline: keep the most recently updated row (updated_at is fixed-width
         # "YYYY-MM-DD HH:MM:SS", so a lexicographic max is a chronological max).
         survivor = max(rows, key=lambda r: r["updated_at"] or "")["machine"]
+
+    # The survivor must be a machine the hub has actually ENROLLED, not merely one that
+    # has posted a report. This is what stops the whole dedup from being a weapon: the
+    # trigger for it arrives on /api/report, which is unauthenticated by design, so
+    # without this check anyone who can reach the hub can invent a hostname, claim a real
+    # machine's serial while that machine is offline, and have the merge hand them its
+    # identity -- deleting its agent enrollment (fleet.delete_machine) and re-pointing
+    # every permission group, deployment, backup and firmware row scoped to it onto the
+    # name they chose (permissions.rename_machine and friends below).
+    #
+    # An attacker cannot enroll without AGENT_ENROLLMENT_SECRET, so requiring it here
+    # costs the legitimate rename case nothing: the box that renamed itself is the box
+    # that is already enrolled. Refused collisions become the operator-facing alert rather
+    # than silence, because an unexplained duplicate is exactly what this would look like.
+    if not fleet.is_enrolled(DB_PATH, survivor):
+        alerts.upsert_duplicate(DB_PATH, serial, [r["machine"] for r in rows])
+        fleet.audit(DB_PATH, actor, "machine.merge_refused", survivor,
+                    {"serial": str(serial).strip(),
+                     "machines": [r["machine"] for r in rows],
+                     "reason": "the surviving hostname has no agent enrollment"},
+                    level=fleet.LEVEL_SECURITY)
+        return [r["machine"] for r in rows]
 
     for r in rows:
         if r["machine"] != survivor:
