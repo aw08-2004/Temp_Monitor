@@ -29,7 +29,7 @@
 
     <!-- Assembly version drives the self-update version comparison. Keep in
          sync with AgentConfig.Version. -->
-    <Version>3.20.0</Version>
+    <Version>3.19.3</Version>
   </PropertyGroup>
 
   <ItemGroup>
