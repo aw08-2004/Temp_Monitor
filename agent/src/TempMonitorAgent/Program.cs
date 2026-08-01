@@ -101,13 +101,14 @@ try
     builder.Services.AddSingleton<ICommandExecutor, UninstallVirtualDisplayExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, SetVirtualDisplayModeExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RefreshRemoteInventoryExecutor>();
-    // Firmware settings inventory (roadmap #9). Read-only for now: the machine re-reads its
-    // BIOS and the answer rides the next heartbeat. update_bios stays stubbed below until the
-    // vendor-dispatched flash executor lands.
+    // Firmware (roadmap #9), in three parts: re-read the settings inventory on demand, write
+    // settings and verify them by re-reading, and flash the BIOS itself. update_bios is no
+    // longer stubbed -- see UpdateBiosExecutor, which stages the manufacturer's own image and
+    // deliberately does not reboot or claim success, because the flash happens during POST.
     builder.Services.AddSingleton<ICommandExecutor, RefreshBiosInventoryExecutor>();
-builder.Services.AddSingleton<ICommandExecutor, SetBiosSettingsExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, SetBiosSettingsExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, UpdateBiosExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
-    builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
 
     // Self-update
     builder.Services.AddSingleton<SelfUpdater>();

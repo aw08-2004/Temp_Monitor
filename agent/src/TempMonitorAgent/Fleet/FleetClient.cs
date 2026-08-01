@@ -629,6 +629,76 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     }
 
     /// <summary>
+    /// Fetch one firmware update's payload: the image URL and digest, the vendor and model
+    /// list to re-check against, the BIOS setup password and the power policy (roadmap #9).
+    ///
+    /// Null on any refusal, and the caller must then do NOTHING -- the hub answers 409 for an
+    /// update that is no longer pending, which is exactly how a redelivered command is stopped
+    /// from flashing a machine twice.
+    /// </summary>
+    public async Task<JsonObject?> FetchFirmwareUpdateAsync(string updateId, CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/firmware/update/"
+                  + $"{Uri.EscapeDataString(updateId)}";
+        try
+        {
+            using var req = Authorized(HttpMethod.Get, url);
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _log.LogWarning("Hub refused the firmware update payload ({Status})",
+                                (int)resp.StatusCode);
+                return null;
+            }
+            return JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))?.AsObject();
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            _log.LogWarning("Could not fetch the firmware update payload: {Msg}", e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Report what the manufacturer's updater did.
+    ///
+    /// Retried harder than most reports, because by the time this runs the image may already
+    /// be staged in the firmware: losing the report to one dropped connection would leave the
+    /// console showing an update that never left the hub over a machine that is about to flash
+    /// on its next restart. The machine's own BIOS-version report can still confirm it, but
+    /// only this call can say the attempt was made at all.
+    /// </summary>
+    public async Task<bool> ReportFirmwareUpdateAsync(string updateId, JsonNode payload,
+                                                      CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/firmware/update/"
+                  + $"{Uri.EscapeDataString(updateId)}/result";
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var req = Authorized(HttpMethod.Post, url);
+                req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                                "application/json");
+                using var resp = await _downloadHttp.SendAsync(req, ct);
+                if (resp.IsSuccessStatusCode) return true;
+                if ((int)resp.StatusCode is >= 400 and < 500)
+                {
+                    _log.LogWarning("Hub refused the firmware update result ({Status})",
+                                    (int)resp.StatusCode);
+                    return false;
+                }
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+            {
+                _log.LogDebug("Firmware update result POST failed: {Msg}", e.Message);
+            }
+            if (attempt < 2) await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), ct);
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Report what the firmware said when the settings were read back.
     ///
     /// Retried like the backup and restore reports, and here the stakes are the same: the

@@ -1133,13 +1133,12 @@ language with more forms needs a rule table, not just a catalog.
 
 ---
 
-## 🚧 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0; settings inventory hub 1.59.0 + agent 3.19.0; **settings WRITE hub 1.60.0 + agent 3.20.0**
+## ✅ 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0; settings inventory hub 1.59.0 + agent 3.19.0; settings WRITE hub 1.60.0; **firmware UPDATE hub 1.61.0 + agent 3.20.0**
 
-Read and change firmware settings across the fleet, and finally execute the `update_bios`
-command type that has been accepted, queued and routed — and then stubbed — since the
-command-signing removal. The console can already issue one today and the agent already
-dispatches it to a `StubExecutor` that answers "not implemented yet"; nothing has ever
-run. The settings half has no command type at all yet.
+Read and change firmware settings across the fleet, and execute the `update_bios` command
+type that had been accepted, queued and routed — and then stubbed — since the
+command-signing removal. Both halves are now built; the agent half ships in source and
+needs a signed release before the fleet gains it.
 
 The immediate motivator is #10 below: **Wake-on-LAN is a firmware setting before it is a
 network feature**, and turning it on by hand on every machine is exactly the errand this
@@ -1328,21 +1327,94 @@ in the fleet shows a red error forever.
   method call itself**: whether real firmware accepts these arguments, and whether the
   return properties are named what the documentation says. Expect the same shape of
   first-contact finding the LDAP and TURN work produced.
-- **Firmware update (`update_bios`) is the second half**, sharing the same vendor
-  dispatch. Payload either hub-hosted or pulled from the vendor catalogue, **sha256-pinned
-  by the hub** exactly as `packages.py` pins installer blobs. The load-bearing difference
-  from a package install: **the reboot is part of the operation, not a side effect** — the
-  flash completes during POST, so the command's own result cannot be the answer and
-  success is only known when the machine comes back reporting a new BIOS version. Reuse
-  the deploy scheduler's maintenance windows rather than inventing a second scheduler.
+- **✅ Firmware update (`update_bios`) — built (hub 1.61.0 + agent 3.20.0).** `firmware.py`
+  (model, flask-free) + the firmware half of `bios_web.py`, a **Firmware page** (image
+  library + fleet update history), a read-only BIOS-updates panel on the machine page,
+  six `firmware.*` settings, and `agent/src/TempMonitorAgent/Bios/FirmwareFlasher.cs` +
+  `UpdateBiosExecutor.cs`. Resolved parameters:
+  - **The remaining open question — do firmware payloads reuse `packages.py`'s blob store
+    — resolved as: the primitives yes, the ROOT no.** `packages.store_blob` /
+    `blob_path` are called as-is (one tested content-addressed writer, and the hub still
+    computes the digest from the bytes it stored rather than accepting a client's), but
+    images live under `<log dir>/firmware`. Sharing one root would mean two features
+    refcounting a file neither owns: `packages.delete_blob_if_orphaned` asks
+    `package_sources` whether anything still points at a digest, and it would answer "no"
+    about a BIOS image it has never heard of — i.e. a package delete unlinking firmware.
+  - **A good agent report is NOT success**, and the state machine says so: it reaches
+    `rebooting`, and only the machine coming back reporting the payload's version applies
+    it (`confirm_from_inventory`, called from the heartbeat's BIOS ingest). A machine that
+    comes back on a *third* version is `unknown` — the same fourth-outcome reasoning as
+    `classify_result`, because a vendor whose image reports a version string the operator
+    did not type is indistinguishable from a flash that did something else, and confirming
+    either would confirm a change nobody verified.
+  - **No retry, ever.** `packages.py` retries a target three times with a doubling backoff,
+    which is right for an installer and is the worst possible behaviour for a flash whose
+    outcome is unknown. A failed target is re-issued by a human who has looked at the
+    machine. This is also why dispatch only targets machines that are **online**: with no
+    retry, dispatching into the dark would record a switched-off PC as a failure nobody
+    would dare re-run. Left pending, it goes out the minute it reappears.
+  - **Preconditions are refusals, and a refusal is a first-class target row.** A machine
+    whose manufacturer or model is not on the image's list — or that is already on the
+    target version, whose flash could never be confirmed — is recorded as `refused` with
+    its reason rather than dropped, so a mixed fleet proceeds where the image fits and
+    *names* where it does not. Same reasoning as `plan_restore` naming a selection that
+    matched nothing. The model list is **required** at upload and never defaults to "any":
+    an image that matches everything is one refusal away from the failure with no undo.
+    Both checks run again **on the agent** against what the hardware says about itself at
+    flash time, because the hub's inventory can be hours old and a chassis can be swapped.
+  - **The agent never reboots the machine.** A vendor tool exits after *staging*; the
+    firmware writes during POST. Restarting somebody's PC as a side effect of an update
+    they were not told about is not the agent's call, and the hub is built for the
+    alternative — the target waits in `rebooting` with a **day** of grace by default, so a
+    PC flashed on a Friday evening is confirmed on Monday morning.
+  - **The BIOS password stays off the command line where a vendor allows it.** HP and
+    Lenovo read it from a file, so it is written to a SYSTEM-owned staging file and deleted
+    on every path; Dell has no file form, and that cost is named in the code rather than
+    buried — for the seconds its updater runs, the password is readable in the process
+    list. Neither it nor the image URL is ever in command params (`create_command` audits
+    those verbatim); the command carries an opaque update id, and the fetch that hands over
+    the rest is a conditional `UPDATE`, so a redelivered command cannot flash twice.
+  - **"Reboot required" is a success exit code**, per vendor (Dell's 2 and 6, the usual
+    3010 elsewhere) — the 3010 trap in another costume, and here it is not an edge case but
+    the normal outcome. Dell's codes are deliberately not generalised to the other two: a 2
+    from an HP updater means something else, and reading it as success would report an
+    unknown failure as a staged flash.
+  - **Found while wiring this up**: a target could sit `in_flight` forever if its command
+    expired. `fleet.expire_stale_commands` noticed, the target never did, and neither
+    timeout catches it because both count from a fetch that never happened — so the job
+    stayed at 39/40 with no way to reach 40. `reconcile_once` retires those as failed,
+    saying which of the three it was and, for an expiry, that nothing was flashed.
+
+  **Tested where it can be** — `tests/test_firmware.py` (the refusals, the state machine,
+  the exactly-once handover, cancel's three outcomes, both sweeps) +
+  `tests/test_bios_web.py` (the `manage_firmware` gate on every route including the reads,
+  the 409 on a second fetch, the digest computed hub-side, and the audit trail scanned for
+  the password) + `FirmwareFlasherTests.cs` (hardware and power refusals, the password
+  never reaching a command line where a vendor offers a file, and reboot-required read as
+  success). **What none of it covers is a real flash**: no vendor tool runs, and whether a
+  Dell Update Package accepts `/s /p=` as documented is a first-contact question, like LDAP
+  and TURN before it.
+
+  **Maintenance windows are the deploy scheduler's, reused as semantics rather than as
+  code** — same `window_start`/`window_end` fields, same claim-then-queue discipline, in
+  `firmware.dispatch_once`. Literally reusing `packages.reconcile_once` would have meant
+  teaching one scheduler two completion models, and the one it has (exit code plus
+  detection) is precisely the guess this feature must not make.
 - **Gate**: ✅ resolved — a new **`manage_firmware`** capability, live as of 1.60.0 and
-  already gating the settings write. `update_bios` will reuse it rather than adding a
-  second one. Audited at `LEVEL_SECURITY`, alongside `virtual_display_install`.
+  gating both halves. `update_bios` reuses it rather than adding a second one, and on the
+  Firmware page it gates the **reads** too: an image library is fleet configuration, not a
+  fact about a PC, so unlike the settings inventory there is nothing in it an operator
+  needs in order to answer a support question. Audited at `LEVEL_SECURITY`, alongside
+  `virtual_display_install`.
 
 **Constraint, stated plainly**: a failed flash can brick a machine, and unlike every other
 feature on this roadmap there is no restore path — no chain to re-pull, no snapshot to
 roll back to. Battery/AC preconditions, model matching and a refusal to flash a machine
 whose reported model does not match the payload are part of v1, not hardening for later.
+✅ All three shipped in 1.61.0/3.20.0, and the power check refuses on an **unknown** state
+rather than assuming mains: a laptop whose battery class is missing or throwing is exactly
+the machine the check exists for, and this is the one operation where an unknown must never
+be spent as a yes.
 
 **A settings change does NOT imply a reboot, and the design must not assume one.** Whether
 a write takes effect immediately is **per vendor *and* per setting**: Dell's interface
@@ -1379,8 +1451,12 @@ than from the command result.
   above. The deciding factor was that the next heartbeat overwrites the inventory blob
   wholesale and would take per-attribute markers with it.
 
-**Still to decide**: whether firmware payloads reuse the `packages.py` blob store outright
-or need their own.
+**Nothing left to decide.** The last open parameter — whether firmware payloads reuse
+`packages.py`'s blob store — resolved to "its primitives, not its root"; see the built
+entry above for why sharing a root would eventually have one feature deleting the other's
+bytes. What remains is a **signed agent release** (build + `sign_release.py --sign-agent`
++ asset upload) before the fleet gains any of #9, and the first-contact WMI findings that
+only real Dell/HP/Lenovo hardware can produce.
 
 ---
 
@@ -1469,7 +1545,7 @@ comes online.
    asserts catalog coverage so a vocabulary entry added without words fails a test instead
    of captioning a page with its own key. 1.56.0 also fixed the browser-language fallback,
    which had been unreachable since the feature shipped.
-9. **#9 BIOS settings + firmware management ← in progress** — fills in the `update_bios`
+9. ~~**#9 BIOS settings + firmware management**~~ — done. Fills in the `update_bios`
    stub that has been queued-but-unimplemented since the signing removal, and adds the
    settings half it never had. Its prerequisite is **done**: `manufacturer` is collected,
    stored, merged and shown as of hub 1.57.0 (+ agent 3.18.0 / companion 2.12.0), so
@@ -1481,19 +1557,24 @@ comes online.
    BIOS setup password in the master-key-wrapped secret store (fleet-wide with a
    per-machine override, and never in command params), and a change confirmed by
    **re-reading the attribute** rather than by assuming a reboot — so `pending_reboot` is
-   the only state that ever asks for a restart. Remaining: the **`update_bios` executor**,
-   which reuses the same `manage_firmware` gate and the same vendor dispatch, and whose
-   completion signal is the BIOS version after the flash rather than the command result.
-   **The agent half is pending a signed release** (build + `sign_release.py --sign-agent` +
-   asset upload).
+   the only state that ever asks for a restart. **The `update_bios` executor is done too**
+   (hub 1.61.0 + agent 3.20.0): `firmware.py`, a Firmware page holding the sha256-pinned
+   image library and the fleet's update history, hardware/power preconditions that refuse
+   by name at both ends, one attempt per machine with no retry, and a flash confirmed by
+   the **BIOS version the machine reports after its restart** rather than by the command
+   result — so a staged image waits in `rebooting` for a day rather than being called
+   success by an exit code. **The agent half is pending a signed release** (build +
+   `sign_release.py --sign-agent` + asset upload).
 10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
     NIC inventory (MAC + subnet) the hub does not collect today.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
 > TURN installer all landed in 1.41–1.48 without a roadmap entry, since none of them was
-> a numbered feature above. #4's entry has been brought up to date. #9 and #10 are the
-> first new items added to this board since #7, and are the only ones still unbuilt.
+> a numbered feature above. #4's entry has been brought up to date. #9 and #10 were the
+> first new items added to this board since #7; with #9 built as of 1.61.0, **#10 is the
+> only one left unbuilt** — and its firmware prerequisite is now in place, since turning
+> Wake-on-LAN on across a fleet is exactly what #9's settings write is for.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full
