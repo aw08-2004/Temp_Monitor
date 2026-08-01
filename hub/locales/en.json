@@ -14,7 +14,6 @@
     "The leading section is the page or component the string belongs to; 'common' is for",
     "text that genuinely appears on several pages, not a dumping ground."
   ],
-
   "nav": {
     "dashboard": "Dashboard",
     "history": "History",
@@ -27,9 +26,9 @@
     "permission_groups": "Permission Groups",
     "users": "Users",
     "close": "Close navigation",
-    "open": "Open navigation"
+    "open": "Open navigation",
+    "firmware": "Firmware"
   },
-
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agent v{version}",
@@ -45,26 +44,22 @@
     ],
     "language_auto": "Automatic (browser)"
   },
-
   "login": {
     "title": "Sign in",
     "prompt": "Sign in with an authorized account to view the dashboard.",
     "google": "Sign in with Google",
     "sso": "Sign in with {provider}"
   },
-
   "denied": {
     "title": "Access denied",
     "default_message": "You do not have permission to view this page.",
     "note": "Permissions come from the groups you belong to. Ask an administrator to add you to a group that covers this.",
     "back": "Back to dashboard"
   },
-
   "dashboard": {
     "heading": "Live CPU Monitor",
     "empty": "No machines have reported in yet."
   },
-
   "history": {
     "heading": "Daily Temperature Summary",
     "select_day": "Select day:",
@@ -123,7 +118,6 @@
       "temperature": "Temperature (°C)"
     }
   },
-
   "inventory": {
     "heading": "Asset Inventory",
     "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
@@ -153,7 +147,6 @@
     "delete_failed": "Could not delete \"{machine}\": {error}",
     "load_failed": "Failed to load inventory."
   },
-
   "alerts": {
     "heading": "Alerts",
     "intro": "Conditions that want your attention. Machines running hot — whose average temperature over the configured window is at or above the high-temperature threshold — show here and stay until you dismiss them, one card per episode, so a machine that runs hot repeatedly builds up a card per spell rather than replacing the last one. So do duplicate machines that share a serial number while both are online: the hub won't merge live machines automatically, so pick which record to keep and the others are merged into it (their temperature history is preserved).",
@@ -199,7 +192,6 @@
       "merge_failed": "Could not merge: {error}"
     }
   },
-
   "audit": {
     "heading": "Audit Log",
     "intro": "Who did what on this hub: every command issued, machine changed, package deployed, account edited, and key touched. Append-only and not machine-scoped — entries are never rewritten or deleted, so this is the record to reach for after the fact.",
@@ -239,7 +231,6 @@
     },
     "load_failed": "Could not load the audit log: {error}"
   },
-
   "users": {
     "heading": "Users",
     "intro": "The people who use this console. Anyone who signs in is added automatically; you can also add someone ahead of their first login. Editing a profile here does not change what they can do — that is set by their Permission Groups.",
@@ -271,7 +262,6 @@
     "delete_failed": "Could not delete \"{email}\": {error}",
     "load_failed": "Could not load users: {error}"
   },
-
   "permissions": {
     "heading": "Permission Groups",
     "intro": "A group grants a set of capabilities over a set of machines. A person's effective access is the union of every group they belong to.",
@@ -414,7 +404,6 @@
       }
     }
   },
-
   "settings": {
     "heading": "Settings",
     "intro": "Operational tuning for the hub and the fleet. Every setting shows its default, and anything you haven't changed behaves exactly as it did before this page existed.",
@@ -428,6 +417,7 @@
       "backup": "Backups",
       "remote": "Remote Control",
       "directory": "Active Directory",
+      "firmware": "Firmware Updates",
       "signin": "Sign-in"
     },
     "_unit": [
@@ -687,6 +677,30 @@
       "directory.allow_insecure": {
         "label": "Allow plain (unencrypted) LDAP",
         "help": "Permit binding over ldap:// without TLS. The bind password is then sent in CLEARTEXT across your network. Leave off unless this is an isolated lab."
+      },
+      "firmware.max_upload_mb": {
+        "label": "Largest firmware image",
+        "help": "Upload limit for a BIOS image. Images are stored beside the database in their own folder, so a package clean-up can never remove one."
+      },
+      "firmware.scheduler_interval_seconds": {
+        "label": "Run the firmware scheduler every",
+        "help": "How often the hub sends out firmware updates that are due, and closes out machines that never reported back."
+      },
+      "firmware.flashing_timeout_seconds": {
+        "label": "Give up on a running flash after",
+        "help": "How long a machine may hold a fetched image without reporting. Reaching this is recorded as a failure that may have left the machine mid-flash, so check it before trying again."
+      },
+      "firmware.confirm_timeout_seconds": {
+        "label": "Wait for the new BIOS version for",
+        "help": "A flash finishes during startup, so it is confirmed only when the machine reports its new BIOS version. Keep this generous: a PC flashed on a Friday evening is confirmed on Monday morning."
+      },
+      "firmware.require_ac_power": {
+        "label": "Require mains power to flash",
+        "help": "A laptop that loses power mid-flash may not start again. The agent refuses the update while it is running on battery."
+      },
+      "firmware.min_battery_percent": {
+        "label": "Minimum battery charge to flash",
+        "help": "Checked as well as mains power: a machine plugged in at the desk with a flat battery is still at risk if the power is pulled during the restart."
       }
     },
     "_choice": [
@@ -849,7 +863,6 @@
       "saved_unchanged": "No changes to save."
     }
   },
-
   "common": {
     "loading": "Loading…",
     "optional": "optional",
@@ -880,7 +893,6 @@
     "hub_error": "The hub returned an error (HTTP {status}).",
     "request_failed": "{url} returned {status}"
   },
-
   "packages": {
     "heading": "Packages",
     "intro": "Describe an installer once -- payload, silent command line, and what proves it worked -- then deploy it to machines and watch it land.",
@@ -1056,7 +1068,6 @@
       }
     }
   },
-
   "backups": {
     "heading": "Backups",
     "intro": "A consistent snapshot of the hub database, compressed, encrypted here, and pushed offsite on a schedule. The storage provider only ever sees ciphertext.",
@@ -1342,7 +1353,6 @@
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
   },
-
   "machine": {
     "views_nav": "Machine views",
     "tab": {
@@ -1582,7 +1592,23 @@
       "password_saved": "Password stored.",
       "password_cleared": "Stored password removed.",
       "password_ready": "A BIOS setup password is set on this machine, and one is stored here to send with a change.",
-      "password_unknown": "This machine's firmware does not say whether a setup password is set. If a change is refused, that is the first thing to check."
+      "password_unknown": "This machine's firmware does not say whether a setup password is set. If a change is refused, that is the first thing to check.",
+      "updates_title": "BIOS updates",
+      "updates_link": "Firmware page",
+      "no_updates": "This machine has not been sent a firmware update.",
+      "update_line": "{name} → BIOS {version} · {when}",
+      "update": {
+        "pending": "Queued",
+        "in_flight": "Sent",
+        "flashing": "Flashing",
+        "rebooting": "Waiting for restart",
+        "applied": "Updated",
+        "failed": "Failed",
+        "unknown": "Unconfirmed",
+        "refused": "Not for this machine",
+        "expired": "Window closed",
+        "cancelled": "Cancelled"
+      }
     },
     "favorites": {
       "title": "Favorites",
@@ -1671,5 +1697,97 @@
       "save_fav_title": "Save a script as a favorite (any selected text is used as a starting point)",
       "shell_title": "Shell used when you open another console with +"
     }
+  },
+  "firmware": {
+    "heading": "Firmware updates",
+    "intro": "Upload a vendor's BIOS image once, say which hardware it belongs to, and flash it onto machines.",
+    "new_image": "Add an image",
+    "warning_title": "A firmware update cannot be undone",
+    "warning_body": "Everything else here can be put back: a backup restored, a package reinstalled, a setting written again. A failed flash cannot. The hub refuses to send an image to a machine whose manufacturer and model it does not match, and the machine checks again before it writes — but nothing recovers a board that was interrupted mid-flash.",
+    "images_title": "Images",
+    "images_help": "The models an image lists are what the hub matches a machine against. Take them from the vendor's own compatibility list.",
+    "jobs_title": "Recent updates",
+    "jobs_help": "A flash is confirmed when the machine comes back reporting the new BIOS version, not when the update tool exits.",
+    "no_images": "No firmware images yet.",
+    "no_jobs": "No firmware updates have been sent yet.",
+    "deleted_image": "Deleted image",
+    "flash_button": "Flash…",
+    "confirm_delete": "Delete the image {name}? Machines already updated with it are unaffected.",
+    "confirm_cancel_job": "Cancel this update? Machines that have already been handed the image will finish flashing.",
+    "cancel_job": "Cancel update",
+    "cancel_target": "Cancel",
+    "cancel_partial": "{count} machine(s) had already been handed the image and will finish flashing.",
+    "job_meta": "Installs {version} · {machines} machine(s) · created {when}",
+    "job_window": "Window {start} to {end}",
+    "show_machines": "Show machines",
+    "col": {
+      "image": "Image",
+      "vendor": "Manufacturer",
+      "models": "Models",
+      "installs": "Installs",
+      "size": "Size",
+      "uploaded": "Uploaded"
+    },
+    "target": {
+      "pending": "Queued",
+      "in_flight": "Sent",
+      "flashing": "Flashing",
+      "rebooting": "Waiting for restart",
+      "applied": "Updated",
+      "failed": "Failed",
+      "unknown": "Unconfirmed",
+      "refused": "Not for this machine",
+      "expired": "Window closed",
+      "cancelled": "Cancelled"
+    },
+    "job": {
+      "scheduled": "Scheduled",
+      "running": "In progress",
+      "complete": "Finished",
+      "cancelled": "Cancelled"
+    },
+    "editor": {
+      "title": "Add a firmware image",
+      "file": "Image file",
+      "file_hint": "The vendor's own update executable. Up to {mb} MB.",
+      "uploading": "Uploading…",
+      "uploaded": "{name} · {size} · SHA-256 {sha256}",
+      "need_file": "Choose an image file first.",
+      "name": "Name",
+      "name_placeholder": "Latitude 5540 BIOS 1.31.0",
+      "vendor": "Manufacturer",
+      "vendor_placeholder": "Dell",
+      "to_version": "BIOS version it installs",
+      "to_version_placeholder": "1.31.0",
+      "to_version_help": "Exactly as the machine will report it afterwards. This is how the hub tells an applied flash from a failed one, so a machine that comes back on any other version is reported as unconfirmed rather than updated.",
+      "models": "Models it applies to",
+      "models_placeholder": "Latitude 5540, Latitude 5550",
+      "models_help": "Comma-separated, spelled as the machine reports its model. A machine whose model is not on this list is refused before anything is sent to it.",
+      "args": "Command-line arguments",
+      "args_placeholder": "/s /f",
+      "args_help": "Whatever makes the vendor's tool run silently. Leave blank to use the defaults the agent knows for that manufacturer.",
+      "notes": "Notes"
+    },
+    "flash": {
+      "title": "Flash firmware",
+      "summary": "{name} — {vendor} {models}, installs BIOS {version}.",
+      "machines": "Machines",
+      "machines_placeholder": "Type a machine name",
+      "machines_help": "Machines the image does not fit are listed back with the reason instead of being quietly skipped.",
+      "no_matches": "No machines match",
+      "window": "Maintenance window",
+      "window_help": "Leave both empty to start as soon as each machine is online. A machine that is off keeps its turn rather than being marked failed.",
+      "window_start": "Not before",
+      "window_end": "Not after",
+      "note": "Note",
+      "submit": "Queue update",
+      "need_machines": "Choose at least one machine.",
+      "refused_title": "{count} machine(s) were not queued"
+    },
+    "_target": [
+      "One entry per wire value of a firmware target's state -- resolved through a literal",
+      "lookup so tests/test_i18n.py's key scan can see them. 'refused' is deliberately not",
+      "a failure word: the image simply is not for that hardware, and nothing went wrong."
+    ]
   }
 }

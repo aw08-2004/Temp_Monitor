@@ -34,6 +34,7 @@ from flask import Blueprint, jsonify, request, session
 
 import backups
 import bios
+import firmware
 import fleet
 import permissions
 import remote
@@ -157,6 +158,17 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
                 bios.record_inventory(db_path, machine, data["bios"])
             except Exception as e:
                 print(f"[bios] Could not record inventory for {machine}: {e}")
+            # ...and the same report is what CONFIRMS a firmware flash. The flash itself
+            # completes during POST, long after the `update_bios` command was answered, so
+            # the version this machine now reports is the only honest evidence it worked --
+            # see firmware.confirm_from_inventory. Separate try/except from the ingest
+            # above: a machine whose inventory failed to store may still have carried the
+            # version that closes out a staged update, and neither is worth a heartbeat.
+            try:
+                firmware.confirm_from_inventory(db_path, machine,
+                                                (data["bios"] or {}).get("bios_version"))
+            except Exception as e:
+                print(f"[firmware] Could not confirm updates for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])

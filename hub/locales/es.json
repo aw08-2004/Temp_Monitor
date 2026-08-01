@@ -4,7 +4,6 @@
     "string, so a partial catalog is mixed-language rather than broken. Placeholders",
     "({name}) must match en.json exactly; tests/test_i18n.py fails if one is dropped."
   ],
-
   "nav": {
     "dashboard": "Panel",
     "history": "Historial",
@@ -17,9 +16,9 @@
     "permission_groups": "Grupos de permisos",
     "users": "Usuarios",
     "close": "Cerrar navegación",
-    "open": "Abrir navegación"
+    "open": "Abrir navegación",
+    "firmware": "Firmware"
   },
-
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agente v{version}",
@@ -30,26 +29,22 @@
     "language": "Idioma",
     "language_auto": "Automático (navegador)"
   },
-
   "login": {
     "title": "Iniciar sesión",
     "prompt": "Inicia sesión con una cuenta autorizada para ver el panel.",
     "google": "Iniciar sesión con Google",
     "sso": "Iniciar sesión con {provider}"
   },
-
   "denied": {
     "title": "Acceso denegado",
     "default_message": "No tienes permiso para ver esta página.",
     "note": "Los permisos provienen de los grupos a los que perteneces. Pide a un administrador que te añada a un grupo que lo incluya.",
     "back": "Volver al panel"
   },
-
   "dashboard": {
     "heading": "Monitor de CPU en vivo",
     "empty": "Todavía no ha informado ningún equipo."
   },
-
   "history": {
     "heading": "Resumen diario de temperatura",
     "select_day": "Seleccionar día:",
@@ -95,7 +90,6 @@
       "temperature": "Temperatura (°C)"
     }
   },
-
   "inventory": {
     "heading": "Inventario de activos",
     "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos en línea también aparecen en el panel en vivo; los que están sin conexión permanecen aquí hasta que se eliminen. Eliminar un equipo borra de forma permanente su identidad, su historial de temperatura y su inscripción en la flota.",
@@ -125,7 +119,6 @@
     "delete_failed": "No se pudo eliminar «{machine}»: {error}",
     "load_failed": "No se pudo cargar el inventario."
   },
-
   "alerts": {
     "heading": "Alertas",
     "intro": "Situaciones que requieren tu atención. Los equipos que funcionan calientes —cuya temperatura media durante la ventana configurada alcanza o supera el umbral de temperatura alta— aparecen aquí y permanecen hasta que los descartes, con una tarjeta por episodio: un equipo que se calienta repetidamente acumula una tarjeta por episodio en lugar de reemplazar la anterior. Lo mismo ocurre con los equipos duplicados que comparten n.º de serie mientras ambos están en línea: el hub no fusiona equipos activos automáticamente, así que elige qué registro conservar y los demás se fusionarán en él (su historial de temperatura se conserva).",
@@ -166,7 +159,6 @@
       "merge_failed": "No se pudo fusionar: {error}"
     }
   },
-
   "audit": {
     "heading": "Registro de auditoría",
     "intro": "Quién hizo qué en este hub: cada comando emitido, equipo modificado, paquete implementado, cuenta editada y clave utilizada. Es de solo anexado y no está limitado por equipo: las entradas nunca se reescriben ni se eliminan, así que este es el registro al que acudir después de los hechos.",
@@ -206,7 +198,6 @@
     },
     "load_failed": "No se pudo cargar el registro de auditoría: {error}"
   },
-
   "users": {
     "heading": "Usuarios",
     "intro": "Las personas que usan esta consola. Cualquiera que inicie sesión se añade automáticamente; también puedes añadir a alguien antes de su primer inicio de sesión. Editar un perfil aquí no cambia lo que esa persona puede hacer: eso lo definen sus grupos de permisos.",
@@ -238,7 +229,6 @@
     "delete_failed": "No se pudo eliminar «{email}»: {error}",
     "load_failed": "No se pudieron cargar los usuarios: {error}"
   },
-
   "permissions": {
     "heading": "Grupos de permisos",
     "intro": "Un grupo concede un conjunto de capacidades sobre un conjunto de equipos. El acceso efectivo de una persona es la unión de todos los grupos a los que pertenece.",
@@ -360,7 +350,6 @@
       }
     }
   },
-
   "settings": {
     "heading": "Configuración",
     "intro": "Ajustes operativos del hub y de la flota. Cada opción muestra su valor predeterminado, y todo lo que no hayas cambiado se comporta exactamente igual que antes de que existiera esta página.",
@@ -374,6 +363,7 @@
       "backup": "Copias de seguridad",
       "remote": "Control remoto",
       "directory": "Active Directory",
+      "firmware": "Actualizaciones de firmware",
       "signin": "Inicio de sesión"
     },
     "unit": {
@@ -620,6 +610,30 @@
       "directory.allow_insecure": {
         "label": "Permitir LDAP sin cifrar",
         "help": "Permite conectarse por LDAP en claro. La contraseña de la cuenta de servicio viaja entonces por la red sin cifrar, así que déjalo desactivado salvo que sepas por qué lo necesitas."
+      },
+      "firmware.max_upload_mb": {
+        "label": "Imagen de firmware más grande",
+        "help": "Límite de subida para una imagen de BIOS. Las imágenes se guardan junto a la base de datos, en su propia carpeta, para que una limpieza de paquetes nunca pueda borrar ninguna."
+      },
+      "firmware.scheduler_interval_seconds": {
+        "label": "Ejecutar el planificador de firmware cada",
+        "help": "Con qué frecuencia el hub envía las actualizaciones de firmware pendientes y cierra los equipos que nunca respondieron."
+      },
+      "firmware.flashing_timeout_seconds": {
+        "label": "Abandonar un flasheo en curso tras",
+        "help": "Cuánto tiempo puede un equipo conservar una imagen descargada sin informar. Alcanzar este límite se registra como un fallo que puede haber dejado el equipo a medio flashear, así que revísalo antes de reintentar."
+      },
+      "firmware.confirm_timeout_seconds": {
+        "label": "Esperar la nueva versión de BIOS durante",
+        "help": "Un flasheo termina durante el arranque, así que solo se confirma cuando el equipo informa su nueva versión de BIOS. Deja un margen amplio: un PC flasheado un viernes por la tarde se confirma el lunes por la mañana."
+      },
+      "firmware.require_ac_power": {
+        "label": "Exigir corriente eléctrica para flashear",
+        "help": "Un portátil que se queda sin corriente a medio flasheo puede no volver a arrancar. El agente rechaza la actualización mientras funciona con batería."
+      },
+      "firmware.min_battery_percent": {
+        "label": "Carga mínima de batería para flashear",
+        "help": "Se comprueba además de la corriente: un equipo enchufado en la mesa con la batería vacía sigue en riesgo si se corta la corriente durante el reinicio."
       }
     },
     "choice": {
@@ -772,7 +786,6 @@
       "saved_unchanged": "No hay cambios que guardar."
     }
   },
-
   "common": {
     "loading": "Cargando…",
     "optional": "opcional",
@@ -803,7 +816,6 @@
     "hub_error": "El hub devolvió un error (HTTP {status}).",
     "request_failed": "{url} devolvió {status}"
   },
-
   "packages": {
     "heading": "Paquetes",
     "intro": "Describe un instalador una sola vez —el archivo, la línea de comandos silenciosa y qué demuestra que funcionó— y después despliégalo en los equipos y observa cómo llega.",
@@ -966,7 +978,6 @@
       }
     }
   },
-
   "backups": {
     "heading": "Copias de seguridad",
     "intro": "Una instantánea coherente de la base de datos del hub, comprimida, cifrada aquí y enviada fuera del servidor según una programación. El proveedor de almacenamiento solo ve texto cifrado.",
@@ -1243,7 +1254,6 @@
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
   },
-
   "machine": {
     "views_nav": "Vistas del equipo",
     "tab": {
@@ -1479,7 +1489,23 @@
       "password_saved": "Contraseña guardada.",
       "password_cleared": "Contraseña guardada eliminada.",
       "password_ready": "Este equipo tiene una contraseña de configuración de la BIOS, y aquí hay una guardada para enviarla con el cambio.",
-      "password_unknown": "El firmware de este equipo no indica si tiene contraseña de configuración. Si se rechaza un cambio, es lo primero que hay que comprobar."
+      "password_unknown": "El firmware de este equipo no indica si tiene contraseña de configuración. Si se rechaza un cambio, es lo primero que hay que comprobar.",
+      "updates_title": "Actualizaciones de BIOS",
+      "updates_link": "Página de firmware",
+      "no_updates": "A este equipo no se le ha enviado ninguna actualización de firmware.",
+      "update_line": "{name} → BIOS {version} · {when}",
+      "update": {
+        "pending": "En cola",
+        "in_flight": "Enviada",
+        "flashing": "Flasheando",
+        "rebooting": "Esperando reinicio",
+        "applied": "Actualizado",
+        "failed": "Fallida",
+        "unknown": "Sin confirmar",
+        "refused": "No es para este equipo",
+        "expired": "Ventana cerrada",
+        "cancelled": "Cancelada"
+      }
     },
     "favorites": {
       "title": "Favoritos",
@@ -1567,6 +1593,93 @@
       "clear_title": "Limpiar el historial de la consola en primer plano",
       "save_fav_title": "Guardar un script como favorito (el texto seleccionado se usa como punto de partida)",
       "shell_title": "Shell que se usa al abrir otra consola con +"
+    }
+  },
+  "firmware": {
+    "heading": "Actualizaciones de firmware",
+    "intro": "Sube una vez la imagen de BIOS del fabricante, indica a qué hardware pertenece y flashéala en los equipos.",
+    "new_image": "Añadir imagen",
+    "warning_title": "Una actualización de firmware no se puede deshacer",
+    "warning_body": "Todo lo demás aquí se puede revertir: una copia restaurada, un paquete reinstalado, un ajuste reescrito. Un flasheo fallido no. El hub se niega a enviar una imagen a un equipo cuyo fabricante y modelo no coinciden, y el equipo vuelve a comprobarlo antes de escribir, pero nada recupera una placa interrumpida a medio flashear.",
+    "images_title": "Imágenes",
+    "images_help": "Los modelos que indica una imagen son con los que el hub compara cada equipo. Tómalos de la lista de compatibilidad del fabricante.",
+    "jobs_title": "Actualizaciones recientes",
+    "jobs_help": "Un flasheo se confirma cuando el equipo vuelve informando la nueva versión de BIOS, no cuando termina la herramienta de actualización.",
+    "no_images": "Todavía no hay imágenes de firmware.",
+    "no_jobs": "Todavía no se ha enviado ninguna actualización de firmware.",
+    "deleted_image": "Imagen eliminada",
+    "flash_button": "Flashear…",
+    "confirm_delete": "¿Eliminar la imagen {name}? Los equipos ya actualizados con ella no se ven afectados.",
+    "confirm_cancel_job": "¿Cancelar esta actualización? Los equipos que ya recibieron la imagen terminarán de flashear.",
+    "cancel_job": "Cancelar actualización",
+    "cancel_target": "Cancelar",
+    "cancel_partial": "{count} equipo(s) ya habían recibido la imagen y terminarán de flashear.",
+    "job_meta": "Instala {version} · {machines} equipo(s) · creada {when}",
+    "job_window": "Ventana de {start} a {end}",
+    "show_machines": "Ver equipos",
+    "col": {
+      "image": "Imagen",
+      "vendor": "Fabricante",
+      "models": "Modelos",
+      "installs": "Instala",
+      "size": "Tamaño",
+      "uploaded": "Subida"
+    },
+    "target": {
+      "pending": "En cola",
+      "in_flight": "Enviada",
+      "flashing": "Flasheando",
+      "rebooting": "Esperando reinicio",
+      "applied": "Actualizado",
+      "failed": "Fallida",
+      "unknown": "Sin confirmar",
+      "refused": "No es para este equipo",
+      "expired": "Ventana cerrada",
+      "cancelled": "Cancelada"
+    },
+    "job": {
+      "scheduled": "Programada",
+      "running": "En curso",
+      "complete": "Terminada",
+      "cancelled": "Cancelada"
+    },
+    "editor": {
+      "title": "Añadir una imagen de firmware",
+      "file": "Archivo de imagen",
+      "file_hint": "El ejecutable de actualización del propio fabricante. Hasta {mb} MB.",
+      "uploading": "Subiendo…",
+      "uploaded": "{name} · {size} · SHA-256 {sha256}",
+      "need_file": "Elige primero un archivo de imagen.",
+      "name": "Nombre",
+      "name_placeholder": "Latitude 5540 BIOS 1.31.0",
+      "vendor": "Fabricante",
+      "vendor_placeholder": "Dell",
+      "to_version": "Versión de BIOS que instala",
+      "to_version_placeholder": "1.31.0",
+      "to_version_help": "Exactamente como la informará el equipo después. Así distingue el hub un flasheo aplicado de uno fallido, de modo que un equipo que vuelva con cualquier otra versión se informa como sin confirmar, no como actualizado.",
+      "models": "Modelos a los que aplica",
+      "models_placeholder": "Latitude 5540, Latitude 5550",
+      "models_help": "Separados por comas, escritos como el equipo informa su modelo. Un equipo cuyo modelo no esté en esta lista se rechaza antes de enviarle nada.",
+      "args": "Argumentos de línea de comandos",
+      "args_placeholder": "/s /f",
+      "args_help": "Lo que haga que la herramienta del fabricante se ejecute en silencio. Déjalo vacío para usar los valores que el agente conoce para ese fabricante.",
+      "notes": "Notas"
+    },
+    "flash": {
+      "title": "Flashear firmware",
+      "summary": "{name} — {vendor} {models}, instala BIOS {version}.",
+      "machines": "Equipos",
+      "machines_placeholder": "Escribe el nombre de un equipo",
+      "machines_help": "Los equipos a los que no corresponde la imagen se listan con el motivo en lugar de omitirse en silencio.",
+      "no_matches": "Ningún equipo coincide",
+      "window": "Ventana de mantenimiento",
+      "window_help": "Deja ambos vacíos para empezar en cuanto cada equipo esté conectado. Un equipo apagado conserva su turno en lugar de marcarse como fallido.",
+      "window_start": "No antes de",
+      "window_end": "No después de",
+      "note": "Nota",
+      "submit": "Poner en cola",
+      "need_machines": "Elige al menos un equipo.",
+      "refused_title": "{count} equipo(s) no se pusieron en cola"
     }
   }
 }

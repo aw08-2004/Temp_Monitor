@@ -150,6 +150,9 @@
         // updates on a manual reload is how an operator concludes the feature is broken.
         if (isOpen((data.changes || [])[0]) && pollTimer === null) startPolling();
         render();
+        // Not awaited: the settings table is what the operator opened the tab for, and the
+        // update history is a second request that must not delay it.
+        loadUpdates();
     }
 
     function setStatus(tone, text) {
@@ -291,6 +294,78 @@
         input.value = shown === undefined || shown === null ? '' : shown;
         input.addEventListener('input', () => stage(attr.name, input.value, attr.value));
         return input;
+    }
+
+    // ---------------------------------------------------------------- BIOS updates
+    //
+    // The flash half of roadmap #9, read-only on this page: an update is aimed from the
+    // Firmware page, where the images are. What belongs beside a machine is whether it has
+    // been flashed and whether it took -- and `rebooting` is why this exists at all, since
+    // that state can last hours and is invisible everywhere else on the machine page.
+    const updatesBody = document.getElementById('firmware-updates-body');
+
+    const UPDATE_LABELS = {
+        pending: () => t('machine.firmware.update.pending'),
+        in_flight: () => t('machine.firmware.update.in_flight'),
+        flashing: () => t('machine.firmware.update.flashing'),
+        rebooting: () => t('machine.firmware.update.rebooting'),
+        applied: () => t('machine.firmware.update.applied'),
+        failed: () => t('machine.firmware.update.failed'),
+        unknown: () => t('machine.firmware.update.unknown'),
+        refused: () => t('machine.firmware.update.refused'),
+        expired: () => t('machine.firmware.update.expired'),
+        cancelled: () => t('machine.firmware.update.cancelled'),
+    };
+    const UPDATE_TONES = {
+        pending: 'muted', in_flight: 'muted', flashing: 'warn', rebooting: 'warn',
+        applied: 'ok', failed: 'danger', unknown: 'warn', refused: 'muted',
+        expired: 'muted', cancelled: 'muted',
+    };
+
+    async function loadUpdates() {
+        if (!updatesBody) return;   // the panel is gated on manage_firmware
+        let jobs;
+        try {
+            const resp = await api(
+                `/api/firmware/jobs?machine=${encodeURIComponent(MACHINE)}`);
+            jobs = resp.jobs || [];
+        } catch (e) {
+            updatesBody.replaceChildren(el('p', 'setting__error', e.message));
+            return;
+        }
+        updatesBody.replaceChildren();
+        if (!jobs.length) {
+            updatesBody.appendChild(el('p', 'stat-card__meta',
+                                       t('machine.firmware.no_updates')));
+            return;
+        }
+        const list = el('ul', 'plain-list');
+        for (const job of jobs) {
+            // One row per job, and the status shown is THIS machine's -- a fleet-wide job
+            // that applied on thirty-nine PCs and failed here must read as failed here.
+            const detail = await api(`/api/firmware/jobs/${encodeURIComponent(job.id)}`)
+                .catch(() => null);
+            const mine = detail && (detail.targets || [])
+                .find((target) => target.machine === MACHINE);
+            const item = el('li');
+            const pill = el('span',
+                            `status-pill status-pill--${UPDATE_TONES[mine && mine.status] || 'muted'}`);
+            pill.appendChild(el('span', 'status-pill__dot'));
+            pill.appendChild(el('span', null,
+                labelFor(UPDATE_LABELS, mine ? mine.status : job.status)));
+            item.appendChild(pill);
+            item.appendChild(document.createTextNode(' '));
+            item.appendChild(el('span', null, t('machine.firmware.update_line', {
+                name: job.payload_name || '—',
+                version: job.payload_version || '—',
+                when: fmtTime(job.created_at),
+            })));
+            if (mine && mine.error) {
+                item.appendChild(el('div', 'stat-card__meta', mine.error));
+            }
+            list.appendChild(item);
+        }
+        updatesBody.appendChild(list);
     }
 
     function render() {

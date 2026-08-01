@@ -4,7 +4,6 @@
     "string, so a partial catalog is mixed-language rather than broken. Placeholders",
     "({name}) must match en.json exactly; tests/test_i18n.py fails if one is dropped."
   ],
-
   "nav": {
     "dashboard": "Übersicht",
     "history": "Verlauf",
@@ -17,9 +16,9 @@
     "permission_groups": "Berechtigungsgruppen",
     "users": "Benutzer",
     "close": "Navigation schließen",
-    "open": "Navigation öffnen"
+    "open": "Navigation öffnen",
+    "firmware": "Firmware"
   },
-
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agent v{version}",
@@ -30,26 +29,22 @@
     "language": "Sprache",
     "language_auto": "Automatisch (Browser)"
   },
-
   "login": {
     "title": "Anmelden",
     "prompt": "Melden Sie sich mit einem autorisierten Konto an, um die Übersicht zu sehen.",
     "google": "Mit Google anmelden",
     "sso": "Mit {provider} anmelden"
   },
-
   "denied": {
     "title": "Zugriff verweigert",
     "default_message": "Sie haben keine Berechtigung, diese Seite anzuzeigen.",
     "note": "Berechtigungen ergeben sich aus den Gruppen, denen Sie angehören. Bitten Sie eine Administratorin oder einen Administrator, Sie einer passenden Gruppe hinzuzufügen.",
     "back": "Zurück zur Übersicht"
   },
-
   "dashboard": {
     "heading": "CPU-Live-Überwachung",
     "empty": "Bisher hat kein Computer Daten gemeldet."
   },
-
   "history": {
     "heading": "Tägliche Temperaturübersicht",
     "select_day": "Tag auswählen:",
@@ -95,7 +90,6 @@
       "temperature": "Temperatur (°C)"
     }
   },
-
   "inventory": {
     "heading": "Anlageninventar",
     "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Online-Computer erscheinen zusätzlich in der Live-Übersicht; Offline-Computer bleiben hier, bis sie gelöscht werden. Beim Löschen werden Identität, Temperaturverlauf und Flottenregistrierung dauerhaft entfernt.",
@@ -125,7 +119,6 @@
     "delete_failed": "„{machine}“ konnte nicht gelöscht werden: {error}",
     "load_failed": "Das Inventar konnte nicht geladen werden."
   },
-
   "alerts": {
     "heading": "Warnungen",
     "intro": "Zustände, die Ihre Aufmerksamkeit brauchen. Heiß laufende Computer – deren Durchschnittstemperatur im konfigurierten Zeitfenster den Schwellenwert erreicht oder überschreitet – erscheinen hier und bleiben, bis Sie sie schließen: eine Karte pro Episode, damit ein wiederholt heiß laufender Computer je Episode eine eigene Karte bekommt, statt die vorherige zu ersetzen. Ebenso doppelte Computer, die dieselbe Seriennummer melden, während beide online sind: der Hub führt aktive Computer nicht automatisch zusammen, also wählen Sie den Datensatz, der bleiben soll – die übrigen werden in ihn zusammengeführt (ihr Temperaturverlauf bleibt erhalten).",
@@ -166,7 +159,6 @@
       "merge_failed": "Zusammenführen nicht möglich: {error}"
     }
   },
-
   "audit": {
     "heading": "Auditprotokoll",
     "intro": "Wer auf diesem Hub was getan hat: jeder abgesetzte Befehl, jede Computeränderung, jedes verteilte Paket, jedes bearbeitete Konto und jeder verwendete Schlüssel. Nur anfügend und nicht auf einzelne Computer beschränkt – Einträge werden nie überschrieben oder gelöscht, dies ist also die Aufzeichnung, auf die man im Nachhinein zurückgreift.",
@@ -206,7 +198,6 @@
     },
     "load_failed": "Das Auditprotokoll konnte nicht geladen werden: {error}"
   },
-
   "users": {
     "heading": "Benutzer",
     "intro": "Die Personen, die diese Konsole verwenden. Wer sich anmeldet, wird automatisch aufgenommen; Sie können jemanden auch vor der ersten Anmeldung hinzufügen. Das Bearbeiten eines Profils ändert nicht, was diese Person tun darf – das legen ihre Berechtigungsgruppen fest.",
@@ -238,7 +229,6 @@
     "delete_failed": "„{email}“ konnte nicht gelöscht werden: {error}",
     "load_failed": "Die Benutzer konnten nicht geladen werden: {error}"
   },
-
   "permissions": {
     "heading": "Berechtigungsgruppen",
     "intro": "Eine Gruppe gewährt eine Menge von Berechtigungen für eine Menge von Computern. Der tatsächliche Zugriff einer Person ist die Vereinigung aller Gruppen, denen sie angehört.",
@@ -360,7 +350,6 @@
       }
     }
   },
-
   "settings": {
     "heading": "Einstellungen",
     "intro": "Betriebseinstellungen für den Hub und die Flotte. Jede Einstellung zeigt ihren Standardwert, und alles, was du nicht geändert hast, verhält sich genau wie vor dieser Seite.",
@@ -374,6 +363,7 @@
       "backup": "Backups",
       "remote": "Fernsteuerung",
       "directory": "Active Directory",
+      "firmware": "Firmware-Updates",
       "signin": "Anmeldung"
     },
     "unit": {
@@ -620,6 +610,30 @@
       "directory.allow_insecure": {
         "label": "Unverschlüsseltes LDAP erlauben",
         "help": "Erlaubt Verbindungen über LDAP im Klartext. Das Kennwort des Dienstkontos geht dann unverschlüsselt über das Netz – also aus lassen, sofern du nicht weißt, warum du es brauchst."
+      },
+      "firmware.max_upload_mb": {
+        "label": "Größte Firmware-Datei",
+        "help": "Upload-Grenze für ein BIOS-Image. Images liegen neben der Datenbank in einem eigenen Ordner, damit eine Paket-Bereinigung niemals eines entfernen kann."
+      },
+      "firmware.scheduler_interval_seconds": {
+        "label": "Firmware-Planer ausführen alle",
+        "help": "Wie oft der Hub fällige Firmware-Updates verschickt und Rechner abschließt, die nie geantwortet haben."
+      },
+      "firmware.flashing_timeout_seconds": {
+        "label": "Laufenden Flash-Vorgang abbrechen nach",
+        "help": "Wie lange ein Rechner ein geladenes Image halten darf, ohne zu antworten. Wird das erreicht, gilt es als Fehler, bei dem der Rechner mitten im Flash-Vorgang stehen geblieben sein kann - prüfe ihn vor einem neuen Versuch."
+      },
+      "firmware.confirm_timeout_seconds": {
+        "label": "Auf die neue BIOS-Version warten",
+        "help": "Ein Flash-Vorgang endet beim Start, wird also erst bestätigt, wenn der Rechner seine neue BIOS-Version meldet. Großzügig lassen: ein am Freitagabend geflashter PC wird am Montagmorgen bestätigt."
+      },
+      "firmware.require_ac_power": {
+        "label": "Netzstrom zum Flashen verlangen",
+        "help": "Ein Notebook, dem mitten im Flash-Vorgang der Strom ausgeht, startet unter Umständen nicht mehr. Der Agent lehnt das Update im Akkubetrieb ab."
+      },
+      "firmware.min_battery_percent": {
+        "label": "Mindest-Akkustand zum Flashen",
+        "help": "Wird zusätzlich zum Netzstrom geprüft: ein am Schreibtisch angeschlossener Rechner mit leerem Akku bleibt gefährdet, wenn beim Neustart der Strom ausfällt."
       }
     },
     "choice": {
@@ -772,7 +786,6 @@
       "saved_unchanged": "Keine Änderungen zu speichern."
     }
   },
-
   "common": {
     "loading": "Wird geladen…",
     "optional": "optional",
@@ -803,7 +816,6 @@
     "hub_error": "Der Hub hat einen Fehler gemeldet (HTTP {status}).",
     "request_failed": "{url} lieferte {status}"
   },
-
   "packages": {
     "heading": "Pakete",
     "intro": "Beschreibe einen Installer einmal – Datei, stille Befehlszeile und was seinen Erfolg belegt – und verteile ihn dann an Computer und sieh zu, wie er ankommt.",
@@ -966,7 +978,6 @@
       }
     }
   },
-
   "backups": {
     "heading": "Sicherungen",
     "intro": "Ein konsistenter Snapshot der Hub-Datenbank, komprimiert, hier verschlüsselt und nach Zeitplan außer Haus geschoben. Der Speicheranbieter sieht immer nur Chiffretext.",
@@ -1243,7 +1254,6 @@
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
   },
-
   "machine": {
     "views_nav": "Computeransichten",
     "tab": {
@@ -1479,7 +1489,23 @@
       "password_saved": "Kennwort gespeichert.",
       "password_cleared": "Gespeichertes Kennwort entfernt.",
       "password_ready": "Auf diesem Rechner ist ein BIOS-Setup-Kennwort gesetzt, und hier ist eines hinterlegt, das mit einer Änderung gesendet wird.",
-      "password_unknown": "Die Firmware dieses Rechners gibt nicht an, ob ein Setup-Kennwort gesetzt ist. Wird eine Änderung abgelehnt, ist das der erste Punkt zum Prüfen."
+      "password_unknown": "Die Firmware dieses Rechners gibt nicht an, ob ein Setup-Kennwort gesetzt ist. Wird eine Änderung abgelehnt, ist das der erste Punkt zum Prüfen.",
+      "updates_title": "BIOS-Updates",
+      "updates_link": "Firmware-Seite",
+      "no_updates": "An diesen Rechner wurde kein Firmware-Update gesendet.",
+      "update_line": "{name} → BIOS {version} · {when}",
+      "update": {
+        "pending": "In Warteschlange",
+        "in_flight": "Gesendet",
+        "flashing": "Wird geflasht",
+        "rebooting": "Wartet auf Neustart",
+        "applied": "Aktualisiert",
+        "failed": "Fehlgeschlagen",
+        "unknown": "Unbestätigt",
+        "refused": "Nicht für diesen Rechner",
+        "expired": "Zeitfenster geschlossen",
+        "cancelled": "Abgebrochen"
+      }
     },
     "favorites": {
       "title": "Favoriten",
@@ -1567,6 +1593,93 @@
       "clear_title": "Den Verlauf der vordersten Konsole leeren",
       "save_fav_title": "Ein Skript als Favorit speichern (markierter Text dient als Ausgangspunkt)",
       "shell_title": "Shell, die beim Öffnen einer weiteren Konsole mit + verwendet wird"
+    }
+  },
+  "firmware": {
+    "heading": "Firmware-Updates",
+    "intro": "Lade das BIOS-Image des Herstellers einmal hoch, gib an, zu welcher Hardware es gehört, und spiele es auf Rechner auf.",
+    "new_image": "Image hinzufügen",
+    "warning_title": "Ein Firmware-Update lässt sich nicht rückgängig machen",
+    "warning_body": "Alles andere hier lässt sich zurückholen: ein Backup wiederherstellen, ein Paket neu installieren, eine Einstellung erneut schreiben. Ein fehlgeschlagener Flash-Vorgang nicht. Der Hub sendet ein Image nicht an einen Rechner, dessen Hersteller und Modell nicht passen, und der Rechner prüft vor dem Schreiben erneut — aber nichts rettet eine Platine, die mitten im Flash-Vorgang unterbrochen wurde.",
+    "images_title": "Images",
+    "images_help": "Die Modelle, die ein Image angibt, sind das, womit der Hub einen Rechner abgleicht. Übernimm sie aus der Kompatibilitätsliste des Herstellers.",
+    "jobs_title": "Letzte Updates",
+    "jobs_help": "Ein Flash-Vorgang gilt als bestätigt, wenn der Rechner mit der neuen BIOS-Version zurückkommt — nicht, wenn das Update-Werkzeug endet.",
+    "no_images": "Noch keine Firmware-Images.",
+    "no_jobs": "Es wurden noch keine Firmware-Updates verschickt.",
+    "deleted_image": "Gelöschtes Image",
+    "flash_button": "Flashen…",
+    "confirm_delete": "Image {name} löschen? Bereits damit aktualisierte Rechner sind nicht betroffen.",
+    "confirm_cancel_job": "Dieses Update abbrechen? Rechner, die das Image bereits erhalten haben, flashen zu Ende.",
+    "cancel_job": "Update abbrechen",
+    "cancel_target": "Abbrechen",
+    "cancel_partial": "{count} Rechner hatten das Image bereits erhalten und flashen zu Ende.",
+    "job_meta": "Installiert {version} · {machines} Rechner · erstellt {when}",
+    "job_window": "Zeitfenster {start} bis {end}",
+    "show_machines": "Rechner anzeigen",
+    "col": {
+      "image": "Image",
+      "vendor": "Hersteller",
+      "models": "Modelle",
+      "installs": "Installiert",
+      "size": "Größe",
+      "uploaded": "Hochgeladen"
+    },
+    "target": {
+      "pending": "In Warteschlange",
+      "in_flight": "Gesendet",
+      "flashing": "Wird geflasht",
+      "rebooting": "Wartet auf Neustart",
+      "applied": "Aktualisiert",
+      "failed": "Fehlgeschlagen",
+      "unknown": "Unbestätigt",
+      "refused": "Nicht für diesen Rechner",
+      "expired": "Zeitfenster geschlossen",
+      "cancelled": "Abgebrochen"
+    },
+    "job": {
+      "scheduled": "Geplant",
+      "running": "Läuft",
+      "complete": "Abgeschlossen",
+      "cancelled": "Abgebrochen"
+    },
+    "editor": {
+      "title": "Firmware-Image hinzufügen",
+      "file": "Image-Datei",
+      "file_hint": "Die Update-Datei des Herstellers selbst. Bis zu {mb} MB.",
+      "uploading": "Wird hochgeladen…",
+      "uploaded": "{name} · {size} · SHA-256 {sha256}",
+      "need_file": "Wähle zuerst eine Image-Datei.",
+      "name": "Name",
+      "name_placeholder": "Latitude 5540 BIOS 1.31.0",
+      "vendor": "Hersteller",
+      "vendor_placeholder": "Dell",
+      "to_version": "BIOS-Version, die es installiert",
+      "to_version_placeholder": "1.31.0",
+      "to_version_help": "Genau so, wie der Rechner sie danach meldet. So unterscheidet der Hub einen erfolgreichen von einem fehlgeschlagenen Flash-Vorgang: ein Rechner, der mit einer anderen Version zurückkommt, gilt als unbestätigt und nicht als aktualisiert.",
+      "models": "Modelle, für die es gilt",
+      "models_placeholder": "Latitude 5540, Latitude 5550",
+      "models_help": "Kommagetrennt, geschrieben wie der Rechner sein Modell meldet. Ein Rechner, dessen Modell nicht in dieser Liste steht, wird abgelehnt, bevor irgendetwas gesendet wird.",
+      "args": "Kommandozeilen-Argumente",
+      "args_placeholder": "/s /f",
+      "args_help": "Was auch immer das Hersteller-Werkzeug still ausführen lässt. Leer lassen, um die Standardwerte zu verwenden, die der Agent für diesen Hersteller kennt.",
+      "notes": "Notizen"
+    },
+    "flash": {
+      "title": "Firmware flashen",
+      "summary": "{name} — {vendor} {models}, installiert BIOS {version}.",
+      "machines": "Rechner",
+      "machines_placeholder": "Rechnernamen eingeben",
+      "machines_help": "Rechner, zu denen das Image nicht passt, werden mit Begründung aufgelistet statt stillschweigend übersprungen.",
+      "no_matches": "Keine passenden Rechner",
+      "window": "Wartungsfenster",
+      "window_help": "Beide leer lassen, um zu starten, sobald der jeweilige Rechner online ist. Ein ausgeschalteter Rechner behält seinen Platz, statt als fehlgeschlagen zu gelten.",
+      "window_start": "Nicht vor",
+      "window_end": "Nicht nach",
+      "note": "Notiz",
+      "submit": "Update einreihen",
+      "need_machines": "Wähle mindestens einen Rechner.",
+      "refused_title": "{count} Rechner wurden nicht eingereiht"
     }
   }
 }

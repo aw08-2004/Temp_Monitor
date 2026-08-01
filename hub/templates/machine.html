@@ -397,6 +397,22 @@
                 <button id="firmware-reset-btn" type="button" class="btn btn--ghost">{{ t('machine.firmware.discard') }}</button>
             </div>
         </div>
+
+        {# BIOS UPDATES for this PC, as distinct from its settings above. Read-only here on
+           purpose: an update is aimed from the Firmware page, where the image library is,
+           because the thing you choose first is the image. What belongs on the machine is
+           the answer to "has this PC been flashed, and did it take". #}
+        {% if cap.MANAGE_FIRMWARE in user_capabilities %}
+        <div class="card" id="firmware-updates-card">
+            <div class="terminal__head">
+                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.updates_title') }}</div>
+                <div class="terminal__head-actions">
+                    <a class="btn btn--ghost" href="{{ url_for('bios.firmware_page') }}">{{ t('machine.firmware.updates_link') }}</a>
+                </div>
+            </div>
+            <div id="firmware-updates-body"></div>
+        </div>
+        {% endif %}
     </div>
 </div>
 

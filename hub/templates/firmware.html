@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.firmware') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. Both lists are built by firmware-images.js from the API, for the same
+   reason the Packages page does it: a table whose rows are per-machine states reads better
+   from one renderer than from a Jinja loop that cannot see the state machine.
+
+   The warning below is not decoration. Every other feature in this console has an undo --
+   a backup to restore, a package to reinstall, a setting to write back. A failed flash has
+   none, which is why the page says so before the first button.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('firmware.heading') }}</h1>
+        <p class="stat-card__meta">{{ t('firmware.intro') }}</p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-image">{{ t('firmware.new_image') }}</button>
+</div>
+
+<div class="notice notice--warn" style="margin-bottom: var(--space-5);">
+    <div class="section-title" style="margin-bottom: var(--space-2);">{{ t('firmware.warning_title') }}</div>
+    <p class="stat-card__meta">{{ t('firmware.warning_body') }}</p>
+</div>
+
+<div class="card" style="margin-bottom: var(--space-5);">
+    <div class="section-title">{{ t('firmware.images_title') }}</div>
+    <p class="stat-card__meta">{{ t('firmware.images_help') }}</p>
+    <div id="images-body"></div>
+</div>
+
+<div class="card">
+    <div class="section-title">{{ t('firmware.jobs_title') }}</div>
+    <p class="stat-card__meta">{{ t('firmware.jobs_help') }}</p>
+    <div id="jobs-body"></div>
+</div>
+
+<!-- ------------------------------------------------------ image editor -->
+{# An image is uploaded first and described second, deliberately: the sha256 the agent
+   verifies is computed by the hub from the bytes it stored, so there is nothing to describe
+   until those bytes exist. #}
+<dialog class="modal" id="image-modal">
+    <form method="dialog" id="image-form">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('firmware.editor.title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="img-file">{{ t('firmware.editor.file') }}</label>
+            <input class="input" id="img-file" type="file" style="width: 100%;">
+            <p class="setting__default" id="img-file-state"
+               data-max-mb="{{ max_upload_mb }}"></p>
+
+            <label class="setting__label" for="img-name">{{ t('firmware.editor.name') }}</label>
+            <input class="input" id="img-name" maxlength="120" autocomplete="off"
+                   placeholder="{{ t('firmware.editor.name_placeholder') }}" style="width: 100%;">
+
+            <div class="pkg-row">
+                <div>
+                    <label class="setting__label" for="img-vendor">{{ t('firmware.editor.vendor') }}</label>
+                    <input class="input" id="img-vendor" maxlength="120" autocomplete="off"
+                           placeholder="{{ t('firmware.editor.vendor_placeholder') }}" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="img-version">{{ t('firmware.editor.to_version') }}</label>
+                    <input class="input" id="img-version" maxlength="80" autocomplete="off"
+                           placeholder="{{ t('firmware.editor.to_version_placeholder') }}" style="width: 100%;">
+                </div>
+            </div>
+            <p class="setting__default">{{ t('firmware.editor.to_version_help') }}</p>
+
+            <label class="setting__label" for="img-models" style="margin-top: var(--space-4);">{{ t('firmware.editor.models') }}</label>
+            <input class="input" id="img-models" autocomplete="off"
+                   placeholder="{{ t('firmware.editor.models_placeholder') }}" style="width: 100%;">
+            <p class="setting__default">{{ t('firmware.editor.models_help') }}</p>
+
+            <label class="setting__label" for="img-args" style="margin-top: var(--space-4);">{{ t('firmware.editor.args') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+            <input class="input" id="img-args" maxlength="500" autocomplete="off"
+                   placeholder="{{ t('firmware.editor.args_placeholder') }}" style="width: 100%;">
+            <p class="setting__default">{{ t('firmware.editor.args_help') }}</p>
+
+            <label class="setting__label" for="img-notes" style="margin-top: var(--space-4);">{{ t('firmware.editor.notes') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+            <input class="input" id="img-notes" maxlength="500" autocomplete="off" style="width: 100%;">
+
+            <p class="setting__error" id="image-error" hidden></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn btn--ghost" type="button" id="image-cancel">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="image-save">{{ t('common.save') }}</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- ------------------------------------------------------ flash a set of machines -->
+<dialog class="modal" id="flash-modal">
+    <form method="dialog" id="flash-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="flash-modal-title">{{ t('firmware.flash.title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <p class="stat-card__meta" id="flash-summary"></p>
+
+            <label class="setting__label" for="flash-machine">{{ t('firmware.flash.machines') }}</label>
+            {# The shared combobox from static/the shared combobox, the same one the
+               Permission Groups machine picker uses -- a fourth one-off would drift. #}
+            <input class="input" id="flash-machine" autocomplete="off"
+                   placeholder="{{ t('firmware.flash.machines_placeholder') }}" style="width: 100%;">
+            <div id="flash-machine-list" class="perm-chips"></div>
+            <p class="setting__default">{{ t('firmware.flash.machines_help') }}</p>
+
+            <h3 class="perm-subhead">{{ t('firmware.flash.window') }}</h3>
+            <p class="setting__default">{{ t('firmware.flash.window_help') }}</p>
+            <div class="pkg-row">
+                <div>
+                    <label class="setting__label" for="flash-start">{{ t('firmware.flash.window_start') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+                    <input class="input" id="flash-start" type="datetime-local" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="flash-end">{{ t('firmware.flash.window_end') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+                    <input class="input" id="flash-end" type="datetime-local" style="width: 100%;">
+                </div>
+            </div>
+
+            <label class="setting__label" for="flash-note" style="margin-top: var(--space-4);">{{ t('firmware.flash.note') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+            <input class="input" id="flash-note" maxlength="500" autocomplete="off" style="width: 100%;">
+
+            <p class="setting__error" id="flash-error" hidden></p>
+            {# Refusals land here: a machine of the wrong model is NAMED rather than dropped,
+               because "queued 37 of 40" with no word on the other three is how somebody
+               believes a fleet was updated when it was not. #}
+            <div id="flash-refused"></div>
+        </div>
+        <div class="modal__foot">
+            <button class="btn btn--ghost" type="button" id="flash-cancel">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="flash-submit">{{ t('firmware.flash.submit') }}</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+{# autocomplete.js is already loaded by base.html for every page. #}
+<script src="{{ url_for('static', filename='js/firmware-images.js') }}"></script>
+{% endblock %}

@@ -17,6 +17,8 @@ Two things are worth stating about what is asserted here:
     for it rather than assumed clean.
 """
 import functools
+import hashlib
+import io
 import json
 import os
 import shutil
@@ -26,6 +28,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import backups
 import bios
+import firmware
 import fleet
 import permissions
 import settings
@@ -67,6 +70,16 @@ def main():
     try:
         fleet.init_fleet_db(db_path)
         bios.init_bios_db(db_path)
+        firmware.init_firmware_db(db_path)
+        # firmware.read_machine_facts reads machine_info, which app.init_db() owns and this
+        # minimal app does not boot. Created here with just the two columns a precondition
+        # check needs -- manufacturer and model ARE the check.
+        import sqlite3
+        with sqlite3.connect(db_path) as _c:
+            _c.execute("CREATE TABLE IF NOT EXISTS machine_info (machine TEXT PRIMARY KEY, "
+                       "manufacturer TEXT, model TEXT)")
+            _c.execute("INSERT OR REPLACE INTO machine_info VALUES ('PC-01', 'Dell', "
+                       "'Latitude 5540')")
         permissions.init_permissions_db(db_path)
         settings.init_settings_db(db_path)
         settings.invalidate()
@@ -93,7 +106,8 @@ def main():
 
         agent_id, token = fleet.enroll_agent(db_path, "PC-01", SECRET, SECRET)
         app.register_blueprint(
-            create_bios_blueprint(db_path, log_dir, fake_login_required, access))
+            create_bios_blueprint(db_path, log_dir, fake_login_required, access,
+                                  hub_url="https://hub.example"))
         app.register_blueprint(create_fleet_blueprint(
             db_path, SECRET, fake_login_required, access))
 
@@ -331,6 +345,159 @@ def main():
         check("issue_commands does not allow storing a password -> 403",
               c.put("/api/bios-password", json={"password": "x"}).status_code == 403)
         CURRENT_USER = "super@x.com"
+
+        # ================================================================
+        # FIRMWARE UPDATES (`update_bios`)
+        # ================================================================
+        print("\n== Uploading an image computes the digest hub-side ==")
+        image = b"MZ" + b"\x00" * 4096
+        r = c.post("/api/firmware/upload", content_type="multipart/form-data",
+                   data={"file": (io.BytesIO(image), "L5540_1.31.0.exe")})
+        check("upload -> 201", r.status_code == 201)
+        uploaded = r.get_json()
+        check("the hub hashes the bytes it actually stored",
+              uploaded["sha256"] == hashlib.sha256(image).hexdigest())
+        check("...and reports the size", uploaded["file_size"] == len(image))
+
+        r = c.post("/api/firmware/payloads", json={
+            "name": "Latitude 5540 BIOS 1.31.0", "vendor": "Dell",
+            "models": ["Latitude 5540"], "to_version": "1.31.0",
+            "sha256": uploaded["sha256"], "file_size": uploaded["file_size"],
+            "file_name": uploaded["file_name"], "install_args": "/s /f"})
+        check("creating the payload -> 201", r.status_code == 201)
+        payload_id = r.get_json()["payload"]["id"]
+        check("a payload with no models is refused -> 400",
+              c.post("/api/firmware/payloads",
+                     json={"name": "x", "vendor": "Dell", "models": [],
+                           "to_version": "1.0", "sha256": uploaded["sha256"]}
+                     ).status_code == 400)
+
+        print("\n== Queueing a flash ==")
+        r = c.post("/api/firmware/jobs", json={"payload_id": payload_id,
+                                               "machines": ["PC-01"]})
+        # 202, never 200: nothing has touched any firmware and will not until the scheduler
+        # dispatches. The console says *queued*.
+        check("create job -> 202", r.status_code == 202)
+        job_body = r.get_json()
+        check("the machine is queued", job_body["queued"] == ["PC-01"])
+        job_id = job_body["job_id"]
+
+        r = c.post("/api/firmware/jobs", json={"payload_id": payload_id,
+                                               "machines": ["PC-01", "PC-GHOST"]})
+        # Named back rather than silently dropped: "queued 1 of 2" with no word on the
+        # other is how somebody believes a fleet was updated when it was not.
+        check("a machine that cannot take the image is REFUSED and named",
+              [x["machine"] for x in r.get_json()["refused"]] == ["PC-GHOST"])
+        check("...with a reason", bool(r.get_json()["refused"][0]["reason"]))
+
+        print("\n== The agent fetches everything the params do not carry ==")
+        firmware.dispatch_once(db_path)
+        target = firmware.get_job(db_path, job_id)["targets"][0]
+        r = c.get(f"/api/agent/firmware/update/{target['id']}", headers=auth)
+        check("agent fetch -> 200", r.status_code == 200)
+        fetched = r.get_json()
+        check("the image URL is built from the hub's public address",
+              fetched["url"].startswith("https://hub.example/api/agent/firmware/image/"))
+        check("the digest rides along so the agent can verify before flashing",
+              fetched["sha256"] == uploaded["sha256"])
+        check("the BIOS setup password is handed over here, never in params",
+              fetched["password"] == "fleet-pw")
+        check("the power preconditions ride down with it",
+              fetched["require_ac_power"] is True
+              and isinstance(fetched["min_battery_percent"], int))
+        check("a redelivered command cannot fetch it twice -> 409",
+              c.get(f"/api/agent/firmware/update/{target['id']}",
+                    headers=auth).status_code == 409)
+        check("an unauthenticated agent gets 401",
+              c.get(f"/api/agent/firmware/update/{target['id']}").status_code == 401)
+
+        r = c.get(f"/api/agent/firmware/image/{uploaded['sha256']}", headers=auth)
+        check("the image downloads to an enrolled agent", r.status_code == 200
+              and r.data == image)
+        check("a digest belonging to no payload is not readable -> 404",
+              c.get("/api/agent/firmware/image/" + "c" * 64,
+                    headers=auth).status_code == 404)
+
+        print("\n== The flash is confirmed by the heartbeat, not by the agent ==")
+        r = c.post(f"/api/agent/firmware/update/{target['id']}/result",
+                   json={"ok": True}, headers=auth)
+        check("a successful report only reaches 'rebooting'",
+              r.get_json()["status"] == firmware.TARGET_REBOOTING)
+        c.post("/api/agent/heartbeat", json={
+            "config_version": 0,
+            "bios": dict(good, bios_version="1.31.0"),
+        }, headers=auth)
+        check("the machine coming back on the new version is what applies it",
+              firmware.get_target(db_path, target["id"])["status"]
+              == firmware.TARGET_APPLIED)
+
+        print("\n== Firmware updates are manage_firmware, all of them ==")
+        CURRENT_USER = "tech@x.com"
+        check("issue_commands cannot list images -> 403",
+              c.get("/api/firmware/payloads").status_code == 403)
+        check("issue_commands cannot queue a flash -> 403",
+              c.post("/api/firmware/jobs",
+                     json={"payload_id": payload_id,
+                           "machines": ["PC-01"]}).status_code == 403)
+        check("issue_commands cannot upload an image -> 403",
+              c.post("/api/firmware/upload", content_type="multipart/form-data",
+                     data={"file": (io.BytesIO(b"x"), "x.exe")}).status_code == 403)
+        CURRENT_USER = "viewer@x.com"
+        check("a viewer cannot see the image library either -> 403",
+              c.get("/api/firmware/payloads").status_code == 403)
+
+        CURRENT_USER = "fw@x.com"
+        check("manage_firmware CAN list images",
+              c.get("/api/firmware/payloads").status_code == 200)
+        check("...and is still bound by machine scope -> 403",
+              c.post("/api/firmware/jobs",
+                     json={"payload_id": payload_id,
+                           "machines": ["PC-09"]}).status_code == 403)
+        CURRENT_USER = "super@x.com"
+
+        print("\n== Cancel says which of the three things happened ==")
+        # A SECOND image, because PC-01 is now on 1.31.0 and the hub refuses a flash to the
+        # version a machine is already running -- correctly, since such a flash could never
+        # be confirmed. Re-using the first payload here would produce refused targets and a
+        # 409 for the wrong reason.
+        image2 = b"MZ" + b"\x01" * 2048
+        up2 = c.post("/api/firmware/upload", content_type="multipart/form-data",
+                     data={"file": (io.BytesIO(image2), "L5540_1.32.0.exe")}).get_json()
+        payload2 = c.post("/api/firmware/payloads", json={
+            "name": "Latitude 5540 BIOS 1.32.0", "vendor": "Dell",
+            "models": ["Latitude 5540"], "to_version": "1.32.0",
+            "sha256": up2["sha256"]}).get_json()["payload"]["id"]
+
+        r = c.post("/api/firmware/jobs", json={"payload_id": payload2,
+                                               "machines": ["PC-01"]})
+        check("a machine already on the target version is refused, a different one is not",
+              r.get_json()["queued"] == ["PC-01"])
+        pending_job = r.get_json()["job_id"]
+        pending_target = firmware.get_job(db_path, pending_job)["targets"][0]["id"]
+        check("a queued machine cancels -> 200",
+              c.post(f"/api/firmware/updates/{pending_target}/cancel",
+                     json={}).status_code == 200)
+
+        r = c.post("/api/firmware/jobs", json={"payload_id": payload2,
+                                               "machines": ["PC-01"]})
+        held_job = r.get_json()["job_id"]
+        firmware.dispatch_once(db_path)
+        held = firmware.get_job(db_path, held_job)["targets"][0]["id"]
+        c.get(f"/api/agent/firmware/update/{held}", headers=auth)
+        r = c.post(f"/api/firmware/updates/{held}/cancel", json={})
+        # Claiming is at-most-once and there is no back-channel; the firmware may already be
+        # written. A 200 here would be the console lying at the worst possible moment.
+        check("a machine already holding the image cannot be recalled -> 409",
+              r.status_code == 409)
+        check("...and the 409 says the firmware may already have been written",
+              "already" in r.get_json()["error"])
+
+        print("\n== Nothing in the audit trail exposes the image URL or the password ==")
+        blob = json.dumps(fleet.list_audit(db_path, limit=500)["entries"], default=str)
+        check("no stored password in any firmware audit row",
+              "fleet-pw" not in blob and "machine-pw" not in blob)
+        check("but WHICH image was aimed WHERE is audited",
+              "create_firmware_job" in blob and "Latitude 5540 BIOS 1.31.0" in blob)
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

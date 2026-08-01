@@ -37,6 +37,7 @@ import backups
 import remote
 import directory
 import bios
+import firmware
 import authconfig
 import i18n
 from fleet_web import create_fleet_blueprint
@@ -76,7 +77,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.60.0"
+HUB_VERSION = "1.61.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1359,7 +1360,11 @@ app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, acces
 # `manage_firmware` capability. LOG_DIR is passed because the BIOS setup password lives in
 # the same master-key-wrapped secret file the backup destinations use -- never in `settings`,
 # which is rendered into a form and partly shipped to agents.
-app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, access))
+# HUB_URL rides along for the same reason packages needs it: an agent is handed the URL
+# it downloads a BIOS image from, and that URL has to be the hub's public address rather
+# than whatever Host header reached it.
+app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, access,
+                                             hub_url=HUB_URL))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
@@ -2064,6 +2069,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # (same hardware, so the same attributes), which is why bios.rename_machine keeps the
     # survivor's row rather than overwriting it with the dropped name's older reading.
     bios.rename_machine(DB_PATH, dropped, survivor)
+    # Firmware update targets follow too, and the survivor's own row wins a collision --
+    # both rows describe one physical machine, and it only needs flashing once.
+    firmware.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -2340,6 +2348,50 @@ def deploy_scheduler():
 
 def start_deploy_scheduler():
     threading.Thread(target=deploy_scheduler, daemon=True, name="deploy_scheduler").start()
+
+
+def firmware_scheduler():
+    """Advance firmware updates: retire what nobody will answer for, dispatch what is due.
+
+    Its own thread rather than a pass inside deploy_scheduler, because the two disagree
+    about time: a deploy tick is 30 seconds and its slowest step is a command result, while
+    a flash is confirmed by a machine coming back from a reboot and is given a day. Sharing
+    a loop would mean one of the two intervals is wrong.
+
+    Dispatch is limited to machines that are ONLINE. A flash queued at a dark PC would burn
+    its command TTL and then be retired as failed -- and this is the one feature with no
+    retry, so a machine that was merely switched off would be recorded as a failure nobody
+    would dare re-run. Left pending, it is still due the minute it reappears; that is the
+    file-backup catch-up discipline, and it matters more here.
+    """
+    while True:
+        interval = settings.get_int(DB_PATH, "firmware.scheduler_interval_seconds")
+        try:
+            # The same roster the per-PC backup scheduler uses, so "online" means one
+            # thing across the hub -- last contact from a non-revoked agent, within
+            # fleet.offline_after_seconds -- rather than this scheduler growing a second,
+            # subtly different definition.
+            online = {entry["machine"] for entry in backup_machine_roster()
+                      if entry["online"]}
+            expired, dispatched = firmware.tick(
+                DB_PATH,
+                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+                online_machines=online,
+                flashing_timeout=settings.get_int(
+                    DB_PATH, "firmware.flashing_timeout_seconds"),
+                confirm_timeout=settings.get_int(
+                    DB_PATH, "firmware.confirm_timeout_seconds"),
+            )
+            if expired or dispatched:
+                print(f"[firmware] Retired {expired}, dispatched {dispatched}.")
+        except Exception as e:
+            print(f"[firmware] Scheduler pass failed: {e}")
+        time.sleep(interval)
+
+
+def start_firmware_scheduler():
+    threading.Thread(target=firmware_scheduler, daemon=True,
+                     name="firmware_scheduler").start()
 
 
 # How often the temperature-alert evaluator wakes. A machine reports every few seconds and
@@ -2625,6 +2677,7 @@ packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
+firmware.init_firmware_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
@@ -2637,6 +2690,7 @@ start_agent_version_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
+start_firmware_scheduler()
 start_backup_scheduler()
 start_high_temp_evaluator()
 start_directory_sync_scheduler()
@@ -2957,6 +3011,10 @@ def delete_machine(machine):
     # attribute list describing hardware it isn't -- which is exactly what an operator would
     # then be offered a "change this setting" button against.
     bios.forget_machine(DB_PATH, machine_name)
+    # Same for any queued or in-flight firmware flash: its targets go, so a fleet-wide
+    # update is not left permanently at 39/40 waiting on a machine record that no longer
+    # exists. The job's own history stays, because it happened.
+    firmware.forget_machine(DB_PATH, machine_name)
     # Its BIOS setup password override lives in the secret file rather than the database, so
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.

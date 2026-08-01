@@ -283,11 +283,33 @@ REGISTRY = (
     _s("directory.alert_on_unmatched", "directory", "bool", True),
     _s("directory.tls_verify", "directory", "bool", True),
     _s("directory.allow_insecure", "directory", "bool", False),
+
+    # ---------------- Firmware updates (roadmap #9) ----------------
+    # The two timeouts are wall-clock windows around an operation the hub cannot observe:
+    # the flash completes during POST, so the only evidence it worked is the machine coming
+    # back reporting a new BIOS version. They are deliberately far apart -- a vendor tool
+    # that hangs is a couple of hours, while a machine flashed on a Friday evening should
+    # not be written off before somebody switches it on again on Monday.
+    #
+    # The power preconditions are enforced on the AGENT, at the moment of the flash, and
+    # ride down with the payload rather than through agent_config: a battery reading taken
+    # when the config was last pushed says nothing about the battery now.
+    _s("firmware.max_upload_mb", "firmware", "int", 128, minimum=1, maximum=4096,
+       unit="mb"),
+    _s("firmware.scheduler_interval_seconds", "firmware", "int", 60, minimum=10,
+       maximum=3600, unit="seconds"),
+    _s("firmware.flashing_timeout_seconds", "firmware", "int", 2 * 3600, minimum=300,
+       maximum=86400, unit="seconds"),
+    _s("firmware.confirm_timeout_seconds", "firmware", "int", 24 * 3600, minimum=600,
+       maximum=7 * 86400, unit="seconds"),
+    _s("firmware.require_ac_power", "firmware", "bool", True),
+    _s("firmware.min_battery_percent", "firmware", "int", 30, minimum=0, maximum=100,
+       unit="percent"),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory")
+            "directory", "firmware")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;
