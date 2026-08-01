@@ -120,14 +120,31 @@ VIRTUAL_DISPLAY_COMMANDS = frozenset({
     "set_virtual_display_mode",
 })
 
-# BIOS/firmware management (roadmap #9). Only the read side exists so far: a machine's
-# firmware inventory rides the heartbeat on a change-only cadence, and this forces a re-read
-# for the operator who is looking at the tab right now and does not want to wait for the next
-# scan. Machine-independent and empty-params, so unlike the remote and deploy types there is
-# nothing stale a saved copy could carry -- it stays favoritable on purpose, because
-# "re-read firmware on these twelve PCs" is exactly the shape a favorite is for.
+# BIOS/firmware management (roadmap #9).
+#
+# `refresh_bios_inventory` forces a re-read for the operator who is looking at the tab right
+# now and does not want to wait for the next six-hourly scan. Machine-independent and
+# empty-params, so unlike the remote and deploy types there is nothing stale a saved copy
+# could carry -- it stays favoritable on purpose, because "re-read firmware on these twelve
+# PCs" is exactly the shape a favorite is for.
+#
+# `set_bios_settings` carries only a CHANGE ID; the attribute list and any BIOS setup
+# password are fetched from an authenticated agent endpoint at claim time (see
+# bios.get_change_payload). That is the restore-plan precedent, and for the same two reasons:
+# create_command audits params verbatim, so the password would otherwise sit in the audit log
+# inside the database that is itself backed up.
 FIRMWARE_COMMANDS = frozenset({
     "refresh_bios_inventory",
+    "set_bios_settings",
+})
+
+# ...and the half of it that must NOT be favoritable. A change id names one machine's one
+# pending set of attribute writes; replaying a saved copy would re-run a change that has
+# already been applied, against a machine whose attribute names may not even match -- v1 maps
+# no vendor vocabulary onto a common one, so a Dell's `WakeOnLan` means nothing on a Lenovo.
+# `refresh_bios_inventory` stays favoritable; only this one is excluded.
+UNSAVEABLE_FIRMWARE_COMMANDS = frozenset({
+    "set_bios_settings",
 })
 
 ALL_COMMANDS = frozenset({
@@ -195,6 +212,13 @@ ACTION_LEVELS = {
     "virtual_display_install": LEVEL_SECURITY,
     "virtual_display_uninstall": LEVEL_SECURITY,
     "virtual_display_payload_set": LEVEL_SECURITY,
+    # Firmware. Recorded SEPARATELY from the `issue_command` row the same request writes,
+    # because that one audits params verbatim and the params are just a change id -- the
+    # attribute names and values an operator actually chose would appear nowhere. The BIOS
+    # setup password is deliberately not part of either row; it never travels in params.
+    "bios_settings_change": LEVEL_SECURITY,
+    "bios_password_set": LEVEL_SECURITY,
+    "bios_password_clear": LEVEL_SECURITY,
     "backup_key_create": LEVEL_SECURITY,
     "backup_key_reveal": LEVEL_SECURITY,
     "backup_key_escrowed": LEVEL_SECURITY,
@@ -1099,6 +1123,10 @@ def _validate_favorite(name, command_type, params):
         # and would then fail the download's hash check on every machine it was replayed
         # against. The other two ride along so the Remote tab stays the single way in.
         raise ValueError(f"{command_type!r} commands are issued from the Remote tab and "
+                         f"cannot be saved as a favorite")
+    if command_type in UNSAVEABLE_FIRMWARE_COMMANDS:
+        # Carries a change id belonging to one machine and one already-issued set of writes.
+        raise ValueError(f"{command_type!r} commands are issued from the Firmware tab and "
                          f"cannot be saved as a favorite")
     if params is None:
         params = {}

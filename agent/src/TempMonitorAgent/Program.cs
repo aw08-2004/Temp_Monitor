@@ -105,6 +105,7 @@ try
     // BIOS and the answer rides the next heartbeat. update_bios stays stubbed below until the
     // vendor-dispatched flash executor lands.
     builder.Services.AddSingleton<ICommandExecutor, RefreshBiosInventoryExecutor>();
+builder.Services.AddSingleton<ICommandExecutor, SetBiosSettingsExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("update_bios"));
 

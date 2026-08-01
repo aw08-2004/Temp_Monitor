@@ -342,6 +342,10 @@
         "label": "Backups verwalten",
         "description": "Backups konfigurieren und Wiederherstellungen auslösen."
       },
+      "manage_firmware": {
+        "label": "Firmware verwalten",
+        "description": "BIOS-Einstellungen ändern und Firmware aktualisieren. Die einzige Aktion ohne Rückweg: Eine fehlgeschlagene Firmware-Aktualisierung kann einen Rechner unbrauchbar machen."
+      },
       "manage_settings": {
         "label": "Einstellungen verwalten",
         "description": "Hub-Einstellungen ändern und Computerdatensätze verwalten (löschen, zusammenführen, Sensor festlegen, Warnungen verwerfen)."
@@ -1434,7 +1438,48 @@
         "string": "Text",
         "integer": "Zahl",
         "unknown": "Nicht klassifiziert"
-      }
+      },
+      "apply": "Änderungen anwenden",
+      "discard": "Verwerfen",
+      "staged": {
+        "one": "{count} Einstellung geändert",
+        "other": "{count} Einstellungen geändert"
+      },
+      "apply_queued": "In der Warteschlange. Der Rechner wendet die Änderung bei der nächsten Meldung an und liest anschließend jede Einstellung erneut, damit das Ergebnis zeigt, was sich wirklich geändert hat.",
+      "locked": "Für diesen Rechner läuft bereits eine Änderung. Die Einstellungen sind wieder bearbeitbar, sobald sie abgeschlossen ist.",
+      "was": "vorher {value}",
+      "change": {
+        "pending": "Änderung in der Warteschlange",
+        "running": "Änderung wird angewendet",
+        "applied": "Änderung angewendet",
+        "pending_reboot": "Änderung wird beim nächsten Neustart wirksam",
+        "partial": "Änderung teilweise angewendet",
+        "failed": "Änderung fehlgeschlagen",
+        "reboot_help": "Der Rechner hat die Änderung angenommen, seine Firmware meldet aber weiterhin den alten Wert. Zum Anwenden neu starten.",
+        "transition": "{from} → {to}",
+        "observed": "Die Firmware meldet jetzt {value} — keinen der beiden Werte.",
+        "meta": "Angefordert von {who} am {when}",
+        "cancel": "Änderung abbrechen"
+      },
+      "outcome": {
+        "applied": "angewendet",
+        "pending_reboot": "wird beim nächsten Neustart wirksam",
+        "failed": "fehlgeschlagen",
+        "unknown": "unbestätigt"
+      },
+      "password_button": "BIOS-Kennwort",
+      "password_title": "BIOS-Setup-Kennwort",
+      "password_help": "Bei allen Herstellern verhindert ein BIOS-Setup-Kennwort Firmware-änderungen. Es wird verschlüsselt gespeichert und nur an den Rechner gesendet, der die Änderung ausführt; angezeigt wird es nie wieder.",
+      "password_scope": "Gilt für",
+      "password_scope_machine": "Nur diesen Rechner",
+      "password_scope_fleet": "Alle Rechner",
+      "password_label": "Kennwort",
+      "password_clear": "Gespeichertes Kennwort löschen",
+      "password_required": "Kennwort eingeben oder mit Löschen das gespeicherte entfernen.",
+      "password_saved": "Kennwort gespeichert.",
+      "password_cleared": "Gespeichertes Kennwort entfernt.",
+      "password_ready": "Auf diesem Rechner ist ein BIOS-Setup-Kennwort gesetzt, und hier ist eines hinterlegt, das mit einer Änderung gesendet wird.",
+      "password_unknown": "Die Firmware dieses Rechners gibt nicht an, ob ein Setup-Kennwort gesetzt ist. Wird eine Änderung abgelehnt, ist das der erste Punkt zum Prüfen."
     },
     "favorites": {
       "title": "Favoriten",

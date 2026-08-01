@@ -66,6 +66,13 @@ ISSUE_COMMANDS = "issue_commands"
 REMOTE_CONTROL = "remote_control"
 DEPLOY_PACKAGES = "deploy_packages"
 MANAGE_BACKUPS = "manage_backups"
+# Writing firmware settings and (later) flashing a BIOS. Its own toggle rather than a reuse
+# of DEPLOY_PACKAGES, because this is the one action in the product with no restore path:
+# a failed flash bricks a machine, and there is no chain to re-pull or snapshot to roll back
+# to. Folding it into "can push an installer" would have handed it silently, on the day it
+# shipped, to everyone who already had that. READING the firmware inventory is deliberately
+# NOT gated here -- that is VIEW, like a machine's model or its disks.
+MANAGE_FIRMWARE = "manage_firmware"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -78,6 +85,7 @@ CAPABILITIES = (
     REMOTE_CONTROL,
     DEPLOY_PACKAGES,
     MANAGE_BACKUPS,
+    MANAGE_FIRMWARE,
     MANAGE_SETTINGS,
     MANAGE_USERS,
     MANAGE_PERMISSION_GROUPS,

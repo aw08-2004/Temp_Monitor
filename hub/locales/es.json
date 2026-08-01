@@ -342,6 +342,10 @@
         "label": "Gestionar copias de seguridad",
         "description": "Configurar copias de seguridad y lanzar restauraciones."
       },
+      "manage_firmware": {
+        "label": "Gestionar el firmware",
+        "description": "Cambiar los ajustes de la BIOS y actualizar el firmware. Es la única acción sin vuelta atrás: una actualización de firmware fallida puede dejar un equipo inutilizable."
+      },
       "manage_settings": {
         "label": "Gestionar la configuración",
         "description": "Cambiar la configuración del hub y administrar los registros de los equipos (eliminar, fusionar, fijar un sensor, descartar alertas)."
@@ -1434,7 +1438,48 @@
         "string": "Texto",
         "integer": "Número",
         "unknown": "Sin clasificar"
-      }
+      },
+      "apply": "Aplicar cambios",
+      "discard": "Descartar",
+      "staged": {
+        "one": "{count} ajuste modificado",
+        "other": "{count} ajustes modificados"
+      },
+      "apply_queued": "En cola. El equipo aplicará el cambio en su próxima conexión y luego volverá a leer cada ajuste, de modo que el resultado indique qué cambió realmente.",
+      "locked": "Hay un cambio en curso para este equipo. Podrás editar los ajustes cuando termine.",
+      "was": "antes {value}",
+      "change": {
+        "pending": "Cambio en cola",
+        "running": "Aplicando el cambio",
+        "applied": "Cambio aplicado",
+        "pending_reboot": "El cambio se aplicará al reiniciar",
+        "partial": "Cambio aplicado parcialmente",
+        "failed": "El cambio ha fallado",
+        "reboot_help": "El equipo aceptó el cambio, pero su firmware sigue informando el valor anterior. Reinicia para aplicarlo.",
+        "transition": "{from} → {to}",
+        "observed": "El firmware informa ahora {value}, que no es ninguno de los dos valores.",
+        "meta": "Solicitado por {who} el {when}",
+        "cancel": "Cancelar el cambio"
+      },
+      "outcome": {
+        "applied": "aplicado",
+        "pending_reboot": "se aplicará al reiniciar",
+        "failed": "ha fallado",
+        "unknown": "sin confirmar"
+      },
+      "password_button": "Contraseña de la BIOS",
+      "password_title": "Contraseña de configuración de la BIOS",
+      "password_help": "En todos los fabricantes, una contraseña de configuración de la BIOS impide cambiar el firmware. Se guarda cifrada y solo se envía al equipo que realiza el cambio; no vuelve a mostrarse.",
+      "password_scope": "Se aplica a",
+      "password_scope_machine": "Solo a este equipo",
+      "password_scope_fleet": "A todos los equipos",
+      "password_label": "Contraseña",
+      "password_clear": "Borrar la contraseña guardada",
+      "password_required": "Introduce una contraseña o usa Borrar para eliminar la guardada.",
+      "password_saved": "Contraseña guardada.",
+      "password_cleared": "Contraseña guardada eliminada.",
+      "password_ready": "Este equipo tiene una contraseña de configuración de la BIOS, y aquí hay una guardada para enviarla con el cambio.",
+      "password_unknown": "El firmware de este equipo no indica si tiene contraseña de configuración. Si se rechaza un cambio, es lo primero que hay que comprobar."
     },
     "favorites": {
       "title": "Favoritos",

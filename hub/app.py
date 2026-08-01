@@ -76,7 +76,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.59.2"
+HUB_VERSION = "1.60.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1354,9 +1354,12 @@ app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access, 
 # and a synchronous "sync now". Same login_required + access seam as everything above.
 app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, access))
 
-# BIOS/firmware inventory (roadmap #9): the read side of what a machine's firmware is set to,
-# plus a "re-read it now" command. Same login_required + access seam as everything above.
-app.register_blueprint(create_bios_blueprint(DB_PATH, login_required, access))
+# BIOS/firmware inventory and writes (roadmap #9): what a machine's firmware is set to, a
+# "re-read it now" command, and the `set_bios_settings` write half behind its own
+# `manage_firmware` capability. LOG_DIR is passed because the BIOS setup password lives in
+# the same master-key-wrapped secret file the backup destinations use -- never in `settings`,
+# which is rendered into a form and partly shipped to agents.
+app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, access))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
@@ -2343,6 +2346,10 @@ def start_deploy_scheduler():
 # the average is over minutes, so a 30-second cadence surfaces a hot machine within a tick of
 # the average crossing without churning the alerts table.
 HIGH_TEMP_TICK_SECONDS = 30
+# How long a firmware change may sit unresolved before the hub gives up on hearing back
+# (roadmap #9). Deliberately not the command TTL: the command expiring means the machine never
+# CLAIMED it, while this covers the machine that claimed it and then vanished mid-write.
+BIOS_CHANGE_TIMEOUT_SECONDS = 60 * 60
 
 
 def evaluate_high_temp_once(db_path=None, now=None):
@@ -2434,6 +2441,16 @@ def high_temp_evaluator():
             terminal.reap_sessions(DB_PATH)
         except Exception as e:
             print(f"[terminal] Session reap sweep failed: {e}")
+        # Firmware changes whose machine never reported back (roadmap #9). Without this a
+        # machine that went down mid-write leaves a running change forever, and the hub
+        # refuses every subsequent change to it -- one dead agent would permanently lock its
+        # own Firmware tab. Given an hour, which is generous against a write measured in
+        # seconds, because closing one early would tell an operator a change failed while the
+        # machine was still applying it.
+        try:
+            bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS)
+        except Exception as e:
+            print(f"[bios] Stale change sweep failed: {e}")
         time.sleep(HIGH_TEMP_TICK_SECONDS)
 
 
@@ -2940,6 +2957,10 @@ def delete_machine(machine):
     # attribute list describing hardware it isn't -- which is exactly what an operator would
     # then be offered a "change this setting" button against.
     bios.forget_machine(DB_PATH, machine_name)
+    # Its BIOS setup password override lives in the secret file rather than the database, so
+    # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
+    # be handed to whatever next takes that hostname.
+    backups.delete_secret(LOG_DIR, bios.secret_id_for(machine_name))
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = (session.get("user") or {}).get("email", "unknown")

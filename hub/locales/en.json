@@ -396,6 +396,10 @@
         "label": "Manage backups",
         "description": "Configure backups and trigger restores."
       },
+      "manage_firmware": {
+        "label": "Manage firmware",
+        "description": "Change BIOS settings and update firmware. The only action with no way back: a failed firmware update can leave a machine unusable."
+      },
       "manage_settings": {
         "label": "Manage settings",
         "description": "Change hub settings, and administer machine records (delete, merge, pin a sensor, dismiss alerts)."
@@ -1536,7 +1540,49 @@
         "string": "Text",
         "integer": "Number",
         "unknown": "Unclassified"
-      }
+      },
+      "_write": "Nothing here ever tells an operator to reboot on the strength of the vendor. A change is confirmed by re-reading the attribute, so only the pending_reboot state -- which means the firmware still reports the old value -- asks for a restart.",
+      "apply": "Apply changes",
+      "discard": "Discard",
+      "staged": {
+        "one": "{count} setting changed",
+        "other": "{count} settings changed"
+      },
+      "apply_queued": "Queued. The machine applies the change on its next check-in, then reads each setting back so the result says what actually changed.",
+      "locked": "A change is in flight for this machine. Settings can be edited again once it finishes.",
+      "was": "was {value}",
+      "change": {
+        "pending": "Change queued",
+        "running": "Applying change",
+        "applied": "Change applied",
+        "pending_reboot": "Change applied at next restart",
+        "partial": "Change partly applied",
+        "failed": "Change failed",
+        "reboot_help": "The machine accepted the change, but its firmware still reports the old value. Restart it to apply.",
+        "transition": "{from} → {to}",
+        "observed": "The firmware now reports {value}, which is neither value.",
+        "meta": "Requested by {who} on {when}",
+        "cancel": "Cancel change"
+      },
+      "outcome": {
+        "applied": "applied",
+        "pending_reboot": "applies at next restart",
+        "failed": "failed",
+        "unknown": "unconfirmed"
+      },
+      "password_button": "Setup password",
+      "password_title": "BIOS setup password",
+      "password_help": "On every vendor a BIOS setup password blocks firmware changes. Stored encrypted and sent only to the machine making the change; it is never shown again.",
+      "password_scope": "Applies to",
+      "password_scope_machine": "This machine only",
+      "password_scope_fleet": "Every machine",
+      "password_label": "Password",
+      "password_clear": "Clear stored password",
+      "password_required": "Enter a password, or use Clear to remove the stored one.",
+      "password_saved": "Password stored.",
+      "password_cleared": "Stored password removed.",
+      "password_ready": "A BIOS setup password is set on this machine, and one is stored here to send with a change.",
+      "password_unknown": "This machine's firmware does not say whether a setup password is set. If a change is refused, that is the first thing to check."
     },
     "favorites": {
       "title": "Favorites",

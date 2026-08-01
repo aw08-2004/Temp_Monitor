@@ -5,18 +5,26 @@ same approach as test_remote_web / test_fleet_web.
 
 Two things are worth stating about what is asserted here:
 
-  * **Reading is `view`, forcing a re-read is `issue_commands`.** A viewer must be able to
-    answer "is Wake-on-LAN on?" without an admin, and must not be able to make a machine do
-    anything. Both halves are checked, in both directions.
+  * **Reading is `view`, forcing a re-read is `issue_commands`, writing is
+    `manage_firmware`.** A viewer must be able to answer "is Wake-on-LAN on?" without an
+    admin, and must not be able to make a machine do anything. All three are checked, in both
+    directions -- and the write gate is checked against a tech who holds `issue_commands`,
+    since the whole point of a separate capability is that the two do not come together.
   * **A malformed `bios` block must not fail a heartbeat.** A 500 there marks the machine
     offline fleet-wide, which is a far worse outcome than a stale Firmware tab.
+  * **The BIOS setup password must never appear in an audit row.** It is the reason the
+    command carries a change id instead of the attribute list, so the audit trail is scanned
+    for it rather than assumed clean.
 """
 import functools
+import json
 import os
+import shutil
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
+import backups
 import bios
 import fleet
 import permissions
@@ -52,6 +60,10 @@ def main():
     global CURRENT_USER
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(db_fd)
+    log_dir = tempfile.mkdtemp(prefix="fleethub-bios-")
+    # The BIOS setup password rides the backup secret store, which needs a master key. Set
+    # here rather than mocked, so what the test exercises is the real encrypt/decrypt path.
+    os.environ["BACKUP_MASTER_KEY"] = backups.generate_master_key()
     try:
         fleet.init_fleet_db(db_path)
         bios.init_bios_db(db_path)
@@ -72,10 +84,16 @@ def main():
         permissions.create_group(
             db_path, "Viewers", capabilities=[permissions.VIEW],
             machines=["PC-01"], members=["viewer@x.com"])
+        # Holds manage_firmware and nothing else that would let them issue a command by
+        # another route -- the point being that the write gate stands on its own.
+        permissions.create_group(
+            db_path, "Firmware", capabilities=[permissions.VIEW, permissions.MANAGE_FIRMWARE],
+            machines=["PC-01"], members=["fw@x.com"])
         settings.invalidate()
 
         agent_id, token = fleet.enroll_agent(db_path, "PC-01", SECRET, SECRET)
-        app.register_blueprint(create_bios_blueprint(db_path, fake_login_required, access))
+        app.register_blueprint(
+            create_bios_blueprint(db_path, log_dir, fake_login_required, access))
         app.register_blueprint(create_fleet_blueprint(
             db_path, SECRET, fake_login_required, access))
 
@@ -147,9 +165,177 @@ def main():
               c.get("/api/bios/PC-01").status_code == 403)
         CURRENT_USER = "super@x.com"
 
+        print("\n== Writing a setting is manage_firmware, not issue_commands ==")
+        # Restore a known-good inventory: the malformed-report loop above deliberately left
+        # the machine in `error`, and a write needs something to validate against.
+        good = {
+            "support": "supported", "vendor": "Dell", "interface": r"root\dcim\sysman",
+            "bios_version": "1.29.0", "password_set": True,
+            "settings": [
+                {"name": "WakeOnLan", "value": "Disabled", "kind": "enum",
+                 "possible_values": ["Disabled", "LanOnly"], "read_only": False},
+                {"name": "AssetTag", "value": "A-1", "kind": "string", "read_only": False},
+                {"name": "SecureBoot", "value": "Enabled", "kind": "enum",
+                 "possible_values": ["Enabled", "Disabled"], "read_only": True},
+            ],
+        }
+        c.post("/api/agent/heartbeat", json={"config_version": 0, "bios": good}, headers=auth)
+
+        CURRENT_USER = "tech@x.com"
+        r = c.post("/api/bios/PC-01/settings",
+                   json={"changes": [{"name": "WakeOnLan", "value": "LanOnly"}]})
+        check("issue_commands alone does NOT allow a firmware write -> 403",
+              r.status_code == 403)
+
+        CURRENT_USER = "fw@x.com"
+        check("a read-only attribute is refused -> 400",
+              c.post("/api/bios/PC-01/settings",
+                     json={"changes": [{"name": "SecureBoot", "value": "Disabled"}]}
+                     ).status_code == 400)
+        check("a value the machine does not accept is refused -> 400",
+              c.post("/api/bios/PC-01/settings",
+                     json={"changes": [{"name": "WakeOnLan", "value": "Sometimes"}]}
+                     ).status_code == 400)
+        check("an attribute the machine never reported is refused -> 400",
+              c.post("/api/bios/PC-01/settings",
+                     json={"changes": [{"name": "Invented", "value": "x"}]}
+                     ).status_code == 400)
+        check("a no-op is refused -> 400",
+              c.post("/api/bios/PC-01/settings",
+                     json={"changes": [{"name": "WakeOnLan", "value": "Disabled"}]}
+                     ).status_code == 400)
+        check("out-of-scope write -> 403",
+              c.post("/api/bios/PC-09/settings",
+                     json={"changes": [{"name": "WakeOnLan", "value": "LanOnly"}]}
+                     ).status_code == 403)
+
+        r = c.post("/api/bios/PC-01/settings",
+                   json={"changes": [{"name": "WakeOnLan", "value": "LanOnly"},
+                                     {"name": "AssetTag", "value": "A-2"}]})
+        check("a valid change -> 202", r.status_code == 202)
+        change_id = r.get_json()["change_id"]
+        check("a second change while one is in flight -> 409",
+              c.post("/api/bios/PC-01/settings",
+                     json={"changes": [{"name": "AssetTag", "value": "A-3"}]}
+                     ).status_code == 409)
+
+        print("\n== The command carries an id, never the password or the values ==")
+        queued = [cmd for cmd in fleet.claim_commands(db_path, agent_id, "PC-01")
+                  if cmd["type"] == "set_bios_settings"]
+        check("a set_bios_settings command was queued", len(queued) == 1)
+        check("its params are only the change id",
+              queued and set(queued[0]["params"]) == {"change_id"})
+
+        print("\n== The agent fetches the payload, once ==")
+        r = c.get(f"/api/agent/bios/change/{change_id}", headers=auth)
+        check("the agent may fetch its own change -> 200", r.status_code == 200)
+        payload = r.get_json()
+        check("the payload carries both attributes", len(payload["changes"]) == 2)
+        check("no password is stored yet, so none is sent", payload["password"] is None)
+        check("a second fetch is refused, so a redelivered command cannot replay writes",
+              c.get(f"/api/agent/bios/change/{change_id}", headers=auth).status_code == 409)
+        check("an unauthenticated fetch -> 401",
+              c.get(f"/api/agent/bios/change/{change_id}").status_code == 401)
+
+        print("\n== Verification: the re-read decides, not the exit code ==")
+        c.post(f"/api/agent/bios/change/{change_id}/result", headers=auth, json={
+            # WakeOnLan came back as asked -> applied. AssetTag came back as it was, with no
+            # error -> the write is waiting for POST, which is the ONLY thing that should ever
+            # produce a "restart to apply" in the console.
+            "items": [{"name": "WakeOnLan", "observed": "LanOnly", "error": ""},
+                      {"name": "AssetTag", "observed": "A-1", "error": ""}],
+            "bios": dict(good, settings=[
+                dict(good["settings"][0], value="LanOnly"),
+                good["settings"][1], good["settings"][2]]),
+        })
+        CURRENT_USER = "fw@x.com"
+        body = c.get("/api/bios/PC-01").get_json()
+        change = body["changes"][0]
+        # Applied + pending_reboot rolls up to pending_reboot, NOT partial: nothing went
+        # wrong, one attribute simply needs a POST. `partial` is reserved for a change where
+        # something did not take, so that an operator who sees it always has to look.
+        check("applied + pending_reboot rolls up to pending_reboot",
+              change["status"] == bios.CHANGE_PENDING_REBOOT)
+        outcomes = {row["name"]: row["outcome"] for row in change["results"]}
+        check("the attribute that came back changed is applied",
+              outcomes["WakeOnLan"] == bios.OUTCOME_APPLIED)
+        check("the attribute still reporting its old value is pending_reboot",
+              outcomes["AssetTag"] == bios.OUTCOME_PENDING_REBOOT)
+        check("the inventory that rode along was stored too",
+              body["settings"][2]["value"] == "LanOnly")
+        check("a resolved change no longer blocks the next one",
+              c.post("/api/bios/PC-01/settings",
+                     json={"changes": [{"name": "AssetTag", "value": "A-9"},
+                                       {"name": "WakeOnLan", "value": "Disabled"}]}
+                     ).status_code == 202)
+
+        # One attribute refused, one applied. THIS is what `partial` is for, and the whole
+        # reason it is not folded into `failed`: the operator has to see which one.
+        pending = bios.open_change_for(db_path, "PC-01")
+        c.get(f"/api/agent/bios/change/{pending['id']}", headers=auth)
+        c.post(f"/api/agent/bios/change/{pending['id']}/result", headers=auth, json={
+            "items": [{"name": "AssetTag", "observed": "A-9", "error": ""},
+                      {"name": "WakeOnLan", "observed": "LanOnly",
+                       "error": "the firmware refused the write (code 5)"}],
+        })
+        change = c.get("/api/bios/PC-01").get_json()["changes"][0]
+        check("one failure among successes is `partial`",
+              change["status"] == bios.CHANGE_PARTIAL)
+        outcomes = {row["name"]: row["outcome"] for row in change["results"]}
+        check("the refused attribute is failed, and says why",
+              outcomes["WakeOnLan"] == bios.OUTCOME_FAILED)
+        check("the other attribute is still reported applied on its own merits",
+              outcomes["AssetTag"] == bios.OUTCOME_APPLIED)
+
+        print("\n== The setup password: stored, sent, never read back ==")
+        check("PUT with no password -> 400",
+              c.put("/api/bios-password", json={}).status_code == 400)
+        check("storing a fleet password -> 200",
+              c.put("/api/bios-password", json={"password": "fleet-pw"}).status_code == 200)
+        check("the console reports only THAT one is stored",
+              c.get("/api/bios/PC-01").get_json()["password_stored"] is True)
+        check("no route hands a password back",
+              c.get("/api/bios-password").status_code in (404, 405))
+
+        def queue_and_fetch(value):
+            """Queue a change and take the agent's view of it. A fresh change each time,
+            because a fetched one is already RUNNING and will not be handed over twice."""
+            c.post("/api/bios/PC-01/settings",
+                   json={"changes": [{"name": "AssetTag", "value": value}]})
+            open_change = bios.open_change_for(db_path, "PC-01")
+            fetched = c.get(f"/api/agent/bios/change/{open_change['id']}",
+                            headers=auth).get_json()
+            c.post(f"/api/agent/bios/change/{open_change['id']}/result", headers=auth,
+                   json={"items": [{"name": "AssetTag", "observed": value, "error": ""}]})
+            return fetched
+
+        check("the fleet password is sent to the machine",
+              queue_and_fetch("A-20")["password"] == "fleet-pw")
+        c.put("/api/bios-password/PC-01", json={"password": "machine-pw"})
+        check("a per-machine password overrides the fleet one",
+              queue_and_fetch("A-21")["password"] == "machine-pw")
+        c.delete("/api/bios-password/PC-01")
+        check("clearing the override falls back to the fleet password",
+              queue_and_fetch("A-22")["password"] == "fleet-pw")
+
+        print("\n== The password is nowhere in the audit trail ==")
+        # The reason the command carries a change id rather than the attribute list: audit
+        # rows store params verbatim, and this is the assertion that keeps it that way.
+        blob = json.dumps(fleet.list_audit(db_path, limit=500)["entries"], default=str)
+        check("no stored password appears in any audit row",
+              "fleet-pw" not in blob and "machine-pw" not in blob)
+        check("but WHAT changed is audited, not just THAT something did",
+              "WakeOnLan" in blob and "bios_settings_change" in blob)
+
+        CURRENT_USER = "tech@x.com"
+        check("issue_commands does not allow storing a password -> 403",
+              c.put("/api/bios-password", json={"password": "x"}).status_code == 403)
+        CURRENT_USER = "super@x.com"
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:
+        shutil.rmtree(log_dir, ignore_errors=True)
         for suffix in ("", "-wal", "-shm"):
             try:
                 os.remove(db_path + suffix)

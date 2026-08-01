@@ -189,6 +189,148 @@ def main():
         check("the merged-away name is dropped",
               bios.get_inventory(db_path, "DUPE")["support"] is None)
 
+        # ------------------------------------------------------------------ the write half
+        #
+        # Everything below is about ONE claim: a change is confirmed by re-reading the
+        # attribute, never by trusting the write's return code and never by consulting a
+        # per-vendor "requires reboot" table. classify_result is where that lives, so it is
+        # tested against each of the four shapes a re-read can come back in.
+        print("\n== Validation is against the machine's OWN attributes ==")
+        inventory = {
+            "support": bios.SUPPORT_SUPPORTED,
+            "settings": [
+                {"name": "WakeOnLan", "value": "Disabled", "kind": bios.KIND_ENUM,
+                 "possible_values": ["Disabled", "LanOnly"], "read_only": False},
+                {"name": "BootDelay", "value": "0", "kind": bios.KIND_INTEGER,
+                 "possible_values": [], "read_only": False},
+                {"name": "Owner", "value": "", "kind": bios.KIND_STRING,
+                 "possible_values": [], "read_only": False},
+                {"name": "SecureBoot", "value": "Enabled", "kind": bios.KIND_ENUM,
+                 "possible_values": ["Enabled", "Disabled"], "read_only": True},
+            ],
+        }
+
+        def rejected(changes):
+            try:
+                bios.validate_changes(inventory, changes)
+                return False
+            except bios.ChangeRejected:
+                return True
+
+        check("an unknown attribute is refused",
+              rejected([{"name": "Invented", "value": "x"}]))
+        check("a read-only attribute is refused",
+              rejected([{"name": "SecureBoot", "value": "Disabled"}]))
+        check("a value outside the machine's own option list is refused",
+              rejected([{"name": "WakeOnLan", "value": "Sometimes"}]))
+        check("a non-numeric integer is refused",
+              rejected([{"name": "BootDelay", "value": "soon"}]))
+        check("an empty value is refused rather than sent through",
+              rejected([{"name": "Owner", "value": "  "}]))
+        check("the same attribute twice is refused",
+              rejected([{"name": "Owner", "value": "a"}, {"name": "owner", "value": "b"}]))
+        check("a no-op is refused -- verification would have nothing to compare",
+              rejected([{"name": "WakeOnLan", "value": "Disabled"}]))
+        check("an empty change list is refused", rejected([]))
+        # An unsupported or never-reported machine has no attribute list to validate against,
+        # so there is nothing a write could legitimately target.
+        for state in (bios.SUPPORT_UNSUPPORTED, bios.SUPPORT_ERROR, None):
+            try:
+                bios.validate_changes({"support": state, "settings": []},
+                                      [{"name": "WakeOnLan", "value": "LanOnly"}])
+                refused = False
+            except bios.ChangeRejected:
+                refused = True
+            check(f"a machine reporting {state!r} refuses every write", refused)
+
+        cleaned = bios.validate_changes(
+            inventory, [{"name": "wakeonlan", "value": " lanonly "}])
+        check("the MACHINE's spelling of the name wins over the caller's",
+              cleaned[0]["name"] == "WakeOnLan")
+        check("the machine's spelling of the VALUE wins too",
+              cleaned[0]["to"] == "LanOnly")
+        check("the previous value is captured, since verification compares against it",
+              cleaned[0]["from"] == "Disabled")
+
+        print("\n== classify_result: the re-read decides ==")
+        change = {"name": "WakeOnLan", "from": "Disabled", "to": "LanOnly"}
+        check("re-read shows the new value -> applied",
+              bios.classify_result(change, dict(change, observed="LanOnly", error=""))
+              == bios.OUTCOME_APPLIED)
+        check("case and padding do not make a mismatch",
+              bios.classify_result(change, dict(change, observed=" lanonly ", error=""))
+              == bios.OUTCOME_APPLIED)
+        check("re-read still shows the old value -> pending_reboot",
+              bios.classify_result(change, dict(change, observed="Disabled", error=""))
+              == bios.OUTCOME_PENDING_REBOOT)
+        check("the write errored -> failed, whatever the re-read says",
+              bios.classify_result(change, dict(change, observed="LanOnly", error="denied"))
+              == bios.OUTCOME_FAILED)
+        check("the firmware substituted a third value -> unknown, never applied",
+              bios.classify_result(change, dict(change, observed="AcOnly", error=""))
+              == bios.OUTCOME_UNKNOWN)
+        check("nothing read back -> unknown",
+              bios.classify_result(change, dict(change, observed=None, error=""))
+              == bios.OUTCOME_UNKNOWN)
+
+        print("\n== A change's lifecycle ==")
+        change_id = bios.create_change(db_path, "PC-W", cleaned, "op@x.com")
+        check("a new change is pending",
+              bios.get_change(db_path, change_id)["status"] == bios.CHANGE_PENDING)
+        check("it blocks a second change on the same machine",
+              bios.open_change_for(db_path, "PC-W")["id"] == change_id)
+        check("the first fetch claims it", bios.start_change(db_path, change_id) is True)
+        check("a second fetch does not -- a redelivered command cannot replay writes",
+              bios.start_change(db_path, change_id) is False)
+        check("and it can no longer be cancelled: the machine may already have written",
+              bios.cancel_change(db_path, change_id) is False)
+
+        bios.ingest_change_result(db_path, change_id, {
+            "items": [{"name": "WakeOnLan", "observed": "LanOnly", "error": ""}]})
+        resolved = bios.get_change(db_path, change_id)
+        check("a verified change is applied", resolved["status"] == bios.CHANGE_APPLIED)
+        check("and no longer blocks the next one",
+              bios.open_change_for(db_path, "PC-W") is None)
+
+        # A result arriving after the row is terminal is dropped, not replayed onto it --
+        # same discipline as the cancelled backup run whose late result is discarded.
+        bios.ingest_change_result(db_path, change_id, {
+            "items": [{"name": "WakeOnLan", "observed": "Disabled", "error": "late"}]})
+        check("a late result cannot reopen a resolved change",
+              bios.get_change(db_path, change_id)["status"] == bios.CHANGE_APPLIED)
+
+        print("\n== A machine that never answers ==")
+        stuck = bios.create_change(db_path, "PC-GONE", cleaned, "op@x.com")
+        bios.start_change(db_path, stuck)
+        check("a fresh change is not swept", bios.expire_stale_changes(db_path, 3600) == 0)
+        check("an old one is", bios.expire_stale_changes(db_path, -1) == 1)
+        # Partial, not failed: the agent HAD fetched the payload, so some of it may well have
+        # been written. Claiming failure would be a guess in the more comfortable direction.
+        check("and it is closed as partial, not failed",
+              bios.get_change(db_path, stuck)["status"] == bios.CHANGE_PARTIAL)
+        check("so the machine is no longer locked out of changes",
+              bios.open_change_for(db_path, "PC-GONE") is None)
+
+        print("\n== A run-level failure names every attribute ==")
+        broken = bios.create_change(db_path, "PC-NOIF", cleaned, "op@x.com")
+        bios.start_change(db_path, broken)
+        bios.ingest_change_result(db_path, broken,
+                                  {"error": "no firmware write interface for Acme"})
+        result = bios.get_change(db_path, broken)
+        check("nothing written -> failed", result["status"] == bios.CHANGE_FAILED)
+        check("and the run-level reason is attached to the attribute, not left blank",
+              "Acme" in result["results"][0]["error"])
+
+        print("\n== Machine lifecycle, with history ==")
+        kept = bios.create_change(db_path, "PC-BYE", cleaned, "op@x.com")
+        bios.forget_machine(db_path, "PC-BYE")
+        check("forget_machine takes the change history with it",
+              bios.get_change(db_path, kept) is None)
+        moved = bios.create_change(db_path, "MERGE-OLD", cleaned, "op@x.com")
+        bios.rename_machine(db_path, "MERGE-OLD", "PC-01")
+        check("a merge moves the change history even when the inventory did not",
+              bios.get_change(db_path, moved)["machine"] == "PC-01")
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
     finally:

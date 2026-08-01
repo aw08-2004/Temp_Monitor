@@ -1,9 +1,13 @@
-// Machine page, Firmware tab: what this PC's BIOS is actually set to (roadmap #9).
+// Machine page, Firmware tab: what this PC's BIOS is set to, and changing it (roadmap #9).
 //
-// Read-only in this release. The write half (`set_bios_settings`) lands next, and this
-// renderer is deliberately shaped for it: every attribute already carries its kind, its
-// accepted values and whether it is read-only, so the editor becomes a control per row
-// rather than a second view of the same data.
+// **Nothing here ever says "reboot to apply".** Whether a firmware write takes effect
+// immediately is per vendor AND per setting, so the hub decides after the agent re-reads the
+// attribute: `applied` says nothing about restarting, and only `pending_reboot` asks. A
+// front-end that guessed would be wrong most of the time on Dell alone.
+//
+// **Edits are staged, not sent per row.** One apply sends one change, which is what makes the
+// hub's "one change in flight per machine" rule survivable -- a per-row control would put an
+// operator changing four settings into a 409 on the second one.
 //
 // **Four states, not two.** `null` (no agent has ever reported), `unsupported` (this machine
 // has told us it has no manageable BIOS -- a VM, a whitebox), `error` (an interface exists
@@ -31,11 +35,27 @@
     const body = document.getElementById('firmware-body');
     const search = document.getElementById('firmware-search');
     const refreshBtn = document.getElementById('firmware-refresh');
+    const changeBox = document.getElementById('firmware-change');
+    const applyBar = document.getElementById('firmware-apply');
+    const applyCount = document.getElementById('firmware-apply-count');
+    const applyBtn = document.getElementById('firmware-apply-btn');
+    const resetBtn = document.getElementById('firmware-reset-btn');
 
     let data = null;
     let loaded = false;
     let filter = '';
     let notice = '';
+    // name -> chosen value, for rows the operator has changed. Keyed on the machine's own
+    // attribute name because that is the identity the write targets; a row index would break
+    // the moment the search filter narrows the table under it.
+    let edits = new Map();
+    // Set while a change is in flight, so the poll below can stop on its own. A change resolves
+    // in seconds once the agent picks the command up, but the agent may be asleep -- so this
+    // polls rather than assuming, and gives up rather than polling a laptop all weekend.
+    let pollTimer = null;
+    let pollsLeft = 0;
+    const POLL_INTERVAL_MS = 5000;
+    const MAX_POLLS = 60;
 
     async function api(path, options) {
         const resp = await fetch(path, options);
@@ -72,6 +92,44 @@
         return fn ? fn() : kind;
     }
 
+    // Same rule, for a change's state and for one attribute's outcome. Literal keys again.
+    const CHANGE_LABELS = {
+        pending: () => t('machine.firmware.change.pending'),
+        running: () => t('machine.firmware.change.running'),
+        applied: () => t('machine.firmware.change.applied'),
+        pending_reboot: () => t('machine.firmware.change.pending_reboot'),
+        partial: () => t('machine.firmware.change.partial'),
+        failed: () => t('machine.firmware.change.failed'),
+    };
+    const OUTCOME_LABELS = {
+        applied: () => t('machine.firmware.outcome.applied'),
+        pending_reboot: () => t('machine.firmware.outcome.pending_reboot'),
+        failed: () => t('machine.firmware.outcome.failed'),
+        unknown: () => t('machine.firmware.outcome.unknown'),
+    };
+    const CHANGE_TONES = {
+        pending: 'muted', running: 'muted', applied: 'ok',
+        pending_reboot: 'warn', partial: 'warn', failed: 'danger',
+    };
+
+    function labelFor(map, value) {
+        const fn = map[value];
+        return fn ? fn() : value;
+    }
+
+    function isOpen(change) {
+        return change && (change.status === 'pending' || change.status === 'running');
+    }
+
+    // The comparison the hub uses when it verifies a change, mirrored here for one purpose
+    // only: deciding whether a row has actually been edited. Firmware values differ in case
+    // and padding between what you pick and what the machine reported, and treating "Enable"
+    // and "enable " as a change would send a write the hub then refuses as a no-op.
+    function sameValue(a, b) {
+        return String(a === undefined || a === null ? '' : a).trim().toLowerCase()
+            === String(b === undefined || b === null ? '' : b).trim().toLowerCase();
+    }
+
     // Loaded lazily on first reveal, like the Backup tab: most machine pages are opened to
     // look at a temperature graph, not a BIOS attribute list.
     pane.addEventListener('tab:shown', () => { if (!loaded) load(); });
@@ -87,6 +145,10 @@
             body.replaceChildren(el('p', 'setting__error', e.message));
             return;
         }
+        // Opening the tab onto a change someone else queued starts the watch too -- the
+        // status is the same fact whoever asked for it, and a stale "running" that only
+        // updates on a manual reload is how an operator concludes the feature is broken.
+        if (isOpen((data.changes || [])[0]) && pollTimer === null) startPolling();
         render();
     }
 
@@ -99,10 +161,147 @@
         statusPill.replaceChildren(el('span', 'status-pill__dot'), statusText);
     }
 
+    // ---------------------------------------------------------------- change panel
+    function renderChange() {
+        changeBox.replaceChildren();
+        const change = (data && data.changes && data.changes[0]) || null;
+        if (!change) return;
+
+        const card = el('div', `notice notice--${CHANGE_TONES[change.status] || 'muted'}`);
+        card.appendChild(el('div', 'section-title',
+                            labelFor(CHANGE_LABELS, change.status)));
+
+        if (change.status === 'pending_reboot') {
+            // The ONLY place a restart is ever suggested, and it is suggested because the
+            // machine read the attribute back and it was still the old value -- not because
+            // this vendor is on a list of vendors that need reboots.
+            card.appendChild(el('p', 'stat-card__meta',
+                                t('machine.firmware.change.reboot_help')));
+        }
+        if (change.error) card.appendChild(el('p', 'setting__error', change.error));
+
+        const rows = (change.results && change.results.length)
+            ? change.results : change.changes;
+        const list = el('ul', 'plain-list');
+        for (const row of rows) {
+            const item = el('li');
+            item.appendChild(el('span', null, `${row.name}: `));
+            item.appendChild(el('span', null,
+                t('machine.firmware.change.transition',
+                  { from: row.from || '—', to: row.to || '—' })));
+            if (row.outcome) {
+                item.appendChild(document.createTextNode(' · '));
+                item.appendChild(el('span', null, labelFor(OUTCOME_LABELS, row.outcome)));
+            }
+            // The value the firmware actually reported afterwards, shown only when it is
+            // neither the old nor the new one -- that is the `unknown` case, and the observed
+            // string is the only thing that explains it (some firmware normalises what you
+            // write, some substitutes something else).
+            if (row.outcome === 'unknown' && row.observed) {
+                item.appendChild(el('div', 'stat-card__meta',
+                    t('machine.firmware.change.observed', { value: row.observed })));
+            }
+            if (row.error) item.appendChild(el('div', 'setting__error', row.error));
+            list.appendChild(item);
+        }
+        card.appendChild(list);
+
+        const meta = el('p', 'stat-card__meta',
+            t('machine.firmware.change.meta',
+              { who: change.requested_by || '—', when: fmtTime(change.requested_at) }));
+        card.appendChild(meta);
+
+        if (change.status === 'pending' && data.can_manage_firmware) {
+            const cancel = el('button', 'btn btn--ghost',
+                              t('machine.firmware.change.cancel'));
+            cancel.type = 'button';
+            cancel.addEventListener('click', async () => {
+                cancel.disabled = true;
+                try {
+                    await api(`/api/bios/${encodeURIComponent(MACHINE)}/changes/`
+                              + encodeURIComponent(change.id), { method: 'DELETE' });
+                    notice = '';
+                } catch (e) {
+                    notice = e.message;
+                }
+                await load();
+            });
+            card.appendChild(cancel);
+        }
+        changeBox.appendChild(card);
+    }
+
+    // ---------------------------------------------------------------- staged edits
+    function refreshApplyBar() {
+        if (!edits.size) {
+            applyBar.hidden = true;
+            return;
+        }
+        applyBar.hidden = false;
+        applyCount.textContent = tPlural('machine.firmware.staged', edits.size);
+    }
+
+    function stage(name, value, current) {
+        // An edit back to the current value is an un-edit, not a change to send. The hub
+        // refuses no-ops (verification has nothing to compare), so catching it here is the
+        // difference between a disabled apply and a 400.
+        if (sameValue(value, current)) edits.delete(name);
+        else edits.set(name, value);
+        refreshApplyBar();
+    }
+
+    function valueControl(attr, editable) {
+        const staged = edits.get(attr.name);
+        const shown = staged === undefined ? attr.value : staged;
+
+        if (!editable) {
+            const cell = el('div', null, attr.value || '—');
+            return cell;
+        }
+
+        // An enum with a known option list gets a <select> -- the accepted values come from
+        // the machine itself, so this is the one control that cannot offer an invalid choice.
+        if (attr.kind === 'enum' && attr.possible_values && attr.possible_values.length) {
+            const select = el('select', 'input');
+            let matched = false;
+            for (const option of attr.possible_values) {
+                const node = el('option', null, option);
+                node.value = option;
+                if (sameValue(option, shown)) { node.selected = true; matched = true; }
+                select.appendChild(node);
+            }
+            if (!matched) {
+                // The current value is not in the machine's own option list. Shown as a
+                // selected, disabled entry rather than dropped: silently pre-selecting the
+                // first option would make the row look like a change nobody made, and
+                // applying it would write it.
+                const node = el('option', null, shown || '—');
+                node.value = shown;
+                node.selected = true;
+                node.disabled = true;
+                select.insertBefore(node, select.firstChild);
+            }
+            select.addEventListener('change',
+                () => stage(attr.name, select.value, attr.value));
+            return select;
+        }
+
+        const input = el('input', 'input');
+        input.type = attr.kind === 'integer' ? 'number' : 'text';
+        input.value = shown === undefined || shown === null ? '' : shown;
+        input.addEventListener('input', () => stage(attr.name, input.value, attr.value));
+        return input;
+    }
+
     function render() {
         if (!data) return;
         body.replaceChildren();
         metaLine.replaceChildren();
+        // Hidden by default and re-shown only by the table renderer, so every early return
+        // below (never reported / unsupported / error / no matches) leaves no apply button
+        // over a page with nothing to apply.
+        applyBar.hidden = true;
+        renderChange();
 
         if (notice) body.appendChild(el('p', 'stat-card__meta', notice));
 
@@ -153,11 +352,31 @@
         const all = data.settings || [];
         setStatus('ok', tPlural('machine.firmware.state.count', all.length));
 
+        // Editable only when the operator holds manage_firmware AND nothing is in flight. A
+        // second change would race the first in the firmware, and verification -- which reads
+        // one current value per attribute -- could not say which write it was looking at. The
+        // hub refuses it too; disabling the controls is so nobody types into a form that is
+        // going to 409.
+        const inFlight = isOpen((data.changes || [])[0]);
+        const canEdit = !!data.can_manage_firmware && !inFlight;
+        if (inFlight && data.can_manage_firmware) {
+            body.appendChild(el('p', 'stat-card__meta', t('machine.firmware.locked')));
+        }
+
         if (data.password_set) {
             // Worth saying before anyone tries to change anything: on all three vendors a
             // setup password blocks writes, and finding that out one machine at a time is
-            // the expensive way.
-            body.appendChild(el('p', 'stat-card__meta', t('machine.firmware.password_set')));
+            // the expensive way. Which of the two lines shows depends on whether the hub has
+            // a password stored -- "the firmware wants one and we have none" is a different
+            // problem from "the firmware wants one and we will send one".
+            body.appendChild(el('p', 'stat-card__meta',
+                data.password_stored ? t('machine.firmware.password_ready')
+                                     : t('machine.firmware.password_set')));
+        } else if (data.password_set === null) {
+            // The vendor gave the agent no way to ask. Deliberately not rendered as "no
+            // password": the two lead to different advice the moment a write is refused.
+            body.appendChild(el('p', 'stat-card__meta',
+                                t('machine.firmware.password_unknown')));
         }
 
         const needle = filter.trim().toLowerCase();
@@ -198,11 +417,18 @@
             }
             tr.appendChild(nameCell);
 
+            const editable = canEdit && !attr.read_only;
             const valueCell = el('td');
-            valueCell.appendChild(el('div', null, attr.value || '—'));
-            if (attr.possible_values && attr.possible_values.length > 1) {
+            valueCell.appendChild(valueControl(attr, editable));
+            if (!editable && attr.possible_values && attr.possible_values.length > 1) {
+                // Only worth listing when there is no control offering them. With a <select>
+                // the options ARE the list, and repeating them below it is noise.
                 valueCell.appendChild(el('div', 'stat-card__meta',
                                          attr.possible_values.join(' / ')));
+            }
+            if (edits.has(attr.name)) {
+                valueCell.appendChild(el('div', 'stat-card__meta',
+                    t('machine.firmware.was', { value: attr.value || '—' })));
             }
             tr.appendChild(valueCell);
 
@@ -219,6 +445,7 @@
         }
         table.appendChild(tbody);
         body.appendChild(table);
+        refreshApplyBar();
     }
 
     if (search) {
@@ -249,5 +476,129 @@
             refreshBtn.disabled = false;
             if (data) render(); else load();
         });
+    }
+
+    // ---------------------------------------------------------------- apply
+    if (applyBtn) {
+        applyBtn.addEventListener('click', async () => {
+            if (!edits.size) return;
+            const changes = Array.from(edits, ([name, value]) => ({ name, value }));
+            applyBtn.disabled = true;
+            notice = '';
+            try {
+                await api(`/api/bios/${encodeURIComponent(MACHINE)}/settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ changes }),
+                });
+                // Cleared only on success. A rejected change (a stale attribute list, a
+                // machine that already has one in flight) leaves the staged edits alone --
+                // the operator's work survives the error they are about to read.
+                edits = new Map();
+                notice = t('machine.firmware.apply_queued');
+                startPolling();
+            } catch (e) {
+                notice = e.message;
+            }
+            applyBtn.disabled = false;
+            await load();
+        });
+    }
+
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            edits = new Map();
+            render();
+        });
+    }
+
+    // While a change is in flight, poll for its outcome. Bounded rather than open-ended: the
+    // command may be sitting in the queue for a laptop that is shut in a bag, and a tab left
+    // open over a weekend must not keep asking. The hub's own stale-change sweep is what
+    // eventually closes that row; this just stops watching.
+    function startPolling() {
+        stopPolling();
+        pollsLeft = MAX_POLLS;
+        pollTimer = setInterval(async () => {
+            if (pollsLeft-- <= 0) { stopPolling(); return; }
+            try {
+                const fresh = await api(`/api/bios/${encodeURIComponent(MACHINE)}`);
+                data = fresh;
+                if (!isOpen((fresh.changes || [])[0])) {
+                    notice = '';
+                    stopPolling();
+                }
+                render();
+            } catch (e) {
+                // A failed poll is not worth surfacing -- the next one usually works, and an
+                // error banner replacing a change's real status would be the wrong news.
+                stopPolling();
+            }
+        }, POLL_INTERVAL_MS);
+    }
+
+    function stopPolling() {
+        if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    // ---------------------------------------------------------------- setup password
+    const passwordBtn = document.getElementById('firmware-password');
+    const passwordDialog = document.getElementById('firmware-password-dialog');
+
+    if (passwordBtn && passwordDialog) {
+        const scope = document.getElementById('firmware-password-scope');
+        const field = document.getElementById('firmware-password-value');
+        const errorLine = document.getElementById('firmware-password-error');
+
+        function url() {
+            return scope.value === 'fleet'
+                ? '/api/bios-password'
+                : `/api/bios-password/${encodeURIComponent(MACHINE)}`;
+        }
+
+        function fail(message) {
+            errorLine.textContent = message;
+            errorLine.hidden = false;
+        }
+
+        passwordBtn.addEventListener('click', () => {
+            field.value = '';
+            errorLine.hidden = true;
+            passwordDialog.showModal();
+        });
+
+        document.getElementById('firmware-password-cancel')
+            .addEventListener('click', () => passwordDialog.close());
+
+        document.getElementById('firmware-password-save')
+            .addEventListener('click', async () => {
+                errorLine.hidden = true;
+                if (!field.value) { fail(t('machine.firmware.password_required')); return; }
+                try {
+                    await api(url(), {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: field.value }),
+                    });
+                } catch (e) { fail(e.message); return; }
+                // Wiped from the DOM as soon as it is stored. There is no endpoint that reads
+                // a password back, so nothing repopulates this field and nothing should.
+                field.value = '';
+                passwordDialog.close();
+                notice = t('machine.firmware.password_saved');
+                await load();
+            });
+
+        document.getElementById('firmware-password-clear')
+            .addEventListener('click', async () => {
+                errorLine.hidden = true;
+                try {
+                    await api(url(), { method: 'DELETE' });
+                } catch (e) { fail(e.message); return; }
+                field.value = '';
+                passwordDialog.close();
+                notice = t('machine.firmware.password_cleared');
+                await load();
+            });
     }
 })();

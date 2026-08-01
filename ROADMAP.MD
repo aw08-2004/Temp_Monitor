@@ -1133,7 +1133,7 @@ language with more forms needs a rule table, not just a catalog.
 
 ---
 
-## 🚧 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0; settings inventory hub 1.59.0 + agent 3.19.0
+## 🚧 9. BIOS settings + firmware management   ·   `manufacturer` hub 1.57.0 + agent 3.18.0 / companion 2.12.0; settings inventory hub 1.59.0 + agent 3.19.0; **settings WRITE hub 1.60.0 + agent 3.20.0**
 
 Read and change firmware settings across the fleet, and finally execute the `update_bios`
 command type that has been accepted, queued and routed — and then stubbed — since the
@@ -1237,20 +1237,97 @@ in the fleet shows a red error forever.
   adapter itself**: whether the property names above match what real firmware emits, and
   whether a missing vendor namespace really surfaces as `InvalidNamespace`. Expect the same
   shape of first-contact finding the LDAP and TURN work produced.
-- **New `set_bios_settings` command type** in `ALL_COMMANDS`, carrying a snapshot of the
-  attribute/value pairs the operator chose (like `install_virtual_display` carries its
-  payload pin).
+- **✅ `set_bios_settings` — built (hub 1.60.0 + agent 3.20.0).** A `bios_changes` table and
+  the write half of `bios.py`/`bios_web.py`, an editable Firmware tab, a new
+  `manage_firmware` capability, and `agent/src/TempMonitorAgent/Bios/BiosWriter.cs` +
+  `SetBiosSettingsExecutor.cs`. Resolved parameters:
+  - **The gate is a new `manage_firmware` capability**, not a reuse of `deploy_packages`
+    (the roadmap left this open). This is the one action in the product with no restore
+    path, and folding it into "can push an installer" would have granted it silently, on
+    the day it shipped, to everyone who already held that. Reading the inventory stays
+    `view` and forcing a re-read stays `issue_commands` — three gates, and the test asserts
+    a tech holding `issue_commands` is refused a write.
+  - **Verification replaces the reboot guess, exactly as specified.** The agent writes,
+    re-reads the affected attributes, and reports what the firmware now says;
+    `bios.classify_result` compares. New value → `applied`, and the console says nothing
+    about restarting. Old value with no write error → `pending_reboot`, and that is the
+    **only** place a restart is ever suggested. A third value → `unknown`, its own outcome
+    rather than a guess in either direction, because some firmware normalises what you
+    write and some substitutes something else — calling either "applied" would confirm a
+    change nobody made. Comparison is casefolded and trimmed: writing `Enable` and reading
+    `enable` is the normal case, and being strict would send an operator to reboot a
+    machine for nothing.
+  - **Change state lives in its own table, not as pending markers on the inventory.** Three
+    reasons: a change is something an operator *did*, with an author and a time, while the
+    inventory is something the machine *reported*; the next heartbeat overwrites the whole
+    inventory blob and would take per-attribute markers with it; and a history answers "who
+    turned Secure Boot off in March", which a current-state column cannot. Rolled up
+    worst-news-first — one failure among five successes is `partial`, never the majority
+    answer, because on firmware the one that did not take is the one that matters.
+    `applied + pending_reboot` rolls up to `pending_reboot`: nothing went wrong there.
+  - **One change in flight per machine.** Two concurrent writes would race in the firmware,
+    and verification — which reads a single current value per attribute — could not say
+    which one it was looking at. A second request is a 409. The corollary is a sweep
+    (`expire_stale_changes`, hourly on the existing housekeeping heartbeat): without it a
+    machine that died mid-write would leave a `running` row forever and one dead agent
+    would permanently lock its own Firmware tab. Swept rows close as `partial`, not
+    `failed` — the agent had fetched the payload, so some of it may well have been written.
+  - **Validation is against the machine's own reported attributes, never a hub-side
+    rulebook.** The attribute must exist, not be read-only, and an enum value must be one
+    the machine listed — and the machine's spelling of both name and value wins over the
+    caller's. A hub-side rulebook here would be the cross-vendor alias map by another name.
+    A **no-op is refused** rather than dropped: verification compares the re-read against
+    the old value, so a change from X to X has no observable outcome and would sit as
+    `pending_reboot` forever.
+  - **Found while wiring this up**: `list_changes`/`open_change_for` ordered by
+    `requested_at` alone, and several changes land within one second — so the tab could
+    show a resolved change over a pending one and hand the agent the wrong payload. Same
+    `(timestamp, rowid)` tiebreak `rotate_chains` needed, for the same reason.
+  - **Also found**: `/api/bios/password` would have collided with `/api/bios/<machine>`,
+    both shadowing a machine actually named `password` and — worse — making
+    `GET /api/bios/password` a 200 that *reads* like a password-reveal endpoint. Moved to
+    `/api/bios-password`. There is no route that returns a password at all.
 - **Setting names stay per-vendor in v1.** A curated cross-vendor alias set —
   `wake_on_lan`, `virtualization`, `secure_boot` — is the obvious design and the one that
   silently writes the wrong attribute on the third vendor, where the mapping was guessed
   from documentation rather than tested on hardware. v1 shows and writes each machine's
   own attribute names; aliases become a later layer with tests behind them, which is also
   the only form in which fleet-wide "turn WoL on everywhere" can be trusted.
-- **A BIOS setup password blocks writes on all three vendors**, so a change can supply an
-  existing password from `.env`-backed secret storage (the mechanism `backups.py` already
-  uses for destination credentials), per-machine or fleet-wide. **Setting, rotating or
-  clearing the BIOS password from the console is deliberately out of scope** — recorded
-  here so the gap is a decision rather than a discovery.
+- **✅ A BIOS setup password blocks writes on all three vendors**, so a change supplies one
+  from the `.env`-master-key-wrapped secret store `backups.py` already uses for destination
+  credentials — **fleet-wide with a per-machine override**, because a helpdesk images a
+  fleet with one password and then has exceptions. **The password never travels in command
+  params**: `fleet.create_command` audits params verbatim, so it would sit in the audit log
+  inside the database that is itself backed up. The command carries a *change id* and the
+  agent fetches the attribute list and password together from an authenticated endpoint —
+  the restore-plan precedent, for the same reason — and that fetch is a conditional
+  `UPDATE ... WHERE status='pending'`, so a redelivered command cannot replay writes
+  against firmware. A second audit row (`bios_settings_change`) records the attribute names
+  and values, since the `issue_command` row would otherwise say somebody changed firmware
+  and not one word about what to. **Setting, rotating or clearing the BIOS password *in the
+  firmware* from the console remains out of scope** — what ships is storing the existing
+  one.
+
+  **Each vendor's write disagrees more than its read does**, and all three fail silently
+  when got wrong: Dell takes parallel name/value **arrays** and reads an empty
+  `AuthorizationToken` as a supplied-and-wrong password on some models (so it is omitted
+  entirely when there is none); HP wants one pair per call and its password
+  `<utf-16/>`-prefixed, without which a *correct* password is refused as wrong; and Lenovo
+  takes one `"Name,Value"` string and **commits nothing until a separate
+  `SaveBiosSettings`** — a write that skips it returns `Success` and changes nothing, which
+  is why a failed commit invalidates every write that thought it had succeeded. A comma in
+  a Lenovo name or value is refused rather than escaped, because Lenovo defines no escape
+  and it would be read as the separator.
+
+  **Tested where it can be** — `tests/test_bios.py` (validation, all four `classify_result`
+  shapes, the change lifecycle, the stale sweep) + `tests/test_bios_web.py` (all three
+  capability gates in both directions, the one-in-flight 409, the fetch-once 409, and a
+  scan of the whole audit trail asserting no stored password appears in it) +
+  `BiosWriterTests.cs` (each vendor's call shape, argument types, password convention and
+  return-code reading, against a recording fake). **What none of that covers is the WMI
+  method call itself**: whether real firmware accepts these arguments, and whether the
+  return properties are named what the documentation says. Expect the same shape of
+  first-contact finding the LDAP and TURN work produced.
 - **Firmware update (`update_bios`) is the second half**, sharing the same vendor
   dispatch. Payload either hub-hosted or pulled from the vendor catalogue, **sha256-pinned
   by the hub** exactly as `packages.py` pins installer blobs. The load-bearing difference
@@ -1258,10 +1335,9 @@ in the fleet shows a red error forever.
   flash completes during POST, so the command's own result cannot be the answer and
   success is only known when the machine comes back reporting a new BIOS version. Reuse
   the deploy scheduler's maintenance windows rather than inventing a second scheduler.
-- **Gate**: either reuse `deploy_packages` or add a `manage_firmware` capability —
-  open parameter. Flashing firmware is the most bricking-capable action in the product,
-  which is the argument for its own toggle. Audited at `LEVEL_SECURITY`, alongside
-  `virtual_display_install`.
+- **Gate**: ✅ resolved — a new **`manage_firmware`** capability, live as of 1.60.0 and
+  already gating the settings write. `update_bios` will reuse it rather than adding a
+  second one. Audited at `LEVEL_SECURITY`, alongside `virtual_display_install`.
 
 **Constraint, stated plainly**: a failed flash can brick a machine, and unlike every other
 feature on this roadmap there is no restore path — no chain to re-pull, no snapshot to
@@ -1288,11 +1364,23 @@ corrects. It also gives the write half a real completion signal rather than an e
 the same way `update_bios` gets its answer from the BIOS version after the flash rather
 than from the command result.
 
-**Still to decide during implementation**: whether `set_bios_settings` is favoritable (a
-boot-order policy is genuinely reusable across a fleet, unlike the session and deploy
-types that are excluded today); whether firmware payloads reuse the `packages.py` blob
-store outright or need their own; and whether a pending change is stored per attribute on
-`machine_bios` or lives on the command result until the next inventory report supersedes it.
+**Two of the three open parameters are now resolved.**
+
+- **`set_bios_settings` is NOT favoritable.** The tempting argument was that a boot-order
+  policy is genuinely reusable across a fleet — but the command carries a change id
+  belonging to one machine and one already-issued set of writes, so a saved copy would
+  replay a resolved change against a machine whose attribute names may not even match (v1
+  maps no vendor vocabulary, so a Dell's `WakeOnLan` means nothing on a Lenovo). The
+  reusable thing is a *named set of attribute values*, which is a different object from a
+  command and belongs with the alias layer if that is ever built. `refresh_bios_inventory`
+  stays favoritable.
+- **A pending change lives in its own `bios_changes` table**, not per attribute on
+  `machine_bios` and not on the command result — see the reasoning in the built entry
+  above. The deciding factor was that the next heartbeat overwrites the inventory blob
+  wholesale and would take per-attribute markers with it.
+
+**Still to decide**: whether firmware payloads reuse the `packages.py` blob store outright
+or need their own.
 
 ---
 
@@ -1387,12 +1475,17 @@ comes online.
    stored, merged and shown as of hub 1.57.0 (+ agent 3.18.0 / companion 2.12.0), so
    vendor dispatch now has something to dispatch on. The **change-only settings inventory
    is done too** (hub 1.59.0 + agent 3.19.0): three vendor sources, a `machine_bios` table,
-   a Firmware tab, and `unsupported` kept firmly distinct from `error`. Next is the
-   `set_bios_settings` command — the write half, which is where the BIOS password lands,
-   and where a change is confirmed by **re-reading the attribute** rather than by assuming a
-   reboot (many Dell attributes apply live; the line is per vendor *and* per setting) —
-   then the `update_bios` executor. **The agent half
-   is pending a signed release** (build + `sign_release.py --sign-agent` + asset upload).
+   a Firmware tab, and `unsupported` kept firmly distinct from `error`. **The settings
+   WRITE half is done as well** (hub 1.60.0 + agent 3.20.0): `set_bios_settings` behind a
+   new `manage_firmware` capability, a `bios_changes` table, an editable Firmware tab, the
+   BIOS setup password in the master-key-wrapped secret store (fleet-wide with a
+   per-machine override, and never in command params), and a change confirmed by
+   **re-reading the attribute** rather than by assuming a reboot — so `pending_reboot` is
+   the only state that ever asks for a restart. Remaining: the **`update_bios` executor**,
+   which reuses the same `manage_firmware` gate and the same vendor dispatch, and whose
+   completion signal is the BIOS version after the flash rather than the command result.
+   **The agent half is pending a signed release** (build + `sign_release.py --sign-agent` +
+   asset upload).
 10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
     NIC inventory (MAC + subnet) the hub does not collect today.
 
