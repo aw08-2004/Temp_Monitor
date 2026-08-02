@@ -432,6 +432,38 @@ def _accepts(db, updates):
         return False
 
 
+def test_every_section_has_somewhere_to_render():
+    """A registry section with no panel in settings.html renders NOWHERE, silently.
+
+    This has happened: `remote`, `deploy` and `backup` were all in SECTIONS and none of
+    them had a tab, so the knobs existed, validated, saved through the API -- and could not
+    be reached from the console at all. `settings.js:applySchema` skips a section whose
+    panel is missing, which is the right runtime behaviour and a silent one, so this is
+    where it is supposed to be caught.
+
+    Three sections are deliberately unreachable from the Settings page because their knobs
+    are edited where the feature lives (the Packages, Backups and Firmware pages own them).
+    They are listed explicitly rather than pattern-matched: the point of the test is that
+    "no tab" has to be a decision somebody made, not something that happened.
+    """
+    hub = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub")
+    with open(os.path.join(hub, "templates", "settings.html"), encoding="utf-8") as handle:
+        markup = handle.read()
+    with open(os.path.join(hub, "static", "js", "settings.js"), encoding="utf-8") as handle:
+        script = handle.read()
+
+    edited_on_their_own_page = {"deploy", "backup", "firmware"}
+    for name in settings.SECTIONS:
+        if name in edited_on_their_own_page:
+            continue
+        check(f"the {name!r} section has a panel div in settings.html",
+              f'id="tab-{name}"' in markup)
+        check(f"the {name!r} section has a tab button in settings.html",
+              f'id="tab-btn-{name}"' in markup)
+        check(f"the {name!r} section is in settings.js's panels map",
+              f"{name}: document.getElementById('tab-{name}')" in script)
+
+
 if __name__ == "__main__":
     test_defaults_match_the_old_constants()
     test_init_is_idempotent()
@@ -447,5 +479,6 @@ if __name__ == "__main__":
     test_concurrent_reads_during_writes()
     test_schema_shape()
     test_agent_config()
+    test_every_section_has_somewhere_to_render()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

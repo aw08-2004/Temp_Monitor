@@ -715,6 +715,28 @@ def _claim_target(db_path, target_id, now):
     return (cursor.rowcount or 0) == 1
 
 
+def pending_target_machines(db_path, now=None):
+    """The machines this scheduler is waiting on, for Wake-on-LAN (roadmap #10).
+
+    Same read, same reasoning and same shape as `packages.pending_target_machines`: a
+    firmware window that opens onto a dark office flashes nothing, and dispatch here is
+    already gated on the machine being online -- so "still pending, window open" is exactly
+    the set worth waking. A question answered, not a hook that acts: waking does not belong
+    inside this dispatch path.
+    """
+    if now is None:
+        now = int(time.time())
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT t.machine FROM firmware_targets t "
+            "JOIN firmware_jobs j ON j.id = t.job_id "
+            "WHERE t.status = ? AND j.status IN (?, ?) "
+            "  AND (j.window_start IS NULL OR j.window_start <= ?) "
+            "  AND (j.window_end IS NULL OR j.window_end > ?)",
+            (TARGET_PENDING, JOB_SCHEDULED, JOB_RUNNING, now, now)).fetchall()
+    return [row["machine"] for row in rows]
+
+
 def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS,
                   online_machines=None):
     """Queue an `update_bios` command for every target whose window is open.

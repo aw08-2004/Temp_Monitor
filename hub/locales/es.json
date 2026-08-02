@@ -117,7 +117,12 @@
     },
     "confirm_delete": "¿Eliminar «{machine}» de forma permanente?\n\nEsto borra su identidad, todo su historial de temperatura y su inscripción en la flota. No se puede deshacer.",
     "delete_failed": "No se pudo eliminar «{machine}»: {error}",
-    "load_failed": "No se pudo cargar el inventario."
+    "load_failed": "No se pudo cargar el inventario.",
+    "wake_all": "Encender los PC apagados",
+    "wake_all_title": "Pedir a un PC encendido de cada subred que encienda los PC apagados.",
+    "wake_all_result": "Se solicitó el encendido de {count} PC.",
+    "wake_all_none": "Todos los PC que puede ver ya están encendidos.",
+    "wake_all_failed": "No se pudo solicitar un encendido para toda la flota."
   },
   "alerts": {
     "heading": "Alertas",
@@ -364,7 +369,8 @@
       "remote": "Control remoto",
       "directory": "Active Directory",
       "firmware": "Actualizaciones de firmware",
-      "signin": "Inicio de sesión"
+      "signin": "Inicio de sesión",
+      "wake": "Wake-on-LAN"
     },
     "unit": {
       "celsius": "°C",
@@ -634,6 +640,26 @@
       "firmware.min_battery_percent": {
         "label": "Carga mínima de batería para flashear",
         "help": "Se comprueba además de la corriente: un equipo enchufado en la mesa con la batería vacía sigue en riesgo si se corta la corriente durante el reinicio."
+      },
+      "wake.scheduler_interval_seconds": {
+        "label": "Ejecutar el planificador de encendido cada",
+        "help": "Con qué frecuencia el hub busca un PC que pueda enviar un paquete mágico y comprueba si un PC encendido ha vuelto."
+      },
+      "wake.request_ttl_seconds": {
+        "label": "Buscar un PC que retransmita durante",
+        "help": "Un encendido espera a que un PC encendido de la misma subred lo envíe. Esto limita la espera, para que un encendido pedido el viernes por la tarde no se produzca el lunes por la mañana."
+      },
+      "wake.confirm_timeout_seconds": {
+        "label": "Esperar la comunicación del PC durante",
+        "help": "Nada confirma un paquete mágico, así que un encendido solo se confirma cuando el PC se comunica. Alcanzar este límite se informa como sin comunicación todavía, no como un fallo."
+      },
+      "wake.hub_broadcast": {
+        "label": "Permitir que el hub envíe el paquete",
+        "help": "Solo se usa cuando ningún PC de la subred del destino está encendido, y solo si el hub está en esa subred. Una difusión del hub nunca sale de su propio segmento de red, por eso siempre se intenta antes con otro PC de la subred."
+      },
+      "wake.auto_wake_targets": {
+        "label": "Encender los PC antes de una ventana programada",
+        "help": "Las implementaciones y las actualizaciones de firmware solo llegan a los PC encendidos. Con esta opción, el hub enciende los destinos apagados al abrirse la ventana."
       }
     },
     "choice": {
@@ -1261,7 +1287,8 @@
       "terminal": "Terminal",
       "backup": "Copia",
       "remote": "Remoto",
-      "firmware": "Firmware"
+      "firmware": "Firmware",
+      "network": "Red"
     },
     "live_temp": "Temperatura en vivo",
     "uptime": "Tiempo activo",
@@ -1593,6 +1620,83 @@
       "clear_title": "Limpiar el historial de la consola en primer plano",
       "save_fav_title": "Guardar un script como favorito (el texto seleccionado se usa como punto de partida)",
       "shell_title": "Shell que se usa al abrir otra consola con +"
+    },
+    "network": {
+      "title": "Adaptadores de red",
+      "history_title": "Historial de encendido",
+      "history_help": "Un paquete mágico nunca se confirma, así que un encendido aparece como enviado y solo se confirma cuando este PC se comunica.",
+      "wake": "Encender este PC",
+      "wake_online": "Ya está encendido",
+      "prepare": "Corregir ajustes de encendido",
+      "prepare_title": "Activar los ajustes de encendido del adaptador de este PC y desactivar el Inicio rápido.",
+      "prepare_offline": "Este PC debe estar encendido para cambiar sus propios ajustes de encendido.",
+      "preparing": "Aplicando…",
+      "cancel": "Cancelar este encendido",
+      "load_failed": "No se pudo cargar el inventario de red de esta máquina.",
+      "problems_title": "Por qué este PC puede no encenderse",
+      "no_adapters": "Este PC no informó de ningún adaptador de red.",
+      "never_reported_help": "Este PC aún no ha informado de sus adaptadores de red. Necesita un agente que los recopile.",
+      "no_history": "No se ha solicitado ningún encendido para este PC.",
+      "pending_on": "Esperando a un PC encendido en {subnet} para enviar el paquete.",
+      "pending_any": "Esperando a un PC encendido en la misma subred para enviar el paquete.",
+      "relaying_via": "Pidiendo a {relay} que envíe el paquete.",
+      "sent_via": "{relay} envió el paquete mágico.",
+      "sent_by_hub": "El hub envió el paquete mágico directamente.",
+      "sent_note": "Nada confirma un paquete mágico. Esto se pondrá en verde cuando el PC se comunique.",
+      "delivered_by": "Enviado por: {method}",
+      "link_up": "Activo",
+      "link_down": "Inactivo",
+      "wake_on": "Activado",
+      "wake_off": "Desactivado",
+      "wake_unknown": "Desconocido",
+      "wake_na": "—",
+      "status": {
+        "online": "Encendido",
+        "asleep": "Suspendido",
+        "unwakeable": "No se puede encender",
+        "never_reported": "Aún sin informar"
+      },
+      "state": {
+        "pending": "Buscando un PC que retransmita",
+        "relaying": "Enviando",
+        "sent": "Paquete mágico enviado",
+        "awake": "Encendido",
+        "already_awake": "Ya estaba encendido",
+        "no_relay": "Ningún PC encendido para retransmitir",
+        "no_answer": "Sin comunicación desde que se envió el paquete",
+        "unwakeable": "Este PC no se puede encender",
+        "cancelled": "Cancelado"
+      },
+      "problem": {
+        "no_report": "Este PC aún no ha informado de sus adaptadores de red.",
+        "no_wired_nic": "Este PC no tiene adaptador de red por cable.",
+        "wireless_only": "Este PC solo usa Wi-Fi. Wake-on-LAN no puede alcanzarlo.",
+        "no_address": "El adaptador por cable de este PC no tiene dirección registrada, así que el hub no puede saber qué subred usar.",
+        "wake_disabled": "El encendido está desactivado en los adaptadores por cable de este PC.",
+        "fast_startup": "El Inicio rápido de Windows está activado, lo que impide que muchos PC se enciendan tras un apagado."
+      },
+      "kind": {
+        "wired": "Por cable",
+        "wireless": "Wi-Fi",
+        "other": "Otro"
+      },
+      "delivery": {
+        "relay": "otro PC de la subred",
+        "hub": "el hub"
+      },
+      "col": {
+        "adapter": "Adaptador",
+        "kind": "Tipo",
+        "mac": "Dirección MAC",
+        "address": "Dirección",
+        "link": "Enlace",
+        "wake": "Encendido",
+        "when": "Solicitado",
+        "outcome": "Resultado",
+        "relay": "Enviado por",
+        "requested_by": "Solicitado por",
+        "detail": "Detalle"
+      }
     }
   },
   "firmware": {

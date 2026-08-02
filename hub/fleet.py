@@ -147,6 +147,35 @@ UNSAVEABLE_FIRMWARE_COMMANDS = frozenset({
     "set_bios_settings",
 })
 
+# Wake-on-LAN (roadmap #10).
+#
+# `wake_machine` is the odd one in this whole taxonomy: it is the only command whose target
+# machine is NOT the machine it is about. The hub issues it to an awake PEER on the sleeping
+# machine's subnet, which sends the magic packet -- a hub-sent broadcast reaches the hub's
+# own L2 segment and nothing else, which for a multi-site helpdesk is the wrong default (see
+# wake.py). So its params name somebody ELSE's MAC and broadcast address, resolved by the
+# scheduler from a NIC inventory at the moment it picked that relay.
+#
+# That is exactly why it is NOT favoritable. A saved copy would tell whichever machine the
+# operator later picked to broadcast a MAC that is very likely on a different subnet
+# entirely -- a packet that goes nowhere, reported as sent. The reusable thing here is "wake
+# these PCs", which is a wake REQUEST, not a relay command, and the console offers that
+# directly.
+#
+# `prepare_wake` is the remedy half, and it IS favoritable: it carries no machine-specific
+# payload at all (it enables the NIC's own wake flags and turns Fast Startup off on whatever
+# machine runs it), and "make these twelve PCs wakeable" is precisely the shape a favorite
+# is for. Most of a WoL rollout is preconditions rather than code, so the fleet-wide verb is
+# the one that matters.
+WAKE_COMMANDS = frozenset({
+    "wake_machine",
+    "prepare_wake",
+})
+
+UNSAVEABLE_WAKE_COMMANDS = frozenset({
+    "wake_machine",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -157,7 +186,7 @@ ALL_COMMANDS = frozenset({
     "install_driver",
     "update_bios",
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
-      | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS)
+      | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS)
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -256,6 +285,15 @@ ACTION_LEVELS = {
     "backup_files_run_fleet": LEVEL_NOTICE,
     "backup_files_cancel": LEVEL_NOTICE,
     "backup_files_cancel_fleet": LEVEL_NOTICE,
+    # Wake-on-LAN (roadmap #10). Recorded SEPARATELY from the `issue_command` row the same
+    # request eventually writes, because that row names the RELAY -- the awake peer that
+    # sends the packet -- and an auditor reading "issued wake_machine to PC-3" would have to
+    # decode its params to discover PC-14 was the machine being woken. This row names the
+    # target. Notice rather than security: waking a PC is strictly less dangerous than the
+    # shutdown the same capability already covers.
+    "wake_request": LEVEL_NOTICE,
+    "wake_request_fleet": LEVEL_NOTICE,
+    "wake_cancel": LEVEL_NOTICE,
     # -- info: routine bookkeeping, the consequence of something already audited above.
     "claim_commands": LEVEL_INFO,
     "complete_command": LEVEL_INFO,
@@ -1153,6 +1191,14 @@ def _validate_favorite(name, command_type, params):
         # Carries a change id belonging to one machine and one already-issued set of writes.
         raise ValueError(f"{command_type!r} commands are issued from the Firmware tab and "
                          f"cannot be saved as a favorite")
+    if command_type in UNSAVEABLE_WAKE_COMMANDS:
+        # Aimed at a RELAY and carrying somebody else's MAC and broadcast address, resolved
+        # when the scheduler picked that peer. Replayed later against a different machine it
+        # would broadcast onto the wrong subnet and report success. `prepare_wake` is
+        # deliberately absent from this list -- it carries nothing machine-specific.
+        raise ValueError(f"{command_type!r} commands carry another machine's address and "
+                         f"cannot be saved as a favorite; wake machines from the console "
+                         f"instead")
     if params is None:
         params = {}
     if not isinstance(params, dict):

@@ -5,6 +5,7 @@ using TempMonitorAgent.Bios;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
+using TempMonitorAgent.Network;
 using TempMonitorAgent.Remote;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
@@ -108,6 +109,12 @@ try
     builder.Services.AddSingleton<ICommandExecutor, RefreshBiosInventoryExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, SetBiosSettingsExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, UpdateBiosExecutor>();
+    // Wake-on-LAN (roadmap #10). wake_machine is the odd one in this whole list: it is about
+    // ANOTHER machine -- the hub hands it to an awake peer on a sleeping PC's subnet, because
+    // a hub-sent broadcast reaches only the hub's own segment. prepare_wake is its
+    // precondition half, turning this machine's own wake flags on and Fast Startup off.
+    builder.Services.AddSingleton<ICommandExecutor, WakeMachineExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, PrepareWakeExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-update

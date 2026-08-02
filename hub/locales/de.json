@@ -117,7 +117,12 @@
     },
     "confirm_delete": "„{machine}“ dauerhaft löschen?\n\nDamit werden Identität, der gesamte Temperaturverlauf und die Flottenregistrierung entfernt. Das kann nicht rückgängig gemacht werden.",
     "delete_failed": "„{machine}“ konnte nicht gelöscht werden: {error}",
-    "load_failed": "Das Inventar konnte nicht geladen werden."
+    "load_failed": "Das Inventar konnte nicht geladen werden.",
+    "wake_all": "Ausgeschaltete PCs aufwecken",
+    "wake_all_title": "Einen wachen PC in jedem Subnetz bitten, die ausgeschalteten PCs aufzuwecken.",
+    "wake_all_result": "Aufwecken für {count} PCs angefordert.",
+    "wake_all_none": "Alle für Sie sichtbaren PCs sind bereits wach.",
+    "wake_all_failed": "Ein flottenweites Aufwecken konnte nicht angefordert werden."
   },
   "alerts": {
     "heading": "Warnungen",
@@ -364,7 +369,8 @@
       "remote": "Fernsteuerung",
       "directory": "Active Directory",
       "firmware": "Firmware-Updates",
-      "signin": "Anmeldung"
+      "signin": "Anmeldung",
+      "wake": "Wake-on-LAN"
     },
     "unit": {
       "celsius": "°C",
@@ -634,6 +640,26 @@
       "firmware.min_battery_percent": {
         "label": "Mindest-Akkustand zum Flashen",
         "help": "Wird zusätzlich zum Netzstrom geprüft: ein am Schreibtisch angeschlossener Rechner mit leerem Akku bleibt gefährdet, wenn beim Neustart der Strom ausfällt."
+      },
+      "wake.scheduler_interval_seconds": {
+        "label": "Aufweck-Planer ausführen alle",
+        "help": "Wie oft der Hub nach einem PC sucht, der ein Magic Packet senden kann, und prüft, ob ein aufgeweckter PC zurück ist."
+      },
+      "wake.request_ttl_seconds": {
+        "label": "Nach einem weiterleitenden PC suchen für",
+        "help": "Ein Aufwecken wartet darauf, dass ein wacher PC im selben Subnetz es sendet. Dies begrenzt die Wartezeit, damit ein am Freitagabend angefordertes Aufwecken nicht am Montagmorgen ausgelöst wird."
+      },
+      "wake.confirm_timeout_seconds": {
+        "label": "Auf die Meldung des PCs warten für",
+        "help": "Ein Magic Packet wird nie bestätigt, ein Aufwecken gilt also erst als bestätigt, wenn sich der PC meldet. Das Erreichen dieser Grenze wird als noch keine Meldung gemeldet, nicht als Fehlschlag."
+      },
+      "wake.hub_broadcast": {
+        "label": "Den Hub das Paket selbst senden lassen",
+        "help": "Wird nur verwendet, wenn kein PC im Subnetz des Ziels wach ist und der Hub selbst in diesem Subnetz liegt. Ein Broadcast des Hubs verlässt dessen eigenes Netzsegment nie — deshalb wird immer zuerst ein anderer PC im Subnetz versucht."
+      },
+      "wake.auto_wake_targets": {
+        "label": "PCs vor einem geplanten Zeitfenster aufwecken",
+        "help": "Verteilungen und Firmware-Updates erreichen nur eingeschaltete PCs. Damit weckt der Hub die ausgeschalteten Ziele eines Zeitfensters, sobald es beginnt."
       }
     },
     "choice": {
@@ -1261,7 +1287,8 @@
       "terminal": "Terminal",
       "backup": "Sicherung",
       "remote": "Remote",
-      "firmware": "Firmware"
+      "firmware": "Firmware",
+      "network": "Netzwerk"
     },
     "live_temp": "Live-Temperatur",
     "uptime": "Laufzeit",
@@ -1593,6 +1620,83 @@
       "clear_title": "Den Verlauf der vordersten Konsole leeren",
       "save_fav_title": "Ein Skript als Favorit speichern (markierter Text dient als Ausgangspunkt)",
       "shell_title": "Shell, die beim Öffnen einer weiteren Konsole mit + verwendet wird"
+    },
+    "network": {
+      "title": "Netzwerkadapter",
+      "history_title": "Aufweck-Verlauf",
+      "history_help": "Ein Magic Packet wird nie bestätigt. Ein Aufwecken gilt daher als gesendet und ist erst bestätigt, wenn sich dieser PC meldet.",
+      "wake": "Diesen PC aufwecken",
+      "wake_online": "Bereits wach",
+      "prepare": "Aufweck-Einstellungen korrigieren",
+      "prepare_title": "Die Aufweck-Einstellungen des Adapters einschalten und den Schnellstart ausschalten.",
+      "prepare_offline": "Dieser PC muss wach sein, um seine eigenen Aufweck-Einstellungen zu ändern.",
+      "preparing": "Wird angewendet…",
+      "cancel": "Dieses Aufwecken abbrechen",
+      "load_failed": "Das Netzwerkinventar dieses Rechners konnte nicht geladen werden.",
+      "problems_title": "Warum dieser PC vielleicht nicht aufwacht",
+      "no_adapters": "Dieser PC hat keine Netzwerkadapter gemeldet.",
+      "never_reported_help": "Dieser PC hat seine Netzwerkadapter noch nicht gemeldet. Er benötigt einen Agenten, der sie erfasst.",
+      "no_history": "Für diesen PC wurde noch kein Aufwecken angefordert.",
+      "pending_on": "Warten auf einen wachen PC in {subnet}, der das Paket sendet.",
+      "pending_any": "Warten auf einen wachen PC im selben Subnetz, der das Paket sendet.",
+      "relaying_via": "{relay} wird gebeten, das Paket zu senden.",
+      "sent_via": "{relay} hat das Magic Packet gesendet.",
+      "sent_by_hub": "Der Hub hat das Magic Packet selbst gesendet.",
+      "sent_note": "Ein Magic Packet wird nie bestätigt. Dies wird grün, sobald sich der PC meldet.",
+      "delivered_by": "Gesendet von: {method}",
+      "link_up": "Verbunden",
+      "link_down": "Getrennt",
+      "wake_on": "Ein",
+      "wake_off": "Aus",
+      "wake_unknown": "Unbekannt",
+      "wake_na": "—",
+      "status": {
+        "online": "Wach",
+        "asleep": "Schläft",
+        "unwakeable": "Kann nicht aufgeweckt werden",
+        "never_reported": "Noch nicht gemeldet"
+      },
+      "state": {
+        "pending": "Suche nach einem PC zum Weiterleiten",
+        "relaying": "Wird gesendet",
+        "sent": "Magic Packet gesendet",
+        "awake": "Aufgeweckt",
+        "already_awake": "War bereits wach",
+        "no_relay": "Kein wacher PC zum Weiterleiten",
+        "no_answer": "Keine Meldung seit dem Senden des Pakets",
+        "unwakeable": "Dieser PC kann nicht aufgeweckt werden",
+        "cancelled": "Abgebrochen"
+      },
+      "problem": {
+        "no_report": "Dieser PC hat seine Netzwerkadapter noch nicht gemeldet.",
+        "no_wired_nic": "Dieser PC hat keinen kabelgebundenen Netzwerkadapter.",
+        "wireless_only": "Dieser PC ist nur über WLAN verbunden. Wake-on-LAN erreicht ihn nicht.",
+        "no_address": "Für den kabelgebundenen Adapter dieses PCs ist keine Adresse erfasst, daher kennt der Hub das Subnetz nicht.",
+        "wake_disabled": "Das Aufwecken ist an den kabelgebundenen Adaptern dieses PCs ausgeschaltet.",
+        "fast_startup": "Der Windows-Schnellstart ist aktiv, wodurch viele PCs nach dem Herunterfahren nicht aufwachen."
+      },
+      "kind": {
+        "wired": "Kabel",
+        "wireless": "WLAN",
+        "other": "Sonstige"
+      },
+      "delivery": {
+        "relay": "ein anderer PC im Subnetz",
+        "hub": "der Hub"
+      },
+      "col": {
+        "adapter": "Adapter",
+        "kind": "Typ",
+        "mac": "MAC-Adresse",
+        "address": "Adresse",
+        "link": "Verbindung",
+        "wake": "Aufwecken",
+        "when": "Angefordert",
+        "outcome": "Ergebnis",
+        "relay": "Gesendet von",
+        "requested_by": "Angefordert von",
+        "detail": "Detail"
+      }
     }
   },
   "firmware": {

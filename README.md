@@ -1098,6 +1098,87 @@ the operator's scope; every session start/stop is in the audit log.
 >
 > Per-machine consent override is still a follow-up.
 
+## Wake-on-LAN
+
+Power a sleeping machine on from the console, so an out-of-hours patch window or a remote
+session doesn't depend on somebody being at the desk to press a button.
+[wake.py](hub/wake.py) (model) + [wake_web.py](hub/wake_web.py) (HTTP), a **Network** tab on
+the machine page, a **Wake offline PCs** button on Asset Inventory, and `wake.*` settings.
+
+**Delivery is agent peer-relay, and that is the whole design.** The hub picks an *online*
+machine whose reported IPv4/prefix puts it on the same subnet as the target, and issues
+**that** machine a `wake_machine` command carrying the target's MACs and the subnet
+broadcast address; its agent sends the magic packet to UDP 9. A hub-sent broadcast reaches
+the hub's own network segment and nothing else, so for a helpdesk with more than one site it
+is the wrong default — the machines that most need waking are at the branch office the hub
+has never shared a broadcast domain with. Peer-relay crosses sites and VLANs with no router
+configuration at all.
+
+The hub's own broadcast survives as a **fallback only** (`wake.hub_broadcast`), taken when
+no awake peer exists *and* the hub can prove it shares the target's subnet. That covers the
+real hole in peer-relay — 3am, every PC on the subnet asleep — on a single-site fleet.
+
+**Subnets come from the agents, never from a heartbeat's source address.** Nothing in the
+product collected a MAC or an IP before this. A new change-only reporter
+(`Network/NicReader.cs`) sends per adapter: MAC, IPv4, prefix, link state, type, and whether
+the NIC is allowed to wake the machine — into a new `machine_nics` table. It has to come
+from the machine: the only address the hub can see for itself is the NAT'd site edge, which
+every PC at an office shares and which would fold a whole building into one fictional subnet.
+
+**A wake is an *attempt*, and every state name says so.** Nothing acknowledges a magic
+packet, no error comes back for a MAC that does not exist, and a machine that was already
+awake looks identical to one that just woke. So:
+
+| State | What it means |
+|---|---|
+| `pending` | Looking for an awake PC on the target's subnet. **Survives across ticks** — a target whose subnet is entirely asleep is woken by the first peer to come online. |
+| `relaying` | A `wake_machine` command is queued at a peer. |
+| `sent` | The packet went out. **Not success.** |
+| `awake` | The target checked in *after* the packet. The only success. |
+| `already_awake` | It was on when you asked. Not an error — that is the answer. |
+| `no_relay` | The deadline passed with nobody awake on that subnet. **Not a failure**: at 3am it is the expected state, and the message names the subnet so it can be acted on. |
+| `no_answer` | The packet went out and the machine never checked in. A report of silence, not a claim about the packet. |
+| `unwakeable` | Nothing to send to — refused before dispatch, with the reason attached. |
+
+Confirmation compares against **when the packet was sent**, not against "is it up now": a
+machine can read online on a last-contact timestamp from before the packet, and treating
+that as a wake would confirm one nobody performed.
+
+**Most of a WoL rollout is preconditions, not code**, so the Network tab names every reason
+a machine cannot be woken — no wired adapter, Wi-Fi only (this mechanism cannot reach a
+laptop over Wi-Fi at all), no address on record, waking turned off on the NIC, and **Windows
+Fast Startup**, which turns shutdown into a hybrid state that defeats wake-from-S5 on many
+machines. **Fix wake settings** (`prepare_wake`) is the remedy: it enables the device's own
+"allow this device to wake the computer" via `powercfg /deviceenablewake`, sets the driver's
+`*WakeOnMagicPacket` property, and turns Fast Startup off. Both NIC settings have to be on —
+an adapter allowed to wake the machine but with magic-packet wake off in its driver looks
+perfectly configured in Device Manager and ignores every packet. Wireless adapters are never
+touched. The firmware-side enable is the [BIOS settings](ROADMAP.MD) half of roadmap #9,
+which is why the two arrived together.
+
+**Scheduled waking is the point.** With `wake.auto_wake_targets` on, the deploy and firmware
+schedulers wake a maintenance window's offline targets when it opens — a window that
+dispatches into a dark office installs nothing. Off by default: waking a fleet at 3am is a
+decision, not a side effect of scheduling a deploy.
+
+**Gating**: reading the adapters and the diagnosis is `view` + machine scope (it is
+inventory, like a model or a disk layout); waking, preparing and cancelling are
+`issue_commands` + machine scope. No new capability — waking a PC is strictly less dangerous
+than the `shutdown` that gate already covers.
+
+**Endpoints** (console-facing): `GET|POST /api/wake/machines/<machine>`,
+`POST /api/wake/machines/<machine>/prepare`, `POST /api/wake/fleet`,
+`POST /api/wake/requests/<id>/cancel`, `GET /api/wake/requests`. The adapters arrive on the
+existing `POST /api/agent/heartbeat` under a `network` key.
+
+> **Status:** built — hub 1.63.0 / agent 3.21.0. **The agent half ships in source and needs
+> a signed release** before the fleet gains it; deploy the hub first.
+>
+> **On-hardware validation outstanding**: the WMI device power policy and the
+> `*WakeOnMagicPacket` value real drivers publish, whether a docked laptop reports the dock's
+> adapter, and whether `powercfg /deviceenablewake` matches on the description this reader
+> reports. Everything else is covered by tests against literal payloads.
+
 ## Signing releases
 
 One artifact in this repo is Ed25519-signed so a compromised hub or repo commit

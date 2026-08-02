@@ -18,7 +18,18 @@ const panels = {
     metrics: document.getElementById('tab-metrics'),
     fleet: document.getElementById('tab-fleet'),
     remote: document.getElementById('tab-remote'),
+    // `directory` was missing here until 1.63.0, so every directory.* field -- the server,
+    // the bind DN, the search base, the cadence, TLS verification -- rendered NOWHERE. The
+    // tab existed and showed settings-directory.js's status card, so the page looked
+    // complete while Active Directory could not actually be configured from the console.
+    directory: document.getElementById('tab-directory'),
+    wake: document.getElementById('tab-wake'),
 };
+
+// NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`
+// skips it. `deploy`, `backup` and `firmware` are deliberately absent because those knobs
+// are edited on their own pages, but a section that has no other home and no panel div is
+// simply unreachable. Add both halves (here and settings.html) when adding a section.
 
 // key -> pending value. An entry exists only while the control differs from what the
 // server last confirmed, so nudging a number up and back leaves no phantom dirty state.

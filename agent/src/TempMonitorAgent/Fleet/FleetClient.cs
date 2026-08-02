@@ -160,6 +160,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // reports that once and then never appears in a heartbeat again.
             var biosInventory = TempMonitorAgent.Bios.BiosInventoryReporter.TakeIfChanged();
             if (biosInventory is not null) body["bios"] = biosInventory;
+            // Network adapters (roadmap #10) -- MAC, address and prefix per adapter. This is
+            // what lets the hub group machines into subnets and pick an awake peer to relay a
+            // magic packet through; the only address the hub can see for itself is the NAT'd
+            // site edge, which every machine at an office shares. Same change-only discipline,
+            // so a settled desktop sends this once.
+            var network = TempMonitorAgent.Network.NetworkInventoryReporter.TakeIfChanged();
+            if (network is not null) body["network"] = network;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 

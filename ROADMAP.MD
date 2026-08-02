@@ -610,6 +610,18 @@ the third machine-scope mode in the permission-group editor. Resolved parameters
   a dependency right. Found by a test that asserted on the message: with `ldap3` absent,
   four config-validation checks had been passing on the *import* error instead.
 
+**Fixed in 1.63.0 — the Active Directory tab never rendered its own fields.** `directory`
+was in `settings.SECTIONS` and had a tab in `settings.html`, but was missing from
+`settings.js`'s `panels` map, and `applySchema` skips a section whose panel it cannot find.
+So the tab existed, showed `settings-directory.js`'s status card, and rendered none of the
+`directory.*` fields — the server, the bind DN, the search base, the cadence, TLS
+verification — meaning AD could not actually be configured from the console at all. This is
+the identical failure the `remote` section had before 1.40.0, which is why the fix comes
+with a test: `test_settings.test_every_section_has_somewhere_to_render` now asserts both
+halves for every section, with `deploy`/`backup`/`firmware` listed as deliberate exceptions
+(their knobs are edited on their own pages). "No tab" now has to be a decision somebody
+made rather than something that happened.
+
 **Not covered by tests, and worth saying:** everything above is exercised against literal
 LDAP entries through `sync_once(fetcher=...)`, with no directory and no `ldap3` present.
 What that cannot cover is the ldap3 call itself — the bind, the TLS handshake and the
@@ -1460,7 +1472,100 @@ only real Dell/HP/Lenovo hardware can produce.
 
 ---
 
-## 📋 10. Wake-on-LAN
+## ✅ 10. Wake-on-LAN   ·   hub 1.63.0 + agent 3.21.0
+
+Built. `wake.py` (model, flask-free) + `wake_web.py` (console API), a `machine_nics` /
+`machine_network` / `wake_requests` schema, a **Network tab** on the machine page, a
+fleet-wide wake on the Asset Inventory page, `wake.*` settings, and two new command types —
+`wake_machine` (issued to a *peer*) and `prepare_wake` (the precondition remedy). Agent
+half: `Network/NicReader.cs`, `NetworkInventoryReporter.cs`, `WakeMachineExecutor.cs`,
+`PrepareWakeExecutor.cs`. **The agent half needs a signed release** (build +
+`sign_release.py --sign-agent` + asset upload) before the fleet gains it.
+
+Delivered as specified below. **All four open parameters resolved:**
+
+- **`wake_machine` is NOT favoritable.** It is the only command type in the product whose
+  target machine is not the machine it is about: the params carry somebody *else's* MAC and
+  broadcast address, resolved when the scheduler picked that relay. A saved copy replayed
+  against a different machine would broadcast a MAC onto a subnet it is not on — a packet
+  that goes nowhere, reported as sent. **`prepare_wake` IS favoritable**, and is the one
+  that wanted to be: it carries no machine-specific payload at all, and "make these twelve
+  PCs wakeable" is exactly the shape a favorite is for. Most of a WoL rollout is
+  preconditions, so the fleet-wide verb is the one that matters.
+- **The hub's own broadcast: yes, as a fallback only** (`wake.hub_broadcast`, on by
+  default). Taken only when no awake peer exists AND the hub can prove it shares the
+  target's subnet — which it decides from the **routing table**, not by enumerating
+  interfaces: connecting a UDP socket sends nothing and answers "which local address would
+  I source from to reach that host", and if that address is inside the target's subnet the
+  hub is on that segment. Pure stdlib, no platform-specific interface API. This closes the
+  real hole in peer-relay — 3am, every PC on the subnet asleep — for a single-site fleet,
+  without becoming the mechanism the design rejected.
+- **How long before a wake is reported unsuccessful: two different clocks, because there
+  are two different silences.** `wake.request_ttl_seconds` (15 min) bounds how long to keep
+  *looking for a relay* before the outcome is `no_relay`; `wake.confirm_timeout_seconds`
+  (5 min) bounds how long to wait for the *target's own check-in* after the packet went out
+  before the outcome is `no_answer`. Collapsing them into one number would have made a
+  machine on an all-asleep subnet indistinguishable from one that was sent a packet and
+  never came back, which are the two situations an operator most needs told apart.
+- **A wake request DOES persist across ticks**, exactly like a backup request — that is
+  what makes a target on an all-asleep subnet get woken by the first peer to come online,
+  within one tick of it arriving. Bounded by the TTL above, because a wake asked for on
+  Friday evening must not fire on Monday morning when the first person to arrive supplies
+  the peer it was waiting for.
+
+**Three implementation-level decisions worth carrying forward:**
+
+- **Confirmation compares against `sent_at`, not against online-ness.** A machine can read
+  online on a `last_seen` from eighty seconds BEFORE the packet went out, so a boolean
+  "is it up now" would confirm a wake nobody performed — every time, for any machine merely
+  flapping in and out of the 90-second offline window. `backup_machine_roster()` therefore
+  grew a `last_seen` field, and only a check-in newer than the packet counts. This is the
+  single sharpest edge in the feature: it fails in the direction of looking like it worked.
+- **A malformed `network` report replaces nothing.** The adapter set is REPLACED on each
+  report (a dock unplugged must disappear, because a stale adapter is a stale *subnet* and
+  the hub would go on offering that machine as a relay for a segment it left) — and
+  replace-semantics plus a lenient parse is how a truncated body silently empties a good
+  inventory and leaves a machine unwakeable with nothing on screen to say why. So an absent
+  or non-list `nics`, and a non-empty list in which nothing parsed, are both refused; an
+  **empty list** is a real claim and is honoured. Found by the tests, not by reasoning.
+- **The relay's answer comes from the command row, not a new agent endpoint.** `firmware`
+  needed one; this does not. The relay's whole job is one `sendto`, its answer is a success
+  bit, and the command queue already carries success bits with an audit trail — a second
+  endpoint would be a second thing to authorise for no extra information. A failed or
+  expired relay command puts the request back to `pending` with that peer excluded, rather
+  than failing it: one agent being unable to send is not evidence the target cannot be
+  woken, and there may be nine other machines on that subnet.
+
+**The scheduled pairing is wired through the schedulers that already exist**, which is the
+reuse this entry asked for. `packages.pending_target_machines()` and
+`firmware.pending_target_machines()` are READS that answer "which machines is this window
+waiting on"; `app.wake_pending_targets()` wakes the offline ones, opt-in via
+`wake.auto_wake_targets` (off by default — waking a fleet at 3am is a decision, not a side
+effect of scheduling a deploy). No third window/target/status machine was built: a wake is
+a *precondition* of a window, not a job kind with windows of its own.
+
+**The preconditions are inventory, and they have a remedy.** `wake.diagnose()` names every
+reason a machine cannot be woken — `no_report`, `no_wired_nic`, `wireless_only`,
+`no_address`, `wake_disabled`, `fast_startup` — as codes the console translates, so a
+machine that can never be woken says so instead of being offered a button that silently
+does nothing. `prepare_wake` is the other half: it ticks the device's own "allow this
+device to wake the computer" (via `powercfg /deviceenablewake`, the supported path), sets
+the driver's `*WakeOnMagicPacket` advanced property, and turns Fast Startup off. **Both NIC
+settings have to be on**: an adapter allowed to wake the machine but with magic-packet wake
+turned off in its driver looks perfectly configured in Device Manager and ignores every
+packet. Wireless adapters are never touched — this mechanism cannot wake a laptop over
+Wi-Fi, so enabling wake there would change a machine's power behaviour and battery life for
+no benefit at all.
+
+**Not covered by tests, and worth saying:** everything above is exercised against literal
+payloads and a fake roster, with no network. What that cannot cover is `NicReader.Read()`
+against real hardware — the WMI device power policy, the `*WakeOnMagicPacket` value a given
+driver actually publishes, whether a docked laptop reports the dock's adapter, and whether
+`powercfg /deviceenablewake` matches on the description this reader reports. Expect the same
+shape of finding the LDAP and TURN work produced on first contact.
+
+<details>
+<summary>Original spec</summary>
 
 Power a sleeping machine on from the console, so an out-of-hours patch window or a remote
 session does not depend on someone being at the desk to press a button. Small feature,
@@ -1518,6 +1623,10 @@ reporting a wake as unsuccessful; and whether a wake request persists across tic
 backup request does, so a target on an all-asleep subnet is woken by the first peer that
 comes online.
 
+*(All four were resolved as described above.)*
+
+</details>
+
 ---
 
 ## Build order
@@ -1565,16 +1674,26 @@ comes online.
    result — so a staged image waits in `rebooting` for a day rather than being called
    success by an exit code. **The agent half is pending a signed release** (build +
    `sign_release.py --sign-agent` + asset upload).
-10. **#10 Wake-on-LAN** — planned. Depends on #9 for the firmware-side enable, and on a
-    NIC inventory (MAC + subnet) the hub does not collect today.
+10. ~~**#10 Wake-on-LAN**~~ — done, hub 1.63.0 + agent 3.21.0. Both prerequisites were in
+    place: #9's settings write turns the firmware-side enable on across a fleet, and the
+    NIC inventory the hub did not collect is now a `machine_nics` table fed by a
+    change-only agent reporter on the heartbeat. Delivery is **agent peer-relay** — the hub
+    picks an awake machine on the sleeping one's subnet and asks *it* to broadcast — with
+    the hub's own broadcast kept only as a same-subnet fallback. All four open parameters
+    resolved (see the entry above); the sharpest was confirming a wake against the moment
+    the packet was sent rather than against online-ness, which fails in the direction of
+    looking like it worked. **The agent half is pending a signed release** (build +
+    `sign_release.py --sign-agent` + asset upload).
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
 > TURN installer all landed in 1.41–1.48 without a roadmap entry, since none of them was
 > a numbered feature above. #4's entry has been brought up to date. #9 and #10 were the
-> first new items added to this board since #7; with #9 built as of 1.61.0, **#10 is the
-> only one left unbuilt** — and its firmware prerequisite is now in place, since turning
-> Wake-on-LAN on across a fleet is exactly what #9's settings write is for.
+> first new items added to this board since #7; both are now built (#9 at 1.61.0, #10 at
+> 1.63.0), so **every numbered feature on this board is done** except the opportunistic
+> remainder of #3. What is outstanding is not a feature but a release: the agent halves of
+> #1, #2, #5, #6, #9 and #10 all ship in source and need a signed agent release before the
+> fleet gains any of them.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full

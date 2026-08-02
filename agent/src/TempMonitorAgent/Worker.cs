@@ -281,16 +281,17 @@ public sealed class Worker : BackgroundService
     /// <summary>
     /// The slow local scans, on a loop of their own.
     ///
-    /// All three are synchronous and genuinely expensive: profile discovery reads the
+    /// All four are synchronous and genuinely expensive: profile discovery reads the
     /// registry and may mount a logged-off user's hive, the remote inventory enumerates
-    /// WTS sessions and probes display outputs through PnP, and the firmware read connects a
-    /// vendor WMI namespace and enumerates a few hundred attributes. They self-throttle
-    /// (hourly, per-minute and six-hourly respectively) but when they DO run they take real
-    /// time, and they used to run on the same loop as the heartbeat -- immediately in front
-    /// of it. "Off the heartbeat path" is only true now that they are on a different thread
-    /// from it.
+    /// WTS sessions and probes display outputs through PnP, the firmware read connects a
+    /// vendor WMI namespace and enumerates a few hundred attributes, and the network scan
+    /// walks every adapter plus two WMI classes and the NIC class registry key. They
+    /// self-throttle (hourly, per-minute, six-hourly and quarter-hourly respectively) but
+    /// when they DO run they take real time, and they used to run on the same loop as the
+    /// heartbeat -- immediately in front of it. "Off the heartbeat path" is only true now
+    /// that they are on a different thread from it.
     ///
-    /// Neither posts anything itself; each leaves a payload for the next heartbeat to carry.
+    /// None posts anything itself; each leaves a payload for the next heartbeat to carry.
     /// </summary>
     private async Task InventoryLoopAsync(CancellationToken ct)
     {
@@ -301,6 +302,7 @@ public sealed class Worker : BackgroundService
                 TempMonitorAgent.Backup.BackupProfileReporter.RefreshIfDue();
                 TempMonitorAgent.Remote.RemoteInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Bios.BiosInventoryReporter.RefreshIfDue();
+                TempMonitorAgent.Network.NetworkInventoryReporter.RefreshIfDue();
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
 

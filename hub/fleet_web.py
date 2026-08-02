@@ -40,6 +40,7 @@ import permissions
 import remote
 import settings
 import terminal
+import wake
 
 
 def _bearer_agent(db_path):
@@ -121,7 +122,10 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         The agent sends the config_version it currently holds and the hub replies with
         config only when that differs, so the steady-state heartbeat stays two fields.
 
-        It may also send `profiles` -- the user profiles and resolved known folders on
+        It may also send `profiles`, `remote`, `bios` and `network` -- the slow local
+        inventories, each on its own change-only cadence, none of them ever fatal.
+
+        `profiles` is the user profiles and resolved known folders on
         that machine. That is how the Backup Settings tab can show what `%Users%\\Desktop`
         ACTUALLY expands to on a given PC rather than echoing the pattern back. The agent
         sends it only when it changes (a new user signs in, OneDrive redirects a folder),
@@ -169,6 +173,16 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
                                                 (data["bios"] or {}).get("bios_version"))
             except Exception as e:
                 print(f"[firmware] Could not confirm updates for {machine}: {e}")
+        # Network adapters (roadmap #10), same change-only cadence and same never-fatal
+        # handling. This is what the hub groups machines into subnets by, so that a sleeping
+        # PC can be woken through an awake peer on its own segment -- and it has to come
+        # from the agent, because the only address the hub can otherwise see is the NAT'd
+        # site edge that every machine at that office shares.
+        if data.get("network"):
+            try:
+                wake.record_network(db_path, machine, data["network"])
+            except Exception as e:
+                print(f"[wake] Could not record network inventory for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])
@@ -365,6 +379,17 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         if data.get("type") == "shell_open":
             return jsonify({"error": "Terminal sessions are opened from the Terminal tab, "
                                      "not the command channel."}), 400
+        # wake_machine is about ANOTHER machine: the hub picks a relay on the sleeping PC's
+        # subnet and puts that PC's MAC and broadcast address in the params. Hand-rolled it
+        # would carry a request id nothing reconciles, and -- the part that matters -- an
+        # arbitrary address pair aimed at a machine whose subnet the caller never checked,
+        # so the packet lands on the wrong segment and the console never shows that it did.
+        # `prepare_wake` is deliberately NOT refused: it carries nothing machine-specific,
+        # it is favoritable, and running a favorite comes back through this endpoint.
+        if data.get("type") == "wake_machine":
+            return jsonify({"error": "PCs are woken from the Network tab, which picks a "
+                                     "machine on the target's own subnet to send the "
+                                     "packet."}), 400
         try:
             command_id = fleet.create_command(
                 db_path,

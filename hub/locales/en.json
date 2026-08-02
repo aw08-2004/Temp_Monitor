@@ -145,7 +145,12 @@
     },
     "confirm_delete": "Permanently delete \"{machine}\"?\n\nThis removes its identity, all temperature history, and its fleet enrollment. This cannot be undone.",
     "delete_failed": "Could not delete \"{machine}\": {error}",
-    "load_failed": "Failed to load inventory."
+    "load_failed": "Failed to load inventory.",
+    "wake_all": "Wake offline PCs",
+    "wake_all_title": "Ask an awake PC on each subnet to wake the PCs that are switched off.",
+    "wake_all_result": "Asked for {count} PCs to be woken.",
+    "wake_all_none": "Every PC you can see is already awake.",
+    "wake_all_failed": "Could not request a fleet-wide wake."
   },
   "alerts": {
     "heading": "Alerts",
@@ -418,7 +423,8 @@
       "remote": "Remote Control",
       "directory": "Active Directory",
       "firmware": "Firmware Updates",
-      "signin": "Sign-in"
+      "signin": "Sign-in",
+      "wake": "Wake-on-LAN"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -701,6 +707,26 @@
       "firmware.min_battery_percent": {
         "label": "Minimum battery charge to flash",
         "help": "Checked as well as mains power: a machine plugged in at the desk with a flat battery is still at risk if the power is pulled during the restart."
+      },
+      "wake.scheduler_interval_seconds": {
+        "label": "Run the wake scheduler every",
+        "help": "How often the hub looks for a PC that can send a magic packet, and checks whether a woken PC has come back."
+      },
+      "wake.request_ttl_seconds": {
+        "label": "Keep looking for a relay for",
+        "help": "A wake waits for an awake PC on the same subnet to send it. This bounds the wait, so a wake asked for on Friday evening does not fire on Monday morning."
+      },
+      "wake.confirm_timeout_seconds": {
+        "label": "Wait for the PC to check in for",
+        "help": "Nothing acknowledges a magic packet, so a wake is confirmed only by the PC checking in. Reaching this is reported as no check-in yet, not as a failed wake."
+      },
+      "wake.hub_broadcast": {
+        "label": "Let the hub send the packet itself",
+        "help": "Only used when no PC on the target's subnet is awake, and only when the hub is on that subnet. A hub broadcast never leaves the hub's own network segment, which is why another PC on the subnet is always tried first."
+      },
+      "wake.auto_wake_targets": {
+        "label": "Wake PCs before a scheduled window runs",
+        "help": "Deployments and firmware updates only reach PCs that are switched on. With this on, the hub wakes a window's offline targets when it opens."
       }
     },
     "_choice": [
@@ -1360,7 +1386,8 @@
       "terminal": "Terminal",
       "backup": "Backup",
       "remote": "Remote",
-      "firmware": "Firmware"
+      "firmware": "Firmware",
+      "network": "Network"
     },
     "live_temp": "Live Temperature",
     "uptime": "Uptime",
@@ -1696,6 +1723,83 @@
       "clear_title": "Clear the front console's scrollback",
       "save_fav_title": "Save a script as a favorite (any selected text is used as a starting point)",
       "shell_title": "Shell used when you open another console with +"
+    },
+    "network": {
+      "title": "Network adapters",
+      "history_title": "Wake history",
+      "history_help": "A magic packet is never acknowledged, so a wake shows as sent and is confirmed only when this PC checks in.",
+      "wake": "Wake this PC",
+      "wake_online": "Already awake",
+      "prepare": "Fix wake settings",
+      "prepare_title": "Turn on this PC's adapter wake settings and turn Fast Startup off.",
+      "prepare_offline": "This PC has to be awake to change its own wake settings.",
+      "preparing": "Applying…",
+      "cancel": "Cancel this wake",
+      "load_failed": "Could not load this machine's network inventory.",
+      "problems_title": "Why this PC may not wake",
+      "no_adapters": "This PC reported no network adapters.",
+      "never_reported_help": "This PC has not reported its network adapters yet. It needs an agent that collects them.",
+      "no_history": "No wake has been requested for this PC.",
+      "pending_on": "Waiting for an awake PC on {subnet} to send the packet.",
+      "pending_any": "Waiting for an awake PC on the same subnet to send the packet.",
+      "relaying_via": "Asking {relay} to send the packet.",
+      "sent_via": "{relay} sent the magic packet.",
+      "sent_by_hub": "The hub sent the magic packet itself.",
+      "sent_note": "Nothing acknowledges a magic packet. This turns green when the PC checks in.",
+      "delivered_by": "Sent by: {method}",
+      "link_up": "Up",
+      "link_down": "Down",
+      "wake_on": "On",
+      "wake_off": "Off",
+      "wake_unknown": "Unknown",
+      "wake_na": "—",
+      "status": {
+        "online": "Awake",
+        "asleep": "Asleep",
+        "unwakeable": "Cannot be woken",
+        "never_reported": "Not reported yet"
+      },
+      "state": {
+        "pending": "Looking for a PC to relay through",
+        "relaying": "Sending",
+        "sent": "Magic packet sent",
+        "awake": "Woken",
+        "already_awake": "Already awake",
+        "no_relay": "No awake PC to relay through",
+        "no_answer": "No check-in since the packet was sent",
+        "unwakeable": "This PC cannot be woken",
+        "cancelled": "Cancelled"
+      },
+      "problem": {
+        "no_report": "This PC has not reported its network adapters yet.",
+        "no_wired_nic": "This PC has no wired network adapter.",
+        "wireless_only": "This PC is on Wi-Fi only. Wake-on-LAN cannot reach it.",
+        "no_address": "This PC's wired adapter has no address on record, so the hub cannot tell which subnet to use.",
+        "wake_disabled": "Waking is turned off on this PC's wired adapters.",
+        "fast_startup": "Windows Fast Startup is on, which stops many PCs waking after a shutdown."
+      },
+      "kind": {
+        "wired": "Wired",
+        "wireless": "Wi-Fi",
+        "other": "Other"
+      },
+      "delivery": {
+        "relay": "another PC on the subnet",
+        "hub": "the hub"
+      },
+      "col": {
+        "adapter": "Adapter",
+        "kind": "Type",
+        "mac": "MAC address",
+        "address": "Address",
+        "link": "Link",
+        "wake": "Wake",
+        "when": "Asked",
+        "outcome": "Outcome",
+        "relay": "Sent by",
+        "requested_by": "Asked by",
+        "detail": "Detail"
+      }
     }
   },
   "firmware": {

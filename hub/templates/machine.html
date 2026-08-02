@@ -47,6 +47,12 @@
            `view` already. The re-read button inside is the part that needs issue_commands. #}
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-firmware"
                 aria-controls="tab-firmware" aria-selected="false" tabindex="-1">{{ t('machine.tab.firmware') }}</button>
+        {# Network (roadmap #10) is NOT capability-gated either, for the same reason Firmware
+           is not: which adapters a PC has, and whether it can be woken at all, is inventory
+           in exactly the sense its model and its disks are. The wake and prepare buttons
+           inside are the parts that need issue_commands. #}
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-network"
+                aria-controls="tab-network" aria-selected="false" tabindex="-1">{{ t('machine.tab.network') }}</button>
     </div>
 
     {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
@@ -414,6 +420,43 @@
         </div>
         {% endif %}
     </div>
+
+    {# Network adapters and Wake-on-LAN (roadmap #10). Structure only -- wake.js renders it,
+       because the interesting part is a DIAGNOSIS (four independent reasons a machine cannot
+       be woken, any combination of which may hold) and that is one renderer rather than four
+       Jinja branches over a payload the template cannot see. #}
+    <div class="tab-panel" id="tab-network" role="tabpanel" aria-labelledby="tab-btn-network" hidden>
+        <div class="card" id="network-card">
+            <div class="terminal__head">
+                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.network.title') }}</div>
+                <span class="status-pill status-pill--muted" id="network-status">
+                    <span class="status-pill__dot"></span><span id="network-status-text">{{ t('common.loading') }}</span></span>
+                {% if cap.ISSUE_COMMANDS in user_capabilities %}
+                <div class="terminal__head-actions">
+                    {# The remedy sits beside the diagnosis on purpose: most of a Wake-on-LAN
+                       rollout is preconditions, and a console that can only name the reasons
+                       a machine will not wake sends somebody to forty desks. #}
+                    <button id="network-prepare" type="button" class="btn btn--ghost"
+                            title="{{ t('machine.network.prepare_title') }}">{{ t('machine.network.prepare') }}</button>
+                    <button id="network-wake" type="button" class="btn btn--primary">{{ t('machine.network.wake') }}</button>
+                </div>
+                {% endif %}
+            </div>
+            {# The in-flight wake, above the adapters: while one is running, what matters is
+               which stage it reached, not which NICs this PC has. #}
+            <div id="network-wake-state"></div>
+            <div id="network-diagnosis"></div>
+            <div id="network-body"></div>
+        </div>
+
+        <div class="card" id="network-history-card">
+            <div class="terminal__head">
+                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.network.history_title') }}</div>
+            </div>
+            <p class="stat-card__meta">{{ t('machine.network.history_help') }}</p>
+            <div id="network-history"></div>
+        </div>
+    </div>
 </div>
 
 {# BIOS setup password. Page-level for the same reason the other dialogs are: showModal()
@@ -475,5 +518,6 @@
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
+<script src="{{ url_for('static', filename='js/wake.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 {% endblock %}

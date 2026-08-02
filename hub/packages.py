@@ -1143,6 +1143,31 @@ def _claim_target(db_path, deployment_id, machine, now):
         return (cur.rowcount or 0) == 1
 
 
+def pending_target_machines(db_path, now=None):
+    """The machines this scheduler is about to dispatch to, if they are reachable.
+
+    Exists for Wake-on-LAN (roadmap #10): a maintenance window that dispatches into a dark
+    office installs nothing, so the wake feature asks which machines a window is waiting on
+    and switches the offline ones on. Deliberately a READ that answers a question rather
+    than a hook that does something -- `wake` does not belong inside this dispatch path, and
+    this module has no business knowing that waking exists.
+
+    Same due-ness test as dispatch_once, minus the per-target retry clock: a target waiting
+    out its backoff is still a machine the window needs awake shortly.
+    """
+    if now is None:
+        now = int(time.time())
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT t.machine FROM deployment_targets t "
+            "JOIN deployments d ON d.id = t.deployment_id "
+            "WHERE t.status = ? AND d.status IN (?, ?) "
+            "  AND (d.window_start IS NULL OR d.window_start <= ?) "
+            "  AND (d.window_end IS NULL OR d.window_end > ?)",
+            (TARGET_PENDING, DEPLOY_SCHEDULED, DEPLOY_RUNNING, now, now)).fetchall()
+    return [row["machine"] for row in rows]
+
+
 def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS,
                   hub_url=""):
     """Queue a `deploy_package` command for every target that is due.

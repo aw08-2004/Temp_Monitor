@@ -305,11 +305,39 @@ REGISTRY = (
     _s("firmware.require_ac_power", "firmware", "bool", True),
     _s("firmware.min_battery_percent", "firmware", "int", 30, minimum=0, maximum=100,
        unit="percent"),
+
+    # ---------------- Wake-on-LAN (roadmap #10) ----------------
+    # The two timeouts bound two different silences, and they are far apart on purpose.
+    # `request_ttl` is how long to keep LOOKING for an awake peer to relay through: a wake
+    # deliberately survives across ticks so a target on an all-asleep subnet is served by
+    # the first machine to come online, and something has to stop a wake asked for on
+    # Friday evening from firing on Monday morning when somebody finally arrives.
+    # `confirm_timeout` is how long to wait for the TARGET after the packet went out --
+    # a wake from sleep is seconds and a cold boot to a running agent service is closer to
+    # a minute, so five minutes never calls a slow boot a failure.
+    _s("wake.scheduler_interval_seconds", "wake", "int", 15, minimum=5, maximum=600,
+       unit="seconds"),
+    _s("wake.request_ttl_seconds", "wake", "int", 15 * 60, minimum=60, maximum=86400,
+       unit="seconds"),
+    _s("wake.confirm_timeout_seconds", "wake", "int", 5 * 60, minimum=60, maximum=3600,
+       unit="seconds"),
+    # The hub's own broadcast, used ONLY when no awake peer exists and the hub can prove it
+    # shares the target's subnet. Peer-relay is the mechanism; this covers the 3am
+    # single-site case where every PC on the segment is asleep. Settable because a hub on a
+    # management VLAN gains nothing from it, and an admin who knows that should be able to
+    # say so rather than have the hub keep probing its own routing table.
+    _s("wake.hub_broadcast", "wake", "bool", True),
+    # Wake a deployment's or a firmware job's OFFLINE targets when their window opens.
+    # This pairing -- not the manual button -- is what makes the feature worth building: a
+    # maintenance window that dispatches into a dark office installs nothing. Off by
+    # default because waking a fleet at 3am is a decision, not a side effect of scheduling
+    # a deploy.
+    _s("wake.auto_wake_targets", "wake", "bool", False),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware")
+            "directory", "firmware", "wake")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

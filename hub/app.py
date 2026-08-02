@@ -38,6 +38,7 @@ import remote
 import directory
 import bios
 import firmware
+import wake
 import authconfig
 import i18n
 from fleet_web import create_fleet_blueprint
@@ -49,6 +50,7 @@ from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
+from wake_web import create_wake_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 
@@ -77,7 +79,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.62.0"
+HUB_VERSION = "1.63.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1425,6 +1427,16 @@ app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, acces
 app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, access,
                                              hub_url=HUB_URL))
 
+# Wake-on-LAN (roadmap #10): a machine's NIC inventory and wakeability diagnosis behind
+# `view`, and waking/preparing behind `issue_commands` -- no new capability, because waking
+# a PC is strictly less dangerous than the `shutdown` that gate already covers.
+# The roster is the same one the backup and firmware schedulers use, wrapped in a lambda for
+# the same reason: backup_machine_roster is defined further down this file. It is what makes
+# "online" mean one thing across the hub, and its `last_seen` is what lets a wake be
+# confirmed against the moment its packet went out rather than against mere online-ness.
+app.register_blueprint(create_wake_blueprint(
+    DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
+
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
 app.register_blueprint(create_auth_blueprint(
@@ -2141,6 +2153,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Firmware update targets follow too, and the survivor's own row wins a collision --
     # both rows describe one physical machine, and it only needs flashing once.
     firmware.rename_machine(DB_PATH, dropped, survivor)
+    # Network adapters and wake history follow (roadmap #10). Doing nothing here would be
+    # worse than a stale display: a NIC row under the merged-away hostname keeps offering a
+    # machine that no longer exists as the RELAY for its subnet, so every wake routed
+    # through it would be queued at a name nothing answers to.
+    wake.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -2435,6 +2452,19 @@ def deploy_scheduler():
                 print(f"[deploy] Reconciled {reconciled}, dispatched {dispatched}.")
         except Exception as e:
             print(f"[deploy] Scheduler pass failed: {e}")
+        # Switch on the PCs this window is waiting for (roadmap #10). Its own try block:
+        # opting into auto-wake must never be able to stop deployments advancing, and a
+        # wake that cannot find a relay is a normal outcome rather than an error here.
+        try:
+            roster = backup_machine_roster()
+            woke = wake_pending_targets(
+                packages.pending_target_machines(DB_PATH),
+                {e["machine"] for e in roster if e["online"]},
+                reason="deployment window")
+            if woke:
+                print(f"[deploy] Requested a wake for {woke} offline target(s).")
+        except Exception as e:
+            print(f"[deploy] Target wake pass failed: {e}")
         time.sleep(interval)
 
 
@@ -2476,6 +2506,14 @@ def firmware_scheduler():
             )
             if expired or dispatched:
                 print(f"[firmware] Retired {expired}, dispatched {dispatched}.")
+            # ...and switch on the machines this window is still waiting for (roadmap #10).
+            # This is the pairing that makes auto-wake worth having here in particular:
+            # dispatch above is deliberately limited to ONLINE machines, so without it a
+            # window aimed at an office that is switched off simply waits out its deadline.
+            woke = wake_pending_targets(firmware.pending_target_machines(DB_PATH), online,
+                                        reason="firmware window")
+            if woke:
+                print(f"[firmware] Requested a wake for {woke} offline target(s).")
         except Exception as e:
             print(f"[firmware] Scheduler pass failed: {e}")
         time.sleep(interval)
@@ -2484,6 +2522,66 @@ def firmware_scheduler():
 def start_firmware_scheduler():
     threading.Thread(target=firmware_scheduler, daemon=True,
                      name="firmware_scheduler").start()
+
+
+def wake_scheduler():
+    """Advance Wake-on-LAN requests: read relays back, confirm arrivals, retire, dispatch.
+
+    Its own thread and its own (much shorter) interval, for the reason firmware got one:
+    the three schedulers disagree about time. A deploy tick waits on a command result and a
+    flash waits on a reboot, while a wake is a UDP packet whose whole point is that
+    somebody pressed a button and is watching -- so this runs on a ~15-second cadence and
+    the others do not.
+
+    Requests deliberately SURVIVE a pass that finds no relay. That is what makes a target on
+    an all-asleep subnet get woken by the first peer to come online, and it is why waking is
+    bounded by `wake.request_ttl_seconds` rather than by failing on the first attempt.
+    """
+    while True:
+        interval = settings.get_int(DB_PATH, "wake.scheduler_interval_seconds")
+        try:
+            confirmed, expired, dispatched = wake.tick(
+                DB_PATH,
+                # The same roster as the backup and firmware schedulers, carrying
+                # `last_seen` so a wake is confirmed against the moment its packet went out
+                # rather than against a check-in that predates it.
+                machines=backup_machine_roster(),
+                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+                confirm_timeout=settings.get_int(DB_PATH, "wake.confirm_timeout_seconds"),
+                allow_hub_broadcast=settings.get_bool(DB_PATH, "wake.hub_broadcast"),
+            )
+            if confirmed or expired or dispatched:
+                print(f"[wake] Confirmed {confirmed}, retired {expired}, "
+                      f"dispatched {dispatched}.")
+        except Exception as e:
+            print(f"[wake] Scheduler pass failed: {e}")
+        time.sleep(interval)
+
+
+def start_wake_scheduler():
+    threading.Thread(target=wake_scheduler, daemon=True, name="wake_scheduler").start()
+
+
+def wake_pending_targets(machines, online, reason):
+    """Wake the offline machines a maintenance window is about to dispatch into.
+
+    Called from the deploy and firmware schedulers rather than from a scheduler of its own,
+    which is the reuse roadmap #10 asked for: a wake is a PRECONDITION of a window, not a
+    job kind with windows of its own, and building a third window/target/status machine to
+    express "before this deploy runs, switch the PCs on" would have been the second
+    scheduler that entry explicitly rejected.
+
+    Opt-in (`wake.auto_wake_targets`), because waking a fleet at 3am is a decision rather
+    than a side effect of scheduling a deploy. Never fatal: this pairing failing must not
+    stop the deployment it was meant to help.
+    """
+    sleeping = [m for m in machines if m not in online]
+    if not sleeping or not settings.get_bool(DB_PATH, "wake.auto_wake_targets"):
+        return 0
+    results = wake.request_many(
+        DB_PATH, sleeping, requested_by="system", reason=reason, online=online,
+        ttl_seconds=settings.get_int(DB_PATH, "wake.request_ttl_seconds"))
+    return sum(1 for r in results if r["status"] == wake.STATUS_PENDING)
 
 
 # How often the temperature-alert evaluator wakes. A machine reports every few seconds and
@@ -2622,6 +2720,12 @@ def backup_machine_roster():
     interval. Online-ness is derived through fleet.derive_status so that "online" means
     the same thing here as it does on the dashboard -- last contact from a non-revoked
     agent, within fleet.offline_after_seconds.
+
+    `last_seen` rides along for Wake-on-LAN (roadmap #10), which needs the timestamp and
+    not just the flag: a wake is confirmed by a check-in NEWER than the magic packet, and
+    a machine can read online on a last_seen from eighty seconds BEFORE that packet went
+    out. Confirming on the flag alone would report a successful wake for any machine that
+    was merely flapping in and out of the offline window.
     """
     now = int(time.time())
     offline_after = settings.get_int(DB_PATH, "fleet.offline_after_seconds")
@@ -2633,6 +2737,7 @@ def backup_machine_roster():
             "FROM machine_info mi ORDER BY mi.machine ASC"
         ).fetchall()
     return [{"machine": row["machine"],
+             "last_seen": row["last_seen"],
              "online": fleet.derive_status(row["last_seen"], now=now,
                                            offline_after=offline_after) == "online"}
             for row in rows]
@@ -2770,6 +2875,7 @@ backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
+wake.init_wake_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
@@ -2783,6 +2889,7 @@ start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
 start_firmware_scheduler()
+start_wake_scheduler()
 start_backup_scheduler()
 start_high_temp_evaluator()
 start_directory_sync_scheduler()
@@ -3107,6 +3214,10 @@ def delete_machine(machine):
     # update is not left permanently at 39/40 waiting on a machine record that no longer
     # exists. The job's own history stays, because it happened.
     firmware.forget_machine(DB_PATH, machine_name)
+    # And its adapters and wake history (roadmap #10), for the relay reason above: a deleted
+    # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
+    # every wake the hub routed through it would be queued at a hostname nothing answers to.
+    wake.forget_machine(DB_PATH, machine_name)
     # Its BIOS setup password override lives in the secret file rather than the database, so
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.

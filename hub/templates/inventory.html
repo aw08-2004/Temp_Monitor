@@ -10,6 +10,15 @@
     <input class="input" id="inventory-search" type="search" autocomplete="off"
            placeholder="{{ t('inventory.search_placeholder') }}" style="min-width: 320px; max-width: 100%;">
     <span class="stat-card__meta" id="inventory-count"></span>
+    {# Fleet-wide wake (roadmap #10) lives here rather than on the Dashboard because this
+       is the page that shows offline machines -- the ones the button is about. Each PC is
+       woken by an awake peer on its OWN subnet, so this works across sites; the hub never
+       broadcasts on their behalf except as a same-subnet fallback. #}
+    {% if cap.ISSUE_COMMANDS in user_capabilities %}
+    <button id="inventory-wake-all" type="button" class="btn btn--ghost"
+            title="{{ t('inventory.wake_all_title') }}">{{ t('inventory.wake_all') }}</button>
+    <span class="stat-card__meta" id="inventory-wake-status"></span>
+    {% endif %}
 </div>
 
 <div class="card">

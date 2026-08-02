@@ -233,6 +233,46 @@ searchInput.addEventListener('input', () => {
     render();
 });
 
+// Wake every offline PC in scope (roadmap #10). The hub decides who relays for whom, so
+// this sends no machine list at all -- narrowing it here would mean the console and the
+// scheduler disagreed about which machines are asleep, and the console's copy is up to
+// thirty seconds old.
+//
+// The answer is a set of COUNTS by outcome, not a success, because that is what actually
+// happened: some PCs were already awake, some have no wired adapter, and some are waiting
+// for a peer on their subnet to come online. Reporting "woken" over that would be a claim
+// nothing supports -- nothing acknowledges a magic packet.
+const wakeAllBtn = document.getElementById('inventory-wake-all');
+if (wakeAllBtn) {
+    const wakeStatus = document.getElementById('inventory-wake-status');
+    wakeAllBtn.addEventListener('click', async () => {
+        wakeAllBtn.disabled = true;
+        wakeStatus.textContent = '';
+        try {
+            const resp = await fetch('/api/wake/fleet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason: 'inventory page' }),
+            });
+            const payload = await resp.json().catch(() => null);
+            if (!resp.ok) throw new Error((payload && payload.error) || `HTTP ${resp.status}`);
+            const counts = (payload && payload.counts) || {};
+            // Only the requests that will actually send a packet are counted here.
+            // Including the already-awake ones would report forty wakes on a fleet that
+            // was never asleep.
+            const asked = (counts.pending || 0) + (counts.relaying || 0) + (counts.sent || 0);
+            wakeStatus.textContent = asked
+                ? t('inventory.wake_all_result', { count: asked })
+                : t('inventory.wake_all_none');
+            loadInventory();
+        } catch (e) {
+            wakeStatus.textContent = `${t('inventory.wake_all_failed')} ${e.message}`;
+        } finally {
+            wakeAllBtn.disabled = false;
+        }
+    });
+}
+
 loadInventory();
 // Keep status fresh without a manual reload. Search box and sort are preserved because
 // render() reads them from module state, not the DOM rows.
