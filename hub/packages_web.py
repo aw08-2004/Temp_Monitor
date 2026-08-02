@@ -122,12 +122,27 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                      f"{packages.DETECTION_TEXT_KEY}.{kind}.description", _lang())}
                 for kind in packages.DETECTION_KINDS
             ],
+            # Same self-describing discipline for the step palette: the editor renders one
+            # button per entry, so a kind added to packages.STEP_KINDS shows up in the UI
+            # with its catalog text and no JS change.
+            "step_kinds": [
+                {"name": kind,
+                 "label": i18n.translate(
+                     f"{packages.STEP_TEXT_KEY}.{kind}.label", _lang()),
+                 "description": i18n.translate(
+                     f"{packages.STEP_TEXT_KEY}.{kind}.description", _lang())}
+                for kind in packages.STEP_KINDS
+            ],
             "source_kinds": list(packages.SOURCE_KINDS),
             "registry_roots": list(packages.REGISTRY_ROOTS),
             "file_placeholder": packages.FILE_PLACEHOLDER,
+            "work_variable": packages.WORK_VAR,
+            "max_steps": packages.MAX_STEPS,
             "max_upload_mb": settings.get_int(db_path, "deploy.max_upload_mb"),
             "defaults": {
                 "success_exit_codes": list(packages.DEFAULT_SUCCESS_EXIT_CODES),
+                "pnputil_exit_codes": list(packages.DEFAULT_PNPUTIL_EXIT_CODES),
+                "source_name": packages.DEFAULT_SOURCE_NAME,
                 "max_attempts": settings.get_int(db_path, "deploy.default_max_attempts"),
                 "retry_backoff_seconds": settings.get_int(
                     db_path, "deploy.default_retry_backoff_seconds"),
@@ -177,7 +192,13 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                 name=data.get("name"),
                 description=data.get("description"),
                 version=data.get("version"),
-                source=data.get("source") or {},
+                # `sources` (a list) is what the current console posts; `source` is the
+                # one-payload shape every earlier client used, and both still arrive.
+                # Neither means no payloads, which is legal only alongside steps -- the
+                # model says so rather than this layer guessing.
+                sources=data.get("sources") if data.get("sources") is not None
+                else data.get("source"),
+                steps=data.get("steps"),
                 install_command=data.get("install_command"),
                 install_args=data.get("install_args"),
                 timeout_seconds=data.get("timeout_seconds", 900),
@@ -209,7 +230,9 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                 name=data.get("name"),
                 description=data.get("description"),
                 version=data.get("version"),
+                sources=data.get("sources"),
                 source=data.get("source"),
+                steps=data.get("steps"),
                 install_command=data.get("install_command"),
                 install_args=data.get("install_args"),
                 timeout_seconds=data.get("timeout_seconds"),

@@ -10,31 +10,36 @@ namespace TempMonitorAgent.Fleet.Executors;
 /// deploy_package: install one package defined in the hub (roadmap #5).
 ///
 /// The params are a full SNAPSHOT of the package recipe taken when the attempt was
-/// dispatched — payload, command line, timeout, success exit codes, detection rule — not
-/// a package id to look up. That is what stops an operator editing a package mid-rollout
-/// from giving half the fleet a different install (see packages.build_command_params).
+/// dispatched — payloads, command line or step list, timeouts, success exit codes,
+/// detection rule — not a package id to look up. That is what stops an operator editing a
+/// package mid-rollout from giving half the fleet a different install (see
+/// packages.build_command_params).
 ///
-/// Four steps, and all four have to pass:
+/// Four phases, and all four have to pass:
 ///
-///   1. **Resolve the payload.** A hub-hosted file is downloaded over the authenticated
+///   1. **Resolve the payloads.** A hub-hosted file is downloaded over the authenticated
 ///      channel and its sha256 checked against the digest the HUB computed at upload.
 ///      A url/unc payload is fetched/copied and checked only if the operator pinned a
-///      hash. winget resolves its own payload and has its own trust chain.
-///   2. **Run it**, with {file} replaced by the resolved local path, under the package's
-///      own timeout.
-///   3. **Check the exit code** against the package's success set (0 and 3010 by
-///      default — 3010 is "installed, reboot required", and failing it would paint half
-///      a fleet's MSI installs red).
+///      hash. winget resolves its own payload and has its own trust chain. Every payload
+///      is bound to its slot name, so a step can say which file it means.
+///   2. **Run the recipe.** Either `params.steps` in order (see PackageStepRunner) or, for
+///      a package written before steps existed, the single command line with {file}
+///      replaced by the resolved path. Both shapes arrive on the wire; which one is
+///      present is the hub's decision, not a negotiation.
+///   3. **Check the exit code** against the success set (0 and 3010 by default — 3010 is
+///      "installed, reboot required", and failing it would paint half a fleet's MSI
+///      installs red). With steps, each step is judged on its own set.
 ///   4. **Check detection.** An installer exiting 0 is evidence, not proof: silent
 ///      installers routinely return 0 having done nothing, and that is exactly the
 ///      failure a fleet-wide push must not report as success. So the recipe also carries
 ///      a post-install check — a file, a registry value, or an installed-version floor —
-///      and the deploy only succeeds if the software is actually THERE afterward.
+///      and the deploy only succeeds if the software is actually THERE afterward. It runs
+///      once, at the end, because it is a claim about the PACKAGE, not about a step.
 ///
-/// The payload is deleted afterward, on every path. These land in the agent's own
-/// %ProgramData% staging directory (SYSTEM-owned, like the self-updater's), not %TEMP%,
-/// so a half-finished install can't leave an executable somewhere a standard user could
-/// swap out before it runs.
+/// The whole working directory is deleted afterward, on every path. It lives under the
+/// agent's own %ProgramData% (SYSTEM-owned, like the self-updater's staging dir), not
+/// %TEMP%, so a half-finished install can't leave an executable somewhere a standard user
+/// could swap out before it runs.
 /// </summary>
 public sealed class DeployPackageExecutor : ICommandExecutor
 {
@@ -57,11 +62,16 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         var packageName = cmd.Params.GetString("package_name") ?? "package";
-        var source = cmd.Params.GetObject("source");
-        if (source is null)
-            return CommandResult.Fail("deploy_package requires params.source");
+        var legacySource = cmd.Params.GetObject("source");
+        var steps = cmd.Params.GetArray("steps");
+        // `sources` is the current wire shape; `source` is what a hub older than steps
+        // sends. Falling back rather than requiring both keeps this agent working against
+        // either, which matters because the hub is upgraded first and separately.
+        var sources = ResolveSourceList(cmd, legacySource);
 
-        var kind = source.GetString("kind") ?? "";
+        if (legacySource is null && sources.Count == 0 && (steps is null || steps.Count == 0))
+            return CommandResult.Fail("deploy_package requires params.source or params.steps");
+
         var timeout = Math.Clamp(cmd.Params.GetInt("timeout_seconds", 900), 30, 24 * 60 * 60);
         var successCodes = cmd.Params.GetIntSet("success_exit_codes");
         if (successCodes.Count == 0)
@@ -89,39 +99,45 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             onOutput?.Invoke(text);
         }
 
-        Say($"[deploy] {packageName} ({kind})");
+        var multiStep = steps is not null && steps.Count > 0;
+        Say($"[deploy] {packageName} ({(multiStep ? $"{steps!.Count} steps" : legacySource.GetString("kind") ?? "")})");
 
-        string? payloadPath = null;
+        // One directory per attempt, deleted whole at the end. Per attempt rather than
+        // shared, so a retry can never pick up a half-unpacked folder the previous one left
+        // behind and install from it.
+        var workDir = Path.Combine(StagingDir, Guid.NewGuid().ToString("N"));
         try
         {
-            // ---- 1. payload ----
-            if (kind is "upload" or "url" or "unc")
+            Directory.CreateDirectory(workDir);
+            var vars = new PackageVariables(workDir);
+
+            // ---- 1. payloads ----
+            foreach (var source in sources)
             {
-                var (path, error) = await ResolvePayloadAsync(source, kind, Say, ct);
+                var kind = source.GetString("kind") ?? "";
+                if (kind is not ("upload" or "url" or "unc")) continue;
+                var name = source.GetString("name") ?? "payload";
+                var (path, error) = await ResolvePayloadAsync(source, kind, workDir, Say, ct);
                 if (error is not null) return new CommandResult(false, log + "\n" + error);
-                payloadPath = path;
+                vars.Bind(name, path!);
+                // `{file}` is what every package written before steps says, so a package
+                // with exactly one payload keeps meaning what it always meant.
+                if (sources.Count == 1) vars.Bind("file", path!);
             }
 
-            // ---- 2. run ----
-            var (file, args, buildError) = BuildCommandLine(cmd, source, kind, payloadPath);
-            if (file is null)
-                return new CommandResult(false, log + "\n" + (buildError ?? "deploy_package has no install command"));
-
-            Say($"[deploy] running: {file} {args}");
-            var outcome = await ProcessRunner.RunAsync(
-                file, args, ct, timeoutSeconds: timeout, onLine: Emit);
-
-            if (outcome.TimedOut)
-                return new CommandResult(false, log + $"\n[deploy] FAILED: timed out after {timeout}s");
-
-            // ---- 3. exit code ----
-            if (!successCodes.Contains(outcome.ExitCode))
+            // ---- 2 + 3. run and judge ----
+            bool ran;
+            if (multiStep)
             {
-                Say($"[deploy] FAILED: exit code {outcome.ExitCode} is not in " +
-                    $"[{string.Join(", ", successCodes.OrderBy(c => c))}]");
-                return new CommandResult(false, log.ToString());
+                ran = await PackageStepRunner.RunAllAsync(
+                    steps!, vars, timeout, successCodes, Say, Emit, ct);
             }
-            Say($"[deploy] exit code {outcome.ExitCode} accepted");
+            else
+            {
+                ran = await RunSingleCommandAsync(
+                    cmd, legacySource, vars, timeout, successCodes, Say, Emit, ct);
+            }
+            if (!ran) return new CommandResult(false, log.ToString());
 
             // ---- 4. detection ----
             var detection = cmd.Params.GetObject("detection");
@@ -144,28 +160,77 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         }
         finally
         {
-            // On every path, including a failure: a rejected or spent installer must not
-            // stay on disk waiting to be run by something else.
-            if (payloadPath is not null)
-            {
-                try { if (File.Exists(payloadPath)) File.Delete(payloadPath); }
-                catch (Exception e) { _log.LogDebug("Could not clean up {Path}: {Msg}", payloadPath, e.Message); }
-            }
+            // On every path, including a failure: a rejected or spent installer -- and
+            // anything a step unpacked next to it -- must not stay on disk waiting to be
+            // run by something else.
+            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
+            catch (Exception e) { _log.LogDebug("Could not clean up {Path}: {Msg}", workDir, e.Message); }
         }
     }
 
-    /// <summary>Fetch (or copy) the payload and verify it. Returns (path, error).</summary>
+    /// <summary>The payload list, from `sources` or from a lone legacy `source`.</summary>
+    private static List<JsonObject> ResolveSourceList(FleetCommand cmd, JsonObject? legacySource)
+    {
+        if (cmd.Params.GetArray("sources") is { } array)
+            return array.OfType<JsonObject>().ToList();
+        // A legacy `source` of kind "multi" is the marker the hub sends for a step-based
+        // package it has no single-command projection for. It names no file, so there is
+        // nothing to resolve; a build that understands steps reads them instead.
+        if (legacySource is not null && legacySource.GetString("kind") != "multi")
+            return new List<JsonObject> { legacySource };
+        return new List<JsonObject>();
+    }
+
+    /// <summary>The original one-command recipe: build the line, run it, judge the exit
+    /// code. Kept whole rather than folded into a one-step list, because it is what every
+    /// package written before steps runs through and its behaviour must not shift.</summary>
+    private async Task<bool> RunSingleCommandAsync(
+        FleetCommand cmd, JsonObject? source, PackageVariables vars, int timeout,
+        HashSet<int> successCodes, Action<string> say, Action<string> emit, CancellationToken ct)
+    {
+        var kind = source.GetString("kind") ?? "";
+        var (file, args, buildError) = BuildCommandLine(cmd, source, kind, vars);
+        if (file is null)
+        {
+            say("[deploy] " + (buildError ?? "FAILED: deploy_package has no install command"));
+            return false;
+        }
+
+        say($"[deploy] running: {file} {args}");
+        // No workingDir, so ProcessRunner's default (System32) still applies. Steps run in
+        // the attempt's own directory, which is the better cwd -- but changing it HERE
+        // would change what every package written before steps does, and an installer that
+        // writes a log next to its cwd would start dropping it somewhere that gets deleted.
+        var outcome = await ProcessRunner.RunAsync(
+            file, args, ct, timeoutSeconds: timeout, onLine: emit);
+
+        if (outcome.TimedOut)
+        {
+            say($"[deploy] FAILED: timed out after {timeout}s");
+            return false;
+        }
+        if (!successCodes.Contains(outcome.ExitCode))
+        {
+            say($"[deploy] FAILED: exit code {outcome.ExitCode} is not in " +
+                $"[{string.Join(", ", successCodes.OrderBy(c => c))}]");
+            return false;
+        }
+        say($"[deploy] exit code {outcome.ExitCode} accepted");
+        return true;
+    }
+
+    /// <summary>Fetch (or copy) one payload and verify it. Returns (path, error).</summary>
     private async Task<(string? Path, string? Error)> ResolvePayloadAsync(
-        JsonObject source, string kind, Action<string> say, CancellationToken ct)
+        JsonObject source, string kind, string workDir, Action<string> say, CancellationToken ct)
     {
         var sha = source.GetString("sha256");
         var fileName = source.GetString("file_name");
         // Never trust a name from the params as a path component — a "file_name" of
-        // ..\..\Windows\System32\x.dll would otherwise write outside the staging dir.
+        // ..\..\Windows\System32\x.dll would otherwise write outside the working dir.
         var safeName = string.IsNullOrWhiteSpace(fileName)
             ? "payload.bin"
             : Path.GetFileName(fileName);
-        var dest = Path.Combine(StagingDir, $"{Guid.NewGuid():N}-{safeName}");
+        var dest = Path.Combine(workDir, $"{Guid.NewGuid():N}-{safeName}");
 
         if (kind == "unc")
         {
@@ -220,7 +285,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// <summary>Substitute {file} and assemble the process to start. A null File means the
     /// command could not be built, and Error says why.</summary>
     private static (string? File, string Args, string? Error) BuildCommandLine(
-        FleetCommand cmd, JsonObject source, string kind, string? payloadPath)
+        FleetCommand cmd, JsonObject? source, string kind, PackageVariables vars)
     {
         var command = cmd.Params.GetString("install_command") ?? "";
         var args = cmd.Params.GetString("install_args") ?? "";
@@ -232,26 +297,13 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // replacing ours. Mirrors InstallAppExecutor's flags for consistency.
             var id = source.GetString("id");
             if (string.IsNullOrWhiteSpace(id))
-                return (null, "", "[deploy] FAILED: the winget source has no package id");
+                return (null, "", "FAILED: the winget source has no package id");
 
             // Not the bare name: as a SYSTEM service we cannot see the per-user App
             // Execution Alias. See WingetLocator.
             var winget = WingetLocator.Find();
             if (winget is null)
-            {
-                // Name the Windows Server case explicitly. It is the most common reason for
-                // this on a managed fleet and the least obvious: Server ships no Microsoft
-                // Store and no App Installer, so winget is not "missing" there, it was never
-                // going to be present, and no amount of installing it by hand is the answer.
-                return (null, "", "[deploy] FAILED: winget (App Installer) was not found on " +
-                                  "this machine. On Windows Server this is expected -- there is " +
-                                  "no Store and no App Installer -- so use an upload or url " +
-                                  "payload for this package instead. On Windows 10/11, install " +
-                                  "'App Installer' from the Microsoft Store. (Note that typing " +
-                                  "'winget' into a SYSTEM shell always fails even where winget " +
-                                  "works, because the alias is per-user; that is not evidence " +
-                                  "either way.)");
-            }
+                return (null, "", "FAILED: " + WingetLocator.NotFoundMessage);
 
             var wingetArgs =
                 $"install --id {id} --silent --accept-package-agreements --accept-source-agreements";
@@ -259,11 +311,8 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             return (winget, wingetArgs, null);
         }
 
-        if (payloadPath is not null)
-        {
-            command = command.Replace("{file}", payloadPath, StringComparison.Ordinal);
-            args = args.Replace("{file}", payloadPath, StringComparison.Ordinal);
-        }
+        command = vars.Resolve(command);
+        args = vars.Resolve(args);
         return (string.IsNullOrWhiteSpace(command) ? null : command, args, null);
     }
 

@@ -62,40 +62,62 @@
             <input class="input" id="pkg-description" maxlength="200" autocomplete="off"
                    placeholder="{{ t('packages.editor.description_placeholder') }}" style="width: 100%;">
 
-            <h3 class="perm-subhead">{{ t('packages.editor.payload') }}</h3>
-            <div class="perm-scope-modes" id="source-kinds"></div>
-
-            <div id="source-upload" class="pkg-source-pane">
-                <input class="input" id="pkg-file" type="file" style="width: 100%;">
-                <p class="setting__default" id="pkg-file-state">
-                    {{ t('packages.editor.upload_help') }}
-                </p>
-            </div>
-            <div id="source-ref" class="pkg-source-pane" hidden>
-                <input class="input" id="pkg-ref" autocomplete="off" style="width: 100%;">
-                <p class="setting__default" id="pkg-ref-help"></p>
-                <label class="setting__label" for="pkg-ref-sha" style="margin-top: var(--space-3);">
-                    {{ t('packages.editor.sha256') }} <span class="setting__default">{{ t('packages.editor.sha256_hint') }}</span>
-                </label>
-                <input class="input" id="pkg-ref-sha" maxlength="64" autocomplete="off"
-                       spellcheck="false" style="width: 100%;">
-            </div>
+            {# The payload list, the step list and both their editors are built by
+               packages.js: a package may carry any number of payloads and up to
+               packages.MAX_STEPS steps, so there is nothing here to write out statically. #}
+            <h3 class="perm-subhead">{{ t('packages.editor.payloads') }}</h3>
+            <p class="setting__default" id="payload-help">{{ t('packages.editor.payloads_help') }}</p>
+            <div id="payload-list"></div>
+            <button class="btn" type="button" id="add-payload" style="margin-top: var(--space-3);">{{ t('packages.editor.add_payload') }}</button>
 
             <h3 class="perm-subhead">{{ t('packages.editor.how_to_install') }}</h3>
-            <div class="pkg-row">
-                <div>
-                    <label class="setting__label" for="pkg-command">{{ t('packages.editor.command') }}</label>
-                    {# The placeholder is replaced from JS when the payload kind is winget. #}
-                    <input class="input" id="pkg-command" autocomplete="off" spellcheck="false"
-                           placeholder="{{ t('packages.editor.command_placeholder') }}" style="width: 100%;">
-                </div>
-                <div>
-                    <label class="setting__label" for="pkg-args">{{ t('packages.editor.args') }}</label>
-                    <input class="input" id="pkg-args" autocomplete="off" spellcheck="false"
-                           placeholder='/i "{file}" /qn /norestart' style="width: 100%;">
-                </div>
+            {# Two shapes, not a spectrum: one command line, or an ordered list of steps.
+               A package stores one or the other, which is also what lets a single-command
+               package keep running on an agent that predates steps entirely. #}
+            <div class="perm-scope-modes">
+                <label class="perm-capability">
+                    <input type="radio" name="install-mode" value="command" checked>
+                    <span>
+                        <span class="perm-capability__label">{{ t('packages.editor.mode_command') }}</span>
+                        <span class="perm-capability__help">{{ t('packages.editor.mode_command_help') }}</span>
+                    </span>
+                </label>
+                <label class="perm-capability">
+                    <input type="radio" name="install-mode" value="steps">
+                    <span>
+                        <span class="perm-capability__label">{{ t('packages.editor.mode_steps') }}</span>
+                        <span class="perm-capability__help">{{ t('packages.editor.mode_steps_help') }}</span>
+                    </span>
+                </label>
             </div>
-            <p class="setting__default" id="pkg-cmd-help"></p>
+
+            <div id="install-command-pane" class="pkg-source-pane">
+                <div class="pkg-row">
+                    <div>
+                        <label class="setting__label" for="pkg-command">{{ t('packages.editor.command') }}</label>
+                        {# The placeholder is replaced from JS when the payload kind is winget. #}
+                        <input class="input" id="pkg-command" autocomplete="off" spellcheck="false"
+                               placeholder="{{ t('packages.editor.command_placeholder') }}" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label class="setting__label" for="pkg-args">{{ t('packages.editor.args') }}</label>
+                        <input class="input" id="pkg-args" autocomplete="off" spellcheck="false"
+                               placeholder='/i "{file}" /qn /norestart' style="width: 100%;">
+                    </div>
+                </div>
+                <p class="setting__default" id="pkg-cmd-help"></p>
+            </div>
+
+            <div id="install-steps-pane" class="pkg-source-pane" hidden>
+                <p class="setting__default">{{ t('packages.editor.steps_help') }}</p>
+                <div id="step-list"></div>
+                <div class="chip-add" style="margin-top: var(--space-3);">
+                    <select class="input" id="step-kind"></select>
+                    <button class="btn" type="button" id="add-step">{{ t('packages.editor.add_step') }}</button>
+                </div>
+                <p class="setting__default" id="step-kind-help"></p>
+                <p class="setting__default" id="step-variables"></p>
+            </div>
 
             <label class="setting__label" for="pkg-exit-codes" style="margin-top: var(--space-4);">{{ t('packages.editor.exit_codes') }}</label>
             <input class="input" id="pkg-exit-codes" autocomplete="off" value="0, 3010"

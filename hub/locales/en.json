@@ -939,6 +939,11 @@
     "winget_ref": "winget: {ref}",
     "exit_summary": "exit {codes} · {timeout}s",
     "detect_exit_only": "Exit code only",
+    "payload_named": "{name}: {payload}",
+    "step_count": {
+      "one": "{count} step",
+      "other": "{count} steps"
+    },
     "detect_registry": "{root}\\{key}\\{name}",
     "detect_registry_equals": "{root}\\{key}\\{name} = {value}",
     "detect_version_min": "{name} ≥ {version}",
@@ -979,7 +984,16 @@
       "timeout": "Timeout",
       "description": "Description",
       "description_placeholder": "File archiver, silent MSI",
-      "payload": "Payload",
+      "payloads": "Payloads",
+      "payloads_help": "The files this package needs on the machine. Steps refer to each one by name.",
+      "add_payload": "Add payload",
+      "no_payloads": "No payloads. A winget or PowerShell step may not need one.",
+      "payload_n": "Payload {number}",
+      "payload_name": "Name",
+      "payload_name_hint": "steps refer to it by this name",
+      "payload_kind": "Where from",
+      "location": "Location",
+      "will_upload": "{file} will be uploaded when you save.",
       "upload_help": "The hub stores the file and pins its SHA-256. Agents verify that hash before running anything.",
       "current_payload": "Current payload: {file} ({size}). Choose a file to replace it.",
       "uploading": "Uploading…",
@@ -987,6 +1001,34 @@
       "sha256": "SHA-256",
       "sha256_hint": "optional -- pin it and the agent will refuse a payload that doesn't match",
       "how_to_install": "How to install it",
+      "mode_command": "One command",
+      "mode_command_help": "One installer, one silent command line. Runs on every agent version.",
+      "mode_steps": "Several steps",
+      "mode_steps_help": "Unpack an archive, install drivers, run a script -- in order, each judged on its own. Needs agent 3.22.0 or newer.",
+      "steps_help": "Steps run top to bottom. The deploy stops at the first one that fails, unless you tell it to carry on.",
+      "add_step": "Add step",
+      "no_steps": "No steps yet. Pick a kind below and add one.",
+      "too_many_steps": "A package may have at most {max} steps.",
+      "step_n": "Step {number} — {kind}",
+      "step_label": "Label",
+      "step_timeout": "Timeout",
+      "step_exit_codes": "Success exit codes",
+      "inherits": "blank = the package's own",
+      "pnputil_codes": "blank = 0, 259, 3010 -- 259 is a driver install that simply ran out of INFs",
+      "continue_on_error": "Carry on even if this step fails",
+      "move_up": "Up",
+      "move_down": "Down",
+      "script": "Script",
+      "winget_id": "Package id",
+      "archive": "Archive to unpack",
+      "dest": "Unpack into",
+      "dest_hint": "blank = a folder in the working directory",
+      "save_as": "Refer to the folder as",
+      "save_as_hint": "blank = named for you",
+      "driver_path": "Driver folder or .inf file",
+      "driver_path_hint": "usually the folder an earlier unpack step produced",
+      "subdirs": "Include subfolders",
+      "variables_help": "Available here: {variables}",
       "command": "Command",
       "command_placeholder": "msiexec.exe",
       "command_winget_placeholder": "winget (built by the agent)",
@@ -1069,6 +1111,33 @@
       "succeeded": "succeeded",
       "failed": "failed",
       "expired": "expired"
+    },
+    "_step": [
+      "One label + description per entry in packages.STEP_KINDS, served by",
+      "GET /api/packages in the caller's language -- same discipline as the detection",
+      "kinds below, and the same test enforcing it."
+    ],
+    "step": {
+      "run": {
+        "label": "Run a program",
+        "description": "An executable with arguments: an MSI, a vendor setup.exe, anything already on the machine."
+      },
+      "powershell": {
+        "label": "Run PowerShell",
+        "description": "An inline script, run as SYSTEM. The catch-all -- copy a file, set a registry value, restart a service."
+      },
+      "winget": {
+        "label": "Install with winget",
+        "description": "winget resolves and verifies its own payload. Not available on Windows Server."
+      },
+      "extract": {
+        "label": "Unpack a .zip",
+        "description": "Unpacks an archive into a folder that later steps can point at."
+      },
+      "pnputil": {
+        "label": "Install drivers",
+        "description": "Hands a folder of .inf files to pnputil, which stages and installs each one."
+      }
     },
     "_detection": [
       "One label + description per entry in packages.DETECTION_KINDS, served by",

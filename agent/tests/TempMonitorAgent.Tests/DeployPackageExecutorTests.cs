@@ -89,6 +89,75 @@ public class DeployPackageExecutorTests
     }
 
     [Fact]
+    public async Task AStepListRunsInsteadOfTheCommandLine()
+    {
+        // The wire shape a multi-step package arrives in: `steps` present, and the legacy
+        // fields deliberately empty because the hub has no single-command projection for
+        // it (see packages.build_command_params). The executor must take the steps.
+        var cmd = new FleetCommand
+        {
+            Id = "cmd-2",
+            Type = "deploy_package",
+            Params = new JsonObject
+            {
+                ["package_name"] = "Stepped package",
+                ["source"] = new JsonObject { ["kind"] = "multi", ["count"] = 0 },
+                ["sources"] = new JsonArray(),
+                ["steps"] = new JsonArray(
+                    new JsonObject { ["kind"] = "run", ["command"] = "cmd.exe",
+                                     ["args"] = "/c echo step-one" },
+                    new JsonObject { ["kind"] = "run", ["command"] = "cmd.exe",
+                                     ["args"] = "/c echo step-two" }),
+                ["install_command"] = "",
+                ["install_args"] = "",
+                ["success_exit_codes"] = new JsonArray(0),
+                ["detection"] = new JsonObject { ["kind"] = "none" },
+                ["timeout_seconds"] = 60,
+            },
+        };
+
+        var result = await NewExecutor().ExecuteAsync(cmd, null, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("step-one", result.Output);
+        Assert.Contains("step-two", result.Output);
+        // "no install command" is what an agent that predates steps says about these same
+        // params. Seeing it here would mean the legacy projection won.
+        Assert.DoesNotContain("no install command", result.Output);
+    }
+
+    [Fact]
+    public async Task AFailedStepFailsTheDeployWithoutReachingDetection()
+    {
+        var cmd = new FleetCommand
+        {
+            Id = "cmd-3",
+            Type = "deploy_package",
+            Params = new JsonObject
+            {
+                ["package_name"] = "Doomed package",
+                ["source"] = new JsonObject { ["kind"] = "multi" },
+                ["steps"] = new JsonArray(
+                    new JsonObject { ["kind"] = "run", ["command"] = "cmd.exe",
+                                     ["args"] = "/c exit 5" }),
+                ["install_command"] = "",
+                ["success_exit_codes"] = new JsonArray(0),
+                // A detection rule that WOULD pass. If the executor ran it anyway after a
+                // failed step, this deploy would be reported as a success -- which is the
+                // exact shape of "the installer did nothing and returned 0".
+                ["detection"] = new JsonObject { ["kind"] = "none" },
+                ["timeout_seconds"] = 60,
+            },
+        };
+
+        var result = await NewExecutor().ExecuteAsync(cmd, null, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("FAILED at step 1", result.Output);
+        Assert.DoesNotContain("[deploy] detection:", result.Output);
+    }
+
+    [Fact]
     public async Task OurOwnMessagesAreStillOnTheirOwnLines()
     {
         // The other half of the Say/Emit split: separating them must not run the

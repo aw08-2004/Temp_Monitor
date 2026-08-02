@@ -265,6 +265,31 @@ def main():
         check("deleting an unknown package raises",
               raises(KeyError, packages.delete_package, db_path, "nope"))
 
+        # Refcounting has to survive a package holding SEVERAL blobs: replacing one slot
+        # must collect that slot's old blob and leave the other one alone. Getting this
+        # wrong deletes a file a live package still points at -- a deploy that then fails
+        # with a 410 on every machine at once.
+        first, _ = packages.store_blob(blob_dir, io.BytesIO(b"first payload"), 1024)
+        second, _ = packages.store_blob(blob_dir, io.BytesIO(b"second payload"), 1024)
+        third, _ = packages.store_blob(blob_dir, io.BytesIO(b"third payload"), 1024)
+        two_blobs = packages.create_package(
+            db_path, name="Two blobs",
+            sources=[{"name": "app", "kind": packages.SOURCE_UPLOAD, "sha256": first},
+                     {"name": "config", "kind": packages.SOURCE_UPLOAD, "sha256": second}],
+            steps=[{"kind": "run", "command": "{app}", "args": "/config {config}"}])
+        packages.update_package(
+            db_path, two_blobs, blob_root_dir=blob_dir,
+            sources=[{"name": "app", "kind": packages.SOURCE_UPLOAD, "sha256": third},
+                     {"name": "config", "kind": packages.SOURCE_UPLOAD, "sha256": second}])
+        check("replacing one payload unlinks only that payload's blob",
+              not os.path.exists(packages.blob_path(blob_dir, first)))
+        check("the payload that did not change keeps its blob",
+              os.path.exists(packages.blob_path(blob_dir, second)))
+        packages.delete_package(db_path, two_blobs, blob_root_dir=blob_dir)
+        check("deleting a package collects every one of its blobs",
+              not os.path.exists(packages.blob_path(blob_dir, second))
+              and not os.path.exists(packages.blob_path(blob_dir, third)))
+
         # ------------------------------------------------------------------ update
         print("\n== Updating a package ==")
         upd_id = make_package(db_path, name="Updatable")
@@ -511,6 +536,174 @@ def main():
               == "https://hub.example.com/api/agent/packages/" + "a" * 64)
         check("the hash the agent verifies rides in the params",
               params["source"]["sha256"] == "a" * 64)
+
+        print("\n== Multi-step packages: the recipe ==")
+        # The motivating shape, end to end: a driver pack that downloads, unpacks and
+        # installs. Three programs, three exit codes, one package.
+        drivers = packages.create_package(
+            db_path, name="Dell drivers",
+            sources=[{"name": "pack", "kind": packages.SOURCE_URL,
+                      "ref": "https://downloads.dell.com/pack.zip"}],
+            steps=[{"kind": "extract", "archive": "{pack}", "save_as": "unpacked"},
+                   {"kind": "pnputil", "path": "{unpacked}"}],
+            actor="op@x.com")
+        stored = packages.get_package(db_path, drivers)
+        check("a step-based package keeps its steps in order",
+              [s["kind"] for s in stored["steps"]] == ["extract", "pnputil"])
+        check("a named payload keeps its slot name",
+              stored["sources"][0]["name"] == "pack")
+        # 259 is a driver install that simply ran out of INFs. It is defaulted by the HUB
+        # so the editor can show it, rather than being hidden in the agent -- that is the
+        # 3010 lesson applied one layer down.
+        check("a pnputil step defaults to pnputil's own exit codes",
+              stored["steps"][1]["success_exit_codes"]
+              == list(packages.DEFAULT_PNPUTIL_EXIT_CODES))
+        check("pnputil recurses by default", stored["steps"][1]["subdirs"] is True)
+
+        # The property that makes a typo cheap: it fails at save time, not at 2am on 200
+        # machines with a literal brace pair in an installer's arguments.
+        check("a step naming a variable nothing provides is refused",
+              raises(ValueError, packages.create_package, db_path, name="Typo",
+                     sources=[{"name": "pack", "kind": packages.SOURCE_URL,
+                               "ref": "https://x/pack.zip"}],
+                     steps=[{"kind": "run", "command": "setup.exe", "args": "{unpacked}"}]))
+        # Ordering is part of that: a variable a LATER step binds is not available yet.
+        check("a step may not use a variable a later step binds",
+              raises(ValueError, packages.create_package, db_path, name="Backwards",
+                     sources=[{"name": "pack", "kind": packages.SOURCE_URL,
+                               "ref": "https://x/pack.zip"}],
+                     steps=[{"kind": "pnputil", "path": "{unpacked}"},
+                            {"kind": "extract", "archive": "{pack}",
+                             "save_as": "unpacked"}]))
+        check("a payload no step ever opens is refused",
+              raises(ValueError, packages.create_package, db_path, name="Unused payload",
+                     sources=[{"name": "pack", "kind": packages.SOURCE_URL,
+                               "ref": "https://x/pack.zip"}],
+                     steps=[{"kind": "winget", "id": "7zip.7zip"}]))
+        check("a package cannot carry both steps and a command line",
+              raises(ValueError, packages.create_package, db_path, name="Both",
+                     sources=[{"kind": packages.SOURCE_UPLOAD, "sha256": "c" * 64}],
+                     install_command="setup.exe", install_args="{file}",
+                     steps=[{"kind": "run", "command": "setup.exe", "args": "{file}"}]))
+        check("a winget payload cannot back a step-based package",
+              raises(ValueError, packages.create_package, db_path, name="Winget payload",
+                     sources=[{"name": "app", "kind": packages.SOURCE_WINGET,
+                               "ref": "7zip.7zip"}],
+                     steps=[{"kind": "run", "command": "x.exe", "args": "{app}"}]))
+        check("two payloads may not share a name",
+              raises(ValueError, packages.create_package, db_path, name="Clashing",
+                     sources=[{"name": "pack", "kind": packages.SOURCE_URL, "ref": "https://x/a"},
+                              {"name": "pack", "kind": packages.SOURCE_URL, "ref": "https://x/b"}],
+                     steps=[{"kind": "run", "command": "a.exe", "args": "{pack}"}]))
+        check("more than one payload needs steps to say what to do with them",
+              raises(ValueError, packages.create_package, db_path, name="Two payloads",
+                     sources=[{"name": "a", "kind": packages.SOURCE_URL, "ref": "https://x/a"},
+                              {"name": "b", "kind": packages.SOURCE_URL, "ref": "https://x/b"}],
+                     install_command="setup.exe", install_args="{file}"))
+
+        # A literal MSI product code is not a variable. Getting this wrong would reject
+        # every uninstall-then-reinstall package ever written, which is why the grammar
+        # excludes hyphens and uppercase rather than treating any brace pair as a name.
+        guid = packages.create_package(
+            db_path, name="Reinstall Office",
+            sources=[{"name": "installer", "kind": packages.SOURCE_URL,
+                      "ref": "https://x/setup.msi"}],
+            steps=[{"kind": "run", "command": "msiexec.exe",
+                    "args": "/x {90160000-008C-0000-1000-0000000FF1CE} /qn"},
+                   {"kind": "run", "command": "msiexec.exe", "args": '/i "{installer}" /qn'}],
+            actor="op@x.com")
+        check("an MSI product code is left alone, not read as a variable",
+              packages.get_package(db_path, guid)["steps"][0]["args"].startswith("/x {901"))
+
+        print("\n== Multi-step packages: editing ==")
+        # Steps and payloads are validated TOGETHER, so removing the payload a step uses
+        # has to fail rather than leave the step pointing at nothing.
+        check("dropping a payload a step still uses is refused",
+              raises(ValueError, packages.update_package, db_path, drivers,
+                     sources=[{"name": "other", "kind": packages.SOURCE_URL,
+                               "ref": "https://x/other.zip"}]))
+        converted = packages.update_package(
+            db_path, drivers, steps=[], install_command="setup.exe",
+            install_args='"{file}" /S', actor="op@x.com")
+        check("a package can be converted back to one command",
+              converted["steps"] == [] and converted["install_command"] == "setup.exe")
+
+        print("\n== Multi-step packages: what the agent receives ==")
+        step_params = packages.build_command_params(stored, {"id": "dep-y"},
+                                                    hub_url="https://hub.example.com")
+        check("the steps ride in the params as a snapshot",
+              [s["kind"] for s in step_params["steps"]] == ["extract", "pnputil"])
+        check("every payload rides with its slot name",
+              [s["name"] for s in step_params["sources"]] == ["pack"])
+        # The legacy projection. An agent that predates steps reads `source` and
+        # `install_command` -- so a multi-step package deliberately gives it nothing it can
+        # run, and that agent fails the deploy instead of silently running step one.
+        check("a step package offers an old agent no command to run",
+              step_params["install_command"] == ""
+              and step_params["source"]["kind"] == "multi")
+        legacy_params = packages.build_command_params(
+            packages.get_package(db_path, deploy_pkg), {"id": "dep-z"},
+            hub_url="https://hub.example.com")
+        check("a one-command package still reaches an old agent unchanged",
+              legacy_params["source"]["kind"] == packages.SOURCE_UPLOAD
+              and legacy_params["install_command"] == "msiexec.exe"
+              and legacy_params["steps"] == [])
+
+        print("\n== Upgrading a database written before steps ==")
+        # The migration is the risky part of this feature: every hub that already deploys
+        # packages runs it, on rows nobody will look at again until a deploy goes out. So
+        # the OLD schema is built here by hand rather than trusted to be gone.
+        old_db = os.path.join(workdir, "old.db")
+        fleet.init_fleet_db(old_db)
+        with packages.get_conn(old_db) as conn:
+            conn.execute(
+                "CREATE TABLE packages (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                "description TEXT, version TEXT, install_command TEXT NOT NULL, "
+                "install_args TEXT, timeout_seconds INTEGER NOT NULL, "
+                "success_exit_codes TEXT NOT NULL, detection_json TEXT NOT NULL, "
+                "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, "
+                "created_by TEXT, updated_by TEXT)")
+            conn.execute(
+                "CREATE TABLE package_sources (id TEXT PRIMARY KEY, package_id TEXT NOT NULL, "
+                "kind TEXT NOT NULL, ref TEXT, sha256 TEXT, file_name TEXT, "
+                "file_size INTEGER, created_at INTEGER NOT NULL)")
+            # The constraint the new schema has to replace: one payload per package.
+            conn.execute("CREATE UNIQUE INDEX idx_package_sources_package "
+                         "ON package_sources(package_id)")
+            conn.execute(
+                "INSERT INTO packages(id, name, install_command, install_args, "
+                "timeout_seconds, success_exit_codes, detection_json, created_at, "
+                "updated_at) VALUES ('old1', 'Legacy', 'msiexec.exe', '/i \"{file}\" /qn', "
+                "900, '[0, 3010]', '{\"kind\": \"none\"}', 1, 1)")
+            conn.execute(
+                "INSERT INTO package_sources(id, package_id, kind, sha256, file_name, "
+                "created_at) VALUES ('s1', 'old1', 'upload', ?, 'old.msi', 1)", ("d" * 64,))
+
+        packages.init_packages_db(old_db)
+        migrated = packages.get_package(old_db, "old1")
+        check("an existing package survives the migration",
+              migrated is not None and migrated["install_command"] == "msiexec.exe")
+        check("its unnamed payload becomes the default slot",
+              migrated["sources"][0]["name"] == packages.DEFAULT_SOURCE_NAME)
+        check("a package written before steps reads back with none",
+              migrated["steps"] == [])
+        check("`source` still answers for callers that predate the list",
+              migrated["source"]["sha256"] == "d" * 64)
+        # The old UNIQUE(package_id) index would refuse this outright.
+        packages.update_package(
+            old_db, "old1",
+            sources=[{"name": "payload", "kind": packages.SOURCE_UPLOAD, "sha256": "d" * 64},
+                     {"name": "config", "kind": packages.SOURCE_URL,
+                      "ref": "https://x/config.xml"}],
+            install_command="", install_args="",
+            steps=[{"kind": "run", "command": "msiexec.exe", "args": '/i "{payload}" /qn'},
+                   {"kind": "powershell", "script": 'Copy-Item "{config}" C:\\ProgramData\\'}],
+            actor="op@x.com")
+        check("a migrated package can then take a second payload",
+              len(packages.get_package(old_db, "old1")["sources"]) == 2)
+        packages.init_packages_db(old_db)
+        check("running the migration twice changes nothing",
+              len(packages.get_package(old_db, "old1")["sources"]) == 2)
 
         print("\n== Favorites & the command taxonomy ==")
         check("deploy_package is a known command type",

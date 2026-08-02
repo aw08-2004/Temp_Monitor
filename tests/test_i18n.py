@@ -208,6 +208,14 @@ def test_server_supplied_ui_text_is_in_the_catalog():
                if f"{packages_module.DETECTION_TEXT_KEY}.{kind}.{part}" not in english]
     check(f"every detection kind has catalog text ({missing[:5]})", not missing)
 
+    # And the step palette, served the same way. A step kind with no catalog text would
+    # show up in the editor's dropdown as `packages.step.foo.label` -- on the control that
+    # decides what a package actually does on every machine it reaches.
+    missing = [f"{packages_module.STEP_TEXT_KEY}.{kind}.{part}"
+               for kind in packages_module.STEP_KINDS for part in ("label", "description")
+               if f"{packages_module.STEP_TEXT_KEY}.{kind}.{part}" not in english]
+    check(f"every step kind has catalog text ({missing[:5]})", not missing)
+
     # Backup destination kinds and the path-token reference, same discipline again.
     import backups as backups_module
     import backup_paths

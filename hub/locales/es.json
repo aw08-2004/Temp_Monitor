@@ -862,6 +862,11 @@
     "winget_ref": "winget: {ref}",
     "exit_summary": "salida {codes} · {timeout} s",
     "detect_exit_only": "Solo el código de salida",
+    "payload_named": "{name}: {payload}",
+    "step_count": {
+      "one": "{count} paso",
+      "other": "{count} pasos"
+    },
     "detect_registry": "{root}\\{key}\\{name}",
     "detect_registry_equals": "{root}\\{key}\\{name} = {value}",
     "detect_version_min": "{name} ≥ {version}",
@@ -898,7 +903,16 @@
       "timeout": "Tiempo de espera",
       "description": "Descripción",
       "description_placeholder": "Compresor de archivos, MSI silencioso",
-      "payload": "Archivo",
+      "payloads": "Archivos",
+      "payloads_help": "Los archivos que este paquete necesita en la máquina. Los pasos se refieren a cada uno por su nombre.",
+      "add_payload": "Añadir archivo",
+      "no_payloads": "Sin archivos. Un paso de winget o de PowerShell puede que no necesite ninguno.",
+      "payload_n": "Archivo {number}",
+      "payload_name": "Nombre",
+      "payload_name_hint": "los pasos lo nombran así",
+      "payload_kind": "De dónde",
+      "location": "Ubicación",
+      "will_upload": "{file} se subirá al guardar.",
       "upload_help": "El hub guarda el archivo y fija su SHA-256. Los agentes verifican ese hash antes de ejecutar nada.",
       "current_payload": "Archivo actual: {file} ({size}). Elige un archivo para reemplazarlo.",
       "uploading": "Subiendo…",
@@ -906,6 +920,34 @@
       "sha256": "SHA-256",
       "sha256_hint": "opcional: fíjalo y el agente rechazará un archivo que no coincida",
       "how_to_install": "Cómo instalarlo",
+      "mode_command": "Un comando",
+      "mode_command_help": "Un instalador, una línea de comandos silenciosa. Funciona con cualquier versión del agente.",
+      "mode_steps": "Varios pasos",
+      "mode_steps_help": "Descomprimir un archivo, instalar controladores, ejecutar un script: en orden y evaluando cada uno por separado. Requiere el agente 3.22.0 o posterior.",
+      "steps_help": "Los pasos se ejecutan de arriba abajo. El despliegue se detiene en el primero que falle, salvo que indiques que continúe.",
+      "add_step": "Añadir paso",
+      "no_steps": "Aún no hay pasos. Elige un tipo abajo y añade uno.",
+      "too_many_steps": "Un paquete admite como máximo {max} pasos.",
+      "step_n": "Paso {number} — {kind}",
+      "step_label": "Etiqueta",
+      "step_timeout": "Tiempo de espera",
+      "step_exit_codes": "Códigos de salida correctos",
+      "inherits": "vacío = el del paquete",
+      "pnputil_codes": "vacío = 0, 259, 3010; el 259 solo significa que ya no quedaban archivos INF",
+      "continue_on_error": "Continuar aunque este paso falle",
+      "move_up": "Subir",
+      "move_down": "Bajar",
+      "script": "Script",
+      "winget_id": "Id del paquete",
+      "archive": "Archivo a descomprimir",
+      "dest": "Descomprimir en",
+      "dest_hint": "vacío = una carpeta del directorio de trabajo",
+      "save_as": "Nombrar la carpeta como",
+      "save_as_hint": "vacío = se le pone nombre automáticamente",
+      "driver_path": "Carpeta de controladores o archivo .inf",
+      "driver_path_hint": "normalmente la carpeta que produjo un paso de descompresión anterior",
+      "subdirs": "Incluir subcarpetas",
+      "variables_help": "Disponibles aquí: {variables}",
       "command": "Comando",
       "command_placeholder": "msiexec.exe",
       "command_winget_placeholder": "winget (lo construye el agente)",
@@ -984,6 +1026,28 @@
       "succeeded": "correcto",
       "failed": "fallido",
       "expired": "caducado"
+    },
+    "step": {
+      "run": {
+        "label": "Ejecutar un programa",
+        "description": "Un ejecutable con argumentos: un MSI, el setup.exe del fabricante, cualquier cosa que ya esté en la máquina."
+      },
+      "powershell": {
+        "label": "Ejecutar PowerShell",
+        "description": "Un script incrustado, ejecutado como SYSTEM. El comodín: copiar un archivo, escribir un valor del registro, reiniciar un servicio."
+      },
+      "winget": {
+        "label": "Instalar con winget",
+        "description": "winget resuelve y verifica su propio archivo. No está disponible en Windows Server."
+      },
+      "extract": {
+        "label": "Descomprimir un .zip",
+        "description": "Descomprime un archivo en una carpeta a la que pueden apuntar los pasos posteriores."
+      },
+      "pnputil": {
+        "label": "Instalar controladores",
+        "description": "Entrega una carpeta de archivos .inf a pnputil, que los prepara e instala uno a uno."
+      }
     },
     "detection": {
       "none": {

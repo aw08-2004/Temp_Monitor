@@ -27,7 +27,6 @@ let vocab = { detection_kinds: [], source_kinds: [], registry_roots: [], default
 let editingPackageId = null;
 let deployPackageId = null;
 let draftMachines = [];
-let uploadedSource = null;      // {sha256, file_name, file_size} from the upload endpoint
 let openDeploymentId = null;
 let pollTimer = null;
 
@@ -108,6 +107,16 @@ function sourceSummary(source) {
     return source.ref || source.kind;
 }
 
+// What the Command column says for a step-based package. The kinds in order, because that
+// is the one thing worth seeing at a glance from a list -- "zip → extract → pnputil" tells
+// an operator which package this is; a truncated first command line does not.
+function installSummary(pkg) {
+    if (!pkg.steps || !pkg.steps.length) {
+        return `${pkg.install_command || 'winget'} ${pkg.install_args || ''}`.trim();
+    }
+    return pkg.steps.map((step) => stepText(step.kind)[0]).join(' → ');
+}
+
 function renderPackages(list) {
     packagesPane.replaceChildren();
     if (!list.length) {
@@ -162,21 +171,30 @@ function renderPackageRow(pkg) {
     tr.appendChild(nameCell);
 
     const payloadCell = el('td');
-    payloadCell.appendChild(el('div', null, sourceSummary(pkg.source)));
-    if (pkg.source && pkg.source.sha256) {
-        payloadCell.appendChild(el('div', 'pkg-hash', pkg.source.sha256.slice(0, 16) + '…'));
-    }
-    if (pkg.source && pkg.source.file_size) {
-        payloadCell.appendChild(el('div', 'stat-card__meta', fmtBytes(pkg.source.file_size)));
-    }
+    const sources = pkg.sources && pkg.sources.length
+        ? pkg.sources : (pkg.source ? [pkg.source] : []);
+    if (!sources.length) payloadCell.appendChild(el('div', null, t('packages.no_payload')));
+    sources.forEach((source) => {
+        // The slot name matters once there is more than one: it is what the steps say.
+        payloadCell.appendChild(el('div', null, sources.length > 1
+            ? t('packages.payload_named', { name: source.name, payload: sourceSummary(source) })
+            : sourceSummary(source)));
+        if (source.sha256) {
+            payloadCell.appendChild(el('div', 'pkg-hash', source.sha256.slice(0, 16) + '…'));
+        }
+        if (source.file_size) {
+            payloadCell.appendChild(el('div', 'stat-card__meta', fmtBytes(source.file_size)));
+        }
+    });
     tr.appendChild(payloadCell);
 
     const cmdCell = el('td');
-    cmdCell.appendChild(el('div', 'pkg-hash',
-        `${pkg.install_command || 'winget'} ${pkg.install_args || ''}`.trim()));
-    cmdCell.appendChild(el('div', 'stat-card__meta',
-        t('packages.exit_summary', { codes: pkg.success_exit_codes.join(', '),
-                                     timeout: pkg.timeout_seconds })));
+    cmdCell.appendChild(el('div', 'pkg-hash', installSummary(pkg)));
+    const meta = t('packages.exit_summary', { codes: pkg.success_exit_codes.join(', '),
+                                              timeout: pkg.timeout_seconds });
+    cmdCell.appendChild(el('div', 'stat-card__meta', (pkg.steps && pkg.steps.length)
+        ? `${tPlural('packages.step_count', pkg.steps.length)} · ${meta}`
+        : meta));
     tr.appendChild(cmdCell);
 
     tr.appendChild(el('td', 'pkg-target-error', detectionSummary(pkg.detection)));
@@ -220,15 +238,24 @@ async function loadPackages() {
 }
 
 // ---------------------------------------------------------------- package editor
+//
+// The editor holds a package as two arrays — payloads and steps — and rebuilds the DOM
+// from them. Field edits write straight into the array WITHOUT re-rendering; only
+// structural changes (add, remove, reorder, change a kind) redraw. Re-rendering on every
+// keystroke would move focus out of the box being typed in, which is exactly the bug a
+// naive "re-render on change" editor ships with.
 
-function selectedSourceKind() {
-    const checked = document.querySelector('input[name="source-kind"]:checked');
-    return checked ? checked.value : 'upload';
+let draftPayloads = [];   // {name, kind, ref, sha256, file_name, file_size, file}
+let draftSteps = [];
+
+function installMode() {
+    const checked = document.querySelector('input[name="install-mode"]:checked');
+    return checked ? checked.value : 'command';
 }
 
 // Spelled out per kind rather than built from `'packages.source.' + kind`: a computed
 // key is invisible to the literal-key scan in tests/test_i18n.py, and a source kind added
-// server-side without catalog entries would then label its own radio button with a key.
+// server-side without catalog entries would then label its own option with a key.
 const SOURCE_LABELS = {
     upload: () => [t('packages.source.upload.label'), t('packages.source.upload.help')],
     winget: () => [t('packages.source.winget.label'), t('packages.source.winget.help')],
@@ -241,42 +268,359 @@ function sourceText(kind) {
     return get ? get() : [kind, ''];
 }
 
+const STEP_LABELS = {
+    run: () => [t('packages.step.run.label'), t('packages.step.run.description')],
+    powershell: () => [t('packages.step.powershell.label'), t('packages.step.powershell.description')],
+    winget: () => [t('packages.step.winget.label'), t('packages.step.winget.description')],
+    extract: () => [t('packages.step.extract.label'), t('packages.step.extract.description')],
+    pnputil: () => [t('packages.step.pnputil.label'), t('packages.step.pnputil.description')],
+};
+
+function stepText(kind) {
+    // The server sends label+description for every step kind; these literals are the
+    // fallback for a kind this page is older than, and they keep the key scan honest.
+    const served = (vocab.step_kinds || []).find((k) => k.name === kind);
+    if (served) return [served.label, served.description];
+    const get = STEP_LABELS[kind];
+    return get ? get() : [kind, ''];
+}
+
 const REF_PLACEHOLDERS = {
     winget: '7zip.7zip',
-    url: 'https://example.com/installer.msi',
+    url: 'https://example.com/drivers.zip',
     unc: '\\\\fileserver\\software\\installer.msi',
 };
 
-function renderSourceKinds() {
-    const host = document.getElementById('source-kinds');
-    host.replaceChildren();
-    vocab.source_kinds.forEach((kind) => {
-        const [label, help] = sourceText(kind);
-        const wrap = el('label', 'perm-capability');
-        const radio = document.createElement('input');
-        radio.type = 'radio';
-        radio.name = 'source-kind';
-        radio.value = kind;
-        radio.addEventListener('change', syncSourcePanes);
-        wrap.appendChild(radio);
-        const text = el('span');
-        text.appendChild(el('span', 'perm-capability__label', label));
-        text.appendChild(el('span', 'perm-capability__help', help));
-        wrap.appendChild(text);
-        host.appendChild(wrap);
-    });
+// ---- small field builders. Each returns a labelled block wired to a setter. ----
+
+function fieldBlock(labelText, control, hint) {
+    const wrap = el('div');
+    const label = el('label', 'setting__label', labelText);
+    if (hint) {
+        label.appendChild(document.createTextNode(' '));
+        label.appendChild(el('span', 'setting__default', hint));
+    }
+    label.htmlFor = control.id;
+    wrap.appendChild(label);
+    wrap.appendChild(control);
+    return wrap;
 }
 
-function syncSourcePanes() {
-    const kind = selectedSourceKind();
-    document.getElementById('source-upload').hidden = kind !== 'upload';
-    document.getElementById('source-ref').hidden = kind === 'upload';
-    document.getElementById('pkg-ref').placeholder = REF_PLACEHOLDERS[kind] || '';
-    document.getElementById('pkg-ref-help').textContent = sourceText(kind)[1];
-    // winget has its own trust chain and its own command line, so both the hash pin and
-    // the command field are meaningless there — say so rather than accepting input the
-    // server will reject.
-    document.getElementById('pkg-ref-sha').disabled = kind === 'winget';
+let controlSeq = 0;
+
+function textField(labelText, value, onInput, options) {
+    const opts = options || {};
+    const input = document.createElement(opts.multiline ? 'textarea' : 'input');
+    input.className = 'input';
+    input.id = `pkg-field-${++controlSeq}`;
+    input.value = value || '';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.style.width = '100%';
+    if (opts.placeholder) input.placeholder = opts.placeholder;
+    if (opts.multiline) input.rows = opts.rows || 5;
+    if (opts.type) input.type = opts.type;
+    input.addEventListener('input', () => onInput(input.value));
+    return fieldBlock(labelText, input, opts.hint);
+}
+
+function selectField(labelText, value, choices, onChange) {
+    const select = document.createElement('select');
+    select.className = 'input';
+    select.id = `pkg-field-${++controlSeq}`;
+    select.style.width = '100%';
+    choices.forEach(([choiceValue, choiceLabel]) => {
+        const option = document.createElement('option');
+        option.value = choiceValue;
+        option.textContent = choiceLabel;
+        select.appendChild(option);
+    });
+    select.value = value;
+    select.addEventListener('change', () => onChange(select.value));
+    return fieldBlock(labelText, select);
+}
+
+function checkboxField(labelText, checked, onChange) {
+    const wrap = el('label', 'checkbox');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!checked;
+    box.addEventListener('change', () => onChange(box.checked));
+    wrap.appendChild(box);
+    wrap.appendChild(document.createTextNode(' ' + labelText));
+    return wrap;
+}
+
+function row(...blocks) {
+    const grid = el('div', 'pkg-row');
+    blocks.forEach((block) => grid.appendChild(block));
+    return grid;
+}
+
+// ---- payloads ----
+
+// Every name a step may use at this point in the list. Payload names are bound before
+// step 1; an extract step binds its own name for the steps after it. Mirrors
+// packages.validate_steps so the hint matches what the server will accept.
+function boundVariables(uptoStepIndex) {
+    const names = [vocab.work_variable || 'work'];
+    draftPayloads.forEach((p) => { if (p.name) names.push(p.name); });
+    if (draftPayloads.length === 1 && draftPayloads[0].name !== 'file') names.push('file');
+    draftSteps.slice(0, uptoStepIndex === undefined ? draftSteps.length : uptoStepIndex)
+        .forEach((step) => {
+            if (step.kind !== 'extract') return;
+            // A blank save_as is not "no name" — the server picks one. Mirroring that
+            // choice here (packages.validate_steps) is what lets the hint name the folder
+            // the next step has to point at, instead of leaving the operator to guess.
+            names.push(step.save_as || autoExtractName(names));
+        });
+    return names;
+}
+
+function autoExtractName(taken) {
+    let name = 'extracted';
+    let suffix = 2;
+    while (taken.includes(name)) name = `extracted${suffix++}`;
+    return name;
+}
+
+function syncVariableHint() {
+    const hint = document.getElementById('step-variables');
+    if (!hint) return;
+    hint.textContent = t('packages.editor.variables_help',
+        { variables: boundVariables().map((n) => `{${n}}`).join(', ') });
+}
+
+function renderPayloads() {
+    const host = document.getElementById('payload-list');
+    host.replaceChildren();
+    if (!draftPayloads.length) {
+        host.appendChild(el('p', 'setting__default', t('packages.editor.no_payloads')));
+    }
+    draftPayloads.forEach((payload, index) => {
+        const card = el('div', 'pkg-card');
+
+        const head = el('div', 'pkg-card__head');
+        head.appendChild(el('span', 'pkg-card__title',
+            t('packages.editor.payload_n', { number: index + 1 })));
+        const remove = el('button', 'btn pkg-card__btn', t('common.delete'));
+        remove.type = 'button';
+        remove.addEventListener('click', () => {
+            draftPayloads.splice(index, 1);
+            renderPayloads();
+            renderSteps();
+        });
+        head.appendChild(remove);
+        card.appendChild(head);
+
+        card.appendChild(row(
+            textField(t('packages.editor.payload_name'), payload.name,
+                (v) => { payload.name = v; syncVariableHint(); },
+                { placeholder: vocab.defaults.source_name || 'payload',
+                  hint: t('packages.editor.payload_name_hint') }),
+            selectField(t('packages.editor.payload_kind'), payload.kind,
+                (vocab.source_kinds || []).map((kind) => [kind, sourceText(kind)[0]]),
+                (v) => { payload.kind = v; renderPayloads(); })));
+
+        card.appendChild(el('p', 'setting__default', sourceText(payload.kind)[1]));
+
+        if (payload.kind === 'upload') {
+            const picker = document.createElement('input');
+            picker.className = 'input';
+            picker.type = 'file';
+            picker.style.width = '100%';
+            picker.addEventListener('change', () => {
+                payload.file = picker.files.length ? picker.files[0] : null;
+                state.textContent = payload.file
+                    ? t('packages.editor.will_upload', { file: payload.file.name })
+                    : payloadState(payload);
+            });
+            card.appendChild(picker);
+            const state = el('p', 'setting__default', payloadState(payload));
+            payload.stateNode = state;   // so the upload progress line can find it
+            card.appendChild(state);
+        } else {
+            card.appendChild(textField(t('packages.editor.location'), payload.ref,
+                (v) => { payload.ref = v; },
+                { placeholder: REF_PLACEHOLDERS[payload.kind] || '' }));
+            // winget has its own trust chain, so a hash pin there is meaningless.
+            if (payload.kind !== 'winget') {
+                card.appendChild(textField(t('packages.editor.sha256'), payload.sha256,
+                    (v) => { payload.sha256 = v; },
+                    { hint: t('packages.editor.sha256_hint') }));
+            }
+        }
+        host.appendChild(card);
+    });
+    syncVariableHint();
+    syncInstallPanes();
+}
+
+function payloadState(payload) {
+    if (payload.file) return t('packages.editor.will_upload', { file: payload.file.name });
+    if (payload.file_name) {
+        return t('packages.editor.current_payload',
+            { file: payload.file_name, size: fmtBytes(payload.file_size) });
+    }
+    return t('packages.editor.upload_help');
+}
+
+document.getElementById('add-payload').addEventListener('click', () => {
+    // The first payload takes the default name so the common one-payload package needs no
+    // naming at all; later ones are numbered, and the operator renames them.
+    const base = vocab.defaults.source_name || 'payload';
+    let name = base;
+    let n = 2;
+    while (draftPayloads.some((p) => p.name === name)) name = `${base}${n++}`;
+    draftPayloads.push({ name, kind: 'upload', ref: '', sha256: '', file: null });
+    renderPayloads();
+});
+
+// ---- steps ----
+
+function renderSteps() {
+    const host = document.getElementById('step-list');
+    host.replaceChildren();
+    if (!draftSteps.length) {
+        host.appendChild(el('p', 'setting__default', t('packages.editor.no_steps')));
+    }
+    draftSteps.forEach((step, index) => host.appendChild(renderStep(step, index)));
+    syncVariableHint();
+}
+
+function moveStep(from, to) {
+    if (to < 0 || to >= draftSteps.length) return;
+    const [moved] = draftSteps.splice(from, 1);
+    draftSteps.splice(to, 0, moved);
+    renderSteps();
+}
+
+function renderStep(step, index) {
+    const card = el('div', 'pkg-card');
+    const head = el('div', 'pkg-card__head');
+    head.appendChild(el('span', 'pkg-card__title',
+        t('packages.editor.step_n', { number: index + 1, kind: stepText(step.kind)[0] })));
+
+    const buttons = el('span', 'pkg-card__actions');
+    [[t('packages.editor.move_up'), () => moveStep(index, index - 1)],
+     [t('packages.editor.move_down'), () => moveStep(index, index + 1)],
+     [t('common.delete'), () => { draftSteps.splice(index, 1); renderSteps(); }],
+    ].forEach(([label, action]) => {
+        const button = el('button', 'btn pkg-card__btn', label);
+        button.type = 'button';
+        button.addEventListener('click', action);
+        buttons.appendChild(button);
+    });
+    head.appendChild(buttons);
+    card.appendChild(head);
+
+    card.appendChild(textField(t('packages.editor.step_label'), step.name,
+        (v) => { step.name = v; }, { placeholder: stepText(step.kind)[0] }));
+
+    stepFields(step).forEach((node) => card.appendChild(node));
+
+    // Per-step overrides. Blank means "use the package's own", which is why these are text
+    // rather than number inputs pre-filled with the package value — a pre-filled box would
+    // silently freeze the package default into every step.
+    card.appendChild(row(
+        textField(t('packages.editor.step_timeout'), step.timeout_seconds,
+            (v) => { step.timeout_seconds = v; },
+            { type: 'number', hint: t('packages.editor.inherits') }),
+        textField(t('packages.editor.step_exit_codes'), step.success_exit_codes,
+            (v) => { step.success_exit_codes = v; },
+            { hint: step.kind === 'pnputil'
+                ? t('packages.editor.pnputil_codes')
+                : t('packages.editor.inherits') })));
+
+    const carryOn = checkboxField(t('packages.editor.continue_on_error'),
+        step.continue_on_error, (v) => { step.continue_on_error = v; });
+    carryOn.style.marginTop = 'var(--space-3)';
+    card.appendChild(carryOn);
+    return card;
+}
+
+function stepFields(step) {
+    if (step.kind === 'run') {
+        return [row(
+            textField(t('packages.editor.command'), step.command,
+                (v) => { step.command = v; }, { placeholder: 'msiexec.exe' }),
+            textField(t('packages.editor.args'), step.args,
+                (v) => { step.args = v; }, { placeholder: '/i "{file}" /qn /norestart' }))];
+    }
+    if (step.kind === 'powershell') {
+        return [textField(t('packages.editor.script'), step.script,
+            (v) => { step.script = v; },
+            { multiline: true, placeholder: 'Copy-Item "{work}\\config.xml" "C:\\ProgramData\\App\\"' })];
+    }
+    if (step.kind === 'winget') {
+        return [row(
+            textField(t('packages.editor.winget_id'), step.id,
+                (v) => { step.id = v; }, { placeholder: '7zip.7zip' }),
+            textField(t('packages.editor.args'), step.args,
+                (v) => { step.args = v; }, { hint: t('common.optional') }))];
+    }
+    if (step.kind === 'extract') {
+        const first = draftPayloads.length ? `{${draftPayloads[0].name}}` : '{payload}';
+        return [
+            row(textField(t('packages.editor.archive'), step.archive,
+                    (v) => { step.archive = v; }, { placeholder: first }),
+                textField(t('packages.editor.dest'), step.dest,
+                    (v) => { step.dest = v; },
+                    { hint: t('packages.editor.dest_hint'), placeholder: '{work}\\drivers' })),
+            textField(t('packages.editor.save_as'), step.save_as,
+                (v) => { step.save_as = v; syncVariableHint(); },
+                { hint: t('packages.editor.save_as_hint'), placeholder: 'extracted' }),
+        ];
+    }
+    // pnputil
+    return [
+        textField(t('packages.editor.driver_path'), step.path,
+            (v) => { step.path = v; },
+            { placeholder: '{extracted}', hint: t('packages.editor.driver_path_hint') }),
+        checkboxField(t('packages.editor.subdirs'), step.subdirs !== false,
+            (v) => { step.subdirs = v; }),
+    ];
+}
+
+function renderStepPalette() {
+    const select = document.getElementById('step-kind');
+    select.replaceChildren();
+    (vocab.step_kinds || []).forEach((kind) => {
+        const option = document.createElement('option');
+        option.value = kind.name;
+        option.textContent = kind.label;
+        select.appendChild(option);
+    });
+    const help = () => {
+        document.getElementById('step-kind-help').textContent = stepText(select.value)[1];
+    };
+    select.addEventListener('change', help);
+    help();
+}
+
+document.getElementById('add-step').addEventListener('click', () => {
+    const kind = document.getElementById('step-kind').value;
+    if (draftSteps.length >= (vocab.max_steps || 25)) {
+        packageError.textContent = t('packages.editor.too_many_steps',
+            { max: vocab.max_steps || 25 });
+        return;
+    }
+    draftSteps.push({ kind, subdirs: true });
+    renderSteps();
+});
+
+document.querySelectorAll('input[name="install-mode"]').forEach((radio) => {
+    radio.addEventListener('change', syncInstallPanes);
+});
+
+function syncInstallPanes() {
+    const steps = installMode() === 'steps';
+    document.getElementById('install-command-pane').hidden = steps;
+    document.getElementById('install-steps-pane').hidden = !steps;
+    if (steps) return;
+
+    // Single-command mode is the original recipe and still assumes exactly one payload.
+    const kind = draftPayloads.length ? draftPayloads[0].kind : 'upload';
     const command = document.getElementById('pkg-command');
     command.disabled = kind === 'winget';
     command.placeholder = kind === 'winget'
@@ -319,7 +663,6 @@ function syncDetectionPanes() {
 
 function openPackage(pkg) {
     editingPackageId = pkg ? pkg.id : null;
-    uploadedSource = null;
     packageError.textContent = '';
     document.getElementById('package-modal-title').textContent = pkg
         ? t('packages.editor.edit_title', { package: pkg.name })
@@ -333,19 +676,36 @@ function openPackage(pkg) {
     document.getElementById('pkg-args').value = (pkg && pkg.install_args) || '';
     document.getElementById('pkg-exit-codes').value =
         (pkg ? pkg.success_exit_codes : (vocab.defaults.success_exit_codes || [0, 3010])).join(', ');
-    document.getElementById('pkg-file').value = '';
 
-    const source = (pkg && pkg.source) || { kind: 'upload' };
-    const radio = document.querySelector(`input[name="source-kind"][value="${source.kind}"]`);
-    if (radio) radio.checked = true;
-    document.getElementById('pkg-ref').value = source.ref || '';
-    document.getElementById('pkg-ref-sha').value =
-        source.kind === 'upload' ? '' : (source.sha256 || '');
-    document.getElementById('pkg-file-state').textContent = source.file_name
-        ? t('packages.editor.current_payload',
-            { file: source.file_name, size: fmtBytes(source.file_size) })
-        : t('packages.editor.upload_help');
-    syncSourcePanes();
+    // Copies, not the fetched objects: the editor mutates these as the operator types, and
+    // a cancelled edit must leave the list behind it untouched.
+    const existing = (pkg && pkg.sources) || (pkg && pkg.source ? [pkg.source] : null);
+    draftPayloads = (existing || [{ kind: 'upload', name: vocab.defaults.source_name || 'payload' }])
+        .map((source) => ({
+            name: source.name || vocab.defaults.source_name || 'payload',
+            kind: source.kind || 'upload',
+            ref: source.ref || '',
+            // An upload's hash is the hub's, not something to re-type; a url/unc hash is
+            // the operator's pin and is theirs to edit.
+            sha256: source.kind === 'upload' ? '' : (source.sha256 || ''),
+            file_name: source.file_name || '',
+            file_size: source.file_size || 0,
+            stored_sha256: source.sha256 || '',
+            file: null,
+        }));
+    draftSteps = ((pkg && pkg.steps) || []).map((step) => ({
+        ...step,
+        // Both arrive typed from the server and are edited as text here.
+        timeout_seconds: step.timeout_seconds || '',
+        success_exit_codes: (step.success_exit_codes || []).join(', '),
+    }));
+
+    const mode = draftSteps.length ? 'steps' : 'command';
+    const modeRadio = document.querySelector(`input[name="install-mode"][value="${mode}"]`);
+    if (modeRadio) modeRadio.checked = true;
+
+    renderPayloads();
+    renderSteps();
 
     const rule = (pkg && pkg.detection) || { kind: 'none' };
     document.getElementById('pkg-detect-kind').value = rule.kind;
@@ -394,33 +754,69 @@ function collectDetection() {
     return { kind: 'none' };
 }
 
-async function uploadIfNeeded() {
-    const input = document.getElementById('pkg-file');
-    if (selectedSourceKind() !== 'upload' || !input.files.length) return null;
-    const form = new FormData();
-    form.append('file', input.files[0]);
-    document.getElementById('pkg-file-state').textContent = t('packages.editor.uploading');
-    const result = await api('/api/packages/upload', { method: 'POST', body: form });
-    document.getElementById('pkg-file-state').textContent =
-        t('packages.editor.uploaded', { file: result.file_name,
-                                        size: fmtBytes(result.file_size),
-                                        sha256: result.sha256.slice(0, 16) });
-    return result;
+// Upload every payload the operator picked a new file for, one at a time. Serial rather
+// than Promise.all on purpose: these are installers, and three 400 MB uploads racing each
+// other through one proxy is how the read timeout in packages.http_502 gets hit.
+async function uploadPayloads() {
+    for (const payload of draftPayloads) {
+        if (payload.kind !== 'upload' || !payload.file) continue;
+        const form = new FormData();
+        form.append('file', payload.file);
+        if (payload.stateNode) payload.stateNode.textContent = t('packages.editor.uploading');
+        const result = await api('/api/packages/upload', { method: 'POST', body: form });
+        payload.stored_sha256 = result.sha256;
+        payload.file_name = result.file_name;
+        payload.file_size = result.file_size;
+        payload.file = null;
+        if (payload.stateNode) {
+            payload.stateNode.textContent = t('packages.editor.uploaded',
+                { file: result.file_name, size: fmtBytes(result.file_size),
+                  sha256: result.sha256.slice(0, 16) });
+        }
+    }
 }
 
-function collectSource(existing) {
-    const kind = selectedSourceKind();
-    if (kind === 'upload') {
-        // A freshly uploaded blob wins; otherwise keep whatever the package already
-        // points at, so editing the command line doesn't require re-uploading 200 MB.
-        const blob = uploadedSource || (existing && existing.kind === 'upload' ? existing : null);
-        if (!blob) return null;
-        return { kind, sha256: blob.sha256, file_name: blob.file_name, file_size: blob.file_size };
-    }
-    const source = { kind, ref: document.getElementById('pkg-ref').value };
-    const sha = document.getElementById('pkg-ref-sha').value.trim();
-    if (sha && kind !== 'winget') source.sha256 = sha;
-    return source;
+function collectSources() {
+    return draftPayloads.map((payload) => {
+        if (payload.kind === 'upload') {
+            // The stored hash carries over untouched when no new file was chosen, so
+            // editing a command line doesn't mean re-uploading 200 MB.
+            if (!payload.stored_sha256) throw new Error(t('packages.editor.choose_file'));
+            return { name: payload.name, kind: 'upload', sha256: payload.stored_sha256,
+                     file_name: payload.file_name, file_size: payload.file_size };
+        }
+        const source = { name: payload.name, kind: payload.kind, ref: payload.ref };
+        const sha = (payload.sha256 || '').trim();
+        if (sha && payload.kind !== 'winget') source.sha256 = sha;
+        return source;
+    });
+}
+
+// Blank overrides are DROPPED rather than sent as empty strings: absent means "inherit the
+// package's timeout / exit codes", and the server distinguishes the two.
+function collectSteps() {
+    if (installMode() !== 'steps') return [];
+    // An empty list would reach the server as "no steps", which it reads as the
+    // single-command recipe and rejects for having no command — a message about a field
+    // this operator cannot even see right now.
+    if (!draftSteps.length) throw new Error(t('packages.editor.no_steps'));
+    return draftSteps.map((step) => {
+        const out = { kind: step.kind };
+        ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path']
+            .forEach((field) => {
+                const value = (step[field] || '').trim ? (step[field] || '').trim() : step[field];
+                if (value) out[field] = value;
+            });
+        if (step.kind === 'pnputil') out.subdirs = step.subdirs !== false;
+        if (String(step.timeout_seconds || '').trim()) {
+            out.timeout_seconds = Number(step.timeout_seconds);
+        }
+        if (String(step.success_exit_codes || '').trim()) {
+            out.success_exit_codes = step.success_exit_codes;
+        }
+        if (step.continue_on_error) out.continue_on_error = true;
+        return out;
+    });
 }
 
 document.getElementById('package-save').addEventListener('click', async () => {
@@ -428,24 +824,22 @@ document.getElementById('package-save').addEventListener('click', async () => {
     const saveBtn = document.getElementById('package-save');
     saveBtn.disabled = true;
     try {
-        uploadedSource = (await uploadIfNeeded()) || uploadedSource;
+        await uploadPayloads();
 
-        let existingSource = null;
-        if (editingPackageId) {
-            const current = await api(`/api/packages/${encodeURIComponent(editingPackageId)}`);
-            existingSource = current.source;
-        }
-        const source = collectSource(existingSource);
-        if (!source) throw new Error(t('packages.editor.choose_file'));
-
+        const steps = collectSteps();
+        const commandMode = installMode() === 'command';
         const payload = {
             name: document.getElementById('pkg-name').value,
             version: document.getElementById('pkg-version').value,
             description: document.getElementById('pkg-description').value,
-            source,
-            install_command: document.getElementById('pkg-command').disabled
-                ? '' : document.getElementById('pkg-command').value,
-            install_args: document.getElementById('pkg-args').value,
+            sources: collectSources(),
+            steps,
+            // A package stores one shape or the other, so switching to steps has to CLEAR
+            // the old command line rather than leave it sitting there for the server to
+            // reject with a message about a field the operator can no longer see.
+            install_command: (commandMode && !document.getElementById('pkg-command').disabled)
+                ? document.getElementById('pkg-command').value : '',
+            install_args: commandMode ? document.getElementById('pkg-args').value : '',
             timeout_seconds: Number(document.getElementById('pkg-timeout').value),
             success_exit_codes: document.getElementById('pkg-exit-codes').value,
             detection: collectDetection(),
@@ -770,9 +1164,9 @@ document.getElementById('progress-retry').addEventListener('click', async () => 
 
 (async function init() {
     await loadPackages();
-    renderSourceKinds();
+    renderStepPalette();
     renderDetectionKinds();
-    syncSourcePanes();
+    syncInstallPanes();
     syncDetectionPanes();
 
     // The machine picker lists what the hub knows about, not just what has enrolled, so a

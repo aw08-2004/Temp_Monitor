@@ -18,6 +18,51 @@
 
 .pkg-detect-pane { margin-top: var(--space-3); }
 
+/* One payload, or one step. A visible box per item because the list is ordered and
+   editable: without an outline it is genuinely hard to tell where step 2 stops and step 3
+   begins once each has five fields. */
+.pkg-card {
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md, 8px);
+    padding: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+.pkg-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.pkg-card__title {
+    font-weight: 600;
+    font-size: var(--text-sm);
+}
+
+.pkg-card__actions {
+    display: flex;
+    gap: var(--space-2);
+}
+
+/* Reorder/remove sit in a card header next to the step's title, so they are sized to that
+   line rather than to the dialog's footer buttons. */
+.pkg-card__btn {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+}
+
+/* The first row inside a card sits directly under the heading, so it does not need the
+   top margin .pkg-row adds for separating rows from each other. */
+.pkg-card .pkg-row:first-of-type { margin-top: 0; }
+
+.pkg-card textarea.input {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    resize: vertical;
+}
+
 /* The payload's identity, once uploaded. Monospace because the operator's job here is
    to compare a hash, and a proportional font makes that genuinely harder. */
 .pkg-hash {

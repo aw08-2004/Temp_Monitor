@@ -862,6 +862,11 @@
     "winget_ref": "winget: {ref}",
     "exit_summary": "Exit {codes} · {timeout} s",
     "detect_exit_only": "Nur der Exit-Code",
+    "payload_named": "{name}: {payload}",
+    "step_count": {
+      "one": "{count} Schritt",
+      "other": "{count} Schritte"
+    },
     "detect_registry": "{root}\\{key}\\{name}",
     "detect_registry_equals": "{root}\\{key}\\{name} = {value}",
     "detect_version_min": "{name} ≥ {version}",
@@ -898,7 +903,16 @@
       "timeout": "Zeitlimit",
       "description": "Beschreibung",
       "description_placeholder": "Archivprogramm, stilles MSI",
-      "payload": "Datei",
+      "payloads": "Dateien",
+      "payloads_help": "Die Dateien, die dieses Paket auf dem Rechner braucht. Schritte sprechen jede über ihren Namen an.",
+      "add_payload": "Datei hinzufügen",
+      "no_payloads": "Keine Dateien. Ein winget- oder PowerShell-Schritt braucht womöglich keine.",
+      "payload_n": "Datei {number}",
+      "payload_name": "Name",
+      "payload_name_hint": "unter diesem Namen sprechen Schritte sie an",
+      "payload_kind": "Woher",
+      "location": "Ort",
+      "will_upload": "{file} wird beim Speichern hochgeladen.",
       "upload_help": "Der Hub speichert die Datei und legt ihren SHA-256 fest. Agenten prüfen diesen Hash, bevor sie irgendetwas ausführen.",
       "current_payload": "Aktuelle Datei: {file} ({size}). Wähle eine Datei, um sie zu ersetzen.",
       "uploading": "Wird hochgeladen…",
@@ -906,6 +920,34 @@
       "sha256": "SHA-256",
       "sha256_hint": "optional – festgelegt lehnt der Agent eine nicht passende Datei ab",
       "how_to_install": "Wie es installiert wird",
+      "mode_command": "Ein Befehl",
+      "mode_command_help": "Ein Installer, eine stille Befehlszeile. Läuft mit jeder Agent-Version.",
+      "mode_steps": "Mehrere Schritte",
+      "mode_steps_help": "Archiv entpacken, Treiber installieren, Skript ausführen – der Reihe nach, jeder einzeln bewertet. Erfordert Agent 3.22.0 oder neuer.",
+      "steps_help": "Schritte laufen von oben nach unten. Der Rollout stoppt beim ersten Fehlschlag, sofern du nicht sagst, dass er weitermachen soll.",
+      "add_step": "Schritt hinzufügen",
+      "no_steps": "Noch keine Schritte. Wähle unten eine Art und füge einen hinzu.",
+      "too_many_steps": "Ein Paket darf höchstens {max} Schritte haben.",
+      "step_n": "Schritt {number} — {kind}",
+      "step_label": "Bezeichnung",
+      "step_timeout": "Zeitlimit",
+      "step_exit_codes": "Exit-Codes für Erfolg",
+      "inherits": "leer = das des Pakets",
+      "pnputil_codes": "leer = 0, 259, 3010 – 259 heißt nur, dass keine INF-Dateien mehr übrig waren",
+      "continue_on_error": "Weitermachen, auch wenn dieser Schritt fehlschlägt",
+      "move_up": "Hoch",
+      "move_down": "Runter",
+      "script": "Skript",
+      "winget_id": "Paket-ID",
+      "archive": "Zu entpackendes Archiv",
+      "dest": "Entpacken nach",
+      "dest_hint": "leer = ein Ordner im Arbeitsverzeichnis",
+      "save_as": "Ordner ansprechen als",
+      "save_as_hint": "leer = Name wird vergeben",
+      "driver_path": "Treiberordner oder .inf-Datei",
+      "driver_path_hint": "meist der Ordner aus einem vorherigen Entpack-Schritt",
+      "subdirs": "Unterordner einbeziehen",
+      "variables_help": "Hier verfügbar: {variables}",
       "command": "Befehl",
       "command_placeholder": "msiexec.exe",
       "command_winget_placeholder": "winget (vom Agenten gebaut)",
@@ -984,6 +1026,28 @@
       "succeeded": "erfolgreich",
       "failed": "fehlgeschlagen",
       "expired": "abgelaufen"
+    },
+    "step": {
+      "run": {
+        "label": "Programm ausführen",
+        "description": "Eine ausführbare Datei mit Argumenten: ein MSI, ein setup.exe des Herstellers, alles, was auf dem Rechner liegt."
+      },
+      "powershell": {
+        "label": "PowerShell ausführen",
+        "description": "Ein eingebettetes Skript, ausgeführt als SYSTEM. Das Auffangbecken – Datei kopieren, Registry-Wert setzen, Dienst neu starten."
+      },
+      "winget": {
+        "label": "Mit winget installieren",
+        "description": "winget löst seine Datei selbst auf und prüft sie. Auf Windows Server nicht verfügbar."
+      },
+      "extract": {
+        "label": "ZIP entpacken",
+        "description": "Entpackt ein Archiv in einen Ordner, auf den spätere Schritte zeigen können."
+      },
+      "pnputil": {
+        "label": "Treiber installieren",
+        "description": "Übergibt einen Ordner mit .inf-Dateien an pnputil, das sie einzeln bereitstellt und installiert."
+      }
     },
     "detection": {
       "none": {

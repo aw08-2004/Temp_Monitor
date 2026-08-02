@@ -49,6 +49,16 @@ public static class ParamsExtensions
         return null;
     }
 
+    /// <summary>A nested array (deploy_package's `steps` and `sources`), or null. Same
+    /// shape as GetObject rather than an indexer at the call site, so a params object that
+    /// is null or carries the wrong type is one branch here instead of at every use.</summary>
+    public static JsonArray? GetArray(this JsonNode? paramsNode, string key)
+    {
+        if (paramsNode is JsonObject obj && obj.TryGetPropertyValue(key, out var v))
+            return v as JsonArray;
+        return null;
+    }
+
     /// <summary>An array of ints (deploy_package's `success_exit_codes`).
     ///
     /// Returns an EMPTY set when the key is absent or unusable rather than a default like

@@ -125,7 +125,7 @@ too. Budget for that explicitly when this becomes an implementation plan.
 
 ---
 
-## ✅ 5. Deploy packages (PDQ-style)
+## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0
 
 Built (hub 1.27.0). `packages.py` (model + blob store + scheduler, flask-free) +
 `packages_web.py` (console API, agent payload download), a Packages page with a
@@ -165,6 +165,50 @@ log, and when no live sink was attached (`onOutput == null`, so `onLine` was nul
 installer's output was dropped from the result entirely. `Say()` (our own messages, needs
 terminating) and `Emit()` (already terminated) are now separate, and the deploy log is
 covered by tests rather than eyeballed.
+
+### Multi-step packages · hub 1.64.0 + agent 3.22.0
+
+The original recipe was one command line, which covers an MSI and nothing else. A driver
+pack is three programs: download a zip, unpack it, hand the folder to `pnputil`. Expressed
+as one chained `cmd /c a && b && c` that is a single exit code for three programs — and
+pnputil's dialect (259 is a clean run that simply ran out of INFs) does not survive being
+merged with someone else's. So a package now carries an ordered **step list**, and payloads
+are **named slots** the steps refer to.
+
+- **Five step kinds**, held to that number for the reason the detection grammar is held to
+  three: each is code the agent must implement and keep working. `run`, `powershell`,
+  `winget`, `extract` (.zip), `pnputil`. `powershell` is the deliberate escape hatch —
+  copy a file, poke the registry, restart a service — so the other four stay narrow instead
+  of growing switches to cover every adjacent case. `packages.STEP_KINDS` is served to the
+  editor with its catalog text, so adding one is a Python edit plus three catalog entries.
+- **Payloads gained names** (`package_sources.name`, `UNIQUE(package_id, name)` replacing
+  `UNIQUE(package_id)`) — the seam the original docstring said extra payloads would land
+  on. Steps say `{drivers}`; an `extract` step binds its output folder for the steps after
+  it. `{work}` is the attempt's own directory, and `{file}` still means the payload when
+  there is exactly one, so every package written before this keeps its command line.
+- **Unknown variables are refused at save time**, not at 2am on 200 machines. The grammar
+  is `{lowercase_words}` only, so a literal MSI product code
+  `{90160000-008C-0000-1000-0000000FF1CE}` is left alone rather than rejected — and a step
+  that names a folder a LATER step produces fails, because bindings are checked in order.
+- **A payload no step opens is refused**, the same rule as the old "`{file}` must appear
+  somewhere": downloading a file to every machine and never opening it is always a mistake.
+- **Per-step timeout and exit codes**, both defaulting to the package's. `pnputil` defaults
+  to `{0, 259, 3010}`, resolved by the HUB so the editor can show an operator the set their
+  driver step will be judged by — the 3010 lesson applied one layer down.
+- **The first failed step stops the deploy** unless it is marked "carry on". Detection runs
+  once at the end, because it is a claim about the package, not about a step.
+- **The agent works in one directory per attempt**, under `%ProgramData%` (SYSTEM-owned,
+  not `%TEMP%`), deleted whole on every path. `extract` is done with `System.IO.Compression`
+  rather than by shelling out to `Expand-Archive`, so the zip-slip check on every entry is
+  ours to make rather than someone else's to have made.
+
+**Old agents fail closed, they do not half-run.** An agent that predates steps reads
+`source` and `install_command`, so `build_command_params` emits a **legacy projection**: a
+package with no steps goes out in exactly the old shape and runs correctly on every agent
+in the field, and a package WITH steps deliberately offers no command to run
+(`install_command: ""`, `source.kind: "multi"`). Such an agent fails the deploy with "no
+install command" and the target retries until the update reaches it. The alternative —
+running step one and reporting success — is the one outcome that would lie.
 
 ---
 
@@ -1691,9 +1735,10 @@ comes online.
 > a numbered feature above. #4's entry has been brought up to date. #9 and #10 were the
 > first new items added to this board since #7; both are now built (#9 at 1.61.0, #10 at
 > 1.63.0), so **every numbered feature on this board is done** except the opportunistic
-> remainder of #3. What is outstanding is not a feature but a release: the agent halves of
-> #1, #2, #5, #6, #9 and #10 all ship in source and need a signed agent release before the
-> fleet gains any of them.
+> remainder of #3. #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0),
+> which is an extension of a done feature rather than a new board item. What is outstanding
+> is not a feature but a release: the agent halves of #1, #2, #5, #6, #9 and #10 all ship in
+> source and need a signed agent release before the fleet gains any of them.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full

@@ -26,6 +26,20 @@ public static class WingetLocator
     private static string? _cached;
     private static readonly object Gate = new();
 
+    /// <summary>What to tell an operator when Find() returns null.
+    ///
+    /// Held here rather than written at each call site because it is the same three facts
+    /// every time, and the Windows Server one is the least obvious: Server ships no Store
+    /// and no App Installer, so winget there is not "missing", it was never going to be
+    /// present, and no amount of installing it by hand is the answer.</summary>
+    public const string NotFoundMessage =
+        "winget (App Installer) was not found on this machine. On Windows Server this is " +
+        "expected -- there is no Store and no App Installer -- so use an upload or url " +
+        "payload for this package instead. On Windows 10/11, install 'App Installer' from " +
+        "the Microsoft Store. (Note that typing 'winget' into a SYSTEM shell always fails " +
+        "even where winget works, because the alias is per-user; that is not evidence " +
+        "either way.)";
+
     /// <summary>Full path to winget.exe, or null if the App Installer is not present.</summary>
     public static string? Find()
     {

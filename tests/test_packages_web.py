@@ -140,8 +140,15 @@ def main():
         check("the list carries retry defaults",
               listing["defaults"]["max_attempts"] == 3)
 
+        # The form renders the step palette from these, exactly like the detection kinds.
+        check("the list is self-describing about step kinds",
+              [k["name"] for k in listing["step_kinds"]] == list(packages.STEP_KINDS))
+        check("every step kind arrives with text to show",
+              all(k["label"] and k["description"] for k in listing["step_kinds"]))
+
         r = c.put(f"/api/packages/{package_id}", json={"version": "25.00"})
         check("update 200", r.status_code == 200 and r.get_json()["version"] == "25.00")
+
         check("unknown package 404", c.get("/api/packages/nope").status_code == 404)
         check("updating an unknown package 404",
               c.put("/api/packages/nope", json={"version": "1"}).status_code == 404)
@@ -154,6 +161,37 @@ def main():
         check("form-encoded package create rejected", r.status_code == 400)
         check("form-encoded create wrote nothing",
               len(packages.list_packages(db_path)) == 1)
+
+        print("\n== Multi-step packages ==")
+        r = c.post("/api/packages", json={
+            "name": "Dock drivers",
+            "sources": [{"name": "pack", "kind": "url",
+                         "ref": "https://downloads.example.com/dock.zip"}],
+            "steps": [{"kind": "extract", "archive": "{pack}", "save_as": "unpacked"},
+                      {"kind": "pnputil", "path": "{unpacked}"}],
+            "detection": {"kind": "none"},
+        })
+        check("a step-based package is created", r.status_code == 201)
+        step_pkg = r.get_json()
+        check("the steps come back in order",
+              [s["kind"] for s in step_pkg["steps"]] == ["extract", "pnputil"])
+        check("the payload keeps its slot name", step_pkg["sources"][0]["name"] == "pack")
+
+        r = c.post("/api/packages", json={
+            "name": "Broken steps",
+            "sources": [{"name": "pack", "kind": "url", "ref": "https://x/a.zip"}],
+            "steps": [{"kind": "pnputil", "path": "{nowhere}"}],
+        })
+        check("a step naming an unknown variable is a 400 that says which one",
+              r.status_code == 400 and "nowhere" in r.get_json()["error"])
+        r = c.post("/api/packages", json={
+            "name": "Bad kind",
+            "sources": [{"name": "pack", "kind": "url", "ref": "https://x/a.zip"}],
+            "steps": [{"kind": "reboot", "path": "{pack}"}],
+        })
+        check("an unknown step kind is refused", r.status_code == 400)
+        check("neither refused package was written",
+              len(packages.list_packages(db_path)) == 2)
 
         print("\n== Deployments: scope enforcement ==")
         r = c.post("/api/deployments", json={"package_id": package_id,

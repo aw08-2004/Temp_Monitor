@@ -32,6 +32,15 @@ Four ideas carry the design, and each exists because the naive version is wrong:
     is a kind the agent must implement, and an expression language would put arbitrary
     evaluation back on the endpoint.
 
+  * **A package is a list of STEPS, and one command line is just the short list.** Real
+    software rarely installs in one call: a driver pack is download, unpack, `pnputil`.
+    Expressing that as a single chained command line hides which part failed and mixes
+    three programs' output into one blob. So `packages.steps_json` holds an ordered list,
+    each step carrying its own timeout and success codes, and `package_sources` holds
+    NAMED payloads that steps refer to by name. A package with no steps is the original
+    one-command recipe, still stored and still dispatched exactly as it was -- that is what
+    lets an agent that predates this keep running every package written before it.
+
   * **Scheduling layers on the existing command queue, it does not replace it.** A
     deployment is a set of per-machine target rows; the scheduler tick turns an eligible
     target into an ordinary `deploy_package` command with the usual TTL, then reads that
@@ -75,6 +84,75 @@ FILE_SOURCE_KINDS = frozenset({SOURCE_UPLOAD, SOURCE_URL, SOURCE_UNC})
 # installer and then never references it is always a mistake, never an intent, so
 # validation refuses it rather than shipping a deploy that silently no-ops.
 FILE_PLACEHOLDER = "{file}"
+
+# ================================
+# STEPS
+# ================================
+# A package may carry an ordered list of STEPS instead of one command line. The motivating
+# shape is a driver pack: download a zip, unpack it, hand the directory to pnputil. Doing
+# that with the single-command recipe means shelling out to a one-liner that chains three
+# things with `&&`, where a failure in the middle is invisible and the operator's only
+# record is a wall of mixed output.
+#
+# Five kinds, and the same discipline as the detection grammar: every kind here is code the
+# C# agent must implement and keep working, so the list is short on purpose and there is no
+# expression language. `powershell` is the deliberate escape hatch -- copying a file,
+# poking the registry, restarting a service -- so the other four can stay narrow instead of
+# growing options to cover every adjacent case.
+STEP_RUN = "run"                # an executable with arguments
+STEP_POWERSHELL = "powershell"  # an inline script, the general-purpose escape hatch
+STEP_WINGET = "winget"          # winget install <id>
+STEP_EXTRACT = "extract"        # unpack a .zip into a directory
+STEP_PNPUTIL = "pnputil"        # stage/install driver packages
+STEP_KINDS = (STEP_RUN, STEP_POWERSHELL, STEP_WINGET, STEP_EXTRACT, STEP_PNPUTIL)
+
+# Labels/descriptions live in the catalogs under `packages.step.<kind>.<label|description>`,
+# exactly like DETECTION_TEXT_KEY -- so the step palette in the editor is served by the API
+# in the caller's language, and a kind added without catalog entries fails tests/test_i18n.py
+# rather than captioning a button with its own key.
+STEP_TEXT_KEY = "packages.step"
+
+# pnputil's exit codes are their own dialect. 0 is success and 3010 is the usual "reboot
+# required", but a driver pack that installed cleanly also routinely reports 259
+# (ERROR_NO_MORE_ITEMS) once it has walked the last INF. Treating that as failure paints a
+# perfectly good driver rollout red on most of a fleet -- the same trap as 3010, one layer
+# down -- so it is in the default set, and the editor says so rather than hiding it here.
+DEFAULT_PNPUTIL_EXIT_CODES = (0, 259, 3010)
+
+# Payload slots. Steps refer to payloads by NAME, so a package can carry more than one file
+# (a driver zip and a config, say) and each step says which one it means.
+DEFAULT_SOURCE_NAME = "payload"
+
+# The working directory the agent creates for one attempt, and deletes afterward. Bound as
+# a variable so a step can put things there without hardcoding a path.
+WORK_VAR = "work"
+
+# Every step-based package binds `{file}` to its single payload when it has exactly one.
+# Purely for continuity: `{file}` is what every existing package and every operator already
+# types, and having it keep working is what makes adding a step to an existing package a
+# one-click change rather than a rewrite.
+LEGACY_FILE_VAR = "file"
+
+# What counts as a variable inside `{...}`. Narrow ON PURPOSE: msiexec command lines are
+# full of literal product codes like {90160000-008C-0000-1000-0000000FF1CE}, and a rule
+# that treated every brace pair as a variable would reject them -- or worse, substitute
+# them. Hyphens and uppercase are not in this grammar, so a GUID is never mistaken for a
+# variable, and an unknown lowercase {word} is a typo worth failing on.
+_VARIABLE_RE = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+# Which string fields of each kind are variable-substituted (and therefore validated for
+# unknown variables). `winget.id` is absent deliberately: a package id is a literal.
+_STEP_SUBSTITUTED = {
+    STEP_RUN: ("command", "args"),
+    STEP_POWERSHELL: ("script",),
+    STEP_WINGET: ("args",),
+    STEP_EXTRACT: ("archive", "dest"),
+    STEP_PNPUTIL: ("path",),
+}
+
+MAX_STEPS = 25
+MAX_SCRIPT_CHARS = 10000
 
 # Post-install detection. Three kinds plus an explicit opt-out, held to that deliberately:
 # each one is code the C# agent must implement and keep working across Windows versions.
@@ -173,6 +251,14 @@ def init_packages_db(db_path):
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_name "
             "ON packages(name COLLATE NOCASE)"
         )
+        # The ordered step list, as JSON. A table would buy nothing here: steps are always
+        # read and written as a whole, never queried across packages, and are snapshotted
+        # verbatim into the command params -- so a second table would add an ordering
+        # column and a join to store one document. NULL means "no steps": the original
+        # install_command recipe, which is still how most packages are written.
+        package_columns = {row["name"] for row in conn.execute("PRAGMA table_info(packages)")}
+        if "steps_json" not in package_columns:
+            conn.execute("ALTER TABLE packages ADD COLUMN steps_json TEXT")
         # The PAYLOAD. `sha256` is set for uploads (the content address of the stored
         # blob) and MAY be set for url/unc, where it is an integrity pin the agent
         # enforces after fetching. NULL for winget, which has its own trust chain.
@@ -190,12 +276,27 @@ def init_packages_db(db_path):
             )
             """
         )
-        # v1 is one source per package. The constraint is what makes that explicit rather
-        # than accidental; lifting it later (per-architecture payloads) is a one-line
-        # index change, not a data migration.
+        # `name` is the slot a step refers to. It arrived with steps: one command line only
+        # ever needed one payload, but "unpack the driver zip, then run the vendor's
+        # config tool from the other download" needs to say which file it means.
+        source_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(package_sources)")}
+        if "name" not in source_columns:
+            conn.execute("ALTER TABLE package_sources ADD COLUMN name TEXT")
+            # Existing rows are the one payload their package has, and every existing
+            # command line calls it {file} -- which is bound to the single source by name
+            # below. Naming them explicitly here (rather than tolerating NULL forever)
+            # keeps one code path for reading sources.
+            conn.execute("UPDATE package_sources SET name = ? WHERE name IS NULL",
+                         (DEFAULT_SOURCE_NAME,))
+        # The old index was UNIQUE(package_id) -- one payload per package, which the
+        # original docstring flagged as the seam extra payloads would land on. This is that
+        # change: uniqueness is now per SLOT. Dropped by name rather than left in place,
+        # because leaving it would silently refuse the second payload.
+        conn.execute("DROP INDEX IF EXISTS idx_package_sources_package")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_package_sources_package "
-            "ON package_sources(package_id)"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_package_sources_slot "
+            "ON package_sources(package_id, name)"
         )
         # Blob refcounting reads this -- see blob_is_referenced().
         conn.execute(
@@ -355,15 +456,37 @@ def validate_detection(rule):
     return normalized
 
 
-def validate_source(source):
+def validate_name(value, field):
+    """A variable-safe identifier: lowercase, starts with a letter, then letters, digits
+    and underscores.
+
+    Lowercase specifically, rather than case-insensitive-unique: `{Drivers}` and
+    `{drivers}` in two steps of the same package would otherwise be a bug an operator
+    could stare straight through. One spelling, no fold to get wrong.
+    """
+    name = _clean(value).lower()
+    if not _NAME_RE.match(name):
+        raise ValueError(
+            f"{field} must start with a letter and contain only lowercase letters, "
+            f"digits and underscores (up to 32 characters)")
+    return name
+
+
+def validate_source(source, default_name=DEFAULT_SOURCE_NAME):
     """Normalize + validate a payload descriptor.
 
-    `source` is {kind, ref, sha256, file_name, file_size}. For an upload the caller has
-    already stored the blob and passes the hash the HUB computed -- this function never
+    `source` is {name, kind, ref, sha256, file_name, file_size}. For an upload the caller
+    has already stored the blob and passes the hash the HUB computed -- this function never
     treats a client-supplied digest as authoritative for an upload, it just checks shape.
     """
     if not isinstance(source, dict):
         raise ValueError("source must be an object")
+    name = validate_name(source.get("name") or default_name, "a payload name")
+    if name == WORK_VAR:
+        # {work} is the attempt's own directory, bound by the agent. A payload claiming
+        # that name would shadow it, and every step referring to {work} would silently
+        # mean the file instead of the folder.
+        raise ValueError(f"{WORK_VAR!r} is reserved -- it is the working directory")
     kind = _clean(source.get("kind"))
     if kind not in SOURCE_KINDS:
         raise ValueError(f"unknown source kind: {kind!r}")
@@ -389,6 +512,7 @@ def validate_source(source):
 
     size = source.get("file_size")
     return {
+        "name": name,
         "kind": kind,
         "ref": ref or None,
         "sha256": sha256,
@@ -397,12 +521,239 @@ def validate_source(source):
     }
 
 
-def _validate_recipe(install_command, install_args, source_kind, timeout_seconds):
-    """The command line and its timeout. Split out because create and update share it."""
+def validate_sources(sources):
+    """Normalize a package's whole payload list. Returns a list of source dicts.
+
+    Accepts a single source dict as well as a list, because a one-payload package is still
+    the common case and the console posts whichever it has. An empty list is legal -- a
+    package can be pure winget, or pure powershell, with nothing to download.
+    """
+    if sources is None:
+        return []
+    if isinstance(sources, dict):
+        sources = [sources]
+    if not isinstance(sources, (list, tuple)):
+        raise ValueError("sources must be a list of payload objects")
+
+    validated = []
+    seen = set()
+    for index, source in enumerate(sources):
+        # The default name is only unambiguous for the first slot; later ones must say what
+        # they are, because "payload2" chosen by the hub is a name no step author expects.
+        item = validate_source(
+            source, default_name=DEFAULT_SOURCE_NAME if index == 0 else "")
+        if item["name"] in seen:
+            raise ValueError(f"two payloads are both named {item['name']!r}")
+        seen.add(item["name"])
+        validated.append(item)
+    return validated
+
+
+def _referenced_variables(text):
+    """Every `{name}` in a string that is shaped like a variable. See _VARIABLE_RE for why
+    a literal MSI product code is deliberately not one."""
+    return set(_VARIABLE_RE.findall(str(text or "")))
+
+
+def _step_int(step, field, low, high, default=None):
+    value = step.get(field)
+    if value in (None, ""):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be an integer")
+    if not (low <= parsed <= high):
+        raise ValueError(f"{field} must be between {low} and {high}")
+    return parsed
+
+
+def validate_steps(steps, source_names=()):
+    """Normalize + validate an ordered step list against the payloads it may refer to.
+
+    Returns [] for a package with no steps -- the original single-command recipe, which
+    every caller still handles.
+
+    Two properties are worth more than the field checking:
+
+      * **Every `{variable}` must already be bound when the step runs.** Payload names are
+        bound before step 1; a step that produces a path (`extract`) binds its `save_as`
+        for the steps AFTER it. So a typo, or a step ordered before the thing it needs, is
+        an error at save time rather than a path called literally "{drivers}" appearing in
+        an installer's arguments on 200 machines at 2am.
+      * **Unknown keys are dropped**, exactly as in validate_detection: these objects are
+        handed to the agent and executed there, so preserving arbitrary fields would make
+        the effective grammar whatever the agent happens to read.
+    """
+    if steps is None or steps == "":
+        return []
+    if isinstance(steps, str):
+        try:
+            steps = json.loads(steps)
+        except (TypeError, ValueError):
+            raise ValueError("steps must be a JSON array")
+    if not isinstance(steps, (list, tuple)):
+        raise ValueError("steps must be a list")
+    if not steps:
+        return []
+    if len(steps) > MAX_STEPS:
+        raise ValueError(f"a package may have at most {MAX_STEPS} steps")
+
+    bound = {WORK_VAR} | set(source_names)
+    if len(source_names) == 1:
+        # One payload, so `{file}` is unambiguous -- and it is what every package written
+        # before steps existed already says. See LEGACY_FILE_VAR.
+        bound.add(LEGACY_FILE_VAR)
+
+    validated = []
+    for index, raw in enumerate(steps, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"step {index} must be an object")
+        kind = _clean(raw.get("kind"))
+        if kind not in STEP_KINDS:
+            raise ValueError(f"step {index}: unknown step kind {kind!r}")
+
+        step = {"kind": kind}
+        label = _clean(raw.get("name"), MAX_NAME_CHARS)
+        if label:
+            step["name"] = label
+
+        if kind == STEP_RUN:
+            command = _clean(raw.get("command"), MAX_COMMAND_CHARS)
+            if not command:
+                raise ValueError(f"step {index}: a run step needs a command")
+            step["command"] = command
+            args = _clean(raw.get("args"), MAX_COMMAND_CHARS)
+            if args:
+                step["args"] = args
+
+        elif kind == STEP_POWERSHELL:
+            script = str(raw.get("script") or "").strip()
+            if not script:
+                raise ValueError(f"step {index}: a PowerShell step needs a script")
+            if len(script) > MAX_SCRIPT_CHARS:
+                raise ValueError(
+                    f"step {index}: the script must be {MAX_SCRIPT_CHARS} characters or fewer")
+            step["script"] = script
+
+        elif kind == STEP_WINGET:
+            package_id = _clean(raw.get("id"), MAX_NAME_CHARS)
+            if not package_id:
+                raise ValueError(f"step {index}: a winget step needs a package id")
+            step["id"] = package_id
+            args = _clean(raw.get("args"), MAX_COMMAND_CHARS)
+            if args:
+                step["args"] = args
+
+        elif kind == STEP_EXTRACT:
+            archive = _clean(raw.get("archive"), MAX_COMMAND_CHARS)
+            if not archive:
+                raise ValueError(
+                    f"step {index}: an extract step needs the archive to unpack, "
+                    f"e.g. {{{source_names[0] if source_names else DEFAULT_SOURCE_NAME}}}")
+            step["archive"] = archive
+            dest = _clean(raw.get("dest"), MAX_COMMAND_CHARS)
+            if dest:
+                step["dest"] = dest
+
+        else:  # STEP_PNPUTIL
+            path = _clean(raw.get("path"), MAX_COMMAND_CHARS)
+            if not path:
+                raise ValueError(
+                    f"step {index}: a pnputil step needs the folder or .inf to install")
+            step["path"] = path
+            # Driver packs nest by model and chipset far more often than not, so recursing
+            # is the default and turning it off is the deliberate act.
+            step["subdirs"] = bool(raw.get("subdirs", True))
+
+        # ---- shared options ----
+        timeout = _step_int(raw, "timeout_seconds", 30, 24 * 3600)
+        if timeout is not None:
+            step["timeout_seconds"] = timeout
+        if raw.get("success_exit_codes") not in (None, ""):
+            step["success_exit_codes"] = validate_exit_codes(raw["success_exit_codes"])
+        elif kind == STEP_PNPUTIL:
+            # Resolved HERE rather than defaulted in the agent, so the editor can show the
+            # operator the set their driver step will actually be judged by. See
+            # DEFAULT_PNPUTIL_EXIT_CODES for why 259 is in it.
+            step["success_exit_codes"] = list(DEFAULT_PNPUTIL_EXIT_CODES)
+        if raw.get("continue_on_error"):
+            step["continue_on_error"] = True
+
+        # ---- variables ----
+        unknown = set()
+        for field in _STEP_SUBSTITUTED[kind]:
+            unknown |= _referenced_variables(step.get(field)) - bound
+        if unknown:
+            raise ValueError(
+                f"step {index} refers to {'{'}{sorted(unknown)[0]}{'}'}, which nothing "
+                f"before it provides. Available here: "
+                f"{', '.join('{' + name + '}' for name in sorted(bound))}")
+
+        if kind == STEP_EXTRACT:
+            # The unpacked directory is the whole point of the step, so it always binds a
+            # name. Auto-numbered when the operator does not care, which is the common case.
+            save_as = raw.get("save_as")
+            if save_as in (None, ""):
+                save_as = "extracted"
+                suffix = 2
+                while save_as in bound:
+                    save_as = f"extracted{suffix}"
+                    suffix += 1
+            else:
+                save_as = validate_name(save_as, "save_as")
+            if save_as in bound:
+                raise ValueError(
+                    f"step {index}: {{{save_as}}} is already taken by an earlier step or a "
+                    f"payload -- give this one a different name")
+            step["save_as"] = save_as
+            bound.add(save_as)
+
+        validated.append(step)
+    return validated
+
+
+def _validate_recipe(install_command, install_args, sources, steps, timeout_seconds):
+    """The command line (or the step list) and the timeout. Create and update share it.
+
+    A package is written one of two ways and never both: an ordered `steps` list, or the
+    original single `install_command`. Accepting both would leave the question of which one
+    runs to be answered by whichever agent picked the command up.
+    """
     command = _clean(install_command, MAX_COMMAND_CHARS)
     args = _clean(install_args, MAX_COMMAND_CHARS)
 
-    if source_kind == SOURCE_WINGET:
+    if steps:
+        if command or args:
+            raise ValueError(
+                "a package with steps has no top-level install command -- the steps are "
+                "the recipe; move that command line into a run step")
+        winget_sources = [s["name"] for s in sources if s["kind"] == SOURCE_WINGET]
+        if winget_sources:
+            # A winget "payload" is not a file, so there is nothing for a step to point at.
+            # In the step grammar winget is an ACTION, which is also the only shape that
+            # lets a package install two winget apps, or one alongside an MSI.
+            raise ValueError(
+                f"payload {winget_sources[0]!r} is a winget reference, which a step-based "
+                f"package cannot use as a payload -- add a winget step instead")
+        # Same rule as {file} below, generalized: a payload the hub downloads onto every
+        # target and no step ever opens is always a mistake, never an intent.
+        used = set()
+        for step in steps:
+            for field in _STEP_SUBSTITUTED[step["kind"]]:
+                used |= _referenced_variables(step.get(field))
+        if len(sources) == 1 and LEGACY_FILE_VAR in used:
+            used.add(sources[0]["name"])
+        unused = [s["name"] for s in sources if s["name"] not in used]
+        if unused:
+            raise ValueError(
+                f"no step uses the payload {{{unused[0]}}} -- it would be downloaded to "
+                f"every machine and never opened")
+
+    elif not sources:
+        raise ValueError("a package needs a payload, or a list of steps")
+
+    elif sources[0]["kind"] == SOURCE_WINGET:
         # The agent builds the winget command line from the package id; a custom command
         # here would silently win over it, so refuse rather than quietly ignore. Extra
         # args ARE allowed -- they're appended to winget's own.
@@ -417,6 +768,12 @@ def _validate_recipe(install_command, install_args, source_kind, timeout_seconds
             raise ValueError(
                 f"the command or arguments must reference the payload with "
                 f"{FILE_PLACEHOLDER} -- otherwise the downloaded file is never used")
+
+    if not steps and len(sources) > 1:
+        # One command line can only name one file. Extra payloads would be downloaded and
+        # unreachable, so this is the same "never opened" mistake as above.
+        raise ValueError(
+            "a package with more than one payload needs steps to say what to do with them")
 
     try:
         timeout = int(timeout_seconds)
@@ -532,28 +889,48 @@ def delete_blob_if_orphaned(db_path, root, sha256, exclude_source_id=None):
 # ================================
 # PACKAGES
 # ================================
-def _package_row(row, source_row=None):
+def _package_row(row, source_rows=()):
     pkg = dict(row)
     pkg["success_exit_codes"] = json.loads(pkg.pop("success_exit_codes"))
     pkg["detection"] = json.loads(pkg.pop("detection_json"))
-    pkg["source"] = None
-    if source_row is not None:
+    pkg["steps"] = json.loads(pkg.pop("steps_json", None) or "[]")
+    sources = []
+    for source_row in source_rows:
         source = dict(source_row)
         source.pop("package_id", None)
-        pkg["source"] = source
+        # A row written before payloads had names is that package's single payload.
+        source["name"] = source.get("name") or DEFAULT_SOURCE_NAME
+        sources.append(source)
+    pkg["sources"] = sources
+    # `source` (singular) is the first payload, kept because every existing caller -- the
+    # console's package list, build_command_params' legacy projection, the blob collector --
+    # was written when a package had exactly one. It is the same object, not a copy of it.
+    pkg["source"] = sources[0] if sources else None
     return pkg
 
 
+def _sources_by_package(conn, package_ids=None):
+    """Payload rows grouped by package, in slot order."""
+    sql = "SELECT * FROM package_sources"
+    params = []
+    if package_ids is not None:
+        if not package_ids:
+            return {}
+        sql += f" WHERE package_id IN ({','.join('?' for _ in package_ids)})"
+        params = list(package_ids)
+    grouped = {}
+    for row in conn.execute(sql + " ORDER BY created_at, rowid", params).fetchall():
+        grouped.setdefault(row["package_id"], []).append(row)
+    return grouped
+
+
 def list_packages(db_path):
-    """Every package with its payload, newest first. Small table by nature -- a fleet has
+    """Every package with its payloads, newest first. Small table by nature -- a fleet has
     tens of packages, not thousands -- so there is no pagination here on purpose."""
     with get_conn(db_path) as conn:
         rows = conn.execute("SELECT * FROM packages ORDER BY name COLLATE NOCASE").fetchall()
-        sources = {
-            r["package_id"]: r
-            for r in conn.execute("SELECT * FROM package_sources").fetchall()
-        }
-    return [_package_row(row, sources.get(row["id"])) for row in rows]
+        sources = _sources_by_package(conn)
+    return [_package_row(row, sources.get(row["id"], ())) for row in rows]
 
 
 def get_package(db_path, package_id):
@@ -562,16 +939,18 @@ def get_package(db_path, package_id):
             "SELECT * FROM packages WHERE id = ?", (str(package_id),)).fetchone()
         if row is None:
             return None
-        source = conn.execute(
-            "SELECT * FROM package_sources WHERE package_id = ?", (str(package_id),)
-        ).fetchone()
-    return _package_row(row, source)
+        sources = _sources_by_package(conn, [str(package_id)])
+    return _package_row(row, sources.get(str(package_id), ()))
 
 
-def create_package(db_path, *, name, source, install_command=None, install_args=None,
+def create_package(db_path, *, name, source=None, sources=None, steps=None,
+                   install_command=None, install_args=None,
                    description=None, version=None, timeout_seconds=900,
                    success_exit_codes=None, detection=None, actor="system"):
     """Define a package. Returns its id.
+
+    `source` (one payload) and `sources` (a list) are the same argument at different
+    arities; `source` is kept because every caller that predates steps passes it.
 
     Everything is validated before anything is written, so a rejected definition never
     leaves a half-created package (or, worse, a source row pointing at a blob nobody
@@ -580,9 +959,10 @@ def create_package(db_path, *, name, source, install_command=None, install_args=
     name = _clean(name, MAX_NAME_CHARS)
     if not name:
         raise ValueError("a package name is required")
-    source = validate_source(source)
+    payloads = validate_sources(sources if sources is not None else source)
+    plan = validate_steps(steps, [s["name"] for s in payloads])
     command, args, timeout = _validate_recipe(
-        install_command, install_args, source["kind"], timeout_seconds)
+        install_command, install_args, payloads, plan, timeout_seconds)
     codes = validate_exit_codes(success_exit_codes)
     rule = validate_detection(detection)
 
@@ -593,44 +973,52 @@ def create_package(db_path, *, name, source, install_command=None, install_args=
             conn.execute(
                 "INSERT INTO packages(id, name, description, version, install_command, "
                 "install_args, timeout_seconds, success_exit_codes, detection_json, "
-                "created_at, updated_at, created_by, updated_by) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "steps_json, created_at, updated_at, created_by, updated_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (package_id, name, _clean(description, 2000) or None,
                  _clean(version, 60) or None, command, args or None, timeout,
                  json.dumps(codes), json.dumps(rule, sort_keys=True),
+                 json.dumps(plan) if plan else None,
                  now, now, str(actor), str(actor)),
             )
-            _write_source(conn, package_id, source, now)
+            _write_sources(conn, package_id, payloads, now)
     except sqlite3.IntegrityError:
         raise ValueError(f"a package named {name!r} already exists")
 
     fleet.audit(db_path, actor=actor, action="create_package",
                 level=fleet.LEVEL_NOTICE, target=name,
-                detail={"package_id": package_id, "source": source["kind"]})
+                detail={"package_id": package_id,
+                        "sources": [s["kind"] for s in payloads],
+                        "steps": [s["kind"] for s in plan]})
     return package_id
 
 
-def _write_source(conn, package_id, source, now):
-    """Replace a package's payload row. One row per package in v1, so this deletes
-    before inserting rather than relying on an upsert -- the kind can change (an upload
-    becoming a winget reference), and a partial update would leave a stale sha256."""
+def _write_sources(conn, package_id, payloads, now):
+    """Replace a package's payload rows wholesale.
+
+    Delete-then-insert rather than an upsert per slot: a slot's KIND can change (an upload
+    becoming a URL reference), slots can be removed entirely, and a partial update would
+    leave a stale sha256 behind pointing at a blob the recipe no longer uses.
+    """
     conn.execute("DELETE FROM package_sources WHERE package_id = ?", (package_id,))
-    conn.execute(
-        "INSERT INTO package_sources(id, package_id, kind, ref, sha256, file_name, "
-        "file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (uuid.uuid4().hex, package_id, source["kind"], source["ref"], source["sha256"],
-         source["file_name"], source["file_size"], now),
+    conn.executemany(
+        "INSERT INTO package_sources(id, package_id, name, kind, ref, sha256, file_name, "
+        "file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(uuid.uuid4().hex, package_id, source["name"], source["kind"], source["ref"],
+          source["sha256"], source["file_name"], source["file_size"], now)
+         for source in payloads],
     )
 
 
-def update_package(db_path, package_id, *, name=None, source=None, install_command=None,
+def update_package(db_path, package_id, *, name=None, source=None, sources=None,
+                   steps=None, install_command=None,
                    install_args=None, description=None, version=None,
                    timeout_seconds=None, success_exit_codes=None, detection=None,
                    actor="system", blob_root_dir=None):
     """Patch a package. Every argument is optional; None means "leave alone".
 
-    When the payload changes, the OLD blob is offered to the orphan collector -- but only
-    after the new row is committed, so a crash between the two loses disk space rather
+    When a payload changes, the OLD blob is offered to the orphan collector -- but only
+    after the new rows are committed, so a crash between the two loses disk space rather
     than the file a package still points at. Pass `blob_root_dir` to enable that; without
     it the old blob is simply left on disk (which is what the unit tests do).
 
@@ -642,17 +1030,25 @@ def update_package(db_path, package_id, *, name=None, source=None, install_comma
     if existing is None:
         raise KeyError("unknown package")
 
-    old_source = existing.get("source") or {}
-    new_source = validate_source(source) if source is not None else None
-    source_kind = (new_source or old_source).get("kind")
+    old_sources = existing.get("sources") or []
+    incoming = sources if sources is not None else source
+    new_sources = validate_sources(incoming) if incoming is not None else None
+    payloads = new_sources if new_sources is not None else old_sources
 
-    # The command line and the source kind are validated together (winget takes no
-    # command; a file-backed package must reference {file}), so a change to either
-    # re-checks the pair rather than just the field that moved.
+    # Steps and payloads are validated together (a step may only name a payload that
+    # exists), and so are the steps and the command line (a package has one or the other).
+    # So a change to any of them re-checks the whole recipe rather than the field that
+    # moved -- otherwise deleting a payload would leave the step that used it dangling.
+    plan = (existing["steps"] if steps is None
+            else validate_steps(steps, [s["name"] for s in payloads]))
+    if steps is None and new_sources is not None:
+        # Re-validate the kept steps against the new payload set for exactly that reason.
+        plan = validate_steps(plan, [s["name"] for s in payloads])
+
     command = existing["install_command"] if install_command is None else install_command
     args = existing["install_args"] if install_args is None else install_args
     timeout = existing["timeout_seconds"] if timeout_seconds is None else timeout_seconds
-    command, args, timeout = _validate_recipe(command, args, source_kind, timeout)
+    command, args, timeout = _validate_recipe(command, args, payloads, plan, timeout)
 
     codes = (existing["success_exit_codes"] if success_exit_codes is None
              else validate_exit_codes(success_exit_codes))
@@ -668,23 +1064,26 @@ def update_package(db_path, package_id, *, name=None, source=None, install_comma
             conn.execute(
                 "UPDATE packages SET name = ?, description = ?, version = ?, "
                 "install_command = ?, install_args = ?, timeout_seconds = ?, "
-                "success_exit_codes = ?, detection_json = ?, updated_at = ?, "
-                "updated_by = ? WHERE id = ?",
+                "success_exit_codes = ?, detection_json = ?, steps_json = ?, "
+                "updated_at = ?, updated_by = ? WHERE id = ?",
                 (new_name,
                  existing["description"] if description is None
                  else (_clean(description, 2000) or None),
                  existing["version"] if version is None else (_clean(version, 60) or None),
                  command, args or None, timeout, json.dumps(codes),
-                 json.dumps(rule, sort_keys=True), now, str(actor), str(package_id)),
+                 json.dumps(rule, sort_keys=True), json.dumps(plan) if plan else None,
+                 now, str(actor), str(package_id)),
             )
-            if new_source is not None:
-                _write_source(conn, str(package_id), new_source, now)
+            if new_sources is not None:
+                _write_sources(conn, str(package_id), new_sources, now)
     except sqlite3.IntegrityError:
         raise ValueError(f"a package named {new_name!r} already exists")
 
-    if new_source is not None and blob_root_dir and old_source.get("sha256"):
-        if old_source.get("sha256") != new_source.get("sha256"):
-            delete_blob_if_orphaned(db_path, blob_root_dir, old_source["sha256"])
+    if new_sources is not None and blob_root_dir:
+        kept = {s.get("sha256") for s in new_sources}
+        for old in old_sources:
+            if old.get("sha256") and old["sha256"] not in kept:
+                delete_blob_if_orphaned(db_path, blob_root_dir, old["sha256"])
 
     fleet.audit(db_path, actor=actor, action="update_package",
                 level=fleet.LEVEL_NOTICE, target=new_name,
@@ -708,9 +1107,10 @@ def delete_package(db_path, package_id, *, actor="system", blob_root_dir=None):
         conn.execute("DELETE FROM package_sources WHERE package_id = ?", (str(package_id),))
         conn.execute("DELETE FROM packages WHERE id = ?", (str(package_id),))
 
-    source = existing.get("source") or {}
-    if blob_root_dir and source.get("sha256"):
-        delete_blob_if_orphaned(db_path, blob_root_dir, source["sha256"])
+    if blob_root_dir:
+        for source in existing.get("sources") or []:
+            if source.get("sha256"):
+                delete_blob_if_orphaned(db_path, blob_root_dir, source["sha256"])
 
     fleet.audit(db_path, actor=actor, action="delete_package",
                 level=fleet.LEVEL_NOTICE, target=existing["name"],
@@ -951,21 +1351,10 @@ def retry_deployment_failures(db_path, deployment_id, actor="system"):
 # ================================
 # COMMAND PAYLOAD
 # ================================
-def build_command_params(package, deployment, hub_url=""):
-    """The params the agent receives for one `deploy_package` command.
-
-    A full SNAPSHOT of the recipe, not a pointer to it. The agent could in principle be
-    handed a package id and told to fetch the definition, but then editing a package
-    while a deployment is in flight would silently change what half the fleet installs.
-    Snapshotting means a target always runs the recipe that was current when its attempt
-    was dispatched, and the audit log records exactly that.
-
-    `download_url` is relative when no hub URL is configured -- the agent resolves it
-    against its own configured hub base, which is the address it already trusts.
-    """
-    source = package.get("source") or {}
+def _wire_source(source, hub_url=""):
+    """One payload as the agent receives it."""
     kind = source.get("kind")
-    payload = {"kind": kind}
+    payload = {"name": source.get("name") or DEFAULT_SOURCE_NAME, "kind": kind}
     if kind == SOURCE_UPLOAD:
         payload["sha256"] = source.get("sha256")
         payload["file_name"] = source.get("file_name")
@@ -979,15 +1368,55 @@ def build_command_params(package, deployment, hub_url=""):
         # Optional for these kinds; when present the agent MUST enforce it.
         if source.get("sha256"):
             payload["sha256"] = source["sha256"]
+    return payload
+
+
+def build_command_params(package, deployment, hub_url=""):
+    """The params the agent receives for one `deploy_package` command.
+
+    A full SNAPSHOT of the recipe, not a pointer to it. The agent could in principle be
+    handed a package id and told to fetch the definition, but then editing a package
+    while a deployment is in flight would silently change what half the fleet installs.
+    Snapshotting means a target always runs the recipe that was current when its attempt
+    was dispatched, and the audit log records exactly that.
+
+    `download_url` is relative when no hub URL is configured -- the agent resolves it
+    against its own configured hub base, which is the address it already trusts.
+
+    THE LEGACY PROJECTION is the interesting part. Agents older than steps read `source`,
+    `install_command` and `install_args` and know nothing about `steps` or `sources`. So:
+
+      * A package with NO steps is emitted exactly as it always was, and an old agent runs
+        it correctly. Every package written before this feature keeps working on every
+        agent in the field, which is the whole point -- the fleet updates itself in about
+        fifteen minutes, but not all at once and not while the operator is watching.
+      * A package WITH steps has no honest single-command projection, so it deliberately
+        emits none: `install_command` is empty and `source.kind` is "multi", which no old
+        agent resolves. Such an agent fails the deploy with "no install command" and the
+        target retries until the update reaches it. Failing closed is the requirement --
+        the alternative is an old agent silently running step 1 and reporting success.
+    """
+    sources = package.get("sources") or ([package["source"]] if package.get("source") else [])
+    steps = package.get("steps") or []
+
+    if steps:
+        legacy_source = {"kind": "multi", "count": len(sources)}
+        legacy_command, legacy_args = "", ""
+    else:
+        legacy_source = _wire_source(sources[0], hub_url) if sources else {"kind": "none"}
+        legacy_command = package["install_command"] or ""
+        legacy_args = package["install_args"] or ""
 
     return {
         "deployment_id": deployment["id"],
         "package_id": package["id"],
         "package_name": package["name"],
         "package_version": package.get("version"),
-        "source": payload,
-        "install_command": package["install_command"] or "",
-        "install_args": package["install_args"] or "",
+        "source": legacy_source,
+        "sources": [_wire_source(s, hub_url) for s in sources],
+        "steps": steps,
+        "install_command": legacy_command,
+        "install_args": legacy_args,
         "timeout_seconds": package["timeout_seconds"],
         "success_exit_codes": package["success_exit_codes"],
         "detection": package["detection"],
