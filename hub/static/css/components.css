@@ -197,8 +197,22 @@
     border-bottom: 1px solid var(--card-border);
     background: var(--surface);
     flex-wrap: wrap;
-    /* Anchors the mobile overflow panel, which hangs off the bottom edge. */
-    position: relative;
+    /* Stays at the top of the viewport while the page scrolls, like the sidebar beside
+       it -- the version badges, the connection pill and Sign out are chrome you need at
+       any scroll depth, and on a long machine page they were four screens up.
+
+       sticky, not fixed: fixed would take the bar out of flow and leave the content to
+       slide up underneath it, needing a matching padding on .app-shell__content that
+       would then have to track the bar's own height. It also still anchors the mobile
+       overflow panel, which hangs off the bottom edge -- sticky establishes a containing
+       block for `position: absolute` exactly as `relative` did.
+
+       z-index sits between page content and the mobile nav: the drawer (60) and its
+       scrim (50) must cover the bar, and everything in the content column must pass
+       under it. */
+    position: sticky;
+    top: 0;
+    z-index: 45;
 }
 
 .topbar__title {

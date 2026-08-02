@@ -9,6 +9,7 @@
     "history": "Verlauf",
     "inventory": "Anlageninventar",
     "alerts": "Warnungen",
+    "remote": "Remote",
     "audit_log": "Auditprotokoll",
     "packages": "Pakete",
     "backups": "Sicherungen",
@@ -1503,7 +1504,10 @@
       "vdd_queued": "Eingereiht. Verfolge das Befehlsergebnis im Reiter Befehle; die Computerseite aktualisiert sich, sobald der Agent zurückmeldet.",
       "vdd_queue_failed": "Einreihen nicht möglich: {error}",
       "fullscreen_refused": "Vollbild abgelehnt: {error}",
-      "view_only_note": "Nur ansehen: Eingaben aus diesem Browser werden unterdrückt. Das ist ein Versehensschutz, keine Berechtigung – es hindert niemand anderen daran, den Computer zu steuern."
+      "view_only_note": "Nur ansehen: Eingaben aus diesem Browser werden unterdrückt. Das ist ein Versehensschutz, keine Berechtigung – es hindert niemand anderen daran, den Computer zu steuern.",
+      "failed": "Fehlgeschlagen",
+      "session_ended": "Sitzung beendet.",
+      "session_expired": "Sitzung abgelaufen."
     },
     "firmware": {
       "title": "Firmware-Einstellungen",
@@ -1762,6 +1766,24 @@
         "detail": "Detail"
       }
     }
+  },
+  "remote": {
+    "title": "Remote",
+    "help": "Öffnen Sie einen Bildschirm für jeden PC, den Sie brauchen. Jeder geöffnete Bildschirm bleibt verbunden, während Sie in einem anderen Tab arbeiten — so können Sie einen Rechner beobachten und einen anderen bedienen. Bildschirme enden, wenn Sie sie schließen oder diese Seite verlassen.",
+    "open_screens": "Geöffnete Bildschirme",
+    "add_screen": "Bildschirm öffnen",
+    "add_screen_title": "Bildschirm für einen weiteren PC öffnen",
+    "no_screens": "Keine Bildschirme geöffnet. Mit + einen öffnen.",
+    "max_screens": "Maximal {max} Bildschirme gleichzeitig — schließen Sie einen, um einen anderen zu öffnen.",
+    "tab_title": "Remote-Bildschirm für {machine}",
+    "close_screen": "{machine} schließen",
+    "close_screen_title": "Sitzung beenden und Bildschirm schließen",
+    "picker_title": "Bildschirm öffnen",
+    "picker_machine": "PC",
+    "picker_open": "Öffnen",
+    "picker_failed": "Maschinenliste konnte nicht geladen werden: {error}",
+    "picker_all_open": "Jeder erreichbare PC ist bereits geöffnet.",
+    "picker_none": "Noch keine Maschinen haben sich bei diesem Hub gemeldet."
   },
   "firmware": {
     "heading": "Firmware-Updates",

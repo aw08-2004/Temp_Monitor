@@ -31,6 +31,12 @@
            presentation only -- every route is gated server-side regardless (see
            permissions_web.Access) -- but a sidebar of links that all 403 is worse than
            no link at all. #}
+        {% if cap.REMOTE_CONTROL in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'remote_page' else '' }}" href="{{ url_for('remote_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 20h10"/><path d="M11 14v6"/><rect x="17" y="10" width="5" height="10" rx="1.5"/></svg>
+            {{ t('nav.remote') }}
+        </a>
+        {% endif %}
         {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" href="{{ url_for('audit.audit_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>

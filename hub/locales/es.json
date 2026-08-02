@@ -9,6 +9,7 @@
     "history": "Historial",
     "inventory": "Inventario de activos",
     "alerts": "Alertas",
+    "remote": "Remoto",
     "audit_log": "Registro de auditoría",
     "packages": "Paquetes",
     "backups": "Copias de seguridad",
@@ -1503,7 +1504,10 @@
       "vdd_queued": "En cola. Sigue el resultado del comando en la pestaña Comandos; la página del equipo se actualiza cuando el agente responde.",
       "vdd_queue_failed": "No se pudo poner en cola: {error}",
       "fullscreen_refused": "Pantalla completa rechazada: {error}",
-      "view_only_note": "Solo ver: se suprime la entrada desde este navegador. Es una protección contra accidentes, no un permiso: no impide que otra persona controle el equipo."
+      "view_only_note": "Solo ver: se suprime la entrada desde este navegador. Es una protección contra accidentes, no un permiso: no impide que otra persona controle el equipo.",
+      "failed": "Fallo",
+      "session_ended": "Sesión terminada.",
+      "session_expired": "Sesión caducada."
     },
     "firmware": {
       "title": "Ajustes de firmware",
@@ -1762,6 +1766,24 @@
         "detail": "Detalle"
       }
     }
+  },
+  "remote": {
+    "title": "Remoto",
+    "help": "Abra una pantalla para cada PC que necesite. Cada pantalla abierta sigue conectada mientras trabaja en otra pestaña, así que puede vigilar un equipo y manejar otro. Las pantallas terminan cuando las cierra o sale de esta página.",
+    "open_screens": "Pantallas abiertas",
+    "add_screen": "Abrir una pantalla",
+    "add_screen_title": "Abrir una pantalla para otro PC",
+    "no_screens": "No hay pantallas abiertas. Use + para abrir una.",
+    "max_screens": "El límite es de {max} pantallas a la vez: cierre una para abrir otra.",
+    "tab_title": "Pantalla remota de {machine}",
+    "close_screen": "Cerrar {machine}",
+    "close_screen_title": "Terminar la sesión y cerrar la pantalla",
+    "picker_title": "Abrir una pantalla",
+    "picker_machine": "PC",
+    "picker_open": "Abrir",
+    "picker_failed": "No se pudo cargar la lista de equipos: {error}",
+    "picker_all_open": "Todos los PC a su alcance ya están abiertos.",
+    "picker_none": "Ningún equipo se ha reportado todavía a este hub."
   },
   "firmware": {
     "heading": "Actualizaciones de firmware",

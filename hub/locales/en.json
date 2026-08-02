@@ -19,6 +19,7 @@
     "history": "History",
     "inventory": "Asset Inventory",
     "alerts": "Alerts",
+    "remote": "Remote",
     "audit_log": "Audit Log",
     "packages": "Packages",
     "backups": "Backups",
@@ -1607,7 +1608,10 @@
       "vdd_queued": "Queued. Watch the command result on the Commands tab; the machine page updates once the agent reports back.",
       "vdd_queue_failed": "Could not queue: {error}",
       "fullscreen_refused": "Fullscreen refused: {error}",
-      "view_only_note": "View only: input from this browser is suppressed. This is an accident guard, not a permission — it does not stop anyone else driving the machine."
+      "view_only_note": "View only: input from this browser is suppressed. This is an accident guard, not a permission — it does not stop anyone else driving the machine.",
+      "failed": "Failed",
+      "session_ended": "Session ended.",
+      "session_expired": "Session expired."
     },
     "firmware": {
       "title": "Firmware settings",
@@ -1870,6 +1874,24 @@
         "detail": "Detail"
       }
     }
+  },
+  "remote": {
+    "title": "Remote",
+    "help": "Open a screen for each PC you need. Every open screen stays connected while you work in another tab, so you can watch one machine and drive another. Screens end when you close them or leave this page.",
+    "open_screens": "Open screens",
+    "add_screen": "Open a screen",
+    "add_screen_title": "Open a screen for another PC",
+    "no_screens": "No screens open. Use + to open one.",
+    "max_screens": "{max} screens at once is the limit — close one to open another.",
+    "tab_title": "Remote screen for {machine}",
+    "close_screen": "Close {machine}",
+    "close_screen_title": "End this session and close the screen",
+    "picker_title": "Open a screen",
+    "picker_machine": "PC",
+    "picker_open": "Open",
+    "picker_failed": "Could not load the machine list: {error}",
+    "picker_all_open": "Every PC you can reach is already open.",
+    "picker_none": "No machines have reported to this hub yet."
   },
   "firmware": {
     "heading": "Firmware updates",

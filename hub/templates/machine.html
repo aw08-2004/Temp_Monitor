@@ -202,17 +202,17 @@
                    operator's sessions, not from anything this browser remembers, so a
                    console opened on another computer shows up here too -- see
                    fleet-pty.js:syncSessions. Empty in the markup; fleet-pty.js fills it. #}
-                <div id="terminal-tabs" class="pty-tabs" role="tablist"
+                <div id="terminal-tabs" class="screen-tabs" role="tablist"
                      aria-label="{{ t('machine.terminal.open_consoles') }}">
-                    <button id="terminal-add" type="button" class="pty-tabs__add"
+                    <button id="terminal-add" type="button" class="screen-tabs__add"
                             aria-label="{{ t('machine.terminal.add_console') }}"
                             title="{{ t('machine.terminal.add_console_title') }}">+</button>
                 </div>
                 {# xterm.js owns each screen it is given and measures it on open, so a screen
                    must have a real size before its terminal is built -- which is why
                    fleet-pty.js builds a console when its tab is first shown, not on load. #}
-                <div id="terminal-screens" class="pty-screens">
-                    <div id="terminal-empty" class="pty-empty" hidden>
+                <div id="terminal-screens" class="screen-stack">
+                    <div id="terminal-empty" class="screen-empty" hidden>
                         {{ t('machine.terminal.no_console') }}
                     </div>
                 </div>
@@ -245,124 +245,13 @@
     {% endif %}
 
     {% if cap.REMOTE_CONTROL in user_capabilities %}
-    {# Remote view/control (roadmap #2). remote.js wires the WebRTC viewer, the input control
-       (mouse/keyboard, Ctrl+Alt+Del), and the live quality controls.
-
-       The controls are split into two rows on purpose. Row 1 is what you choose BEFORE
-       connecting -- the Windows session to attach to, the codec, the encoder -- because those
-       are negotiated in the SDP or decide which encoder object exists, so changing them means a
-       new session. Row 2 is live: monitor, quality, view-only, fullscreen. #}
+    {# Remote view/control (roadmap #2). The viewer markup is a partial shared with the
+       Remote page, which clones the same thing once per open PC -- see the partial's own
+       comment. remote.js finds this one by its data-remote-viewer attribute and wires it to
+       THIS machine; there is exactly one here, because this page is about one PC. Several
+       at once, side by side in tabs, is what the Remote page is for. #}
     <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote" hidden>
-        <div class="card remote-card" id="remote-card">
-            <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.remote.title') }}</div>
-                <span class="status-pill status-pill--muted" id="remote-status"><span class="status-pill__dot"></span>{{ t('machine.remote.idle') }}</span>
-                <span class="status-pill status-pill--warn remote-badge" id="remote-desktop-badge" hidden>
-                    <span class="status-pill__dot"></span>{{ t('machine.remote.secure_desktop') }}</span>
-                <span class="status-pill status-pill--danger remote-badge" id="remote-headless-badge" hidden>
-                    <span class="status-pill__dot"></span>{{ t('machine.remote.no_display') }}</span>
-                <div class="terminal__head-actions">
-                    <button id="remote-cad" type="button" class="btn btn--ghost" disabled
-                            title="{{ t('machine.remote.cad_title') }}">{{ t('machine.remote.cad') }}</button>
-                    <button id="remote-start" type="button" class="btn btn--primary">{{ t('machine.remote.start') }}</button>
-                    <button id="remote-stop" type="button" class="btn btn--ghost" disabled>{{ t('machine.remote.stop') }}</button>
-                </div>
-            </div>
-
-            <div class="remote-toolbar" id="remote-toolbar-start">
-                <label class="remote-field">
-                    <span class="remote-field__label">{{ t('machine.remote.session') }}</span>
-                    <select id="remote-session" class="remote-field__control">
-                        <option value="auto">{{ t('machine.remote.session_auto') }}</option>
-                    </select>
-                </label>
-                <button id="remote-refresh-sessions" type="button" class="btn btn--ghost"
-                        title="{{ t('machine.remote.refresh_title') }}">{{ t('machine.remote.refresh') }}</button>
-                <label class="remote-field">
-                    <span class="remote-field__label">{{ t('machine.remote.codec') }}</span>
-                    {# H.264 is a standard's name, not prose, so it has no catalog entry. #}
-                    <select id="remote-codec" class="remote-field__control">
-                        <option value="h264">H.264</option>
-                        <option value="vp8">{{ t('machine.remote.codec_vp8') }}</option>
-                    </select>
-                </label>
-                <label class="remote-field">
-                    <span class="remote-field__label">{{ t('machine.remote.encoder') }}</span>
-                    <select id="remote-encoder" class="remote-field__control">
-                        <option value="auto">{{ t('machine.remote.encoder_auto') }}</option>
-                        <option value="hardware">{{ t('machine.remote.encoder_hardware') }}</option>
-                        <option value="software">{{ t('machine.remote.encoder_software') }}</option>
-                    </select>
-                </label>
-                <span class="remote-field__note">{{ t('machine.remote.before_connecting') }}</span>
-            </div>
-
-            <div class="remote-toolbar" id="remote-toolbar-live">
-                <label class="remote-field">
-                    <span class="remote-field__label">{{ t('machine.remote.monitor') }}</span>
-                    <select id="remote-monitor" class="remote-field__control">
-                        <option value="0">1</option>
-                    </select>
-                </label>
-                <label class="remote-field">
-                    <span class="remote-field__label">{{ t('machine.remote.quality') }}</span>
-                    <select id="remote-preset" class="remote-field__control">
-                        <option value="quality">{{ t('machine.remote.preset_quality') }}</option>
-                        <option value="balanced" selected>{{ t('machine.remote.preset_balanced') }}</option>
-                        <option value="speed">{{ t('machine.remote.preset_speed') }}</option>
-                        <option value="custom">{{ t('machine.remote.preset_custom') }}</option>
-                    </select>
-                </label>
-                <label class="remote-field remote-field--custom" hidden>
-                    <span class="remote-field__label">{{ t('machine.remote.fps') }}</span>
-                    <input id="remote-fps" class="remote-field__control remote-field__control--num"
-                           type="number" min="1" max="60" value="15">
-                </label>
-                <label class="remote-field remote-field--custom" hidden>
-                    <span class="remote-field__label">{{ t('machine.remote.kbps') }}</span>
-                    <input id="remote-bitrate" class="remote-field__control remote-field__control--num"
-                           type="number" min="100" max="50000" step="100" value="4000">
-                </label>
-                <label class="remote-field remote-field--custom" hidden>
-                    <span class="remote-field__label">{{ t('machine.remote.scale') }}</span>
-                    <select id="remote-scale" class="remote-field__control">
-                        <option value="100">100%</option>
-                        <option value="75">75%</option>
-                        <option value="50">50%</option>
-                        <option value="25">25%</option>
-                    </select>
-                </label>
-                <label class="remote-toggle">
-                    <input type="checkbox" id="remote-viewonly">
-                    <span>{{ t('machine.remote.view_only') }}</span>
-                </label>
-                <button id="remote-fullscreen" type="button" class="btn btn--ghost"
-                        title="{{ t('machine.remote.fullscreen_title') }}">{{ t('machine.remote.fullscreen') }}</button>
-            </div>
-
-            {# The video is wrapped so fullscreen can take the stage AND its overlay toolbar,
-               rather than a bare <video> the operator then cannot control. #}
-            <div class="remote-stage" id="remote-stage">
-                {# Rendered from the WebRTC media stream; muted so autoplay is allowed with no
-                   user gesture. object-fit: contain preserves aspect ratio -- remote.js maps
-                   click coordinates against the rendered content box, not the element box. #}
-                <video id="remote-video" class="remote-stage__video" playsinline autoplay muted></video>
-                <div class="remote-stage__overlay" id="remote-overlay" hidden>
-                    <span class="remote-stage__badge" id="remote-overlay-status">{{ t('machine.remote.live') }}</span>
-                    <button type="button" class="btn btn--ghost" id="remote-exit-fullscreen">{{ t('machine.remote.exit_fullscreen') }}</button>
-                </div>
-            </div>
-            <div id="remote-hint" class="terminal__hint"></div>
-            <div id="remote-meta" class="terminal__hint"></div>
-
-            <div class="remote-vdd" id="remote-vdd" hidden>
-                <div class="remote-vdd__text" id="remote-vdd-text"></div>
-                <div class="remote-vdd__actions">
-                    <button id="remote-vdd-install" type="button" class="btn btn--primary">{{ t('machine.remote.vdd_install') }}</button>
-                    <button id="remote-vdd-uninstall" type="button" class="btn btn--ghost" hidden>{{ t('machine.remote.vdd_remove') }}</button>
-                </div>
-            </div>
-        </div>
+        {% include "partials/_remote_viewer.html" %}
     </div>
     {% endif %}
 
@@ -462,29 +351,37 @@
 {# BIOS setup password. Page-level for the same reason the other dialogs are: showModal()
    puts it in the top layer wherever it sits, and a tab panel that gets hidden would take it
    with it. There is no field showing the CURRENT password because the hub has no endpoint
-   that returns one -- it is sent to the machine that needs it and never read back. #}
-<dialog id="firmware-password-dialog" class="dialog">
-    <form method="dialog" class="dialog__form">
-        <h3 class="dialog__title">{{ t('machine.firmware.password_title') }}</h3>
+   that returns one -- it is sent to the machine that needs it and never read back.
+
+   .modal, like every other dialog in the console -- it is the only dialog class the
+   stylesheet carries rules for. This markup used a .dialog/.field vocabulary that has no CSS
+   behind it at all, so the dialog rendered in the top-left corner with no backdrop: base.css's
+   `* { margin: 0 }` reset wipes the UA stylesheet's centring, and .modal is what puts it back.
+   No <form> wrapper, matching the favorites and remote pickers: every button is type="button"
+   and wired in firmware.js, and Esc-to-close comes from showModal(), not from the form. #}
+<dialog class="modal" id="firmware-password-dialog" aria-labelledby="firmware-password-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="firmware-password-title">{{ t('machine.firmware.password_title') }}</h2>
+    </div>
+    <div class="modal__body">
         <p class="stat-card__meta">{{ t('machine.firmware.password_help') }}</p>
-        <label class="field">
-            <span class="field__label">{{ t('machine.firmware.password_scope') }}</span>
-            <select id="firmware-password-scope" class="input">
-                <option value="machine">{{ t('machine.firmware.password_scope_machine') }}</option>
-                <option value="fleet">{{ t('machine.firmware.password_scope_fleet') }}</option>
-            </select>
-        </label>
-        <label class="field">
-            <span class="field__label">{{ t('machine.firmware.password_label') }}</span>
-            <input type="password" id="firmware-password-value" class="input" autocomplete="off">
-        </label>
-        <p id="firmware-password-error" class="setting__error" hidden></p>
-        <div class="dialog__actions">
-            <button type="button" id="firmware-password-clear" class="btn btn--ghost">{{ t('machine.firmware.password_clear') }}</button>
-            <button type="button" id="firmware-password-cancel" class="btn btn--ghost">{{ t('common.close') }}</button>
-            <button type="button" id="firmware-password-save" class="btn btn--primary">{{ t('common.save') }}</button>
-        </div>
-    </form>
+
+        <label class="setting__label" for="firmware-password-scope" style="margin-top: var(--space-4);">{{ t('machine.firmware.password_scope') }}</label>
+        <select class="select" id="firmware-password-scope" style="width: 100%;">
+            <option value="machine">{{ t('machine.firmware.password_scope_machine') }}</option>
+            <option value="fleet">{{ t('machine.firmware.password_scope_fleet') }}</option>
+        </select>
+
+        <label class="setting__label" for="firmware-password-value" style="margin-top: var(--space-4);">{{ t('machine.firmware.password_label') }}</label>
+        <input class="input" type="password" id="firmware-password-value" autocomplete="off" style="width: 100%;">
+
+        <p class="setting__error" id="firmware-password-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="firmware-password-clear" class="btn btn--ghost">{{ t('machine.firmware.password_clear') }}</button>
+        <button type="button" id="firmware-password-cancel" class="btn btn--ghost">{{ t('common.close') }}</button>
+        <button type="button" id="firmware-password-save" class="btn btn--primary">{{ t('common.save') }}</button>
+    </div>
 </dialog>
 
 {# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in

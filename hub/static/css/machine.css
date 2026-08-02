@@ -199,11 +199,18 @@
     overflow: hidden;
 }
 
-/* ============ Console tab strip (ConPTY mode) ============
-   One tab per open session, sitting on top of the terminal box the way a terminal app's
+/* ============ Screen tab strip ============
+   One tab per open screen, sitting on top of the box below it the way a terminal app's
    own tabs do: the active tab shares the screen's background and loses its bottom border,
-   so the two read as one surface. */
-.pty-tabs {
+   so the two read as one surface.
+
+   SHARED by two strips, which is why it is named for what it is rather than for either
+   of them: the consoles on this page (fleet-pty.js, one tab per ConPTY session) and the
+   remote screens on the Remote page (remote-workspace.js, one tab per PC). Both are "a
+   row of closeable tabs over a stack of screens where exactly one is shown", and a second
+   copy of these rules would have drifted from this one within a release. remote.html
+   loads this stylesheet for the same reason. */
+.screen-tabs {
     display: flex;
     align-items: stretch;
     gap: 2px;
@@ -212,7 +219,7 @@
     padding-bottom: 0;
 }
 
-.pty-tab {
+.screen-tab {
     display: flex;
     align-items: center;
     gap: 2px;
@@ -225,16 +232,16 @@
     max-width: 260px;
 }
 
-.pty-tab:hover {
+.screen-tab:hover {
     background: var(--control-bg);
 }
 
-.pty-tab--active {
+.screen-tab--active {
     background: var(--control-bg);
     border-color: var(--card-border);
 }
 
-.pty-tab__select {
+.screen-tab__select {
     flex: 1;
     min-width: 0;
     background: none;
@@ -250,19 +257,19 @@
     text-overflow: ellipsis;
 }
 
-.pty-tab--active .pty-tab__select {
+.screen-tab--active .screen-tab__select {
     color: var(--text);
     font-weight: 600;
 }
 
 /* A console that ended on its own keeps its tab (and its last screen) until the operator
    dismisses it -- struck through so it is obviously not typeable. */
-.pty-tab--closed .pty-tab__select {
+.screen-tab--closed .screen-tab__select {
     text-decoration: line-through;
     opacity: 0.6;
 }
 
-.pty-tab__close {
+.screen-tab__close {
     background: none;
     border: 0;
     color: var(--muted);
@@ -273,12 +280,12 @@
     cursor: pointer;
 }
 
-.pty-tab__close:hover {
+.screen-tab__close:hover {
     background: var(--danger-bg);
     color: var(--danger);
 }
 
-.pty-tabs__add {
+.screen-tabs__add {
     background: none;
     border: 0;
     color: var(--muted);
@@ -290,29 +297,29 @@
     cursor: pointer;
 }
 
-.pty-tabs__add:hover:not(:disabled) {
+.screen-tabs__add:hover:not(:disabled) {
     background: var(--control-bg);
     color: var(--text);
 }
 
-.pty-tabs__add:disabled {
+.screen-tabs__add:disabled {
     opacity: 0.4;
     cursor: not-allowed;
 }
 
-.pty-tab__select:focus-visible,
-.pty-tab__close:focus-visible,
-.pty-tabs__add:focus-visible {
+.screen-tab__select:focus-visible,
+.screen-tab__close:focus-visible,
+.screen-tabs__add:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
 }
 
 /* Every console's screen lives here; all but the front one are `hidden`. */
-.pty-screens {
+.screen-stack {
     margin-top: var(--space-2);
 }
 
-.pty-empty {
+.screen-empty {
     color: var(--muted);
     font-size: var(--text-sm);
     padding: var(--space-5);
@@ -483,6 +490,13 @@
     margin-bottom: var(--space-3);
 }
 
+/* Same [hidden] caveat as .btn, .tab-panel and .status-pill in components.css: the
+   display below beats the UA stylesheet's [hidden] rule, so remote.js setting
+   `el.hidden = true` on the Custom fields (FPS / kbps / Scale, hidden unless the quality
+   preset IS Custom) set the attribute and changed nothing on screen -- every viewer showed
+   the raw numbers next to the preset that was supposed to replace them. */
+.remote-field[hidden] { display: none; }
+
 .remote-field {
     display: flex;
     flex-direction: column;
@@ -564,6 +578,12 @@
     height: 100vh;
 }
 
+/* [hidden] again -- and the worst of the three, because this one is painted ON the remote
+   desktop: the overlay is only meant to exist in fullscreen (remote.js clears its `hidden`
+   from the fullscreenchange handler), so without this every session ran with a status badge
+   and an "Exit fullscreen" button sitting over the top-right corner of the picture. */
+.remote-stage__overlay[hidden] { display: none; }
+
 .remote-stage__overlay {
     position: absolute;
     top: var(--space-3);
@@ -588,6 +608,11 @@
     font-size: var(--text-xs);
     color: #fff;
 }
+
+/* [hidden], third of three in this section. The virtual-display panel is meant to appear
+   only when there is a decision to make -- a machine with no monitors, or one that already
+   has a virtual display -- so without this every PC in the fleet offered to install one. */
+.remote-vdd[hidden] { display: none; }
 
 .remote-vdd {
     display: flex;

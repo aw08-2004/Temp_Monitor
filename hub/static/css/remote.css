@@ -1,0 +1,53 @@
+/* The Remote page: what is specific to having SEVERAL remote viewers open at once.
+ *
+ * Everything a single viewer needs -- the toolbars, the stage, the virtual-display panel --
+ * is in machine.css, which this page loads too, because the viewer here is literally the
+ * machine page's card (templates/partials/_remote_viewer.html) cloned once per PC. The tab
+ * strip is shared with the console strip and lives there as well. So this file is short by
+ * design: a second copy of any of that is a second thing to keep in step. */
+
+/* One screen. All but the front one carry `hidden`, which works only because nothing here
+ * sets `display` on it -- see the [hidden] caveat on .btn and .tab-panel in components.css
+ * for what happens when a rule does. */
+.remote-screen {
+    min-width: 0;
+}
+
+/* Connection state, on the tab, so the screens you are NOT looking at can still be seen to
+ * be live (or to have dropped). Colours match the status pill the viewer shows inside
+ * itself; remote-workspace.js sets the modifier from the same status kind. */
+.screen-tab__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+    margin-right: var(--space-2);
+    color: var(--muted);
+}
+
+.screen-tab__dot--ok { color: var(--success); }
+.screen-tab__dot--warn { color: var(--warning); }
+.screen-tab__dot--danger { color: var(--danger); }
+.screen-tab__dot--muted { color: var(--muted); }
+
+/* The tab's button is a flex row so the dot sits beside the name rather than on the text
+ * baseline, and the name is what ellipsizes when the machine name is long. */
+.screen-tab__select {
+    display: flex;
+    align-items: center;
+}
+
+.screen-tab__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The picker's one control, filling the modal rather than sitting at whatever width the
+ * longest hostname happens to make it -- and staying put when autocomplete.js swaps the
+ * <select> for its combobox input on a fleet big enough to need searching. */
+.remote-picker__control {
+    width: 100%;
+}

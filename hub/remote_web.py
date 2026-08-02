@@ -324,11 +324,17 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     @can_view
     def list_sessions():
         """Active sessions for a machine, so the machine page can show 'currently being
-        viewed'. Gated on view + scope like the other read endpoints."""
+        viewed'. Gated on view + scope like the other read endpoints.
+
+        The no-machine form answers for the WHOLE fleet, so its rows are narrowed to the
+        caller's scope before they go out -- they carry both a machine name and the email of
+        the operator on it, and an HR tech must no more be able to enumerate Hospital
+        hostnames here than on /api/machines (which filters for the same reason)."""
         machine = (request.args.get("machine") or "").strip() or None
         if machine and not access.in_scope(machine):
             return jsonify({"error": "You do not have access to that machine."}), 403
-        return jsonify(remote.list_sessions(db_path, machine, active_only=True)), 200
+        sessions = remote.list_sessions(db_path, machine, active_only=True)
+        return jsonify(access.filter_rows(sessions)), 200
 
     # ---------------- Virtual display (remote_control + scope) ----------------
     # These exist to make a headless machine viewable at all, so they belong to the same

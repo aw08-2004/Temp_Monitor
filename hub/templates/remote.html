@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ t('remote.title') }} - FleetHub{% endblock %}
+{% block extra_head %}
+{# machine.css, on a page that is not the machine page, on purpose: the viewer partial below
+   is the machine page's remote card, so its styles (.remote-*, .terminal__head,
+   .terminal__hint) and the screen tab strip both live there and are shared rather than
+   copied. remote.css holds only what is specific to having several of them at once. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/remote.css') }}">
+{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('remote.title') }}</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5); max-width: 80ch;">{{ t('remote.help') }}</p>
+
+{# One tab per open PC. Built at runtime by remote-workspace.js, which is also why the strip
+   is empty here apart from the + that fills it. #}
+<div id="remote-tabs" class="screen-tabs" role="tablist" aria-label="{{ t('remote.open_screens') }}">
+    <button id="remote-add" type="button" class="screen-tabs__add"
+            aria-label="{{ t('remote.add_screen') }}"
+            title="{{ t('remote.add_screen_title') }}">+</button>
+</div>
+
+<div id="remote-screens" class="screen-stack">
+    <div id="remote-empty" class="screen-empty">{{ t('remote.no_screens') }}</div>
+</div>
+
+{# The viewer, once, as a stamp. Cloning it per PC is what keeps this page and the machine
+   page from drifting into two remote viewers -- see the partial's own comment for why it
+   carries data attributes instead of ids. Inside a <template> its content is inert: no
+   video element is created, no script sees it, until a clone is taken. #}
+<template id="remote-viewer-template">
+    {% include "partials/_remote_viewer.html" %}
+</template>
+
+{# Which PC to open next. A plain <select> because autocomplete.js upgrades any long one to
+   a searchable combobox on its own, so this is a dropdown on a small fleet and a type-ahead
+   on a large one without either being special-cased here.
+
+   .modal, matching the favorites dialog: that is the only dialog class the stylesheet
+   actually carries rules for -- centring, the backdrop scrim, the head/body/foot bands. #}
+<dialog id="remote-picker" class="modal" aria-labelledby="remote-picker-title">
+    <div class="modal__head">
+        <div class="modal__title" id="remote-picker-title">{{ t('remote.picker_title') }}</div>
+        <button type="button" id="remote-picker-cancel" class="btn btn--icon"
+                aria-label="{{ t('common.close') }}">&times;</button>
+    </div>
+    <div class="modal__body">
+        <label class="setting__label" for="remote-picker-machine">{{ t('remote.picker_machine') }}</label>
+        <select id="remote-picker-machine" class="select remote-picker__control"></select>
+        <p id="remote-picker-error" class="setting__error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="remote-picker-open" class="btn btn--primary">{{ t('remote.picker_open') }}</button>
+    </div>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+{# fleet-api.js first: remote.js uses the window.FleetApi it defines. It finds no
+   #machine-config here, so FleetApi.machine is null -- which is exactly what stops remote.js
+   from bootstrapping a single viewer the way it does on the machine page. #}
+<script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/remote.js') }}"></script>
+<script src="{{ url_for('static', filename='js/remote-workspace.js') }}"></script>
+{% endblock %}

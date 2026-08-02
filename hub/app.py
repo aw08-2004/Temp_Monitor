@@ -79,7 +79,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.64.0"
+HUB_VERSION = "1.65.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3681,6 +3681,20 @@ def settings_page():
 @access.require(permissions.MANAGE_PERMISSION_GROUPS)
 def permissions_page():
     return render_template("permissions.html", hub_version=HUB_VERSION,
+                           latest_agent_version=get_latest_agent_version())
+
+@app.route("/remote")
+@login_required
+@access.require(permissions.REMOTE_CONTROL)
+def remote_page():
+    """The multi-machine remote workspace: several PCs open at once, one tab each.
+
+    Gated on remote_control rather than view, like the machine page's Remote tab -- the page
+    is nothing but viewers. It names no machine of its own: which PCs are opened is chosen in
+    the browser, and every session it starts goes through /api/remote/<machine>/start, which
+    checks the capability AND the machine's scope again for each one.
+    """
+    return render_template("remote.html", hub_version=HUB_VERSION,
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/machine/<machine>")

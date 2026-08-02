@@ -123,22 +123,22 @@
 
     function makeTab(record) {
         const tab = document.createElement('div');
-        tab.className = 'pty-tab';
+        tab.className = 'screen-tab';
         tab.dataset.session = record.id;
 
         const select = document.createElement('button');
         select.type = 'button';
-        select.className = 'pty-tab__select';
+        select.className = 'screen-tab__select';
         select.setAttribute('role', 'tab');
         select.addEventListener('click', () => activate(record.id));
 
         const label = document.createElement('span');
-        label.className = 'pty-tab__label';
+        label.className = 'screen-tab__label';
         select.appendChild(label);
 
         const close = document.createElement('button');
         close.type = 'button';
-        close.className = 'pty-tab__close';
+        close.className = 'screen-tab__close';
         close.setAttribute('aria-label', t('machine.pty.close_console'));
         close.title = t('machine.pty.close_console_title');
         close.textContent = '×';
@@ -186,8 +186,8 @@
             record.labelEl.textContent = totals[name] > 1
                 ? t('machine.pty.tab_numbered', { name, index: record.index })
                 : name;
-            record.tabEl.classList.toggle('pty-tab--active', record.id === activeId);
-            record.tabEl.classList.toggle('pty-tab--closed', record.status === 'closed');
+            record.tabEl.classList.toggle('screen-tab--active', record.id === activeId);
+            record.tabEl.classList.toggle('screen-tab--closed', record.status === 'closed');
             record.selectEl.setAttribute(
                 'aria-selected', record.id === activeId ? 'true' : 'false');
             record.selectEl.title = record.status === 'closed'

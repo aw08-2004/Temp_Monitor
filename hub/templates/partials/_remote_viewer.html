@@ -1,0 +1,125 @@
+{# One remote view/control viewer (roadmap #2): the toolbars, the video stage and the
+   virtual-display panel for ONE PC. remote.js turns it into a working viewer.
+
+   RENDERED IN TWO PLACES, which is why it carries no ids: the machine page includes it
+   once (one PC, the one that page is about), and the Remote page puts it inside a
+   <template> and clones it once per open PC, so any id in here would be duplicated across
+   screens the moment a second PC is opened -- and getElementById would hand every clone's
+   controls to the first one. Everything is addressed by data-remote instead, looked up
+   within the viewer's own root (see remote.js's `q`), and every control is wrapped in its
+   own <label> so no `for=` attribute is needed to pair them.
+
+   The controls are split into two rows on purpose. Row 1 is what you choose BEFORE
+   connecting -- the Windows session to attach to, the codec, the encoder -- because those
+   are negotiated in the SDP or decide which encoder object exists, so changing them means a
+   new session. Row 2 is live: monitor, quality, view-only, fullscreen. #}
+<div class="card remote-card" data-remote-viewer>
+    <div class="terminal__head">
+        <div class="section-title" data-remote="title" style="margin-bottom: 0;">{{ t('machine.remote.title') }}</div>
+        <span class="status-pill status-pill--muted" data-remote="status"><span class="status-pill__dot"></span>{{ t('machine.remote.idle') }}</span>
+        <span class="status-pill status-pill--warn remote-badge" data-remote="desktop-badge" hidden>
+            <span class="status-pill__dot"></span>{{ t('machine.remote.secure_desktop') }}</span>
+        <span class="status-pill status-pill--danger remote-badge" data-remote="headless-badge" hidden>
+            <span class="status-pill__dot"></span>{{ t('machine.remote.no_display') }}</span>
+        <div class="terminal__head-actions">
+            <button type="button" class="btn btn--ghost" data-remote="cad" disabled
+                    title="{{ t('machine.remote.cad_title') }}">{{ t('machine.remote.cad') }}</button>
+            <button type="button" class="btn btn--primary" data-remote="start">{{ t('machine.remote.start') }}</button>
+            <button type="button" class="btn btn--ghost" data-remote="stop" disabled>{{ t('machine.remote.stop') }}</button>
+        </div>
+    </div>
+
+    <div class="remote-toolbar">
+        <label class="remote-field">
+            <span class="remote-field__label">{{ t('machine.remote.session') }}</span>
+            <select class="remote-field__control" data-remote="session">
+                <option value="auto">{{ t('machine.remote.session_auto') }}</option>
+            </select>
+        </label>
+        <button type="button" class="btn btn--ghost" data-remote="refresh-sessions"
+                title="{{ t('machine.remote.refresh_title') }}">{{ t('machine.remote.refresh') }}</button>
+        <label class="remote-field">
+            <span class="remote-field__label">{{ t('machine.remote.codec') }}</span>
+            {# H.264 is a standard's name, not prose, so it has no catalog entry. #}
+            <select class="remote-field__control" data-remote="codec">
+                <option value="h264">H.264</option>
+                <option value="vp8">{{ t('machine.remote.codec_vp8') }}</option>
+            </select>
+        </label>
+        <label class="remote-field">
+            <span class="remote-field__label">{{ t('machine.remote.encoder') }}</span>
+            <select class="remote-field__control" data-remote="encoder">
+                <option value="auto">{{ t('machine.remote.encoder_auto') }}</option>
+                <option value="hardware">{{ t('machine.remote.encoder_hardware') }}</option>
+                <option value="software">{{ t('machine.remote.encoder_software') }}</option>
+            </select>
+        </label>
+        <span class="remote-field__note">{{ t('machine.remote.before_connecting') }}</span>
+    </div>
+
+    <div class="remote-toolbar">
+        <label class="remote-field">
+            <span class="remote-field__label">{{ t('machine.remote.monitor') }}</span>
+            <select class="remote-field__control" data-remote="monitor">
+                <option value="0">1</option>
+            </select>
+        </label>
+        <label class="remote-field">
+            <span class="remote-field__label">{{ t('machine.remote.quality') }}</span>
+            <select class="remote-field__control" data-remote="preset">
+                <option value="quality">{{ t('machine.remote.preset_quality') }}</option>
+                <option value="balanced" selected>{{ t('machine.remote.preset_balanced') }}</option>
+                <option value="speed">{{ t('machine.remote.preset_speed') }}</option>
+                <option value="custom">{{ t('machine.remote.preset_custom') }}</option>
+            </select>
+        </label>
+        <label class="remote-field remote-field--custom" hidden>
+            <span class="remote-field__label">{{ t('machine.remote.fps') }}</span>
+            <input class="remote-field__control remote-field__control--num" data-remote="fps"
+                   type="number" min="1" max="60" value="15">
+        </label>
+        <label class="remote-field remote-field--custom" hidden>
+            <span class="remote-field__label">{{ t('machine.remote.kbps') }}</span>
+            <input class="remote-field__control remote-field__control--num" data-remote="bitrate"
+                   type="number" min="100" max="50000" step="100" value="4000">
+        </label>
+        <label class="remote-field remote-field--custom" hidden>
+            <span class="remote-field__label">{{ t('machine.remote.scale') }}</span>
+            <select class="remote-field__control" data-remote="scale">
+                <option value="100">100%</option>
+                <option value="75">75%</option>
+                <option value="50">50%</option>
+                <option value="25">25%</option>
+            </select>
+        </label>
+        <label class="remote-toggle">
+            <input type="checkbox" data-remote="viewonly">
+            <span>{{ t('machine.remote.view_only') }}</span>
+        </label>
+        <button type="button" class="btn btn--ghost" data-remote="fullscreen"
+                title="{{ t('machine.remote.fullscreen_title') }}">{{ t('machine.remote.fullscreen') }}</button>
+    </div>
+
+    {# The video is wrapped so fullscreen can take the stage AND its overlay toolbar,
+       rather than a bare <video> the operator then cannot control. #}
+    <div class="remote-stage" data-remote="stage">
+        {# Rendered from the WebRTC media stream; muted so autoplay is allowed with no
+           user gesture. object-fit: contain preserves aspect ratio -- remote.js maps
+           click coordinates against the rendered content box, not the element box. #}
+        <video class="remote-stage__video" data-remote="video" playsinline autoplay muted></video>
+        <div class="remote-stage__overlay" data-remote="overlay" hidden>
+            <span class="remote-stage__badge" data-remote="overlay-status">{{ t('machine.remote.live') }}</span>
+            <button type="button" class="btn btn--ghost" data-remote="exit-fullscreen">{{ t('machine.remote.exit_fullscreen') }}</button>
+        </div>
+    </div>
+    <div class="terminal__hint" data-remote="hint"></div>
+    <div class="terminal__hint" data-remote="meta"></div>
+
+    <div class="remote-vdd" data-remote="vdd" hidden>
+        <div class="remote-vdd__text" data-remote="vdd-text"></div>
+        <div class="remote-vdd__actions">
+            <button type="button" class="btn btn--primary" data-remote="vdd-install">{{ t('machine.remote.vdd_install') }}</button>
+            <button type="button" class="btn btn--ghost" data-remote="vdd-uninstall" hidden>{{ t('machine.remote.vdd_remove') }}</button>
+        </div>
+    </div>
+</div>

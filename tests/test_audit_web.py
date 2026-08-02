@@ -52,7 +52,7 @@ def _register_sidebar_stubs(app):
     that has nothing to do with the audit log. Stubbing them also means the sidebar really
     is exercised here -- including the capability gate on the Audit Log link itself."""
     for endpoint in ("index", "history_page", "inventory_page", "alerts_page",
-                     "settings_page", "permissions_page", "logout"):
+                     "remote_page", "settings_page", "permissions_page", "logout"):
         app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
     for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),
                            ("users", "users_page"), ("bios", "firmware_page")):
