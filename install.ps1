@@ -1242,29 +1242,71 @@ function Register-TurnBootTask([string]$Distro) {
       (Docker Desktop's own restart flow among them) and takes the distro down with it, with no
       other recovery path.
     #>
-    try {
-        $sid       = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-        $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType S4U -RunLevel Highest
-        $atStartup = New-ScheduledTaskTrigger -AtStartup
-        $atStartup.Delay = 'PT45S'          # let the WSL service and networking settle first
-        $watchdog  = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-                        -RepetitionInterval (New-TimeSpan -Minutes 5)
-        $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-                        -DontStopIfGoingOnBatteries -StartWhenAvailable `
-                        -ExecutionTimeLimit ([TimeSpan]::Zero)
-        # Invoke a script inside the distro, not an inline bash string: nothing to mis-quote in
-        # the task XML, and starting an already-running distro is a harmless no-op.
-        $action    = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\wsl.exe" `
-                        -Argument "-d $Distro -u root -- /usr/local/sbin/fleethub-turn-boot.sh"
+    $sid       = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $atStartup = New-ScheduledTaskTrigger -AtStartup
+    $atStartup.Delay = 'PT45S'          # let the WSL service and networking settle first
+    # NOTE: -RepetitionInterval with no -RepetitionDuration is CORRECT here and means
+    # "indefinitely". Do not "fix" it by adding -RepetitionDuration ([TimeSpan]::MaxValue):
+    # that serialises to P99999999DT23H59M59S, which the task scheduler rejects outright with
+    # "The task XML contains a value which is incorrectly formatted or out of range."
+    $watchdog  = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                    -RepetitionInterval (New-TimeSpan -Minutes 5)
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                    -DontStopIfGoingOnBatteries -StartWhenAvailable `
+                    -ExecutionTimeLimit ([TimeSpan]::Zero)
+    # Invoke a script inside the distro, not an inline bash string: nothing to mis-quote in
+    # the task XML, and starting an already-running distro is a harmless no-op.
+    $action    = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\wsl.exe" `
+                    -Argument "-d $Distro -u root -- /usr/local/sbin/fleethub-turn-boot.sh"
 
-        Register-ScheduledTask -TaskName $TaskTurn -Force -Action $action `
-            -Trigger @($atStartup, $watchdog) -Principal $principal -Settings $settings `
-            -Description "Starts the FleetHub TURN WSL distro (coturn) at boot and keeps it up." | Out-Null
-        Ok "Registered the boot task '$TaskTurn'"
-    } catch {
-        Warn "Could not register the boot task -- $($_.Exception.Message)"
-        Say  "Without it, coturn will not come back after a reboot. Create it by hand, or re-run this installer."
+    # S4U first, Interactive as a fallback. S4U registration is refused outright on some
+    # accounts -- it needs an S4U logon token for the SID, which not every local/Microsoft
+    # account can obtain -- and it surfaces as a bare "Access is denied" that says nothing
+    # about which part was denied. Interactive is strictly worse (the relay only comes up
+    # once that user logs on) but it is enormously better than no task at all, which is what
+    # this function used to leave behind. Seen in the field 2026-07-30: registration was
+    # denied, the failure was a Warn that scrolled past, the install reported success, and the
+    # relay was dead from the next reboot until someone went looking.
+    $attempts = @(
+        @{ Label = 'S4U';         Type = 'S4U' },
+        @{ Label = 'Interactive'; Type = 'Interactive' }
+    )
+    $lastError = $null
+    foreach ($attempt in $attempts) {
+        try {
+            $principal = New-ScheduledTaskPrincipal -UserId $sid `
+                            -LogonType $attempt.Type -RunLevel Highest
+            Register-ScheduledTask -TaskName $TaskTurn -Force -Action $action `
+                -Trigger @($atStartup, $watchdog) -Principal $principal -Settings $settings `
+                -Description "Starts the FleetHub TURN WSL distro (coturn) at boot and keeps it up." `
+                -ErrorAction Stop | Out-Null
+        } catch {
+            $lastError = $_.Exception.Message
+            continue
+        }
+        # Registering without throwing is not proof it is there. Confirm before claiming it.
+        if (-not (Get-ScheduledTask -TaskName $TaskTurn -ErrorAction SilentlyContinue)) {
+            $lastError = "Register-ScheduledTask reported success but '$TaskTurn' does not exist."
+            continue
+        }
+        if ($attempt.Type -eq 'S4U') {
+            Ok "Registered the boot task '$TaskTurn'"
+        } else {
+            Ok   "Registered the boot task '$TaskTurn' (logon type: Interactive)"
+            Warn "S4U was refused for this account, so the task runs only once $env:USERNAME logs on."
+            Say  "On a machine that boots unattended, the relay stays down until that login."
+        }
+        return $true
     }
+
+    Warn "COULD NOT REGISTER THE BOOT TASK '$TaskTurn' -- $lastError"
+    Say  "This is not cosmetic. WSL distros do not start at boot, so coturn is up now and will be"
+    Say  "DEAD after the next reboot (and after any 'wsl --shutdown' -- Docker Desktop issues one)."
+    Say  "Remote sessions will then fail for every machine that needs the relay."
+    Say  "Fix it by re-running this installer from an ELEVATED PowerShell, or create it by hand:"
+    Say  "  schtasks /create /tn ""$TaskTurn"" /sc onstart /delay 0000:45 /rl highest /ru $env:USERNAME \"
+    Say  "    /tr ""%WINDIR%\System32\wsl.exe -d $Distro -u root -- /usr/local/sbin/fleethub-turn-boot.sh"""
+    return $false
 }
 
 function Unregister-TurnBootTask {
@@ -1514,7 +1556,11 @@ echo FLEETHUB_PROVISION_OK
         }
     }
 
-    Register-TurnBootTask -Distro $Distro
+    # Piped to Out-Null deliberately: the function returns $true/$false and this one returns
+    # $true for "the relay is installed". A missing boot task is reported loudly by the
+    # function itself and re-checked in Test-TurnServer, so it must not silently become part
+    # of this function's return value.
+    Register-TurnBootTask -Distro $Distro | Out-Null
     return $true
 }
 
@@ -1589,16 +1635,32 @@ function Test-TurnServer {
     #    rotation from the console updated the hub and left coturn on the old value.
     #    On a standalone TURN install there may be no hub on this box at all, in which case
     #    there is nothing to compare against -- say so rather than reporting a false mismatch.
-    $conf = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'grep', '-h', 'static-auth-secret', '/etc/turnserver.conf')
+    #    BOTH configs are checked, not just the public one: each listener validates against its
+    #    own copy, so updating one and not the other leaves LAN sessions failing with 401 while
+    #    internet sessions work (or the reverse) -- a genuinely confusing half-broken state.
     $hubSecret = (Read-DotEnv $HubEnvPath)["REMOTE_TURN_SECRET"]
     if (-not $hubSecret) {
         Say "No hub .env on this machine, so the secret can't be cross-checked here."
         Say "Make sure REMOTE_TURN_SECRET on the hub matches the secret printed below."
-    } elseif ($conf.Output -match 'static-auth-secret\s*=\s*(\S+)') {
-        if ($matches[1] -eq $hubSecret) { Ok "Shared secret matches the hub's .env" }
-        else {
-            Warn "The hub and coturn hold DIFFERENT secrets -- every allocation will fail with 401."
-            Say  "hub: $HubEnvPath   coturn: /etc/turnserver.conf in '$Distro'"
+    } else {
+        foreach ($confPath in @('/etc/turnserver.conf', '/etc/turnserver-lan.conf')) {
+            $exists = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'test', '-f', $confPath)
+            if ($exists.ExitCode -ne 0) { continue }   # no LAN listener on this install
+            $conf = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--', 'grep', '-h', 'static-auth-secret', $confPath)
+            if ($conf.Output -match 'static-auth-secret\s*=\s*(\S+)') {
+                if ($matches[1] -eq $hubSecret) {
+                    Ok "Shared secret in $confPath matches the hub's .env"
+                } else {
+                    Warn "The hub and $confPath hold DIFFERENT secrets -- every allocation there will fail with 401."
+                    Say  "hub: $HubEnvPath   coturn: $confPath in '$Distro'"
+                    Say  "A rotation from the console updates only the hub. Sync it with:"
+                    Say  "  wsl -d $Distro -u root -- sed -i ""s/^static-auth-secret=.*/static-auth-secret=<new>/"" $confPath"
+                    Say  "  wsl -d $Distro -u root -- chown root:turnserver $confPath"
+                    Say  "  wsl -d $Distro -u root -- systemctl restart coturn coturn-lan"
+                }
+            } else {
+                Warn "No static-auth-secret found in $confPath."
+            }
         }
     }
 
@@ -1641,6 +1703,30 @@ function Test-TurnServer {
         } else {
             Warn "Could not allocate via $PublicHost from this machine."
             Say  "That is often just NAT hairpinning, not a fault -- most routers can't reach their own public IP from inside."
+        }
+    }
+
+    # 7. Will any of the above survive a reboot? WSL distros do not auto-start, so without the
+    #    boot task every check here passes on install day and the relay is dead the next
+    #    morning. This check exists because that is exactly what happened on 2026-07-30: the
+    #    registration was denied, the warning scrolled past, and nothing afterwards looked.
+    $task = Get-ScheduledTask -TaskName $TaskTurn -ErrorAction SilentlyContinue
+    if (-not $task) {
+        Warn "The boot task '$TaskTurn' does NOT exist."
+        Say  "coturn is up now, but WSL distros do not start at boot -- it will be dead after the"
+        Say  "next reboot, and after any 'wsl --shutdown' (Docker Desktop issues one)."
+        Say  "Re-run this installer from an ELEVATED PowerShell to create it."
+    } elseif ($task.State -eq 'Disabled') {
+        Warn "The boot task '$TaskTurn' exists but is DISABLED -- it will not run."
+        Say  "Enable it with:  Enable-ScheduledTask -TaskName ""$TaskTurn"""
+    } else {
+        $logon = $task.Principal.LogonType
+        if ($logon -eq 'Interactive') {
+            Ok   "Boot task '$TaskTurn' is registered"
+            Warn "It runs as Interactive, so it only fires once $($task.Principal.UserId) logs on."
+            Say  "On a machine that boots unattended, the relay stays down until that login."
+        } else {
+            Ok "Boot task '$TaskTurn' is registered (logon type: $logon)"
         }
     }
 
