@@ -2416,24 +2416,33 @@ print("ok")
 # ----------------------------------------------------------------------
 # Resolve which component to act on, then dispatch
 # ----------------------------------------------------------------------
+$exitRequested = $false
+
 if (-not $Component) {
     if ($Uninstall) {
         # Back-compat: bare -Uninstall (no -Component) matches the documented
         # legacy behavior of uninstalling the companion.
         $Component = "Companion"
     } else {
-        $Component = Show-Menu
-        if ($Component -eq "UninstallMenu") {
-            $Component = Show-UninstallMenu
+        # Resolve the menu through a plain local, NOT through $Component: the param's
+        # [ValidateSet] attribute stays attached to $Component for the life of the variable,
+        # so assigning a menu-only sentinel ("UninstallMenu", "Exit") to it throws
+        # ValidateSetFailure before we ever get to dispatch. Only real component names --
+        # the ones the set allows -- are ever copied across.
+        $selection = Show-Menu
+        if ($selection -eq "UninstallMenu") {
+            $selection = Show-UninstallMenu
             $Uninstall = $true
         }
+        if ($selection -eq "Exit" -or -not $selection) { $exitRequested = $true }
+        else { $Component = $selection }
     }
 }
 
 # Exit chosen from a menu: end the script gracefully but DON'T `exit` -- that would kill the
 # (elevated) console the user wants to keep open to read the log. `return` at script scope
 # stops here and, with the relaunch's -NoExit, leaves them at a live prompt.
-if ($Component -eq "Exit" -or -not $Component) {
+if ($exitRequested -or -not $Component) {
     Write-Host "`n  Exiting installer. This window stays open so you can review the log above." -ForegroundColor Cyan
     return
 }
