@@ -53,6 +53,26 @@
                     src="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode('utf-8', 'replace') }}{% endif %}"
                     title="{{ t('shell.frame_title') }}"
                     allow="fullscreen; clipboard-read; clipboard-write" allowfullscreen></iframe>
+            {# A fragment is never sent to the server, so the src above CANNOT carry it: a
+               bookmarked or middle-clicked /machine/PC-1#backup would frame /machine/PC-1,
+               and the page's hash-driven startup would find nothing to act on -- that exact
+               url is the Backups exceptions table's deep link (backup-tab.js), and tabs.js
+               restores a linked tab the same way. Worse, the frame's load handler then
+               replaceState()s the address bar to the frame's own hash-less url, so the
+               fragment is lost from both sides and cannot be recovered later.
+
+               Hence here, inline, immediately after the frame: this is the last moment the
+               fragment still exists AND the framed document has not run anything yet.
+               shell.js is too late -- it runs at the end of the body. The replace() costs
+               one restarted request, and only on a url that actually carries a fragment. #}
+            <script>
+            (function () {
+                if (!window.location.hash) return;
+                var frame = document.querySelector('#app-frames .app-frames__frame');
+                if (!frame || !frame.contentWindow) return;
+                frame.contentWindow.location.replace(frame.src + window.location.hash);
+            })();
+            </script>
         </div>
     </div>
 </div>
