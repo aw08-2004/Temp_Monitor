@@ -234,6 +234,14 @@ public static class RemoteHelper
             if (!approved)
             {
                 Log.Information("Consent denied or timed out; ending session.");
+                // A denial FINISHES the session, so clear the supervision record on the way out
+                // exactly as the normal teardown below does. Without this the record outlives the
+                // process, the supervisor reads "the helper died involuntarily", and re-injects a
+                // fresh helper that prompts again -- the user presses Deny and is asked again a
+                // few seconds later, up to MaxRelaunches times. Telling the hub is not enough:
+                // the replacement helper prompts before it ever polls, so it never learns the
+                // session it is asking about is already ended.
+                RemoteSessionSupervisor.Untrack(session.SessionId);
                 try { await signaling.ReportEndedAsync("consent denied", CancellationToken.None); }
                 catch { /* the TTL sweep is the backstop */ }
                 return 0;
