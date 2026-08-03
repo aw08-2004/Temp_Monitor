@@ -48,11 +48,31 @@ function notifyHighTemp(machine, temp) {
     });
 }
 
+// An element of the app chrome, wherever this page happens to be rendered. Under the app
+// shell (see shell.js) the topbar belongs to the parent document, not to this one, so a page
+// that owns a piece of chrome has to reach out of its frame for it. Same-origin, so this is
+// an ordinary lookup; the guard is for the day something else frames us.
+function shellElement(id) {
+    const local = document.getElementById(id);
+    if (local) return local;
+    try {
+        if (window.parent !== window && window.parent.document) {
+            return window.parent.document.getElementById(id);
+        }
+    } catch (e) { /* cross-origin parent: not our shell, and none of our business */ }
+    return null;
+}
+
 // Connects the Socket.IO client and wires up a #socket-status pill. Returns the socket
 // so callers can attach their own `new_temp` handlers.
 function connectSocketWithStatus() {
     const socket = io({ transports: ['polling'], upgrade: false });
-    const statusEl = document.getElementById('socket-status');
+    const statusEl = shellElement('socket-status');
+    // The shell renders one pill for every page and hides it until a page claims it. Claiming
+    // is marking our own frame, not showing the pill directly: the shell keeps several frames
+    // alive at once and only the visible one's status should be on screen.
+    if (window.frameElement) window.frameElement.dataset.socket = 'yes';
+    if (statusEl) statusEl.hidden = false;
     socket.on('connect', () => setStatusPill(statusEl, 'ok', t('common.status.live')));
     socket.on('disconnect', () => setStatusPill(statusEl, 'danger', t('common.status.offline')));
     return socket;
@@ -71,6 +91,10 @@ function initThemeToggle() {
         root.setAttribute('data-theme', next);
         try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch (e) { /* ignore */ }
         sync();
+        // Under the app shell the toggle is in the chrome and the pages are in frames, which
+        // this attribute does not reach. Announced rather than reached into so this stays the
+        // theme's own business and shell.js keeps the frames its.
+        document.dispatchEvent(new CustomEvent('theme:change', { detail: { theme: next } }));
     });
 }
 
@@ -111,8 +135,8 @@ function initMobileNav() {
         if (e.key === 'Escape') close({ restoreFocus: true });
     });
 
-    // Navigating is a full page load, so this only matters for a link that no-ops --
-    // but a drawer that stays open after a tap reads as broken.
+    // Under the app shell this is the ONLY thing that closes the drawer: the sidebar outlives
+    // the page it navigates to, so there is no longer a page load to take it away with.
     sidebar.addEventListener('click', (e) => {
         if (e.target.closest('.sidebar__link')) close();
     });

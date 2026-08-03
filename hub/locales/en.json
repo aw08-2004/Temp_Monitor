@@ -44,6 +44,14 @@
     ],
     "language_auto": "Automatic (browser)"
   },
+  "_shell": [
+    "The app shell -- the sidebar/topbar document that stays put while pages load into a",
+    "frame inside it (see app.py's _shell_mode). frame_title names that frame for screen",
+    "readers, which announce an untitled frame as nothing more useful than 'frame'."
+  ],
+  "shell": {
+    "frame_title": "Page content"
+  },
   "login": {
     "title": "Sign in",
     "prompt": "Sign in with an authorized account to view the dashboard.",

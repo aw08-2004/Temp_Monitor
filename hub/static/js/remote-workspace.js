@@ -13,8 +13,14 @@
 // also means each open screen costs real bandwidth, which is why there is a cap (MAX_SCREENS)
 // and why remote.js slows its signaling poll right down once media is flowing.
 //
-// NOT PERSISTED ACROSS RELOADS. A WebRTC session belongs to the browser page that negotiated
-// it -- reload and the peer connection is gone, so a restored tab would be a name with a dead
+// LEAVING THE PAGE NO LONGER ENDS THEM EITHER. A WebRTC session belongs to the document that
+// negotiated it, which used to mean that going to Packages tore every screen down. It does not
+// any more: the app shell keeps this document alive in a frame while other pages load in
+// another one (see static/js/shell.js -- /remote is the page it is built around), so a trip to
+// Packages and back finds the same screens still connected.
+//
+// STILL NOT PERSISTED ACROSS RELOADS, and that part cannot be fixed here. Reload and the peer
+// connection is gone whatever the shell does, so a restored tab would be a name with a dead
 // session behind it. Reloading therefore ends every screen (see pagehide in remote.js) and
 // leaves an empty strip, rather than pretending otherwise.
 //

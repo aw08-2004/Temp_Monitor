@@ -79,7 +79,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.67.1"
+HUB_VERSION = "1.68.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3688,6 +3688,58 @@ def set_language():
     return jsonify({"language": language})
 
 
+# ================================
+# APP SHELL
+# ================================
+# base.html has three renderings and this picks between them. The point of the shell is that
+# the document holding the sidebar and topbar NEVER reloads: pages load into an iframe inside
+# it, so a remote screen survives a trip to Packages. That is not a nicety -- a WebRTC session
+# belongs to the document that negotiated it, and in a plain multi-page app clicking any nav
+# link tears one down (see static/js/remote.js's pagehide, which stops the hub session
+# deliberately rather than leaking a capture helper on the target PC for hours).
+#
+# The shell and the page it frames answer on the SAME url, told apart by Sec-Fetch-Dest, which
+# the browser sets on the request itself:
+#
+#   document -> "shell"    the chrome, with a frame already pointed at this url
+#   iframe   -> "framed"   this page's own content, no chrome around it
+#   absent   -> "classic"  the whole page exactly as it rendered before the shell existed
+#
+# Doing it on the header rather than on a ?frame=1 parameter is what keeps every existing url
+# working untouched: bookmarks, url_for(), the ?machine= deep link into Remote, and every link
+# already in the templates. A deep link to /packages is a document request, so it gets the
+# shell with Packages already in the frame -- one url, no redirect, no hash routing.
+#
+# "classic" is not a dead branch. It is every non-browser client (the test suite, curl, an
+# uptime monitor) and any browser too old to send Sec-Fetch-Dest, and it renders what this app
+# always rendered: a complete page, chrome included. Such a browser simply does not get the
+# persistence -- nothing else about it changes.
+def _shell_mode():
+    dest = request.headers.get("Sec-Fetch-Dest")
+    if dest == "iframe":
+        return "framed"
+    if dest == "document":
+        return "shell"
+    return "classic"
+
+
+@app.after_request
+def _frame_policy(response):
+    """Allow our own shell to frame us, and nobody else.
+
+    The shell needs same-origin framing to work at all, so this states that intent rather
+    than leaving it to a default -- and denies cross-origin framing while it is there, which
+    is the clickjacking defence a console with a Delete button wants regardless.
+
+    Note for deployments: an upstream proxy that adds `X-Frame-Options: DENY` of its own
+    wins (browsers apply the most restrictive of the headers they receive) and the shell
+    will render an empty frame. Terminate that at the proxy, not here.
+    """
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    return response
+
+
 @app.context_processor
 def inject_nav_context():
     """Feed the sidebar on every page render: the Alerts badge, and which nav links the
@@ -3709,6 +3761,7 @@ def inject_nav_context():
     context = {"open_alert_count": 0, "user_capabilities": set(),
                "is_superuser": False, "cap": permissions,
                "hub_version": HUB_VERSION,
+               "shell_mode": _shell_mode(),
                "latest_agent_version": get_latest_agent_version()}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):

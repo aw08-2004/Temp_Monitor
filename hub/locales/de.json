@@ -29,6 +29,9 @@
     "language": "Sprache",
     "language_auto": "Automatisch (Browser)"
   },
+  "shell": {
+    "frame_title": "Seiteninhalt"
+  },
   "login": {
     "title": "Anmelden",
     "prompt": "Melden Sie sich mit einem autorisierten Konto an, um die Übersicht zu sehen.",
