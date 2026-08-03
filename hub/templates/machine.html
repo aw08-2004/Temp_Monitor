@@ -7,7 +7,9 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
 {% endif %}
-{# Version-pinned with subresource integrity -- see history.html for why. #}
+{# Version-pinned with subresource integrity: an unversioned CDN URL resolves to whatever
+   the package publishes next, which would be a silent code-push into a console that can
+   run commands fleet-wide. Bumping a version means recomputing its integrity hash. #}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
         integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
         crossorigin="anonymous"></script>
@@ -36,12 +38,9 @@
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-backup"
                 aria-controls="tab-backup" aria-selected="false" tabindex="-1">{{ t('machine.tab.backup') }}</button>
         {% endif %}
-        {# Gated on remote_control, like the sidebar links -- the start/signal routes behind
-           it are gated server-side on remote_control AND this machine being in scope. #}
-        {% if cap.REMOTE_CONTROL in user_capabilities %}
-        <button class="tabs__tab" type="button" role="tab" id="tab-btn-remote"
-                aria-controls="tab-remote" aria-selected="false" tabindex="-1">{{ t('machine.tab.remote') }}</button>
-        {% endif %}
+        {# No Remote tab here: remote view/control lives on the Remote page, which can hold
+           several PCs side by side in its own tab strip. A second entry point on this page
+           meant two viewers for the same machine could be open at once. #}
         {# Firmware (roadmap #9) is NOT capability-gated: what a PC's BIOS is set to is
            inventory, like its model or its disks, and anyone who can open this page has
            `view` already. The re-read button inside is the part that needs issue_commands. #}
@@ -281,17 +280,6 @@
     <div class="tab-panel" id="tab-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden></div>
     {% endif %}
 
-    {% if cap.REMOTE_CONTROL in user_capabilities %}
-    {# Remote view/control (roadmap #2). The viewer markup is a partial shared with the
-       Remote page, which clones the same thing once per open PC -- see the partial's own
-       comment. remote.js finds this one by its data-remote-viewer attribute and wires it to
-       THIS machine; there is exactly one here, because this page is about one PC. Several
-       at once, side by side in tabs, is what the Remote page is for. #}
-    <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote" hidden>
-        {% include "partials/_remote_viewer.html" %}
-    </div>
-    {% endif %}
-
     {# Firmware settings, as last reported on the heartbeat (roadmap #9). Structure only --
        firmware.js renders the state (never reported / unsupported / error / N attributes)
        and the attribute table, because four states rendered from one payload are clearer in
@@ -447,9 +435,6 @@
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
 <script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
-{% endif %}
-{% if cap.REMOTE_CONTROL in user_capabilities %}
-<script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/wake.js') }}"></script>

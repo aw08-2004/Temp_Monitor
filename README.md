@@ -230,7 +230,6 @@ OIDC sign-in plus permission groups, see below):
   LibreHardwareMonitor tree, grouped hardware -> category -> sensor, including
   the readings nothing charts (VRM temperatures, rail voltages, battery charge
   and wear). Collapsed by default and only polled while open.
-- `/history` -- daily summary/average across all machines
 - `/alerts` -- conditions that want attention: machines running hot, and
   duplicate machines that share a serial while both online (see below)
 - `/inventory` -- one row per machine of the hardware/asset facts agents report
@@ -286,9 +285,8 @@ python hub/app.py
 
 ### Sign-in setup (OIDC)
 
-Viewing the dashboard (`/`, `/machine/<name>`, `/history`, and the
-`/api/history`, `/api/daily_summary`, `/api/machines`, `/api/machines/<name>`
-endpoints, plus live Socket.IO updates) requires signing in. Sign-in succeeds for
+Viewing the dashboard (`/`, `/machine/<name>`, and the `/api/machines`,
+`/api/machines/<name>` endpoints, plus live Socket.IO updates) requires signing in. Sign-in succeeds for
 an address in `ALLOWED_EMAILS` (break-glass superusers), one that belongs to at
 least one permission group, or one whose provider says it is in a **directory group**
 some permission group maps (see [Permission groups](#permission-groups)); anyone else
@@ -1025,7 +1023,7 @@ the operator's scope; every session start/stop is in the audit log.
   as SYSTEM into the interactive session. The helper captures the screen (DXGI), encodes
   H.264, and streams it to the operator's browser over WebRTC; the browser sends mouse and
   keyboard back over a data channel (`SendInput`). Ctrl+Alt+Del is supported.
-- **Which session gets captured — and choosing it.** The **Session** picker in the Remote tab
+- **Which session gets captured — and choosing it.** The **Session** picker in the Remote page's viewer
   lists the machine's logon sessions (who, where, what state), reported on the agent heartbeat.
   Leave it on **Auto** and the agent picks: a session Windows reports as `WTSActive`, not merely
   the physical console — on a machine administered over RDP the console session is often signed
@@ -1061,7 +1059,7 @@ the operator's scope; every session start/stop is in the audit log.
   duplication itself cannot be built.
 - **Headless machines need a virtual display.** Desktop Duplication duplicates a display
   *output*; a machine with no monitor has none, so there is genuinely nothing to capture and the
-  stream is black. The Remote tab shows a **No display outputs** badge on such a machine and
+  stream is black. The viewer shows a **No display outputs** badge on such a machine and
   offers to install a bundled IddCx **virtual display driver** on demand, per machine (never
   fleet-wide, never automatically). It is a user-mode (UMDF2) driver, so no test-signing, Secure
   Boot or HVCI changes are involved — but installing it does add its publisher to that machine's

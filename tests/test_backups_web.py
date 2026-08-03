@@ -178,8 +178,7 @@ def main():
         # Stubbing them is what lets a PAGE route's 403 be asserted here at all -- without
         # them the deny path dies in template rendering and reports 500, which would look
         # like the gate letting the request through.
-        for endpoint in ("index", "history_page", "inventory_page", "alerts_page",
-                         "logout"):
+        for endpoint in ("index", "inventory_page", "alerts_page", "logout"):
             app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "")
 
         @app.context_processor

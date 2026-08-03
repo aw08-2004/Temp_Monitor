@@ -1,7 +1,8 @@
-"""Tests the History-dashboard metric pipeline: diagnostics extraction of the new
-disk/network metrics, the typed metric columns on `readings` (populated at ingest and
-gated by the metrics.* collection toggles), the multi-metric per-machine history endpoint,
-and enabled_history_metrics().
+"""Tests the machine dashboard's metric pipeline: diagnostics extraction of the
+disk/network/cooling/power metrics, the full sensor tree behind the All sensors section,
+the typed metric columns on `readings` (populated at ingest and gated by the metrics.*
+collection toggles), the multi-metric per-machine history endpoint, and
+enabled_history_metrics().
 
 The load-bearing cases:
   - net_rx/net_tx must NOT pick up disk read/write throughput (both are SensorType
@@ -452,18 +453,6 @@ def test_machine_history_endpoint():
           r3.status_code == 200 and r3.get_json()["metrics"] == {})
 
 
-def test_history_metric_param_on_fleet_endpoint():
-    print("\n-- /api/history honours the metric param and rejects unknowns --")
-    client = _client()
-    _report(client, "HIST-2", 72.0, BLOCK)
-    today = app.today_str()
-    r = client.get(f"/api/history?machine=HIST-2&metric=cpu_load&date={today}&resolution=raw")
-    check("known metric 200", r.status_code == 200)
-    check("returns that machine's series", len(r.get_json().get("HIST-2", [])) >= 1)
-    r_bad = client.get(f"/api/history?metric=not_a_metric&date={today}")
-    check("unknown metric 400", r_bad.status_code == 400)
-
-
 # --------------------------------------------------------------------------- enabled map
 def test_enabled_history_metrics():
     print("\n-- enabled_history_metrics reflects the toggles; temp is always on --")
@@ -496,7 +485,6 @@ if __name__ == "__main__":
     test_sensorless_report_stores_null_metrics()
     test_all_sensors_endpoint()
     test_machine_history_endpoint()
-    test_history_metric_param_on_fleet_endpoint()
     test_enabled_history_metrics()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

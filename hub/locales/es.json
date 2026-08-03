@@ -6,7 +6,6 @@
   ],
   "nav": {
     "dashboard": "Panel",
-    "history": "Historial",
     "inventory": "Inventario de activos",
     "alerts": "Alertas",
     "remote": "Remoto",
@@ -47,8 +46,6 @@
     "empty": "Todavía no ha informado ningún equipo."
   },
   "history": {
-    "heading": "Resumen diario de temperatura",
-    "select_day": "Seleccionar día:",
     "resolution": "Resolución:",
     "resolution_label": {
       "raw": "Sin agregar",
@@ -59,37 +56,9 @@
     },
     "in_use": "En uso: {value}",
     "dynamic_on_zoom": "Dinámica al ampliar",
-    "load_day": "Cargar día",
     "zoom_in": "Ampliar",
     "zoom_out": "Reducir",
-    "reset_zoom": "Restablecer zoom",
-    "overall_avg": "Promedio diario general",
-    "temp_c": "{value} °C",
-    "temp_unknown": "-- °C",
-    "meta_prompt": "Selecciona un día para cargar los datos.",
-    "meta": "{date} • {machines} • {readings}",
-    "machine_count": {
-      "one": "{count} equipo",
-      "other": "{count} equipos"
-    },
-    "reading_count": {
-      "one": "{count} lectura",
-      "other": "{count} lecturas"
-    },
-    "avg_by_machine": "Promedio por equipo",
-    "col": {
-      "machine": "Equipo",
-      "average": "Promedio (°C)"
-    },
-    "no_data_loaded": "No hay datos cargados.",
-    "no_data_for_day": "No hay datos para el día seleccionado.",
-    "graph_title": "Gráfico diario de temperatura",
-    "zoom_hint": "Usa la rueda del ratón o arrastra para ampliar. Pasa el cursor sobre los puntos para ver las temperaturas exactas.",
-    "no_readings": "No se encontraron lecturas para este día.",
-    "axis": {
-      "time": "Hora",
-      "temperature": "Temperatura (°C)"
-    }
+    "reset_zoom": "Restablecer zoom"
   },
   "inventory": {
     "heading": "Inventario de activos",
@@ -1359,7 +1328,6 @@
       "overview": "Resumen",
       "terminal": "Terminal",
       "backup": "Copia",
-      "remote": "Remoto",
       "firmware": "Firmware",
       "network": "Red"
     },

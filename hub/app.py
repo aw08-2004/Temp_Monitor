@@ -79,7 +79,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.66.1"
+HUB_VERSION = "1.67.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -748,9 +748,9 @@ METRIC_COLUMN_TOGGLE = {
     "gpu_power_w": "metrics.collect_power",
 }
 
-# Friendly metric keys used by the /api/history `metric` param and the multi-metric
-# per-machine endpoint, mapped to their `readings` column. A whitelist -- callers never
-# choose a raw column name, so nothing user-supplied is interpolated into SQL.
+# Friendly metric keys used by the per-machine history endpoint's `metrics` param, mapped
+# to their `readings` column. A whitelist -- callers never choose a raw column name, so
+# nothing user-supplied is interpolated into SQL.
 HISTORY_METRIC_COLUMNS = {
     "temp": "temp",
     "cpu_load": "cpu_load_pct",
@@ -797,9 +797,9 @@ def metrics_for_storage(sensors):
 
 
 def enabled_history_metrics():
-    """Which /api/history metric keys are currently being collected, so the machine
-    dashboard renders a panel only for metrics whose toggle is on. Temperature has no
-    toggle and is always on."""
+    """Which history metric keys are currently being collected, so the machine dashboard
+    renders a panel only for metrics whose toggle is on. Temperature has no toggle and is
+    always on."""
     enabled = {}
     for key, column in HISTORY_METRIC_COLUMNS.items():
         toggle = METRIC_COLUMN_TOGGLE.get(column)
@@ -3522,9 +3522,9 @@ def dismiss_alert(alert_id):
     return jsonify({"status": "dismissed"}), 200
 
 def _resolve_history_window(args):
-    """Parse the shared date/from/to/resolution/limit query params into
+    """Parse the date/from/to/resolution/limit query params into
     (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
-    message on a bad date. Shared by /api/history and the per-machine history endpoint."""
+    message on a bad date."""
     date = args.get("date")
     from_raw = args.get("from")
     to_raw = args.get("to")
@@ -3570,31 +3570,6 @@ def _query_history_series(start_epoch, end_epoch, machine, limit, resolution, co
         allowed_machines)
 
 
-@app.route('/api/history')
-@login_required
-@access.require(permissions.VIEW)
-def get_history():
-    """Provide history data with optional range/machine/resolution/metric controls.
-    `metric` (default "temp") selects which column to chart; see HISTORY_METRIC_COLUMNS."""
-    machine = (request.args.get("machine") or "").strip() or None
-    metric = (request.args.get("metric") or "temp").strip().lower()
-    column = HISTORY_METRIC_COLUMNS.get(metric)
-    if column is None:
-        return jsonify({"error": f"Unknown metric: {metric}"}), 400
-    # A named machine outside the caller's scope is refused outright; the fleet-wide
-    # form is narrowed in SQL instead (see _scope_clause).
-    if machine and not access.in_scope(machine):
-        return jsonify({"error": f"You do not have access to {machine!r}."}), 403
-    try:
-        start_epoch, end_epoch, resolution, limit = _resolve_history_window(request.args)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-    history = _query_history_series(start_epoch, end_epoch, machine, limit, resolution,
-                                   column, access.current()["machines"])
-    return jsonify(history)
-
-
 @app.route('/api/machines/<machine>/history')
 @login_required
 @access.require_machine(permissions.VIEW)
@@ -3631,72 +3606,6 @@ def get_machine_history(machine):
         metrics[key] = series.get(machine_name, [])
     return jsonify({"machine": machine_name, "resolution": resolution, "metrics": metrics})
 
-@app.route('/api/daily_summary')
-@login_required
-@access.require(permissions.VIEW)
-def get_daily_summary():
-    """Provide daily averages and reading counts for selected date."""
-    date = request.args.get("date") or today_str()
-
-    # Parse before touching the filesystem: ensure_day_loaded_from_csv interpolates the
-    # value straight into the archive filename, so an unvalidated arg is a traversal
-    # primitive. parse_request_datetime is strict (fromisoformat/strptime), which is what
-    # rules out separators -- the ordering is the whole guarantee here.
-    day_start = parse_request_datetime(date)
-    if day_start is None:
-        return jsonify({"error": "Invalid date format; use YYYY-MM-DD."}), 400
-    ensure_day_loaded_from_csv(date)
-
-    day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1)
-    start_epoch = to_epoch_seconds(day_start)
-    end_epoch = to_epoch_seconds(day_end)
-    # Same scope narrowing as the history queries: a fleet-wide average that silently
-    # included machines the caller cannot see would leak their existence.
-    scope_sql, scope_params = _scope_clause(access.current()["machines"])
-
-    with get_db_conn() as conn:
-        summary = conn.execute(
-            f"""
-            SELECT AVG(temp) AS overall_avg, COUNT(*) AS reading_count
-            FROM readings
-            WHERE ts_epoch >= ? AND ts_epoch < ?{scope_sql}
-            """,
-            (start_epoch, end_epoch, *scope_params),
-        ).fetchone()
-
-        if not summary or int(summary["reading_count"]) == 0:
-            return jsonify({
-                "date": date,
-                "overall_avg": None,
-                "machine_averages": {},
-                "machine_count": 0,
-                "reading_count": 0
-            })
-
-        machine_rows = conn.execute(
-            f"""
-            SELECT machine, AVG(temp) AS avg_temp
-            FROM readings
-            WHERE ts_epoch >= ? AND ts_epoch < ?{scope_sql}
-            GROUP BY machine
-            ORDER BY machine ASC
-            """,
-            (start_epoch, end_epoch, *scope_params),
-        ).fetchall()
-
-    machine_averages = {
-        row["machine"]: round(float(row["avg_temp"]), 1)
-        for row in machine_rows
-    }
-
-    return jsonify({
-        "date": date,
-        "overall_avg": round(float(summary["overall_avg"]), 1),
-        "machine_averages": machine_averages,
-        "machine_count": len(machine_averages),
-        "reading_count": int(summary["reading_count"])
-    })
 
 def current_language():
     """The language for THIS request, resolved once and memoised on `g`.
@@ -3834,13 +3743,6 @@ def index():
     # The Dashboard no longer classifies high temperatures (that is the Alerts tab now, from a
     # server-side average), so the threshold values it used to embed are gone.
     return render_template("index.html", hub_version=HUB_VERSION,
-                           latest_agent_version=get_latest_agent_version())
-
-@app.route("/history")
-@login_required
-@access.require(permissions.VIEW)
-def history_page():
-    return render_template("history.html", hub_version=HUB_VERSION,
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/inventory")
