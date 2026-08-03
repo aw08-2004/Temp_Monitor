@@ -21,18 +21,56 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
-{% block extra_head %}{% endblock %}
+{# The shell renders no page content, so it needs no page stylesheet either -- and pulling
+   in, say, remote.css around an empty frame host is how the chrome starts inheriting rules
+   meant for a page. #}
+{% if shell_mode != 'shell' %}{% block extra_head %}{% endblock %}{% endif %}
 </head>
 <body>
-<div class="app-shell">
+{% if shell_mode == 'shell' %}
+{# ---------------------------------------------------------------- the shell -------------
+   The document that never reloads: chrome on the outside, pages in a frame. Which url it
+   opens on is this very request's url, so a deep link, a bookmark and a refresh all land
+   where they were pointed. See app.py's _shell_mode() for why this and the framed page
+   answer on the same url, and static/js/shell.js for the navigation itself.
+
+   The frame is rendered here rather than created by shell.js so the page inside it starts
+   loading with the document, not a script later -- and so its FIRST load is the frame's
+   initial navigation, which (unlike a later src assignment) adds no browser history entry
+   of its own. #}
+<div class="app-shell app-shell--frames">
     {% include "partials/_sidebar.html" %}
     <div class="app-shell__main">
         {% include "partials/_topbar.html" %}
+        <div class="app-frames" id="app-frames">
+            {# allow=fullscreen is load-bearing: a framed document may not enter fullscreen
+               unless its embedder delegates the permission, and without it the remote
+               viewer's Fullscreen button silently does nothing. #}
+            {# request.path + the raw query, NOT request.full_path: that one appends a bare
+               "?" when there is no query string, which would leave the shell and the frame
+               disagreeing about their own url on every plain page. #}
+            <iframe class="app-frames__frame"
+                    src="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode('utf-8', 'replace') }}{% endif %}"
+                    title="{{ t('shell.frame_title') }}"
+                    allow="fullscreen; clipboard-read; clipboard-write" allowfullscreen></iframe>
+        </div>
+    </div>
+</div>
+{% else %}
+{# ------------------------------------------------- the page: framed, or the whole thing ---
+   Identical markup either way apart from the chrome, which the shell already has on screen
+   around the frame. Same wrapper, same .app-shell__content, so every rule and every page
+   script sees exactly what it saw before the shell existed. #}
+<div class="app-shell{% if shell_mode == 'framed' %} app-shell--bare{% endif %}">
+    {% if shell_mode != 'framed' %}{% include "partials/_sidebar.html" %}{% endif %}
+    <div class="app-shell__main">
+        {% if shell_mode != 'framed' %}{% include "partials/_topbar.html" %}{% endif %}
         <main class="app-shell__content">
             {% block content %}{% endblock %}
         </main>
     </div>
 </div>
+{% endif %}
 {# The catalog is embedded rather than fetched so it cannot race the scripts below, which
    call t() during their own top-level execution. `| safe` is correct here and only here:
    i18n.catalog_json() already produced JSON with `<` escaped, and Jinja's HTML escaping
@@ -40,9 +78,14 @@
 <script type="application/json" id="i18n-catalog">{{ i18n_catalog_json | safe }}</script>
 <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+{% if shell_mode == 'shell' %}
+<script src="{{ url_for('static', filename='js/shell.js') }}"></script>
+{% else %}
 {# Loaded for every page: it auto-upgrades long <select>s to searchable comboboxes and
-   provides attachAutocomplete for the pickers that call it directly. #}
+   provides attachAutocomplete for the pickers that call it directly. Not for the shell,
+   which has no page content to upgrade. #}
 <script src="{{ url_for('static', filename='js/autocomplete.js') }}"></script>
 {% block page_scripts %}{% endblock %}
+{% endif %}
 </body>
 </html>

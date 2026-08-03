@@ -9,16 +9,23 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
     </div>
+    {# data-nav-prefix is the same "which link is active" question as the request.endpoint
+       tests below, asked in the form static/js/shell.js can answer. The server can only
+       decide it once, when the shell document is built; inside the shell the sidebar
+       outlives every page it navigates to, so the active state has to be re-derived from a
+       path. Space-separated: Dashboard owns "/" and every "/machine/..." under it, exactly
+       as its endpoint tuple does. tests/test_shell.py pins each one against its own href so
+       the two cannot drift apart. #}
     <nav class="sidebar__nav">
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" href="{{ url_for('index') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" data-nav-prefix="/ /machine" href="{{ url_for('index') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
             {{ t('nav.dashboard') }}
         </a>
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'inventory_page' else '' }}" href="{{ url_for('inventory_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'inventory_page' else '' }}" data-nav-prefix="/inventory" href="{{ url_for('inventory_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg>
             {{ t('nav.inventory') }}
         </a>
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'alerts_page' else '' }}" href="{{ url_for('alerts_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'alerts_page' else '' }}" data-nav-prefix="/alerts" href="{{ url_for('alerts_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a6 6 0 0 0-6 6c0 4-2 5-2 7h16c0-2-2-3-2-7a6 6 0 0 0-6-6z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
             {{ t('nav.alerts') }}
             {% if open_alert_count %}<span class="sidebar__badge">{{ open_alert_count }}</span>{% endif %}
@@ -28,49 +35,49 @@
            permissions_web.Access) -- but a sidebar of links that all 403 is worse than
            no link at all. #}
         {% if cap.REMOTE_CONTROL in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'remote_page' else '' }}" href="{{ url_for('remote_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'remote_page' else '' }}" data-nav-prefix="/remote" href="{{ url_for('remote_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 20h10"/><path d="M11 14v6"/><rect x="17" y="10" width="5" height="10" rx="1.5"/></svg>
             {{ t('nav.remote') }}
         </a>
         {% endif %}
         {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" href="{{ url_for('audit.audit_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" data-nav-prefix="/audit" href="{{ url_for('audit.audit_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
             {{ t('nav.audit_log') }}
         </a>
         {% endif %}
         {% if cap.DEPLOY_PACKAGES in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'packages.packages_page' else '' }}" href="{{ url_for('packages.packages_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'packages.packages_page' else '' }}" data-nav-prefix="/packages" href="{{ url_for('packages.packages_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
             {{ t('nav.packages') }}
         </a>
         {% endif %}
         {% if cap.MANAGE_FIRMWARE in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'bios.firmware_page' else '' }}" href="{{ url_for('bios.firmware_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'bios.firmware_page' else '' }}" data-nav-prefix="/firmware" href="{{ url_for('bios.firmware_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>
             {{ t('nav.firmware') }}
         </a>
         {% endif %}
         {% if cap.MANAGE_BACKUPS in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'backups.backups_page' else '' }}" href="{{ url_for('backups.backups_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'backups.backups_page' else '' }}" data-nav-prefix="/backups" href="{{ url_for('backups.backups_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
             {{ t('nav.backups') }}
         </a>
         {% endif %}
         {% if cap.MANAGE_SETTINGS in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'settings_page' else '' }}" href="{{ url_for('settings_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'settings_page' else '' }}" data-nav-prefix="/settings" href="{{ url_for('settings_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>
             {{ t('nav.settings') }}
         </a>
         {% endif %}
         {% if cap.MANAGE_PERMISSION_GROUPS in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'permissions_page' else '' }}" href="{{ url_for('permissions_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'permissions_page' else '' }}" data-nav-prefix="/permissions" href="{{ url_for('permissions_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9.5 12l1.8 1.8L15 10"/></svg>
             {{ t('nav.permission_groups') }}
         </a>
         {% endif %}
         {% if cap.MANAGE_USERS in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'users.users_page' else '' }}" href="{{ url_for('users.users_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'users.users_page' else '' }}" data-nav-prefix="/users" href="{{ url_for('users.users_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             {{ t('nav.users') }}
         </a>

@@ -5,8 +5,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <span class="topbar__brand">FleetHub</span>
-    {% if request.endpoint in ('index', 'machine_page') %}
-    <span id="socket-status" class="status-pill status-pill--muted"><span class="status-pill__dot"></span>{{ t('topbar.connecting') }}</span>
+    {# The live-data pill belongs to the page, but the topbar it sits in is the shell's, and
+       the shell has no idea which page is in the frame. So in shell mode it is rendered once
+       and starts hidden: common.js's connectSocketWithStatus() writes into it through the
+       frame boundary and marks its own frame as a claimant, and shell.js shows or hides it
+       per screen from that mark. Outside the shell it is what it always was -- rendered only
+       on the two pages that connect a socket. #}
+    {% if shell_mode == 'shell' or request.endpoint in ('index', 'machine_page') %}
+    <span id="socket-status" class="status-pill status-pill--muted"
+          {{ 'hidden' if shell_mode == 'shell' else '' }}><span class="status-pill__dot"></span>{{ t('topbar.connecting') }}</span>
     {% endif %}
     {# Secondary chrome. On desktop the wrapper is `display: contents`, so these sit in the
        topbar row exactly as they always did -- flex `order` (components.css) keeps the

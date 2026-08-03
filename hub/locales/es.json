@@ -29,6 +29,9 @@
     "language": "Idioma",
     "language_auto": "Automático (navegador)"
   },
+  "shell": {
+    "frame_title": "Contenido de la página"
+  },
   "login": {
     "title": "Iniciar sesión",
     "prompt": "Inicia sesión con una cuenta autorizada para ver el panel.",

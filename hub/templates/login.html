@@ -6,6 +6,13 @@
 <title>{{ t('login.title') }} - FleetHub</title>
 <link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
 <script>
+// A session that expires while the console is open leaves the app shell's frame pointed at a
+// page that redirects here (see app.py's _shell_mode) -- and a login form wrapped in the
+// chrome of the session it just lost is both confusing and useless, since Google refuses to
+// be framed at all. Break out to the whole window and sign in there.
+if (window.top !== window.self) window.top.location.replace(window.location.href);
+</script>
+<script>
 (function () {
     try {
         var saved = localStorage.getItem('tempmonitor:theme');
