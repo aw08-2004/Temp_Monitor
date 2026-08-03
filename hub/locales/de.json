@@ -6,7 +6,6 @@
   ],
   "nav": {
     "dashboard": "Übersicht",
-    "history": "Verlauf",
     "inventory": "Anlageninventar",
     "alerts": "Warnungen",
     "remote": "Remote",
@@ -47,8 +46,6 @@
     "empty": "Bisher hat kein Computer Daten gemeldet."
   },
   "history": {
-    "heading": "Tägliche Temperaturübersicht",
-    "select_day": "Tag auswählen:",
     "resolution": "Auflösung:",
     "resolution_label": {
       "raw": "Ungefiltert",
@@ -59,37 +56,9 @@
     },
     "in_use": "Verwendet: {value}",
     "dynamic_on_zoom": "Dynamisch beim Zoomen",
-    "load_day": "Tag laden",
     "zoom_in": "Vergrößern",
     "zoom_out": "Verkleinern",
-    "reset_zoom": "Zoom zurücksetzen",
-    "overall_avg": "Tagesdurchschnitt gesamt",
-    "temp_c": "{value} °C",
-    "temp_unknown": "-- °C",
-    "meta_prompt": "Wähle einen Tag, um Daten zu laden.",
-    "meta": "{date} • {machines} • {readings}",
-    "machine_count": {
-      "one": "{count} Computer",
-      "other": "{count} Computer"
-    },
-    "reading_count": {
-      "one": "{count} Messwert",
-      "other": "{count} Messwerte"
-    },
-    "avg_by_machine": "Durchschnitt pro Computer",
-    "col": {
-      "machine": "Computer",
-      "average": "Durchschnitt (°C)"
-    },
-    "no_data_loaded": "Keine Daten geladen.",
-    "no_data_for_day": "Keine Daten für den gewählten Tag.",
-    "graph_title": "Tages-Temperaturverlauf",
-    "zoom_hint": "Zum Zoomen das Mausrad benutzen oder ziehen. Für genaue Temperaturen mit der Maus über die Punkte fahren.",
-    "no_readings": "Für diesen Tag wurden keine Messwerte gefunden.",
-    "axis": {
-      "time": "Zeit",
-      "temperature": "Temperatur (°C)"
-    }
+    "reset_zoom": "Zoom zurücksetzen"
   },
   "inventory": {
     "heading": "Anlageninventar",
@@ -1359,7 +1328,6 @@
       "overview": "Übersicht",
       "terminal": "Terminal",
       "backup": "Sicherung",
-      "remote": "Remote",
       "firmware": "Firmware",
       "network": "Netzwerk"
     },

@@ -703,15 +703,9 @@
         };
     }
 
+    // The only entry point: the Remote page builds a viewer per open PC from its <template>
+    // copy of the partial (remote-workspace.js). There is no self-bootstrapping viewer here
+    // any more -- the machine page used to include the partial directly and have this file
+    // adopt it, which is the second entry point that let one PC be opened twice.
     window.RemoteViewer = { create };
-
-    // ---- The machine page's single viewer -------------------------------------------------
-    // Not in a DOMContentLoaded handler: page scripts are loaded at the end of <body>, so the
-    // markup above is already parsed. The Remote page keeps its copy of the partial inside a
-    // <template>, whose content is a separate document fragment -- querySelector does not
-    // reach into it -- so this cannot accidentally adopt one of that page's screens.
-    const solo = document.querySelector('[data-remote-viewer]');
-    if (solo && window.FleetApi && window.FleetApi.machine) {
-        create(solo, window.FleetApi.machine);
-    }
 })();

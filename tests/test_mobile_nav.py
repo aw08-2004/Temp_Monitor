@@ -40,7 +40,7 @@ def _register_sidebar_stubs(app):
     """base.html includes the shared sidebar, which url_for()s every other page -- app.py
     defines those, so this minimal app must stand them up or rendering is a BuildError
     that has nothing to do with the nav. Same helper as test_audit_web.py."""
-    for endpoint in ("index", "history_page", "inventory_page", "alerts_page",
+    for endpoint in ("index", "inventory_page", "alerts_page",
                      "remote_page", "settings_page", "permissions_page", "logout"):
         app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
     for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),

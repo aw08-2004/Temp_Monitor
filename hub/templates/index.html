@@ -2,7 +2,9 @@
 {% block title %}{{ t('nav.dashboard') }} - FleetHub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
-{# Subresource integrity -- see history.html for why. #}
+{# Subresource integrity: an unversioned CDN URL resolves to whatever the package publishes
+   next, which would be a silent code-push into a console that can run commands fleet-wide.
+   Bumping a version means recomputing its integrity hash. #}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"
         integrity="sha384-ijk2QwnixVP19l5ENflXHY2/BMo9ANUiTqH6MiVk6i7wp68I6wjNQFOcyayHgClg"
         crossorigin="anonymous"></script>

@@ -16,7 +16,6 @@
   ],
   "nav": {
     "dashboard": "Dashboard",
-    "history": "History",
     "inventory": "Asset Inventory",
     "alerts": "Alerts",
     "remote": "Remote",
@@ -62,11 +61,9 @@
     "empty": "No machines have reported in yet."
   },
   "history": {
-    "heading": "Daily Temperature Summary",
-    "select_day": "Select day:",
     "resolution": "Resolution:",
     "_resolution_label": [
-      "The four bucket sizes the summary can be aggregated at. 'Raw' is prose and needs",
+      "The four bucket sizes a machine's history charts can be aggregated at. 'Raw' is prose and needs",
       "translating; the other three are duration abbreviations, so translate them only if",
       "your language abbreviates seconds/minutes differently. The VALUES sent to the API",
       "are fixed strings ('raw', '10s', ...) and are not these labels."
@@ -80,44 +77,9 @@
     },
     "in_use": "In use: {value}",
     "dynamic_on_zoom": "Dynamic on zoom",
-    "load_day": "Load Day",
     "zoom_in": "Zoom In",
     "zoom_out": "Zoom Out",
-    "reset_zoom": "Reset Zoom",
-    "overall_avg": "Overall Daily Average",
-    "temp_c": "{value} °C",
-    "temp_unknown": "-- °C",
-    "meta_prompt": "Select a day to load data.",
-    "_meta": [
-      "Not a sentence: three separate facts on one line, bullet-separated. {machines} and",
-      "{readings} arrive ALREADY pluralised (from machine_count/reading_count below),",
-      "because two independent counts in one string would need a four-way plural the",
-      "one/other helper cannot express. Reorder the parts freely; do not add words that",
-      "would have to agree with a count."
-    ],
-    "meta": "{date} • {machines} • {readings}",
-    "machine_count": {
-      "one": "{count} machine",
-      "other": "{count} machines"
-    },
-    "reading_count": {
-      "one": "{count} reading",
-      "other": "{count} readings"
-    },
-    "avg_by_machine": "Average by Machine",
-    "col": {
-      "machine": "Machine",
-      "average": "Average (°C)"
-    },
-    "no_data_loaded": "No data loaded.",
-    "no_data_for_day": "No data for selected day.",
-    "graph_title": "Daily Temperature Graph",
-    "zoom_hint": "Use mouse wheel or drag to zoom. Hover points to see exact temperatures.",
-    "no_readings": "No readings found for this day.",
-    "axis": {
-      "time": "Time",
-      "temperature": "Temperature (°C)"
-    }
+    "reset_zoom": "Reset Zoom"
   },
   "inventory": {
     "heading": "Asset Inventory",
@@ -1463,7 +1425,6 @@
       "overview": "Overview",
       "terminal": "Terminal",
       "backup": "Backup",
-      "remote": "Remote",
       "firmware": "Firmware",
       "network": "Network"
     },
