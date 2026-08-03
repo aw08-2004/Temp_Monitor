@@ -279,6 +279,12 @@ def test_diagnostics_empty_has_all_keys():
         d = app.extract_diagnostics(block)
         check(f"all metric keys present and None ({block!r})",
               all(d.get(k) is None for k in METRIC_COLUMNS))
+        # The page hides hardware a machine doesn't have. "No block at all" must be
+        # distinguishable from "reported, and has no GPU", or an offline machine loses
+        # every card on its overview.
+        check(f"has_sensors is False without a block ({block!r})", d["has_sensors"] is False)
+    check("has_sensors is True for a real block",
+          app.extract_diagnostics(BLOCK)["has_sensors"] is True)
 
 
 # --------------------------------------------------------------------------- ingest -> columns
@@ -376,6 +382,39 @@ def test_sensorless_report_stores_null_metrics():
           all(m[k] is None for k in METRIC_COLUMNS))
 
 
+# --------------------------------------------------------------------------- all sensors
+def test_all_sensors_endpoint():
+    """The full sensor tree, which exists precisely because the curated diagnostics fields
+    can't have anticipated what an operator will need. Nothing may be filtered out of it,
+    and the report order has to survive -- LHM groups a chip's sensors deliberately."""
+    print("\n-- every reported sensor is served, grouped and in report order --")
+    client = _client()
+    _report(client, "SENSORS-ALL", 70.0, BLOCK)
+
+    body = client.get("/api/machines/SENSORS-ALL/sensors/all").get_json()
+    check("count matches the reported block", body["count"] == len(BLOCK))
+    hardware = {hw["name"]: hw for hw in body["hardware"]}
+    # CPU, RAM, GPU, SSD, NIC, the synthetic volume, and the SuperIO chip the fans hang off.
+    check("one entry per distinct hardware", len(body["hardware"]) == 7)
+    check("hardware appears in report order",
+          [hw["name"] for hw in body["hardware"]][0] == "Ryzen 7")
+
+    cpu_groups = {g["name"]: g["sensors"] for g in hardware["Ryzen 7"]["groups"]}
+    check("sensors are grouped by category", set(cpu_groups) == {"Temperature", "Load", "Power"})
+    check("both CPU power rails are served, not just the charted one",
+          {s["name"] for s in cpu_groups["Power"]} == {"CPU Package", "CPU Cores"})
+    check("values come through", cpu_groups["Temperature"][0]["value"] == 70.0)
+
+    # The agent's own formatted text is what carries units for sensor types the hub has no
+    # opinion about; absent in this synthetic block, which must not break the row.
+    check("a sensor with no text still serves a value",
+          cpu_groups["Temperature"][0]["text"] is None)
+
+    empty = client.get("/api/machines/NOBODY-HOME/sensors/all").get_json()
+    check("an unknown machine yields an empty tree, not an error",
+          empty["count"] == 0 and empty["hardware"] == [])
+
+
 # --------------------------------------------------------------------------- history endpoint
 def test_machine_history_endpoint():
     print("\n-- the multi-metric per-machine history endpoint --")
@@ -455,6 +494,7 @@ if __name__ == "__main__":
     test_ingest_stores_metric_columns()
     test_ingest_respects_collection_toggles()
     test_sensorless_report_stores_null_metrics()
+    test_all_sensors_endpoint()
     test_machine_history_endpoint()
     test_history_metric_param_on_fleet_endpoint()
     test_enabled_history_metrics()

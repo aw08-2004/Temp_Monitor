@@ -1391,6 +1391,16 @@
     "no_disks": "Todavía no se ha informado de ningún disco.",
     "cooling": "Refrigeración",
     "no_fans": "No se han informado sensores de ventilador. Muchos portátiles y equipos OEM no los exponen.",
+    "sensors": {
+      "title": "Todos los sensores",
+      "filter": "Filtrar sensores",
+      "count": {
+        "one": "{count} lectura",
+        "other": "{count} lecturas"
+      },
+      "none": "Este equipo todavía no ha informado de ningún sensor.",
+      "no_match": "Ningún sensor coincide con ese filtro."
+    },
     "sensor": {
       "title": "Sensor de temperatura principal",
       "use": "Usar el sensor:",

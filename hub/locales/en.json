@@ -1495,6 +1495,16 @@
     "no_disks": "No disks reported yet.",
     "cooling": "Cooling",
     "no_fans": "No fan sensors reported. Many laptops and OEM desktops don't expose them.",
+    "sensors": {
+      "title": "All sensors",
+      "filter": "Filter sensors",
+      "count": {
+        "one": "{count} reading",
+        "other": "{count} readings"
+      },
+      "none": "This machine hasn't reported any sensors yet.",
+      "no_match": "No sensor matches that filter."
+    },
     "sensor": {
       "title": "Primary temperature sensor",
       "use": "Use sensor:",

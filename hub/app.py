@@ -656,6 +656,12 @@ def extract_diagnostics(sensors):
     found -- e.g. no discrete GPU, or an older client that sent no sensors."""
     if not sensors:
         return {
+            # "we have never seen this machine's sensors" -- distinct from "it reported and
+            # has no GPU". The page hides absent hardware, and hiding on the strength of a
+            # block we simply don't have would empty the overview of a machine that is
+            # merely offline. Every other key here is None, so this flag is the only way to
+            # tell the two apart.
+            "has_sensors": False,
             "cpu_load_pct": None, "cpu_clock_mhz": None,
             "gpu_temp": None, "gpu_load_pct": None, "gpu_clock_mhz": None,
             "memory_load_pct": None, "mem_used_gb": None, "mem_total_gb": None,
@@ -669,6 +675,7 @@ def extract_diagnostics(sensors):
     disk_read_bps, disk_write_bps = _disk_throughput(sensors)
     fans = _fans(sensors)
     return {
+        "has_sensors": True,
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
         "gpu_temp": _find_sensor_value(sensors, "gpu", "Temperature", ["gpu core", "gpu hot spot", "gpu package"]),
@@ -3229,7 +3236,11 @@ def get_machine(machine):
     }
     result['uptime_seconds'] = uptime_seconds
     result['temp'] = temp
-    result['diagnostics'] = extract_diagnostics(get_latest_sensors(machine_name))
+    # _recent_sensors_for, not the in-memory cache alone: the page hides the panels for
+    # hardware a machine doesn't have, and the cache is empty for every machine until it
+    # reports again after a hub restart. Falling back to the stored block means an offline
+    # PC still shows the disks and fans it HAS, rather than looking like it has none.
+    result['diagnostics'] = extract_diagnostics(_recent_sensors_for(machine_name))
     result['status'] = derive_machine_status(result.get('updated_at'))
     result['primary_sensor_name'] = get_primary_sensor_override(machine_name)
     return jsonify(result)
@@ -3273,6 +3284,61 @@ def get_machine_sensors(machine):
         "sensors": available,
         "primary_sensor_name": get_primary_sensor_override(machine_name),
         "preference": settings.get_list(DB_PATH, "computer.primary_sensor_preference"),
+    })
+
+
+@app.route('/api/machines/<machine>/sensors/all')
+@login_required
+@access.require_machine(permissions.VIEW)
+def get_machine_all_sensors(machine):
+    """EVERY sensor this machine reported, grouped the way LibreHardwareMonitor's own tree
+    groups them: hardware -> category -> sensors.
+
+    The curated diagnostics fields exist because a dashboard has to choose what to chart.
+    This endpoint deliberately chooses nothing: the agent flattens the entire LHM tree
+    (every hardware category, every sub-hardware, several hundred sensors on a workstation)
+    and until now the hub stored all of it and showed a dozen. A helpdesk operator chasing
+    "why is this PC throttling" wants the VRM temperature and the +12V rail, and no
+    hand-picked list is ever going to have guessed at those in advance.
+
+    Rendered from the block as reported -- `group` and `text` are the agent's own
+    formatting (SensorReader.GroupFor/FormatText), so a sensor type the hub has never heard
+    of still arrives with a sensible heading and a unit. Report order is preserved
+    throughout: LHM walks hardware in a deliberate order, and re-sorting it alphabetically
+    would scatter "Core #1..#16" and split each chip's temperatures away from its clocks.
+    """
+    machine_name = str(machine).strip()
+    sensors = _recent_sensors_for(machine_name) or []
+
+    hardware = {}          # id -> {name, id, groups: {group -> [sensor, ...]}}
+    for s in sensors:
+        if not isinstance(s, dict):
+            continue
+        hardware_id = str(s.get("hardware_id") or "")
+        entry = hardware.setdefault(hardware_id, {
+            "id": hardware_id,
+            "name": str(s.get("hardware") or "") or hardware_id,
+            "groups": {},
+        })
+        # An unknown/absent group still gets a heading rather than silently dropping the
+        # sensor -- "no category" is not a reason to hide a reading from the operator.
+        group = str(s.get("group") or "").strip() or str(s.get("type") or "").strip() or "Other"
+        entry["groups"].setdefault(group, []).append({
+            "name": str(s.get("name") or ""),
+            "type": str(s.get("type") or ""),
+            "value": s.get("value") if isinstance(s.get("value"), (int, float))
+                     and not isinstance(s.get("value"), bool) else None,
+            "text": s.get("text") if isinstance(s.get("text"), str) else None,
+        })
+
+    return jsonify({
+        "machine": machine_name,
+        "count": sum(len(items) for hw in hardware.values() for items in hw["groups"].values()),
+        "hardware": [
+            {"id": hw["id"], "name": hw["name"],
+             "groups": [{"name": name, "sensors": items} for name, items in hw["groups"].items()]}
+            for hw in hardware.values()
+        ],
     })
 
 

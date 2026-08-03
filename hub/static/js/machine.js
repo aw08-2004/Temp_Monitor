@@ -321,7 +321,7 @@ function buildPanels() {
 
         gridEl.appendChild(container);
         const chart = new Chart(canvas.getContext('2d'), panelConfig(metric));
-        panels.push({ metric, chart, emptyEl, titleEl: title });
+        panels.push({ metric, chart, emptyEl, titleEl: title, container });
     }
     // If diagnostics already told us the RAM size before the panels existed, apply it now.
     if (Number.isFinite(memTotalGb)) updateMemoryTotal(memTotalGb);
@@ -384,6 +384,7 @@ async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
             p.chart.data.datasets[0].data = points;
             p.emptyEl.style.display = points.length ? 'none' : 'block';
             if (points.length) anyData = true;
+            setPanelVisible(p, panelHasSubject(p, points.length));
             applyRange(p.chart, minMs, maxMs, resetZoom);
         }
         noDataEl.style.display = anyData ? 'none' : 'block';
@@ -614,10 +615,69 @@ function renderFans(fans) {
     }
 }
 
+// ---- Show only the hardware this machine actually has --------------------------
+// A card whose every reading is absent is hidden outright rather than left showing "--":
+// an office PC has no discrete GPU, most laptops expose no fan, and a permanent row of
+// dashes reads as "this is broken" rather than "not applicable here".
+//
+// Gated on diagnostics.has_sensors, which is the hub saying it HAS a sensor block for this
+// machine. Without one -- a machine that has never reported -- "absent" and "not yet known"
+// are indistinguishable, and hiding on the strength of that would strip the page of a PC
+// that is merely offline.
+let lastDiagnostics = {};
+
+function hasReading(...values) {
+    return values.some((v) => typeof v === 'number' && Number.isFinite(v));
+}
+
+function setCardVisible(id, visible) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !visible;
+}
+
+function applyPresence(d) {
+    if (!d.has_sensors) return;
+    setCardVisible('card-cpu-load', hasReading(d.cpu_load_pct));
+    setCardVisible('card-cpu-clock', hasReading(d.cpu_clock_mhz));
+    setCardVisible('card-cpu-power', hasReading(d.cpu_power_w));
+    // One card for four GPU readings: it stays as long as the machine reports ANY of them,
+    // because a GPU that reports load but no temperature is still a GPU worth showing.
+    setCardVisible('card-gpu',
+                   hasReading(d.gpu_temp, d.gpu_load_pct, d.gpu_clock_mhz, d.gpu_power_w));
+    setCardVisible('card-storage', Array.isArray(d.disks) && d.disks.length > 0);
+    setCardVisible('card-cooling', Array.isArray(d.fans) && d.fans.length > 0);
+    for (const p of panels) setPanelVisible(p, panelHasSubject(p));
+}
+
+// Whether a chart panel has anything to be about. `points` is this panel's history for the
+// loaded range when we have just fetched it; the live reading counts too, so a machine that
+// only started reporting a sensor five minutes ago still gets its panel.
+function panelHasSubject(panel, points) {
+    // Temperature is the core metric and drives the alerts -- it keeps its panel even on a
+    // machine reporting nothing, where an empty chart is itself the answer.
+    if (panel.metric.key === 'temp') return true;
+    if (!lastDiagnostics.has_sensors) return true;
+    if (points) return true;
+    if (hasReading(lastDiagnostics[panel.metric.diag])) return true;
+    // Not yet loaded: leave whatever the last decision was rather than flickering the
+    // panel out between a diagnostics update and the history that follows it.
+    return points === undefined ? !panel.container.hidden : false;
+}
+
+function setPanelVisible(panel, visible) {
+    const wasHidden = panel.container.hidden;
+    panel.container.hidden = !visible;
+    // Chart.js measures its canvas on creation; one built (or resized) while its container
+    // was display:none comes back 0 px tall, so re-measure on the way in.
+    if (wasHidden && visible) panel.chart.resize();
+}
+
 function applyDiagnostics(diagnostics) {
     const d = diagnostics || {};
+    lastDiagnostics = d;
     renderDisks(d.disks);
     renderFans(d.fans);
+    applyPresence(d);
     if (typeof d.mem_total_gb === 'number') updateMemoryTotal(d.mem_total_gb);
     lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
     document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');
@@ -779,6 +839,121 @@ async function savePrimarySensor() {
         primarySensorStatus.textContent = t('machine.sensor_save_failed', { error: e.message });
     }
 }
+
+// ---- Every sensor the machine reports ------------------------------------------
+// The cards and charts above are a chosen dozen readings. This is the rest: the whole
+// flattened LHM tree the agent already sends, grouped hardware -> category -> sensor, so
+// the VRM temperature or the +12V rail is there when somebody needs it -- without any of
+// them having to be promoted to a card first.
+//
+// Polled only while the section is open AND the tab is in front. Collapsed (the default)
+// it costs nothing, which is what makes it affordable to show several hundred readings on
+// a page that is otherwise a summary.
+const sensorBrowserEl = document.getElementById('sensor-browser');
+const sensorBrowserBody = document.getElementById('sensor-browser-body');
+const sensorBrowserCount = document.getElementById('sensor-browser-count');
+const sensorFilterEl = document.getElementById('sensor-filter');
+const SENSOR_REFRESH_MS = 10000;        // the agent's own sensor reporting cadence
+let sensorTree = [];
+let sensorTimer = null;
+
+async function loadAllSensors() {
+    try {
+        const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/sensors/all`);
+        if (!resp.ok) return;
+        const body = await resp.json();
+        sensorTree = Array.isArray(body.hardware) ? body.hardware : [];
+        sensorBrowserCount.textContent =
+            tPlural('machine.sensors.count', Number(body.count) || 0);
+        renderSensorTree();
+    } catch (e) { /* non-critical */ }
+}
+
+// Value as the AGENT formatted it (text: "61.0 °C", "1120.0 RPM"), falling back to the raw
+// number. That is what lets this table show a sensor type the hub has never heard of with
+// the right unit -- the agent knows LHM's vocabulary, and the hub does not have to.
+function sensorValueText(sensor) {
+    if (typeof sensor.text === 'string' && sensor.text) return sensor.text;
+    if (typeof sensor.value === 'number' && Number.isFinite(sensor.value)) {
+        return String(sensor.value);
+    }
+    return t('machine.unknown');
+}
+
+function renderSensorTree() {
+    const needle = (sensorFilterEl.value || '').trim().toLowerCase();
+    sensorBrowserBody.replaceChildren();
+    let shown = 0;
+
+    for (const hw of sensorTree) {
+        const hwName = hw.name || '';
+        const groups = [];
+        for (const group of hw.groups || []) {
+            const matches = (group.sensors || []).filter((s) => !needle ||
+                `${hwName} ${group.name || ''} ${s.name || ''}`.toLowerCase().includes(needle));
+            if (matches.length) groups.push({ name: group.name || '', sensors: matches });
+        }
+        if (!groups.length) continue;
+
+        const section = document.createElement('div');
+        section.className = 'sensor-hw';
+        const heading = document.createElement('div');
+        heading.className = 'sensor-hw__name';
+        // textContent throughout: every name here came off an agent, and /api/report is
+        // unauthenticated.
+        heading.textContent = hwName;
+        section.appendChild(heading);
+
+        for (const group of groups) {
+            const groupEl = document.createElement('div');
+            groupEl.className = 'sensor-group';
+            groupEl.textContent = group.name;
+            section.appendChild(groupEl);
+
+            const table = document.createElement('table');
+            table.className = 'data-table sensor-table';
+            const tbody = document.createElement('tbody');
+            for (const sensor of group.sensors) {
+                const tr = document.createElement('tr');
+                const nameCell = document.createElement('td');
+                nameCell.textContent = sensor.name || '';
+                const valueCell = document.createElement('td');
+                valueCell.className = 'sensor-table__value';
+                valueCell.textContent = sensorValueText(sensor);
+                tr.append(nameCell, valueCell);
+                tbody.appendChild(tr);
+                shown += 1;
+            }
+            table.appendChild(tbody);
+            section.appendChild(table);
+        }
+        sensorBrowserBody.appendChild(section);
+    }
+
+    if (!shown) {
+        const empty = document.createElement('div');
+        empty.className = 'stat-card__meta';
+        empty.textContent = needle ? t('machine.sensors.no_match') : t('machine.sensors.none');
+        sensorBrowserBody.appendChild(empty);
+    }
+}
+
+function syncSensorPolling() {
+    const active = sensorBrowserEl.open && document.visibilityState === 'visible';
+    if (active && sensorTimer === null) {
+        loadAllSensors();
+        sensorTimer = setInterval(loadAllSensors, SENSOR_REFRESH_MS);
+    } else if (!active && sensorTimer !== null) {
+        clearInterval(sensorTimer);
+        sensorTimer = null;
+    }
+}
+
+sensorBrowserEl.addEventListener('toggle', syncSensorPolling);
+document.addEventListener('visibilitychange', syncSensorPolling);
+// Re-render from what we already hold: filtering is a view of the last poll, so typing
+// doesn't wait on the network.
+sensorFilterEl.addEventListener('input', renderSensorTree);
 
 dayPicker.value = getLocalDateString();
 syncResolutionControl();

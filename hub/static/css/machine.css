@@ -103,10 +103,76 @@
 
 /* The empty-state line is hidden by machine.js as soon as a disk (or fan) is rendered. It
    starts visible so a machine that never reports storage or fans says so instead of
-   showing a blank card. */
+   showing a blank card. (A machine that HAS reported and has neither loses the whole card
+   instead -- see applyPresence.) */
 #disk-empty,
 #fan-empty {
     margin-top: var(--space-2);
+}
+
+/* ============ All sensors ============ */
+.sensor-browser {
+    margin-top: var(--space-6);
+}
+
+/* The default disclosure triangle is replaced by our own so the row can be a flex line
+   with the count sitting beside the title. */
+.sensor-browser__summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    cursor: pointer;
+    list-style: none;
+}
+
+.sensor-browser__summary::-webkit-details-marker {
+    display: none;
+}
+
+.sensor-browser__summary::before {
+    content: '▶';
+    font-size: var(--text-sm);
+    color: var(--muted);
+    transition: transform 0.15s ease;
+}
+
+.sensor-browser[open] .sensor-browser__summary::before {
+    transform: rotate(90deg);
+}
+
+/* Columns rather than one long list: a workstation reports several hundred sensors, and a
+   single column turns the rest of the page into a scroll target. Capped and scrolled
+   internally for the same reason -- the History charts below stay reachable. */
+#sensor-browser-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    align-items: start;
+    gap: var(--space-4);
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.sensor-hw__name {
+    font-weight: 600;
+    margin-bottom: var(--space-1);
+}
+
+.sensor-group {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    margin-top: var(--space-2);
+}
+
+.sensor-table {
+    margin: 0;
+}
+
+/* Right-aligned and tabular so a column of readings lines up on the decimal point, which
+   is what makes an outlier findable by eye in a list this long. */
+.sensor-table__value {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 /* The select carries long sensor names; without a cap it stretches to fill the toolbar

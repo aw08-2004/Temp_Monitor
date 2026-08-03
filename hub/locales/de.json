@@ -1391,6 +1391,16 @@
     "no_disks": "Bisher wurden keine Laufwerke gemeldet.",
     "cooling": "Kühlung",
     "no_fans": "Keine Lüftersensoren gemeldet. Viele Notebooks und OEM-Desktops geben sie nicht preis.",
+    "sensors": {
+      "title": "Alle Sensoren",
+      "filter": "Sensoren filtern",
+      "count": {
+        "one": "{count} Messwert",
+        "other": "{count} Messwerte"
+      },
+      "none": "Dieser Computer hat noch keine Sensoren gemeldet.",
+      "no_match": "Kein Sensor passt zu diesem Filter."
+    },
     "sensor": {
       "title": "Primärer Temperatursensor",
       "use": "Sensor verwenden:",

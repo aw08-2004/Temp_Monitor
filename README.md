@@ -223,7 +223,13 @@ OIDC sign-in plus permission groups, see below):
   read/write, network in/out, GPU, fan speed, CPU/GPU package power, temperature
   (day picker + live updates for today). The throughput panels auto-scale their
   units, so an idle NIC reads in KB/s and a busy NVMe in MB/s on the same axis
-  format.
+  format. Cards and panels for hardware a machine doesn't have are hidden rather
+  than left reading "--": an office PC with no discrete GPU has no GPU card, and
+  a laptop that exposes no fan has no Cooling card. Below them, an **All
+  sensors** section lists everything else the agent reports -- the whole
+  LibreHardwareMonitor tree, grouped hardware -> category -> sensor, including
+  the readings nothing charts (VRM temperatures, rail voltages, battery charge
+  and wear). Collapsed by default and only polled while open.
 - `/history` -- daily summary/average across all machines
 - `/alerts` -- conditions that want attention: machines running hot, and
   duplicate machines that share a serial while both online (see below)

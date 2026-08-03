@@ -67,19 +67,24 @@
             <div class="stat-card__label" id="stat-uptime-label">{{ t('machine.uptime') }}</div>
             <div class="stat-card__value" id="stat-uptime">{{ t('machine.unknown') }}</div>
         </div>
-        <div class="card stat-card">
+        {# The cards below are hidden by machine.js on a machine that reports no such sensor
+           -- an office PC with no discrete GPU has no GPU card at all, rather than one
+           reading "--" forever. Kept in the markup (rather than rendered server-side from
+           the sensor block) because the same page has to react to a machine that starts or
+           stops reporting a sensor while it is open. #}
+        <div class="card stat-card" id="card-cpu-load">
             <div class="stat-card__label">{{ t('machine.cpu_load') }}</div>
             <div class="stat-card__value" id="stat-cpu-load">{{ t('machine.percent', value=t('machine.unknown')) }}</div>
         </div>
-        <div class="card stat-card">
+        <div class="card stat-card" id="card-cpu-clock">
             <div class="stat-card__label">{{ t('machine.cpu_clock') }}</div>
             <div class="stat-card__value" id="stat-cpu-clock">{{ t('machine.mhz', value=t('machine.unknown')) }}</div>
         </div>
-        <div class="card stat-card">
+        <div class="card stat-card" id="card-cpu-power">
             <div class="stat-card__label">{{ t('machine.cpu_power') }}</div>
             <div class="stat-card__value" id="stat-cpu-power">{{ t('machine.watts', value=t('machine.unknown')) }}</div>
         </div>
-        <div class="card stat-card identity-block">
+        <div class="card stat-card identity-block" id="card-gpu">
             <div class="stat-card__label">{{ t('machine.gpu') }}</div>
             <div class="stat-card__meta" id="stat-gpu-temp">{{ t('machine.gpu_temp', value=t('machine.unknown')) }}</div>
             <div class="stat-card__meta" id="stat-gpu-load">{{ t('machine.gpu_load', value=t('machine.unknown')) }}</div>
@@ -109,7 +114,7 @@
     {# Live per-disk space usage, one tile per volume, built by machine.js from the
        diagnostics `disks` list. Live state rather than history, so it is a card and not a
        chart panel -- how many disks a machine has is per-machine and changes over its life. #}
-    <div class="card storage-card">
+    <div class="card storage-card" id="card-storage">
         <div class="section-title">{{ t('machine.storage') }}</div>
         <div class="disk-grid" id="disk-grid"></div>
         <div id="disk-empty" class="stat-card__meta">{{ t('machine.no_disks') }}</div>
@@ -118,7 +123,7 @@
     {# Live per-fan speeds, built by machine.js from the diagnostics `fans` list -- same
        reasoning as the Storage card above: a per-machine list of live readings, not a
        chart. The fastest fan is charted as its own panel below. #}
-    <div class="card storage-card">
+    <div class="card storage-card" id="card-cooling">
         <div class="section-title">{{ t('machine.cooling') }}</div>
         <div class="fan-grid" id="fan-grid"></div>
         <div id="fan-empty" class="stat-card__meta">{{ t('machine.no_fans') }}</div>
@@ -147,6 +152,24 @@
             {{ t('machine.sensor.help_after') }}
         </p>
     </div>
+
+    {# EVERY sensor the machine reports, not the handful the cards and charts pick out.
+       Collapsed by default and only polled while open: a workstation reports several
+       hundred readings, which is the right amount of detail when you are chasing a
+       throttling PC and far too much to have permanently on screen. #}
+    <details class="card sensor-browser" id="sensor-browser">
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.sensors.title') }}</span>
+            <span class="stat-card__meta" id="sensor-browser-count"></span>
+        </summary>
+        <div class="toolbar" style="margin: var(--space-3) 0;">
+            <label for="sensor-filter" class="sr-only">{{ t('machine.sensors.filter') }}</label>
+            <input type="search" id="sensor-filter" class="input"
+                   placeholder="{{ t('machine.sensors.filter') }}"
+                   aria-label="{{ t('machine.sensors.filter') }}">
+        </div>
+        <div id="sensor-browser-body"></div>
+    </details>
 
     <div class="card chart-card">
         <div class="section-title">{{ t('machine.history.title') }}</div>
