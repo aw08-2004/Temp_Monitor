@@ -944,10 +944,14 @@ label.checkbox input {
 }
 
 /* ============ Autocomplete combobox (autocomplete.js) ============ */
-/* The listbox is absolutely positioned inside the input's parent -- see the module
-   comment for why it can't live at document body level (dialog top-layer clipping). */
+/* Fixed, not absolute: the listbox is portaled out to <body> (or to the enclosing
+   <dialog>, so a modal's top layer still paints it) and positioned in viewport
+   coordinates by the widget. Absolute inside the input's own parent meant any
+   scrolling ancestor clipped it -- .modal__body's `overflow-y: auto` cropped the
+   remote picker's dropdown to a sliver. max-height here is the ceiling; the widget
+   lowers it inline when the gap to the viewport edge is smaller. */
 .ac-list {
-    position: absolute;
+    position: fixed;
     z-index: 40;
     margin: 0;
     padding: var(--space-1);

@@ -23,10 +23,15 @@
 //   ac.close();  ac.destroy();
 //
 // Design notes:
-//   * The listbox is inserted next to the input, NOT appended to <body>. These pickers
-//     live inside a <dialog>, which paints in the top layer above any position:fixed
-//     element on the page -- a body-level dropdown would vanish behind the modal. Sitting
-//     inside the input's own parent keeps it in the same layer.
+//   * The listbox is portaled to the nearest enclosing <dialog>, or to <body> when the
+//     input is not in one, and positioned in viewport coordinates (position: fixed).
+//     Both halves matter. It cannot simply go to <body>: a modal <dialog> paints in the
+//     top layer above everything on the page, so a body-level dropdown would vanish
+//     behind it. It cannot stay next to the input either: .modal__body scrolls
+//     (`overflow-y: auto`), and an absolutely positioned child of a scroller is clipped
+//     to it -- which cropped the remote picker's dropdown to a single sliver of a row.
+//     Fixed positioning escapes ancestor overflow; landing inside the <dialog> keeps it
+//     in the modal's layer.
 //   * Nodes are built with textContent/createElement, never innerHTML: the suggestions are
 //     operator- and agent-supplied strings (hostnames, display names) re-rendered live.
 //   * Async sources are race-guarded by a monotonic request id, so a slow response for an
@@ -59,18 +64,15 @@
         const renderItem = opts.renderItem || defaultRenderItem;
         const id = 'ac-list-' + (++widgetSeq);
 
-        const parent = input.parentNode;
-        // The listbox is absolutely positioned within the input's parent; make sure that
-        // parent establishes a positioning context.
-        if (getComputedStyle(parent).position === 'static') {
-            parent.style.position = 'relative';
-        }
+        // See the design note at the top of the file for why the list is hosted here
+        // rather than beside the input.
+        const host = input.closest('dialog') || document.body;
 
         const list = el('ul', 'ac-list');
         list.id = id;
         list.setAttribute('role', 'listbox');
         list.hidden = true;
-        parent.appendChild(list);
+        host.appendChild(list);
 
         input.setAttribute('role', 'combobox');
         input.setAttribute('aria-autocomplete', 'list');
@@ -83,11 +85,34 @@
         let open = false;
         let requestSeq = 0;     // guards against out-of-order async results
 
+        const GAP = 2;          // breathing room between the field and the list
+        const EDGE = 8;         // and between the list and the viewport edge
+        const MIN_HEIGHT = 120; // below this, flipping to the other side is worth it
+
         function position() {
-            list.style.top = (input.offsetTop + input.offsetHeight + 2) + 'px';
-            list.style.left = input.offsetLeft + 'px';
-            list.style.width = input.offsetWidth + 'px';
+            const box = input.getBoundingClientRect();
+            const below = window.innerHeight - box.bottom - GAP - EDGE;
+            const above = box.top - GAP - EDGE;
+            list.style.left = box.left + 'px';
+            list.style.width = box.width + 'px';
+            // Drop down by default, but flip above the field when the space below is too
+            // cramped to be useful and there is more of it up top -- a picker sitting near
+            // the bottom of a short modal has almost nothing underneath it.
+            if (below < MIN_HEIGHT && above > below) {
+                list.style.top = '';
+                list.style.bottom = (window.innerHeight - box.top + GAP) + 'px';
+                list.style.maxHeight = Math.max(MIN_HEIGHT, above) + 'px';
+            } else {
+                list.style.bottom = '';
+                list.style.top = (box.bottom + GAP) + 'px';
+                list.style.maxHeight = Math.max(MIN_HEIGHT, below) + 'px';
+            }
         }
+
+        // Viewport coordinates go stale the moment anything moves, and the list is no
+        // longer a sibling that moves with the field. Capture-phase so scrolling of any
+        // ancestor (a modal body, the page) is seen, not just the window's own.
+        function reposition() { if (open) position(); }
 
         function show() {
             if (open) return;
@@ -95,6 +120,8 @@
             position();
             list.hidden = false;
             input.setAttribute('aria-expanded', 'true');
+            window.addEventListener('scroll', reposition, true);
+            window.addEventListener('resize', reposition);
         }
 
         function close() {
@@ -104,6 +131,8 @@
             list.hidden = true;
             input.setAttribute('aria-expanded', 'false');
             input.removeAttribute('aria-activedescendant');
+            window.removeEventListener('scroll', reposition, true);
+            window.removeEventListener('resize', reposition);
         }
 
         function setActive(index) {
@@ -154,6 +183,10 @@
         }
 
         async function query() {
+            // The list no longer rides along with the input's parent, so a page that
+            // re-renders its markup without calling destroy() would strand it. Cheapest
+            // place to notice is the next query.
+            if (!input.isConnected) { close(); list.remove(); return; }
             const q = input.value.trim();
             if (q.length < minChars) { close(); return; }
             const mySeq = ++requestSeq;
