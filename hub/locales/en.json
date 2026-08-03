@@ -527,6 +527,14 @@
         "label": "Record network throughput",
         "help": "Chart network in/out (bytes per second). Also tells the agent whether to collect the network sensor category at all."
       },
+      "metrics.collect_fans": {
+        "label": "Record fan speed",
+        "help": "Chart the fastest fan on the machine (RPM) over time. The per-fan Cooling cards are live readings and stay visible either way."
+      },
+      "metrics.collect_power": {
+        "label": "Record CPU & GPU power",
+        "help": "Chart package power draw in watts. No effect on machines whose chips report no power sensor."
+      },
       "fleet.dashboard_online_window_seconds": {
         "label": "Drop a machine off the Dashboard after",
         "help": "A machine that hasn't reported a temperature within this window leaves the live Dashboard and reads as offline in Asset Inventory. Agents report every few seconds, so this tolerates a couple of missed reports without flapping."
@@ -1463,10 +1471,12 @@
     "uptime": "Uptime",
     "cpu_load": "CPU Load",
     "cpu_clock": "CPU Clock",
+    "cpu_power": "CPU Package Power",
     "gpu": "GPU",
     "gpu_temp": "Temp: {value}",
     "gpu_load": "Load: {value}",
     "gpu_clock": "Clock: {value}",
+    "gpu_power": "Power: {value}",
     "companion_version": "Companion Version",
     "identity": "Identity",
     "manufacturer": "Manufacturer: {value}",
@@ -1480,8 +1490,11 @@
     "temp_c": "{value} °C",
     "percent": "{value} %",
     "mhz": "{value} MHz",
+    "watts": "{value} W",
     "storage": "Storage",
     "no_disks": "No disks reported yet.",
+    "cooling": "Cooling",
+    "no_fans": "No fan sensors reported. Many laptops and OEM desktops don't expose them.",
     "sensor": {
       "title": "Primary temperature sensor",
       "use": "Use sensor:",
@@ -1749,6 +1762,9 @@
       "disk_write": "Disk Write",
       "gpu_temp": "GPU Temp",
       "gpu_load": "GPU Load",
+      "fan_rpm": "Fastest Fan",
+      "cpu_power": "CPU Power",
+      "gpu_power": "GPU Power",
       "temp": "Temperature"
     },
     "memory_with_total": "Memory ({total} GB)",
@@ -1758,6 +1774,11 @@
     "disk_fallback": "Disk",
     "disk_usage": "{used} of {total} used · {free} free",
     "disk_no_size": "Used space only — size needs agent 3.10.0+",
+    "fan_fallback": "Fan",
+    "fan_rpm": "{value} RPM",
+    "fan_duty": "Driven at {value}%",
+    "fan_no_duty": "Speed only — this fan reports no duty cycle",
+    "fan_stalled": "Not turning, but driven at {value}%",
     "ad_disabled": "AD account disabled",
     "sensor_order": " (currently {order})",
     "sensor_with_temp": "{name} — {value} °C",

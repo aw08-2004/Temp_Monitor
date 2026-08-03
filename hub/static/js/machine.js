@@ -157,6 +157,11 @@ const METRICS = [
     { key: 'disk_write', label: () => t('machine.metric.disk_write'), unit: 'B/s', color: '#f43f5e', rate: true, diag: 'disk_write_bps' },
     { key: 'gpu_temp',   label: () => t('machine.metric.gpu_temp'),   unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
     { key: 'gpu_load',   label: () => t('machine.metric.gpu_load'),   unit: '%',   color: '#a855f7', max: 100, diag: 'gpu_load_pct' },
+    // `decimals: 0` -- a fan reports whole revolutions per minute, and "1200.0 RPM" reads as
+    // precision the sensor doesn't have. Everything else keeps the default single decimal.
+    { key: 'fan_rpm',    label: () => t('machine.metric.fan_rpm'),    unit: 'RPM', color: '#38bdf8', decimals: 0, diag: 'fan_rpm' },
+    { key: 'cpu_power',  label: () => t('machine.metric.cpu_power'),  unit: 'W',   color: '#eab308', diag: 'cpu_power_w' },
+    { key: 'gpu_power',  label: () => t('machine.metric.gpu_power'),  unit: 'W',   color: '#c084fc', diag: 'gpu_power_w' },
     { key: 'temp',       label: () => t('machine.metric.temp'),       unit: '°C',  color: '#f97316' },
 ];
 
@@ -266,7 +271,7 @@ function panelConfig(metric) {
                         label: (ctx) => {
                             if (metric.key === 'memory') return formatMemTooltip(ctx.parsed.y);
                             if (metric.rate) return formatRate(ctx.parsed.y);
-                            return `${ctx.parsed.y.toFixed(1)} ${metric.unit}`;
+                            return `${ctx.parsed.y.toFixed(metric.decimals ?? 1)} ${metric.unit}`;
                         },
                     },
                 },
@@ -541,16 +546,94 @@ function renderDisks(disks) {
     }
 }
 
+// ---- Cooling cards ------------------------------------------------------------
+// One tile per fan, same live-state argument as the Storage tiles above: how many fans a
+// machine has is per-machine, and it CHANGES within a session -- a GPU stops its fans
+// entirely when it cools below about 50 °C, so those sensors come and go. Rebuilt each
+// reading for the same reason the disk tiles are.
+const fanGridEl = document.getElementById('fan-grid');
+const fanEmptyEl = document.getElementById('fan-empty');
+
+function renderFans(fans) {
+    if (!fanGridEl) return;
+    const list = Array.isArray(fans) ? fans : [];
+    fanGridEl.replaceChildren();
+    fanEmptyEl.style.display = list.length ? 'none' : 'block';
+
+    for (const fan of list) {
+        const rpm = Number(fan.rpm);
+        const duty = Number(fan.control_pct);
+        const hasDuty = Number.isFinite(duty);
+
+        // A fan at 0 RPM while the board is asking for duty is seized, unplugged, or dead --
+        // the failure this card exists to make visible, and the one case worth colouring.
+        const stalled = hasDuty && duty > 0 && rpm === 0;
+
+        const tile = document.createElement('div');
+        tile.className = 'fan-tile';
+        // Which chip the fan hangs off ("Nuvoton NCT6687D", "NVIDIA RTX 3060") -- worth
+        // having when a box reports "Fan #2" twice, but not worth a line of its own.
+        if (fan.hardware) tile.title = fan.hardware;
+
+        const head = document.createElement('div');
+        head.className = 'fan-tile__head';
+        const name = document.createElement('span');
+        name.className = 'fan-tile__name';
+        // textContent: sensor names come from the agent, and /api/report is unauthenticated.
+        name.textContent = fan.name || t('machine.fan_fallback');
+        name.title = name.textContent;
+        const value = document.createElement('span');
+        value.className = 'fan-tile__rpm';
+        value.textContent = Number.isFinite(rpm)
+            ? t('machine.fan_rpm', { value: Math.round(rpm) })
+            : t('machine.unknown');
+        head.append(name, value);
+
+        // The bar shows the DUTY the board is asking for, not the speed: RPM has no
+        // meaningful maximum to fill against (a case fan tops out around 1200, a blower at
+        // 5000), whereas duty is a percentage by definition.
+        const bar = document.createElement('div');
+        bar.className = 'fan-tile__bar';
+        const fill = document.createElement('div');
+        fill.className = `fan-tile__fill ${stalled ? 'fan-tile__fill--stalled' : ''}`.trim();
+        fill.style.width = `${hasDuty ? Math.min(100, Math.max(0, duty)) : 0}%`;
+        bar.appendChild(fill);
+
+        const meta = document.createElement('div');
+        meta.className = 'stat-card__meta';
+        if (stalled) {
+            meta.textContent = t('machine.fan_stalled', { value: duty.toFixed(0) });
+        } else if (hasDuty) {
+            meta.textContent = t('machine.fan_duty', { value: duty.toFixed(0) });
+        } else {
+            meta.textContent = t('machine.fan_no_duty');
+        }
+
+        tile.append(head, bar, meta);
+        fanGridEl.appendChild(tile);
+    }
+}
+
 function applyDiagnostics(diagnostics) {
     const d = diagnostics || {};
     renderDisks(d.disks);
+    renderFans(d.fans);
     if (typeof d.mem_total_gb === 'number') updateMemoryTotal(d.mem_total_gb);
     lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
     document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');
     document.getElementById('stat-cpu-clock').textContent = formatMetric(d.cpu_clock_mhz, 'MHz');
-    document.getElementById('stat-gpu-temp').textContent = 'Temp: ' + formatMetric(d.gpu_temp, '°C');
-    document.getElementById('stat-gpu-load').textContent = 'Load: ' + formatMetric(d.gpu_load_pct, '%');
-    document.getElementById('stat-gpu-clock').textContent = 'Clock: ' + formatMetric(d.gpu_clock_mhz, 'MHz');
+    document.getElementById('stat-cpu-power').textContent = formatMetric(d.cpu_power_w, 'W');
+    // Through the catalog, like the template's server-rendered first paint: the row labels
+    // ("Temp: {value}") are translated text, and hardcoding them here reverted the whole
+    // card to English on the first live reading.
+    document.getElementById('stat-gpu-temp').textContent =
+        t('machine.gpu_temp', { value: formatMetric(d.gpu_temp, '°C') });
+    document.getElementById('stat-gpu-load').textContent =
+        t('machine.gpu_load', { value: formatMetric(d.gpu_load_pct, '%') });
+    document.getElementById('stat-gpu-clock').textContent =
+        t('machine.gpu_clock', { value: formatMetric(d.gpu_clock_mhz, 'MHz') });
+    document.getElementById('stat-gpu-power').textContent =
+        t('machine.gpu_power', { value: formatMetric(d.gpu_power_w, 'W') });
 }
 
 async function loadMachineInfo() {

@@ -27,6 +27,14 @@ public sealed class SensorReader : ISensorSource
             IsMemoryEnabled = true,
             IsMotherboardEnabled = true,
             IsStorageEnabled = true,
+            // Fan/pump controllers (Aquacomputer, T-Balancer, Heatmaster), addressable PSUs
+            // (Corsair/NZXT: rail voltages, wattage and the PSU's own fan) and the battery on
+            // a laptop. Each reports sensors no other category does, and on a machine that has
+            // none of them the category simply comes back empty -- LHM only probes hardware it
+            // finds, so asking costs nothing on a plain desktop.
+            IsControllerEnabled = true,
+            IsPsuEnabled = true,
+            IsBatteryEnabled = true,
             // Network throughput (in/out B/s) for the History dashboard. Whether it is
             // actually reported is gated per-read by RuntimeConfig.CollectNetwork so the hub's
             // metrics.collect_network toggle takes effect without a restart; the category stays
@@ -173,6 +181,13 @@ public sealed class SensorReader : ISensorSource
         SensorType.Data => "Data",
         SensorType.SmallData => "Data",
         SensorType.Throughput => "Throughput",
+        // The rest come from the water-cooling controllers, PSUs and batteries enabled
+        // above. Named the way LHM's own tree groups them.
+        SensorType.TimeSpan => "Times",
+        SensorType.Energy => "Energies",
+        SensorType.Noise => "Noise",
+        SensorType.Conductivity => "Conductivity",
+        SensorType.Humidity => "Humidity",
         _ => t.ToString(),
     };
 
@@ -195,6 +210,14 @@ public sealed class SensorReader : ISensorSource
             SensorType.Data => "GB",
             SensorType.SmallData => "MB",
             SensorType.Throughput => "B/s",
+            // TimeSpan is seconds (LHM's "Remaining Time (Estimated)" on a battery); left as
+            // a raw number with its unit rather than formatted as h:mm, because `Value` is a
+            // number for every other sensor and the hub charts this list generically.
+            SensorType.TimeSpan => "s",
+            SensorType.Energy => "mWh",
+            SensorType.Noise => "dBA",
+            SensorType.Conductivity => "µS/cm",
+            SensorType.Humidity => "%",
             _ => "",
         };
         var num = v.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);

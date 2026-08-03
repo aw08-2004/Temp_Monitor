@@ -75,11 +75,16 @@
             <div class="stat-card__label">{{ t('machine.cpu_clock') }}</div>
             <div class="stat-card__value" id="stat-cpu-clock">{{ t('machine.mhz', value=t('machine.unknown')) }}</div>
         </div>
+        <div class="card stat-card">
+            <div class="stat-card__label">{{ t('machine.cpu_power') }}</div>
+            <div class="stat-card__value" id="stat-cpu-power">{{ t('machine.watts', value=t('machine.unknown')) }}</div>
+        </div>
         <div class="card stat-card identity-block">
             <div class="stat-card__label">{{ t('machine.gpu') }}</div>
             <div class="stat-card__meta" id="stat-gpu-temp">{{ t('machine.gpu_temp', value=t('machine.unknown')) }}</div>
             <div class="stat-card__meta" id="stat-gpu-load">{{ t('machine.gpu_load', value=t('machine.unknown')) }}</div>
             <div class="stat-card__meta" id="stat-gpu-clock">{{ t('machine.gpu_clock', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-gpu-power">{{ t('machine.gpu_power', value=t('machine.unknown')) }}</div>
         </div>
         <div class="card stat-card">
             <div class="stat-card__label">{{ t('machine.companion_version') }}</div>
@@ -108,6 +113,15 @@
         <div class="section-title">{{ t('machine.storage') }}</div>
         <div class="disk-grid" id="disk-grid"></div>
         <div id="disk-empty" class="stat-card__meta">{{ t('machine.no_disks') }}</div>
+    </div>
+
+    {# Live per-fan speeds, built by machine.js from the diagnostics `fans` list -- same
+       reasoning as the Storage card above: a per-machine list of live readings, not a
+       chart. The fastest fan is charted as its own panel below. #}
+    <div class="card storage-card">
+        <div class="section-title">{{ t('machine.cooling') }}</div>
+        <div class="fan-grid" id="fan-grid"></div>
+        <div id="fan-empty" class="stat-card__meta">{{ t('machine.no_fans') }}</div>
     </div>
 
     {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is

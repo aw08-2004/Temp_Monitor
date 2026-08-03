@@ -460,6 +460,14 @@
         "label": "Registrar el rendimiento de red",
         "help": "Grafica la entrada/salida de red (bytes por segundo). También indica al agente si debe recopilar la categoría de sensores de red."
       },
+      "metrics.collect_fans": {
+        "label": "Registrar la velocidad de los ventiladores",
+        "help": "Grafica el ventilador más rápido del equipo (RPM) a lo largo del tiempo. Las tarjetas de Refrigeración por ventilador son lecturas en vivo y siguen visibles en cualquier caso."
+      },
+      "metrics.collect_power": {
+        "label": "Registrar la potencia de CPU y GPU",
+        "help": "Grafica el consumo del paquete en vatios. Sin efecto en equipos cuyos chips no informan de ningún sensor de potencia."
+      },
       "fleet.dashboard_online_window_seconds": {
         "label": "Quitar un equipo del panel tras",
         "help": "Un equipo que no haya informado una temperatura dentro de esta ventana desaparece del panel en vivo y aparece como sin conexión en el Inventario de activos. Los agentes informan cada pocos segundos, así que esto tolera un par de informes perdidos sin oscilaciones."
@@ -1359,10 +1367,12 @@
     "uptime": "Tiempo activo",
     "cpu_load": "Carga de CPU",
     "cpu_clock": "Frecuencia de CPU",
+    "cpu_power": "Potencia del paquete de CPU",
     "gpu": "GPU",
     "gpu_temp": "Temp.: {value}",
     "gpu_load": "Carga: {value}",
     "gpu_clock": "Frecuencia: {value}",
+    "gpu_power": "Potencia: {value}",
     "companion_version": "Versión de Companion",
     "identity": "Identidad",
     "manufacturer": "Fabricante: {value}",
@@ -1376,8 +1386,11 @@
     "temp_c": "{value} °C",
     "percent": "{value} %",
     "mhz": "{value} MHz",
+    "watts": "{value} W",
     "storage": "Almacenamiento",
     "no_disks": "Todavía no se ha informado de ningún disco.",
+    "cooling": "Refrigeración",
+    "no_fans": "No se han informado sensores de ventilador. Muchos portátiles y equipos OEM no los exponen.",
     "sensor": {
       "title": "Sensor de temperatura principal",
       "use": "Usar el sensor:",
@@ -1641,6 +1654,9 @@
       "disk_write": "Escritura de disco",
       "gpu_temp": "Temp. de GPU",
       "gpu_load": "Carga de GPU",
+      "fan_rpm": "Ventilador más rápido",
+      "cpu_power": "Potencia de CPU",
+      "gpu_power": "Potencia de GPU",
       "temp": "Temperatura"
     },
     "memory_with_total": "Memoria ({total} GB)",
@@ -1650,6 +1666,11 @@
     "disk_fallback": "Disco",
     "disk_usage": "{used} de {total} usados · {free} libres",
     "disk_no_size": "Solo espacio usado: el tamaño necesita el agente 3.10.0 o superior",
+    "fan_fallback": "Ventilador",
+    "fan_rpm": "{value} RPM",
+    "fan_duty": "Accionado al {value} %",
+    "fan_no_duty": "Solo velocidad: este ventilador no informa de su ciclo de trabajo",
+    "fan_stalled": "No gira, aunque se le pide un {value} %",
     "ad_disabled": "Cuenta de AD deshabilitada",
     "sensor_order": " (actualmente {order})",
     "sensor_with_temp": "{name} — {value} °C",

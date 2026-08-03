@@ -71,11 +71,22 @@ BLOCK = [
     s("Upload Speed", 630.0, "Throughput", NIC, "Intel Ethernet"),
     s("Total Space", 476.0, "Data", "/volume/c", "C: (Windows)"),
     s("Used Space", 412.0, "Data", "/volume/c", "C: (Windows)"),
+    # Cooling and power. "Fan #1"/"Fan Control #1" are the SuperIO naming the fan pairing
+    # has to cope with; the GPU reports a fan with no control sensor at all. "CPU Cores"
+    # sits alongside "CPU Package" so the package pick can be seen preferring the right one.
+    s("Fan #1", 980.0, "Fan", "/lpc/nct6687d", "Nuvoton NCT6687D"),
+    s("Fan Control #1", 45.0, "Control", "/lpc/nct6687d", "Nuvoton NCT6687D"),
+    s("Fan #2", 1450.0, "Fan", "/lpc/nct6687d", "Nuvoton NCT6687D"),
+    s("GPU Fan", 1720.0, "Fan", "/gpu-nvidia/0", "RTX 3060"),
+    s("CPU Package", 65.5, "Power", "/amdcpu/0", "Ryzen 7"),
+    s("CPU Cores", 48.0, "Power", "/amdcpu/0", "Ryzen 7"),
+    s("GPU Package", 120.0, "Power", "/gpu-nvidia/0", "RTX 3060"),
 ]
 
 METRIC_COLUMNS = ("cpu_load_pct", "memory_load_pct", "gpu_temp", "gpu_load_pct",
                   "disk_load_pct", "net_rx_bps", "net_tx_bps",
-                  "disk_read_bps", "disk_write_bps")
+                  "disk_read_bps", "disk_write_bps",
+                  "fan_rpm", "cpu_power_w", "gpu_power_w")
 
 
 # --------------------------------------------------------------------------- diagnostics
@@ -91,6 +102,9 @@ def test_diagnostics_extracts_all_metrics():
     check("network upload", d["net_tx_bps"] == 630.0)
     check("disk read rate", d["disk_read_bps"] == 1000.0)
     check("disk write rate", d["disk_write_bps"] == 250.0)
+    check("fastest fan", d["fan_rpm"] == 1720.0)
+    check("cpu package power", d["cpu_power_w"] == 65.5)
+    check("gpu package power", d["gpu_power_w"] == 120.0)
     check("memory used GB", d["mem_used_gb"] == 6.6)
     # total = used (6.6) + available (9.4) = 16.0; virtual-memory sensors must NOT leak in.
     check("memory total GB (used + available, not virtual)", d["mem_total_gb"] == 16.0)
@@ -207,6 +221,58 @@ def test_volume_sensors_do_not_displace_disk_load_pct():
     check("disk_load_pct is still the device percentage", d["disk_load_pct"] == 63.0)
 
 
+def test_fans():
+    """The Cooling cards. A fan's RPM says how fast it is turning; its Control sensor says
+    what the board is ASKING for, and only the pair distinguishes "idle, ramped down" from
+    "commanded to 100% and seized". The pairing is by name within one piece of hardware."""
+    print("\n-- per-fan readings, with each control sensor paired onto its fan --")
+    fans = app.extract_diagnostics(BLOCK)["fans"]
+    check("one entry per fan sensor", len(fans) == 3)
+    by_name = {f["name"]: f for f in fans}
+    check("speed is carried through", by_name["Fan #2"]["rpm"] == 1450.0)
+    check('"Fan Control #1" pairs onto "Fan #1"', by_name["Fan #1"]["control_pct"] == 45.0)
+    check("a fan with no control sensor reports none", by_name["Fan #2"]["control_pct"] is None)
+    check("the GPU's fan is included too", by_name["GPU Fan"]["rpm"] == 1720.0)
+    check("each fan carries the hardware it hangs off", by_name["GPU Fan"]["hardware"] == "RTX 3060")
+    check("the chartable metric is the fastest fan", app.extract_diagnostics(BLOCK)["fan_rpm"] == 1720.0)
+
+    # Pairing is per-hardware: a board fan's duty must not be shown against a GPU fan
+    # that happens to share its name.
+    cross = [s("GPU Fan", 900.0, "Fan", "/gpu-nvidia/0", "RTX 3060"),
+             s("GPU Fan", 70.0, "Control", "/lpc/nct6687d", "Nuvoton NCT6687D")]
+    check("a control sensor on other hardware is not borrowed",
+          app.extract_diagnostics(cross)["fans"][0]["control_pct"] is None)
+
+    # 0 RPM is a reading, not a gap -- unlike the 0 °C that _cpu_temp_candidates rejects.
+    # A GPU stops its fans below ~50 °C, and a fan the board IS driving that reads 0 is the
+    # dead fan this card exists to surface.
+    stopped = app.extract_diagnostics([s("GPU Fan", 0.0, "Fan", "/gpu-nvidia/0", "RTX 3060")])
+    check("a stopped fan is reported, not dropped", stopped["fans"][0]["rpm"] == 0.0)
+    check("and it charts as 0 rather than a gap", stopped["fan_rpm"] == 0.0)
+
+    fanless = app.extract_diagnostics([s("CPU Total", 5.0, "Load", "/amdcpu/0")])
+    check("no fan sensors => empty list", fanless["fans"] == [])
+    check("no fan sensors => no chartable metric", fanless["fan_rpm"] is None)
+
+
+def test_package_power_prefers_the_package():
+    """A chip reports its package alongside subsets of itself, so picking the first Power
+    sensor in the block charts the graphics rail on one vendor and the package on another."""
+    print("\n-- package power beats the rails it contains --")
+    d = app.extract_diagnostics(BLOCK)
+    check("CPU Package wins over CPU Cores", d["cpu_power_w"] == 65.5)
+    check("GPU package power", d["gpu_power_w"] == 120.0)
+
+    odd = [s("Rail A", 12.0, "Power", "/intelcpu/0", "Core i7"),
+           s("Rail B", 88.0, "Power", "/intelcpu/0", "Core i7")]
+    check("unrecognised names fall back to the largest rail, not the first",
+          app.extract_diagnostics(odd)["cpu_power_w"] == 88.0)
+
+    powerless = app.extract_diagnostics([s("CPU Total", 5.0, "Load", "/amdcpu/0")])
+    check("no power sensors => None", powerless["cpu_power_w"] is None)
+    check("no GPU at all => None", powerless["gpu_power_w"] is None)
+
+
 def test_diagnostics_empty_has_all_keys():
     print("\n-- an empty/None block returns every key as None --")
     for block in (None, []):
@@ -251,7 +317,8 @@ def _stored_metrics(machine):
 def test_ingest_stores_metric_columns():
     print("\n-- /api/report promotes the sensor block into typed columns --")
     for key in ("metrics.collect_cpu_load", "metrics.collect_memory", "metrics.collect_gpu",
-                "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network"):
+                "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network",
+                "metrics.collect_fans", "metrics.collect_power"):
         settings.reset(app.DB_PATH, [key])
     client = _client()
     _report(client, "METRICS-ALL", 70.0, BLOCK)
@@ -266,19 +333,28 @@ def test_ingest_stores_metric_columns():
     check("net_tx_bps column", m["net_tx_bps"] == 630.0)
     check("disk_read_bps column", m["disk_read_bps"] == 1000.0)
     check("disk_write_bps column", m["disk_write_bps"] == 250.0)
+    check("fan_rpm column", m["fan_rpm"] == 1720.0)
+    check("cpu_power_w column", m["cpu_power_w"] == 65.5)
+    check("gpu_power_w column", m["gpu_power_w"] == 120.0)
 
 
 def test_ingest_respects_collection_toggles():
     print("\n-- a toggled-off metric is recorded NULL, not silently kept --")
     client = _client()
     settings.set_many(app.DB_PATH, {"metrics.collect_network": False,
-                                    "metrics.collect_disk_io": False})
+                                    "metrics.collect_disk_io": False,
+                                    "metrics.collect_fans": False,
+                                    "metrics.collect_power": False})
     _report(client, "METRICS-GATED", 66.0, BLOCK)
     m = _stored_metrics("METRICS-GATED")
     check("network off => net_rx NULL", m["net_rx_bps"] is None)
     check("network off => net_tx NULL", m["net_tx_bps"] is None)
     check("disk I/O off => disk_read NULL", m["disk_read_bps"] is None)
     check("disk I/O off => disk_write NULL", m["disk_write_bps"] is None)
+    check("fans off => fan_rpm NULL", m["fan_rpm"] is None)
+    # One toggle covers both chips, so neither may survive it.
+    check("power off => cpu_power NULL", m["cpu_power_w"] is None)
+    check("power off => gpu_power NULL", m["gpu_power_w"] is None)
     # collect_disk and collect_disk_io are deliberately separate knobs: turning off the
     # noisy per-second rates must not also stop recording "is C: filling up".
     check("disk usage is unaffected by the disk I/O toggle", m["disk_load_pct"] == 63.0)
@@ -287,7 +363,8 @@ def test_ingest_respects_collection_toggles():
     check("disk off => disk_load NULL", _stored_metrics("METRICS-GATED2")["disk_load_pct"] is None)
     check("an unaffected metric is still recorded", m["cpu_load_pct"] == 12.0)
     settings.reset(app.DB_PATH, ["metrics.collect_network", "metrics.collect_disk",
-                                 "metrics.collect_disk_io"])
+                                 "metrics.collect_disk_io", "metrics.collect_fans",
+                                 "metrics.collect_power"])
 
 
 def test_sensorless_report_stores_null_metrics():
@@ -304,7 +381,8 @@ def test_machine_history_endpoint():
     print("\n-- the multi-metric per-machine history endpoint --")
     client = _client()
     for key in ("metrics.collect_cpu_load", "metrics.collect_memory", "metrics.collect_gpu",
-                "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network"):
+                "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network",
+                "metrics.collect_fans", "metrics.collect_power"):
         settings.reset(app.DB_PATH, [key])
     _report(client, "HIST-1", 71.5, BLOCK)
     today = app.today_str()
@@ -318,6 +396,8 @@ def test_machine_history_endpoint():
     check("temperature series has a point", len(metrics.get("temp", [])) >= 1)
     check("cpu_load series has a point", len(metrics.get("cpu_load", [])) >= 1)
     check("net_rx series has a point", len(metrics.get("net_rx", [])) >= 1)
+    check("fan_rpm series has a point", len(metrics.get("fan_rpm", [])) >= 1)
+    check("cpu_power series has a point", len(metrics.get("cpu_power", [])) >= 1)
     check("disk_read series has a point", len(metrics.get("disk_read", [])) >= 1)
     check("disk_write series has a point", len(metrics.get("disk_write", [])) >= 1)
     check("a point looks like {x, y}",
@@ -369,6 +449,8 @@ if __name__ == "__main__":
     test_disk_throughput_sums_every_disk()
     test_disk_volumes()
     test_volume_sensors_do_not_displace_disk_load_pct()
+    test_fans()
+    test_package_power_prefers_the_package()
     test_diagnostics_empty_has_all_keys()
     test_ingest_stores_metric_columns()
     test_ingest_respects_collection_toggles()

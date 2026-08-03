@@ -12,7 +12,10 @@ per-PC file backup/restore, and remote view/control.
   win-x64** (no runtime install needed on the fleet).
 - **Sensors:** LibreHardwareMonitorLib **in-process** — no separate
   LibreHardwareMonitor.exe / `:8085` web server. Needs the **PawnIO** kernel driver
-  (the installer sets it up).
+  (the installer sets it up). Every LHM hardware category is enabled (CPU, GPU, RAM,
+  motherboard/SuperIO, storage, NICs, fan controllers, PSU, battery) and the whole
+  sensor tree is flattened into the report — fan RPM, control duty, package watts and
+  voltages ride along with the temperatures. The hub decides what to chart.
 
 ## Layout
 ```

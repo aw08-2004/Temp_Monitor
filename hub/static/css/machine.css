@@ -16,26 +16,34 @@
     margin-top: var(--space-6);
 }
 
-/* ============ Storage (per-disk space) ============ */
+/* ============ Storage (per-disk space) and Cooling (per-fan speed) ============ */
+/* Two cards, one tile vocabulary: both are "a named thing, a headline number, and a bar
+   from 0 to 100%", and giving the fans their own near-identical ruleset would mean every
+   later change had to be made twice. The fan grid keeps its own class name so the markup
+   still says which card it is. */
 /* auto-fit rather than a fixed column count: a laptop reports one volume and a workstation
    five, and either should fill the card rather than leaving a half-empty row. */
-.disk-grid {
+.disk-grid,
+.fan-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: var(--space-4);
 }
 
-.disk-grid:empty {
+.disk-grid:empty,
+.fan-grid:empty {
     display: none;
 }
 
-.disk-tile {
+.disk-tile,
+.fan-tile {
     border: 1px solid var(--card-border);
     border-radius: var(--radius-md);
     padding: var(--space-4);
     min-width: 0;
 }
 
+.fan-tile__head,
 .disk-tile__head {
     display: flex;
     align-items: baseline;
@@ -46,7 +54,8 @@
 
 /* The name can be "C: (Windows-SSD-Volume)"; ellipsize it rather than let it push the
    percentage out of the tile. min-width:0 is what actually lets it shrink in a flex row. */
-.disk-tile__name {
+.disk-tile__name,
+.fan-tile__name {
     font-weight: 600;
     min-width: 0;
     overflow: hidden;
@@ -54,13 +63,15 @@
     white-space: nowrap;
 }
 
-.disk-tile__pct {
+.disk-tile__pct,
+.fan-tile__rpm {
     font-weight: 700;
     font-size: var(--text-md);
     flex-shrink: 0;
 }
 
-.disk-tile__bar {
+.disk-tile__bar,
+.fan-tile__bar {
     height: 8px;
     border-radius: 999px;
     background: var(--control-bg);
@@ -68,7 +79,8 @@
     margin-bottom: var(--space-2);
 }
 
-.disk-tile__fill {
+.disk-tile__fill,
+.fan-tile__fill {
     height: 100%;
     border-radius: 999px;
     background: var(--accent);
@@ -83,9 +95,17 @@
     background: var(--danger);
 }
 
-/* The empty-state line is hidden by machine.js as soon as a disk is rendered. It starts
-   visible so a machine that never reports storage says so instead of showing a blank card. */
-#disk-empty {
+/* A fan the board is driving but that isn't turning: the bar is what the board asks for,
+   the RPM beside it is 0, and the tile should not read as normal. */
+.fan-tile__fill--stalled {
+    background: var(--danger);
+}
+
+/* The empty-state line is hidden by machine.js as soon as a disk (or fan) is rendered. It
+   starts visible so a machine that never reports storage or fans says so instead of
+   showing a blank card. */
+#disk-empty,
+#fan-empty {
     margin-top: var(--space-2);
 }
 

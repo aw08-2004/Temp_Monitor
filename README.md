@@ -217,10 +217,13 @@ OIDC sign-in plus permission groups, see below):
   its detail page
 - `/machine/<name>` -- that machine's live temp, uptime, agent version,
   asset tag/serial number/model, a Storage card with one % occupied tile per
-  volume (used/total/free), and its own history charts: CPU, memory, disk usage,
-  disk read/write, network in/out, GPU, temperature (day picker + live updates
-  for today). The throughput panels auto-scale their units, so an idle NIC reads
-  in KB/s and a busy NVMe in MB/s on the same axis format.
+  volume (used/total/free), a Cooling card with one tile per fan (RPM plus the
+  duty cycle the board is asking for, flagged when a fan is driven but not
+  turning), and its own history charts: CPU, memory, disk usage, disk
+  read/write, network in/out, GPU, fan speed, CPU/GPU package power, temperature
+  (day picker + live updates for today). The throughput panels auto-scale their
+  units, so an idle NIC reads in KB/s and a busy NVMe in MB/s on the same axis
+  format.
 - `/history` -- daily summary/average across all machines
 - `/alerts` -- conditions that want attention: machines running hot, and
   duplicate machines that share a serial while both online (see below)

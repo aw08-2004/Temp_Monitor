@@ -460,6 +460,14 @@
         "label": "Netzwerkdurchsatz aufzeichnen",
         "help": "Zeichnet ein-/ausgehenden Netzwerkverkehr auf (Bytes pro Sekunde). Legt außerdem fest, ob der Agent die Netzwerk-Sensorkategorie überhaupt erfasst."
       },
+      "metrics.collect_fans": {
+        "label": "Lüfterdrehzahl aufzeichnen",
+        "help": "Zeichnet den schnellsten Lüfter des Computers auf (U/min). Die Kühlungs-Kacheln je Lüfter sind Live-Werte und bleiben in jedem Fall sichtbar."
+      },
+      "metrics.collect_power": {
+        "label": "CPU- und GPU-Leistung aufzeichnen",
+        "help": "Zeichnet die Leistungsaufnahme des Package in Watt auf. Ohne Wirkung auf Computern, deren Chips keinen Leistungssensor melden."
+      },
       "fleet.dashboard_online_window_seconds": {
         "label": "Computer aus der Übersicht nehmen nach",
         "help": "Ein Computer, der innerhalb dieses Fensters keine Temperatur gemeldet hat, verschwindet aus der Live-Übersicht und gilt im Anlageninventar als offline. Agenten melden alle paar Sekunden, das verkraftet also ein paar ausgefallene Meldungen ohne Flattern."
@@ -1359,10 +1367,12 @@
     "uptime": "Laufzeit",
     "cpu_load": "CPU-Last",
     "cpu_clock": "CPU-Takt",
+    "cpu_power": "CPU-Package-Leistung",
     "gpu": "GPU",
     "gpu_temp": "Temp.: {value}",
     "gpu_load": "Last: {value}",
     "gpu_clock": "Takt: {value}",
+    "gpu_power": "Leistung: {value}",
     "companion_version": "Companion-Version",
     "identity": "Identität",
     "manufacturer": "Hersteller: {value}",
@@ -1376,8 +1386,11 @@
     "temp_c": "{value} °C",
     "percent": "{value} %",
     "mhz": "{value} MHz",
+    "watts": "{value} W",
     "storage": "Speicher",
     "no_disks": "Bisher wurden keine Laufwerke gemeldet.",
+    "cooling": "Kühlung",
+    "no_fans": "Keine Lüftersensoren gemeldet. Viele Notebooks und OEM-Desktops geben sie nicht preis.",
     "sensor": {
       "title": "Primärer Temperatursensor",
       "use": "Sensor verwenden:",
@@ -1641,6 +1654,9 @@
       "disk_write": "Schreiben",
       "gpu_temp": "GPU-Temp.",
       "gpu_load": "GPU-Last",
+      "fan_rpm": "Schnellster Lüfter",
+      "cpu_power": "CPU-Leistung",
+      "gpu_power": "GPU-Leistung",
       "temp": "Temperatur"
     },
     "memory_with_total": "Arbeitsspeicher ({total} GB)",
@@ -1650,6 +1666,11 @@
     "disk_fallback": "Datenträger",
     "disk_usage": "{used} von {total} belegt · {free} frei",
     "disk_no_size": "Nur belegter Speicher – die Größe braucht Agent 3.10.0 oder neuer",
+    "fan_fallback": "Lüfter",
+    "fan_rpm": "{value} U/min",
+    "fan_duty": "Angesteuert mit {value} %",
+    "fan_no_duty": "Nur Drehzahl – dieser Lüfter meldet keine Ansteuerung",
+    "fan_stalled": "Dreht nicht, obwohl mit {value} % angesteuert",
     "ad_disabled": "AD-Konto deaktiviert",
     "sensor_order": " (derzeit {order})",
     "sensor_with_temp": "{name} — {value} °C",

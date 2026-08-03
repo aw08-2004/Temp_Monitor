@@ -79,7 +79,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.65.0"
+HUB_VERSION = "1.66.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -551,6 +551,105 @@ def _memory_gb(sensors):
     return round(float(used), 1), round(float(used) + float(avail), 1)
 
 
+# Wording that appears on a fan's CONTROL sensor but not on the fan itself, so the two can
+# be paired by name: "Fan #2" and "Fan Control #2" both reduce to "fan #2".
+_FAN_CONTROL_WORDS = ("control", "pwm")
+
+
+def _fan_key(name):
+    """A fan's identity within one piece of hardware, with the control-sensor wording
+    stripped. Used only for pairing -- the name shown to the operator is the fan's own."""
+    return " ".join(w for w in str(name or "").lower().split()
+                    if w not in _FAN_CONTROL_WORDS)
+
+
+def _fans(sensors):
+    """Every fan this machine reports: [{name, hardware, rpm, control_pct}, ...].
+
+    A list rather than a single number, for the same reason `disks` is one: how many fans a
+    PC has is per-machine (a laptop reports one, a workstation six plus a GPU pair), and an
+    operator asking "is this thing still cooling itself" wants to see each of them.
+
+    Each fan is paired with its Control sensor -- the duty cycle the board is ASKING for --
+    when the two can be matched inside the same hardware. RPM alone doesn't separate "idle,
+    ramped down" from "commanded to 100% and seized", and that difference is the whole
+    reason to look. control_pct stays None when nothing matches, which is normal: plenty of
+    GPUs expose fan speed and no duty cycle at all.
+
+    0 RPM is kept, not dropped. A modern GPU stops its fans entirely below ~50 °C, and a
+    header with nothing plugged into it reads 0 too -- both are real answers to "what is
+    this fan doing", unlike the 0 °C that _cpu_temp_candidates rejects (a CPU is never
+    actually at 0 °C, so there it means "could not read").
+    """
+    controls = {}
+    for s in sensors:
+        if s.get("type") != "Control":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        key = (str(s.get("hardware_id") or ""), _fan_key(s.get("name")))
+        controls.setdefault(key, round(float(value), 1))
+
+    fans = []
+    for s in sensors:
+        if s.get("type") != "Fan":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        name = str(s.get("name") or "").strip()
+        fans.append({
+            "name": name,
+            "hardware": str(s.get("hardware") or ""),
+            "rpm": round(float(value), 1),
+            "control_pct": controls.get((str(s.get("hardware_id") or ""), _fan_key(name))),
+        })
+    return fans
+
+
+def _fastest_fan_rpm(fans):
+    """The single chartable fan number: the fastest fan on the machine.
+
+    Max, not average: a case with five fans idling and one screaming is exactly the machine
+    you want the chart to show, and averaging hides it. It also keeps the series meaningful
+    when the fan COUNT changes (a GPU's fans stop and drop to 0), which an average would
+    make jump for a reason that has nothing to do with cooling.
+    """
+    speeds = [f["rpm"] for f in fans if isinstance(f.get("rpm"), (int, float))]
+    return max(speeds) if speeds else None
+
+
+def _package_power(sensors, hardware_substr, preferred_name_substrs):
+    """Whole-chip power draw in watts for CPU or GPU hardware.
+
+    Preferred names first, like every other pick here. The fallback is the LARGEST Power
+    sensor on that hardware rather than the first one listed, which is what
+    _find_sensor_value would do: a chip reports its package alongside subsets of itself
+    ("CPU Cores", "CPU Graphics", "CPU Memory"), and the package is by definition the
+    biggest of them -- whereas "first in the block" charts the graphics rail on one vendor
+    and the package on another, and nothing on the page would say which you were looking at.
+    """
+    candidates = []
+    for s in sensors:
+        if s.get("type") != "Power":
+            continue
+        haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+        if hardware_substr not in haystack:
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        candidates.append((str(s.get("name") or "").lower(), float(value)))
+    if not candidates:
+        return None
+    for wanted in preferred_name_substrs:
+        for name, value in candidates:
+            if wanted in name:
+                return value
+    return max(value for _, value in candidates)
+
+
 def extract_diagnostics(sensors):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
     list (see the agent's SensorReader flattening). Every field is None when not
@@ -562,10 +661,13 @@ def extract_diagnostics(sensors):
             "memory_load_pct": None, "mem_used_gb": None, "mem_total_gb": None,
             "disk_load_pct": None, "net_rx_bps": None, "net_tx_bps": None,
             "disk_read_bps": None, "disk_write_bps": None, "disks": [],
+            "fan_rpm": None, "fans": [],
+            "cpu_power_w": None, "gpu_power_w": None,
         }
     mem_used_gb, mem_total_gb = _memory_gb(sensors)
     net_rx_bps, net_tx_bps = _network_throughput(sensors)
     disk_read_bps, disk_write_bps = _disk_throughput(sensors)
+    fans = _fans(sensors)
     return {
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
@@ -588,6 +690,17 @@ def extract_diagnostics(sensors):
         # Per-volume space usage for the Storage cards. A list, not a chartable scalar:
         # it is live state, and how many disks a machine has varies per machine.
         "disks": _disk_volumes(sensors),
+        # Cooling. `fans` is the live per-fan list behind the Cooling cards (same shape
+        # argument as `disks`); fan_rpm is the one number that can be charted -- see
+        # _fastest_fan_rpm for why it is the maximum.
+        "fans": fans,
+        "fan_rpm": _fastest_fan_rpm(fans),
+        # Package power. Reported by nearly every modern CPU and discrete GPU, and it is
+        # the metric that explains a temperature chart: a package pulling 140 W in an
+        # office PC is a fan/thermal problem waiting to happen, whatever °C it reads now.
+        "cpu_power_w": _package_power(sensors, "cpu", ["cpu package", "package", "cpu ppt"]),
+        "gpu_power_w": _package_power(sensors, "gpu",
+                                      ["gpu package", "gpu power", "board power", "gpu ppt"]),
     }
 
 
@@ -602,6 +715,7 @@ READING_METRIC_COLUMNS = (
     "cpu_load_pct", "memory_load_pct", "gpu_temp", "gpu_load_pct",
     "disk_load_pct", "net_rx_bps", "net_tx_bps",
     "disk_read_bps", "disk_write_bps",
+    "fan_rpm", "cpu_power_w", "gpu_power_w",
 )
 
 # Which collection toggle (settings.py `metrics.*`) gates each column at ingest. When a
@@ -620,6 +734,11 @@ METRIC_COLUMN_TOGGLE = {
     # them without also losing the "is C: filling up" history.
     "disk_read_bps": "metrics.collect_disk_io",
     "disk_write_bps": "metrics.collect_disk_io",
+    "fan_rpm": "metrics.collect_fans",
+    # CPU and GPU package power share one toggle: they are the same measurement on two
+    # chips, and an operator who doesn't care about watts doesn't care about either.
+    "cpu_power_w": "metrics.collect_power",
+    "gpu_power_w": "metrics.collect_power",
 }
 
 # Friendly metric keys used by the /api/history `metric` param and the multi-metric
@@ -636,6 +755,9 @@ HISTORY_METRIC_COLUMNS = {
     "net_tx": "net_tx_bps",
     "disk_read": "disk_read_bps",
     "disk_write": "disk_write_bps",
+    "fan_rpm": "fan_rpm",
+    "cpu_power": "cpu_power_w",
+    "gpu_power": "gpu_power_w",
 }
 _ALLOWED_HISTORY_COLUMNS = frozenset(HISTORY_METRIC_COLUMNS.values())
 

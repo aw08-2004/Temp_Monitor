@@ -194,6 +194,10 @@ REGISTRY = (
     _s("metrics.collect_disk", "metrics", "bool", True),
     _s("metrics.collect_disk_io", "metrics", "bool", True),
     _s("metrics.collect_network", "metrics", "bool", True, agent=True),
+    # Cooling and power. Like the Storage cards, the live per-fan tiles on a machine's page
+    # are unaffected by collect_fans -- the toggle governs what goes into HISTORY.
+    _s("metrics.collect_fans", "metrics", "bool", True),
+    _s("metrics.collect_power", "metrics", "bool", True),
 
     # ---------------- Fleet: liveness and command timings ----------------
     # These next two are different windows that operators WILL confuse, so the labels
