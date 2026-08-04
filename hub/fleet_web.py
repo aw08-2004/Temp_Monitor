@@ -37,6 +37,7 @@ import bios
 import firmware
 import fleet
 import permissions
+import permissions_web
 import remote
 import settings
 import terminal
@@ -283,8 +284,10 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
     def _current_email():
         """The signed-in operator. ALWAYS the source of ownership/attribution -- never
         take an email from the request body, or one operator could write rows as
-        another and the audit trail would be fiction."""
-        return (session.get("user") or {}).get("email", "unknown")
+        another and the audit trail would be fiction. Resolves a device token as well as
+        a session cookie (roadmap #11), so an action taken from the app is attributed to
+        the operator who paired it rather than to nobody."""
+        return permissions_web.current_actor()
 
     # Favorites are reusable command templates owned by an operator, not machine
     # state, so they are scoped by ownership (and the `shared` flag) rather than by

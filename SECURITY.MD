@@ -18,7 +18,8 @@ system administration use cases:
 - **Source Code:** Fully open-source (GPL-3.0), auditable on GitHub
 - **Signed Artifacts:** All agent updates are Ed25519-signed; manifests are verified fail-closed
 - **Audit Trail:** Every RMM command is logged with operator email + full params
-- **Operator Control:** Remote code execution requires an authorized Google sign-in + allow-list
+- **Operator Control:** Remote code execution requires an authorized OAuth/OIDC sign-in, or a
+  device token minted by one (see "Device tokens" below)
 - **Signed Releases:** Authenticode-signed executables
 - **HTTPS-only:** All hub-to-agent communication over TLS
 
@@ -36,11 +37,42 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
 ## Risk Mitigations
 
 1. **Enrollment Secret:** Agents enroll once with a shared secret; only enrolled agents accept commands
-2. **Authentication:** Issuing commands requires valid Google Sign-in + email allow-list
+2. **Authentication:** Issuing commands requires a valid OAuth/OIDC sign-in (Google, or any
+   configured OIDC provider) against the email allow-list or a Permission Group
 3. **Audit Log:** Every action recorded: who did what, when, on which machine
 4. **SYSTEM Context:** Commands run as SYSTEM; access to this capability is intentionally powerful and scoped to trusted admins
 5. **Machine Scope:** Operators can be limited to specific machines via Permission Groups
 6. **Signed Updates:** Binary replacements verified before execution
+
+## Device tokens (the native client)
+
+The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather
+than a session cookie, because sign-in is OAuth/OIDC only and there is no password for an
+app to hold. This is the largest change to the hub's security perimeter since fleet-command
+signing was removed, so the controls around it are stated here rather than left implicit:
+
+- **A token is minted only by a real sign-in.** Pairing follows RFC 8252's native-app flow:
+  the app opens the *system* browser, the hub authenticates it through the ordinary OAuth
+  path, and an operator explicitly confirms the device on a consent page. The app never
+  sees credentials. Nothing is minted until a one-time, sixty-second, single-use code is
+  exchanged, so an abandoned pairing leaves no credential behind.
+- **Only the token's SHA-256 is stored.** There is no "reveal": the hub does not hold the
+  value and cannot show it again.
+- **A token carries a SUBSET of its owner's capabilities, intersected live on every
+  request.** Removing somebody from a Permission Group disables their paired devices
+  immediately — the credential can never outlive the grant.
+- **Administrative capabilities cannot be granted to a device at all.** `manage_settings`,
+  `manage_users`, `manage_permission_groups` and `manage_firmware` are refused at mint
+  time, including for break-glass superusers. Console administration stays in the console.
+- **Tokens expire and slide on use** (`hub.device_token_lifetime_days`, 90 by default), so
+  a device that stops checking in loses access on its own.
+- **Every mint, first use and revoke is audited at security level**, and any device can be
+  revoked — by its owner, or fleet-wide by a `manage_users` holder — from the Users page.
+- **A token can never be upgraded into a session cookie**, so it cannot be used to escape
+  its own capability ceiling.
+- **Client downloads are signed.** The console's Download Client page renders only a
+  manifest whose Ed25519 signature verifies against the same release key that signs the
+  agent, and publishes each build's SHA-256.
 
 ## For Antivirus Teams
 

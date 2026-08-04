@@ -25,6 +25,7 @@ from flask import Blueprint, jsonify, request, session
 
 import fleet
 import permissions
+import permissions_web
 import remote
 import settings
 
@@ -60,7 +61,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     can_manage_settings = access.require(permissions.MANAGE_SETTINGS)
 
     def _current_email():
-        return (session.get("user") or {}).get("email", "unknown")
+        return permissions_web.current_actor()
 
     def _ice_servers(session_id):
         """Assemble the ICE server list for a session from settings + the .env TURN secret."""

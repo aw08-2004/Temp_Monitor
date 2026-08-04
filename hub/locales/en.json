@@ -27,7 +27,8 @@
     "users": "Users",
     "close": "Close navigation",
     "open": "Open navigation",
-    "firmware": "Firmware"
+    "firmware": "Firmware",
+    "download": "Download Client"
   },
   "topbar": {
     "hub_version": "Hub v{version}",
@@ -236,7 +237,10 @@
     "email_required": "An email address is required.",
     "confirm_delete": "Remove \"{user}\" from the directory?\n\nThis only removes their profile. It does NOT change what they can do or whether they can sign in — that is set by their Permission Groups.",
     "delete_failed": "Could not delete \"{email}\": {error}",
-    "load_failed": "Could not load users: {error}"
+    "load_failed": "Could not load users: {error}",
+    "views_nav": "User views",
+    "tab_directory": "Directory",
+    "tab_devices": "Devices"
   },
   "permissions": {
     "heading": "Permission Groups",
@@ -706,6 +710,10 @@
       "wake.auto_wake_targets": {
         "label": "Wake PCs before a scheduled window runs",
         "help": "Deployments and firmware updates only reach PCs that are switched on. With this on, the hub wakes a window's offline targets when it opens."
+      },
+      "hub.device_token_lifetime_days": {
+        "label": "Device access lifetime",
+        "help": "How long a paired app keeps working without being used. Every use extends it. Devices already paired keep the lifetime they were paired with."
       }
     },
     "_choice": [
@@ -1984,5 +1992,55 @@
       "lookup so tests/test_i18n.py's key scan can see them. 'refused' is deliberately not",
       "a failure word: the image simply is not for that hardware, and nothing went wrong."
     ]
+  },
+  "pair": {
+    "heading": "Pair a device",
+    "intro": "You are about to give an app on this device access to FleetHub as you. Check what it is being allowed to do before you confirm.",
+    "device": "Device",
+    "device_unnamed": "An unnamed device",
+    "expires_in_days": "Access expires after {days} days without use, and can be revoked at any time from the Users page.",
+    "capabilities": "What this device may do",
+    "capabilities_help": "A device can never do more than you can. If your own permissions change later, this device follows them.",
+    "forbidden": "Managing settings, users, permission groups and firmware stays in the console and cannot be granted to a device.",
+    "redirect_refused": "This app's return address was refused",
+    "redirect_refused_help": "You can still pair by confirming below and typing the code into the app.",
+    "confirm": "Pair this device",
+    "pick_one": "Choose at least one thing this device may do.",
+    "handing_over": "Handing the code to the app…",
+    "code_heading": "Pairing code",
+    "code_help": "Type this into the app within {seconds} seconds. It works once."
+  },
+  "devices": {
+    "heading": "Paired devices",
+    "intro": "Every app signed in to this hub. Revoking a device stops it working immediately; it does not change anyone's permissions.",
+    "empty": "No devices are paired.",
+    "empty_hint": "A device appears here after somebody pairs the FleetHub app from the Download Client page.",
+    "unnamed": "Unnamed device",
+    "revoked": "Revoked",
+    "confirm_revoke": "Revoke {device}? The app will stop working at once.",
+    "col": {
+      "device": "Device",
+      "owner": "Signed in as",
+      "capabilities": "May do",
+      "last_used": "Last used",
+      "expires": "Expires"
+    }
+  },
+  "download": {
+    "heading": "Download the FleetHub client",
+    "intro": "The native app for watching this fleet, with alerts and Wake-on-LAN. Install it, then pair it from the app.",
+    "version": "Version {version}",
+    "get": "Download",
+    "open": "Open",
+    "checksum": "SHA-256",
+    "unavailable": "Nothing is available to download.",
+    "platform": {
+      "windows": "Windows",
+      "macos": "macOS",
+      "linux": "Linux",
+      "android": "Android",
+      "ios": "iOS",
+      "unknown": "Client"
+    }
   }
 }

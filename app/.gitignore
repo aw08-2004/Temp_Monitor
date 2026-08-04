@@ -1,0 +1,25 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+pubspec.lock
+
+# Generated platform runners. `flutter create --platforms=windows .` regenerates them --
+# see README.md. Kept out of the repo so a Flutter SDK upgrade does not arrive as a
+# thousand-line diff nobody reviews.
+windows/
+android/
+ios/
+linux/
+macos/
+web/
+
+# Written by release_client.py and handed to sign_release.py --sign-client. It names local
+# paths, so it is per-machine; the SIGNED manifest it produces (hub/client.manifest.json)
+# is what gets committed.
+builds.json
+
+# Packaged release zips. The bytes are published as a GitHub release asset and pinned by
+# sha256 in the signed manifest, so a copy in the repo would be a second source of truth
+# for the same artifact.
+dist/

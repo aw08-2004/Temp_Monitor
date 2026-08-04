@@ -33,23 +33,93 @@ import users
 DIRECTORY_PICKER_LIMIT = 20
 
 
+def set_request_identity(identity):
+    """Record that THIS request authenticated as `identity` by some means other than the
+    session cookie -- today, a device token (roadmap #11).
+
+    Stored on `g` rather than in `session` deliberately, and this is a security property
+    rather than tidiness: writing the user into the session would make Flask return a
+    signed session cookie, so a device token could be laundered into a full browser
+    session that no longer carries the token's capability ceiling. A token must never be
+    upgradeable into something stronger than itself.
+    """
+    g._fleethub_identity = identity
+
+
+def current_identity():
+    """Who this request is, however it authenticated. The token identity wins when
+    present; otherwise the signed session cookie. One implementation, because "who is
+    this caller" being answered differently in two places is how an audit trail starts
+    naming the wrong person."""
+    return getattr(g, "_fleethub_identity", None) or session.get("user") or {}
+
+
+def current_actor():
+    """The audit actor for this request -- an email, or "unknown".
+
+    Every blueprint used to spell this out for itself against the session; they now all
+    call this, so a request that authenticated with a device token is attributed to the
+    operator who paired it instead of being recorded as "unknown".
+    """
+    return current_identity().get("email", "unknown")
+
+
 def _current_email():
-    """The signed-in operator. ALWAYS from the session, never from a request body --
-    otherwise one operator could act as another and the audit trail becomes fiction."""
-    return permissions.normalize_email((session.get("user") or {}).get("email"))
+    """The signed-in operator. ALWAYS from the request's authenticated identity, never
+    from a request body -- otherwise one operator could act as another and the audit
+    trail becomes fiction."""
+    return permissions.normalize_email(current_identity().get("email"))
 
 
 def _current_directory_groups():
     """The mapped directory groups this session's issuer asserted at sign-in (roadmap
-    #4). From the session for the same reason the email is: it is the signed cookie, not
-    the request, that says who someone is.
+    #4). From the authenticated identity for the same reason the email is: it is the
+    signed cookie -- or the device token minted from one -- not the request, that says
+    who someone is.
 
     app.py stores only tokens that matched a mapping at sign-in time, so a mapping added
     afterwards does not reach an existing session -- the operator signs out and back in,
     which they would have to do for a new directory-group MEMBERSHIP anyway, since the
-    hub only learns membership from the issuer at sign-in.
+    hub only learns membership from the issuer at sign-in. A device token carries the
+    same intersected set, frozen at pairing, for exactly the same reason.
     """
-    return list((session.get("user") or {}).get("directory_groups") or ())
+    return list(current_identity().get("directory_groups") or ())
+
+
+def _narrow_to_device(current):
+    """Intersect the caller's real permissions with their DEVICE's ceiling, if this
+    request came from one (roadmap #11).
+
+    The intersection is the load-bearing half of device tokens, not an optimisation. A
+    token stores the capability subset chosen at pairing; without narrowing here, a token
+    minted while its owner was an admin would keep admin after they were demoted -- the
+    credential would outlive the grant, which is exactly the failure a long-lived bearer
+    token introduces and a session cookie does not.
+
+    It narrows CAPABILITIES only. Machine scope is untouched on purpose: a device sees
+    the fleet its owner sees, and a second scoping mechanism here would be a second place
+    for an operator's visible machine list to be wrong.
+
+    `superuser` is cleared whenever the device holds less than everything, because that
+    flag is read as "bypasses every check" -- leaving it true beside a narrowed set would
+    be an invitation for the next caller of is_superuser() to route around the ceiling.
+    """
+    identity = current_identity()
+    ceiling = identity.get("token_capabilities")
+    if ceiling is None:
+        return current
+
+    narrowed = set(current.get("capabilities") or ()) & set(ceiling)
+    out = dict(current)
+    out["capabilities"] = narrowed
+    out["superuser"] = bool(current.get("superuser")) and narrowed == set(
+        permissions.CAPABILITIES)
+    out["device"] = {
+        "token_id": identity.get("token_id"),
+        "device_name": identity.get("device_name"),
+        "platform": identity.get("platform"),
+    }
+    return out
 
 
 class Access:
@@ -72,6 +142,7 @@ class Access:
             cached = permissions.effective_permissions(
                 self.db_path, _current_email(), self.superusers,
                 directory_groups=_current_directory_groups())
+            cached = _narrow_to_device(cached)
             g._fleethub_permissions = cached
         return cached
 

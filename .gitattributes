@@ -3,3 +3,7 @@
 # the bytes raw.githubusercontent.com serves and the fleet will reject every update.
 agent/agent.manifest.json -text
 agent/agent.manifest.json.sig -text
+# The client download catalogue (roadmap #11), signed with the same key. It ships under
+# hub/ because the hub's self-updater mirrors that directory and nothing else.
+hub/client.manifest.json -text
+hub/client.manifest.json.sig -text

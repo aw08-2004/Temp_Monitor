@@ -111,6 +111,38 @@ def test_agent_endpoints_are_not_gated():
     check("/api/report still accepts a normal agent report", r.status_code == 200)
 
 
+def test_device_tokens_are_not_gated_either():
+    """A device token (roadmap #11) is a bearer credential, so the rule that exempts
+    /api/agent/* exempts it too -- for the same reason, not as a favour.
+
+    Worth pinning HERE rather than only in test_apitokens_web.py: the two halves are one
+    decision, and a change that relaxed the cookie path while "keeping" the token path
+    would pass a test that only looked at tokens.
+    """
+    print("\n-- a bearer credential is not ambient, so the content-type rule does not apply --")
+    import apitokens
+    import permissions
+
+    apitokens.init_apitokens_db(app.DB_PATH)
+    token, _row = apitokens.mint_token(
+        app.DB_PATH, "tester@example.com", "CSRF test device", "windows",
+        [permissions.VIEW, permissions.ISSUE_COMMANDS])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # The same route, the same body, the same content type -- the ONLY difference is which
+    # credential is presented.
+    form = "machine=CSRF-PC"
+    ctype = "application/x-www-form-urlencoded"
+    cookie_resp = client.post("/api/fleet/commands", data=form, content_type=ctype)
+    token_resp = client.post("/api/fleet/commands", data=form, content_type=ctype,
+                             headers=headers)
+    check("the cookie caller is refused (415)", cookie_resp.status_code == 415)
+    check("the bearer caller is not", token_resp.status_code != 415)
+
+    check("a GET with a device token is authenticated at all",
+          client.get("/api/machines", headers=headers).status_code == 200)
+
+
 def test_uploads_are_exempt_but_narrowly():
     """The two file-upload endpoints post multipart and cannot send JSON. They are
     exempted by ENDPOINT NAME rather than by allowing multipart everywhere, so a future
@@ -131,6 +163,7 @@ if __name__ == "__main__":
     test_charset_parameter_is_tolerated()
     test_reads_and_preflighted_methods_are_untouched()
     test_agent_endpoints_are_not_gated()
+    test_device_tokens_are_not_gated_either()
     test_uploads_are_exempt_but_narrowly()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

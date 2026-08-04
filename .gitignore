@@ -3,6 +3,7 @@ logs
 __pycache__
 .env
 sign_release.py
+flutter_sdk
 
 # Private signing key for agent self-updates -- MUST never be committed.
 .temp_monitor_signing_key

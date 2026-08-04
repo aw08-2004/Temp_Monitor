@@ -40,8 +40,7 @@ request.get_json(silent=True), which requires Content-Type: application/json.
 """
 import os
 
-from flask import (Blueprint, jsonify, render_template, request, send_file,
-                   session)
+from flask import Blueprint, jsonify, render_template, request, send_file
 
 import backups
 import bios
@@ -49,6 +48,7 @@ import firmware
 import fleet
 import packages
 import permissions
+import permissions_web
 import settings
 
 
@@ -75,7 +75,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
     image_dir = firmware.blob_root(log_dir)
 
     def _current_email():
-        return (session.get("user") or {}).get("email", "unknown")
+        return permissions_web.current_actor()
 
     def _password_for(machine):
         """The BIOS setup password to send with a change, or None.

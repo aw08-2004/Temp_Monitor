@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.download') }} - FleetHub{% endblock %}
+{% block content %}
+{#
+   Structure only. Every card is rendered by download.js from GET /api/app/manifest, which
+   is the SIGNED client manifest and nothing else -- see clientrelease.py. There is
+   deliberately no hardcoded list of links here: a page that names its own platforms is a
+   page that offers an Android build three weeks before the APK exists, and keeps offering
+   one that was pulled.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('download.heading') }}</h1>
+        <p class="stat-card__meta">{{ t('download.intro') }}</p>
+    </div>
+    <span class="badge" id="download-version" hidden></span>
+</div>
+
+<div id="download-host"></div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/download.js') }}"></script>
+{% endblock %}

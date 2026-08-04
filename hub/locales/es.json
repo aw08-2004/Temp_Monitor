@@ -17,7 +17,8 @@
     "users": "Usuarios",
     "close": "Cerrar navegación",
     "open": "Abrir navegación",
-    "firmware": "Firmware"
+    "firmware": "Firmware",
+    "download": "Descargar cliente"
   },
   "topbar": {
     "hub_version": "Hub v{version}",
@@ -205,7 +206,10 @@
     "email_required": "Se requiere una dirección de correo electrónico.",
     "confirm_delete": "¿Quitar a «{user}» del directorio?\n\nEsto solo elimina su perfil. NO cambia lo que puede hacer ni si puede iniciar sesión: eso lo definen sus grupos de permisos.",
     "delete_failed": "No se pudo eliminar «{email}»: {error}",
-    "load_failed": "No se pudieron cargar los usuarios: {error}"
+    "load_failed": "No se pudieron cargar los usuarios: {error}",
+    "views_nav": "Vistas de usuarios",
+    "tab_directory": "Directorio",
+    "tab_devices": "Dispositivos"
   },
   "permissions": {
     "heading": "Grupos de permisos",
@@ -641,6 +645,10 @@
       "wake.auto_wake_targets": {
         "label": "Encender los PC antes de una ventana programada",
         "help": "Las implementaciones y las actualizaciones de firmware solo llegan a los PC encendidos. Con esta opción, el hub enciende los destinos apagados al abrirse la ventana."
+      },
+      "hub.device_token_lifetime_days": {
+        "label": "Duración del acceso del dispositivo",
+        "help": "Cuánto tiempo sigue funcionando una aplicación vinculada sin usarse. Cada uso la prolonga. Los dispositivos ya vinculados conservan la duración con la que se vincularon."
       }
     },
     "choice": {
@@ -1872,6 +1880,56 @@
       "submit": "Poner en cola",
       "need_machines": "Elige al menos un equipo.",
       "refused_title": "{count} equipo(s) no se pusieron en cola"
+    }
+  },
+  "pair": {
+    "heading": "Vincular un dispositivo",
+    "intro": "Está a punto de dar a una aplicación de este dispositivo acceso a FleetHub en su nombre. Revise qué se le permite antes de confirmar.",
+    "device": "Dispositivo",
+    "device_unnamed": "Un dispositivo sin nombre",
+    "expires_in_days": "El acceso caduca tras {days} días sin uso y puede revocarse en cualquier momento desde la página Usuarios.",
+    "capabilities": "Qué puede hacer este dispositivo",
+    "capabilities_help": "Un dispositivo nunca puede hacer más que usted. Si sus permisos cambian más adelante, el dispositivo los sigue.",
+    "forbidden": "Gestionar ajustes, usuarios, grupos de permisos y firmware queda en la consola y no puede concederse a un dispositivo.",
+    "redirect_refused": "Se rechazó la dirección de retorno de esta aplicación",
+    "redirect_refused_help": "Aún puede vincularlo: confirme abajo y escriba el código en la aplicación.",
+    "confirm": "Vincular este dispositivo",
+    "pick_one": "Elija al menos una cosa que este dispositivo pueda hacer.",
+    "handing_over": "Entregando el código a la aplicación…",
+    "code_heading": "Código de vinculación",
+    "code_help": "Escríbalo en la aplicación antes de {seconds} segundos. Funciona una sola vez."
+  },
+  "devices": {
+    "heading": "Dispositivos vinculados",
+    "intro": "Todas las aplicaciones conectadas a este hub. Revocar un dispositivo lo detiene de inmediato; no cambia los permisos de nadie.",
+    "empty": "No hay dispositivos vinculados.",
+    "empty_hint": "Un dispositivo aparece aquí cuando alguien vincula la aplicación FleetHub desde la página Descargar cliente.",
+    "unnamed": "Dispositivo sin nombre",
+    "revoked": "Revocado",
+    "confirm_revoke": "¿Revocar {device}? La aplicación dejará de funcionar de inmediato.",
+    "col": {
+      "device": "Dispositivo",
+      "owner": "Conectado como",
+      "capabilities": "Puede",
+      "last_used": "Último uso",
+      "expires": "Caduca"
+    }
+  },
+  "download": {
+    "heading": "Descargar el cliente de FleetHub",
+    "intro": "La aplicación nativa para vigilar esta flota, con alertas y Wake-on-LAN. Instálela y luego vínculela desde la aplicación.",
+    "version": "Versión {version}",
+    "get": "Descargar",
+    "open": "Abrir",
+    "checksum": "SHA-256",
+    "unavailable": "No hay nada disponible para descargar.",
+    "platform": {
+      "windows": "Windows",
+      "macos": "macOS",
+      "linux": "Linux",
+      "android": "Android",
+      "ios": "iOS",
+      "unknown": "Cliente"
     }
   }
 }

@@ -35,9 +35,16 @@ Usage
       manifest + .sig to main and upload the exe to the release asset URL, or fleet
       updates stall.
 
-Note: .gitattributes pins agent/agent.manifest.json and its .sig to '-text' so git
-never rewrites line endings -- otherwise the committed bytes wouldn't match what you
-signed and the fleet would reject the update.
+  python sign_release.py --sign-client --client-version 1.0.0 --builds builds.json
+      Produce and sign hub/client.manifest.json -- the catalogue the console's Download
+      Client page renders and the app's own updater checks (roadmap #11). Unlike the
+      agent's, this manifest holds a LIST of builds, so adding a platform is a release
+      action rather than a hub and console edit. `builds.json` names each build and where
+      it will be hosted; every sha256 and size is computed here from the bytes on disk.
+
+Note: .gitattributes pins agent/agent.manifest.json, hub/client.manifest.json and their
+.sig files to '-text' so git never rewrites line endings -- otherwise the committed bytes
+wouldn't match what you signed and the fleet (or the download page) would reject them.
 """
 import argparse
 import json
@@ -120,6 +127,94 @@ def sign_agent(path, exe_file, version, url, manifest_path):
     print("Commit the manifest + .sig together; upload the exe to the asset URL.")
 
 
+def sign_client(path, builds_file, version, manifest_path, notes="", released_at=""):
+    """Build and sign the CLIENT manifest -- the catalogue the console's Download Client
+    page renders and the app's own updater checks (roadmap #11).
+
+    Unlike the agent's, this manifest holds a LIST of builds. The agent has exactly one
+    artifact; a client has several and will have more (Windows today, Android and iOS
+    later), and a shape that assumed one would mean a hub edit and a console edit per
+    platform. With a list, adding a platform is: build it, re-sign, push.
+
+    `builds_file` is a small JSON file naming each build:
+
+        [{"platform": "windows", "arch": "x64", "kind": "file",
+          "file": "app/build/FleetHubSetup.zip",
+          "url": "https://github.com/.../FleetHubSetup.zip"},
+         {"platform": "ios", "kind": "link", "url": "https://testflight.apple.com/..."}]
+
+    The sha256 and size of every `file` build are computed HERE from the bytes on disk,
+    never taken from the input: a digest somebody typed is a digest that can be wrong, and
+    the whole point of publishing one is that it is checkable.
+    """
+    import hashlib
+
+    Ed25519PrivateKey, _ = _ed25519()
+    if not os.path.exists(path):
+        sys.exit(f"No signing key at {path}. Run: python sign_release.py --genkey")
+    if not builds_file or not os.path.exists(builds_file):
+        sys.exit("--sign-client requires --builds pointing at a build list JSON file")
+    if not version:
+        sys.exit("--sign-client requires --client-version")
+
+    with open(builds_file, "r", encoding="utf-8") as f:
+        wanted = json.load(f)
+    if not isinstance(wanted, list) or not wanted:
+        sys.exit(f"{builds_file} must be a non-empty JSON list of builds")
+
+    builds = []
+    for i, entry in enumerate(wanted):
+        kind = str(entry.get("kind") or "file").lower()
+        url = str(entry.get("url") or "").strip()
+        if not url:
+            sys.exit(f"build {i} has no url")
+        build = {
+            "platform": str(entry.get("platform") or "").lower(),
+            "arch": str(entry.get("arch") or "").lower(),
+            "kind": kind,
+            "url": url,
+        }
+        for optional in ("label", "notes"):
+            if entry.get(optional):
+                build[optional] = str(entry[optional])
+
+        if kind == "file":
+            local = entry.get("file")
+            if not local or not os.path.exists(local):
+                sys.exit(f"build {i} ({build['platform']}): no such file {local!r}. "
+                         "Build it first.")
+            with open(local, "rb") as f:
+                blob = f.read()
+            build["filename"] = os.path.basename(local)
+            build["size"] = len(blob)
+            build["sha256"] = hashlib.sha256(blob).hexdigest()
+            print(f"Client  : {build['platform']} {build['arch']} "
+                  f"({build['size']} bytes, sha256 {build['sha256']})")
+            print(f"Asset   : upload {local} to {url}")
+        else:
+            print(f"Client  : {build['platform']} -> {url} (link)")
+        builds.append(build)
+
+    manifest = {"version": version, "builds": builds}
+    if notes:
+        manifest["notes"] = notes
+    if released_at:
+        manifest["released_at"] = released_at
+    data = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    with open(path, "r", encoding="utf-8") as f:
+        priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+    signature = priv.sign(data)
+
+    with open(manifest_path, "wb") as f:
+        f.write(data)
+    with open(manifest_path + ".sig", "w", encoding="utf-8") as f:
+        f.write(signature.hex())
+
+    print(f"Manifest: {manifest_path} (+ .sig)")
+    print("Commit the manifest + .sig together; upload each asset to its URL.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Sign the agent self-update manifest for Temp_Monitor.")
     ap.add_argument("--genkey", action="store_true", help="generate a new keypair instead of signing")
@@ -131,14 +226,33 @@ def main():
                     help="manifest output path (with --sign-agent)")
     ap.add_argument("--key", default=DEFAULT_KEY_PATH, help="path to the private signing key")
     ap.add_argument("--file", help="path to the built agent exe (with --sign-agent)")
+    # ---- client (roadmap #11) ----
+    ap.add_argument("--sign-client", action="store_true",
+                    help="sign the FleetHub client download manifest")
+    ap.add_argument("--client-version", help="client version (with --sign-client)")
+    ap.add_argument("--builds", help="JSON file listing the client builds (with --sign-client)")
+    ap.add_argument("--client-notes", default="", help="release note shown on the download page")
+    ap.add_argument("--released-at", default="", help="release date shown on the download page")
+    # Ships under hub/, NOT under app/. The hub's self-updater mirrors the hub/ directory
+    # and nothing else, so a manifest beside the Flutter sources would never reach an
+    # installed hub -- the same shape as the 1.27.x bug where packages.py was left out of
+    # the runtime file list. See hub/clientrelease.py.
+    ap.add_argument("--client-manifest",
+                    default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         "hub", "client.manifest.json"),
+                    help="client manifest output path (with --sign-client)")
     args = ap.parse_args()
 
     if args.genkey:
         genkey(args.key)
     elif args.sign_agent:
         sign_agent(args.key, args.file, args.agent_version, args.agent_url, args.manifest)
+    elif args.sign_client:
+        sign_client(args.key, args.builds, args.client_version, args.client_manifest,
+                    notes=args.client_notes, released_at=args.released_at)
     else:
-        ap.error("nothing to do: pass --sign-agent (or --genkey for one-time setup)")
+        ap.error("nothing to do: pass --sign-agent or --sign-client "
+                 "(or --genkey for one-time setup)")
 
 
 if __name__ == "__main__":

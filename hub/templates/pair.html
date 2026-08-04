@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ t('pair.heading') }} - FleetHub{% endblock %}
+{% block content %}
+{#
+   The consent page a native client opens in the system browser (roadmap #11).
+
+   Everything the app asked for is shown BEFORE anything is minted -- which device, which
+   capabilities, and where the one-time code will be sent. A pairing page that only says
+   "allow?" is a page nobody can answer honestly, and this one hands out a credential that
+   works for months.
+#}
+<div style="max-width: 40rem;">
+    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('pair.heading') }}</h1>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('pair.intro') }}</p>
+
+    <div class="card" style="margin-bottom: var(--space-5);">
+        <h2 class="card__title">{{ t('pair.device') }}</h2>
+        <p class="stat-card__meta" id="pair-device-line"
+           data-name="{{ device_name }}" data-platform="{{ platform }}">
+            {% if device_name %}<strong>{{ device_name }}</strong>{% else %}{{ t('pair.device_unnamed') }}{% endif %}
+            {% if platform %} &middot; {{ platform }}{% endif %}
+        </p>
+        <p class="stat-card__meta" style="margin-top: var(--space-2);">
+            {{ t('pair.expires_in_days', days=lifetime_days) }}
+        </p>
+    </div>
+
+    <div class="card" style="margin-bottom: var(--space-5);">
+        <h2 class="card__title">{{ t('pair.capabilities') }}</h2>
+        <p class="stat-card__meta" style="margin-bottom: var(--space-4);">{{ t('pair.capabilities_help') }}</p>
+
+        {# Labels come from the server already resolved in the caller's language, like
+           every other server-supplied vocabulary here. Building the catalog key by
+           concatenation in the template would hide it from test_i18n.py's typo scan. #}
+        {% for capability in grantable %}
+        <label class="setting__label" style="display: flex; gap: var(--space-3); align-items: flex-start; margin-bottom: var(--space-3);">
+            <input type="checkbox" name="capability" value="{{ capability.name }}"
+                   {% if capability.name in defaults %}checked{% endif %}>
+            <span>
+                <strong>{{ capability.label }}</strong><br>
+                <span class="setting__default">{{ capability.description }}</span>
+            </span>
+        </label>
+        {% endfor %}
+
+        {# Named rather than merely absent. An operator who holds MANAGE_SETTINGS and does
+           not see it here should be told it is a rule, not a bug in the page. #}
+        <p class="stat-card__meta" style="margin-top: var(--space-4);">
+            {{ t('pair.forbidden') }}
+        </p>
+    </div>
+
+    {% if redirect_error %}
+    <div class="card" style="margin-bottom: var(--space-5); border-color: var(--danger);">
+        <h2 class="card__title">{{ t('pair.redirect_refused') }}</h2>
+        <p class="stat-card__meta">{{ redirect_error }}</p>
+        <p class="stat-card__meta" style="margin-top: var(--space-2);">{{ t('pair.redirect_refused_help') }}</p>
+    </div>
+    {% endif %}
+
+    <div class="toolbar" style="gap: var(--space-3);">
+        <button class="btn btn--primary" type="button" id="pair-confirm"
+                data-redirect="{{ '' if redirect_error else redirect_uri }}"
+                data-state="{{ state }}">{{ t('pair.confirm') }}</button>
+        <span class="autosave" id="pair-status"></span>
+    </div>
+
+    {# The copy-paste path. Shown only once a code exists -- it is the fallback for a
+       device that cannot listen on loopback, and the path a phone will take through a
+       custom URL scheme later. #}
+    <div class="card" id="pair-code-card" hidden style="margin-top: var(--space-5);">
+        <h2 class="card__title">{{ t('pair.code_heading') }}</h2>
+        <p class="stat-card__meta">{{ t('pair.code_help', seconds=60) }}</p>
+        <p style="font-family: var(--font-mono, monospace); font-size: var(--text-md); word-break: break-all; margin-top: var(--space-3);" id="pair-code"></p>
+    </div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/pair.js') }}"></script>
+{% endblock %}

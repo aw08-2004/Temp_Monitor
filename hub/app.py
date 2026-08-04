@@ -40,7 +40,9 @@ import bios
 import firmware
 import wake
 import authconfig
+import apitokens
 import i18n
+import permissions_web
 from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
@@ -53,6 +55,7 @@ from bios_web import create_bios_blueprint
 from wake_web import create_wake_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
+from apitokens_web import create_apitokens_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
 # telemetry DB) lives one level up in the install root. Keeping the two apart is what lets
@@ -79,7 +82,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.68.2"
+HUB_VERSION = "1.69.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1478,12 +1481,50 @@ def _csrf_content_type_ok():
     return request.mimetype == "application/json"
 
 
+def _device_identity():
+    """Resolve a device token from this request's Authorization header, or None.
+
+    The native client (roadmap #11) has no cookie and cannot get one -- sign-in is
+    OAuth-only, so there is nothing for an app to type. It presents
+    `Bearer tmu_<token_id>:<secret>` instead, minted by the pairing flow in
+    apitokens_web.py.
+
+    Re-checked on EVERY request rather than trusted for the life of the token:
+    `login_allowed` is the same gate the sign-in path runs, so an operator removed from
+    every permission group loses their paired devices the moment the group changes, not
+    whenever the token happens to expire. (What the device may then DO is narrowed a
+    second time by permissions_web._narrow_to_device.)
+    """
+    identity = apitokens.authenticate(DB_PATH, request.headers.get("Authorization"))
+    if identity is None:
+        return None
+    if not access.login_allowed(identity["email"], identity.get("directory_groups") or ()):
+        return None
+    return identity
+
+
 def login_required(view):
-    """Gate a route behind an authenticated + allow-listed session, and require a JSON
-    content type on anything that changes state (see the CSRF note above). Never applied
-    to /api/report."""
+    """Gate a route behind an authenticated + allow-listed caller, and require a JSON
+    content type on anything that changes state with an AMBIENT credential (see the CSRF
+    note above). Never applied to /api/report.
+
+    Two ways in, one gate: the signed session cookie a browser carries, and a device
+    token a native client presents. They differ in exactly one respect below -- see the
+    CSRF comment inside.
+    """
     @wraps(view)
     def wrapped(*args, **kwargs):
+        identity = _device_identity()
+        if identity is not None:
+            # NOT subject to the content-type rule, and this is the rule being applied
+            # rather than an exception to it: the note above says CSRF rides an ambient
+            # credential, and a bearer header is not ambient -- no browser attaches one on
+            # its own. It is the same reasoning that (correctly) leaves /api/agent/*
+            # outside this check. Requiring JSON here would defend against a request that
+            # cannot be made, at the cost of breaking ordinary API callers.
+            permissions_web.set_request_identity(identity)
+            return view(*args, **kwargs)
+
         if not session.get("user"):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Authentication required"}), 401
@@ -1570,6 +1611,13 @@ app.register_blueprint(create_wake_blueprint(
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
 app.register_blueprint(create_auth_blueprint(
     DB_PATH, login_required, access, ENV_PATH, configure_oauth))
+
+# Device pairing and the Download Client page (roadmap #11). The pairing routes sit behind
+# the ORDINARY session gate -- pairing a device is something a signed-in operator does in a
+# browser, and the token it mints is what the app uses afterwards. HUB_CODE_DIR is handed in
+# because the signed client manifest ships beside the code, like the agent's does.
+app.register_blueprint(create_apitokens_blueprint(
+    DB_PATH, login_required, access, code_dir=HUB_CODE_DIR))
 
 
 @app.route("/login")
@@ -3006,6 +3054,7 @@ bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
+apitokens.init_apitokens_db(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
@@ -3362,7 +3411,7 @@ def put_machine_primary_sensor(machine):
         return jsonify({"error": "Unknown machine"}), 404
 
     applied = set_primary_sensor_override(machine_name, name)
-    fleet.audit(DB_PATH, (session.get("user") or {}).get("email", "unknown"),
+    fleet.audit(DB_PATH, permissions_web.current_actor(),
                 "machine.primary_sensor", machine_name, {"to": applied},
                 level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "saved", "primary_sensor_name": applied})
@@ -3412,7 +3461,7 @@ def delete_machine(machine):
     backups.delete_secret(LOG_DIR, bios.secret_id_for(machine_name))
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
-    actor = (session.get("user") or {}).get("email", "unknown")
+    actor = permissions_web.current_actor()
     fleet.audit(DB_PATH, actor, "machine.delete", machine_name,
                 level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "deleted"}), 200
@@ -3502,7 +3551,7 @@ def merge_machines_endpoint():
     if missing:
         return jsonify({"error": f"unknown machine(s): {', '.join(missing)}"}), 404
 
-    actor = (session.get("user") or {}).get("email", "unknown")
+    actor = permissions_web.current_actor()
     for victim in victims:
         merge_machines(survivor, victim, actor=actor)
     if found.get(survivor):
@@ -3516,7 +3565,7 @@ def merge_machines_endpoint():
 def dismiss_alert(alert_id):
     if not alerts.dismiss(DB_PATH, alert_id):
         return jsonify({"error": "no open alert with that id"}), 404
-    actor = (session.get("user") or {}).get("email", "unknown")
+    actor = permissions_web.current_actor()
     fleet.audit(DB_PATH, actor, "alert.dismiss", str(alert_id),
                 level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "dismissed"}), 200
@@ -3627,7 +3676,7 @@ def current_language():
     accept = None
     try:
         fleet_default = settings.get(DB_PATH, "hub.default_language")
-        email = (session.get("user") or {}).get("email")
+        email = permissions_web.current_identity().get("email")
         if email:
             chosen = users.get_language(DB_PATH, email)
         # Read unconditionally: the fleet default ships as i18n.AUTO, so on a hub where
@@ -3677,7 +3726,7 @@ def set_language():
     # picker would have no option meaning "follow my browser again".
     if language != i18n.AUTO and not i18n.is_supported(language):
         return jsonify({"error": f"{language!r} is not a supported language."}), 400
-    email = (session.get("user") or {}).get("email")
+    email = permissions_web.current_identity().get("email")
     try:
         users.set_language(DB_PATH, email,
                            None if language == i18n.AUTO else language)

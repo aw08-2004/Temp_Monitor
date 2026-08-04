@@ -30,6 +30,16 @@
             {{ t('nav.alerts') }}
             {% if open_alert_count %}<span class="sidebar__badge">{{ open_alert_count }}</span>{% endif %}
         </a>
+        {# The native client (roadmap #11). Gated on VIEW rather than on a capability of
+           its own: anyone allowed into the console may install the app, because the app
+           can do nothing on its own -- the device token it is later paired with is what
+           decides that. The gate matches the route's, so this link never 403s. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'apitokens.download_page' else '' }}" data-nav-prefix="/download" href="{{ url_for('apitokens.download_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
+            {{ t('nav.download') }}
+        </a>
+        {% endif %}
         {# Links are hidden when the caller lacks the capability behind them. This is
            presentation only -- every route is gated server-side regardless (see
            permissions_web.Access) -- but a sidebar of links that all 403 is worse than

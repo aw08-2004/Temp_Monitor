@@ -171,6 +171,13 @@ REGISTRY = (
     # unreachable on every untouched hub -- see the note on i18n.AUTO.
     _s("hub.default_language", "hub", "enum", i18n.AUTO,
        choices=[i18n.AUTO] + list(i18n.LANGUAGE_CODES)),
+    # How long a paired client device's token stays valid (roadmap #11). Lives in `hub`
+    # rather than a section of its own because it is one hub-wide policy knob, and a
+    # single-setting Settings tab is a tab nobody finds. Each token COPIES the value in
+    # force when it was paired, so raising this never silently extends a device somebody
+    # already agreed to a shorter lifetime for.
+    _s("hub.device_token_lifetime_days", "hub", "int", 90, minimum=1, maximum=730,
+       unit="days"),
 
     # ---------------- Data & retention ----------------
     _s("data.retention_days", "data", "int", 30, minimum=1, maximum=3650, unit="days"),

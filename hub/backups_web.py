@@ -33,13 +33,14 @@ page polls the run list, exactly as the packages page polls a deployment.
 import threading
 import time
 
-from flask import Blueprint, Response, jsonify, render_template, request, session
+from flask import Blueprint, Response, jsonify, render_template, request
 
 import backup_paths
 import backups
 import fleet
 import i18n
 import permissions
+import permissions_web
 import settings
 
 
@@ -83,9 +84,9 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     can_manage = access.require(permissions.MANAGE_BACKUPS)
 
     def _current_email():
-        """The signed-in operator. ALWAYS from the session -- never a request body, or
-        the audit trail becomes fiction."""
-        return (session.get("user") or {}).get("email", "unknown")
+        """The signed-in operator. ALWAYS from the authenticated identity -- never a
+        request body, or the audit trail becomes fiction."""
+        return permissions_web.current_actor()
 
     def _master_key_or_error():
         """The master key as bytes, or (None, response) if there isn't a usable one."""

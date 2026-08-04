@@ -1,0 +1,8 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_single_quotes: true
+    # NOT require_trailing_commas: the modern `dart format` decides trailing commas for
+    # itself and does not add the ones that rule demands, so the two disagree on every
+    # file forever. `dart format` is the authority on layout here.

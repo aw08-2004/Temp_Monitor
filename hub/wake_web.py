@@ -27,10 +27,11 @@ build a sentence in. wake.diagnose is the single source of the list.
 The CSRF note from fleet_web.py applies verbatim: bodies are read with
 request.get_json(silent=True), which requires Content-Type: application/json.
 """
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request
 
 import fleet
 import permissions
+import permissions_web
 import settings
 import wake
 
@@ -55,7 +56,7 @@ def create_wake_blueprint(db_path, login_required, access, machine_roster=None):
     can_issue = access.require(permissions.ISSUE_COMMANDS)
 
     def _current_email():
-        return (session.get("user") or {}).get("email", "unknown")
+        return permissions_web.current_actor()
 
     def _require_json():
         if not request.is_json:

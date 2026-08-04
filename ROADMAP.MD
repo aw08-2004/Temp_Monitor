@@ -1673,6 +1673,208 @@ comes online.
 
 ---
 
+## 🚧 11. Desktop & mobile app   ·   hub 1.69.0 (client pending its first signed release)
+
+**The hub half is built (1.69.0). The client analyzes clean and its 45 tests pass; the
+Windows BINARY has never been produced** — the build machine has neither Visual Studio's
+"Desktop development with C++" workload nor Windows Developer Mode (Flutter plugins need
+symlinks), and `release_client.py` names both when the build fails. So the logic is
+verified and the packaging is not: nobody has run this app.
+
+Running the tests immediately earned its keep. It found a **real race in the pairing
+flow**: the loopback listener was attached AFTER the browser was opened, so a browser
+already running and signed in could complete the round trip before anything was listening,
+and the pairing would hang until its five-minute timeout with nothing to say why. The
+listener is now attached first.
+
+The console is a good web app, but it is a *web* app: watching a fleet means keeping a tab
+open, and a high-temperature alert raised at 02:00 by `evaluate_high_temp_once` reaches
+nobody until someone looks at the Alerts tab. This adds a **native client** — Flutter, one
+codebase, **Windows desktop in v1**, Android/iOS as an addition rather than a rewrite.
+
+v1 scope is the fleet list, machine detail, alerts with OS notifications, Wake-on-LAN and
+saved commands as quick actions. The open parameters were resolved as:
+
+- **Flutter, not React Native + Electron.** RN's desktop story would have meant Electron as
+  a *second* shell — two runtimes, two build systems, and a desktop half that is Chromium
+  anyway, at which point a PWA was cheaper. Flutter covers Windows, Android and iOS from
+  one codebase with `flutter_webrtc`/`xterm.dart` waiting for the tiers after v1. The cost
+  is honest and paid once: Dart is new to this project, and `app/` is its first real build
+  toolchain.
+- **The hub gained authentication and a download, and no new data endpoints.** Every v1
+  screen is composed from routes that already existed, are already scope-filtered and are
+  already tested — `/api/machines`, `/api/alerts`, `/api/wake/*`, `/api/fleet/favorites`,
+  `/api/fleet/commands`. A screen needing data the console does not serve is a screen
+  outside v1, not a reason for a route.
+- **No Socket.IO in the app.** It is `transports=["polling"]`, CORS-pinned to `HUB_URL`,
+  and costs a waitress thread per open connection. A native client would have forced that
+  origin list open — the exact thing app.py's own comments warn against with cookie auth.
+  The app polls `/api/machines` every 10 s, which is what the Inventory page already does
+  at 30 s. Live temperature is not worth reopening CORS for.
+- **Push is phase 2, and v1 needs none.** A running desktop app holds its own connection
+  and raises its own toasts from the alert delta; an app that is not running has nothing to
+  notify. Building an FCM sender now would mean shipping untested plumbing against no
+  client. The `api_tokens` table carries nullable `push_kind`/`push_token` columns so the
+  phone build lands on the device registry that already exists rather than a second one
+  that could disagree about which devices there are.
+- **English only in v1, catalogs bundled and runtime-switchable in v2.** No string is
+  written inline (`app/lib/strings.dart`), which is the whole v1 cost and what makes v2 an
+  asset drop instead of a sweep through every screen. v2 bundles rather than fetches: this
+  app gets opened in a car park on a phone with no signal, and labels that depend on a
+  round-trip are labels that are sometimes blank.
+
+### Built (hub side) — device tokens
+
+`apitokens.py` (model, flask-free) + `apitokens_web.py` (pairing, device administration,
+the download page), `clientrelease.py` (the signed client catalogue), a Devices tab on the
+Users page, a Download Client page, and `--sign-client` in `sign_release.py`.
+
+**Authentication is a second way through the one existing gate.** `login_required` is the
+single seam every console route passes through and is injected into every blueprint, so
+one change covers the whole surface: a `Bearer tmu_<token_id>:<secret>` header resolves to
+a device identity, and the session path is untouched. Three properties carry the security
+of adding a months-long credential on somebody's laptop to a hub whose entire perimeter has
+been `ALLOWED_EMAILS` + a session since command signing was removed:
+
+- **A token is a CEILING, intersected LIVE.** The capability subset is chosen at pairing;
+  the effective set is `token ∩ owner's real capabilities`, recomputed per request in
+  `permissions_web._narrow_to_device`. Without the intersection a token minted while
+  someone was an admin keeps admin after they are demoted — the credential outliving the
+  grant is exactly the failure a bearer token introduces and a session does not.
+  `login_allowed` is re-run per request too, so removing somebody from every group kills
+  their paired devices immediately rather than at expiry.
+- **`manage_settings`, `manage_users`, `manage_permission_groups` and `manage_firmware`
+  are refused at MINT time.** Console administration stays in the console, and the cheapest
+  way to guarantee a laptop in a bag cannot rewrite the permission model is for the
+  credential to have never been able to. Even a break-glass superuser is refused.
+- **Tokens expire and the expiry slides on use**, against each row's OWN `lifetime_days`
+  rather than the current fleet default — the same rule `packages.py` applies to retry
+  policy, so raising `hub.device_token_lifetime_days` never silently extends a device
+  somebody agreed to a shorter lifetime for.
+
+**Pairing: RFC 8252's native-app flow, because there is no password and there must not be
+one.** The app binds a loopback listener, opens the SYSTEM browser at `/app/pair`, the hub
+authenticates it through the existing OAuth path (`_complete_login` untouched), an operator
+confirms the device and its capabilities on a consent page, and a one-time code comes back
+to loopback and is exchanged once.
+
+- **Nothing is minted until the code is exchanged.** The consent page records a GRANT; the
+  token does not exist until the device collects it, so an abandoned pairing leaves no
+  credential and no plaintext token is ever at rest, not even for the sixty seconds the
+  code lives. Single-use is a conditional DELETE, so a race has exactly one winner, and an
+  expired code is CONSUMED rather than left for a second attempt.
+- **The redirect is validated as literal loopback only** — `127.0.0.0/8` or `::1`, an
+  unprivileged port, no fragment, no credentials, no `localhost`. This is the sharpest edge
+  in the feature: the redirect carries a code that becomes a fleet credential and arrives
+  in a query string, so an open redirect here mails somebody's console access to whoever
+  crafted the link. `localhost` is refused deliberately even though it usually resolves
+  correctly — it is a NAME, resolved through a hosts file the hub cannot vouch for — and the
+  refusal names the fix rather than being silent about it.
+- **A copy-paste code is the fallback**, built now rather than retrofitted, because it is
+  also the path a phone takes through a custom URL scheme in phase 2.
+
+**Two implementation-level notes worth carrying forward:**
+
+- **A device token must never become a session.** The identity is stashed on `flask.g`, not
+  in `session`, because writing it into the session would make Flask return a signed
+  session cookie — and that cookie would carry no capability ceiling. A token that can be
+  laundered into something stronger than itself is not a ceiling at all.
+- **The CSRF content-type rule does not apply to bearer callers, and that is the rule
+  rather than an exception to it.** app.py's own note already says CSRF rides an AMBIENT
+  credential; a bearer header is not ambient, which is why `/api/agent/*` is correctly
+  outside the check. `tests/test_csrf.py` pins both halves together, so a change that
+  relaxed the cookie path while "keeping" the token path fails.
+- **`tmu_` is an authentication boundary, not a naming convenience.** Agent auth is
+  `Bearer <agent_id>:<token>`, parsed by five copies of `_bearer_agent`. The prefix makes
+  "agent token at a console endpoint" and "user token at an agent endpoint" parse failures
+  at the door rather than lookups that happen to miss. Both directions are tested.
+
+**Also cleaned up here** (found while wiring this up): ten blueprints each spelled out
+`(session.get("user") or {}).get("email", "unknown")` for the audit actor. They now all
+call `permissions_web.current_actor()`, so an action taken from the app is attributed to
+the operator who paired it instead of being recorded as `unknown` — one implementation of
+"who is this caller", for the same reason `login_required` and `access` are passed around
+rather than re-declared.
+
+### Built (hub side) — the Download Client page
+
+A first-class console page that renders **whatever the signed manifest lists**, never a
+hand-maintained list of links: a hardcoded page is one that offers an Android build three
+weeks before the APK exists and keeps offering one that was pulled. Adding a platform is a
+release action — build, re-sign, push — with no hub change and no console change.
+
+- **The manifest holds a LIST of builds.** The agent's is `{version, sha256, url}` because
+  it has one artifact; a client has several and will have more, so this is
+  `{version, builds: [{platform, arch, kind, filename, size, sha256, url}, …]}`, signed as
+  one document with the **same Ed25519 key that signs the agent**. One trust root for every
+  artifact this project ships, because a second signing key is a second private key to keep
+  safe.
+- **The signature is verified before the page renders**, not before the download. The
+  console is somewhere operators already trust; an unverified page there would let anyone
+  who could write a file into the hub's code directory hand the whole helpdesk a binary.
+  Failure is a 503 carrying the reason — "no client has been published yet" and "this
+  manifest is not signed by your release key" are different situations, and an empty list
+  would render them identically.
+- **iOS is a `link` kind, not a file.** Apple does not permit installing an app from a
+  link to a file, so the distinction exists from the start rather than arriving later as a
+  special case in the template.
+- **The manifest ships under `hub/`, not under `app/`** — load-bearing, and the reason it
+  is called out. The hub's self-updater mirrors the `hub/` directory and nothing else, so a
+  manifest beside the Flutter sources would never arrive on an installed hub: the identical
+  shape of the 1.27.x bug where `packages.py` was left out of the runtime file list and the
+  hub died on import. `/download/manifest.json` and its `.sig` are served unauthenticated
+  as the EXACT bytes on disk, because an installed client needs them to check for its own
+  update before it has been paired with anything, and re-serialising them would break the
+  detached signature.
+
+### Built (client side) — the update check and the release script
+
+**The client verifies the same signed manifest before offering an update**, with the same
+embedded public key the agent's `SelfUpdater` uses. Checked once per launch, after the
+device is paired. Both `/download/manifest.json` and its `.sig` are unauthenticated on the
+hub deliberately, so this works before a device has been paired and keeps working after its
+token is revoked — an app that could not tell you it was out of date until you signed in
+would be least useful exactly when it was most stale.
+
+- **It asks; it never installs.** The agent self-updates because it runs unattended as
+  SYSTEM. This app has a person in front of it, so the dialog names the version, shows the
+  sha256 the download page publishes, and opens the signed URL in a browser — where the
+  operator can see what they are downloading and their own AV will look at it. That
+  resolves the open parameter this entry left ("self-update, or just report?").
+- **"Skip this version" is per VERSION, not forever.** Without it an operator who cannot
+  install software today sees the same dialog every launch and learns to dismiss it unread
+  — and the one they eventually dismiss unread is the one carrying a security fix.
+- **A release with no build for this machine is not an update.** An Android-only release
+  must not send a Windows operator to a page with nothing on it for them.
+- **Every refusal is tested against REAL Ed25519**, with an ephemeral keypair rather than a
+  stubbed verifier: unsigned, signed-by-another-key, and edited-after-signing all have to
+  produce "not an update", and a verifier tested against a fake verifier tests nothing.
+
+**`release_client.py` is the client's equivalent of `--sign-agent`**, and it refuses rather
+than warns. `app/lib/version.dart` is the source of truth — compiled into the binary and
+what the update check compares against — and the script READS it rather than taking a
+version on the command line, because a script you can hand a version to is a script you can
+hand the wrong one. It checks `pubspec.yaml` agrees, then runs `pub get` / `analyze` /
+`test` / `build` / package / sign, stopping on a failing analyzer or a red test: a release
+script that ships a red build is worse than none, because it looks like a process.
+
+### Not yet done
+
+- **The Windows binary has never been produced**, so nobody has run this app. Needs
+  Visual Studio's C++ workload and Developer Mode on a build machine. Expect the same shape
+  of finding the TURN work produced on first contact with hardware.
+- **No client release exists**, so the Download page correctly reports that none has been
+  published — and so does the in-app check, which treats the hub's 404 as "nothing newer"
+  rather than an error.
+- **Packaging is a zip, not an installer.** An unsigned installer is a SmartScreen warning;
+  an unsigned zip is a folder. Revisit as MSIX once there is a code-signing certificate,
+  which is also what would let toasts stop depending on `local_notifier`'s Start Menu
+  shortcut for an application identity.
+- **Phase 2**: the Android/iOS builds, FCM/APNs against the `push_*` columns already in
+  place, and the bundled localization described above.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
@@ -1728,17 +1930,34 @@ comes online.
     the packet was sent rather than against online-ness, which fails in the direction of
     looking like it worked. **The agent half is pending a signed release** (build +
     `sign_release.py --sign-agent` + asset upload).
+11. **#11 Desktop & mobile app** — hub half done, hub 1.69.0: device tokens at the one
+    `login_required` seam, RFC 8252 loopback pairing, a Devices tab, and a Download Client
+    page driven by a signed manifest. The Flutter client in `app/` analyzes clean and its
+    45 tests pass — including a signature-verifying update check and the pairing rejections
+    — but **the Windows binary has never been produced** (no Visual Studio C++ workload, no
+    Developer Mode on the build machine), so nobody has run it and the first client release
+    is outstanding. `release_client.py` automates that release the way `--sign-agent` does
+    the agent's. Its prerequisite was #Foundation: a device holds a SUBSET of its owner's
+    capabilities, intersected live, which is only meaningful because permission groups
+    exist.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
 > TURN installer all landed in 1.41–1.48 without a roadmap entry, since none of them was
 > a numbered feature above. #4's entry has been brought up to date. #9 and #10 were the
 > first new items added to this board since #7; both are now built (#9 at 1.61.0, #10 at
-> 1.63.0), so **every numbered feature on this board is done** except the opportunistic
-> remainder of #3. #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0),
-> which is an extension of a done feature rather than a new board item. What is outstanding
-> is not a feature but a release: the agent halves of #1, #2, #5, #6, #9 and #10 all ship in
-> source and need a signed agent release before the fleet gains any of them.
+> 1.63.0). #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0), which is an
+> extension of a done feature rather than a new board item.
+>
+> **#11 is the first item on this board that is not finished.** Its hub half is built and
+> tested (1.69.0) and its client passes its own tests, but no Windows binary has been
+> produced, so the app has never actually run. Everything else is done except the
+> opportunistic remainder of #3.
+>
+> What is otherwise outstanding is not a feature but a release — two of them now: the agent
+> halves of #1, #2, #5, #6, #9 and #10 all ship in source and need a signed **agent**
+> release before the fleet gains any of them, and #11 needs a signed **client** release
+> before there is anything on the Download page.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full

@@ -1,0 +1,170 @@
+# FleetHub client (roadmap #11)
+
+The native FleetHub client. One Flutter codebase; **v1 targets Windows desktop**, and
+Android/iOS are additions rather than a rewrite.
+
+What it does in v1: the fleet list, one machine's detail, open alerts with Windows toasts,
+Wake-on-LAN, and saved commands as quick actions. Console administration — settings, users,
+permission groups, firmware — deliberately stays in the browser and cannot be granted to a
+device at all.
+
+## How it talks to a hub
+
+Ordinary HTTPS JSON against endpoints the hub already had. **The hub gained authentication
+for this feature and no new data endpoints**, which is the design: a screen that needs data
+the console does not already serve is a screen outside v1's scope.
+
+Two things this app deliberately does not use:
+
+- **Socket.IO.** The hub's is polling-only, CORS-pinned to its own origin, and costs a
+  server thread per open connection. The app polls `/api/machines` every ten seconds —
+  which is what the console's own Inventory page does at thirty — and nothing about the
+  hub's perimeter has to be widened to accommodate it.
+- **The session cookie.** The app holds a bearer **device token**. It is never given a
+  session, so a stolen token cannot be upgraded into one.
+
+## Pairing
+
+There is no password to type into this app, because the hub signs people in with
+OAuth/OIDC and nothing else. Pairing follows RFC 8252's native-app flow:
+
+1. the app binds a listener to `127.0.0.1` on a free port
+2. it opens the **system browser** at `<hub>/app/pair?redirect=…&state=…`
+3. the hub authenticates that browser normally and shows a consent page
+4. the operator confirms the device and what it may do
+5. the browser is redirected to the loopback URL with a one-time code
+6. the app exchanges the code for the token, once
+
+A copy-paste code path exists for when the app cannot listen locally — and is the path a
+phone will take through a custom URL scheme in phase 2. Both end at the same single-use
+exchange.
+
+The token is stored with `flutter_secure_storage`, DPAPI-backed on Windows, so the stored
+blob is bound to the Windows user account.
+
+## Building
+
+The platform runner directories are **not** in the repo — a Flutter SDK upgrade should not
+arrive as a thousand-line diff. Generate them once per checkout:
+
+```bash
+cd app && flutter create --platforms=windows .
+```
+
+That writes `windows/` over this source without touching `lib/`, `test/` or `pubspec.yaml`.
+Then:
+
+```bash
+cd app && flutter pub get && flutter test
+```
+
+```bash
+cd app && flutter build windows --release
+```
+
+The build lands in `build/windows/x64/runner/Release/`.
+
+### Toasts need an application identity
+
+Windows will not show a toast for an application that has none, and an unsigned non-MSIX
+build has none of its own. `local_notifier` registers a Start Menu shortcut carrying an
+AppUserModelID at startup, which supplies one. **If toasts silently do nothing, check that
+shortcut before reading the notification code.** MSIX packaging is the cleaner answer and
+the upgrade path once there is a code-signing certificate.
+
+## Updating
+
+The app checks for a newer release **once per launch**, after this device is paired. It
+reads the same signed manifest the console's Download page renders —
+`<hub>/download/manifest.json` plus its detached `.sig` — and **verifies the Ed25519
+signature against the embedded release key before believing a word of it** ([updater.dart](lib/update/updater.dart)).
+An update prompt that trusted an unverified document would be a prompt anyone who could
+answer for the hub's hostname could use to point the helpdesk at a binary of their choosing.
+
+It **asks, and never installs**. The agent self-updates because it runs unattended as
+SYSTEM; this app has a person in front of it, so the dialog shows what changed, publishes
+the SHA-256, and opens the signed download URL if they say yes. "Skip this version" is
+per-version, so the next release asks again — without it, an operator who cannot install
+software today gets the same dialog every launch and learns to dismiss it unread.
+
+A hub with no client release published answers 404, which is reported as "nothing newer"
+rather than as an error to dismiss.
+
+## Releasing
+
+One command:
+
+```bash
+python release_client.py
+```
+
+It reads the version from [lib/version.dart](lib/version.dart) — the source of truth,
+compiled into the binary and what the update check compares against — checks that
+`pubspec.yaml` agrees, then runs `pub get`, `analyze`, `test`, `build windows`, zips the
+result, and signs the manifest. **It refuses rather than warns**: a failing analyzer or a
+red test stops the release, because a release script that ships a red build is worse than
+no release script.
+
+Bump the version first (this moves both files together and stops, so you can commit them):
+
+```bash
+python release_client.py --set-version 1.1.0
+```
+
+To also create the GitHub release and upload the asset with `gh`:
+
+```bash
+python release_client.py --upload
+```
+
+Then commit `hub/client.manifest.json` + `.sig` and deploy the hub. Every `sha256` and
+`size` in the manifest is computed from the bytes on disk by `sign_release.py`, never
+typed, and signed with the **same Ed25519 key that signs the agent** — one trust root for
+every artifact this project ships.
+
+**Windows build prerequisites** (`flutter doctor` confirms both, and `release_client.py`
+names them when the build fails):
+
+- Visual Studio with the **Desktop development with C++** workload.
+- **Windows Developer Mode**, for the symlink support Flutter plugins need —
+  `start ms-settings:developers`.
+
+**The manifest ships under `hub/`, not under `app/`.** The hub's self-updater mirrors the
+`hub/` directory and nothing else, so a manifest beside these sources would never reach an
+installed hub — the same shape as the 1.27.x bug where `packages.py` was left out of the
+runtime file list and the hub died on import. See `hub/clientrelease.py`.
+
+## Localization
+
+**v1 is English only**, but no string is written inline in a widget — every one lives in
+`lib/strings.dart`. That is the whole v1 cost, and it is what makes v2 an asset drop rather
+than a sweep through every screen.
+
+**v2 ships the catalogs inside the app**, generated from `hub/locales/{en,de,es}.json` and
+switchable at runtime from the app's own settings. Bundled rather than fetched, because
+this app gets opened in a car park on a phone with no signal, and a UI whose labels depend
+on a round-trip is a UI that is sometimes blank. Generate the assets in the build rather
+than hand-copying them, and add a test asserting the key sets agree — the same shape as the
+hub's `tests/test_i18n.py`.
+
+## Layout
+
+```
+lib/
+  main.dart          window, tray, close-to-tray, theme
+  version.dart       the running version -- source of truth for a release
+  models.dart        tolerant decoders over the hub's JSON
+  state.dart         riverpod: session, pollers, alert delta
+  notify.dart        Windows toasts, and when NOT to raise one
+  strings.dart       every user-facing string, in one place
+  api/
+    hub_client.dart  bearer auth, timeouts, 401 -> re-pair
+    fleet_api.dart   typed calls over existing hub endpoints
+  auth/
+    pairing.dart     the loopback flow, and its refusals
+    token_store.dart secure storage
+  update/
+    updater.dart     signed manifest -> "is there a newer one?"
+  ui/                fleet, alerts, wake, commands, settings, update prompt
+test/                models, pairing, updater (real Ed25519), notify
+```

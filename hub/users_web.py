@@ -16,9 +16,10 @@ deliberately separate from MANAGE_PERMISSION_GROUPS so the two can be delegated
 independently -- editing someone's phone number is not the same trust as granting
 capabilities.
 """
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, render_template, request
 
 import permissions
+import permissions_web
 import users
 
 
@@ -29,7 +30,8 @@ def create_users_blueprint(db_path, login_required, access):
     manage = access.require(permissions.MANAGE_USERS)
 
     def _actor():
-        return permissions.normalize_email((session.get("user") or {}).get("email"))
+        return permissions.normalize_email(
+            permissions_web.current_identity().get("email"))
 
     @bp.route("/users")
     @login_required

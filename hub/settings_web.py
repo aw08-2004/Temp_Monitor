@@ -19,8 +19,9 @@ answer.
 """
 import fleet
 import permissions
+import permissions_web
 import settings
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request
 
 
 def create_settings_blueprint(db_path, login_required, access):
@@ -38,7 +39,7 @@ def create_settings_blueprint(db_path, login_required, access):
     def _current_email():
         """The signed-in operator. Always the source of attribution -- never take an
         email from the request body, or the audit trail becomes fiction."""
-        return (session.get("user") or {}).get("email", "unknown")
+        return permissions_web.current_actor()
 
     def _audit_changes(before, after, action):
         for key, value in after.items():

@@ -9,22 +9,42 @@
    GET /api/users. This is a profile directory, not an access-control surface --
    membership in a Permission Group is what grants what someone can do.
 #}
-<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
-    <div>
-        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('users.heading') }}</h1>
-        <p class="stat-card__meta">
-            {{ t('users.intro') }}
-        </p>
+{# Two tabs, because a paired DEVICE is a property of a person: the page that answers
+   "who is Carol" is the one that should answer "and what is she signed in from". A page of
+   its own would have to be found, and would duplicate this one's manage_users gate. #}
+<div class="tabs" role="tablist" aria-label="{{ t('users.views_nav') }}" data-tabs-key="users">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-directory"
+            aria-controls="directory-pane" aria-selected="true">{{ t('users.tab_directory') }}</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-devices"
+            aria-controls="devices-pane" aria-selected="false" tabindex="-1">{{ t('users.tab_devices') }}</button>
+</div>
+
+<div class="tab-panel" id="directory-pane" role="tabpanel" aria-labelledby="tab-btn-directory">
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+        <div>
+            <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('users.heading') }}</h1>
+            <p class="stat-card__meta">
+                {{ t('users.intro') }}
+            </p>
+        </div>
+        <button class="btn btn--primary" type="button" id="new-user">{{ t('users.add') }}</button>
     </div>
-    <button class="btn btn--primary" type="button" id="new-user">{{ t('users.add') }}</button>
+
+    <div class="toolbar" style="margin-bottom: var(--space-4);">
+        <input class="input" id="user-search" type="search" autocomplete="off"
+               placeholder="{{ t('users.search_placeholder') }}" style="max-width: 24rem; width: 100%;">
+    </div>
+
+    <div id="users-host"></div>
 </div>
 
-<div class="toolbar" style="margin-bottom: var(--space-4);">
-    <input class="input" id="user-search" type="search" autocomplete="off"
-           placeholder="{{ t('users.search_placeholder') }}" style="max-width: 24rem; width: 100%;">
+<div class="tab-panel" id="devices-pane" role="tabpanel" aria-labelledby="tab-btn-devices" hidden>
+    <div style="margin-bottom: var(--space-5);">
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('devices.heading') }}</h1>
+        <p class="stat-card__meta">{{ t('devices.intro') }}</p>
+    </div>
+    <div id="devices-host"></div>
 </div>
-
-<div id="users-host"></div>
 
 <dialog class="modal" id="user-modal">
     <form method="dialog" id="user-form">
@@ -67,5 +87,7 @@
 </dialog>
 {% endblock %}
 {% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 <script src="{{ url_for('static', filename='js/users.js') }}"></script>
+<script src="{{ url_for('static', filename='js/devices.js') }}"></script>
 {% endblock %}

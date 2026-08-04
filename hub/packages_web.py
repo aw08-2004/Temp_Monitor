@@ -33,12 +33,13 @@ convenience.
 """
 import os
 
-from flask import Blueprint, jsonify, render_template, request, send_file, session
+from flask import Blueprint, jsonify, render_template, request, send_file
 
 import fleet
 import i18n
 import packages
 import permissions
+import permissions_web
 import settings
 
 
@@ -75,9 +76,9 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
     blob_dir = packages.blob_root(log_dir)
 
     def _current_email():
-        """The signed-in operator. ALWAYS from the session -- never a request body, or
-        the audit trail becomes fiction."""
-        return (session.get("user") or {}).get("email", "unknown")
+        """The signed-in operator. ALWAYS from the authenticated identity -- never a
+        request body, or the audit trail becomes fiction."""
+        return permissions_web.current_actor()
 
     def _scoped_targets(machines):
         """Validate every requested target against the caller's scope.

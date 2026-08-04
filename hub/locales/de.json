@@ -17,7 +17,8 @@
     "users": "Benutzer",
     "close": "Navigation schließen",
     "open": "Navigation öffnen",
-    "firmware": "Firmware"
+    "firmware": "Firmware",
+    "download": "Client herunterladen"
   },
   "topbar": {
     "hub_version": "Hub v{version}",
@@ -205,7 +206,10 @@
     "email_required": "Eine E-Mail-Adresse ist erforderlich.",
     "confirm_delete": "„{user}“ aus dem Verzeichnis entfernen?\n\nDamit wird nur das Profil entfernt. Es ändert NICHT, was diese Person tun darf oder ob sie sich anmelden kann – das legen ihre Berechtigungsgruppen fest.",
     "delete_failed": "„{email}“ konnte nicht gelöscht werden: {error}",
-    "load_failed": "Die Benutzer konnten nicht geladen werden: {error}"
+    "load_failed": "Die Benutzer konnten nicht geladen werden: {error}",
+    "views_nav": "Benutzeransichten",
+    "tab_directory": "Verzeichnis",
+    "tab_devices": "Geräte"
   },
   "permissions": {
     "heading": "Berechtigungsgruppen",
@@ -641,6 +645,10 @@
       "wake.auto_wake_targets": {
         "label": "PCs vor einem geplanten Zeitfenster aufwecken",
         "help": "Verteilungen und Firmware-Updates erreichen nur eingeschaltete PCs. Damit weckt der Hub die ausgeschalteten Ziele eines Zeitfensters, sobald es beginnt."
+      },
+      "hub.device_token_lifetime_days": {
+        "label": "Gültigkeit des Gerätezugriffs",
+        "help": "Wie lange eine gekoppelte App ohne Nutzung weiter funktioniert. Jede Nutzung verlängert sie. Bereits gekoppelte Geräte behalten ihre ursprüngliche Gültigkeit."
       }
     },
     "choice": {
@@ -1872,6 +1880,56 @@
       "submit": "Update einreihen",
       "need_machines": "Wähle mindestens einen Rechner.",
       "refused_title": "{count} Rechner wurden nicht eingereiht"
+    }
+  },
+  "pair": {
+    "heading": "Gerät koppeln",
+    "intro": "Sie sind dabei, einer App auf diesem Gerät Zugriff auf FleetHub unter Ihrem Namen zu geben. Prüfen Sie vor dem Bestätigen, was sie darf.",
+    "device": "Gerät",
+    "device_unnamed": "Ein unbenanntes Gerät",
+    "expires_in_days": "Der Zugriff läuft nach {days} Tagen ohne Nutzung ab und kann jederzeit auf der Seite Benutzer widerrufen werden.",
+    "capabilities": "Was dieses Gerät darf",
+    "capabilities_help": "Ein Gerät kann nie mehr als Sie selbst. Ändern sich Ihre Berechtigungen später, folgt das Gerät ihnen.",
+    "forbidden": "Einstellungen, Benutzer, Berechtigungsgruppen und Firmware bleiben der Konsole vorbehalten und können keinem Gerät erteilt werden.",
+    "redirect_refused": "Die Rückadresse dieser App wurde abgelehnt",
+    "redirect_refused_help": "Sie können trotzdem koppeln: unten bestätigen und den Code in der App eingeben.",
+    "confirm": "Dieses Gerät koppeln",
+    "pick_one": "Wählen Sie mindestens eine Berechtigung für dieses Gerät.",
+    "handing_over": "Code wird an die App übergeben…",
+    "code_heading": "Kopplungscode",
+    "code_help": "Geben Sie ihn innerhalb von {seconds} Sekunden in der App ein. Er funktioniert einmal."
+  },
+  "devices": {
+    "heading": "Gekoppelte Geräte",
+    "intro": "Alle bei diesem Hub angemeldeten Apps. Ein widerrufenes Gerät funktioniert sofort nicht mehr; Berechtigungen ändert das nicht.",
+    "empty": "Es sind keine Geräte gekoppelt.",
+    "empty_hint": "Ein Gerät erscheint hier, sobald jemand die FleetHub-App über die Seite „Client herunterladen“ koppelt.",
+    "unnamed": "Unbenanntes Gerät",
+    "revoked": "Widerrufen",
+    "confirm_revoke": "{device} widerrufen? Die App funktioniert sofort nicht mehr.",
+    "col": {
+      "device": "Gerät",
+      "owner": "Angemeldet als",
+      "capabilities": "Darf",
+      "last_used": "Zuletzt genutzt",
+      "expires": "Läuft ab"
+    }
+  },
+  "download": {
+    "heading": "FleetHub-Client herunterladen",
+    "intro": "Die native App zur Überwachung dieser Flotte, mit Warnungen und Wake-on-LAN. Installieren und dann in der App koppeln.",
+    "version": "Version {version}",
+    "get": "Herunterladen",
+    "open": "Öffnen",
+    "checksum": "SHA-256",
+    "unavailable": "Es steht nichts zum Herunterladen bereit.",
+    "platform": {
+      "windows": "Windows",
+      "macos": "macOS",
+      "linux": "Linux",
+      "android": "Android",
+      "ios": "iOS",
+      "unknown": "Client"
     }
   }
 }

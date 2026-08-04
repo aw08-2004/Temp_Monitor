@@ -230,6 +230,15 @@ ACTION_LEVELS = {
     "enroll": LEVEL_SECURITY,
     "revoke_agent": LEVEL_SECURITY,
     "issue_command": LEVEL_SECURITY,
+    # Device tokens (roadmap #11): the native client's credential. Pairing MINTS a
+    # long-lived bearer credential that leaves the hub on somebody's laptop, which is the
+    # same class of event as enrolling an agent. `device.first_use` is separate because
+    # the gap between minting and collection is exactly where a leaked pairing code would
+    # show up -- a mint with no matching first use, or a first use from a device nobody
+    # paired, is the signal, and neither is visible if the two share one row.
+    "device.pair": LEVEL_SECURITY,
+    "device.first_use": LEVEL_SECURITY,
+    "device.revoke": LEVEL_SECURITY,
     "create_deployment": LEVEL_SECURITY,
     "retry_deployment": LEVEL_SECURITY,
     "remote_session_start": LEVEL_SECURITY,
