@@ -34,6 +34,12 @@ public sealed class CaptureEncodePipeline
     /// to churn an idle session.</summary>
     private const int IdleRebuildMs = 30_000;
 
+    /// <summary>Ceiling on the gap we will report between two sent frames (see
+    /// <see cref="RtpDurationFor"/>). An encoder rebuild or a stalled hardware MFT can leave a
+    /// multi-second hole; reporting it honestly is right up to a point, but an unbounded jump in
+    /// the RTP clock is worth capping, and a gap this large re-keys the stream anyway.</summary>
+    private const int MaxFrameGapMs = 2000;
+
     /// <summary>Reported to the caller whenever the stream's shape changes, so the browser can
     /// be told what it is now looking at.</summary>
     public readonly record struct Geometry(
@@ -93,6 +99,11 @@ public sealed class CaptureEncodePipeline
         bool stallReported = false;
         var sinceLastFrame = Stopwatch.StartNew();
         var tick = Stopwatch.StartNew();
+        // Wall clock since the last frame we actually SENT, which is what the RTP timestamps are
+        // derived from. Separate from `tick` (which paces the loop) and from `sinceLastFrame`
+        // (which is stall detection) because it must only advance across frames that reached the
+        // peer -- a frame the encoder swallowed contributes its time to the next one that lands.
+        var sinceSent = Stopwatch.StartNew();
 
         try
         {
@@ -173,7 +184,8 @@ public sealed class CaptureEncodePipeline
                 var encoded = session.Encode(timestamp, frameDuration100ns);
                 if (encoded.Length > 0)
                 {
-                    onEncoded(encoded, (uint)(90000 / wanted.Fps));
+                    onEncoded(encoded, RtpDurationFor(sinceSent.ElapsedMilliseconds, wanted.Fps));
+                    sinceSent.Restart();
                     frames++;
                 }
                 timestamp += frameDuration100ns;
@@ -188,6 +200,35 @@ public sealed class CaptureEncodePipeline
             session?.Dispose();
         }
         return frames;
+    }
+
+    /// <summary>
+    /// How far to advance the 90 kHz RTP clock for the frame about to be sent, measured from the
+    /// wall clock rather than assumed from the configured fps.
+    ///
+    /// This used to be a flat <c>90000 / fps</c>, which is correct exactly as long as the loop
+    /// keeps up -- and the loop stops keeping up in precisely the conditions where latency already
+    /// hurts most: a software encoder on a 4K desktop, a hardware MFT stalling in AwaitNeedInput,
+    /// a rebuild. When an iteration takes 120ms at a nominal 15fps, we were telling the receiver
+    /// the frames were 66ms apart while they actually arrived 120ms apart. A WebRTC receiver reads
+    /// that mismatch as network jitter and GROWS its buffer to absorb it -- so the punishment for
+    /// a slow encoder was not just a lower frame rate but a jitter buffer that inflated and stayed
+    /// inflated, adding delay that never came back on its own. Measuring the real gap keeps the
+    /// receiver's clock model honest, so the only latency left is the latency actually there.
+    ///
+    /// Note this is deliberately NOT applied to the Media Foundation sample times, which stay on
+    /// the nominal monotonic clock: those feed the encoder's own rate control, which was
+    /// configured for that frame rate on the media type, and the receiver never sees them.
+    /// </summary>
+    internal static uint RtpDurationFor(long elapsedMs, int fps)
+    {
+        // The first frame has no predecessor to measure against, and a sub-millisecond gap
+        // rounds to zero -- both take the nominal duration rather than stalling the clock.
+        long nominalMs = Math.Max(1, 1000L / Math.Max(1, fps));
+        if (elapsedMs <= 0) elapsedMs = nominalMs;
+
+        // 90 kHz clock: 90 ticks per millisecond.
+        return (uint)(Math.Clamp(elapsedMs, 1, MaxFrameGapMs) * 90);
     }
 
     private static void ReportStallOnce(

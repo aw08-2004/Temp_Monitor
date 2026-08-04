@@ -107,6 +107,41 @@ public class RemoteStreamTests
         Assert.Equal(60, live.Current.Fps);
     }
 
+    // ---------------------------------------------------------------- rtp pacing
+    [Fact]
+    public void RtpDuration_ReportsTheGapThatActuallyHappened()
+    {
+        // The regression this exists for: the duration used to be a flat 90000/fps, so an
+        // iteration that overran (slow software encode, a stalling hardware MFT) told the
+        // receiver the frames were nominal-spaced while they arrived much further apart. A
+        // WebRTC receiver reads that mismatch as jitter and grows its playout buffer, so a slow
+        // encoder cost latency that never came back. 120ms at 90kHz is 10800 ticks -- NOT the
+        // 6000 that 15fps would have claimed.
+        Assert.Equal(10800u, CaptureEncodePipeline.RtpDurationFor(elapsedMs: 120, fps: 15));
+        Assert.Equal(2970u, CaptureEncodePipeline.RtpDurationFor(elapsedMs: 33, fps: 30));
+    }
+
+    [Fact]
+    public void RtpDuration_FallsBackToNominalWhenThereIsNothingToMeasure()
+    {
+        // The first frame has no predecessor, and a gap under a millisecond floors to zero.
+        // Both must advance the clock by something sane rather than stalling it at 0, which
+        // would stack two frames on one timestamp.
+        Assert.Equal(5940u, CaptureEncodePipeline.RtpDurationFor(elapsedMs: 0, fps: 15));
+        Assert.Equal(5940u, CaptureEncodePipeline.RtpDurationFor(elapsedMs: -1, fps: 15));
+        // fps is clamped upstream, but this must not divide by zero even if it were not.
+        Assert.Equal(90000u, CaptureEncodePipeline.RtpDurationFor(elapsedMs: 0, fps: 0));
+    }
+
+    [Fact]
+    public void RtpDuration_CapsAPathologicalGap()
+    {
+        // An encoder rebuild or a wedged MFT can leave a multi-second hole. Tracking it honestly
+        // is right up to a point; an unbounded jump in the RTP clock is not worth the fidelity,
+        // and a gap this size re-keys the stream anyway. Capped at 2000ms -> 180000 ticks.
+        Assert.Equal(180_000u, CaptureEncodePipeline.RtpDurationFor(elapsedMs: 60_000, fps: 15));
+    }
+
     [Fact]
     public void SessionParams_UnknownCodecAndEncoderDegradeToTheGoodPath()
     {

@@ -204,6 +204,22 @@
             // healthy from both ends. Build a MediaStream from the bare track instead. Verified
             // against a live session 2026-07-28.
             pc.ontrack = (e) => {
+                // Ask for the shortest jitter buffer the browser will give us. Chrome's default
+                // tuning is for WATCHING video: it holds 100-200ms of frames back so that network
+                // jitter never shows up as a stutter. That is the right trade for a video call and
+                // the wrong one here -- every millisecond it buffers is a millisecond between the
+                // operator moving the mouse and seeing the pointer move, and it dwarfs anything
+                // the capture and encode side costs. Remote control would far rather stutter than
+                // lag, so we ask for 0 and let the browser clamp it to whatever it can actually
+                // sustain (it treats this as a hint, not a promise).
+                //
+                // Chromium-only. Firefox and Safari expose no equivalent and simply will not have
+                // the property, so this is a no-op there rather than an error -- their operators
+                // keep the latency they had before, which is why this is set defensively and
+                // nothing downstream depends on it having worked.
+                if (e.receiver && 'playoutDelayHint' in e.receiver) {
+                    try { e.receiver.playoutDelayHint = 0; } catch (err) { /* not writable here */ }
+                }
                 if (e.streams && e.streams[0]) {
                     els.video.srcObject = e.streams[0];
                     return;
