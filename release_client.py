@@ -21,13 +21,17 @@ judgement calls, and a release script that makes them is one nobody reads the ou
 
 Usage
 -----
-  python release_client.py --set-version 1.1.0
-      Move app/lib/version.dart and app/pubspec.yaml to 1.1.0 and stop. Commit that, then
-      run the release.
-
   python release_client.py
-      Full release: pub get, analyze, test, build, package, sign. Prints the asset URL
-      each build must be uploaded to.
+      Full release. ASKS which version to publish (offering the patch/minor/major bumps
+      and naming what is currently published), then: pub get, analyze, test, build,
+      package, sign. Prints the asset URL each build must be uploaded to.
+
+  python release_client.py --version 1.2.0     # skip the prompt
+  python release_client.py --keep-version      # publish the tree's version, no prompt
+
+  python release_client.py --set-version 1.1.0
+      Only move app/lib/version.dart and app/pubspec.yaml, then stop. For bumping the
+      version as its own commit, separately from cutting a release.
 
   python release_client.py --upload
       The same, then create the GitHub release and upload the assets with `gh`.
@@ -153,6 +157,112 @@ def check_versions_agree(version):
             f"Run: python release_client.py --set-version {version}")
 
 
+def published_version():
+    """What the signed manifest in this checkout currently advertises, or None.
+
+    Read WITHOUT verifying the signature, deliberately: this is used to tell an operator
+    what they last published, not to decide whether to trust anything. The verification
+    that matters happens in the hub (clientrelease.load_manifest) and in the client's own
+    update check, and duplicating it here would imply this number is load-bearing.
+    """
+    path = os.path.join(ROOT, "hub", "client.manifest.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("version") or None
+    except (ValueError, OSError):
+        return None
+
+
+def bump(version, part):
+    major, minor, patch = (int(p) for p in version.split("."))
+    if part == "major":
+        return f"{major + 1}.0.0"
+    if part == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def prompt_version(current, published, ask=input):
+    """Ask which version to publish, defaulting to the one in the tree.
+
+    Interactive rather than an argument, because "which version is this" is the decision
+    most easily got wrong by muscle memory -- and the failure is silent: publishing the
+    version that is already out means every installed client compares it as not-newer and
+    nobody is ever offered the update.
+
+    Re-prompts on bad input rather than exiting, the same lesson install.ps1 records:
+    somebody halfway through a release should not have to start again over a typo.
+    """
+    print(f"\nCurrent version in the tree : {current}")
+    if published:
+        print(f"Currently published         : {published}")
+    else:
+        print("Currently published         : nothing yet -- this is the first release")
+
+    print("\nWhat should this release be?")
+    print(f"  [1] {bump(current, 'patch')}   (patch -- fixes)")
+    print(f"  [2] {bump(current, 'minor')}   (minor -- new features)")
+    print(f"  [3] {bump(current, 'major')}   (major -- breaking changes)")
+    print(f"  [k] {current}   (keep -- re-release the version already in the tree)")
+    print("  or type a version like 1.4.2")
+
+    choices = {"1": bump(current, "patch"),
+               "2": bump(current, "minor"),
+               "3": bump(current, "major"),
+               "k": current, "": current}
+
+    while True:
+        try:
+            answer = (ask("\nVersion [1]: ") or "").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            # The real non-interactive guard. sys.stdin.isatty() is checked by the caller
+            # but cannot be trusted alone -- under MSYS/Git Bash it reports True even with
+            # stdin redirected from /dev/null, so a CI runner would hang here forever on a
+            # prompt nobody can see. An EOF is unambiguous, and the safe answer to it is
+            # "publish what is in the tree", never "guess a bump".
+            print(f"\n  no input available -- publishing the tree's version ({current}). "
+                  f"Pass --version to choose one.")
+            return current
+        # Blank picks the SUGGESTED patch bump rather than "keep", because keeping is the
+        # answer that silently publishes nothing new -- the mistake this prompt exists to
+        # prevent should not also be the one you get by pressing Enter.
+        chosen = choices.get(answer or "1")
+        if chosen is None:
+            if re.fullmatch(r"\d+\.\d+\.\d+", answer):
+                chosen = answer
+            else:
+                print(f"  {answer!r} is not one of the options or a MAJOR.MINOR.PATCH "
+                      f"version. Try again.")
+                continue
+
+        if published and _cmp_versions(chosen, published) <= 0:
+            # Not refused outright -- re-publishing after a botched upload is legitimate --
+            # but named, because the consequence is invisible: no installed client will
+            # ever offer an update to a version that is not strictly newer.
+            print(f"  !! {chosen} is not newer than the published {published}. "
+                  f"No installed client will be offered it.")
+            confirm = (ask("     Publish it anyway? [y/N]: ") or "").strip().lower()
+            if confirm not in ("y", "yes"):
+                continue
+        return chosen
+
+
+def _cmp_versions(a, b):
+    """Numeric comparison, matching the hub's cmp_versions and the client's
+    compareVersions -- 2.10.1 is newer than 2.9.9, which a string compare gets wrong."""
+    def parts(v):
+        return [int(p) if p.isdigit() else -1 for p in v.split("-")[0].split(".")]
+    left, right = parts(a), parts(b)
+    for i in range(max(len(left), len(right))):
+        l = left[i] if i < len(left) else 0
+        r = right[i] if i < len(right) else 0
+        if l != r:
+            return -1 if l < r else 1
+    return 0
+
+
 # ---------------------------------------------------------------- build
 def build(flutter, skip_tests):
     code, _ = run([flutter, "pub", "get"])
@@ -172,14 +282,30 @@ def build(flutter, skip_tests):
 
     code, output = run([flutter, "build", "windows", "--release"], capture=True)
     if code:
-        # Both of these produce walls of CMake output that say nothing about the cause.
+        # Each of these produces a wall of CMake output that says nothing about the cause,
+        # so each is matched on the ONE line that identifies it.
+        #
+        # Matched on exact sentences rather than on keywords, and that is a fix rather
+        # than a preference: an earlier version matched "symlink" anywhere in the output,
+        # and EVERY plugin path contains `.plugin_symlinks` -- so a missing ATL header was
+        # confidently diagnosed as "Developer Mode is off" on a machine where Developer
+        # Mode was already on, and the person believed it. A wrong hint costs more than no
+        # hint, so the fallback below says "no known cause" rather than guessing.
         hints = []
-        if "symlink" in output.lower() or "Developer Mode" in output:
+        if "requires symlink support" in output:
             hints.append("Windows Developer Mode is off (Flutter plugins need symlinks). "
                          "Run: start ms-settings:developers")
-        if "Visual Studio" in output or "cmake" in output.lower():
+        if "atlstr.h" in output or "atlbase.h" in output:
+            hints.append("Visual Studio is missing the C++ ATL component, which "
+                         "flutter_secure_storage_windows includes. In the Visual Studio "
+                         "Installer, tick 'C++ ATL for latest v143 build tools "
+                         "(x86 & x64)' under Desktop development with C++.")
+        if "Unable to locate Visual Studio" in output or "Build tools" in output:
             hints.append("Visual Studio with the 'Desktop development with C++' workload "
                          "may be missing. Run: flutter doctor")
+        if not hints:
+            hints.append("No known cause matched -- the compiler output above is the real "
+                         "answer. `flutter doctor -v` is the next place to look.")
         # After the captured output, not before it: a diagnosis printed forty lines above
         # the thing it diagnoses is one nobody connects to the failure.
         sys.stdout.flush()
@@ -277,6 +403,10 @@ def main():
     ap = argparse.ArgumentParser(
         description="Build, package and sign a FleetHub client release.")
     ap.add_argument("--set-version", help="move version.dart + pubspec.yaml, then stop")
+    ap.add_argument("--version", dest="release_version",
+                    help="the version to publish; skips the prompt")
+    ap.add_argument("--keep-version", action="store_true",
+                    help="publish whatever is in the tree without asking")
     ap.add_argument("--skip-build", action="store_true",
                     help="package and sign what is already built")
     ap.add_argument("--skip-tests", action="store_true",
@@ -291,9 +421,34 @@ def main():
         set_version(args.set_version)
         return
 
-    version = read_version()
-    check_versions_agree(version)
-    print(f"Releasing FleetHub client {version}")
+    current = read_version()
+    check_versions_agree(current)
+
+    # Which version is being published is a decision, so it is ASKED rather than inferred
+    # from whatever was left in the tree. --version and --keep-version are the
+    # non-interactive answers, and a non-tty (a pipe, a CI runner) takes the tree's version
+    # rather than hanging on a prompt nobody will ever see.
+    if args.release_version:
+        version = args.release_version
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            die(f"{version!r} is not a MAJOR.MINOR.PATCH version")
+    elif args.keep_version or not sys.stdin.isatty():
+        version = current
+        if not args.keep_version:
+            print(f"note: not a terminal, so publishing the tree's version ({current}). "
+                  f"Pass --version to choose one.")
+    else:
+        version = prompt_version(current, published_version())
+
+    if version != current:
+        set_version(version)
+        # Rewritten, not just recorded: version.dart is COMPILED into the binary, so the
+        # build below has to happen after this or the app would report the old version to
+        # its own update check forever.
+        print("\n!! app/lib/version.dart and app/pubspec.yaml were rewritten -- "
+              "commit them with the manifest.")
+
+    print(f"\nReleasing FleetHub client {version}")
 
     if not args.skip_build:
         build(find_flutter(), args.skip_tests)

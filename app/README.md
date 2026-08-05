@@ -98,17 +98,42 @@ One command:
 python release_client.py
 ```
 
-It reads the version from [lib/version.dart](lib/version.dart) — the source of truth,
-compiled into the binary and what the update check compares against — checks that
-`pubspec.yaml` agrees, then runs `pub get`, `analyze`, `test`, `build windows`, zips the
-result, and signs the manifest. **It refuses rather than warns**: a failing analyzer or a
-red test stops the release, because a release script that ships a red build is worse than
-no release script.
+**It asks which version to publish**, showing what is in the tree, what is currently
+published, and the patch/minor/major bumps:
 
-Bump the version first (this moves both files together and stops, so you can commit them):
+```
+Current version in the tree : 1.0.0
+Currently published         : 1.0.0
+
+What should this release be?
+  [1] 1.0.1   (patch -- fixes)
+  [2] 1.1.0   (minor -- new features)
+  [3] 2.0.0   (major -- breaking changes)
+  [k] 1.0.0   (keep -- re-release the version already in the tree)
+  or type a version like 1.4.2
+```
+
+Blank picks the patch bump rather than "keep", deliberately: keeping is the answer that
+silently publishes nothing new — **no installed client is ever offered an update to a
+version that is not strictly newer** — so the mistake this prompt exists to prevent should
+not also be what you get by pressing Enter. Choosing a version at or below the published
+one warns and asks again; re-publishing after a botched upload is legitimate, but it should
+be a decision.
+
+Picking a new version rewrites [lib/version.dart](lib/version.dart) and `pubspec.yaml`
+before building, because `version.dart` is compiled into the binary and is what the update
+check compares against. Commit them with the manifest.
+
+Then it runs `pub get`, `analyze`, `test`, `build windows`, zips the result, and signs the
+manifest. **It refuses rather than warns**: a failing analyzer or a red test stops the
+release, because a release script that ships a red build is worse than no release script.
+
+Non-interactive forms, for CI or a scripted release:
 
 ```bash
-python release_client.py --set-version 1.1.0
+python release_client.py --version 1.2.0     # skip the prompt
+python release_client.py --keep-version      # publish the tree's version as-is
+python release_client.py --set-version 1.1.0 # only bump the files, then stop
 ```
 
 To also create the GitHub release and upload the asset with `gh`:
@@ -122,10 +147,16 @@ Then commit `hub/client.manifest.json` + `.sig` and deploy the hub. Every `sha25
 typed, and signed with the **same Ed25519 key that signs the agent** — one trust root for
 every artifact this project ships.
 
-**Windows build prerequisites** (`flutter doctor` confirms both, and `release_client.py`
-names them when the build fails):
+**Windows build prerequisites** (`release_client.py` names each one when the build fails):
 
-- Visual Studio with the **Desktop development with C++** workload.
+- Visual Studio with the **Desktop development with C++** workload. The three components
+  `flutter doctor` checks for are **MSVC build tools**, a **Windows SDK**, and **C++ CMake
+  tools for Windows**.
+- **C++ ATL for the latest v143 build tools (x86 & x64)** — an optional component of that
+  workload that `flutter doctor` does NOT check for, because a bare Flutter app does not
+  need it. This app does: `flutter_secure_storage_windows`, which holds the device token,
+  includes `atlstr.h`. Without it the build dies with `error C1083` most of the way
+  through, long after doctor has said everything is fine.
 - **Windows Developer Mode**, for the symlink support Flutter plugins need —
   `start ms-settings:developers`.
 

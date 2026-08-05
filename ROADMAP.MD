@@ -1851,12 +1851,24 @@ would be least useful exactly when it was most stale.
   produce "not an update", and a verifier tested against a fake verifier tests nothing.
 
 **`release_client.py` is the client's equivalent of `--sign-agent`**, and it refuses rather
-than warns. `app/lib/version.dart` is the source of truth — compiled into the binary and
-what the update check compares against — and the script READS it rather than taking a
-version on the command line, because a script you can hand a version to is a script you can
-hand the wrong one. It checks `pubspec.yaml` agrees, then runs `pub get` / `analyze` /
-`test` / `build` / package / sign, stopping on a failing analyzer or a red test: a release
-script that ships a red build is worse than none, because it looks like a process.
+than warns. It runs `pub get` / `analyze` / `test` / `build` / package / sign, stopping on
+a failing analyzer or a red test: a release script that ships a red build is worse than
+none, because it looks like a process.
+
+**It ASKS which version to publish**, rather than inferring it from whatever was left in
+the tree. That is the decision most easily got wrong by muscle memory, and its failure is
+silent: publishing a version that is not strictly newer than the last one means no
+installed client ever compares it as an update, and nobody finds out. So the prompt names
+what is currently published, offers the patch/minor/major bumps, warns when the answer is
+not newer, and makes the *bump* the blank-Enter default rather than "keep". Choosing a new
+version rewrites `app/lib/version.dart` and `pubspec.yaml` before the build, because that
+constant is compiled into the binary and is what the update check compares against.
+`--version` and `--keep-version` are the non-interactive answers.
+
+**`sys.stdin.isatty()` is checked but not trusted**, and that is worth recording: under
+MSYS/Git Bash it returns True even with stdin redirected from `/dev/null`, so a tty check
+alone would hang a CI runner on a prompt nobody can see. `EOFError` is the real guard, and
+the safe answer to it is "publish what is in the tree" rather than a guessed bump.
 
 ### Not yet done
 
