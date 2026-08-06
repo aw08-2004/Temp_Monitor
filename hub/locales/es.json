@@ -815,7 +815,10 @@
     "status": {
       "live": "En vivo",
       "online": "En línea",
-      "offline": "Sin conexión"
+      "offline": "Sin conexión",
+      "online_unenrolled": "En línea, sin inscribir",
+      "offline_unenrolled": "Sin conexión, sin inscribir",
+      "unenrolled_help": "Este equipo informa de temperaturas, pero nunca se inscribió en la flota, así que la consola no puede actuar sobre él: los comandos, el terminal, los despliegues de paquetes, las copias de seguridad y la lista de procesos no harán nada. Vuelve a ejecutar el instalador en él con el secreto de inscripción."
     },
     "uptime": "Tiempo activo: {value}",
     "uptime_unknown": "Tiempo activo: --",

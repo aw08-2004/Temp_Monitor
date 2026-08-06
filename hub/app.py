@@ -84,7 +84,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.71.0"
+HUB_VERSION = "1.72.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3270,11 +3270,18 @@ def get_machines():
     # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
     # caller will never be shown.
     result = access.filter_rows(result)
+    # One query for the whole list, not one per row. `enrolled` is what separates a machine
+    # the console can ACT on from one it can only watch: an agent that never enrolled (no
+    # secret at install time, or a rejected one) still posts telemetry, so it appears here
+    # with a temperature and reads as perfectly healthy while every command, terminal,
+    # process and backup on it silently does nothing.
+    enrolled = fleet.enrolled_machines(DB_PATH)
     for row in result:
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
         row['temp'] = get_latest_temp(row['machine'])
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
         row['status'] = derive_machine_status(row['updated_at'])
+        row['enrolled'] = row['machine'] in enrolled
     result.sort(key=lambda row: row['machine'])
     return jsonify(result)
 
@@ -3313,6 +3320,8 @@ def get_machine(machine):
     # PC still shows the disks and fans it HAS, rather than looking like it has none.
     result['diagnostics'] = extract_diagnostics(_recent_sensors_for(machine_name))
     result['status'] = derive_machine_status(result.get('updated_at'))
+    # Same field the list carries, for the same reason -- see get_machines.
+    result['enrolled'] = fleet.is_enrolled(DB_PATH, machine_name)
     result['primary_sensor_name'] = get_primary_sensor_override(machine_name)
     return jsonify(result)
 

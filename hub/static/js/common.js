@@ -24,6 +24,38 @@ function setStatusPill(el, state, label) {
     el.innerHTML = `<span class="status-pill__dot"></span>${label}`;
 }
 
+// A machine's online/offline pill, qualified when it has no fleet enrollment.
+//
+// **Why "not enrolled" is worth saying out loud.** An agent that never enrolled still posts
+// telemetry -- /api/report is open by design -- so the machine appears with a name, a model
+// and a live temperature and reads as entirely healthy. What it has no channel for is
+// everything the console is FOR: commands, the terminal, package deployments, backups and
+// the process list all queue or wait and quietly never happen. That is invisible until
+// somebody tries one, which is why it belongs on the same pill as online/offline rather than
+// behind a click.
+//
+// **`enrolled === false`, not falsy.** The field is absent on an older hub's response and
+// briefly unknown for a card the live socket created before the next /api/machines poll;
+// neither is evidence of anything, and claiming "not enrolled" on a missing field would
+// label a healthy fleet.
+//
+// Colour follows what an operator can DO about it: an unenrolled machine that is up right
+// now is fixable (re-run the installer with the enrollment secret), so it warns; one that is
+// off is a note for when it comes back, so it stays muted like any other offline row.
+function setMachineStatusPill(el, row) {
+    if (!el) return;
+    const online = row && row.status === 'online';
+    const unenrolled = row && row.enrolled === false;
+    // Literal keys, never an interpolated one: setStatusPill writes the label with innerHTML,
+    // and tests/test_i18n.py's key scan can only see literals.
+    const label = online
+        ? (unenrolled ? t('common.status.online_unenrolled') : t('common.status.online'))
+        : (unenrolled ? t('common.status.offline_unenrolled') : t('common.status.offline'));
+    setStatusPill(el, online ? (unenrolled ? 'warn' : 'ok') : 'muted', label);
+    // Set as a property, so an explanation this long does not have to be markup-safe.
+    el.title = unenrolled ? t('common.status.unenrolled_help') : '';
+}
+
 function requestNotificationPermission() {
     if (typeof Notification === 'undefined') return;
     if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
