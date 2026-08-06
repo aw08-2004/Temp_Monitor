@@ -17,6 +17,7 @@ namespace TempMonitorAgent;
 ///   * heartbeat  -- liveness, and the channel hub config/profiles/inventory ride on
 ///   * commands   -- poll, claim, and dispatch fleet commands
 ///   * inventory  -- the slow local scans (backup profiles, logon sessions, displays)
+///   * processes  -- the live process list, but only while an operator is watching one
 ///   * updates    -- the signed self-update check
 ///
 /// WHY THEY ARE SEPARATE. This used to be a single loop that did all five in order, and in
@@ -112,6 +113,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => HeartbeatLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => InventoryLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => ProcessLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
         };
 
@@ -307,6 +309,50 @@ public sealed class Worker : BackgroundService
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
 
             if (!await DelayAsync(AgentConfig.InventoryScanSeconds, ct)) break;
+        }
+    }
+
+    // ------------------------------------------------------------------ processes
+
+    /// <summary>
+    /// The live process list for the machine Processes card.
+    ///
+    /// **Idle by default, and that is the whole design.** Sampling enumerates every process
+    /// on the machine, opens each one's token to resolve its owner, and asks WMI which of
+    /// them host services. Doing that on a five-second cadence on every PC in the fleet, to
+    /// answer a question being asked about one of them, would be pure waste -- so the hub
+    /// sets `processes_wanted` on the heartbeat reply only while somebody has that card
+    /// open, and this loop does nothing at all until it does.
+    ///
+    /// **It sends its own heartbeat rather than waiting for one.** The heartbeat loop is on
+    /// a 10-second tick and a sample lands every 5, so half of them would arrive stale (or
+    /// be dropped by the next sample) if this only left the payload behind. Calling
+    /// HeartbeatAsync here is safe: FleetClient's HttpClient is built for concurrent use and
+    /// every reporter hands its payload over under a lock, so the two callers cannot send
+    /// the same inventory twice or interleave into one body.
+    ///
+    /// Separate from the inventory loop despite being another local scan, because those
+    /// self-throttle to minutes and this one's entire value is being current.
+    /// </summary>
+    private async Task ProcessLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var watching = false;
+            try
+            {
+                watching = ProcessReporter.Wanted;
+                if (watching && _fleet.IsEnrolled && await ProcessReporter.SampleAsync(ct))
+                    await _fleet.HeartbeatAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { _log.LogWarning(e, "Process sample failed"); }
+
+            // Fast enough to notice a card being opened without the operator feeling it, and
+            // never faster than the sampling cadence once one is.
+            var every = watching ? AgentConfig.ProcessSampleSeconds
+                                 : AgentConfig.ProcessIdleCheckSeconds;
+            if (!await DelayAsync(every, ct)) break;
         }
     }
 

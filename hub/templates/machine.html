@@ -24,7 +24,10 @@
         crossorigin="anonymous"></script>
 {% endblock %}
 {% block content %}
-<div id="machine-config" data-machine="{{ machine }}" data-high-temp-threshold="{{ high_temp_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}'>
+{# data-can-issue-commands decides only whether the Processes card DRAWS its End task /
+   Restart buttons. The endpoints enforce the same capability themselves, so a console that
+   got this wrong would be offering a 403, not a way past one. #}
+<div id="machine-config" data-machine="{{ machine }}" data-high-temp-threshold="{{ high_temp_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
     <div class="tabs" role="tablist" aria-label="{{ t('machine.views_nav') }}" data-tabs-key="machine">
@@ -127,6 +130,39 @@
         <div class="fan-grid" id="fan-grid"></div>
         <div id="fan-empty" class="stat-card__meta">{{ t('machine.no_fans') }}</div>
     </div>
+
+    {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
+       Collapsed by default and only polled while open, exactly like the sensor browser
+       below, and here the argument is stronger than "it is a lot of rows": the machine does
+       no process sampling at all until somebody opens this, and stops again a few seconds
+       after they leave. See hub/processes.py for the watch that makes that true.
+
+       Structure only. processes.js builds the table, because the interesting parts are a
+       GROUPING (twelve chrome.exe are one row until you expand them) and a per-row decision
+       about which actions are even offered -- neither of which a template can express over a
+       payload it cannot see. #}
+    <details class="card sensor-browser process-card" id="process-browser">
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.processes.title') }}</span>
+            <span class="stat-card__meta" id="process-count"></span>
+        </summary>
+        <div class="toolbar" style="margin: var(--space-3) 0;">
+            <label for="process-filter" class="sr-only">{{ t('machine.processes.filter') }}</label>
+            <input type="search" id="process-filter" class="input"
+                   placeholder="{{ t('machine.processes.filter') }}"
+                   aria-label="{{ t('machine.processes.filter') }}">
+            <input id="process-group" class="checkbox" type="checkbox" checked>
+            <label for="process-group">{{ t('machine.processes.group') }}</label>
+            <span id="process-status" class="stat-card__meta"></span>
+        </div>
+        {# The outcome of the last End task / Restart. Deliberately its own line above the
+           table rather than a toast: the answer arrives seconds after the click, by which
+           time the operator is reading the list, and a message that disappears is a message
+           that gets missed. #}
+        <div id="process-result" class="stat-card__meta" hidden></div>
+        <div id="process-body"></div>
+        <p class="stat-card__meta process-card__help">{{ t('machine.processes.help') }}</p>
+    </details>
 
     {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is
        per-machine state, like the asset tag -- Settings holds the fleet-wide preference
@@ -409,6 +445,30 @@
     </div>
 </dialog>
 
+{# Ending or restarting a process on somebody else's PC destroys their unsaved work, and the
+   list it was clicked from is a few seconds old -- so it is confirmed against the NAME and
+   PID the operator actually saw, spelled out in the sentence. Page-level for the same reason
+   as the dialogs around it: showModal() puts it in the top layer wherever it sits, and a
+   <details> that gets collapsed would take it with it. #}
+<dialog class="modal" id="process-confirm" aria-labelledby="process-confirm-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="process-confirm-title"></h2>
+    </div>
+    <div class="modal__body">
+        <p class="stat-card__meta" id="process-confirm-text"></p>
+        {# Only shown for End task. A restart relaunches the image, and killing the children
+           of something that is about to come back is not the same request. #}
+        <div id="process-confirm-tree-row" style="margin-top: var(--space-4);">
+            <input id="process-confirm-tree" class="checkbox" type="checkbox">
+            <label for="process-confirm-tree">{{ t('machine.processes.confirm.tree') }}</label>
+        </div>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="process-confirm-cancel" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="process-confirm-ok" class="btn btn--danger"></button>
+    </div>
+</dialog>
+
 {# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
    the top layer regardless of where it sits in the DOM. #}
 <dialog class="modal" id="favorites-dialog" aria-labelledby="favorites-title">
@@ -436,6 +496,7 @@
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
 <script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/processes.js') }}"></script>
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/wake.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>

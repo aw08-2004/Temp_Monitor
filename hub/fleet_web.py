@@ -38,6 +38,7 @@ import firmware
 import fleet
 import permissions
 import permissions_web
+import processes
 import remote
 import settings
 import terminal
@@ -124,7 +125,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
         config only when that differs, so the steady-state heartbeat stays two fields.
 
         It may also send `profiles`, `remote`, `bios` and `network` -- the slow local
-        inventories, each on its own change-only cadence, none of them ever fatal.
+        inventories, each on its own change-only cadence, none of them ever fatal -- and
+        `processes`, which is neither slow nor change-only but is only sent at all while an
+        operator has that machine's Processes card open (see the `processes_wanted` reply).
 
         `profiles` is the user profiles and resolved known folders on
         that machine. That is how the Backup Settings tab can show what `%Users%\\Desktop`
@@ -184,6 +187,24 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
                 wake.record_network(db_path, machine, data["network"])
             except Exception as e:
                 print(f"[wake] Could not record network inventory for {machine}: {e}")
+        # The process list (the machine's Processes card). The ONE payload here that is not
+        # change-only, because a process list that has not changed is not a thing that
+        # happens -- and unlike its neighbours it is not sent unless somebody is looking:
+        # `processes_wanted` below is what turns the machine's sampling on, and it goes
+        # false again a few seconds after the operator closes the card. Same never-fatal
+        # handling as the rest; a dropped snapshot costs one refresh.
+        if data.get("processes"):
+            try:
+                processes.record_snapshot(db_path, machine, data["processes"])
+            except Exception as e:
+                print(f"[processes] Could not record processes for {machine}: {e}")
+        # Answered on EVERY heartbeat, including the ones carrying nothing: this is how an
+        # agent learns to start sampling, and how it learns to stop. A machine nobody is
+        # looking at reads `false` here and does no process work at all.
+        try:
+            payload["processes_wanted"] = processes.is_watched(db_path, machine)
+        except Exception as e:
+            print(f"[processes] Could not resolve the watch for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])
@@ -393,6 +414,13 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
             return jsonify({"error": "PCs are woken from the Network tab, which picks a "
                                      "machine on the target's own subnet to send the "
                                      "packet."}), 400
+        # Same capability, but a different door on purpose: processes_web validates the
+        # (name, pid) pairing that protects against PID reuse and refuses the critical
+        # Windows processes whose termination is a bugcheck rather than a closed program.
+        # Accepting a hand-rolled copy here would make both of those guards optional.
+        if data.get("type") in fleet.PROCESS_COMMANDS:
+            return jsonify({"error": "Processes are ended and restarted from the machine's "
+                                     "Processes card, not the command channel."}), 400
         try:
             command_id = fleet.create_command(
                 db_path,

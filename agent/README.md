@@ -48,6 +48,11 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
 - Backups: `POST /api/agent/backups/upload/<run_id>`, `POST /api/agent/backups/<run_id>/result`;
   restores via `GET /api/agent/backups/restore/<id>/plan`, `.../archive/<index>`, `.../result`.
 - Packages: `GET /api/agent/packages/<sha256>` (payload fetch, re-hashed before execution).
+- Processes: no endpoint of its own. The heartbeat's reply carries `processes_wanted`, and
+  while it is true the agent samples every 5s and the next heartbeat body carries
+  `processes`. It is the one heartbeat payload that is not change-only (a process list has
+  changed by definition) and the one that is demand-driven — an unwatched machine samples
+  nothing and sends nothing. See `Telemetry/ProcessReporter`.
 - Commands are **not signed**. The agent executes what an enrolled, authenticated pull
   returns; the hub authorizes on an allow-listed console session and records every
   command in its `audit_log`. (Until hub 1.10 / agent 3.1, `run_script`,
@@ -65,6 +70,7 @@ Implemented executors (registered in `Program.cs`):
 | Terminal | `shell_open`, `shell_input`, `shell_signal`, `shell_reset` |
 | Backups | `backup_files`, `restore_files` |
 | Remote | `start_remote_session`, `install_virtual_display`, `uninstall_virtual_display`, `set_virtual_display_mode`, `refresh_remote_inventory` |
+| Processes | `kill_process`, `restart_process` |
 
 `install_driver` / `update_bios` are still registered as `StubExecutor`s.
 

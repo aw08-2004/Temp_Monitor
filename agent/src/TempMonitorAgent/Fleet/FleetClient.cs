@@ -167,6 +167,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // so a settled desktop sends this once.
             var network = TempMonitorAgent.Network.NetworkInventoryReporter.TakeIfChanged();
             if (network is not null) body["network"] = network;
+            // The process list, and the ONE payload here that is not change-only: a process
+            // list has changed by definition. What bounds it instead is demand -- there is a
+            // sample waiting only while the hub has told us somebody is looking (see
+            // ProcessReporter and the `processes_wanted` reply below), so a machine nobody
+            // has open contributes nothing to this body at all.
+            var procs = TempMonitorAgent.Telemetry.ProcessReporter.TakeLatest();
+            if (procs is not null) body["processes"] = procs;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 
@@ -175,6 +182,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
 
             var text = await resp.Content.ReadAsStringAsync(ct);
             ApplyConfigFromHeartbeat(text);
+            ApplyProcessWatchFromHeartbeat(text);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -213,6 +221,32 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e)
         {
             _log.LogWarning("Ignoring malformed hub config: {Msg}", e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Apply the hub's answer to "is anybody looking at this machine's processes?".
+    ///
+    /// Its own method with its own try/catch rather than a branch inside
+    /// ApplyConfigFromHeartbeat, because the two must not be able to lose each other: a
+    /// malformed config block would otherwise stop the watch flag being read, and a machine
+    /// would sample forever (or never) on the strength of an unrelated parse failure.
+    ///
+    /// A hub too old to know about this feature sends no such field, which reads as false --
+    /// the correct answer, since it has nowhere to put a process report either.
+    /// </summary>
+    private void ApplyProcessWatchFromHeartbeat(string body)
+    {
+        try
+        {
+            var wanted = JsonNode.Parse(body)?["processes_wanted"]?.GetValue<bool>() ?? false;
+            TempMonitorAgent.Telemetry.ProcessReporter.SetWanted(wanted);
+        }
+        catch
+        {
+            // Deliberately does NOT clear the watch: a single unparseable reply is not the
+            // hub saying "stop", and blanking an operator's live list over one bad response
+            // would be a worse failure than sampling for one extra cycle.
         }
     }
 

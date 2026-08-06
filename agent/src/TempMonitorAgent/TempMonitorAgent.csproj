@@ -47,6 +47,14 @@
          verification is unchanged from 2.5.1. -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="System.Management" Version="10.0.0" />
+    <!-- ServiceController, for restart_process: a process that hosts exactly one Windows
+         service is restarted AS that service (stop, wait, start, wait, bring its dependents
+         back) rather than killed. Killing it instead leaves the SCM believing it crashed,
+         and a service with no recovery action configured then simply stays down. Not in the
+         box for net10.0-windows; it is its own package, which Hosting.WindowsServices above
+         already pulls in transitively. Named here anyway, and pinned to the same version, so
+         that a future change to that package's dependencies cannot silently take it away. -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.6" />
     <!-- SignedCms, for reading the signer chain out of a driver's .cat (a PKCS#7 envelope)
          before we make the machine trust that publisher. -->
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.0" />

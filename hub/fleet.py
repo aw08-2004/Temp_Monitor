@@ -176,6 +176,24 @@ UNSAVEABLE_WAKE_COMMANDS = frozenset({
     "wake_machine",
 })
 
+# The machine Processes card -- the console's task manager (see processes.py).
+#
+# Both carry a PID, which is what makes them the least reusable params in this whole
+# taxonomy: Windows recycles process ids within minutes, so yesterday's saved "end pid 4812"
+# would end whatever inherited that id today. The name travels with the pid precisely so the
+# agent can refuse that mismatch, and a favorite would be a stored invitation to test it.
+# Neither is favoritable.
+#
+# Note what is NOT here: LISTING processes is not a command at all. The list rides the
+# heartbeat while an operator has the card open (fleet_web's agent_heartbeat, gated on
+# processes.is_watched), because a command per refresh would put a security-level audit row
+# in the trail every few seconds for the crime of reading a list -- and that trail is never
+# pruned, by design. Commands are for the two things that CHANGE the machine.
+PROCESS_COMMANDS = frozenset({
+    "kill_process",
+    "restart_process",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -186,7 +204,8 @@ ALL_COMMANDS = frozenset({
     "install_driver",
     "update_bios",
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
-      | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS)
+      | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
+      | PROCESS_COMMANDS)
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
@@ -1208,6 +1227,13 @@ def _validate_favorite(name, command_type, params):
         raise ValueError(f"{command_type!r} commands carry another machine's address and "
                          f"cannot be saved as a favorite; wake machines from the console "
                          f"instead")
+    if command_type in PROCESS_COMMANDS:
+        # Carries a PID, and Windows recycles those within minutes. A favorite replayed
+        # tomorrow would not end the process the operator saved it for -- it would end
+        # whichever process inherited that id, on whichever machine it was aimed at.
+        raise ValueError(f"{command_type!r} commands name one process by id and cannot be "
+                         f"saved as a favorite; end processes from the machine's Processes "
+                         f"card instead")
     if params is None:
         params = {}
     if not isinstance(params, dict):
