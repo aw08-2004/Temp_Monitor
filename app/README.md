@@ -72,6 +72,25 @@ AppUserModelID at startup, which supplies one. **If toasts silently do nothing, 
 shortcut before reading the notification code.** MSIX packaging is the cleaner answer and
 the upgrade path once there is a code-signing certificate.
 
+### What gets toasted, and what deliberately does not
+
+The app toasts the **delta**, never the list: each poll is diffed against the alert ids it
+has already shown. Two rules carry that, and both exist because the failure is an operator
+learning to dismiss FleetHub notifications unread:
+
+- **The first poll of a session primes and raises nothing.** Alerts that were already open
+  are history, not news.
+- **Signing out resets the delta** ([state.dart](lib/state.dart), `SessionController.forget`).
+  The notifier is a process-lifetime object, so without this the next operator to pair on
+  the same machine would inherit the previous one's seen-set — and be toasted, at sign-in,
+  every alert in their scope that the previous operator's scope did not cover.
+
+`notifyNew` returns what it raised so both are testable: a toast does nothing under a test
+binding, so a return value is the only way a test can tell "raised nothing" from "raised
+nine". `test/session_test.dart` drives the real providers, because the bug that motivated
+it was a missing call rather than a wrong unit — and no test that constructs `AlertNotifier`
+directly can see one of those.
+
 ## Updating
 
 The app checks for a newer release **once per launch**, after this device is paired. It
@@ -197,5 +216,5 @@ lib/
   update/
     updater.dart     signed manifest -> "is there a newer one?"
   ui/                fleet, alerts, wake, commands, settings, update prompt
-test/                models, pairing, updater (real Ed25519), notify
+test/                models, pairing, updater (real Ed25519), notify, session wiring
 ```

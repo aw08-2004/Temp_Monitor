@@ -35,13 +35,20 @@ class AlertNotifier {
   bool get isPriming => _priming;
 
   /// Fold in one poll's worth of alerts, toasting anything genuinely new.
-  Future<void> notifyNew(List<Alert> alerts) async {
+  ///
+  /// Returns what it toasted, which callers ignore. It exists because a toast itself is
+  /// invisible to a test -- `local_notifier` does nothing under a test binding and
+  /// [_toast] swallows its own failures by design -- so without a return value the only
+  /// observable here is [isPriming], and a test asserting a flag cannot tell "raised
+  /// nothing" apart from "raised nine". That gap is what let the missing `reset()` call
+  /// sit behind a passing test.
+  Future<List<Alert>> notifyNew(List<Alert> alerts) async {
     final current = {for (final alert in alerts) alert.id: alert};
 
     if (_priming) {
       _priming = false;
       _seen.addAll(current.keys);
-      return;
+      return const <Alert>[];
     }
 
     final fresh = current.keys.where((id) => !_seen.contains(id)).toList();
@@ -52,9 +59,13 @@ class AlertNotifier {
       ..removeWhere((id) => !current.containsKey(id))
       ..addAll(current.keys);
 
+    final raised = <Alert>[];
     for (final id in fresh) {
-      await _toast(current[id]!);
+      final alert = current[id]!;
+      raised.add(alert);
+      await _toast(alert);
     }
+    return raised;
   }
 
   Future<void> _toast(Alert alert) async {
