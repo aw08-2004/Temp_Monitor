@@ -1909,13 +1909,23 @@ the safe answer to it is "publish what is in the tree" rather than a guessed bum
 
 ---
 
-## ✅ 12. Processes on the machine Overview   ·   hub 1.70.0 (+ agent, pending a signed release)
+## ✅ 12. Processes on the machine Overview   ·   hub 1.71.0 (+ agent, pending a signed release)
 
 A task manager for a machine you are not sitting at. The Overview tab grows a **Processes**
-card: every process grouped by name with its CPU and memory, expandable to the individual
-instances, and **End task** / **Restart** on each. It answers the call that starts "this PC
-has been at 100% since lunch" without opening a SYSTEM shell to run `Get-Process` and read
-the output back to somebody.
+card: every process grouped by name with its CPU, memory, owner and PID, expandable to the
+individual instances, and **End task** / **Restart** on the right-click menu. It answers the
+call that starts "this PC has been at 100% since lunch" without opening a SYSTEM shell to run
+`Get-Process` and read the output back to somebody.
+
+**Actions are on a context menu, not in a column.** Task Manager's shape, and for Task
+Manager's reason: a table of a few hundred rows is scanned, and two buttons on every one of
+them widen the row, pull the eye off the numbers the card exists to show, and are no easier
+to hit than a right-click on the one row that matters. The menu is also where the two actions
+can differ per row — a critical process cannot be ended, a group of twelve cannot be
+restarted as one — without the table growing a column of greyed-out buttons. The rows are one
+roving tab stop with arrow-key movement, so Enter and the Menu key open the same menu; with
+the buttons gone that is the only keyboard path to an action, which makes it load-bearing
+rather than polish.
 
 **Reading the list is `view`; ending or restarting is `issue_commands`.** No new capability
 — what is running on a PC is inventory in the same sense its disks and its sensor tree are,
@@ -1927,9 +1937,21 @@ every process, opens each one's token to resolve its owner, and asks WMI which o
 services; the payload is ~60 KB. Neither is affordable on every PC in the fleet forever, and
 neither is needed — the question is being asked about one machine, by one operator, for a
 couple of minutes. So the console's poll IS the subscription: a read sets a watch
-(`processes.note_watch`), the hub answers that machine's next heartbeat with
-`processes_wanted`, and the agent samples every 5 s until the watch lapses ~45 s after the
-operator leaves. A machine nobody has open does no process work and sends nothing.
+(`processes.note_watch`), and the agent samples every 5 s until the watch lapses ~45 s after
+the operator leaves. A machine nobody has open does no process work and sends nothing.
+
+**...but the machine ASKS whether it is watched, rather than waiting to be told.** The first
+build learned it from the heartbeat, which is a 10-second tick — so opening the card cost a
+heartbeat, then a CPU window, then a console poll, and the first list landed 10-15 seconds
+after the click. Long enough that "waiting" had to be a rendered state explaining itself. An
+agent has no inbound port, so nothing on the hub can push at it and the only lever is how
+often it asks: `GET /api/agent/processes/wanted` every 2 s while idle, which is bearer auth,
+one indexed lookup on a one-row-per-machine table and a ~30-byte answer, with no writes on
+either side. That is now the *only* thing an unwatched machine does for this feature — the
+expensive half is still strictly demand-driven — and the first list arrives in a few seconds.
+The heartbeat's `processes_wanted` stays: it is how a machine learns to **stop**, and the
+only path for an agent that predates the poll. The console matches it by polling once a
+second until the first list lands, then settling to the hub's cadence.
 
 **Listing is deliberately NOT a command.** The obvious design — a `list_processes` command
 per refresh — would have written a security-level row into `audit_log` every few seconds for
@@ -2043,14 +2065,18 @@ than silently applied.
     `release_client.py` automates that release the way `--sign-agent` does the agent's. Its prerequisite was #Foundation: a device holds a SUBSET of its owner's
     capabilities, intersected live, which is only meaningful because permission groups
     exist.
-12. ~~**#12 Processes on the machine Overview**~~ — done, hub 1.70.0. Added after the
-    numbered board was cleared, because "what is eating this PC?" turned out to be the one
-    helpdesk question the console could not answer without opening a SYSTEM shell. It reuses
-    two existing seams rather than adding a channel: the heartbeat carries the list (gated on
-    a watch, so an unwatched fleet pays nothing) and the ordinary command queue carries the
-    two verbs that change the machine. **The agent half is pending a signed release** (build +
-    `sign_release.py --sign-agent` + asset upload); until then the card names the version it
-    needs instead of waiting forever on a machine that will never report.
+12. ~~**#12 Processes on the machine Overview**~~ — done, hub 1.70.0; refreshed at 1.71.0.
+    Added after the numbered board was cleared, because "what is eating this PC?" turned out
+    to be the one helpdesk question the console could not answer without opening a SYSTEM
+    shell. It reuses two existing seams rather than adding a channel: the heartbeat carries
+    the list (gated on a watch, so an unwatched fleet pays nothing) and the ordinary command
+    queue carries the two verbs that change the machine. 1.71.0 added the one thing that
+    could not be reused — a dedicated 2-second watch poll, because an agent has no inbound
+    port and 10-second heartbeat notification was most of what made the first list feel slow
+    — and moved the actions onto a right-click menu. **The agent half is pending a signed
+    release** (build + `sign_release.py --sign-agent` + asset upload); until then the card
+    names the version it needs instead of waiting forever on a machine that will never
+    report.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

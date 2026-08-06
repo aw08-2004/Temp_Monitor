@@ -250,6 +250,53 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
     }
 
+    /// <summary>
+    /// Ask the hub whether an operator is looking at this machine's processes, and apply the
+    /// answer. Returns whether we are now wanted.
+    ///
+    /// **Why this exists next to a heartbeat that answers the same question.** The heartbeat
+    /// ticks every 10 seconds and carries config, inventory and liveness with it; waiting for
+    /// one before even starting to sample put the operator's first process list 10-15 seconds
+    /// after the click that asked for it. This is the same question asked on its own, cheaply
+    /// enough (see AgentConfig.ProcessIdleCheckSeconds) that it can be asked every couple of
+    /// seconds by every machine in the fleet -- which is what makes the card feel like it
+    /// responded rather than eventually caught up.
+    ///
+    /// **Failure leaves the watch exactly as it was**, and the caller sees the current state
+    /// rather than a lie: a dropped request is not the hub saying "stop", and clearing the
+    /// flag on one timeout would blank an operator's live list mid-read. A hub too old to
+    /// serve this route 404s, which is the same story -- those machines fall back to learning
+    /// from the heartbeat, which is exactly how this worked before.
+    /// </summary>
+    public async Task<bool> PollProcessWatchAsync(CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return false;
+        try
+        {
+            using var req = Authorized(HttpMethod.Get, AgentConfig.ProcessWatchUrl);
+            using var resp = await _http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+                return TempMonitorAgent.Telemetry.ProcessReporter.Wanted;
+
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            var wanted = JsonNode.Parse(text)?["wanted"]?.GetValue<bool>() ?? false;
+            TempMonitorAgent.Telemetry.ProcessReporter.SetWanted(wanted);
+            return wanted;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Process watch poll failed: {Msg}", e.Message);
+            return TempMonitorAgent.Telemetry.ProcessReporter.Wanted;
+        }
+        catch (Exception e)
+        {
+            // A malformed body is not a reason to stop sampling either, and this runs on a
+            // two-second loop -- one that can throw is one that fills the log.
+            _log.LogDebug("Process watch poll returned something unreadable: {Msg}", e.Message);
+            return TempMonitorAgent.Telemetry.ProcessReporter.Wanted;
+        }
+    }
+
     /// <summary>Poll + claim pending commands. Returns an empty list on any failure.</summary>
     public async Task<List<FleetCommand>> PollCommandsAsync(CancellationToken ct)
     {

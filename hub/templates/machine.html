@@ -469,6 +469,23 @@
     </div>
 </dialog>
 
+{# What a right-click on a process opens. Only rendered for operators who can act: a menu
+   with nothing in it is worse than the browser's own, which at least offers Copy.
+
+   Page-level and positioned against the viewport, like the dialogs above and for the same
+   reason -- the list it belongs to is a scrolling box inside a <details>, and a menu that
+   lived in there would be clipped by it and collapse with it. #}
+{% if cap.ISSUE_COMMANDS in user_capabilities %}
+<div class="process-menu" id="process-menu" role="menu" hidden
+     aria-labelledby="process-menu-target">
+    <div class="process-menu__target" id="process-menu-target"></div>
+    <button type="button" role="menuitem" id="process-menu-end"
+            class="process-menu__item process-menu__item--danger">{{ t('machine.processes.end') }}</button>
+    <button type="button" role="menuitem" id="process-menu-restart"
+            class="process-menu__item">{{ t('machine.processes.restart') }}</button>
+</div>
+{% endif %}
+
 {# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
    the top layer regardless of where it sits in the DOM. #}
 <dialog class="modal" id="favorites-dialog" aria-labelledby="favorites-title">

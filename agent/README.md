@@ -48,11 +48,16 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
 - Backups: `POST /api/agent/backups/upload/<run_id>`, `POST /api/agent/backups/<run_id>/result`;
   restores via `GET /api/agent/backups/restore/<id>/plan`, `.../archive/<index>`, `.../result`.
 - Packages: `GET /api/agent/packages/<sha256>` (payload fetch, re-hashed before execution).
-- Processes: no endpoint of its own. The heartbeat's reply carries `processes_wanted`, and
-  while it is true the agent samples every 5s and the next heartbeat body carries
-  `processes`. It is the one heartbeat payload that is not change-only (a process list has
+- Processes: `GET /api/agent/processes/wanted` — asked every 2s while idle, because there is
+  no inbound port for the hub to push at and an operator who opens the Processes card should
+  not wait out a heartbeat before the machine starts looking. One indexed lookup, a ~30-byte
+  answer, no writes; it is the only thing an unwatched machine does for this feature. While
+  the answer is yes the agent samples every 5s and the next heartbeat body carries
+  `processes`. That is the one heartbeat payload that is not change-only (a process list has
   changed by definition) and the one that is demand-driven — an unwatched machine samples
-  nothing and sends nothing. See `Telemetry/ProcessReporter`.
+  nothing and sends nothing. The heartbeat reply's `processes_wanted` remains the way a
+  machine learns to **stop**, and the only path against a hub older than 1.71.0. See
+  `Telemetry/ProcessReporter` and `Worker.ProcessLoopAsync`.
 - Commands are **not signed**. The agent executes what an enrolled, authenticated pull
   returns; the hub authorizes on an allow-listed console session and records every
   command in its `audit_log`. (Until hub 1.10 / agent 3.1, `run_script`,

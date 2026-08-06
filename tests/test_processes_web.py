@@ -109,6 +109,14 @@ def main():
         check("...and is told nobody is watching, so it samples nothing",
               r.get_json()["processes_wanted"] is False)
 
+        print("\n== ...and it does not have to wait for a heartbeat to find out ==")
+        r = c.get("/api/agent/processes/wanted", headers=auth)
+        check("the machine can ask directly -> 200", r.status_code == 200)
+        check("...and is told nobody is looking", r.get_json()["wanted"] is False)
+        r = c.get("/api/agent/processes/wanted")
+        check("...and an unauthenticated caller is not told anything -> 401",
+              r.status_code == 401)
+
         print("\n== Opening the card IS the subscription ==")
         r = c.get("/api/machines/PC-1/processes")
         check("GET -> 200", r.status_code == 200)
@@ -118,8 +126,15 @@ def main():
         check("the cadence is served, not hardcoded in the browser",
               body["poll_interval"] == processes.POLL_INTERVAL_SECONDS
               and body["watch_ttl"] == processes.WATCH_TTL_SECONDS)
+        # The whole point of the dedicated poll: this answer is available within a couple of
+        # seconds of the click, not on the next 10-second heartbeat. An operator who opened
+        # the card was otherwise made to wait out a heartbeat before the machine even started
+        # looking, which is most of what made the first list feel slow.
+        r = c.get("/api/agent/processes/wanted", headers=auth)
+        check("...and the machine's very next watch poll says start sampling",
+              r.get_json()["wanted"] is True)
         r = c.post("/api/agent/heartbeat", json={"config_version": 0}, headers=auth)
-        check("...and the machine's next heartbeat is told to start sampling",
+        check("...as does its heartbeat, which is the only path an older agent has",
               r.get_json()["processes_wanted"] is True)
 
         print("\n== The heartbeat carries the process list ==")
@@ -235,6 +250,19 @@ def main():
         r = c.post("/api/agent/heartbeat", json={"config_version": 0}, headers=auth)
         check("with nobody looking, the machine is told to stop",
               r.get_json()["processes_wanted"] is False)
+        r = c.get("/api/agent/processes/wanted", headers=auth)
+        check("...and the watch poll agrees", r.get_json()["wanted"] is False)
+
+        # An enrolled agent asks about ITS OWN machine and nothing else -- the name comes from
+        # the bearer token, never the request -- so one machine cannot learn that an operator
+        # is looking at another. Worth asserting: this route is polled by every machine in the
+        # fleet every couple of seconds, which makes it the widest-open surface in the feature.
+        other_id, other_token = fleet.enroll_agent(db_path, "PC-2", SECRET, SECRET)
+        processes.note_watch(db_path, "PC-1", watcher="tech@x.com")
+        r = c.get("/api/agent/processes/wanted",
+                  headers={"Authorization": f"Bearer {other_id}:{other_token}"})
+        check("another machine's agent is not told that PC-1 is being watched",
+              r.get_json()["wanted"] is False)
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

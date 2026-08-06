@@ -35,6 +35,7 @@ public static class AgentConfig
     public static string EnrollUrl => HubBase + "/api/agent/enroll";
     public static string HeartbeatUrl => HubBase + "/api/agent/heartbeat";
     public static string CommandsUrl => HubBase + "/api/agent/commands";
+    public static string ProcessWatchUrl => HubBase + "/api/agent/processes/wanted";
     public static string CommandResultUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
     public static string CommandOutputUrl(string commandId) =>
@@ -99,8 +100,19 @@ public static class AgentConfig
     // POLL_INTERVAL_SECONDS), so the console's refresh and the machine's sampling are one
     // cadence rather than two that beat against each other.
     public const int ProcessSampleSeconds = 5;
-    // ...and how often the loop wakes while nobody is watching, just to notice that somebody
-    // now is. Cheap: it reads one bool that the heartbeat already fetched.
+    // ...and how often the machine ASKS whether somebody now is (ProcessWatchUrl).
+    //
+    // This is a real hub request rather than a re-read of what the last heartbeat happened
+    // to say, and that is the entire point: the heartbeat is a 10-second tick, so learning
+    // from it put the first process list 10-15 seconds after the operator opened the card --
+    // a delay long enough that the card had to explain itself. There is no inbound port to
+    // push at, so asking often is the only way to answer promptly.
+    //
+    // Affordable because the question is deliberately tiny: bearer auth, one indexed lookup,
+    // a ~30-byte answer, no writes on either side (see the hub's /api/agent/processes/wanted).
+    // It is also the ONLY thing an unwatched machine does for this feature -- no enumeration,
+    // no WMI, no payload -- so the "a machine nobody is looking at does no work" rule still
+    // holds where the work is actually expensive.
     public const int ProcessIdleCheckSeconds = 2;
 
     public const int OfflineBufferMax = 1000;

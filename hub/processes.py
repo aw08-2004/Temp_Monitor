@@ -16,10 +16,18 @@ each one's owner and image path and asking WMI which of them host services costs
 managed machine real CPU, and shipping ~60 KB on every heartbeat from every PC in the
 fleet would cost the hub real bandwidth -- to answer a question that is being asked on
 exactly one machine, by exactly one operator, for a couple of minutes. So the console's
-poll IS the subscription: `note_watch` while the card is open, `is_watched` on the next
-heartbeat tells that agent (and only that agent) to start sampling, and the watch lapses
-on its own when the operator navigates away. A machine nobody is looking at does no work
-and sends nothing. See WATCH_TTL_SECONDS for why the window is what it is.
+poll IS the subscription: `note_watch` while the card is open, `is_watched` tells that
+agent (and only that agent) to start sampling, and the watch lapses on its own when the
+operator navigates away. A machine nobody is looking at does no work and sends nothing.
+See WATCH_TTL_SECONDS for why the window is what it is.
+
+**...and the machine asks whether it is watched far more often than it heartbeats.**
+`is_watched` is answered on two endpoints: the 10-second heartbeat, and a dedicated
+agent-facing poll (`/api/agent/processes/wanted`) that exists purely so an operator does
+not wait out a heartbeat tick before their machine even starts looking. That makes this the
+most-called function in the module by a wide margin -- every enrolled machine in the fleet
+asks it every couple of seconds, watched or not -- so it must stay one indexed lookup on a
+table with one row per machine, and must never write.
 
 **PID reuse is the hazard this module is shaped around.** Every snapshot is seconds old by
 the time an operator clicks End task, and Windows recycles process ids aggressively -- so
@@ -198,8 +206,11 @@ def note_watch(db_path, machine, watcher=None, now=None, ttl=WATCH_TTL_SECONDS):
 
 
 def is_watched(db_path, machine, now=None):
-    """Is an operator looking at this machine's processes? Answered on the heartbeat, so it
-    must stay a single indexed lookup -- every agent in the fleet asks this every 10s."""
+    """Is an operator looking at this machine's processes?
+
+    Answered on the heartbeat AND on the agent's dedicated watch poll, so it must stay a
+    single indexed lookup and must never write: every enrolled machine in the fleet asks
+    this every couple of seconds, and the overwhelmingly common answer is no."""
     machine = str(machine or "").strip()
     if not machine:
         return False

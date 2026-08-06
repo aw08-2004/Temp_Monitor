@@ -673,8 +673,10 @@ Every issue/claim/complete/enroll is written to `audit_log`.
 ### The Processes card (the machine's task manager)
 
 A machine's **Overview** tab carries a **Processes** card: every process grouped by name
-with its CPU and memory, expandable to the individual instances, with **End task** and
-**Restart** on each. Core logic in [processes.py](hub/processes.py), HTTP surface in
+with its CPU, memory, owner and PID, expandable to the individual instances. **Right-click
+any row** for **End task** and **Restart** — Task Manager's shape, and for its reason: a
+table of a few hundred rows is scanned, and two buttons on each of them is more furniture
+than list. Core logic in [processes.py](hub/processes.py), HTTP surface in
 [processes_web.py](hub/processes_web.py), UI in `hub/static/js/processes.js`, agent side in
 `Telemetry/ProcessReader.cs` and `Fleet/Executors/ProcessExecutors.cs`.
 
@@ -684,12 +686,20 @@ machine page already reads both. Ending a process is strictly less dangerous tha
 `shutdown` the command gate already covers, so there is no new capability.
 
 **The card is collapsed by default, and that is load-bearing.** No machine samples its
-processes until an operator opens it. Opening it registers a *watch*; the hub answers that
-machine's next heartbeat with `processes_wanted: true`; the agent then samples every 5s and
-the list rides the heartbeat it already sends. The watch lapses ~45s after the operator
-navigates away, so a fleet nobody is looking at does no process work and sends nothing. The
-first list therefore appears within about 15 seconds rather than instantly — the card says
-so instead of spinning.
+processes until an operator opens it. Opening it registers a *watch*; the agent asks
+`GET /api/agent/processes/wanted` every 2s while idle and starts sampling the moment that
+answers yes; the list then rides the heartbeat it already sends, every 5s. The watch lapses
+~45s after the operator navigates away, so a fleet nobody is looking at does no process work
+and sends nothing.
+
+**Why the machine asks rather than being told.** An agent has no inbound port — nothing on
+the hub can push at it — so the only lever on "how fast does the list appear?" is how often
+the machine asks. Learning it from the heartbeat (a 10s tick) put the first list 10-15
+seconds after the click; a dedicated poll that is one indexed lookup and a ~30-byte answer
+makes that a few seconds, and is the *only* thing an unwatched machine does for this feature.
+The heartbeat still carries `processes_wanted` — it is how a machine learns to **stop**, and
+the only path for an agent older than v3.25.0. The console polls once a second until the
+first list lands, then settles to the hub's cadence.
 
 **Ending a process is guarded twice, against the same hazard.** Every action carries the
 process NAME the operator saw alongside its PID, because a rendered list is always a few

@@ -1391,8 +1391,7 @@
         "cpu": "CPU",
         "memory": "Memoria",
         "user": "Usuario",
-        "pid": "PID",
-        "actions": "Acciones"
+        "pid": "PID"
       },
       "mb": "{value} MB",
       "gb": "{value} GB",
@@ -1401,7 +1400,7 @@
       "restart": "Reiniciar",
       "protected_title": "Es un proceso crítico de Windows. Finalizarlo no cerraría un programa, sino que tumbaría el equipo, así que la consola no lo permite.",
       "restart_group_title": "Despliega el grupo y reinicia una sola instancia.",
-      "waiting": "Esperando a que este equipo informe de sus procesos. Empieza a muestrear en su siguiente latido, así que la primera lista aparece en unos 15 segundos.",
+      "waiting": "Esperando a que este equipo informe de sus procesos. Ya se los hemos pedido y necesita medir la CPU durante un momento antes de poder responder, así que la primera lista aparece en unos pocos segundos.",
       "waiting_short": "Esperando al equipo",
       "needs_agent": "Este equipo informa del agente v{version}. La lista de procesos necesita la v{required}; aparecerá cuando el agente se haya actualizado.",
       "none": "Este equipo no ha informado de ningún proceso.",
@@ -1409,7 +1408,7 @@
       "truncated": "Hay {count} procesos más en ejecución que no se han enviado. El informe se limita a los más activos.",
       "updated": "Actualizado {age}",
       "stale": "Último informe {age}. Puede que el equipo se haya desconectado.",
-      "help": "La lista se actualiza cada pocos segundos mientras esta tarjeta está abierta, y el equipo deja de muestrear poco después de cerrarla. La CPU es la parte del equipo completo, contada como la cuenta el Administrador de tareas.",
+      "help": "Haz clic derecho en un proceso para finalizarlo o reiniciarlo. La lista se actualiza cada pocos segundos mientras esta tarjeta está abierta, y el equipo deja de muestrear poco después de cerrarla. La CPU es la parte del equipo completo, contada como la cuenta el Administrador de tareas.",
       "queued": "En cola para {name}. El equipo lo recogerá en unos segundos.",
       "done": "{name}: {detail}",
       "failed": "Ha fallado: {error}",

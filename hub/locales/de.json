@@ -1391,8 +1391,7 @@
         "cpu": "CPU",
         "memory": "Arbeitsspeicher",
         "user": "Benutzer",
-        "pid": "PID",
-        "actions": "Aktionen"
+        "pid": "PID"
       },
       "mb": "{value} MB",
       "gb": "{value} GB",
@@ -1401,7 +1400,7 @@
       "restart": "Neu starten",
       "protected_title": "Ein kritischer Windows-Prozess. Ihn zu beenden würde nicht ein Programm schließen, sondern den Computer lahmlegen – deshalb lässt die Konsole es nicht zu.",
       "restart_group_title": "Gruppe aufklappen und eine einzelne Instanz neu starten.",
-      "waiting": "Warte darauf, dass dieser Computer seine Prozesse meldet. Die Erfassung beginnt mit dem nächsten Heartbeat, die erste Liste erscheint also nach etwa 15 Sekunden.",
+      "waiting": "Warte darauf, dass dieser Computer seine Prozesse meldet. Er wurde bereits danach gefragt und muss die CPU-Auslastung erst einen Moment lang messen, die erste Liste erscheint also in wenigen Sekunden.",
       "waiting_short": "Warte auf den Computer",
       "needs_agent": "Dieser Computer meldet Agent v{version}. Die Prozessliste benötigt v{required}; sie erscheint, sobald sich der Agent aktualisiert hat.",
       "none": "Dieser Computer hat keine Prozesse gemeldet.",
@@ -1409,7 +1408,7 @@
       "truncated": "{count} weitere Prozesse laufen, wurden aber nicht übertragen. Der Bericht ist auf die aktivsten begrenzt.",
       "updated": "Aktualisiert {age}",
       "stale": "Letzte Meldung {age}. Der Computer ist möglicherweise offline.",
-      "help": "Die Liste wird alle paar Sekunden aktualisiert, solange diese Karte geöffnet ist; kurz nach dem Schließen stellt der Computer die Erfassung wieder ein. Die CPU-Angabe ist der Anteil am gesamten Computer – so, wie auch der Task-Manager rechnet.",
+      "help": "Rechtsklick auf einen Prozess, um ihn zu beenden oder neu zu starten. Die Liste wird alle paar Sekunden aktualisiert, solange diese Karte geöffnet ist; kurz nach dem Schließen stellt der Computer die Erfassung wieder ein. Die CPU-Angabe ist der Anteil am gesamten Computer – so, wie auch der Task-Manager rechnet.",
       "queued": "Für {name} eingereiht. Der Computer übernimmt den Befehl in wenigen Sekunden.",
       "done": "{name}: {detail}",
       "failed": "Fehlgeschlagen: {error}",

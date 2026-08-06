@@ -320,9 +320,19 @@ public sealed class Worker : BackgroundService
     /// **Idle by default, and that is the whole design.** Sampling enumerates every process
     /// on the machine, opens each one's token to resolve its owner, and asks WMI which of
     /// them host services. Doing that on a five-second cadence on every PC in the fleet, to
-    /// answer a question being asked about one of them, would be pure waste -- so the hub
-    /// sets `processes_wanted` on the heartbeat reply only while somebody has that card
-    /// open, and this loop does nothing at all until it does.
+    /// answer a question being asked about one of them, would be pure waste -- so a machine
+    /// samples only while the hub says somebody has that card open, and this loop does
+    /// nothing at all until it does.
+    ///
+    /// **It ASKS whether it is wanted rather than waiting to be told.** The heartbeat reply
+    /// carries the same flag, but a heartbeat is a 10-second tick, and an operator who opened
+    /// the card was made to wait out that tick, then a sampling window, then a console poll,
+    /// before the first row appeared. There is no inbound port on this machine for the hub to
+    /// push at, so the only way to answer promptly is to ask often -- hence the dedicated
+    /// two-second poll of /api/agent/processes/wanted while idle, which is one indexed lookup
+    /// and a ~30-byte answer and is all an unwatched machine ever does for this feature. The
+    /// heartbeat's flag stays authoritative for the other direction (learning to STOP), and
+    /// is the only path on a hub too old to serve the poll.
     ///
     /// **It sends its own heartbeat rather than waiting for one.** The heartbeat loop is on
     /// a 10-second tick and a sample lands every 5, so half of them would arrive stale (or
@@ -341,7 +351,16 @@ public sealed class Worker : BackgroundService
             var watching = false;
             try
             {
+                // Already watching means the heartbeats this loop sends are keeping the flag
+                // current, so there is nothing to ask -- the extra poll would be a request per
+                // sample for an answer we already have. Only an idle machine asks, and it is
+                // the asking that makes the card responsive.
                 watching = ProcessReporter.Wanted;
+                if (!watching && _fleet.IsEnrolled)
+                    watching = await _fleet.PollProcessWatchAsync(ct);
+
+                // Sampled in the SAME iteration the answer arrived in, deliberately: waiting
+                // for the next tick would hand back the two seconds this poll exists to save.
                 if (watching && _fleet.IsEnrolled && await ProcessReporter.SampleAsync(ct))
                     await _fleet.HeartbeatAsync(ct);
             }

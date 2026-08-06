@@ -209,10 +209,21 @@
 #process-body {
     max-height: 60vh;
     overflow-y: auto;
-    /* ...and sideways within itself on a narrow screen. Six columns plus two buttons a row
-       do not fit a phone, and a table that widens the PAGE instead takes every other card
-       on it out of alignment. */
+    /* ...and sideways within itself on a narrow screen. Five columns do not fit a phone, and
+       a table that widens the PAGE instead takes every other card on it out of alignment. */
     overflow-x: auto;
+    /* The bars themselves are hidden: this box scrolls in both directions, and two permanent
+       gutters around a dense table is a lot of chrome for a card that is mostly read at a
+       glance. The scrolling itself is untouched -- wheel, trackpad, touch, arrow keys and
+       the sticky header all behave exactly as before, and the row count in the summary is
+       what says there is more than fits. */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+#process-body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
 }
 
 /* The header has to stay visible while the body scrolls -- a usage column you have to
@@ -221,7 +232,9 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    background: var(--card-bg, var(--bg));
+    /* The card's own surface, not the page's -- rows scrolling behind a header painted in
+       --bg leave a strip that reads as a gap in the table. */
+    background: var(--card);
 }
 
 /* Rows are dense on purpose: this is a list to scan, not to read, and the default table
@@ -240,28 +253,16 @@
     font-variant-numeric: tabular-nums;
 }
 
-.process-table__actions {
-    text-align: right;
-    white-space: nowrap;
+/* The row the open menu belongs to. Rows move on every poll (that is what sorting by CPU
+   means) so an operator who has right-clicked one needs to see WHICH one they are about to
+   end -- the menu names it too, and this is the other half of that sentence. */
+.process-row--targeted > td {
+    background: var(--control-bg);
 }
 
-/* Compact buttons, scoped here rather than added to the button vocabulary: this is the
-   only table in the console with two controls on every row. */
-.process-table__actions .btn {
-    padding: 2px var(--space-2);
-    font-size: var(--text-sm);
-}
-
-.process-table__actions .btn + .btn {
-    margin-left: var(--space-1);
-}
-
-/* A refused action is SHOWN rather than hidden -- "you cannot end lsass" is the answer to
-   the question, and a missing button just looks like a rendering fault -- so it has to read
-   as unavailable at a glance. Its title says why. */
-.process-table__actions .btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
+.process-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
 }
 
 .process-row__toggle {
@@ -321,6 +322,67 @@
 
 .process-result--failed {
     color: var(--danger, #ef4444);
+}
+
+/* The right-click menu. Fixed rather than absolute because it is positioned from pointer
+   coordinates, which are viewport coordinates -- and because its row lives in a scrolling
+   box, so anchoring to the page would leave it behind the moment the list moved. */
+.process-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 12rem;
+    padding: var(--space-1);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    box-shadow: var(--shadow-card);
+}
+
+.process-menu[hidden] {
+    display: none;
+}
+
+/* The process the menu is about, spelled out at the top: the list underneath is still
+   refreshing, and "which row was this again?" is not a question to be answering while
+   deciding whether to end somebody's work. */
+.process-menu__target {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: var(--space-1);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+}
+
+.process-menu__item {
+    display: block;
+    width: 100%;
+    padding: var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.process-menu__item:hover:not(:disabled),
+.process-menu__item:focus-visible {
+    background: var(--control-bg);
+    outline: none;
+}
+
+.process-menu__item--danger:not(:disabled) {
+    color: var(--danger);
+}
+
+/* A refused action is SHOWN rather than left out -- "you cannot end lsass" is the answer to
+   the question that was asked by right-clicking it, and a menu with one entry on some rows
+   and two on others teaches nothing. Its title says why. */
+.process-menu__item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 /* ============ Historical metric grid ============ */

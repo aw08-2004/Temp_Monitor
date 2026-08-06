@@ -3,8 +3,16 @@
 // **Grouped by name, because that is the question.** An operator looking at a PC that is
 // pinned at 100% wants to know that "Chrome is eating the CPU", not that pids 4812, 4907
 // and eleven of their siblings are each eating 8% of it. Rows are one per NAME with the
-// instances summed, expandable to the individual processes -- which is where a pid, a
-// window session and the two actions live, because those are per-process facts.
+// instances summed, expandable to the individual processes -- which is where a pid and a
+// window session live, because those are per-process facts.
+//
+// **Actions are on the right-click menu, not in a column.** Task Manager's shape, and for
+// Task Manager's reason: a table of a few hundred rows is scanned, and two buttons on every
+// one of them is more furniture than list -- they widen the row, they pull the eye away from
+// the numbers the card exists to show, and on the row an operator actually wants they are no
+// easier to hit than a right-click. The menu is also the only place the two actions can
+// differ per row (a critical process cannot be ended; a group of twelve cannot be restarted
+// as one) without the table growing a column of greyed-out buttons.
 //
 // **The list is polled, and the poll IS the subscription.** The machine does no process
 // sampling until somebody opens this card and stops again seconds after they close it, so
@@ -12,9 +20,11 @@
 // background, and when the page is left. See hub/processes.py for the other half.
 //
 // **Nothing here pretends to be Task Manager's refresh rate.** A snapshot crosses a
-// heartbeat, so it is a few seconds old by the time it renders and the card says so rather
-// than implying live numbers. The first one takes longer still (the machine has to be told
-// to start sampling), which is why "waiting" is a rendered state and not a spinner.
+// heartbeat, so it is a couple of seconds old by the time it renders and the card says so
+// rather than implying live numbers. The first one takes longer still -- the machine has to
+// hear that it is wanted and then measure a CPU window before it has anything to send -- so
+// "waiting" is a rendered state rather than a spinner, and this polls faster until it
+// arrives. See the agent's ProcessLoopAsync for the half of that wait it owns.
 //
 // **Every action is confirmed against the name and pid the operator SAW.** The list is
 // always slightly stale and Windows recycles pids within minutes, so both travel to the
@@ -45,6 +55,11 @@
     const filterEl = document.getElementById('process-filter');
     const groupEl = document.getElementById('process-group');
 
+    const menu = document.getElementById('process-menu');
+    const menuTargetEl = document.getElementById('process-menu-target');
+    const menuEnd = document.getElementById('process-menu-end');
+    const menuRestart = document.getElementById('process-menu-restart');
+
     const dialog = document.getElementById('process-confirm');
     const dialogTitle = document.getElementById('process-confirm-title');
     const dialogText = document.getElementById('process-confirm-text');
@@ -57,7 +72,14 @@
     // TTL and the agent's sampling stay one decision rather than three constants drifting
     // apart -- this is what we use until the first response arrives.
     let pollSeconds = 5;
+    // ...except while the machine has not sent its first list. That wait is the one the
+    // operator actually feels, and it ends at a moment we cannot predict (the agent hears it
+    // is wanted, measures a CPU window, posts), so asking once a second turns a "nothing is
+    // happening" pause into a list that appears the instant there is one. It costs a handful
+    // of extra requests exactly once per card.
+    const FIRST_POLL_SECONDS = 1;
     let pollTimer = null;
+    let pollingAt = null;         // the cadence pollTimer is actually running at
     let inFlight = false;
 
     let snapshot = null;          // the last payload from the hub
@@ -65,6 +87,9 @@
     let sort = { key: 'cpu', dir: 'desc' };
     let pending = null;           // the command we are waiting on, if any
     let tooOld = null;            // the agent version, when it predates this feature
+    let menuTarget = null;        // the row the context menu is open on, if any
+    let renderMissed = false;     // a poll landed while the menu was open
+    let focusKey = null;          // the row that owns the table's tab stop
 
     // The release that added process reporting. An agent below it never sends a snapshot, so
     // without this check the card would sit on "waiting for the machine" forever and look
@@ -224,23 +249,19 @@
         return td;
     }
 
-    function actionButton(labelKey, onClick, danger) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `btn ${danger ? 'btn--danger' : 'btn--ghost'}`;
-        btn.textContent = t(labelKey);
-        btn.addEventListener('click', onClick);
-        return btn;
-    }
+    // What a right-click on this row would act on. Held per row rather than read back out of
+    // the DOM when the menu opens: the name and pid an operator SAW are what travel to the
+    // agent, and re-deriving them from cells would make that depend on how they are rendered.
+    const rowTargets = new WeakMap();
 
-    function disabledNote(labelKey, titleKey) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn--ghost';
-        btn.textContent = t(labelKey);
-        btn.disabled = true;
-        btn.title = t(titleKey);
-        return btn;
+    // Rows are a single tab stop that moves with the arrow keys, not one stop each: a few
+    // hundred processes would otherwise be a few hundred presses to get past this card. With
+    // the buttons gone this is the only way to reach an action without a mouse, so it is not
+    // optional -- Enter, Space and the Menu key all open the same menu a right-click does.
+    function makeRowFocusable(tr, key) {
+        tr.dataset.rowKey = key;
+        tr.tabIndex = focusKey === key ? 0 : -1;
+        tr.setAttribute('aria-haspopup', 'menu');
     }
 
     function groupRow(entry) {
@@ -304,25 +325,16 @@
         tr.appendChild(cell(entry.instances.length === 1 ? String(first.pid) : '',
                             'process-table__num'));
 
-        const actions = document.createElement('td');
-        actions.className = 'process-table__actions';
-        if (CAN_ISSUE) {
-            if (entry.protected) {
-                actions.appendChild(disabledNote('machine.processes.end',
-                                                 'machine.processes.protected_title'));
-            } else {
-                actions.appendChild(actionButton('machine.processes.end',
-                    () => confirmEnd(entry.name, entry.instances.map((p) => p.pid)), true));
-            }
-            if (entry.instances.length === 1) {
-                actions.appendChild(actionButton('machine.processes.restart',
-                    () => confirmRestart(entry.name, first.pid), false));
-            } else {
-                actions.appendChild(disabledNote('machine.processes.restart',
-                                                 'machine.processes.restart_group_title'));
-            }
-        }
-        tr.appendChild(actions);
+        // A group row acts on the whole group: End task ends every instance under it, and
+        // Restart is only meaningful when the group IS one process.
+        rowTargets.set(tr, {
+            name: entry.name,
+            pids: entry.instances.map((p) => p.pid),
+            pid: entry.instances.length === 1 ? first.pid : null,
+            count: entry.instances.length,
+            protectedProcess: !!entry.protected,
+        });
+        makeRowFocusable(tr, `g:${entry.key}`);
         return tr;
     }
 
@@ -343,20 +355,14 @@
         tr.appendChild(cell(proc.user || t('machine.unknown')));
         tr.appendChild(cell(String(proc.pid), 'process-table__num'));
 
-        const actions = document.createElement('td');
-        actions.className = 'process-table__actions';
-        if (CAN_ISSUE) {
-            if (entry.protected) {
-                actions.appendChild(disabledNote('machine.processes.end',
-                                                 'machine.processes.protected_title'));
-            } else {
-                actions.appendChild(actionButton('machine.processes.end',
-                    () => confirmEnd(proc.name, [proc.pid]), true));
-            }
-            actions.appendChild(actionButton('machine.processes.restart',
-                () => confirmRestart(proc.name, proc.pid), false));
-        }
-        tr.appendChild(actions);
+        rowTargets.set(tr, {
+            name: proc.name,
+            pids: [proc.pid],
+            pid: proc.pid,
+            count: 1,
+            protectedProcess: !!entry.protected,
+        });
+        makeRowFocusable(tr, `p:${proc.pid}`);
         return tr;
     }
 
@@ -375,6 +381,17 @@
     }
 
     function render() {
+        // Rebuilding the table under an open menu would pull the highlighted row out from
+        // under the cursor mid-decision (rows move every poll -- that is what a sort by CPU
+        // means). The menu already holds the name and pid it was opened on, so nothing goes
+        // stale by waiting; the render happens when it closes.
+        if (menuTarget) { renderMissed = true; return; }
+        renderMissed = false;
+
+        // A poll lands every second or five, so anything focused inside the table is about to
+        // be replaced by an equal row in a new element. Put focus back where the operator left
+        // it -- but only if it was in here, or a refresh would steal it from the filter box.
+        const hadFocus = bodyEl.contains(document.activeElement);
         bodyEl.replaceChildren();
 
         if (snapshot === null) {
@@ -422,9 +439,6 @@
             headerCell('user', t('machine.processes.col.user'), false),
             headerCell('pid', t('machine.processes.col.pid'), true),
         );
-        const actionsHead = document.createElement('th');
-        actionsHead.textContent = CAN_ISSUE ? t('machine.processes.col.actions') : '';
-        headRow.appendChild(actionsHead);
         thead.appendChild(headRow);
         table.appendChild(thead);
 
@@ -454,6 +468,18 @@
         }
         table.appendChild(tbody);
         bodyEl.appendChild(table);
+
+        // The tab stop, and whatever the operator was standing on. A row that has since gone
+        // (the process ended, the filter changed) hands both back to the first row rather
+        // than leaving the table unreachable.
+        let stop = focusKey ? tbody.querySelector(`[data-row-key="${CSS.escape(focusKey)}"]`)
+                            : null;
+        if (!stop) {
+            stop = tbody.querySelector('tr[data-row-key]');
+            focusKey = stop ? stop.dataset.rowKey : null;
+            if (stop) stop.tabIndex = 0;
+        }
+        if (hadFocus && stop) stop.focus({ preventScroll: true });
 
         if (Number(snapshot.truncated) > 0) {
             bodyEl.appendChild(emptyMessage(
@@ -500,6 +526,8 @@
             snapshot = body;
             render();
             renderStatus();
+            // The first list arriving drops us off the fast cadence.
+            syncPolling();
         } catch (e) {
             /* transient: the next tick tries again, and the age readout already shows drift */
         } finally {
@@ -511,19 +539,94 @@
         return card.open && document.visibilityState === 'visible';
     }
 
+    // Once a second until the machine has sent something, then the cadence the hub serves.
+    // Only the first wait is a wait; after that the card is being refreshed, and refreshing a
+    // list of four hundred rows five times as often would be work nobody asked for.
+    function cadence() {
+        return (snapshot === null || snapshot.reported_at === null)
+            ? FIRST_POLL_SECONDS : pollSeconds;
+    }
+
     function syncPolling() {
-        if (active() && pollTimer === null) {
+        if (!active()) { stopPolling(); return; }
+        const every = cadence();
+        if (pollTimer !== null && pollingAt === every) return;
+
+        const starting = pollTimer === null;
+        stopPolling();
+        pollingAt = every;
+        pollTimer = setInterval(load, every * 1000);
+        if (starting) {
             checkAgentVersion();
             load();
-            pollTimer = setInterval(load, pollSeconds * 1000);
-        } else if (!active() && pollTimer !== null) {
-            stopPolling();
         }
     }
 
     function stopPolling() {
         if (pollTimer !== null) clearInterval(pollTimer);
         pollTimer = null;
+        pollingAt = null;
+    }
+
+    // ---- the row menu -------------------------------------------------------------
+
+    // Both actions are shown on every row an operator may act on, and the ones that would be
+    // refused are shown DISABLED with the reason on them rather than left out. A menu whose
+    // entries come and go teaches nothing; "End task -- this is a critical Windows process"
+    // answers the question that was being asked by right-clicking it.
+    function openMenu(target, at) {
+        if (!menu || !CAN_ISSUE || !target) return false;
+        menuTarget = target;
+
+        menuTargetEl.textContent = target.count > 1
+            ? `${target.name} ×${target.count}`
+            : `${target.name} · ${t('machine.processes.col.pid')} ${target.pid}`;
+
+        menuEnd.disabled = !!target.protectedProcess;
+        menuEnd.title = target.protectedProcess ? t('machine.processes.protected_title') : '';
+        // Restarting "the twelve chrome.exe" is not one action -- the agent restarts a single
+        // process, by name and pid, and there is no honest way to spread that over a group.
+        menuRestart.disabled = !target.pid;
+        menuRestart.title = target.pid ? '' : t('machine.processes.restart_group_title');
+
+        // Shown before it is measured, because a hidden element has no size to position by.
+        menu.hidden = false;
+        const box = menu.getBoundingClientRect();
+        const pad = 8;
+        // Flipped rather than clamped at the near edge: a menu that runs off the bottom of
+        // the window would otherwise open under the cursor with its first entry -- End task --
+        // exactly where the next click lands.
+        const left = at.x + box.width + pad > window.innerWidth
+            ? Math.max(pad, at.x - box.width) : at.x;
+        const top = at.y + box.height + pad > window.innerHeight
+            ? Math.max(pad, at.y - box.height) : at.y;
+        menu.style.left = `${Math.round(left)}px`;
+        menu.style.top = `${Math.round(top)}px`;
+
+        if (target.row) target.row.classList.add('process-row--targeted');
+        // Focus the first entry that can actually be used, so Enter does something sensible
+        // and Escape has somewhere to come back from.
+        (menuEnd.disabled ? (menuRestart.disabled ? menu : menuRestart) : menuEnd)
+            .focus({ preventScroll: true });
+        return true;
+    }
+
+    function closeMenu(restoreFocus) {
+        if (!menuTarget) return;
+        const row = menuTarget.row;
+        menuTarget = null;
+        menu.hidden = true;
+        if (row) {
+            row.classList.remove('process-row--targeted');
+            if (restoreFocus && row.isConnected) row.focus({ preventScroll: true });
+        }
+        // Whatever arrived while it was open.
+        if (renderMissed) { render(); renderStatus(); }
+    }
+
+    function menuTargetFor(row) {
+        const target = rowTargets.get(row);
+        return target ? { ...target, row } : null;
     }
 
     // ---- actions ------------------------------------------------------------------
@@ -629,7 +732,10 @@
 
     // ---- wiring -------------------------------------------------------------------
 
-    card.addEventListener('toggle', syncPolling);
+    // Collapsing the card takes its menu with it. A pointer press anywhere already closes
+    // one (below), but the summary can also be toggled from the keyboard, and a menu left
+    // floating over a card that is no longer on screen is a menu aimed at nothing.
+    card.addEventListener('toggle', () => { closeMenu(false); syncPolling(); });
     document.addEventListener('visibilitychange', syncPolling);
     // Filtering and grouping are views of the snapshot we already hold, so neither waits on
     // the network.
@@ -639,4 +745,74 @@
     dialogCancel.addEventListener('click', closeDialog);
     // Esc closes the dialog itself (showModal does that); this clears what it was about.
     dialog.addEventListener('close', () => { pending = null; });
+
+    // Right-click anywhere on a row. Delegated, because the rows themselves are replaced
+    // every poll. When there is nothing to offer -- a viewer without issue_commands -- the
+    // browser's own menu is left alone rather than replaced with an empty one of ours.
+    bodyEl.addEventListener('contextmenu', (event) => {
+        const row = event.target.closest('tr[data-row-key]');
+        if (!row) return;
+        closeMenu(false);
+        // The Menu key fires this with no coordinates (0,0 in Chrome, -1 in others); anchor
+        // to the row instead so keyboard use does not open the menu in the corner.
+        const useRow = !(event.clientX > 0 && event.clientY > 0);
+        const box = row.getBoundingClientRect();
+        const at = useRow ? { x: box.left + 16, y: box.bottom }
+                          : { x: event.clientX, y: event.clientY };
+        if (openMenu(menuTargetFor(row), at)) event.preventDefault();
+    });
+
+    // Enter/Space on the focused row, and the arrow keys that move between them.
+    bodyEl.addEventListener('keydown', (event) => {
+        const row = event.target.closest?.('tr[data-row-key]');
+        if (!row || event.target !== row) return;
+
+        if (event.key === 'Enter' || event.key === ' ') {
+            const box = row.getBoundingClientRect();
+            if (openMenu(menuTargetFor(row), { x: box.left + 16, y: box.bottom })) {
+                event.preventDefault();
+            }
+            return;
+        }
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        const rows = [...bodyEl.querySelectorAll('tr[data-row-key]')];
+        const next = rows[rows.indexOf(row) + (event.key === 'ArrowDown' ? 1 : -1)];
+        if (!next) return;
+        event.preventDefault();
+        row.tabIndex = -1;
+        next.tabIndex = 0;
+        focusKey = next.dataset.rowKey;
+        next.focus({ preventScroll: false });
+    });
+
+    // The menu is only in the page at all for operators who can act on it (see machine.html),
+    // so everything below is conditional on it existing rather than on a second capability
+    // check that could disagree with the first.
+    if (menu) {
+        menuEnd.addEventListener('click', () => {
+            const target = menuTarget;
+            closeMenu(false);
+            if (target) confirmEnd(target.name, target.pids);
+        });
+        menuRestart.addEventListener('click', () => {
+            const target = menuTarget;
+            closeMenu(false);
+            if (target && target.pid) confirmRestart(target.name, target.pid);
+        });
+    }
+
+    // Everything that ends a menu. `pointerdown` rather than `click` so it closes on the
+    // press, like every other menu on the platform, and capture so a click on a row's own
+    // twisty closes it too. Scrolling the list is included because the menu is positioned
+    // against the viewport: the row would slide out from under it.
+    document.addEventListener('pointerdown', (event) => {
+        if (menuTarget && !menu.contains(event.target)) closeMenu(false);
+    }, true);
+    document.addEventListener('keydown', (event) => {
+        if (menuTarget && event.key === 'Escape') { event.stopPropagation(); closeMenu(true); }
+    }, true);
+    // Capture, so the list's own scroller counts as well as the page's.
+    window.addEventListener('scroll', () => closeMenu(false), true);
+    window.addEventListener('resize', () => closeMenu(false));
+    window.addEventListener('blur', () => closeMenu(false));
 })();

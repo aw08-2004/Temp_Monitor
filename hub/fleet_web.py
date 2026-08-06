@@ -199,13 +199,46 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
             except Exception as e:
                 print(f"[processes] Could not record processes for {machine}: {e}")
         # Answered on EVERY heartbeat, including the ones carrying nothing: this is how an
-        # agent learns to start sampling, and how it learns to stop. A machine nobody is
-        # looking at reads `false` here and does no process work at all.
+        # agent learns to STOP sampling (and how a pre-1.71 agent learns to start). A machine
+        # nobody is looking at reads `false` here and does no process work at all.
         try:
             payload["processes_wanted"] = processes.is_watched(db_path, machine)
         except Exception as e:
             print(f"[processes] Could not resolve the watch for {machine}: {e}")
         return jsonify(payload), 200
+
+    @bp.route("/api/agent/processes/wanted", methods=["GET"])
+    @agent_auth
+    def agent_processes_wanted(agent_id, machine):
+        """Does anybody want this machine's process list RIGHT NOW?
+
+        The same question the heartbeat answers, asked on its own so it can be answered
+        promptly. The heartbeat is a 10-second tick carrying config, inventory and liveness;
+        making an operator wait out one of those, plus a sampling window, plus a console
+        poll, put the first process list 10-15 seconds after the click that asked for it.
+        Long enough that the card looked broken, which is why "waiting" had to be a rendered
+        state at all.
+
+        The agent has no inbound port -- nothing here can push -- so the only way to shorten
+        that is to let it ASK more often than it heartbeats, and the only way that is
+        affordable fleet-wide is for the asking to be this: bearer auth, one indexed lookup
+        on a single-row-per-machine table, and a ~30-byte answer. No config, no inventory, no
+        writes. An idle fleet costs one of these per machine every couple of seconds and
+        nothing else; the moment one answers `true` that machine starts sampling and posts
+        its list on a heartbeat of its own (see the agent's ProcessLoopAsync).
+
+        Scoped to the caller's own machine by construction: `machine` comes from the bearer
+        token, never from the request, so one enrolled agent cannot learn that an operator is
+        looking at another.
+        """
+        try:
+            wanted = processes.is_watched(db_path, machine)
+        except Exception as e:
+            # Never fatal, and false rather than true: a hub that cannot answer must not
+            # leave a machine sampling every five seconds on the strength of an error.
+            print(f"[processes] Could not resolve the watch for {machine}: {e}")
+            wanted = False
+        return jsonify({"wanted": wanted}), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])
     @agent_auth

@@ -1493,8 +1493,7 @@
         "cpu": "CPU",
         "memory": "Memory",
         "user": "User",
-        "pid": "PID",
-        "actions": "Actions"
+        "pid": "PID"
       },
       "mb": "{value} MB",
       "gb": "{value} GB",
@@ -1503,7 +1502,7 @@
       "restart": "Restart",
       "protected_title": "A critical Windows process. Ending it would take the machine down rather than close a program, so the console will not.",
       "restart_group_title": "Expand the group and restart a single instance.",
-      "waiting": "Waiting for this machine to report its processes. It starts sampling on its next heartbeat, so the first list appears within about 15 seconds.",
+      "waiting": "Waiting for this machine to report its processes. It has been asked for them and has to measure CPU over a moment before it can answer, so the first list appears within a few seconds.",
       "waiting_short": "Waiting for the machine",
       "needs_agent": "This machine reports agent v{version}. The process list needs v{required}; it will appear once the agent has updated itself.",
       "none": "This machine reported no processes.",
@@ -1511,7 +1510,7 @@
       "truncated": "{count} more processes are running but were not sent. The report is capped at the busiest ones.",
       "updated": "Updated {age}",
       "stale": "Last report {age}. The machine may have gone offline.",
-      "help": "The list refreshes every few seconds while this card is open, and the machine stops sampling shortly after it is closed. CPU is the share of the whole machine, counted the way Task Manager counts it.",
+      "help": "Right-click a process to end or restart it. The list refreshes every few seconds while this card is open, and the machine stops sampling shortly after it is closed. CPU is the share of the whole machine, counted the way Task Manager counts it.",
       "queued": "Queued for {name}. The machine picks this up within a few seconds.",
       "done": "{name}: {detail}",
       "failed": "Failed: {error}",
