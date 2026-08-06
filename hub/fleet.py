@@ -796,6 +796,24 @@ def is_enrolled(db_path, machine):
     return row is not None
 
 
+def enrolled_machines(db_path):
+    """The set of hostnames with a live enrollment. `is_enrolled` for a whole list.
+
+    The Dashboard and the Asset Inventory ask this about every machine they render, and a
+    fleet is hundreds of rows: asking per row would be hundreds of queries to answer one
+    question. Same rule as `is_enrolled` -- enrolled means "has a non-revoked agent row",
+    not "is online" -- so a machine that is merely switched off still reads as enrolled,
+    which is the point. A machine MISSING from this set is one the hub can see (it posts
+    telemetry, so it has a name, a temperature and a card) and cannot act on at all: no
+    commands, no terminal, no processes, no backups.
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT machine FROM agents WHERE revoked = 0"
+        ).fetchall()
+    return {row["machine"] for row in rows}
+
+
 def delete_machine(db_path, machine):
     """Remove all fleet rows for a machine: its agent enrollments, its queued/past
     commands, and the command_results / command_output_chunks tied to those commands.

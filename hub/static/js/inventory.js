@@ -58,8 +58,12 @@ function formatTemp(temp) {
 function sortValue(row, key) {
     switch (key) {
         case 'status':
-            // Online sorts before offline in ascending order.
-            return row.status === 'online' ? 0 : 1;
+            // Online before offline, and within each the machines the console can actually
+            // act on first: online+enrolled, online+not enrolled, offline, offline+not
+            // enrolled. An unenrolled machine is the one you can do least with, so it does
+            // not outrank a working one just for being unusual -- but it groups together,
+            // which is what makes "how many of these do I have?" a glance rather than a scan.
+            return (row.status === 'online' ? 0 : 2) + (row.enrolled === false ? 1 : 0);
         case 'temp':
             // Missing temps sort last regardless of direction feel; -Infinity keeps them
             // at the bottom ascending and the numbers ordered.
@@ -146,8 +150,7 @@ function renderRow(row) {
     const statusTd = document.createElement('td');
     const pill = document.createElement('span');
     pill.className = 'status-pill';
-    const online = row.status === 'online';
-    setStatusPill(pill, online ? 'ok' : 'muted', online ? t('common.status.online') : t('common.status.offline'));
+    setMachineStatusPill(pill, row);
     statusTd.appendChild(pill);
 
     const makeTd = document.createElement('td');

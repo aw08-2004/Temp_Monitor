@@ -815,7 +815,10 @@
     "status": {
       "live": "Live",
       "online": "Online",
-      "offline": "Offline"
+      "offline": "Offline",
+      "online_unenrolled": "Online, nicht registriert",
+      "offline_unenrolled": "Offline, nicht registriert",
+      "unenrolled_help": "Dieser Computer meldet Temperaturen, hat sich aber nie in der Flotte registriert. Die Konsole kann daher nichts auf ihm ausführen: Befehle, Terminal, Paketverteilung, Sicherungen und die Prozessliste bleiben wirkungslos. Führe das Installationsprogramm dort erneut mit dem Registrierungsschlüssel aus."
     },
     "uptime": "Laufzeit: {value}",
     "uptime_unknown": "Laufzeit: --",

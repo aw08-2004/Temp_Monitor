@@ -890,7 +890,10 @@
     "status": {
       "live": "Live",
       "online": "Online",
-      "offline": "Offline"
+      "offline": "Offline",
+      "online_unenrolled": "Online, not enrolled",
+      "offline_unenrolled": "Offline, not enrolled",
+      "unenrolled_help": "This machine reports temperatures but never enrolled with the fleet, so the console cannot act on it: commands, the terminal, package deployments, backups and the process list will all do nothing. Re-run the installer on it with the enrollment secret."
     },
     "uptime": "Uptime: {value}",
     "uptime_unknown": "Uptime: --",

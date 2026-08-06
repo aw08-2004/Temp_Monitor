@@ -148,6 +148,42 @@ def test_merge_backfills_manufacturer():
     check("dropped row is gone", "mfrDrop" not in machines_list())
 
 
+def test_enrollment_is_reported_per_machine():
+    """The Dashboard and the Asset Inventory qualify a machine's online/offline pill with
+    whether it ever enrolled, because an agent that never did still posts telemetry and so
+    reads as a perfectly healthy machine while every command, terminal session, deployment,
+    backup and process report on it silently does nothing.
+
+    The distinction is deliberately "has an enrollment", not "is online" -- a machine that
+    is merely switched off is still enrolled -- and it must survive a REVOKED agent, which
+    is the case where the hub still holds a row for a machine it can no longer talk to.
+    """
+    print("\n-- /api/machines says which machines have a fleet enrollment --")
+    report("ENROLL-YES")
+    report("ENROLL-NO")
+    secret = "inventory-test-secret"
+    agent_id, _ = app.fleet.enroll_agent(app.DB_PATH, "ENROLL-YES", secret, secret)
+
+    rows = machines_list()
+    check("an enrolled machine reports enrolled=True",
+          rows.get("ENROLL-YES", {}).get("enrolled") is True)
+    check("a telemetry-only machine reports enrolled=False",
+          rows.get("ENROLL-NO", {}).get("enrolled") is False)
+    check("...and it is a real boolean, not a truthy value the console has to guess at",
+          isinstance(rows.get("ENROLL-NO", {}).get("enrolled"), bool))
+
+    detail = client.get("/api/machines/ENROLL-NO").get_json()
+    check("the single-machine endpoint agrees", detail.get("enrolled") is False)
+    detail = client.get("/api/machines/ENROLL-YES").get_json()
+    check("...for both answers", detail.get("enrolled") is True)
+
+    # Revoking is how an operator says "this machine is no longer ours". The console must
+    # stop claiming it can act on it, exactly as if it had never enrolled.
+    app.fleet.revoke_agent(app.DB_PATH, agent_id, actor="tester@example.com")
+    check("a revoked agent reads as not enrolled",
+          machines_list().get("ENROLL-YES", {}).get("enrolled") is False)
+
+
 if __name__ == "__main__":
     test_service_tag_round_trip()
     test_service_tag_coalesced_not_clobbered()
@@ -158,5 +194,6 @@ if __name__ == "__main__":
     test_missing_manufacturer_is_null()
     test_manufacturer_alone_creates_a_row()
     test_merge_backfills_manufacturer()
+    test_enrollment_is_reported_per_machine()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

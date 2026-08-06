@@ -7,6 +7,16 @@ const socket = connectSocketWithStatus();
 const machineCards = document.getElementById('machine-cards');
 const emptyStateEl = document.getElementById('empty-state');
 
+// machine -> whether it has a fleet enrollment, from the last /api/machines poll.
+//
+// Held here because the two things that update a card disagree about what they know: the
+// 30-second poll carries the whole row, while the live `new_temp` socket event carries a
+// temperature and nothing else -- and it fires far more often. Without this, every socket
+// update would repaint the pill as a plain "Online" and the enrollment note would flicker
+// out between polls. A machine not in the map yet (its first temp arrived before the first
+// poll) is left unqualified rather than guessed at.
+const enrollment = new Map();
+
 function formatMachineInfo(info) {
     if (!info) return '';
     const parts = [];
@@ -82,8 +92,13 @@ function updateMachineCard(machine, temp, uptimeSeconds, info) {
 
     document.getElementById('temp-' + machine).innerText = Number(temp).toFixed(1) + ' °C';
     // A card on the live Dashboard is, by construction, a machine currently reporting.
-    // High temperature is not flagged here (see the top of this file).
-    setStatusPill(statusEl, 'ok', t('common.status.online'));
+    // High temperature is not flagged here (see the top of this file). Reporting is not the
+    // same as reachable, though: a machine with no enrollment posts telemetry and answers
+    // nothing, so the pill says so.
+    setMachineStatusPill(statusEl, {
+        status: 'online',
+        enrolled: enrollment.has(machine) ? enrollment.get(machine) : undefined,
+    });
 }
 
 async function refreshMachineInfo() {
@@ -102,7 +117,14 @@ async function refreshMachineInfo() {
         }
         emptyStateEl.style.display = online.length ? 'none' : 'block';
         for (const row of online) {
+            // Recorded before the card is drawn -- updateMachineCard reads it back out.
+            if (typeof row.enrolled === 'boolean') enrollment.set(row.machine, row.enrolled);
             updateMachineCard(row.machine, row.temp, row.uptime_seconds, row);
+        }
+        // Machines that left the live view keep no entry: they are gone from the map for the
+        // same reason their card is gone from the page.
+        for (const name of [...enrollment.keys()]) {
+            if (!onlineNames.has(name)) enrollment.delete(name);
         }
     } catch (e) { /* non-critical, dashboard still works without it */ }
 }

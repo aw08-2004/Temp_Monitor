@@ -539,6 +539,16 @@ never did — it was telemetry-only, which is why it was replaced.
   `POST /api/agent/enroll` and receives a per-agent bearer token (only its hash
   is stored). All other agent endpoints require `Authorization: Bearer
   <agent_id>:<token>`. With the secret unset, no agent can enroll (fail closed).
+
+  > **A machine that never enrolled still posts telemetry**, because `/api/report` is open
+  > by design — so it appears on the Dashboard and in the Asset Inventory with a name, a
+  > model and a live temperature, and reads as perfectly healthy while every command,
+  > terminal session, package deployment, backup and process report on it silently does
+  > nothing. That is why `/api/machines` carries an **`enrolled`** flag
+  > (`fleet.enrolled_machines`, one query for the whole list) and both views qualify the
+  > status pill with it: *Online, not enrolled* / *Offline, not enrolled*, with the
+  > explanation on hover. Enrolled machines read exactly as before. A **revoked** agent
+  > reads as not enrolled, which is the point of revoking it.
 - **Issuing a command requires a signed-in session holding `issue_commands`, plus the
   target machine in that operator's scope** — no offline signature. Every type,
   including `run_script`, which runs arbitrary PowerShell **as SYSTEM**, dispatches on
