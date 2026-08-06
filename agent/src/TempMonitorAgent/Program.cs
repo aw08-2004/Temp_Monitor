@@ -115,6 +115,13 @@ try
     // precondition half, turning this machine's own wake flags on and Fast Startup off.
     builder.Services.AddSingleton<ICommandExecutor, WakeMachineExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, PrepareWakeExecutor>();
+    // The machine Processes card. There is no list_processes executor to go with these:
+    // reading the list is not a command at all, it rides the heartbeat while an operator has
+    // the card open (see Telemetry/ProcessReporter). These two are the half that CHANGES the
+    // machine, and both refuse a pid whose process no longer answers to the name the operator
+    // clicked -- see ProcessGuard.
+    builder.Services.AddSingleton<ICommandExecutor, KillProcessExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, RestartProcessExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-update

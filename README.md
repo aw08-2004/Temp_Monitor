@@ -670,6 +670,55 @@ AGENT_ENROLLMENT_SECRET=a-long-random-shared-secret
 `POST /api/fleet/pty` + `/api/fleet/pty/<session>/input` `/output` `/clear` `/close`.
 Every issue/claim/complete/enroll is written to `audit_log`.
 
+### The Processes card (the machine's task manager)
+
+A machine's **Overview** tab carries a **Processes** card: every process grouped by name
+with its CPU and memory, expandable to the individual instances, with **End task** and
+**Restart** on each. Core logic in [processes.py](hub/processes.py), HTTP surface in
+[processes_web.py](hub/processes_web.py), UI in `hub/static/js/processes.js`, agent side in
+`Telemetry/ProcessReader.cs` and `Fleet/Executors/ProcessExecutors.cs`.
+
+**Reading is `view`; ending or restarting is `issue_commands`.** What is running on a PC is
+inventory in the same sense its disks and its sensor tree are, and anyone who can open the
+machine page already reads both. Ending a process is strictly less dangerous than the
+`shutdown` the command gate already covers, so there is no new capability.
+
+**The card is collapsed by default, and that is load-bearing.** No machine samples its
+processes until an operator opens it. Opening it registers a *watch*; the hub answers that
+machine's next heartbeat with `processes_wanted: true`; the agent then samples every 5s and
+the list rides the heartbeat it already sends. The watch lapses ~45s after the operator
+navigates away, so a fleet nobody is looking at does no process work and sends nothing. The
+first list therefore appears within about 15 seconds rather than instantly — the card says
+so instead of spinning.
+
+**Ending a process is guarded twice, against the same hazard.** Every action carries the
+process NAME the operator saw alongside its PID, because a rendered list is always a few
+seconds old and Windows recycles process ids within minutes — a bare PID is an instruction
+to kill whatever now holds that number. The agent re-reads the live process and refuses a
+mismatch rather than resolving it. **Critical Windows processes are refused outright**
+(`csrss`, `wininit`, `winlogon`, `services`, `lsass`, `smss`, the kernel pseudo-processes,
+and the agent itself): ending one is a bugcheck, not a closed program. `svchost` is refused
+too — killing a service host takes every service in it down, and for the RPC host that
+reboots the machine — with the refusal pointing at Restart, which does the right thing.
+`explorer.exe` is deliberately killable.
+
+**Restart means three things, decided on the machine.** A process hosting exactly one
+Windows service is restarted *as that service* (stop, wait, start, wait, and its running
+dependents brought back) rather than killed, so the SCM does not record a crash. One hosting
+several is refused with them named. Anything else is relaunched from its own image, in the
+Windows session it was running in, **as the user who was running it** — not as SYSTEM, which
+would give the program no profile and no access to the documents it exists to open.
+
+**Endpoints** (console-facing): `GET /api/machines/<machine>/processes` (`view` + scope;
+polling it is what renews the watch), `POST /api/machines/<machine>/processes/kill` and
+`POST /api/machines/<machine>/processes/restart` (`issue_commands` + scope). Both queue an
+ordinary fleet command and answer with its id, which the card follows through
+`GET /api/fleet/commands/<id>` — so every End task and Restart lands in `audit_log` with the
+operator, the machine, the process name and the PID. `kill_process` and `restart_process`
+are deliberately refused by the generic `POST /api/fleet/commands` endpoint and cannot be
+saved as favorites: the guards above live on the dedicated route, and a saved PID is a
+different process by tomorrow.
+
 ## Package deployment (PDQ-style)
 
 Define an installer once — payload, silent command line, what proves it worked — then

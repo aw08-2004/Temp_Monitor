@@ -39,6 +39,7 @@ import directory
 import bios
 import firmware
 import wake
+import processes
 import authconfig
 import apitokens
 import i18n
@@ -53,6 +54,7 @@ from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from wake_web import create_wake_blueprint
+from processes_web import create_processes_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -82,7 +84,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.69.0"
+HUB_VERSION = "1.70.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1607,6 +1609,12 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 app.register_blueprint(create_wake_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
 
+# The machine Processes card: reading the live process list behind `view` (it is inventory,
+# like the sensor tree the same page already shows in full), and ending or restarting a
+# process behind `issue_commands` -- no new capability, because this is strictly less
+# dangerous than the `shutdown` and the SYSTEM shell that gate already covers.
+app.register_blueprint(create_processes_blueprint(DB_PATH, login_required, access))
+
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
 app.register_blueprint(create_auth_blueprint(
@@ -2335,6 +2343,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Processes are dropped rather than renamed: unlike an adapter list or a firmware
+    # inventory this is a live sample that the survivor's own agent replaces within seconds
+    # of anyone looking, so carrying the merged-away name's copy across would only put a
+    # stale list under a hostname that is about to report its own.
+    processes.forget_machine(DB_PATH, dropped)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -2596,6 +2609,14 @@ def retention_pruner():
                 prune_command_output_once()
             except Exception as e:
                 print(f"[retention] Command-output prune failed: {e}")
+            # Lapsed process watches. Not a retention question -- is_watched already tests
+            # the expiry, so a stale row is never believed -- just housekeeping, so that a
+            # table which gains a row per machine anyone ever opened the card on does not
+            # keep them all forever. Its own try for the same reason as the two above.
+            try:
+                processes.prune_watches(DB_PATH)
+            except Exception as e:
+                print(f"[retention] Process-watch prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 
@@ -3053,6 +3074,7 @@ remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
+processes.init_processes_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 apitokens.init_apitokens_db(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
@@ -3455,6 +3477,10 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And its last process snapshot and any live watch on it. This is transient state that
+    # would lapse on its own within the minute, but a deleted machine leaving a table row
+    # naming what its users had open is exactly the kind of residue a deletion is for.
+    processes.forget_machine(DB_PATH, machine_name)
     # Its BIOS setup password override lives in the secret file rather than the database, so
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.

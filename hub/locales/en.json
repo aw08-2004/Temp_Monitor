@@ -1472,6 +1472,60 @@
     "no_disks": "No disks reported yet.",
     "cooling": "Cooling",
     "no_fans": "No fan sensors reported. Many laptops and OEM desktops don't expose them.",
+    "processes": {
+      "title": "Processes",
+      "count": {
+        "one": "{count} process",
+        "other": "{count} processes"
+      },
+      "instances": {
+        "one": "{count} instance",
+        "other": "{count} instances"
+      },
+      "users": {
+        "one": "{count} user",
+        "other": "{count} users"
+      },
+      "filter": "Filter processes",
+      "group": "Group by name",
+      "col": {
+        "name": "Name",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "user": "User",
+        "pid": "PID",
+        "actions": "Actions"
+      },
+      "mb": "{value} MB",
+      "gb": "{value} GB",
+      "services": "Services: {names}",
+      "end": "End task",
+      "restart": "Restart",
+      "protected_title": "A critical Windows process. Ending it would take the machine down rather than close a program, so the console will not.",
+      "restart_group_title": "Expand the group and restart a single instance.",
+      "waiting": "Waiting for this machine to report its processes. It starts sampling on its next heartbeat, so the first list appears within about 15 seconds.",
+      "waiting_short": "Waiting for the machine",
+      "needs_agent": "This machine reports agent v{version}. The process list needs v{required}; it will appear once the agent has updated itself.",
+      "none": "This machine reported no processes.",
+      "no_match": "No process matches that filter.",
+      "truncated": "{count} more processes are running but were not sent. The report is capped at the busiest ones.",
+      "updated": "Updated {age}",
+      "stale": "Last report {age}. The machine may have gone offline.",
+      "help": "The list refreshes every few seconds while this card is open, and the machine stops sampling shortly after it is closed. CPU is the share of the whole machine, counted the way Task Manager counts it.",
+      "queued": "Queued for {name}. The machine picks this up within a few seconds.",
+      "done": "{name}: {detail}",
+      "failed": "Failed: {error}",
+      "expired": "The machine never picked that up, so {name} was left running.",
+      "gave_up": "Still no answer for {name}. The command may yet run; reopen this card to see.",
+      "confirm": {
+        "end_title": "End {name}?",
+        "end_one": "This ends {name} (PID {pid}) on {machine}. Anything unsaved in it is lost.",
+        "end_many": "This ends all {count} instances of {name} on {machine}. Anything unsaved in them is lost.",
+        "restart_title": "Restart {name}?",
+        "restart_text": "This ends {name} (PID {pid}) on {machine} and starts it again in the same Windows session. Anything unsaved in it is lost.",
+        "tree": "End the processes it started, too"
+      }
+    },
     "sensors": {
       "title": "All sensors",
       "filter": "Filter sensors",

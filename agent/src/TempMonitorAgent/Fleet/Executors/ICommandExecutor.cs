@@ -41,6 +41,24 @@ public static class ParamsExtensions
         return fallback;
     }
 
+    /// <summary>A flag (kill_process's `tree`), defaulting to false.
+    ///
+    /// Never throws on a value that is not a boolean -- JsonNode.GetValue&lt;bool&gt; does,
+    /// and a params object carrying "true" as a string would otherwise take down the
+    /// executor rather than the flag.</summary>
+    public static bool GetBool(this JsonNode? paramsNode, string key, bool fallback = false)
+    {
+        if (paramsNode is JsonObject obj && obj.TryGetPropertyValue(key, out var v) && v is not null)
+        {
+            try { return v.GetValue<bool>(); }
+            catch
+            {
+                if (bool.TryParse(v.ToString(), out var parsed)) return parsed;
+            }
+        }
+        return fallback;
+    }
+
     /// <summary>A nested object (deploy_package's `source` and `detection`), or null.</summary>
     public static JsonObject? GetObject(this JsonNode? paramsNode, string key)
     {

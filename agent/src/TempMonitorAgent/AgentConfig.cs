@@ -91,6 +91,18 @@ public static class AgentConfig
     // own intervals; this is just how often the loop asks whether one is due.
     public const int InventoryScanSeconds = 15;
 
+    // How often to sample the process list WHILE AN OPERATOR IS WATCHING one -- and only
+    // then (see Telemetry/ProcessReporter). Off the inventory loop despite being another
+    // local scan, because those self-throttle to minutes and this is the one payload whose
+    // whole value is being current: an operator watching a machine's CPU climb needs the
+    // table under it to move. It matches the hub's own poll interval (processes.py's
+    // POLL_INTERVAL_SECONDS), so the console's refresh and the machine's sampling are one
+    // cadence rather than two that beat against each other.
+    public const int ProcessSampleSeconds = 5;
+    // ...and how often the loop wakes while nobody is watching, just to notice that somebody
+    // now is. Cheap: it reads one bool that the heartbeat already fetched.
+    public const int ProcessIdleCheckSeconds = 2;
+
     public const int OfflineBufferMax = 1000;
     public const int MaxChainRestarts = 3;
 

@@ -1909,6 +1909,75 @@ the safe answer to it is "publish what is in the tree" rather than a guessed bum
 
 ---
 
+## ✅ 12. Processes on the machine Overview   ·   hub 1.70.0 (+ agent, pending a signed release)
+
+A task manager for a machine you are not sitting at. The Overview tab grows a **Processes**
+card: every process grouped by name with its CPU and memory, expandable to the individual
+instances, and **End task** / **Restart** on each. It answers the call that starts "this PC
+has been at 100% since lunch" without opening a SYSTEM shell to run `Get-Process` and read
+the output back to somebody.
+
+**Reading the list is `view`; ending or restarting is `issue_commands`.** No new capability
+— what is running on a PC is inventory in the same sense its disks and its sensor tree are,
+and an operator who can open the machine page already reads both in full. Ending a process
+is strictly less dangerous than the `shutdown` that gate already covers.
+
+**The list rides the HEARTBEAT, and only while somebody is watching.** Sampling enumerates
+every process, opens each one's token to resolve its owner, and asks WMI which of them host
+services; the payload is ~60 KB. Neither is affordable on every PC in the fleet forever, and
+neither is needed — the question is being asked about one machine, by one operator, for a
+couple of minutes. So the console's poll IS the subscription: a read sets a watch
+(`processes.note_watch`), the hub answers that machine's next heartbeat with
+`processes_wanted`, and the agent samples every 5 s until the watch lapses ~45 s after the
+operator leaves. A machine nobody has open does no process work and sends nothing.
+
+**Listing is deliberately NOT a command.** The obvious design — a `list_processes` command
+per refresh — would have written a security-level row into `audit_log` every few seconds for
+the crime of reading a list, and that trail is never pruned by design. Commands are for the
+two things that change the machine.
+
+**PID reuse is the hazard the whole feature is shaped around.** A snapshot is seconds old by
+the time somebody clicks, and Windows recycles process ids within minutes, so a pid alone is
+an instruction to kill whatever now holds that number. Every action carries the NAME the
+operator saw alongside the pid; the agent re-reads the live process and refuses a mismatch
+rather than resolving it helpfully (`ProcessGuard.NameMatches`). Both ends validate, and the
+generic `/api/fleet/commands` endpoint refuses these types outright so there is one door.
+
+**Critical processes are refused, and the refusal is shown rather than hidden.** Ending
+csrss, wininit, winlogon, services, lsass or smss does not close a program — it bugchecks
+the machine. `svchost` is refused for a different reason: it is killable, and killing one
+takes every service in it down (for the RPC host, that reboots the box in a minute), so the
+refusal points at `restart_process` instead. The agent's copy of the list is the authority
+and is checked against the live process; the hub's copy exists so a refusal is immediate in
+the console and so a hand-rolled API call never becomes a queued command. `explorer.exe` is
+deliberately killable — that is a real helpdesk action and Windows brings it straight back.
+
+**"Restart" means three different things, and the machine decides which.** A process hosting
+exactly one Windows service is restarted AS that service (stop, wait, start, wait, and its
+running dependents brought back explicitly, which Windows does not do) — killing it instead
+leaves the SCM believing it crashed, and a service with no recovery action then simply stays
+down. A process hosting several is refused with them named, because there is no honest way
+to guess which one was meant. Anything else is relaunched from its own image in the Windows
+session it was running in, **as the user who was running it** (`UserSessionLauncher`, via
+WTSQueryUserToken) — not as SYSTEM, which would produce a program with no profile, no mapped
+drives and no access to the documents it exists to open. This is the mirror image of
+`SessionInjector`, which retargets the service's SYSTEM token into a session precisely
+because the remote-control helper must be SYSTEM.
+
+**CPU is a rate, so it cannot come from one look.** `ProcessReader` keeps a baseline and
+reports the delta over the window divided by (elapsed × logical processors) — the share of
+the whole machine, the way Task Manager's Processes tab counts it. The one-look alternative
+(cumulative CPU time over uptime) would show a browser that has been open since breakfast at
+a permanent 4% while it pins a core right now.
+
+**Remaining gaps.** No per-process disk or network I/O (Task Manager has both; they need
+`GetProcessIoCounters` and a second delta, and CPU + memory is what the card was asked for).
+No "open file location" or "go to service", no column chooser, and no fleet-wide view — this
+is per-machine by construction. The 400-process cap is counted and admitted in the UI rather
+than silently applied.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
@@ -1974,6 +2043,14 @@ the safe answer to it is "publish what is in the tree" rather than a guessed bum
     `release_client.py` automates that release the way `--sign-agent` does the agent's. Its prerequisite was #Foundation: a device holds a SUBSET of its owner's
     capabilities, intersected live, which is only meaningful because permission groups
     exist.
+12. ~~**#12 Processes on the machine Overview**~~ — done, hub 1.70.0. Added after the
+    numbered board was cleared, because "what is eating this PC?" turned out to be the one
+    helpdesk question the console could not answer without opening a SYSTEM shell. It reuses
+    two existing seams rather than adding a channel: the heartbeat carries the list (gated on
+    a watch, so an unwatched fleet pays nothing) and the ordinary command queue carries the
+    two verbs that change the machine. **The agent half is pending a signed release** (build +
+    `sign_release.py --sign-agent` + asset upload); until then the card names the version it
+    needs instead of waiting forever on a machine that will never report.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

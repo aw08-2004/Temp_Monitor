@@ -188,6 +188,141 @@
     color: var(--muted);
 }
 
+/* ============ Processes ============ */
+/* Reuses .sensor-browser for the disclosure row (same control, same behaviour -- a card
+   that costs the managed machine work while it is open), so only the table below is new. */
+.process-card {
+    margin-top: var(--space-6);
+}
+
+.process-card__help {
+    margin-top: var(--space-3);
+    max-width: 80ch;
+}
+
+/* Capped and scrolled internally for the same reason the sensor browser is: a few hundred
+   rows would otherwise push the History charts off the end of a very long page. */
+.process-table {
+    margin: 0;
+}
+
+#process-body {
+    max-height: 60vh;
+    overflow-y: auto;
+    /* ...and sideways within itself on a narrow screen. Six columns plus two buttons a row
+       do not fit a phone, and a table that widens the PAGE instead takes every other card
+       on it out of alignment. */
+    overflow-x: auto;
+}
+
+/* The header has to stay visible while the body scrolls -- a usage column you have to
+   scroll back up to identify is not a usage column. */
+.process-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--card-bg, var(--bg));
+}
+
+/* Rows are dense on purpose: this is a list to scan, not to read, and the default table
+   padding fits about eight processes on a laptop screen. */
+.process-table th,
+.process-table td {
+    padding: var(--space-2);
+}
+
+/* Numbers right-aligned and tabular so a column of readings lines up on the decimal point
+   -- the same reason the sensor table does it, and the thing that makes the one process
+   eating the machine findable by eye. */
+.process-table__num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.process-table__actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Compact buttons, scoped here rather than added to the button vocabulary: this is the
+   only table in the console with two controls on every row. */
+.process-table__actions .btn {
+    padding: 2px var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.process-table__actions .btn + .btn {
+    margin-left: var(--space-1);
+}
+
+/* A refused action is SHOWN rather than hidden -- "you cannot end lsass" is the answer to
+   the question, and a missing button just looks like a rendering fault -- so it has to read
+   as unavailable at a glance. Its title says why. */
+.process-table__actions .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.process-row__toggle {
+    display: inline-block;
+    width: 1.25em;
+    margin-right: var(--space-1);
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    text-align: left;
+}
+
+/* A single-instance row keeps the indent without the control, so names stay in one column
+   whether or not their group can be expanded. */
+.process-row__toggle--empty {
+    cursor: default;
+}
+
+.process-row__name {
+    overflow-wrap: anywhere;
+}
+
+.process-row__count {
+    margin-left: var(--space-2);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+}
+
+.process-row__service {
+    display: block;
+    margin-left: 1.25em;
+    color: var(--muted);
+    font-size: var(--text-sm);
+}
+
+/* Expanded instances sit under their group, indented and quieter -- they are detail, and
+   styling them like top-level rows loses the grouping the card is built around. */
+.process-row--instance td {
+    padding-left: var(--space-5);
+    color: var(--muted);
+    font-size: var(--text-sm);
+}
+
+.process-row--instance .process-row__name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* A snapshot that has aged out is not merely late: the machine has stopped reporting, and
+   an operator about to end a process needs to know the list is not current. */
+.process-status--stale {
+    color: var(--danger, #ef4444);
+}
+
+.process-result--failed {
+    color: var(--danger, #ef4444);
+}
+
 /* ============ Historical metric grid ============ */
 /* Komodo-style multi-panel dashboard: one chart per enabled metric, two-up on desktop and
    single-column on narrow screens. Each panel's canvas needs an explicitly sized parent

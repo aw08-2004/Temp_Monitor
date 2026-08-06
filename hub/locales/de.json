@@ -1370,6 +1370,60 @@
     "no_disks": "Bisher wurden keine Laufwerke gemeldet.",
     "cooling": "Kühlung",
     "no_fans": "Keine Lüftersensoren gemeldet. Viele Notebooks und OEM-Desktops geben sie nicht preis.",
+    "processes": {
+      "title": "Prozesse",
+      "count": {
+        "one": "{count} Prozess",
+        "other": "{count} Prozesse"
+      },
+      "instances": {
+        "one": "{count} Instanz",
+        "other": "{count} Instanzen"
+      },
+      "users": {
+        "one": "{count} Benutzer",
+        "other": "{count} Benutzer"
+      },
+      "filter": "Prozesse filtern",
+      "group": "Nach Name gruppieren",
+      "col": {
+        "name": "Name",
+        "cpu": "CPU",
+        "memory": "Arbeitsspeicher",
+        "user": "Benutzer",
+        "pid": "PID",
+        "actions": "Aktionen"
+      },
+      "mb": "{value} MB",
+      "gb": "{value} GB",
+      "services": "Dienste: {names}",
+      "end": "Task beenden",
+      "restart": "Neu starten",
+      "protected_title": "Ein kritischer Windows-Prozess. Ihn zu beenden würde nicht ein Programm schließen, sondern den Computer lahmlegen – deshalb lässt die Konsole es nicht zu.",
+      "restart_group_title": "Gruppe aufklappen und eine einzelne Instanz neu starten.",
+      "waiting": "Warte darauf, dass dieser Computer seine Prozesse meldet. Die Erfassung beginnt mit dem nächsten Heartbeat, die erste Liste erscheint also nach etwa 15 Sekunden.",
+      "waiting_short": "Warte auf den Computer",
+      "needs_agent": "Dieser Computer meldet Agent v{version}. Die Prozessliste benötigt v{required}; sie erscheint, sobald sich der Agent aktualisiert hat.",
+      "none": "Dieser Computer hat keine Prozesse gemeldet.",
+      "no_match": "Kein Prozess passt zu diesem Filter.",
+      "truncated": "{count} weitere Prozesse laufen, wurden aber nicht übertragen. Der Bericht ist auf die aktivsten begrenzt.",
+      "updated": "Aktualisiert {age}",
+      "stale": "Letzte Meldung {age}. Der Computer ist möglicherweise offline.",
+      "help": "Die Liste wird alle paar Sekunden aktualisiert, solange diese Karte geöffnet ist; kurz nach dem Schließen stellt der Computer die Erfassung wieder ein. Die CPU-Angabe ist der Anteil am gesamten Computer – so, wie auch der Task-Manager rechnet.",
+      "queued": "Für {name} eingereiht. Der Computer übernimmt den Befehl in wenigen Sekunden.",
+      "done": "{name}: {detail}",
+      "failed": "Fehlgeschlagen: {error}",
+      "expired": "Der Computer hat den Befehl nie abgeholt, {name} läuft also weiter.",
+      "gave_up": "Für {name} liegt noch keine Antwort vor. Der Befehl kann trotzdem noch ausgeführt werden – diese Karte erneut öffnen, um nachzusehen.",
+      "confirm": {
+        "end_title": "{name} beenden?",
+        "end_one": "Damit wird {name} (PID {pid}) auf {machine} beendet. Nicht Gespeichertes geht verloren.",
+        "end_many": "Damit werden alle {count} Instanzen von {name} auf {machine} beendet. Nicht Gespeichertes geht verloren.",
+        "restart_title": "{name} neu starten?",
+        "restart_text": "Damit wird {name} (PID {pid}) auf {machine} beendet und in derselben Windows-Sitzung neu gestartet. Nicht Gespeichertes geht verloren.",
+        "tree": "Auch die von ihm gestarteten Prozesse beenden"
+      }
+    },
     "sensors": {
       "title": "Alle Sensoren",
       "filter": "Sensoren filtern",
