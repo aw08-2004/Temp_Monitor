@@ -22,19 +22,20 @@ void main() {
   test('the first poll primes and never notifies', () async {
     final notifier = AlertNotifier();
     expect(notifier.isPriming, isTrue);
-    await notifier.notifyNew([alert('a'), alert('b')]);
-    expect(notifier.isPriming, isFalse,
+    expect(await notifier.notifyNew([alert('a'), alert('b')]), isEmpty,
         reason: 'alerts that existed at launch are history, not news');
+    expect(notifier.isPriming, isFalse);
   });
 
   test('an alert that is still open does not notify again', () async {
     final notifier = AlertNotifier();
     await notifier.notifyNew([alert('a')]); // prime
-    await notifier.notifyNew([alert('a')]);
-    await notifier.notifyNew([alert('a')]);
-    // Nothing to assert but the absence of a crash and the state below -- the value is
-    // that this shape is fixed in a test rather than in someone's memory.
-    await notifier.notifyNew([alert('a'), alert('b')]);
+    expect(await notifier.notifyNew([alert('a')]), isEmpty);
+    expect(await notifier.notifyNew([alert('a')]), isEmpty,
+        reason: 'still open is not the same as newly raised -- at a ten-second '
+            'poll this would be six toasts a minute, forever');
+    expect((await notifier.notifyNew([alert('a'), alert('b')])).map((a) => a.id),
+        ['b']);
   });
 
   test('a dismissed-then-re-raised alert is news again', () async {
@@ -44,7 +45,7 @@ void main() {
     // Re-raised. If the seen-set never shrank, a machine that goes hot, is dismissed and
     // goes hot again would notify only the first time, which is the failure that makes
     // the feature useless on the machine that keeps overheating.
-    await notifier.notifyNew([alert('a')]);
+    expect((await notifier.notifyNew([alert('a')])).map((a) => a.id), ['a']);
   });
 
   test('reset returns it to priming, so a new operator inherits nothing',

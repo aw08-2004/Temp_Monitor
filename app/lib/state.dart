@@ -36,11 +36,16 @@ final notifierProvider = Provider<AlertNotifier>((ref) => AlertNotifier());
 /// The current session, or null when this device is not paired. Everything else in the
 /// app hangs off this: there is exactly one place that answers "are we signed in".
 class SessionController extends StateNotifier<AsyncValue<StoredSession?>> {
-  SessionController(this._store) : super(const AsyncValue.loading()) {
+  SessionController(this._store, this._notifier)
+      : super(const AsyncValue.loading()) {
     _load();
   }
 
   final TokenStore _store;
+
+  /// Held only so [forget] can reset it. The notifier is a plain Provider and therefore
+  /// outlives any one pairing, which is the whole reason this dependency exists.
+  final AlertNotifier _notifier;
 
   Future<void> _load() async {
     try {
@@ -60,13 +65,26 @@ class SessionController extends StateNotifier<AsyncValue<StoredSession?>> {
   /// the worst of both.
   Future<void> forget() async {
     await _store.clear();
+    // Drop the alert-delta with the session. `notifierProvider` has no dependencies, so
+    // its AlertNotifier is built once for the PROCESS and survives sign-out: without this
+    // the next operator to pair on this machine starts against the previous operator's
+    // seen-set with priming already spent, and their first poll toasts every alert that
+    // operator had not seen. Two people on one helpdesk PC rarely have the same machine
+    // scope, so that is not a small set -- it is the launch-notification storm `_priming`
+    // exists to prevent, arriving at sign-in instead of at startup.
+    //
+    // Here rather than in the sign-out button because this is the one seam both ways out
+    // of a session pass through: the button, and a poll that takes an
+    // UnauthenticatedException because the token was revoked underneath it.
+    _notifier.reset();
     state = const AsyncValue.data(null);
   }
 }
 
 final sessionProvider =
-    StateNotifierProvider<SessionController, AsyncValue<StoredSession?>>(
-        (ref) => SessionController(ref.watch(tokenStoreProvider)));
+    StateNotifierProvider<SessionController, AsyncValue<StoredSession?>>((ref) =>
+        SessionController(
+            ref.watch(tokenStoreProvider), ref.watch(notifierProvider)));
 
 /// The API, rebuilt whenever the session changes and disposed with it. Null until paired.
 final apiProvider = Provider<FleetApi?>((ref) {

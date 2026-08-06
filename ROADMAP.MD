@@ -1673,19 +1673,44 @@ comes online.
 
 ---
 
-## 🚧 11. Desktop & mobile app   ·   hub 1.69.0 (client pending its first signed release)
+## 🚧 11. Desktop & mobile app   ·   hub 1.69.0   ·   client 1.0.0
 
-**The hub half is built (1.69.0). The client analyzes clean and its 45 tests pass; the
-Windows BINARY has never been produced** — the build machine has neither Visual Studio's
-"Desktop development with C++" workload nor Windows Developer Mode (Flutter plugins need
-symlinks), and `release_client.py` names both when the build fails. So the logic is
-verified and the packaging is not: nobody has run this app.
+**The hub half is built (1.69.0) and the client is built, signed and published as 1.0.0.**
+It analyzes clean and its 48 tests pass. The Windows binary now exists, and the app has
+been **launched**: the window opens, every plugin DLL resolves, and `local_notifier`
+registers the Start Menu shortcut that gives an unsigned non-MSIX build the application
+identity Windows demands before it will show a toast at all.
+
+**What remains unverified is the client against a live hub.** Launching it proves the
+packaging; it exercises neither pairing, nor the ten-second poll, nor a single hub
+endpoint, because those need a reachable hub and an OAuth round trip. The "first contact
+with hardware" finding this entry predicts is therefore still ahead of it, not behind.
 
 Running the tests immediately earned its keep. It found a **real race in the pairing
 flow**: the loopback listener was attached AFTER the browser was opened, so a browser
 already running and signed in could complete the round trip before anything was listening,
 and the pairing would hang until its five-minute timeout with nothing to say why. The
 listener is now attached first.
+
+A second bug surfaced the same way, and is worth recording because **a passing test was
+hiding it**. `AlertNotifier.reset()` — documented as "used by the tests, and by sign out" —
+was called by the tests and by nothing else. The notifier is built by a Provider with no
+dependencies, so one instance serves the whole process and outlives every pairing: after a
+sign-out and re-pair, the next operator started against the previous one's seen-set with
+priming already spent, and their first poll toasted every alert that operator had not seen.
+Two people sharing a helpdesk PC rarely share a machine scope, so that is not a short list
+— it is precisely the launch-notification storm `_priming` exists to prevent, arriving at
+sign-in instead of at startup. `reset()` now happens in `SessionController.forget()`, the
+one seam both the sign-out button and a poll killed by a 401 pass through.
+
+**The transferable part is why the test passed.** `notify_test.dart` asserted that
+`reset()` returns the notifier to priming, and it did — the unit was correct and the seam
+to it was missing, which is not something a test that constructs the class directly can
+see. Two changes close that: `notifyNew` now returns the alerts it raised, because a toast
+is invisible under a test binding and `isPriming` was the only observable, and a flag
+cannot distinguish "raised nothing" from "raised nine"; and `test/session_test.dart` drives
+the real providers, so the WIRING is pinned rather than the unit. Both new tests fail
+against the old code, one of them reporting the two toasts an operator would have seen.
 
 The console is a good web app, but it is a *web* app: watching a fleet means keeping a tab
 open, and a high-temperature alert raised at 02:00 by `evaluate_high_temp_once` reaches
@@ -1872,12 +1897,9 @@ the safe answer to it is "publish what is in the tree" rather than a guessed bum
 
 ### Not yet done
 
-- **The Windows binary has never been produced**, so nobody has run this app. Needs
-  Visual Studio's C++ workload and Developer Mode on a build machine. Expect the same shape
-  of finding the TURN work produced on first contact with hardware.
-- **No client release exists**, so the Download page correctly reports that none has been
-  published — and so does the in-app check, which treats the hub's 404 as "nothing newer"
-  rather than an error.
+- **The client has never talked to a hub.** It builds and it launches, but pairing, the
+  poll loop and every endpoint behind them have only ever run against tests and fakes.
+  This is now the one thing gating everything else here, including the Android port below.
 - **Packaging is a zip, not an installer.** An unsigned installer is a SmartScreen warning;
   an unsigned zip is a folder. Revisit as MSIX once there is a code-signing certificate,
   which is also what would let toasts stop depending on `local_notifier`'s Start Menu
@@ -1945,11 +1967,11 @@ the safe answer to it is "publish what is in the tree" rather than a guessed bum
 11. **#11 Desktop & mobile app** — hub half done, hub 1.69.0: device tokens at the one
     `login_required` seam, RFC 8252 loopback pairing, a Devices tab, and a Download Client
     page driven by a signed manifest. The Flutter client in `app/` analyzes clean and its
-    45 tests pass — including a signature-verifying update check and the pairing rejections
-    — but **the Windows binary has never been produced** (no Visual Studio C++ workload, no
-    Developer Mode on the build machine), so nobody has run it and the first client release
-    is outstanding. `release_client.py` automates that release the way `--sign-agent` does
-    the agent's. Its prerequisite was #Foundation: a device holds a SUBSET of its owner's
+    48 tests pass — including a signature-verifying update check and the pairing rejections
+    — and **the Windows binary is built, signed and published as client 1.0.0**, which it
+    was not when this line was first written. It launches; it has still never talked to a
+    hub, which is now the outstanding item rather than the build.
+    `release_client.py` automates that release the way `--sign-agent` does the agent's. Its prerequisite was #Foundation: a device holds a SUBSET of its owner's
     capabilities, intersected live, which is only meaningful because permission groups
     exist.
 
