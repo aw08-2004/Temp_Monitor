@@ -112,6 +112,11 @@
         // Capture geometry as last reported by the agent over the control channel. Needed to
         // map pointer coordinates correctly once the video is letterboxed (object-fit: contain).
         let captured = { w: 0, h: 0 };
+        // Which KINDS of ICE candidate each side managed to gather (host / srflx / relay). The
+        // only thing that explains a failed connection from the operator's chair, and the one
+        // piece of it that is not in any log: "neither side produced a relay candidate" means the
+        // TURN server was unreachable from both, which is a deployment answer, not a bug report.
+        let iceTypes = { local: new Set(), remote: new Set() };
 
         function setStatus(text, kind) {
             const state = kind || 'muted';
@@ -172,6 +177,7 @@
             remoteSet = false;
             pendingIce = [];
             captured = { w: 0, h: 0 };
+            iceTypes = { local: new Set(), remote: new Set() };
             try {
                 const body = Object.assign({
                     session: els.session.value || 'auto',
@@ -252,6 +258,7 @@
             pc.onicecandidate = (e) => {
                 if (!e.candidate || !sessionId) return;
                 const c = e.candidate;
+                if (c.type) iceTypes.local.add(c.type);
                 postSignal('ice', {
                     candidate: c.candidate,
                     sdpMid: c.sdpMid,
@@ -267,10 +274,29 @@
                     case 'disconnected':
                         setStatus(t('machine.remote.reconnecting'), 'warn'); break;
                     case 'failed':
-                        hint(t('machine.remote.connection_failed')); teardown('failed'); break;
+                        hint(iceDiagnosis()); teardown('failed'); break;
                     case 'closed': break;
                 }
             };
+        }
+
+        /** Why the connection failed, in terms of what ICE actually had to work with.
+         *
+         * "Connection failed." on its own sends the operator to the agent log, which will say
+         * the same thing from the other side. What decides the case is which candidate types
+         * each end produced: no relay candidate anywhere means the TURN server was not reachable
+         * from either machine (firewall, port forwarding, or a relay URL that only resolves
+         * inside the hub's network), which is a different problem from one side relaying fine
+         * and the pair still failing.
+         */
+        function iceDiagnosis() {
+            const list = (set) => (set.size ? Array.from(set).sort().join(', ') : '-');
+            const detail = t('machine.remote.ice_summary', {
+                local: list(iceTypes.local), remote: list(iceTypes.remote),
+            });
+            const noRelay = !iceTypes.local.has('relay') && !iceTypes.remote.has('relay');
+            return t('machine.remote.connection_failed') + ' ' + detail +
+                   (noRelay ? ' ' + t('machine.remote.ice_no_relay') : '');
         }
 
         // Status the agent pushes down the control channel. Without this, "the screen went
@@ -366,6 +392,10 @@
                     await pc.setLocalDescription(answer);
                     await postSignal('answer', { type: 'answer', sdp: answer.sdp });
                 } else if (sig.kind === 'ice') {
+                    // RTCIceCandidate.type is only populated on candidates WE created, so the
+                    // agent's type is read off the SDP line: "... <ip> <port> typ <type> ...".
+                    const typed = /\btyp\s+(\w+)/.exec(sig.payload.candidate || '');
+                    if (typed) iceTypes.remote.add(typed[1]);
                     const cand = {
                         candidate: sig.payload.candidate,
                         sdpMid: sig.payload.sdpMid,

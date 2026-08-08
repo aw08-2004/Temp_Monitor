@@ -44,7 +44,10 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
   `POST /api/agent/commands/<id>/output` (live output while a script runs).
 - Terminal (ConPTY): `GET /api/agent/pty/<session>/input`,
   `POST /api/agent/pty/<session>/output`, `POST /api/agent/pty/<session>/closed`.
-- Remote: `GET /api/agent/remote/<session>/poll`, `POST .../signal`, `POST .../ended`.
+- Remote: `GET /api/agent/remote/<session>/poll`, `POST .../signal`, `POST .../ended`,
+  `GET .../ice` (the ICE servers the hub picks for this machine, from the source address it sees
+  the request arrive from -- the copy in the start command was chosen for wherever the operator
+  was sitting).
 - Backups: `POST /api/agent/backups/upload/<run_id>`, `POST /api/agent/backups/<run_id>/result`;
   restores via `GET /api/agent/backups/restore/<id>/plan`, `.../archive/<index>`, `.../result`.
 - Packages: `GET /api/agent/packages/<sha256>` (payload fetch, re-hashed before execution).

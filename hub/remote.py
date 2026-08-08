@@ -27,6 +27,7 @@ endpoints on top.
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -489,25 +490,103 @@ def set_env_var(env_path, key, value):
     return envfile.set_var(env_path, key, value)
 
 
-def ice_servers(session_id, stun_urls=None, turn_urls=None, turn_secret=None, turn_ttl=600):
-    """Build the ICE server list handed to both peers. STUN servers need no credential; TURN
+# --------------------------------------------------------------------------- vantage
+# Which of the configured relay URLs a given peer can actually reach.
+#
+# The hub publishes up to three TURN URLs for one relay (see install.ps1 New-TurnUrlList):
+# the public listener by its public hostname, the same listener by the hub's LAN address, and
+# a second listener bound to the LAN address that does NOT rewrite relay candidates. The URLs
+# with a PRIVATE IP literal for a host only mean anything to a peer sitting inside that
+# network; to a machine out on the internet they are unroutable, and every allocation against
+# them is a few seconds of ICE gathering spent on a candidate that can never appear.
+#
+# The hub already knows where each peer is: it is the source address of the peer's own request
+# (the console's at /start, the agent's at /ice). So each side is handed the URLs that make
+# sense from where it is standing, rather than the union that only ever made sense for one of
+# them.
+#
+# The rule is deliberately one-directional -- it only ever DROPS URLs a peer provably cannot
+# reach, and never drops the last one -- because the cost of being wrong in the other direction
+# is a session that cannot connect at all.
+
+def ice_url_host(url):
+    """The host out of a `turn:host:port?transport=tcp` or `stun:host:port` URL (or the `[v6]`
+    bracketed form). '' if there is nothing after the scheme."""
+    rest = str(url or "").partition(":")[2].strip()
+    rest = rest.split("?", 1)[0]
+    if rest.startswith("["):
+        return rest[1:].partition("]")[0]
+    return rest.partition(":")[0]
+
+
+def _ip_or_none(text):
+    try:
+        return ipaddress.ip_address(str(text).strip())
+    except ValueError:
+        return None
+
+
+def is_lan_address(text):
+    """True if `text` is an IP LITERAL that is only meaningful inside some private network.
+
+    A hostname answers False: it may well resolve to a private address, but the hub cannot know
+    that, and guessing wrong would drop the one URL a peer could have used.
+    """
+    ip = _ip_or_none(text)
+    if ip is None:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
+
+
+def select_urls_for_peer(urls_in, peer_ip=None):
+    """Order (and where provable, narrow) a list of STUN/TURN URLs for a peer seen coming
+    from `peer_ip`.
+
+      * peer on a public address -> drop the private-literal URLs. It cannot route to them; all
+        they buy is gathering time spent on allocations that will time out.
+      * peer on a private address -> keep everything, LAN URLs first. It may be on the hub's own
+        network (where the LAN listener is the only URL that yields a usable relay candidate) or
+        on some OTHER private network reached through NAT, where only the public URL works -- and
+        nothing in the request distinguishes the two, so both stay on the list.
+      * unknown peer -> unchanged, which is what every caller did before this existed.
+
+    Never returns an empty list for a non-empty input.
+    """
+    urls = [str(u).strip() for u in (urls_in or []) if str(u).strip()]
+    if not urls:
+        return []
+    ip = _ip_or_none(peer_ip)
+    if ip is None:
+        return urls
+    lan = [u for u in urls if is_lan_address(ice_url_host(u))]
+    lan_set = set(lan)
+    wan = [u for u in urls if u not in lan_set]
+    if ip.is_private or ip.is_loopback or ip.is_link_local:
+        return lan + wan
+    return wan or urls
+
+
+def ice_servers(session_id, stun_urls=None, turn_urls=None, turn_secret=None, turn_ttl=600,
+                peer_ip=None):
+    """Build the ICE server list handed to one peer. STUN servers need no credential; TURN
     servers get a freshly minted ephemeral credential. Pure and config-driven -- remote_web.py
     supplies the URLs from settings and the secret from .env -- so an empty/unconfigured TURN
     simply yields whatever STUN is set (or nothing, which still works on a LAN via host
     candidates).
+
+    `peer_ip` is the source address of the peer this list is for; see select_urls_for_peer.
     """
     servers = []
-    for url in (stun_urls or []):
-        url = str(url).strip()
+    for url in select_urls_for_peer(stun_urls, peer_ip):
         if url:
             # urls is always a list, even for a single STUN server -- both the browser's
             # RTCIceServer and the agent's parser accept a list, and one shape is simpler
             # than two on both consumers.
             servers.append({"urls": [url]})
     if turn_urls and turn_secret:
-        cred = mint_turn_credentials(turn_secret, session_id, turn_ttl)
-        urls = [str(u).strip() for u in turn_urls if str(u).strip()]
+        urls = select_urls_for_peer(turn_urls, peer_ip)
         if urls:
+            cred = mint_turn_credentials(turn_secret, session_id, turn_ttl)
             servers.append({
                 "urls": urls,
                 "username": cred["username"],

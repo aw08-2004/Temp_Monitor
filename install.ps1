@@ -1320,31 +1320,42 @@ function Unregister-TurnBootTask {
 
 function New-TurnUrlList {
     <#
-      The TURN URLs to put in Settings -> Remote Control, in priority order. Three of them,
-      because there are three shapes of session and no single URL covers all three.
+      The TURN URLs to put in Settings -> Remote Control, in priority order. Four of them,
+      because there are three shapes of session plus one shape of NETWORK, and no single URL
+      covers them all.
 
         1. turn:<public>:3478   -- both peers out on the internet. The ordinary case.
 
-        2. turn:<lan-ip>:3478   -- one peer inside this network, one outside. Same PUBLIC
+        2. turn:<public>:3478?transport=tcp -- same listener, reached over TCP. coturn has
+           listened on 3478/tcp all along and the firewall rules have always opened it, but
+           without this URL nothing ever asked for it: an ICE agent only tries TCP when the URL
+           says so. It is the difference between working and not on a guest/corporate network
+           that permits 443 and 3478/tcp outbound and drops UDP, which is a common shape for
+           exactly the machines that need the relay most. Listed after the UDP form because UDP
+           is what you want when you can have it -- TURN-over-TCP adds head-of-line blocking to
+           a video stream.
+
+        3. turn:<lan-ip>:3478   -- one peer inside this network, one outside. Same PUBLIC
            listener, just reached by its LAN address so the inside peer does not have to
            hairpin off the router to talk to a relay sitting next to it. It still gets a
            public relay candidate (external-ip rewrites it), which is exactly right: the
            outside peer has to be able to reach it.
 
-        3. turn:<lan-ip>:3479   -- both peers inside this network. The LAN listener, which
+        4. turn:<lan-ip>:3479   -- both peers inside this network. The LAN listener, which
            does NOT rewrite, so the relay candidate is a real LAN address and the media stays
            on the switch. Handed a public candidate instead, these two would have to hairpin,
            which most routers refuse or do while rewriting the source port -- and ICE requires
            the peer to receive from exactly the advertised address:port.
 
-      A peer only uses what it can reach: an outside machine's allocations against 2 and 3 just
-      time out and cost a few seconds of ICE gathering, so the same list is safe for everyone.
-      All three share one secret and realm, so the hub's minted credential authenticates against
-      any of them with no extra bookkeeping.
+      All four share one secret and realm, so the hub's minted credential authenticates against
+      any of them with no extra bookkeeping. The hub narrows this list per peer before handing
+      it out (hub/remote.py select_urls_for_peer): a machine out on the internet is never given the
+      <lan-ip> forms, because it cannot route to them and every allocation against one is
+      gathering time spent on a candidate that can never appear.
     #>
     param([string]$PublicHost, [string]$LocalIp)
 
-    $urls = @("turn:${PublicHost}:$TurnPort")
+    $urls = @("turn:${PublicHost}:$TurnPort", "turn:${PublicHost}:${TurnPort}?transport=tcp")
     if ($LocalIp -and $LocalIp -ne $PublicHost) {
         $urls += "turn:${LocalIp}:$TurnPort"
         if ($TurnLanPort -gt 0) { $urls += "turn:${LocalIp}:$TurnLanPort" }
@@ -1818,7 +1829,7 @@ function Resolve-TurnSetup {
     $plan = @{
         Configure = $false; Secret = ""; Generated = $false; PublicHost = ""
         DistroName = $TurnDistro; DistroExists = $false; NeedsWslConfig = $true
-        ControlUrl = ""; StunUrl = ""; TurnUrls = @()
+        ControlUrl = ""; StunUrl = ""; StunUrls = @(); TurnUrls = @()
     }
     $plan.WslDir = if ($TurnWslLocation) { $TurnWslLocation }
                    else { Join-Path $env:LOCALAPPDATA "FleetHub\wsl\$TurnDistro" }
@@ -1852,9 +1863,19 @@ function Resolve-TurnSetup {
     if ($TurnHost) { $HostDefault = $TurnHost }
     $plan.PublicHost = Prompt-Value "  Public IP (or hostname) clients reach the TURN server on" $HostDefault `
                            -Required -ValidateHint "Enter the public IP address (preferred) or a resolvable hostname."
+    $planLanIp = Get-HostLanIPv4
     $plan.ControlUrl = "turn:$($plan.PublicHost):$TurnPort"
-    $plan.StunUrl    = "stun:$($plan.PublicHost):$TurnPort"
-    $plan.TurnUrls   = New-TurnUrlList -PublicHost $plan.PublicHost -LocalIp (Get-HostLanIPv4)
+    # STUN gets the same two-vantage treatment as TURN, and for the same reason: a machine on
+    # this LAN cannot ask the PUBLIC hostname what its address looks like from outside without
+    # hairpinning off the router, so with only that URL it produces no server-reflexive candidate
+    # at all. The LAN entry is answered by the same coturn on its LAN address. The hub hands each
+    # peer whichever of the two it can actually reach (hub/remote.py select_urls_for_peer).
+    $plan.StunUrls   = @("stun:$($plan.PublicHost):$TurnPort")
+    if ($planLanIp -and $planLanIp -ne $plan.PublicHost) {
+        $plan.StunUrls += "stun:${planLanIp}:$TurnPort"
+    }
+    $plan.StunUrl    = $plan.StunUrls[0]
+    $plan.TurnUrls   = New-TurnUrlList -PublicHost $plan.PublicHost -LocalIp $planLanIp
 
     # ---- Preconditions, all asked up front ----
     # Everything the operator needs to decide is settled here, before anything is installed.
@@ -2015,12 +2036,14 @@ function Install-Turn {
 
   Point the hub at this relay -- Settings -> Remote Control:
     TURN URLs: $($plan.TurnUrls -join "`n               ")
-    STUN URL : $($plan.StunUrl)
+    STUN URLs: $($plan.StunUrls -join "`n               ")
     Secret   : $($plan.Secret)
 
-  Add all the TURN URLs, in that order. The first covers peers out on the internet, the
-  second lets a peer inside this network reach the relay without hairpinning off the router,
-  and the third keeps traffic between two machines inside this network on the LAN.
+  Add all the TURN URLs, in that order. The first covers peers out on the internet; the
+  second is the same listener over TCP, for networks that drop UDP; the third lets a peer
+  inside this network reach the relay without hairpinning off the router; and the fourth
+  keeps traffic between two machines inside this network on the LAN. The hub hands each
+  machine only the ones it can reach, from the address it sees that machine arriving from.
 
   That secret must match REMOTE_TURN_SECRET in the hub's .env exactly, or every
   allocation fails with 401 and remote sessions never connect.
@@ -2179,6 +2202,7 @@ function Install-Hub {
     $turnControlUrl     = $turnPlan.ControlUrl
     $turnUrlList        = $turnPlan.TurnUrls
     $stunControlUrl     = $turnPlan.StunUrl
+    $stunUrlList        = $turnPlan.StunUrls
     $turnDistroName     = $turnPlan.DistroName
     $turnWslDir         = $turnPlan.WslDir
     $turnDistroExists   = $turnPlan.DistroExists
@@ -2227,23 +2251,25 @@ function Install-Hub {
         if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
         $dbPath  = Join-Path $logDir "temp_v2.db"
         $seedPy  = Join-Path $env:TEMP "fleethub_seed_turn.py"
-        # turn_urls is newline-separated: there are up to three of them (public / LAN-reached
-        # public / LAN-only), and passing a list through argv as one argument beats trying to
-        # make argv count variable across PowerShell and python.
+        # Both lists are newline-separated: there are up to four TURN URLs (public UDP / public
+        # TCP / LAN-reached public / LAN-only) and up to two STUN, and passing a list through
+        # argv as one argument beats trying to make argv count variable across PowerShell and
+        # python.
         $seedSrc = @'
 import sys
-code_dir, db_path, turn_urls, stun_url = sys.argv[1:5]
+code_dir, db_path, turn_urls, stun_urls = sys.argv[1:5]
 sys.path.insert(0, code_dir)
 import settings
 settings.init_settings_db(db_path)
-urls = [u.strip() for u in turn_urls.split("\n") if u.strip()]
-settings.set_many(db_path, {"remote.turn_urls": urls, "remote.stun_urls": [stun_url]})
+split = lambda blob: [u.strip() for u in blob.split("\n") if u.strip()]
+settings.set_many(db_path, {"remote.turn_urls": split(turn_urls),
+                            "remote.stun_urls": split(stun_urls)})
 print("ok")
 '@
         [System.IO.File]::WriteAllText($seedPy, $seedSrc, (New-Object System.Text.UTF8Encoding($false)))
         try {
-            & $pythonExe $seedPy $codeDir $dbPath ($turnUrlList -join "`n") $stunControlUrl | Out-Null
-            if ($LASTEXITCODE -eq 0) { Ok "Settings -> Remote Control: TURN=$($turnUrlList -join ', ')  STUN=$stunControlUrl" }
+            & $pythonExe $seedPy $codeDir $dbPath ($turnUrlList -join "`n") ($stunUrlList -join "`n") | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "Settings -> Remote Control: TURN=$($turnUrlList -join ', ')  STUN=$($stunUrlList -join ', ')" }
             else { Warn "Could not seed TURN URLs (exit $LASTEXITCODE) -- set them in Settings -> Remote Control." }
         } catch {
             Warn "Could not seed TURN URLs ($($_.Exception.Message)) -- set them in Settings -> Remote Control."

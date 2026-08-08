@@ -30,9 +30,9 @@ services:
       - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:49160-49200/udp"
     command: >
       -n --log-file=stdout --no-cli --no-tls --no-dtls
-      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET}
+      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET:?set REMOTE_TURN_SECRET to the SAME value as the hub .env}
       --realm=${TURN_REALM:-fleethub}
       --listening-port=3478
       --min-port=${TURN_MIN_PORT:-49160} --max-port=${TURN_MAX_PORT:-49200}
-      --external-ip=${TURN_EXTERNAL_IP}
+      --external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP to this host's PUBLIC ip}
       --fingerprint

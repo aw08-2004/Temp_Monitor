@@ -114,6 +114,31 @@ def main():
         check("agent poll receives the console's answer",
               len(av["signals"]) == 1 and av["signals"][0]["kind"] == "answer")
 
+        print("\n== Agent fetches ICE servers from its own vantage ==")
+        os.environ["REMOTE_TURN_SECRET"] = "interop-secret"
+        settings.set_many(db_path, {"remote.turn_urls":
+                                   ["turn:hub.example:3478", "turn:192.168.7.5:3479"]})
+        settings.invalidate()
+        r = c.get(f"/api/agent/remote/{sid}/ice", headers=auth,
+                  environ_overrides={"REMOTE_ADDR": "93.184.216.34"})
+        check("agent ice -> 200", r.status_code == 200)
+        turn = [s for s in r.get_json()["ice_servers"] if "username" in s]
+        check("an agent out on the internet is not handed the LAN relay url",
+              len(turn) == 1 and turn[0]["urls"] == ["turn:hub.example:3478"])
+        r = c.get(f"/api/agent/remote/{sid}/ice", headers=auth,
+                  environ_overrides={"REMOTE_ADDR": "192.168.7.99"})
+        turn = [s for s in r.get_json()["ice_servers"] if "username" in s]
+        check("an agent on the hub's network gets the LAN relay url first",
+              turn[0]["urls"] == ["turn:192.168.7.5:3479", "turn:hub.example:3478"])
+        check("agent ice is credentialed", bool(turn[0].get("credential")))
+        r = c.get(f"/api/agent/remote/{sid}/ice", headers=other_auth)
+        check("a foreign agent cannot fetch this session's ice -> 404", r.status_code == 404)
+        r = c.get(f"/api/agent/remote/{sid}/ice")
+        check("ice without a token -> 401", r.status_code == 401)
+        settings.set_many(db_path, {"remote.turn_urls": []})
+        settings.invalidate()
+        os.environ.pop("REMOTE_TURN_SECRET", None)
+
         print("\n== Agent isolation: a foreign agent can't touch this session ==")
         r = c.post(f"/api/agent/remote/{sid}/signal",
                    json={"kind": "ice", "payload": {"c": "x"}}, headers=other_auth)
