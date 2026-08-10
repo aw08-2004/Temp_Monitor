@@ -1851,9 +1851,8 @@
     "close_screen": "{machine} schließen",
     "close_screen_title": "Sitzung beenden und Bildschirm schließen",
     "picker_title": "Bildschirm öffnen",
-    "picker_machine": "PC",
-    "picker_placeholder": "PC auswählen …",
-    "picker_open": "Öffnen",
+    "picker_search": "PCs durchsuchen …",
+    "picker_no_matches": "Kein PC passt dazu.",
     "picker_failed": "Maschinenliste konnte nicht geladen werden: {error}",
     "picker_all_open": "Jeder erreichbare PC ist bereits geöffnet.",
     "picker_none": "Noch keine Maschinen haben sich bei diesem Hub gemeldet."

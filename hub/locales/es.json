@@ -1851,9 +1851,8 @@
     "close_screen": "Cerrar {machine}",
     "close_screen_title": "Terminar la sesión y cerrar la pantalla",
     "picker_title": "Abrir una pantalla",
-    "picker_machine": "PC",
-    "picker_placeholder": "Elija un PC…",
-    "picker_open": "Abrir",
+    "picker_search": "Buscar PC…",
+    "picker_no_matches": "Ningún PC coincide.",
     "picker_failed": "No se pudo cargar la lista de equipos: {error}",
     "picker_all_open": "Todos los PC a su alcance ya están abiertos.",
     "picker_none": "Ningún equipo se ha reportado todavía a este hub."

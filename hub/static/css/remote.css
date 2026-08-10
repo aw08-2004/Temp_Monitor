@@ -45,9 +45,57 @@
     white-space: nowrap;
 }
 
-/* The picker's one control, filling the modal rather than sitting at whatever width the
- * longest hostname happens to make it -- and staying put when autocomplete.js swaps the
- * <select> for its combobox input on a fleet big enough to need searching. */
+/* The picker's filter box, filling the modal rather than sitting at whatever width the
+ * longest hostname happens to make it. */
 .remote-picker__control {
     width: 100%;
+}
+
+/* The picker's list of PCs: one row per machine, the row itself the button. It scrolls
+ * inside the dialog rather than growing it, so a fleet of hundreds still opens a modal the
+ * size of the one a fleet of three opens. */
+.picker-list {
+    margin-top: var(--space-4);
+    max-height: 42vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+/* A <button> reset back to a row: buttons bring their own font, centring and background,
+ * none of which belong on something shaped like a list item. */
+.picker-list__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.picker-list__item:hover {
+    background: var(--control-bg);
+}
+
+/* Keyboard focus gets the same treatment as hover PLUS a ring: arrowing down the list plays
+ * the same role as the pointer moving over it, and one click/Enter connects either way. */
+.picker-list__item:focus-visible {
+    background: var(--control-bg);
+    border-color: var(--accent, var(--card-border));
+    outline: none;
+}
+
+.picker-list__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }

@@ -32,12 +32,17 @@
     {% include "partials/_remote_viewer.html" %}
 </template>
 
-{# Which PC to open next. A plain <select> because autocomplete.js upgrades any long one to
-   a searchable combobox on its own, so this is a dropdown on a small fleet and a type-ahead
-   on a large one without either being special-cased here.
+{# Which PC to open next. The whole fleet, listed, one click per PC -- not a dropdown you
+   open, choose from, and then confirm. A dropdown hid the list behind a click and (being a
+   <select>) always showed some machine as already chosen, which is how you end up connected
+   to a host you never picked.
+
+   The filter box narrows the list rather than replacing it: on a helpdesk fleet the list is
+   long, but it should still be the thing you see first.
 
    .modal, matching the favorites dialog: that is the only dialog class the stylesheet
-   actually carries rules for -- centring, the backdrop scrim, the head/body/foot bands. #}
+   actually carries rules for -- centring, the backdrop scrim, the head/body bands. There is
+   no foot: picking IS the action, so there is nothing left for an OK button to do. #}
 <dialog id="remote-picker" class="modal" aria-labelledby="remote-picker-title">
     <div class="modal__head">
         <div class="modal__title" id="remote-picker-title">{{ t('remote.picker_title') }}</div>
@@ -45,12 +50,12 @@
                 aria-label="{{ t('common.close') }}">&times;</button>
     </div>
     <div class="modal__body">
-        <label class="setting__label" for="remote-picker-machine">{{ t('remote.picker_machine') }}</label>
-        <select id="remote-picker-machine" class="select remote-picker__control"></select>
+        <input type="search" id="remote-picker-search" class="input remote-picker__control"
+               placeholder="{{ t('remote.picker_search') }}"
+               aria-label="{{ t('remote.picker_search') }}"
+               aria-controls="remote-picker-list" autocomplete="off">
+        <div id="remote-picker-list" class="picker-list" role="list"></div>
         <p id="remote-picker-error" class="setting__error" hidden></p>
-    </div>
-    <div class="modal__foot">
-        <button type="button" id="remote-picker-open" class="btn btn--primary">{{ t('remote.picker_open') }}</button>
     </div>
 </dialog>
 {% endblock %}

@@ -34,8 +34,8 @@
     const emptyEl = document.getElementById('remote-empty');
     const template = document.getElementById('remote-viewer-template');
     const dialog = document.getElementById('remote-picker');
-    const pickerSelect = document.getElementById('remote-picker-machine');
-    const pickerOpen = document.getElementById('remote-picker-open');
+    const pickerSearch = document.getElementById('remote-picker-search');
+    const pickerList = document.getElementById('remote-picker-list');
     const pickerCancel = document.getElementById('remote-picker-cancel');
     const pickerError = document.getElementById('remote-picker-error');
 
@@ -44,7 +44,7 @@
     // here beats a null dereference three clicks later, inside a session it half-opened.
     if (!window.RemoteViewer || !window.FleetApi) return;
     if ([stripEl, screensEl, addBtn, emptyEl, template, dialog,
-         pickerSelect, pickerOpen, pickerCancel, pickerError].some((el) => !el)) return;
+         pickerSearch, pickerList, pickerCancel, pickerError].some((el) => !el)) return;
 
     // A ceiling on live screens, not a hub limit -- the hub happily runs more. Each screen is
     // a video stream being decoded in a browser tab, so this is about the OPERATOR's machine
@@ -182,10 +182,56 @@
     }
 
     // ---------------- The machine picker ----------------
+    // Every PC you could open, listed, one click each. No dropdown to open first and no
+    // confirm button after: the click IS the choice, and seeing the whole list is the point.
+
+    /** [{ machine, online }], online first then alphabetical -- an offline PC cannot be
+     *  connected to, so it belongs at the bottom rather than salted through the list. */
+    let pickable = [];
+
+    function renderPickerList() {
+        const q = pickerSearch.value.trim().toLowerCase();
+        const rows = q ? pickable.filter((p) => p.machine.toLowerCase().includes(q)) : pickable;
+        pickerList.replaceChildren();
+        if (!rows.length) {
+            const none = document.createElement('p');
+            none.className = 'stat-card__meta';
+            none.textContent = t('remote.picker_no_matches');
+            pickerList.appendChild(none);
+            return;
+        }
+        for (const row of rows) {
+            // A <button>, not a styled <div>: Enter/Space, focus and the click itself all
+            // come from the element rather than from event handlers reimplementing them.
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'picker-list__item';
+            item.setAttribute('role', 'listitem');
+            item.dataset.machine = row.machine;
+
+            const pill = document.createElement('span');
+            pill.className = 'status-pill';
+            setStatusPill(pill, row.online ? 'ok' : 'muted',
+                          row.online ? t('common.status.online') : t('common.status.offline'));
+
+            const name = document.createElement('span');
+            name.className = 'picker-list__name';
+            name.textContent = row.machine;
+
+            item.append(name, pill);
+            item.addEventListener('click', () => {
+                dialog.close();
+                openScreen(row.machine);
+            });
+            pickerList.appendChild(item);
+        }
+    }
+
     async function openPicker() {
         pickerError.hidden = true;
-        pickerSelect.innerHTML = '';
-        pickerOpen.disabled = true;
+        pickerSearch.value = '';
+        pickerList.replaceChildren();
+        pickable = [];
         dialog.showModal();
         let machines;
         try {
@@ -197,76 +243,64 @@
         }
         // Already-open PCs are left out rather than shown and refused: the list answers
         // "which one next", and its own answer should always be openable.
-        const available = machines
-            .map((row) => row.machine)
-            .filter((name) => name && !screens.has(name));
-        if (!available.length) {
+        pickable = machines
+            .filter((row) => row.machine && !screens.has(row.machine))
+            .map((row) => ({ machine: row.machine, online: row.status === 'online' }))
+            .sort((a, b) => (a.online === b.online)
+                ? a.machine.localeCompare(b.machine)
+                : (a.online ? -1 : 1));
+        if (!pickable.length) {
             pickerError.textContent = machines.length
                 ? t('remote.picker_all_open') : t('remote.picker_none');
             pickerError.hidden = false;
             return;
         }
-        // A <select> shows its first option as the chosen one, so the dialog used to open
-        // already pointing at whichever machine sorted first -- press Open without reading
-        // it and you connect to a PC you never picked. A disabled placeholder makes "no
-        // choice yet" a state the control can actually be in. Disabled also keeps it out of
-        // the searchable combobox's list (autocomplete.js skips disabled options), so it is
-        // a prompt rather than something pickable.
-        const placeholder = new Option(t('remote.picker_placeholder'), '');
-        placeholder.disabled = true;
-        placeholder.selected = true;
-        pickerSelect.appendChild(placeholder);
-        for (const name of available) {
-            pickerSelect.appendChild(new Option(name, name));
-        }
-        // Open stays disabled until something is actually picked.
-        pickerOpen.disabled = true;
-        // autocomplete.js watches the document and turns a long <select> into a searchable
-        // combobox on its own, so a fleet of hundreds is typed at rather than scrolled. When
-        // it has, the native select is aria-hidden with tabindex=-1 and focusing it would
-        // drop the keystrokes on the floor -- the search box is the thing to type into.
-        const search = pickerSelect.parentNode
-            && pickerSelect.parentNode.querySelector('.select-search__input');
-        (search || pickerSelect).focus();
-    }
-
-    function confirmPicker() {
-        const machine = pickerSelect.value;
-        if (!machine) return;             // still on the placeholder
-        dialog.close();
-        openScreen(machine);
+        renderPickerList();
+        // The list is already on screen; focus goes to the filter so a big fleet can be
+        // typed down to one row without reaching for the mouse first.
+        pickerSearch.focus();
     }
 
     // ---------------- Wiring ----------------
     addBtn.addEventListener('click', openPicker);
-    pickerOpen.addEventListener('click', confirmPicker);
     pickerCancel.addEventListener('click', () => dialog.close());
-    // Enter in the picker opens the selection rather than submitting nothing: the dialog's
-    // form is method="dialog", so without this the key would just close it.
-    pickerSelect.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || pickerOpen.disabled) return;
+    pickerSearch.addEventListener('input', renderPickerList);
+    // Enter in the filter opens the only remaining match. With several left it would be a
+    // guess at which one, so it does nothing and the click decides -- and the dialog's form
+    // is method="dialog", so the key must be swallowed either way or it just closes.
+    pickerSearch.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+            const first = pickerList.querySelector('.picker-list__item');
+            if (first) { e.preventDefault(); first.focus(); }
+            return;
+        }
+        if (e.key !== 'Enter') return;
         e.preventDefault();
-        confirmPicker();
+        const items = pickerList.querySelectorAll('.picker-list__item');
+        if (items.length === 1) items[0].click();
     });
 
-    // Picking a machine connects to it -- the Open button is a fallback, not a second step.
-    //
-    // Which `change` counts as a pick is the whole difficulty. A NATIVE <select> fires
-    // `change` on every arrow key while it is closed, so connecting on any change would
-    // launch a session on each host the caret passed over. The two cases separate cleanly:
-    //   * an untrusted `change` was dispatched by autocomplete.js's combobox, which emits it
-    //     only on a deliberate pick (a click, or Enter on the highlighted row) -- always a
-    //     choice, and note that merely arrowing its list emits nothing;
-    //   * a trusted `change` came from the native control, where only a pointer means "this
-    //     one" -- keyboard users commit with Enter, which is handled above.
-    let pointerPick = false;
-    pickerSelect.addEventListener('mousedown', () => { pointerPick = true; });
-    pickerSelect.addEventListener('keydown', () => { pointerPick = false; });
-    pickerSelect.addEventListener('change', (e) => {
-        pickerOpen.disabled = !pickerSelect.value;
-        const deliberate = !e.isTrusted || pointerPick;
-        pointerPick = false;
-        if (pickerSelect.value && deliberate) confirmPicker();
+    // Arrow keys walk the list; typing anywhere in it goes back to the filter, so a fleet can
+    // be narrowed without tabbing back up to the box.
+    pickerList.addEventListener('keydown', (e) => {
+        const items = [...pickerList.querySelectorAll('.picker-list__item')];
+        const at = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown' && at > -1 && at < items.length - 1) {
+            e.preventDefault();
+            items[at + 1].focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            (at > 0 ? items[at - 1] : pickerSearch).focus();
+        } else if ((e.key === 'Enter' || e.key === ' ') && at > -1) {
+            // Handled rather than left to the button's own key activation. preventDefault
+            // is what keeps that from ALSO firing, so the row opens exactly once -- and it
+            // must come before the printable-character branch below, or Space would be
+            // typed into the filter instead of opening the focused PC.
+            e.preventDefault();
+            items[at].click();
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            pickerSearch.focus();       // the keystroke itself lands in the box
+        }
     });
 
     // Arrow keys across the strip, matching the ARIA tabs pattern the page-level tabs follow
