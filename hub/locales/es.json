@@ -1852,6 +1852,7 @@
     "close_screen_title": "Terminar la sesión y cerrar la pantalla",
     "picker_title": "Abrir una pantalla",
     "picker_machine": "PC",
+    "picker_placeholder": "Elija un PC…",
     "picker_open": "Abrir",
     "picker_failed": "No se pudo cargar la lista de equipos: {error}",
     "picker_all_open": "Todos los PC a su alcance ya están abiertos.",

@@ -206,19 +206,35 @@
             pickerError.hidden = false;
             return;
         }
+        // A <select> shows its first option as the chosen one, so the dialog used to open
+        // already pointing at whichever machine sorted first -- press Open without reading
+        // it and you connect to a PC you never picked. A disabled placeholder makes "no
+        // choice yet" a state the control can actually be in. Disabled also keeps it out of
+        // the searchable combobox's list (autocomplete.js skips disabled options), so it is
+        // a prompt rather than something pickable.
+        const placeholder = new Option(t('remote.picker_placeholder'), '');
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        pickerSelect.appendChild(placeholder);
         for (const name of available) {
             pickerSelect.appendChild(new Option(name, name));
         }
-        pickerOpen.disabled = false;
+        // Open stays disabled until something is actually picked.
+        pickerOpen.disabled = true;
         // autocomplete.js watches the document and turns a long <select> into a searchable
-        // combobox on its own, so a fleet of hundreds is typed at rather than scrolled.
-        pickerSelect.focus();
+        // combobox on its own, so a fleet of hundreds is typed at rather than scrolled. When
+        // it has, the native select is aria-hidden with tabindex=-1 and focusing it would
+        // drop the keystrokes on the floor -- the search box is the thing to type into.
+        const search = pickerSelect.parentNode
+            && pickerSelect.parentNode.querySelector('.select-search__input');
+        (search || pickerSelect).focus();
     }
 
     function confirmPicker() {
         const machine = pickerSelect.value;
+        if (!machine) return;             // still on the placeholder
         dialog.close();
-        if (machine) openScreen(machine);
+        openScreen(machine);
     }
 
     // ---------------- Wiring ----------------
@@ -231,6 +247,26 @@
         if (e.key !== 'Enter' || pickerOpen.disabled) return;
         e.preventDefault();
         confirmPicker();
+    });
+
+    // Picking a machine connects to it -- the Open button is a fallback, not a second step.
+    //
+    // Which `change` counts as a pick is the whole difficulty. A NATIVE <select> fires
+    // `change` on every arrow key while it is closed, so connecting on any change would
+    // launch a session on each host the caret passed over. The two cases separate cleanly:
+    //   * an untrusted `change` was dispatched by autocomplete.js's combobox, which emits it
+    //     only on a deliberate pick (a click, or Enter on the highlighted row) -- always a
+    //     choice, and note that merely arrowing its list emits nothing;
+    //   * a trusted `change` came from the native control, where only a pointer means "this
+    //     one" -- keyboard users commit with Enter, which is handled above.
+    let pointerPick = false;
+    pickerSelect.addEventListener('mousedown', () => { pointerPick = true; });
+    pickerSelect.addEventListener('keydown', () => { pointerPick = false; });
+    pickerSelect.addEventListener('change', (e) => {
+        pickerOpen.disabled = !pickerSelect.value;
+        const deliberate = !e.isTrusted || pointerPick;
+        pointerPick = false;
+        if (pickerSelect.value && deliberate) confirmPicker();
     });
 
     // Arrow keys across the strip, matching the ARIA tabs pattern the page-level tabs follow

@@ -1958,6 +1958,7 @@
     "close_screen_title": "End this session and close the screen",
     "picker_title": "Open a screen",
     "picker_machine": "PC",
+    "picker_placeholder": "Choose a PC…",
     "picker_open": "Open",
     "picker_failed": "Could not load the machine list: {error}",
     "picker_all_open": "Every PC you can reach is already open.",
