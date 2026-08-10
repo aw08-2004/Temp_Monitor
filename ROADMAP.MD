@@ -1905,7 +1905,63 @@ the safe answer to it is "publish what is in the tree" rather than a guessed bum
   which is also what would let toasts stop depending on `local_notifier`'s Start Menu
   shortcut for an application identity.
 - **Phase 2**: the Android/iOS builds, FCM/APNs against the `push_*` columns already in
-  place, and the bundled localization described above.
+  place, and the bundled localization described above. Scoped in detail below.
+
+### Phase 2 — what an Android build actually costs
+
+Scoped rather than assumed, because "it's Flutter, so it's the same code" is true enough to
+be misleading. Most of it IS the same code; the part that is not is precisely the part that
+makes the current build a *desktop* app.
+
+**Shared verbatim** — `models.dart`, `state.dart`, `api/`, `auth/pairing.dart`,
+`auth/token_store.dart`, `update/updater.dart`, `strings.dart`, and every screen (fleet,
+alerts, wake, commands, settings, the update prompt). That is the bulk of the client, and
+it is the whole reason Flutter was chosen over React Native + Electron.
+
+**Needs an Android counterpart** — checked against the resolved packages, not assumed:
+
+| Plugin | Ships native code for |
+|---|---|
+| `window_manager` | windows, macos, linux — **no android** |
+| `tray_manager` | windows, macos, linux — **no android** |
+| `local_notifier` | windows, macos, linux — **no android** |
+| `flutter_secure_storage` | android, ios ✅ |
+| `shared_preferences`, `url_launcher` | federated, android ✅ |
+
+1. **`main.dart` needs a platform branch.** Window sizing, the tray icon and close-to-tray
+   are three desktop-only plugins, and a phone has no tray. The whole startup path splits.
+2. **`notify.dart` needs a second implementation.** `flutter_local_notifications`, a
+   notification channel, and the `POST_NOTIFICATIONS` runtime permission on API 33+. The
+   alert-delta logic above it is unchanged and already tested.
+3. **`NavigationRail` is a desktop shape.** A phone wants a bottom `NavigationBar`.
+4. **Pairing works as-is but is not idiomatic.** The loopback listener functions on Android
+   (the device's own browser can reach `127.0.0.1`), and the copy-paste code path is
+   already built. An app link or custom URL scheme is the shape a phone should use, and the
+   hub's pairing flow needs no change for either — which is why the fallback was built now
+   rather than retrofitted.
+5. **Release: `flutter build apk`, plus an Android signing keystore** (separate from, and
+   unrelated to, the Ed25519 release key). The manifest's `builds[]` list already accepts a
+   second entry with no hub change and no console change — exactly what it was made a list
+   for — so `release_client.py` gains an android branch and nothing else does.
+
+**The gap that decides whether this is worth doing: background alerts.** On Windows the app
+sits in the tray and polls, so an alert raised at 02:00 reaches an operator with the window
+shut. **Android kills background polling.** Without FCM an Android build shows alerts only
+while it is open on screen, which removes most of the reason to want it on a phone — so the
+push work is not a later refinement of the Android build, it is a prerequisite for it being
+useful. That work is: a Firebase project, a hub-side sender against the `push_kind` /
+`push_token` columns already on `api_tokens`, device registration over the existing device
+token, and **content-free payloads** ("3 alerts", tap to open) so no machine name or
+temperature transits Google. iOS is the same shape with APNs, plus an Apple Developer
+account, and would appear on the Download page as a `link`-kind build rather than a file.
+
+**Build prerequisites**, none of which are on the current build machine: the Android SDK
+and a JDK (`flutter doctor` currently reports "Unable to locate Android SDK"), plus the
+keystore above for a release APK.
+
+**Recommended order: not before the Windows client has actually run.** Porting a client
+whose desktop half has never been launched against a real hub risks finding the same bug
+twice, in two places.
 
 ---
 

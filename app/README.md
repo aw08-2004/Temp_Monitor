@@ -184,6 +184,24 @@ every artifact this project ships.
 installed hub — the same shape as the 1.27.x bug where `packages.py` was left out of the
 runtime file list and the hub died on import. See `hub/clientrelease.py`.
 
+## Android / iOS
+
+Not built. **Most of this codebase is already platform-neutral** — models, state, the API
+client, pairing, the updater, and every screen — but three of the plugins `main.dart`
+depends on (`window_manager`, `tray_manager`, `local_notifier`) ship no Android code at
+all, because a phone has no window to manage and no tray to sit in. `notify.dart` needs a
+`flutter_local_notifications` counterpart, the navigation rail needs to become a bottom
+bar, and a release needs an Android keystore.
+
+The decisive one is **background alerts**: Android kills background polling, so without
+FCM an Android build only shows alerts while it is open — which is most of the reason to
+want it on a phone. Push is therefore a prerequisite for the Android build being useful,
+not a later refinement.
+
+`ROADMAP.MD` #11 scopes all of it, including the `push_kind` / `push_token` columns already
+waiting on `api_tokens` and why the signed manifest's `builds[]` list means adding a
+platform costs no hub or console change.
+
 ## Localization
 
 **v1 is English only**, but no string is written inline in a widget — every one lives in
