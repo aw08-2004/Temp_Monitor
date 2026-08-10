@@ -13,10 +13,11 @@
 #   2. docker compose up -d
 #   3. In the FleetHub console: Settings -> Remote Control -> TURN servers =
 #      turn:<this-host-public-hostname>:3478
+#      turn:<this-host-public-hostname>:3478?transport=tcp
 #      turn:<this-host-lan-ip>:3478
 #      turn:<this-host-lan-ip>:3479
 #
-# Why three URLs and two listeners: --external-ip makes coturn advertise the PUBLIC address in
+# Why four URLs and two listeners: --external-ip makes coturn advertise the PUBLIC address in
 # every allocate response, including to clients on its own LAN. That is right for a peer out on
 # the internet and useless for two peers inside this network, who would be handed a relay
 # candidate pointing at the router's WAN address and have to hairpin back in -- which most
@@ -25,6 +26,10 @@
 # no external-ip, bound to the LAN address, so LAN peers get a routable LAN relay candidate.
 #
 # The two relay port ranges MUST NOT overlap -- both services share the host's network namespace.
+#
+# The ?transport=tcp URL is not a duplicate: coturn already listens on 3478/tcp, but an ICE
+# agent only tries TCP when a URL says so, so without it that listener is never used. It is what
+# makes a relay work from a network that allows 3478/tcp out and drops UDP.
 #
 # See README.md for the Windows-host notes, the firewall ports, and TLS.
 services:
@@ -44,11 +49,11 @@ services:
       - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:49160-49200/udp"
     command: >
       -n --log-file=stdout --no-cli --no-tls --no-dtls
-      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET}
+      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET:?set REMOTE_TURN_SECRET to the SAME value as the hub .env}
       --realm=${TURN_REALM:-fleethub}
       --listening-port=3478
       --min-port=${TURN_MIN_PORT:-49160} --max-port=${TURN_MAX_PORT:-49200}
-      --external-ip=${TURN_EXTERNAL_IP}
+      --external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP to this host's PUBLIC ip}
       --fingerprint
 
   # The LAN listener: same secret and realm, no external-ip, bound to the LAN address only.
@@ -60,9 +65,9 @@ services:
     network_mode: host
     command: >
       -n --log-file=stdout --no-cli --no-tls --no-dtls
-      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET}
+      --use-auth-secret --static-auth-secret=${REMOTE_TURN_SECRET:?set REMOTE_TURN_SECRET to the SAME value as the hub .env}
       --realm=${TURN_REALM:-fleethub}
       --listening-port=${TURN_LAN_PORT:-3479}
-      --listening-ip=${TURN_LOCAL_IP}
+      --listening-ip=${TURN_LOCAL_IP:?set TURN_LOCAL_IP to this host's LAN ip}
       --min-port=${TURN_LAN_MIN_PORT:-49210} --max-port=${TURN_LAN_MAX_PORT:-49250}
       --fingerprint

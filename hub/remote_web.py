@@ -63,14 +63,22 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     def _current_email():
         return permissions_web.current_actor()
 
-    def _ice_servers(session_id):
-        """Assemble the ICE server list for a session from settings + the .env TURN secret."""
+    def _ice_servers(session_id, peer_ip=None):
+        """Assemble the ICE server list for ONE PEER of a session, from settings + the .env TURN
+        secret.
+
+        `peer_ip` is that peer's own source address, which is why the two sides no longer get an
+        identical list: a relay URL spelled with a private IP literal is reachable from inside
+        the hub's network and from nowhere else (remote.select_urls_for_peer). ProxyFix is installed
+        in app.py, so request.remote_addr is the real client behind the TLS terminator.
+        """
         return remote.ice_servers(
             session_id,
             stun_urls=settings.get_list(db_path, "remote.stun_urls"),
             turn_urls=settings.get_list(db_path, "remote.turn_urls"),
             turn_secret=os.environ.get(TURN_SECRET_ENV, ""),
             turn_ttl=settings.get_int(db_path, "remote.turn_ttl_seconds"),
+            peer_ip=peer_ip,
         )
 
     def _stream_params(data):
@@ -166,6 +174,27 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return jsonify({"error": str(e)}), 400
         return jsonify({"seq": seq}), 200
 
+    @bp.route("/api/agent/remote/<session_id>/ice", methods=["GET"])
+    @agent_auth
+    def agent_ice(agent_id, machine, session_id):
+        """The ICE servers for THIS agent, minted now and chosen from the agent's own source
+        address.
+
+        The list in the start command was built when the console pressed Start, from the
+        console's vantage -- and the two peers are frequently not on the same side of the hub's
+        network. Handing the agent a relay URL spelled with the hub's LAN address when the agent
+        is out on the internet costs it an allocation that can only time out; handing it only the
+        public hostname when it is sitting on the hub's own LAN makes it hairpin off the router
+        for a relay one switch away. Fetching from here lets the hub answer from what it can see
+        rather than from what the other peer could see.
+
+        Also re-mints the credential, so a helper the supervisor relaunched late in a long
+        session does not start out holding one that has already expired.
+        """
+        if _agent_session_or_404(session_id, machine) is None:
+            return jsonify({"error": "unknown session"}), 404
+        return jsonify({"ice_servers": _ice_servers(session_id, request.remote_addr)}), 200
+
     @bp.route("/api/agent/remote/<session_id>/ended", methods=["POST"])
     @agent_auth
     def agent_ended(agent_id, machine, session_id):
@@ -225,11 +254,16 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             db_path, machine, _current_email(), consent_mode,
             ttl_seconds=settings.get_int(db_path, "remote.session_ttl_seconds"),
         )
-        ice = _ice_servers(session_id)
+        ice = _ice_servers(session_id, request.remote_addr)
 
         # Queue the agent's start command. Its params are a one-shot snapshot (session id +
         # freshly minted TURN creds), which is exactly why start_remote_session is not
         # favoritable (see fleet.REMOTE_CONTROL_COMMANDS).
+        #
+        # The agent's copy is minted from the CONSOLE's vantage, which is the wrong one for it --
+        # it re-fetches its own from /api/agent/remote/<id>/ice before it builds its peer. This
+        # copy stays because an agent too old to know about that endpoint still needs something,
+        # and because it is what makes a session start at all when the ICE fetch fails.
         try:
             fleet.create_command(
                 db_path, machine=machine, command_type="start_remote_session",
@@ -506,12 +540,20 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             "preview", stun_urls=stun, turn_urls=turn, turn_secret=secret,
             turn_ttl=settings.get_int(db_path, "remote.turn_ttl_seconds"),
         )
+        # How the URLs split by vantage, because "3 TURN URLs configured" hides the failure this
+        # page exists to catch: a relay reachable only from inside the hub's network, or only
+        # from outside it. A deployment with zero of either is not necessarily wrong (a LAN-only
+        # fleet needs no public URL) but it does bound which sessions can ever connect.
+        lan = [u for u in turn if remote.is_lan_address(remote.ice_url_host(u))]
         return jsonify({
             "enabled": bool(settings.get_bool(db_path, "remote.enabled")),
             "secret_set": bool(secret),
             "can_write_secret": bool(env_path),
             "stun_count": len(stun),
             "turn_count": len(turn),
+            "turn_lan_count": len(lan),
+            "turn_wan_count": len(turn) - len(lan),
+            "turn_tcp_count": len([u for u in turn if "transport=tcp" in u.lower()]),
             "ice_count": len(preview),
         }), 200
 

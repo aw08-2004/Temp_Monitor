@@ -18,6 +18,7 @@ public sealed class RemoteSignalingClient : IDisposable
     private readonly string _signalUrl;
     private readonly string _pollUrl;
     private readonly string _endedUrl;
+    private readonly string _iceUrl;
 
     public RemoteSignalingClient(string sessionId, string bearer)
     {
@@ -28,6 +29,33 @@ public sealed class RemoteSignalingClient : IDisposable
         _signalUrl = $"{baseUrl}/api/agent/remote/{enc}/signal";
         _pollUrl = $"{baseUrl}/api/agent/remote/{enc}/poll";
         _endedUrl = $"{baseUrl}/api/agent/remote/{enc}/ended";
+        _iceUrl = $"{baseUrl}/api/agent/remote/{enc}/ice";
+    }
+
+    /// <summary>Fetch the ICE servers the hub picks for THIS machine, or null if the hub could
+    /// not answer.
+    ///
+    /// The copy in the start command was minted when the operator pressed Start, from the
+    /// CONSOLE's source address -- and the relay is published under several URLs precisely
+    /// because the two peers are often not on the same side of the hub's network (the hub's LAN
+    /// address means nothing to a machine on the internet, and its public hostname means a
+    /// hairpin off the router to a relay one switch away). Asking here lets the hub choose from
+    /// the address it sees US arriving from.
+    ///
+    /// Null -- an older hub with no such route, or any transport failure -- means "keep what the
+    /// command carried", so this can never be the reason a session fails to start.
+    /// </summary>
+    public async Task<List<IceServerConfig>?> GetIceServersAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var resp = await _http.GetAsync(_iceUrl, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+            var body = await resp.Content.ReadFromJsonAsync<IceResult>(cancellationToken: ct);
+            return body?.IceServers;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return null; }
     }
 
     /// <summary>Send one signal (offer/ice/bye) to the console side. Returns the hub's sequence
@@ -74,6 +102,11 @@ public sealed class RemoteSignalingClient : IDisposable
     private sealed class PostResult
     {
         [JsonPropertyName("seq")] public int Seq { get; set; }
+    }
+
+    private sealed class IceResult
+    {
+        [JsonPropertyName("ice_servers")] public List<IceServerConfig>? IceServers { get; set; }
     }
 
     public sealed class PollResult

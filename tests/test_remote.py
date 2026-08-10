@@ -140,6 +140,32 @@ def main():
         check("turn is skipped when no secret is set",
               all("turn:" not in str(s.get("urls")) for s in remote.ice_servers("s1", turn_urls=["turn:x:3478"])))
 
+        print("\n== TURN URL vantage selection ==")
+        check("host of a plain turn url", remote.ice_url_host("turn:hub.example:3478") == "hub.example")
+        check("host survives a transport suffix",
+              remote.ice_url_host("turn:1.2.3.4:3478?transport=tcp") == "1.2.3.4")
+        check("host of a bracketed v6 literal",
+              remote.ice_url_host("turn:[fd00::1]:3478") == "fd00::1")
+        check("a private literal is a LAN address", remote.is_lan_address("192.168.1.50"))
+        check("a public literal is not", not remote.is_lan_address("93.184.216.34"))
+        check("a hostname is not assumed to be LAN", not remote.is_lan_address("hub.example"))
+
+        urls = ["turn:hub.example:3478", "turn:192.168.1.50:3478", "turn:192.168.1.50:3479"]
+        check("an unknown peer gets the list unchanged", remote.select_urls_for_peer(urls) == urls)
+        check("a peer out on the internet loses the unroutable private urls",
+              remote.select_urls_for_peer(urls, "93.184.216.34") == ["turn:hub.example:3478"])
+        check("a peer inside keeps everything, LAN first",
+              remote.select_urls_for_peer(urls, "192.168.1.77")
+              == ["turn:192.168.1.50:3478", "turn:192.168.1.50:3479", "turn:hub.example:3478"])
+        check("a LAN-only deployment is never emptied for an outside peer",
+              remote.select_urls_for_peer(["turn:10.0.0.5:3478"], "93.184.216.34") == ["turn:10.0.0.5:3478"])
+        check("a garbled peer address is treated as unknown",
+              remote.select_urls_for_peer(urls, "not-an-ip") == urls)
+        check("ice_servers narrows the turn entry for an outside peer",
+              [s for s in remote.ice_servers("s1", turn_urls=urls, turn_secret=secret,
+                                             peer_ip="93.184.216.34")
+               if "username" in s][0]["urls"] == ["turn:hub.example:3478"])
+
         print("\n== TURN secret generation ==")
         s1, s2 = remote.generate_turn_secret(), remote.generate_turn_secret()
         check("generate_turn_secret returns a long hex string", len(s1) >= 32 and all(c in "0123456789abcdef" for c in s1))

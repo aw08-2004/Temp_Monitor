@@ -137,7 +137,10 @@
                     s.secret_set ? pill(t('settings.remote.secret_set'), 'ok')
                                  : pill(t('settings.remote.secret_unset'), 'warn')),
             statRow(t('settings.remote.stun_servers'), el('span', { text: String(s.stun_count) })),
-            statRow(t('settings.remote.turn_servers'), el('span', { text: String(s.turn_count) })),
+            statRow(t('settings.remote.turn_servers'),
+                    el('span', { text: t('settings.remote.turn_breakdown', {
+                        total: s.turn_count, wan: s.turn_wan_count, lan: s.turn_lan_count,
+                        tcp: s.turn_tcp_count }) })),
             statRow(t('settings.remote.ice_per_session'), pill(String(s.ice_count), iceKind)),
         ]);
         card.appendChild(stats);
@@ -145,6 +148,20 @@
         if (s.ice_count === 0 && s.enabled) {
             card.appendChild(el('p', { class: 'turn-warn',
                 text: t('settings.remote.no_ice_warning') }));
+        }
+        // A relay is only useful from where it is reachable, and "3 TURN URLs" hides which
+        // sessions can never connect. No LAN-address URL means two machines on the relay's own
+        // network have to hairpin off the router; no public one means nothing outside it can
+        // relay at all. Both are legitimate deployments -- and both are worth saying out loud,
+        // because the symptom is "remote works for some machines", which reads as a bug.
+        if (s.enabled && s.turn_count > 0 && (!s.turn_lan_count || !s.turn_wan_count)) {
+            card.appendChild(el('p', { class: 'turn-warn',
+                text: t(s.turn_lan_count ? 'settings.remote.turn_lan_only'
+                                         : 'settings.remote.turn_wan_only') }));
+        }
+        if (s.enabled && s.turn_wan_count > 0 && !s.turn_tcp_count) {
+            card.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.remote.turn_no_tcp') }));
         }
 
         card.appendChild(secretControls());

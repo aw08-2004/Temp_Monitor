@@ -27,6 +27,8 @@ public sealed class RemotePeer : IDisposable
     private readonly List<RTCIceCandidateInit> _pendingRemoteIce = new();
     private bool _remoteSet;
     private RTCDataChannel? _control;
+    private int _localCandidates;
+    private int _remoteCandidates;
 
     /// <summary>Fires for each local ICE candidate; the payload is ready to POST as a signal.</summary>
     public event Action<object>? OnLocalIceCandidate;
@@ -68,6 +70,13 @@ public sealed class RemotePeer : IDisposable
         _pc.onicecandidate += candidate =>
         {
             if (candidate is null) return;
+            // Logged rather than counted. "srflx" present but no "relay" says the STUN server
+            // answered and the TURN allocation did not; no "srflx" and no "relay" from a machine
+            // that is not on the operator's LAN says neither was reachable at all. Both are
+            // routine and neither is guessable after the fact, and this is one line per
+            // candidate on a path that produces a handful per session.
+            Interlocked.Increment(ref _localCandidates);
+            _log($"local ICE candidate: {Summarise(candidate.candidate)}");
             OnLocalIceCandidate?.Invoke(new
             {
                 candidate = candidate.candidate,
@@ -75,9 +84,18 @@ public sealed class RemotePeer : IDisposable
                 sdpMLineIndex = candidate.sdpMLineIndex,
             });
         };
+        _pc.onicegatheringstatechange += state =>
+        {
+            if (state == RTCIceGatheringState.complete)
+                _log($"ICE gathering complete: {_localCandidates} local candidate(s)");
+        };
         _pc.onconnectionstatechange += state =>
         {
             _log($"peer connection state: {state}");
+            if (state == RTCPeerConnectionState.failed)
+                _log($"ICE never found a working path: {_localCandidates} local / " +
+                     $"{_remoteCandidates} remote candidate(s) were on the table. If neither side " +
+                     "produced a 'relay' candidate, the TURN server was unreachable from there.");
             OnConnectionStateChange?.Invoke(state);
         };
     }
@@ -153,6 +171,8 @@ public sealed class RemotePeer : IDisposable
     public void AddRemoteIce(string? candidate, string? sdpMid, ushort sdpMLineIndex)
     {
         if (string.IsNullOrEmpty(candidate)) return;
+        Interlocked.Increment(ref _remoteCandidates);
+        _log($"remote ICE candidate: {Summarise(candidate)}");
         var init = new RTCIceCandidateInit
         {
             candidate = candidate,
@@ -184,6 +204,26 @@ public sealed class RemotePeer : IDisposable
         if (channel is null || channel.readyState != RTCDataChannelState.open) return;
         try { channel.send(json); }
         catch (Exception e) { _log($"control send failed: {e.Message}"); }
+    }
+
+    /// <summary>Condense an SDP candidate line to the three fields that decide whether a session
+    /// can connect: transport, type (host/srflx/prflx/relay) and address:port. The rest is
+    /// foundation/priority/component bookkeeping that only obscures the log.
+    ///
+    /// An unrecognised shape is returned verbatim rather than dropped -- a candidate we cannot
+    /// parse is exactly the kind of thing worth seeing in full. Browser host candidates arrive
+    /// as an mDNS `<uuid>.local` name rather than an address; those are left alone too, because
+    /// "the address is a .local name" is itself the answer to why a LAN-only session failed.
+    /// </summary>
+    private static string Summarise(string? candidate)
+    {
+        var text = (candidate ?? "").Trim();
+        if (text.Length == 0) return "(empty)";
+        // candidate:<foundation> <component> <transport> <priority> <ip> <port> typ <type> ...
+        var parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 8 || !string.Equals(parts[6], "typ", StringComparison.Ordinal))
+            return text;
+        return $"{parts[7]} {parts[2].ToLowerInvariant()} {parts[4]}:{parts[5]}";
     }
 
     public RTCPeerConnectionState State => _pc.connectionState;

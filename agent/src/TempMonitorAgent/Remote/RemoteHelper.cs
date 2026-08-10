@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Serilog;
+using Serilog.Extensions.Logging;
 using SIPSorcery.Net;
 using TempMonitorAgent.State;
 
@@ -250,7 +251,21 @@ public static class RemoteHelper
         }
 
         var settings = new LiveStreamSettings(session.ToStreamSettings());
-        using var peer = new RemotePeer(session.IceServers, msg => Log.Information("{Msg}", msg),
+
+        // Re-fetch the ICE servers from the hub before building the peer: the list in the start
+        // command was chosen for wherever the OPERATOR was sitting, and the credential in it is
+        // as old as the command (which matters for a helper the supervisor relaunched into a new
+        // Windows session an hour into a four-hour session). A hub too old to answer, or any
+        // transport failure, keeps the command's copy -- see GetIceServersAsync.
+        var iceServers = await signaling.GetIceServersAsync(cts.Token) ?? session.IceServers;
+        if (!ReferenceEquals(iceServers, session.IceServers))
+            Log.Information("Hub re-issued {Count} ICE server(s) for this machine's vantage.",
+                            iceServers.Count);
+        foreach (var s in iceServers)
+            Log.Information("ICE server: {Urls}{Auth}", string.Join(", ", s.Urls),
+                            string.IsNullOrEmpty(s.Username) ? "" : " (credentialed)");
+
+        using var peer = new RemotePeer(iceServers, msg => Log.Information("{Msg}", msg),
                                         session.ParsedCodec);
 
         peer.OnConnectionStateChange += state =>
@@ -537,6 +552,10 @@ public static class RemoteHelper
         Directory.CreateDirectory(AgentConfig.ProgramDataDir);
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
+            // SIPSorcery's own diagnostics are noisy at Debug and are the ONLY account of why an
+            // ICE negotiation failed, so they are admitted at Warning and above and given their
+            // own level floor rather than the blanket minimum.
+            .MinimumLevel.Override("SIPSorcery", Serilog.Events.LogEventLevel.Warning)
             .WriteTo.File(
                 AgentConfig.RemoteHelperLogPath,
                 rollOnFileSizeLimit: true,
@@ -546,6 +565,14 @@ public static class RemoteHelper
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3} {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
+
+        // Without this SIPSorcery logs to a null factory and the helper's account of a failed
+        // session is three lines long: offer posted, answer applied, "peer connection state:
+        // failed" sixteen seconds later. Everything that would say WHY -- which ICE server
+        // answered, which allocation was refused, which candidate pair timed out -- is written by
+        // SIPSorcery and was being thrown away.
+        try { SIPSorcery.LogFactory.Set(new SerilogLoggerFactory(Log.Logger)); }
+        catch (Exception e) { Log.Warning("Could not route SIPSorcery logs: {Msg}", e.Message); }
     }
 
     /// <summary>Read the session file and remove it so its single-use secrets do not linger. A

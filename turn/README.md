@@ -38,7 +38,7 @@ hard way and written up below. The Windows installer therefore builds a WSL2 dis
   - **3479/udp+tcp and 49210–49250/udp**, reachable **from the LAN only** — the LAN listener.
     Do not port-forward these; see below.
 
-## Two listeners, three URLs
+## Two listeners, four URLs
 
 `--external-ip` makes coturn advertise the **public** address in every allocate response —
 including responses to clients on its own LAN. That is exactly right for a peer out on the
@@ -62,22 +62,37 @@ networking) both instances share one network namespace, so an overlap means whic
 claims a port first wins and the other's allocation silently goes nowhere.
 
 Both listeners share one secret and one realm, so a hub-minted credential authenticates against
-either with no extra bookkeeping. Put **all three** URLs in **Settings → Remote Control → TURN
+either with no extra bookkeeping. Put **all four** URLs in **Settings → Remote Control → TURN
 servers**, in this order:
 
 ```
-turn:<public-host>:3478     # both peers on the internet
-turn:<lan-ip>:3478          # one peer inside this network, one outside
-turn:<lan-ip>:3479          # both peers inside this network
+turn:<public-host>:3478                # both peers on the internet
+turn:<public-host>:3478?transport=tcp  # ...on a network that drops UDP
+turn:<lan-ip>:3478                     # one peer inside this network, one outside
+turn:<lan-ip>:3479                     # both peers inside this network
 ```
 
-The middle one is the same public listener reached by its LAN address: the inside peer no longer
+The third one is the same public listener reached by its LAN address: the inside peer no longer
 hairpins to *reach* the relay, and still gets a public relay candidate — which is what the
-outside peer needs to be able to reach it. A peer only ever uses what it can reach, so an
-internet-side machine's attempts against the two LAN URLs simply time out during gathering; the
-same list is correct for every machine in the fleet.
+outside peer needs to be able to reach it.
 
-`install.ps1` provisions both listeners and seeds all three URLs into Settings.
+The **`?transport=tcp`** entry is not a duplicate. coturn has always listened on 3478/tcp and the
+firewall rules have always opened it, but an ICE agent only ever tries TCP when a URL asks for
+it — so without this line that listener was provisioned, firewalled, and never used. It is the
+difference between working and not on a guest or corporate network that allows 3478/tcp out and
+drops UDP, which is a common shape for exactly the machines that need a relay most. It is listed
+*after* the UDP form because TURN-over-TCP puts head-of-line blocking under a video stream: you
+want it as the fallback, not the first choice.
+
+The hub narrows this list per peer before handing it out (`hub/remote.py select_urls_for_peer`),
+using the source address of that peer's own request — the console's at `/api/remote/<machine>/
+start`, the agent's at `/api/agent/remote/<session>/ice`. A machine out on the internet is never
+handed the `<lan-ip>` forms: it cannot route to them, and every allocation against one is
+gathering time spent on a candidate that can never appear. A machine on a private address keeps
+the whole list, LAN first — it may be on the hub's own network or on some other private network
+reached through NAT, and nothing in the request tells the two apart.
+
+`install.ps1` provisions both listeners and seeds all four URLs into Settings.
 
 ## Easiest: let the installer do it (Windows)
 
@@ -151,8 +166,8 @@ docker compose logs -f turn turn-lan          # watch both listeners accept allo
 docker compose -f docker-compose.windows.yml up -d
 ```
 
-Then in the console: **Settings → Remote Control → TURN servers** — all three URLs from
-[Two listeners, three URLs](#two-listeners-three-urls). (Optionally also set **STUN servers** —
+Then in the console: **Settings → Remote Control → TURN servers** — all four URLs from
+[Two listeners, four URLs](#two-listeners-four-urls). (Optionally also set **STUN servers** —
 the same coturn answers STUN, so `stun:<this-host>:3478` works with no extra dependency. One
 entry is enough; a LAN STUN URL is not useful, since it returns the client its own LAN address
 as a reflexive candidate, duplicating a host candidate it already has.)
@@ -265,14 +280,33 @@ wsl -d FleetHubTurn -u root -- journalctl -u coturn -u coturn-lan -f   # WSL2 (i
 docker compose logs -f turn turn-lan                                    # Docker (Linux host)
 ```
 
+Two things worth knowing before you read either log. **The helper log now carries SIPSorcery's
+own ICE account** — which server answered, which allocation was refused, which candidate pair
+timed out — plus one line per local and remote candidate condensed to `type transport
+address:port`. A session that fails now names its cause; before agent 3.26.0 it said only
+`peer connection state: failed`. And **the viewer says the same thing from the browser's side**:
+a failed session reports which candidate types each end gathered, and calls out the case where
+neither produced a `relay` candidate.
+
+Read the candidate types first — they decide which row below applies:
+
+* no `relay` on **either** side → the relay was unreachable from both machines. Auth, firewall,
+  port forwarding, or a URL that only resolves inside one of the two networks.
+* `relay` on one side only → that side reached it and the other did not. Compare the two
+  machines' networks, not the relay's config.
+* `relay` on both and still failed → reachability is proven; the problem is downstream in the
+  media path (the `Global turn allocation count incremented` note at the end of this section).
+* `host` only, on a LAN-only session → no STUN and no TURN answered at all.
+
 | Symptom | Almost certainly |
 |---|---|
 | Agent logs `ice_servers=0` | `REMOTE_TURN_SECRET` unset on the hub, or no TURN URL in **Settings → Remote Control**. The hub omits TURN rather than failing, so sessions still start and only cross-NAT media dies. |
 | Nothing listening on 3478 on the host; coturn log has **no requests at all** since boot | On Windows/Docker: started from the Linux `docker-compose.yml`. See trap 1 above. |
 | coturn logs `check_stun_auth: Cannot find credentials of user <...>` or clients get **401** | The secret differs between the hub's `.env` and coturn's copy. A rotation from the UI updates only the hub — see [Rotating the secret](#rotating-the-secret-from-the-ui). |
 | Allocations **succeed** (`Global turn allocation count incremented`) but the agent still reports `peer connection state: failed` | The relay's media path, not auth. On Windows/Docker see trap 2 above. Otherwise check that the whole **relay UDP range** (not just 3478) is open and forwarded, and that the external IP is the real public IP. |
+| Fails from one particular site, works everywhere else; that site's machines gather no `srflx` and no `relay` | That network drops UDP. Add `turn:<public-host>:3478?transport=tcp` in **Settings → Remote Control** — coturn already listens on 3478/tcp and the firewall rules already open it, but an ICE agent only tries TCP when a URL asks for it. |
 | Works on the LAN, fails only cross-NAT | TURN is not actually being used or not reachable — the LAN case succeeds on host candidates alone and proves nothing about the relay. Always validate with a machine on a genuinely different network. |
-| Works cross-NAT, fails when **one** peer is on the relay's own LAN | That peer is hairpinning off the router to reach the relay. Add `turn:<lan-ip>:3478` — the same public listener reached by its LAN address. See [Two listeners, three URLs](#two-listeners-three-urls). |
+| Works cross-NAT, fails when **one** peer is on the relay's own LAN | That peer is hairpinning off the router to reach the relay. Add `turn:<lan-ip>:3478` — the same public listener reached by its LAN address. See [Two listeners, four URLs](#two-listeners-four-urls). |
 | Works cross-NAT, fails when **both** peers are on the relay's own LAN | The relay candidate is being rewritten to the public IP by `--external-ip`, so both peers are pointed back out at the router. Add the LAN listener and `turn:<lan-ip>:3479`. Adding a LAN URL to the *public* listener does not help — the advertised address is chosen by coturn's config, not by the URL the client dialled. |
 | LAN sessions get 401 but internet sessions work (or vice versa) | The two listeners' `static-auth-secret` values have drifted. Rotation must update `/etc/turnserver.conf` **and** `/etc/turnserver-lan.conf`. |
 | `coturn-lan` dead, journal shows `bind: Address already in use` on a relay port | The two relay ranges overlap. They must be disjoint — both instances share one network namespace. |
