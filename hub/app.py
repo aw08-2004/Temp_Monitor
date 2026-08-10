@@ -84,7 +84,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.72.0"
+HUB_VERSION = "1.73.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3605,6 +3605,43 @@ def dismiss_alert(alert_id):
                 level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "dismissed"}), 200
 
+def _scoped_open_alert_count():
+    """The number the sidebar badge shows: open alerts this caller is allowed to see.
+
+    Shared by the badge's server render (inject_nav_context) and by /api/alerts/count,
+    which the badge poller calls -- two implementations of "which alerts are mine" is how
+    the number drifts between the page load and the first poll.
+    """
+    keep = access.machine_filter()
+    if keep is None:
+        return alerts.count_open(DB_PATH)
+
+    def _in_scope(a):
+        # Per-machine alerts (high temperature) scope on their single subject; the
+        # duplicate_serial `machines` list scopes if it touches any kept machine. Such an
+        # alert carries an empty `machines`, so it must be checked on `machine` first --
+        # otherwise "no machines" would read as fleet-wide and leak the count across a
+        # scope boundary.
+        if a["kind"] == alerts.KIND_HIGH_TEMP:
+            return bool(a.get("machine")) and keep(a["machine"])
+        return not a.get("machines") or any(keep(m) for m in a["machines"])
+
+    return sum(1 for a in alerts.list_open(DB_PATH) if _in_scope(a))
+
+
+@app.route('/api/alerts/count')
+@login_required
+def get_alert_count():
+    """Just the badge number, for the poller in common.js. Deliberately not gated on VIEW:
+    the badge renders for every signed-in operator, and a poll that 403s where the page
+    render succeeded would freeze the count instead of correcting it."""
+    try:
+        return jsonify({"count": _scoped_open_alert_count()}), 200
+    except Exception:
+        # Same posture as the nav context: a badge is never worth an error to the caller.
+        return jsonify({"count": 0}), 200
+
+
 def _resolve_history_window(args):
     """Parse the date/from/to/resolution/limit query params into
     (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
@@ -3854,21 +3891,7 @@ def inject_nav_context():
         current = access.current()
         context["user_capabilities"] = current["capabilities"]
         context["is_superuser"] = current["superuser"]
-        keep = access.machine_filter()
-        if keep is None:
-            context["open_alert_count"] = alerts.count_open(DB_PATH)
-        else:
-            def _in_scope(a):
-                # Per-machine alerts (high temperature) scope on their single subject; the
-                # duplicate_serial `machines` list scopes if it touches any kept machine.
-                # Such an alert carries an empty `machines`, so it must be checked on
-                # `machine` first -- otherwise "no machines" would read as fleet-wide and
-                # leak the count across a scope boundary.
-                if a["kind"] == alerts.KIND_HIGH_TEMP:
-                    return bool(a.get("machine")) and keep(a["machine"])
-                return not a.get("machines") or any(keep(m) for m in a["machines"])
-            context["open_alert_count"] = sum(
-                1 for a in alerts.list_open(DB_PATH) if _in_scope(a))
+        context["open_alert_count"] = _scoped_open_alert_count()
     except Exception:
         pass
     return context

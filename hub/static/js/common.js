@@ -211,8 +211,62 @@ function initTopbarMore() {
     });
 }
 
+// ============ Open-alert badge ============
+// The sidebar badge is rendered server-side once per page load, which goes stale the moment
+// an alert is dismissed -- in another tab, by another operator, or on the Alerts page of a
+// shell that never reloads this document. So every page that shows the badge keeps it
+// current itself.
+
+const ALERT_BADGE_POLL_MS = 30000;
+
+// In shell mode the sidebar lives in the OUTER document while pages run inside the frame,
+// so a framed page finds its badge through the parent. Same origin by construction; the
+// try/catch is for the case where it isn't ours to touch.
+function alertBadgeEl() {
+    const own = document.getElementById('alerts-badge');
+    if (own) return own;
+    try {
+        if (window.parent && window.parent !== window) {
+            return window.parent.document.getElementById('alerts-badge');
+        }
+    } catch (e) { /* cross-origin parent: not our chrome */ }
+    return null;
+}
+
+// Zero hides the badge rather than showing a "0" -- nothing to attend to should look like
+// nothing, which is what the server-rendered markup does too.
+function setAlertBadge(count) {
+    const el = alertBadgeEl();
+    if (!el) return;
+    el.textContent = count ? String(count) : '';
+    el.hidden = !count;
+}
+
+async function refreshAlertBadge() {
+    try {
+        const resp = await fetch('/api/alerts/count');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (typeof data.count === 'number') setAlertBadge(data.count);
+    } catch (e) { /* offline or mid-deploy: keep the last number, don't blank it */ }
+}
+
+function initAlertBadge() {
+    // Only the document that OWNS the badge polls. A framed page shares the shell's badge
+    // and would otherwise double the request rate for one number; it can still push a value
+    // through setAlertBadge (alerts.js does, the instant a dismiss is confirmed).
+    if (!document.getElementById('alerts-badge')) return;
+    setInterval(refreshAlertBadge, ALERT_BADGE_POLL_MS);
+    // A background tab's timers are throttled hard, so a tab returned to after an hour would
+    // show its hour-old count for a while. Correct it on the way back in.
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshAlertBadge();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initMobileNav();
     initTopbarMore();
+    initAlertBadge();
 });

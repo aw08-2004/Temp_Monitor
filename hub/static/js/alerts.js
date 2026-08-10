@@ -14,6 +14,10 @@
 const alertsList = document.getElementById('alerts-list');
 const alertsEmpty = document.getElementById('alerts-empty');
 
+function setAlertsEmpty(isEmpty) {
+    alertsEmpty.style.display = isEmpty ? 'block' : 'none';
+}
+
 function formatLastSeen(updatedAt) {
     return updatedAt || '--';
 }
@@ -63,6 +67,13 @@ async function dismissAlert(alertId, cardEl, btnEl) {
             body: '{}',
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        // Drop the card the moment the server confirms, rather than waiting for the
+        // refetch below: the operator clicked it, so the card should go now. loadAlerts()
+        // still runs and is what the rendering ultimately settles on.
+        cardEl.remove();
+        const left = alertsList.querySelectorAll('.card').length;
+        setAlertsEmpty(left === 0);
+        setAlertBadge(left);
         loadAlerts();
     } catch (e) {
         btnEl.disabled = false;
@@ -262,7 +273,8 @@ async function loadAlerts() {
         if (!resp.ok) return;
         const alerts = await resp.json();
         alertsList.innerHTML = '';
-        alertsEmpty.style.display = alerts.length ? 'none' : 'block';
+        setAlertsEmpty(alerts.length === 0);
+        setAlertBadge(alerts.length);
         for (const alert of alerts) {
             alertsList.appendChild(renderAlert(alert));
         }

@@ -28,7 +28,9 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'alerts_page' else '' }}" data-nav-prefix="/alerts" href="{{ url_for('alerts_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a6 6 0 0 0-6 6c0 4-2 5-2 7h16c0-2-2-3-2-7a6 6 0 0 0-6-6z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
             {{ t('nav.alerts') }}
-            {% if open_alert_count %}<span class="sidebar__badge">{{ open_alert_count }}</span>{% endif %}
+            {# Always in the DOM (hidden at zero) so the Alerts page can retitle it live after a
+               dismiss -- rendering it conditionally would leave nothing for the script to find. #}
+            <span class="sidebar__badge" id="alerts-badge" {% if not open_alert_count %}hidden{% endif %}>{{ open_alert_count or '' }}</span>
         </a>
         {# The native client (roadmap #11). Gated on VIEW rather than on a capability of
            its own: anyone allowed into the console may install the app, because the app

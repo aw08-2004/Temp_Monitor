@@ -8,6 +8,7 @@ auto-resolves once one machine goes offline and gets absorbed.
 Run from the repo root so `import app` resolves.
 """
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -261,6 +262,10 @@ def test_auth_required():
     print("\n-- alerts endpoints require a session --")
     anon = app.app.test_client()
     check("GET /api/alerts unauthenticated -> 401", anon.get("/api/alerts").status_code == 401)
+    # The count endpoint swallows its own errors to protect the badge; that must not
+    # extend to answering an anonymous caller with a fleet-wide number.
+    check("GET /api/alerts/count unauthenticated -> 401",
+          anon.get("/api/alerts/count").status_code == 401)
     check("merge unauthenticated -> 401",
           anon.post("/api/machines/merge",
                     json={"survivor": "a", "victims": ["b"]}).status_code == 401)
@@ -393,7 +398,38 @@ def test_sidebar_badge_renders():
     check("GET /alerts page 200", resp.status_code == 200)
     body = resp.get_data(as_text=True)
     check("Alerts page renders", "Alerts" in body)
-    check("badge shown when alerts are open", "sidebar__badge" in body)
+    # The span is now always in the markup (the Alerts page rewrites it live after a
+    # dismiss), so presence alone proves nothing -- it has to be the visible, counted one.
+    badge = re.search(r'<span class="sidebar__badge"[^>]*>([^<]*)</span>', body)
+    check("badge shown when alerts are open",
+          badge is not None and "hidden" not in badge.group(0)
+          and badge.group(1).strip().isdigit())
+
+
+def test_alert_count_endpoint():
+    # The badge poller's endpoint. What matters is that it agrees with the number the
+    # server rendered into the sidebar and with the list the Alerts page shows -- a count
+    # computed a second way is a count that drifts.
+    print("\n-- /api/alerts/count backs the badge poller --")
+    report("cntA", "SER-AL-7")
+    report("cntB", "SER-AL-7")
+
+    resp = client.get("/api/alerts/count")
+    check("GET /api/alerts/count 200", resp.status_code == 200)
+    count = resp.get_json()["count"]
+    check("count is a positive number", isinstance(count, int) and count > 0)
+
+    listed = client.get("/api/alerts").get_json()
+    check("count matches the alert list", count == len(listed))
+
+    body = client.get("/alerts").get_data(as_text=True)
+    badge = re.search(r'<span class="sidebar__badge"[^>]*>([^<]*)</span>', body)
+    check("count matches the server-rendered badge",
+          badge is not None and badge.group(1).strip() == str(count))
+
+    alerts.dismiss(app.DB_PATH, listed[0]["id"])
+    after = client.get("/api/alerts/count").get_json()["count"]
+    check("dismissing an alert lowers the count", after == count - 1)
 
 
 if __name__ == "__main__":
@@ -408,5 +444,6 @@ if __name__ == "__main__":
     test_high_temp_evaluator()
     test_high_temp_api_and_scope()
     test_sidebar_badge_renders()
+    test_alert_count_endpoint()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
