@@ -11,18 +11,27 @@ needs a decision needs to be readable before it has already happened everywhere.
 
 ## Publishing one
 
-Pass the file, never the text. `release.ps1 -Notes` hands its argument to `gh release create`
-as a PowerShell string, and that path is what put `emote-helper.log` (for `remote-helper.log`)
-and a stray tab where `type` should have been into the published 3.26.0 notes: the `\r` and
-`\t` were consumed as escapes before `gh` ever saw them.
+Pass the path, never the text:
 
 ```powershell
-.\release.ps1 -Version 3.27.0 -Notes (Get-Content -Raw .\release-notes\3.27.0.md)
+.\release.ps1 -Version 3.27.0 -NotesFile .\release-notes\3.27.0.md
 ```
 
-`Get-Content -Raw` reads the file verbatim, so nothing gets a chance to interpret a backslash
-on the way through. If a release has already been published with the wrong body, replace it
-from the file directly — this path never touches PowerShell argument binding at all:
+`-NotesFile` hands the path to `gh --notes-file`, so gh reads the bytes and nothing parses
+them on the way. That matters more than it sounds. Prose routed through PowerShell's
+native-argument binding has broken this twice already:
+
+- The 3.26.0 notes published with `emote-helper.log` for `remote-helper.log`, and a literal
+  tab where `type` should have been — `\r` and `\t` eaten as escapes.
+- The first 3.27.0 attempt failed outright with ``no matches found for `commands` ``. The
+  notes contain the phrase `"Push commands to at most"`, whose embedded quotes split the
+  argument; everything positional after the tag is an asset path to `gh release create`, so
+  it went looking for a file called `commands`.
+
+`-Notes "one short sentence"` is still fine when there is nothing in it to misparse. Anything
+longer goes in a file.
+
+To fix a release that was already published with a mangled body:
 
 ```powershell
 gh release edit agent-v3.27.0 --repo aw08-2004/Temp_Monitor --notes-file .\release-notes\3.27.0.md

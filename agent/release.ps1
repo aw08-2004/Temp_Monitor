@@ -17,13 +17,19 @@
 
     Usage:
         .\release.ps1 -Version 3.0.1
-        .\release.ps1 -Version 3.0.1 -Notes "Fix rename executor" -Push
+        .\release.ps1 -Version 3.0.1 -NotesFile .\release-notes\3.0.1.md -Push
+        .\release.ps1 -Version 3.0.1 -Notes "Fix rename executor"
         .\release.ps1 -Version 3.0.1 -DryRun     # print the plan, touch nothing external
+
+    Prefer -NotesFile for anything longer than a sentence. -Notes is fine for a one-liner
+    with no quotes or backslashes in it; past that, see the comment at the release-creation
+    step on why prose and PowerShell argument binding do not mix.
 #>
 
 param(
     [Parameter(Mandatory=$true)][string]$Version,
     [string]$Notes = "",
+    [string]$NotesFile = "",       # preferred: agent/release-notes/<version>.md
     [switch]$Push,
     [switch]$DryRun,
     [string]$SigningKey,           # default: ~/.temp_monitor_signing_key (sign_release.py's own default)
@@ -136,10 +142,38 @@ if ($DryRun) {
     if ($exists) {
         Ok "Release $Tag already exists, reusing it"
     } else {
-        $notesArg = if ($Notes) { $Notes } else { "Agent v$Version" }
-        gh release create $Tag --repo $Repo --title "Agent v$Version" --notes $notesArg
-        if ($LASTEXITCODE -ne 0) { Die "gh release create failed." }
-        Ok "Created release $Tag"
+        # The notes reach gh through a FILE, never as an argument, whatever form they came in.
+        #
+        # `--notes $Notes` cannot be made safe here. PowerShell re-quotes a string on its way
+        # to a native exe, and release prose is exactly the input that breaks it. Two ways,
+        # both already suffered: the escapes in `remote-helper.log` and `type` were eaten on
+        # the way to the 3.26.0 release, which published as `emote-helper.log` with a literal
+        # tab in it -- and a note containing a double-quoted phrase splits into several
+        # arguments, which `gh release create` reads as ASSET PATHS, since everything
+        # positional after the tag is a file to upload. That one killed the 3.27.0 run
+        # outright: `no matches found for `commands``, from the phrase "Push commands to at
+        # most" inside the notes. A release whose own prose decides whether it gets created.
+        #
+        # A file has none of that surface. gh reads the bytes; nothing parses them first.
+        $tempNotes = $null
+        try {
+            if ($NotesFile) {
+                if (-not (Test-Path $NotesFile)) { Die "No notes file at $NotesFile." }
+                $notesPath = $NotesFile
+            } else {
+                # -Encoding utf8: Set-Content defaults to the system ANSI codepage on Windows
+                # PowerShell 5.1, which would mangle the arrows and dashes these notes use.
+                $tempNotes = Join-Path ([System.IO.Path]::GetTempPath()) "agent-release-$Version.md"
+                $text = if ($Notes) { $Notes } else { "Agent v$Version" }
+                Set-Content -Path $tempNotes -Value $text -Encoding utf8
+                $notesPath = $tempNotes
+            }
+            gh release create $Tag --repo $Repo --title "Agent v$Version" --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) { Die "gh release create failed." }
+            Ok "Created release $Tag (notes from $notesPath)"
+        } finally {
+            if ($tempNotes) { Remove-Item $tempNotes -Force -ErrorAction SilentlyContinue }
+        }
     }
 }
 
