@@ -27,7 +27,7 @@
 {# data-can-issue-commands decides only whether the Processes card DRAWS its End task /
    Restart buttons. The endpoints enforce the same capability themselves, so a console that
    got this wrong would be offering a 403, not a way past one. #}
-<div id="machine-config" data-machine="{{ machine }}" data-high-temp-threshold="{{ high_temp_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
+<div id="machine-config" data-machine="{{ machine }}" data-high-temp-threshold="{{ high_temp_threshold }}" data-low-load-threshold="{{ low_load_threshold }}" data-live-window-seconds="{{ live_window_seconds }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
     <div class="tabs" role="tablist" aria-label="{{ t('machine.views_nav') }}" data-tabs-key="machine">

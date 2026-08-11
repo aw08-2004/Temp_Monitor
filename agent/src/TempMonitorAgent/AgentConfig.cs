@@ -9,7 +9,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.26.0";
+    public const string Version = "3.27.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -35,6 +35,16 @@ public static class AgentConfig
     public static string EnrollUrl => HubBase + "/api/agent/enroll";
     public static string HeartbeatUrl => HubBase + "/api/agent/heartbeat";
     public static string CommandsUrl => HubBase + "/api/agent/commands";
+
+    /// <summary>The command endpoint, asking the hub to HOLD the request open for up to
+    /// <paramref name="waitSeconds"/> if nothing is queued, so a command issued in the
+    /// meantime comes straight back down it instead of waiting out CommandPollSeconds.
+    ///
+    /// The hub applies its own ceiling (Settings -> Fleet) and may decline to hold at all,
+    /// which is why the response says whether it did. Declining is not a failure: the
+    /// command is still in the queue and the next ordinary poll claims it.</summary>
+    public static string CommandsUrl_Waiting(int waitSeconds) =>
+        CommandsUrl + "?wait=" + waitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
     public static string ProcessWatchUrl => HubBase + "/api/agent/processes/wanted";
     public static string CommandResultUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
@@ -84,8 +94,30 @@ public static class AgentConfig
     public const int SensorIntervalSeconds = 10;  // full sensor block
     public const int UptimeIntervalSeconds = 600; // uptime field
     public const int HeartbeatSeconds = 10;       // liveness + config (well under 90s online window)
-    public const int CommandPollSeconds = 10;     // idle command poll
+    public const int CommandPollSeconds = 10;     // idle command poll (the fallback cadence)
     public const int UpdateIntervalSeconds = 7 * 24 * 60 * 60; // weekly self-update check
+
+    // How long the agent asks the hub to hold an empty command request open. When the hub
+    // agrees, this replaces CommandPollSeconds entirely -- the wait happens inside the
+    // request, so a command an operator issues starts within a round trip instead of up to
+    // ten seconds later. When it declines (its cap is full, push is off, or it predates
+    // this), the response says so and the loop goes back to sleeping CommandPollSeconds.
+    //
+    // Deliberately shorter than the hub's own maximum hold (60s): the ceiling that decides
+    // when this connection ends must be OURS, so CommandPollTimeoutSeconds below can be
+    // sized against a number this build knows. A hub that wanted to hold longer holds for
+    // this instead.
+    //
+    // Also well under the hub's 90-second offline window. The hub refreshes last_seen when
+    // the request ARRIVES, so a machine parked in a hold that outlasted that window would
+    // read as offline in the console while sitting there perfectly healthy.
+    public const int CommandWaitSeconds = 25;
+
+    // Whole-request budget for a held command poll: the hold plus enough room for a slow
+    // link and a hub that is a little late letting go. Its own HttpClient, because the
+    // shared 10-second one exists to catch a hub that has stopped answering -- and a request
+    // we ASKED to be answered late must not trip that.
+    public const int CommandPollTimeoutSeconds = CommandWaitSeconds + 15;
 
     // The machine-inventory scans (backup profiles, logon sessions, display outputs) touch
     // the registry, mount user hives and enumerate WTS sessions. They self-throttle to their

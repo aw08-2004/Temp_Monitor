@@ -384,9 +384,9 @@
         "label": "Höchstalter des Live-Status",
         "help": "Nach einem Neustart des Hubs werden die zuletzt bekannte Temperatur und Laufzeit aus der Datenbank zurückgelesen. Über dieses Alter hinaus gelten sie als unbekannt, statt als aktuell angezeigt zu werden."
       },
-      "hub.live_default_window_hours": {
+      "hub.live_default_window_seconds": {
         "label": "Standard-Zeitfenster der Diagramme",
-        "help": "Wie viel Verlauf die Live-Diagramme zeigen, bevor du einen Bereich wählst."
+        "help": "Mit wie viel Verlauf die Diagramme einer Maschine öffnen. Kleine Werte wirken wie eine Live-Kurve: Das Fenster wandert mit jeder neuen Messung mit, sodass der jüngste Punkt immer am rechten Rand liegt. Verschieben oder Zoomen verlässt diesen Folgemodus, Zurücksetzen kehrt dorthin zurück. 60 = die letzte Minute."
       },
       "hub.auto_update": {
         "label": "Automatische Hub-Aktualisierung",
@@ -455,6 +455,14 @@
       "fleet.command_ttl_seconds": {
         "label": "Nicht abgeholte Befehle verfallen nach",
         "help": "Ein Befehl, den sein Ziel nicht innerhalb dieses Fensters abholt, verfällt, statt viel später auf einem gerade zurückgekehrten Computer zu laufen."
+      },
+      "fleet.command_push_max_agents": {
+        "label": "Befehle aktiv zustellen an höchstens",
+        "help": "Computer, für die der Hub eine Verbindung offen halten darf, damit ein Befehl sofort startet statt auf die nächste Abfrage dieses Computers zu warten. Das ist eine Grenze für die Worker-Threads des Hubs, nicht für die Flottengröße: Jede offen gehaltene Verbindung belegt einen, und jeder geöffnete Konsolen-Tab ebenfalls. Computer jenseits dieser Grenze erhalten weiterhin jeden Befehl, mit der üblichen Abfrageverzögerung. 0 schaltet die aktive Zustellung ab, es wird dann nur abgefragt."
+      },
+      "fleet.command_push_hold_seconds": {
+        "label": "Zugestellte Verbindung offen halten für",
+        "help": "Wie lange der Hub eine solche Verbindung offen hält, bevor der Agent sie neu aufbaut. Verringere den Wert, wenn etwas zwischen dir und dem Hub (ein Reverse-Proxy oder CDN) untätige Anfragen früher schließt; ein höherer Wert bringt nichts."
       },
       "deploy.default_max_attempts": {
         "label": "Standardversuche je Computer",

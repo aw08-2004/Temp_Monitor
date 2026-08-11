@@ -384,9 +384,9 @@
         "label": "Antigüedad máxima del estado en vivo",
         "help": "Tras reiniciar el hub, la última temperatura y el tiempo de actividad conocidos se releen de la base de datos. Pasada esta antigüedad se tratan como desconocidos en lugar de mostrarse como actuales."
       },
-      "hub.live_default_window_hours": {
+      "hub.live_default_window_seconds": {
         "label": "Ventana predeterminada de los gráficos",
-        "help": "Cuánto historial muestran los gráficos en vivo antes de que elijas un intervalo."
+        "help": "Con cuánto historial se abren los gráficos de una máquina. Los valores pequeños se leen como una traza en vivo: la ventana se desplaza con cada nueva lectura, de modo que el punto más reciente queda siempre en el borde derecho. Desplazar o hacer zoom sale de ese modo de seguimiento, y Restablecer vuelve a él. 60 = el último minuto."
       },
       "hub.auto_update": {
         "label": "Actualización automática del hub",
@@ -455,6 +455,14 @@
       "fleet.command_ttl_seconds": {
         "label": "Caducar los comandos no recogidos tras",
         "help": "Un comando que su destinatario no recoge dentro de esta ventana caduca en lugar de ejecutarse mucho después en un equipo que acaba de volver."
+      },
+      "fleet.command_push_max_agents": {
+        "label": "Enviar comandos como máximo a",
+        "help": "Equipos para los que el hub puede mantener una conexión abierta, de modo que un comando que emitas empiece de inmediato en lugar de esperar al siguiente sondeo de ese equipo. Es un límite de los hilos de trabajo del hub, no del tamaño de tu flota: cada conexión abierta ocupa uno, y cada pestaña de consola abierta también. Los equipos que superen este límite siguen recibiendo todos los comandos, con el retardo de sondeo habitual. Pon 0 para desactivar el envío y volver solo al sondeo."
+      },
+      "fleet.command_push_hold_seconds": {
+        "label": "Mantener abierta una conexión de envío",
+        "help": "Cuánto tiempo mantiene el hub abierta una de esas conexiones antes de que el agente la vuelva a abrir. Redúcelo si algo entre tú y el hub (un proxy inverso o una CDN) cierra las peticiones inactivas antes de ese plazo; subirlo no aporta nada."
       },
       "deploy.default_max_attempts": {
         "label": "Intentos predeterminados por equipo",

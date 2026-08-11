@@ -41,6 +41,7 @@ import hmac
 import json
 import secrets
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -878,6 +879,12 @@ def create_command(db_path, machine, command_type, params, issued_by,
                 now, now + int(ttl_seconds), STATUS_PENDING,
             ),
         )
+    # Straight after the commit and BEFORE the audit write, which is a second transaction:
+    # the row is durable by here, so any agent held open on this machine can claim it while
+    # we are still writing the trail. See the COMMAND PUSH block below. Every command in the
+    # system is created here -- the deploy scheduler, the wake relay and the terminal all
+    # come through this function -- so this one call is what makes the doorbell complete.
+    notify_commands(machine)
     audit(db_path, actor=issued_by, action="issue_command",
           level=LEVEL_SECURITY, target=machine,
           detail={"command_id": command_id, "type": command_type,
@@ -976,6 +983,146 @@ def claim_commands(db_path, agent_id, machine):
               level=LEVEL_INFO, target=machine,
               detail={"command_ids": [c["id"] for c in claimed]})
     return claimed
+
+
+# ================================
+# COMMAND PUSH (the doorbell)
+# ================================
+# Claiming is a PULL: the agent asks every CommandPollSeconds and a command sits in the queue
+# until it does, so an operator's click cost up to a full poll interval before anything began.
+# This makes the hub able to PUSH instead -- without the agent ever opening an inbound port,
+# which it cannot do (it lives behind a site's NAT; see wake.py on why the hub can't even
+# reach its subnet). The agent's own request is held open, and create_command hands the
+# command straight down it. Same one connection, same bearer auth, same direction: the only
+# thing that changed is WHO is waiting on it.
+#
+# Claiming is unchanged and is the FALLBACK, not a second mechanism: a held request claims
+# through exactly the code above, and an agent that is between holds -- or that could not get
+# a slot, or is running an older build, or whose proxy dropped the connection -- picks the
+# same row up on its next ordinary poll. Nothing is delivered twice (claim_commands flips
+# pending -> claimed in one transaction) and nothing is delivered only by push.
+#
+# WHAT A HELD REQUEST COSTS. One waitress worker thread, for as long as it is held. That is
+# the whole reason wait_for_commands takes a `max_waiting` and refuses past it: the hub serves
+# Socket.IO in engineio's threading mode, where an open operator tab ALSO parks a worker
+# (see app.py's socketio block), so the pool is already the scarce resource here. Past the
+# cap, agents fall back to polling rather than queueing behind each other and taking the
+# console's static assets down with them. Size the cap against `--threads` in install.ps1,
+# never independently of it.
+#
+# Per-process, like settings.py's cache and for the same reason: one waitress process, many
+# threads, one address space. Under multiple worker processes a command created in worker A
+# would not ring a bell held in worker B -- delivery would silently degrade to the poll
+# fallback rather than break, but the fix would be a shared bus, not a bigger dict.
+
+# machine -> threading.Event. One entry per machine that has ever been waited on or issued
+# to, which is bounded by the fleet; the events are a few dozen bytes each and are reused.
+_command_bells = {}
+_command_bells_lock = threading.Lock()
+
+# How often a held request re-reads the queue even if no bell rang. Belt and braces: every
+# command goes through create_command today, so the bell is complete -- but "complete" is a
+# property of a call graph that people extend, and the cost of being wrong should be a few
+# seconds of latency rather than a command that hangs for the whole hold.
+COMMAND_WAIT_SLICE_SECONDS = 5.0
+
+
+def _command_bell(machine):
+    with _command_bells_lock:
+        bell = _command_bells.get(machine)
+        if bell is None:
+            bell = _command_bells[machine] = threading.Event()
+        return bell
+
+
+def notify_commands(machine):
+    """Ring `machine`'s doorbell: wake any held request so it claims immediately.
+
+    Safe to call for a machine nobody is waiting on (the event is simply left set; the next
+    waiter clears it before claiming, so a stale set costs one extra claim, never a missed
+    one). Never raises -- delivery is an optimisation over the poll fallback, and a command
+    that is safely in the queue must not fail to be ISSUED because waking somebody threw.
+    """
+    machine = str(machine or "").strip()
+    if not machine:
+        return
+    try:
+        _command_bell(machine).set()
+    except Exception as e:                                   # pragma: no cover - defensive
+        print(f"[fleet] Could not signal waiting agents for {machine}: {e}")
+
+
+def wait_for_commands(db_path, agent_id, machine, timeout_seconds, max_waiting=0,
+                      slice_seconds=COMMAND_WAIT_SLICE_SECONDS):
+    """Claim now; failing that, hold up to `timeout_seconds` for a command to be issued.
+
+    Returns (commands, held) -- `held` says whether the request was actually kept open, so
+    the agent knows whether the wait has already happened and it can come straight back
+    round, or whether it should fall back to its own poll delay.
+
+    ORDER MATTERS and is the whole correctness argument. The bell is cleared BEFORE the first
+    claim, so a command created in the gap between them is seen by the claim, and one created
+    after it leaves the bell set and returns from wait() at once. Clearing after the claim
+    instead is the classic lost wakeup: the command lands, rings, and is then un-rung by a
+    waiter that already looked and saw nothing.
+
+    Holds NO database connection while waiting -- claim, release, wait, claim again. A
+    sqlite connection parked for 25 seconds is a writer other threads queue behind, which
+    would trade the latency we just removed for a worse one somewhere else.
+    """
+    machine = str(machine or "").strip()
+    bell = _command_bell(machine)
+    bell.clear()
+
+    claimed = claim_commands(db_path, agent_id, machine)
+    if claimed or timeout_seconds <= 0:
+        return claimed, False
+
+    if not _take_wait_slot(max_waiting):
+        return [], False
+    try:
+        deadline = time.monotonic() + float(timeout_seconds)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return [], True
+            bell.wait(min(float(slice_seconds), remaining))
+            bell.clear()
+            claimed = claim_commands(db_path, agent_id, machine)
+            if claimed:
+                return claimed, True
+    finally:
+        _release_wait_slot()
+
+
+# The cap on concurrently held requests, enforced here rather than in the HTTP layer so it
+# cannot be bypassed by a second caller of wait_for_commands.
+_wait_slots_lock = threading.Lock()
+_wait_slots_used = 0
+
+
+def _take_wait_slot(max_waiting):
+    global _wait_slots_used
+    limit = int(max_waiting or 0)
+    if limit <= 0:
+        return False
+    with _wait_slots_lock:
+        if _wait_slots_used >= limit:
+            return False
+        _wait_slots_used += 1
+        return True
+
+
+def _release_wait_slot():
+    global _wait_slots_used
+    with _wait_slots_lock:
+        _wait_slots_used = max(0, _wait_slots_used - 1)
+
+
+def waiting_agent_count():
+    """How many requests are held right now. For tests and diagnostics."""
+    with _wait_slots_lock:
+        return _wait_slots_used
 
 
 def complete_command(db_path, command_id, agent_id, success, output=None, cwd=None):

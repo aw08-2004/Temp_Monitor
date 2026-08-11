@@ -2295,7 +2295,15 @@ print("ok")
     # one's parked poll is dead, and everything else queues in the backlog until a poll times
     # out. The threads are blocked on a queue rather than burning CPU, so a generous pool is
     # nearly free; size it by expected concurrent operator TABS, not by request rate.
-    $HubThreads  = 32
+    #
+    # Command PUSH parks a worker the same way, and per MACHINE rather than per tab: an agent
+    # holding GET /api/agent/commands open is what lets a command start the moment it is
+    # issued instead of at that machine's next poll (see fleet.py's COMMAND PUSH block). The
+    # hub caps how many it will hold -- Settings -> Fleet -> "Push commands to at most",
+    # default 8 -- and that cap only means anything if the pool it is drawn from has room to
+    # spare. Hence 128 rather than 32: it is what makes raising that setting toward the size
+    # of a real fleet a supported thing to do rather than a way to hang the console.
+    $HubThreads  = 128
     $scriptsDir  = Join-Path (Split-Path $pythonExe -Parent) "Scripts"
     $waitressExe = Join-Path $scriptsDir "waitress-serve.exe"
     if (Test-Path $waitressExe) {

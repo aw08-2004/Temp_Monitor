@@ -67,6 +67,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     // the 10-second client above — that timeout is a *whole request* budget, not an idle
     // one, and would abort every large installer mid-download.
     private readonly HttpClient _downloadHttp;
+    // Held command polls, for the same reason downloads have their own client: the 10-second
+    // budget above is there to notice a hub that has stopped answering, and a request we
+    // explicitly asked the hub to sit on until it has something is not that.
+    private readonly HttpClient _commandHttp;
     private AgentIdentity _identity;
 
     public FleetClient(ILogger<FleetClient> log, AgentState state)
@@ -76,6 +80,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         _identity = state.LoadIdentity();
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _downloadHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        _commandHttp = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(AgentConfig.CommandPollTimeoutSeconds),
+        };
     }
 
     public bool IsEnrolled => _identity.IsEnrolled;
@@ -297,24 +305,42 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
     }
 
-    /// <summary>Poll + claim pending commands. Returns an empty list on any failure.</summary>
-    public async Task<List<FleetCommand>> PollCommandsAsync(CancellationToken ct)
+    /// <summary>
+    /// Poll + claim pending commands, optionally asking the hub to HOLD the request open
+    /// while the queue is empty so a command issued meanwhile arrives at once.
+    ///
+    /// <paramref name="waitSeconds"/> of 0 is the plain poll this has always been. Returns
+    /// the commands and whether the hub actually held the request — the caller uses that to
+    /// decide whether to sleep before asking again, because a hold IS the sleep.
+    ///
+    /// Both failure paths report Waited=false on purpose. A hub that could not be reached,
+    /// answered an error, or dropped the connection has told us nothing about whether it
+    /// would have held, so the caller must fall back to its own cadence rather than
+    /// reconnecting in a tight loop against something that is already unwell.
+    /// </summary>
+    public async Task<CommandPollResult> PollCommandsAsync(int waitSeconds, CancellationToken ct)
     {
-        if (!_identity.IsEnrolled) return new List<FleetCommand>();
+        if (!_identity.IsEnrolled) return CommandPollResult.Empty;
+        var holding = waitSeconds > 0;
+        var url = holding ? AgentConfig.CommandsUrl_Waiting(waitSeconds) : AgentConfig.CommandsUrl;
         try
         {
-            using var req = Authorized(HttpMethod.Get, AgentConfig.CommandsUrl);
-            using var resp = await _http.SendAsync(req, ct);
-            if (!resp.IsSuccessStatusCode) return new List<FleetCommand>();
+            using var req = Authorized(HttpMethod.Get, url);
+            using var resp = await (holding ? _commandHttp : _http).SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) return CommandPollResult.Empty;
 
             var text = await resp.Content.ReadAsStringAsync(ct);
             var parsed = JsonSerializer.Deserialize<CommandsResponse>(text);
-            return parsed?.Commands ?? new List<FleetCommand>();
+            return new CommandPollResult(
+                parsed?.Commands ?? new List<FleetCommand>(),
+                // Absent on a hub too old to know about push, which deserializes to false --
+                // exactly right, since such a hub never held anything.
+                parsed?.Waited ?? false);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Command poll failed: {Msg}", e.Message);
-            return new List<FleetCommand>();
+            return CommandPollResult.Empty;
         }
     }
 
@@ -904,11 +930,15 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     {
         [System.Text.Json.Serialization.JsonPropertyName("commands")]
         public List<FleetCommand>? Commands { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("waited")]
+        public bool Waited { get; set; }
     }
 
     public void Dispose()
     {
         _http.Dispose();
         _downloadHttp.Dispose();
+        _commandHttp.Dispose();
     }
 }

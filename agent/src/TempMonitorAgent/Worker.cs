@@ -195,19 +195,32 @@ public sealed class Worker : BackgroundService
 
     // ------------------------------------------------------------------ commands
 
-    /// <summary>Poll, claim, dispatch. Its cadence follows the operator: fast while a shell
-    /// submission is in flight or something arrived recently, idle otherwise.</summary>
+    /// <summary>Ask, claim, dispatch.
+    ///
+    /// The ask is a HELD request by default: the hub keeps it open while this machine's queue
+    /// is empty and answers the moment something is issued, so an operator's click starts
+    /// work within a round trip rather than up to CommandPollSeconds later. Nothing about
+    /// claiming changed -- the hold just decides WHEN the claim happens.
+    ///
+    /// Which means the sleep at the bottom is conditional now. If the hub held the request,
+    /// the wait already happened inside it and this comes straight back round; sleeping again
+    /// would hand back the latency the hold just removed. If it declined -- push turned off,
+    /// its cap full, an older hub, or the request failed outright -- the old cadence is still
+    /// there underneath, unchanged, and that is what runs.</summary>
     private async Task CommandLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
+            var held = false;
             try
             {
                 if (await EnsureEnrolledAsync(ct))
-                    await PollAndDispatchAsync(ct);
+                    held = await PollAndDispatchAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Command poll failed"); }
+
+            if (held) continue;
 
             // Fast while the operator is mid-something: a live shell submission waiting on
             // shell_input, or anything at all having arrived within CommandBurstSeconds.
@@ -218,9 +231,17 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    private async Task PollAndDispatchAsync(CancellationToken ct)
+    /// <summary>Returns whether the hub held this request open, i.e. whether the loop has
+    /// already done its waiting.</summary>
+    private async Task<bool> PollAndDispatchAsync(CancellationToken ct)
     {
-        var commands = await _fleet.PollCommandsAsync(ct);
+        // Never hold while a shell submission is live: those exchanges are a burst of tiny
+        // round trips against a slot the hub only has a few of, and the fast cadence already
+        // covers them. Holding here would spend a fleet-wide resource on the one case that
+        // does not need it.
+        var wait = _shells.AnyActiveSubmission ? 0 : AgentConfig.CommandWaitSeconds;
+        var poll = await _fleet.PollCommandsAsync(wait, ct);
+        var commands = poll.Commands;
         if (commands.Count > 0) _lastCommandUtc = DateTime.UtcNow;
 
         foreach (var cmd in commands)
@@ -252,6 +273,8 @@ public sealed class Worker : BackgroundService
         // Reap finished entries so the dictionary can't grow without bound.
         foreach (var (id, task) in _running.ToArray())
             if (task.IsCompleted) _running.TryRemove(id, out _);
+
+        return poll.Waited;
     }
 
     private async Task RunOneAsync(FleetCommand cmd, CancellationToken ct)

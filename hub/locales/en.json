@@ -449,9 +449,9 @@
         "label": "Live status fallback age",
         "help": "After a hub restart the last known temperature and uptime are read back from the database. Past this age they are treated as unknown rather than shown as current."
       },
-      "hub.live_default_window_hours": {
+      "hub.live_default_window_seconds": {
         "label": "Default chart window",
-        "help": "How much history the live charts show before you pick a range."
+        "help": "How much history a machine's charts open on. Small values read as a live trace: the window slides along with each new reading so the latest point is always at the right edge. Panning or zooming leaves that follow mode, and Reset returns to it. 60 = the last minute."
       },
       "hub.auto_update": {
         "label": "Hub auto-update",
@@ -520,6 +520,14 @@
       "fleet.command_ttl_seconds": {
         "label": "Expire unclaimed commands after",
         "help": "A command not picked up by its target within this window expires instead of running much later on a machine that just came back."
+      },
+      "fleet.command_push_max_agents": {
+        "label": "Push commands to at most",
+        "help": "Machines the hub may hold a connection open for, so a command you issue starts immediately instead of waiting for that machine's next poll. This is a limit on the hub's worker threads, not on your fleet: each held connection uses one, and so does each open console tab. Machines past this limit still get every command, on the usual poll delay. Set 0 to turn push off and go back to polling only."
+      },
+      "fleet.command_push_hold_seconds": {
+        "label": "Hold a pushed connection for",
+        "help": "How long the hub keeps one of those connections open before letting the agent reconnect. Lower it if something between you and the hub (a reverse proxy or CDN) closes idle requests sooner than this; there is no benefit to raising it."
       },
       "deploy.default_max_attempts": {
         "label": "Default attempts per machine",

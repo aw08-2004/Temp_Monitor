@@ -84,7 +84,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.75.0"
+HUB_VERSION = "1.76.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3667,8 +3667,15 @@ def _resolve_history_window(args):
         end_dt = parse_request_datetime(to_raw) or datetime.now()
         start_dt = parse_request_datetime(from_raw)
         if start_dt is None:
-            default_window = settings.get_int(DB_PATH, "hub.live_default_window_hours")
-            start_dt = get_oldest_reading_datetime() or (end_dt - timedelta(hours=default_window))
+            # A caller that names no start gets the configured default window, not the whole
+            # archive. The oldest reading is a FLOOR, not the start: it stops us asking for
+            # time that predates the data, but on a hub with months of history it used to
+            # make "no from=" mean "everything", which is unbounded and nothing wants.
+            window = settings.get_int(DB_PATH, "hub.live_default_window_seconds")
+            start_dt = end_dt - timedelta(seconds=window)
+            oldest = get_oldest_reading_datetime()
+            if oldest is not None and oldest > start_dt:
+                start_dt = oldest
 
     if start_dt > end_dt:
         start_dt, end_dt = end_dt, start_dt
@@ -3955,6 +3962,7 @@ def machine_page(machine):
         "machine.html", machine=machine,
         high_temp_threshold=settings.get_int(DB_PATH, "hub.high_temp_threshold"),
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
+        live_window_seconds=settings.get_int(DB_PATH, "hub.live_default_window_seconds"),
         enabled_metrics=enabled_history_metrics(),
         hub_version=HUB_VERSION,
         latest_agent_version=get_latest_agent_version()

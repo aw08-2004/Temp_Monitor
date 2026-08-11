@@ -244,9 +244,36 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
     @agent_auth
     def agent_commands(agent_id, machine):
         """Agent pulls (and thereby claims) any pending commands for its machine.
-        Outbound-only: the agent polls this, no inbound port is ever opened."""
-        commands = fleet.claim_commands(db_path, agent_id, machine)
-        return jsonify({"commands": commands}), 200
+
+        Outbound-only, still: the agent makes this request, no inbound port is ever opened.
+        What `?wait=<seconds>` adds is that the hub may HOLD it open when the queue is empty,
+        so a command issued a moment later goes down this connection at once rather than
+        waiting out the agent's next poll. See fleet.py's COMMAND PUSH block.
+
+        The requested wait is a CEILING FROM BOTH ENDS: min(what the agent asked for, what
+        this hub is configured to hold). The agent's own HTTP timeout is sized against its
+        request, so a hub configured to hold longer must never be able to hold an agent past
+        the point where it gives up and retries -- that would spend a slot on a connection
+        with nobody on the other end.
+
+        `waited` tells the agent whether the request was actually held. That is what lets it
+        come straight back round instead of sleeping again (the hold WAS the sleep), and --
+        just as important -- what lets an agent that was refused a slot fall back to its old
+        cadence rather than hammering the hub with unheld requests.
+        """
+        hold = settings.get_int(db_path, "fleet.command_push_hold_seconds")
+        max_agents = settings.get_int(db_path, "fleet.command_push_max_agents")
+        try:
+            requested = float(request.args.get("wait") or 0)
+        except (TypeError, ValueError):
+            requested = 0.0
+        # Negative or nonsense reads as "don't wait", which is the pre-push behaviour and the
+        # right answer for a client that didn't ask for this.
+        wait_seconds = max(0.0, min(requested, float(hold)))
+
+        commands, waited = fleet.wait_for_commands(
+            db_path, agent_id, machine, wait_seconds, max_waiting=max_agents)
+        return jsonify({"commands": commands, "waited": waited}), 200
 
     @bp.route("/api/agent/commands/<command_id>/output", methods=["POST"])
     @agent_auth

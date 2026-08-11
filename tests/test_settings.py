@@ -54,7 +54,9 @@ def test_defaults_match_the_old_constants():
         "hub.high_temp_avg_window_seconds": 300,   # 5-minute averaging window for alerts
         "hub.low_load_threshold": 40,             # was app.LOW_LOAD_THRESHOLD
         "hub.live_status_cache_seconds": 600,     # was app.LIVE_STATUS_CACHE_SECONDS
-        "hub.live_default_window_hours": 3,       # was app.LIVE_DEFAULT_WINDOW_HOURS
+        # Not a replaced constant: the machine page opens on this many seconds of history and
+        # slides the window with each live reading. Replaced hub.live_default_window_hours (3).
+        "hub.live_default_window_seconds": 60,
         "data.retention_days": 30,                # was app.RETENTION_DAYS
         "data.prune_interval_seconds": 86400,     # was app.RETENTION_PRUNE_INTERVAL_SECONDS
         "data.ingest_max_backdate_days": 30,      # was app.RETENTION_DAYS, now split out

@@ -41,6 +41,20 @@ public sealed class FleetCommand
     [JsonPropertyName("issued_by")] public string IssuedBy { get; set; } = "";
 }
 
+/// <summary>One answer from the command endpoint: what to run, and whether the hub HELD the
+/// request open waiting for it.
+///
+/// <c>Waited</c> is the whole reason this is a pair rather than a list. When the hub holds a
+/// request, the wait has already happened inside it, so the poll loop must come straight back
+/// round -- sleeping afterwards would reintroduce exactly the delay the hold removed. When it
+/// declines (push disabled, its cap full, or an older hub), the loop keeps its own cadence.
+/// An empty list therefore means two very different things, and this is how they are told
+/// apart.</summary>
+public readonly record struct CommandPollResult(List<FleetCommand> Commands, bool Waited)
+{
+    public static CommandPollResult Empty => new(new List<FleetCommand>(), false);
+}
+
 /// <summary>Result of executing a command, reported back to the hub. <c>Cwd</c> is the
 /// working directory a persistent shell was left in (run_script only); null otherwise, and
 /// an older hub simply ignores the extra field.</summary>

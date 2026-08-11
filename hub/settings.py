@@ -163,8 +163,19 @@ REGISTRY = (
     _s("hub.low_load_threshold", "hub", "int", 40, minimum=0, maximum=100, unit="percent"),
     _s("hub.live_status_cache_seconds", "hub", "int", 600, minimum=60, maximum=86400,
        unit="seconds"),
-    _s("hub.live_default_window_hours", "hub", "int", 3, minimum=1, maximum=168,
-       unit="hours"),
+    # How much history a machine's charts open on. SECONDS, and a small number of them: the
+    # page is a live view first and an archive second, so it opens on the last minute and
+    # slides with each incoming reading rather than fitting a whole day you then have to zoom
+    # into. Panning or zooming drops out of that follow mode, and the whole day is still one
+    # pan away -- the day picker and the range bounds are unchanged.
+    #
+    # This replaced hub.live_default_window_hours (default 3). Not a RENAMED_KEYS entry on
+    # purpose: that migration moves a row verbatim, and a stored `3` means three HOURS under
+    # the old key and three SECONDS under this one. A hub that had overridden the old value
+    # falls back to the default here, which is the honest outcome for a knob whose unit
+    # changed under it.
+    _s("hub.live_default_window_seconds", "hub", "int", 60, minimum=5, maximum=86400,
+       unit="seconds"),
     _s("hub.auto_update", "hub", "bool", None),
     # Ships as AUTO, not "en". A concrete default here is indistinguishable from an admin
     # deliberately choosing English, which made i18n.resolve's Accept-Language step
@@ -214,6 +225,26 @@ REGISTRY = (
     _s("fleet.offline_after_seconds", "fleet", "int", 90, minimum=30, maximum=3600,
        unit="seconds"),
     _s("fleet.command_ttl_seconds", "fleet", "int", 900, minimum=60, maximum=86400,
+       unit="seconds"),
+
+    # Command PUSH: how long the hub may hold an agent's command request open so a command
+    # issued in the meantime goes down it immediately, and how many it will hold at once.
+    # See fleet.py's COMMAND PUSH block -- claiming is unchanged and is the fallback.
+    #
+    # The cap is a THREAD budget, not a fleet size. Each held request parks one waitress
+    # worker, and open operator tabs already park one each for Socket.IO (app.py), so the
+    # default is sized to be safe against the 32-thread pool install.ps1 has shipped rather
+    # than against how many PCs you have. Raise it only alongside `--threads`; agents past
+    # the cap keep working, on the poll cadence they used before this existed. 0 turns push
+    # off entirely and is the setting to reach for if a proxy in front of the hub cannot be
+    # made to tolerate a held request.
+    #
+    # The hold is bounded well under fleet.offline_after_seconds on purpose: last_seen is
+    # refreshed when the request ARRIVES, so a hold longer than the offline window would let
+    # an agent that is sitting there waiting, healthy and connected, read as offline.
+    _s("fleet.command_push_max_agents", "fleet", "int", 8, minimum=0, maximum=512,
+       unit="pcs"),
+    _s("fleet.command_push_hold_seconds", "fleet", "int", 25, minimum=5, maximum=60,
        unit="seconds"),
 
     # ---------------- Deploy: package pushes ----------------

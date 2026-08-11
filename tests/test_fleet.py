@@ -4,6 +4,7 @@ Run from the repo root so `import fleet` resolves.
 import os
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
@@ -456,6 +457,94 @@ def main():
         with fleet.get_conn(db_path) as conn:
             check("delete_machine('  ') is a no-op",
                   conn.execute("SELECT COUNT(*) AS n FROM agents WHERE machine = 'PC-01'").fetchone()["n"] >= 1)
+
+        # ---------------- command push (the doorbell) ----------------
+        # Everything here is about the ONE guarantee push has to make: it may make delivery
+        # faster, and it may not make it less reliable. Every case checks against the queue,
+        # not against the wait.
+        push_id, _ = fleet.enroll_agent(db_path, "PC-PUSH", SECRET, SECRET)
+
+        # Nothing queued and no wait asked for: the pre-push behaviour, byte for byte.
+        cmds, waited = fleet.wait_for_commands(db_path, push_id, "PC-PUSH", 0)
+        check("no wait requested -> claims and returns immediately", cmds == [] and not waited)
+
+        # Already queued: answered from the queue without ever holding the request. The point
+        # of the assertion is the elapsed time -- a hub that holds a request it could have
+        # answered has spent a thread slot on nothing.
+        fleet.create_command(db_path, "PC-PUSH", "restart", {}, "op@example.com")
+        started = time.monotonic()
+        cmds, waited = fleet.wait_for_commands(db_path, push_id, "PC-PUSH", 5, max_waiting=4)
+        check("a queued command is claimed without waiting",
+              len(cmds) == 1 and not waited and (time.monotonic() - started) < 1.0)
+
+        # The push itself: hold an empty queue, issue from another thread, and the held
+        # request must come back with it well inside the timeout rather than at it.
+        def issue_soon():
+            time.sleep(0.3)
+            fleet.create_command(db_path, "PC-PUSH", "restart", {}, "op@example.com")
+
+        t = threading.Thread(target=issue_soon)
+        started = time.monotonic()
+        t.start()
+        cmds, waited = fleet.wait_for_commands(db_path, push_id, "PC-PUSH", 10, max_waiting=4)
+        elapsed = time.monotonic() - started
+        t.join()
+        check("a command issued during the hold is pushed down it",
+              len(cmds) == 1 and waited and elapsed < 3.0)
+
+        # Nothing arrives: return empty at the deadline, having said it waited. `waited` is
+        # what tells the agent the sleep already happened, so it must be true even when the
+        # hold produced nothing.
+        started = time.monotonic()
+        cmds, waited = fleet.wait_for_commands(db_path, push_id, "PC-PUSH", 1, max_waiting=4,
+                                               slice_seconds=0.2)
+        elapsed = time.monotonic() - started
+        check("an empty hold returns at the deadline, marked waited",
+              cmds == [] and waited and 0.9 < elapsed < 4.0)
+
+        # The slot cap. max_waiting=0 is the off switch and must NOT mean "hold forever";
+        # the request has to fall straight through to the poll fallback.
+        started = time.monotonic()
+        cmds, waited = fleet.wait_for_commands(db_path, push_id, "PC-PUSH", 10, max_waiting=0)
+        check("max_waiting=0 refuses to hold and answers at once",
+              cmds == [] and not waited and (time.monotonic() - started) < 1.0)
+
+        # ...and past the cap, the extra agent is refused a hold rather than queued behind
+        # the ones that have one. Refused is not dropped: it still claimed first, so a
+        # command already waiting for it comes back on this very call.
+        holder = threading.Thread(target=lambda: fleet.wait_for_commands(
+            db_path, push_id, "PC-HOLD", 3, max_waiting=1, slice_seconds=0.2))
+        holder.start()
+        time.sleep(0.4)                      # let it take the only slot
+        fleet.create_command(db_path, "PC-OTHER", "restart", {}, "op@example.com")
+        other_id, _ = fleet.enroll_agent(db_path, "PC-OTHER", SECRET, SECRET)
+        started = time.monotonic()
+        cmds, waited = fleet.wait_for_commands(db_path, other_id, "PC-OTHER", 10, max_waiting=1)
+        check("an agent past the cap still claims, it just isn't held",
+              len(cmds) == 1 and (time.monotonic() - started) < 1.0)
+        started = time.monotonic()
+        cmds, waited = fleet.wait_for_commands(db_path, other_id, "PC-OTHER", 10, max_waiting=1)
+        check("...and with nothing queued it falls back to polling",
+              cmds == [] and not waited and (time.monotonic() - started) < 1.0)
+        holder.join()
+        check("slots are released when a hold ends", fleet.waiting_agent_count() == 0)
+
+        # The lost-wakeup race, run head on: issue at the same moment the wait starts, many
+        # times over. wait_for_commands clears the bell BEFORE its first claim precisely so
+        # the command that lands in that gap is seen; get the order wrong and this hangs to
+        # the deadline instead of returning at once.
+        raced_ok = True
+        for i in range(20):
+            racer = threading.Thread(target=fleet.create_command,
+                                     args=(db_path, "PC-RACE", "restart", {}, "op@example.com"))
+            racer.start()
+            cmds, _ = fleet.wait_for_commands(db_path, push_id, "PC-RACE", 5, max_waiting=4,
+                                              slice_seconds=0.2)
+            racer.join()
+            if len(cmds) != 1:
+                raced_ok = False
+                break
+        check("a command issued as the hold begins is never lost", raced_ok)
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

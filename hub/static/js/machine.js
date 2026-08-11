@@ -2,6 +2,12 @@ const config = document.getElementById('machine-config');
 const MACHINE = config.dataset.machine;
 const HIGH_TEMP_THRESHOLD = Number(config.dataset.highTempThreshold);
 const LOW_LOAD_THRESHOLD = Number(config.dataset.lowLoadThreshold);
+// How much history the panels OPEN on, from hub.live_default_window_seconds. Small by
+// default (a minute), because this page is watched live far more often than it is read as an
+// archive -- a whole day fitted into 400 px is a flat line you have to zoom into before it
+// says anything. The fallback matches the registry default, for a page served by an older
+// hub that doesn't emit the attribute.
+const LIVE_WINDOW_MS = (Number(config.dataset.liveWindowSeconds) || 60) * 1000;
 
 const zoomPlugin = window['chartjs-plugin-zoom'];
 if (zoomPlugin) Chart.register(zoomPlugin.default || zoomPlugin);
@@ -54,6 +60,12 @@ let viewportReloadTimer = null;
 let lastHistoryRequest = null;
 let historyLoadInFlight = false;
 let viewingToday = true;
+// Follow mode: every live reading re-anchors the visible window so the newest point sits at
+// the right edge. On for today, off the moment the operator pans or zooms (they've asked to
+// look somewhere specific, and yanking the axis out from under them each tick is unusable),
+// and back on via Reset. Deliberately separate from `viewingToday`: a past day has no
+// "latest" to follow, but you can also be on today and simply not want it.
+let followLive = true;
 
 function getLocalDateString() {
     const now = new Date();
@@ -71,6 +83,17 @@ function getDayRange(dateString) {
     if (Number.isNaN(start.getTime())) return null;
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
     return { startMs: start.getTime(), endMs: Math.min(end.getTime(), Date.now()) };
+}
+
+// What the panels SHOW when the page opens (and what Reset returns to). Distinct from
+// getDayRange, which stays the bound on where panning and zooming may reach -- the whole day
+// is one pan away, it just isn't what you land on. A past day has no live edge to sit at, so
+// it opens on the whole day exactly as before.
+function getInitialRange(dateString) {
+    const day = getDayRange(dateString);
+    if (!day) return null;
+    if (dateString !== getLocalDateString()) return day;
+    return { startMs: Math.max(day.startMs, day.endMs - LIVE_WINDOW_MS), endMs: day.endMs };
 }
 
 function chooseResolutionForSpan(spanMs) {
@@ -333,6 +356,9 @@ function onPanelRangeChanged(sourceChart) {
     if (syncingXRange) return;
     const xs = sourceChart.scales?.x;
     if (!xs || !Number.isFinite(Number(xs.min)) || !Number.isFinite(Number(xs.max))) return;
+    // The operator has chosen a range by hand; stop dragging the axis back to the live edge
+    // under them. Reset is how they say they're done looking.
+    followLive = false;
     applyXRangeToAll(Number(xs.min), Number(xs.max), sourceChart);
     scheduleViewportReload();
 }
@@ -423,42 +449,82 @@ async function loadSelectedDay() {
     const range = getDayRange(date);
     if (!range) return;
     viewingToday = date === getLocalDateString();
+    // The day stays the PAN BOUND; only the opening view narrows. loadVisibleViewport clamps
+    // to selectedDayRange, so panning left off the initial minute still fetches the rest of
+    // the day rather than hitting an invisible wall at the window edge.
     selectedDayRange = range;
+    await loadInitialRange(date);
+}
+
+// Load (or reload) the opening view for `date`. Follow mode is re-armed here rather than at
+// the call sites, so "open the page", "pick a day" and "Reset" cannot drift apart.
+async function loadInitialRange(date) {
+    const view = getInitialRange(date);
+    if (!view) return;
+    followLive = date === getLocalDateString();
     lastHistoryRequest = null;
+    // resetZoom only when we are NOT following: follow mode needs an explicit x min/max to
+    // anchor the window, and resetZoom's job is to throw exactly those away.
     await loadHistoryRange(
-        range.startMs,
-        range.endMs,
-        getSelectedResolution(range.endMs - range.startMs),
-        true
+        view.startMs,
+        view.endMs,
+        getSelectedResolution(view.endMs - view.startMs),
+        !followLive
     );
 }
 
+// Set here as well as in onPanelRangeChanged: the plugin's onZoomComplete is documented for
+// user gestures, and a button that zooms while the next live reading yanks the axis back is
+// worse than one that doesn't zoom at all.
 document.getElementById('zoom-in').addEventListener('click', () => {
+    followLive = false;
     for (const p of panels) if (typeof p.chart.zoom === 'function') p.chart.zoom(1.2);
     scheduleViewportReload();
 });
 document.getElementById('zoom-out').addEventListener('click', () => {
+    followLive = false;
     for (const p of panels) if (typeof p.chart.zoom === 'function') p.chart.zoom(0.8);
     scheduleViewportReload();
 });
 document.getElementById('reset-zoom').addEventListener('click', () => {
-    if (!selectedDayRange) return;
-    const resolution = getSelectedResolution(selectedDayRange.endMs - selectedDayRange.startMs);
-    loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
+    if (!selectedDayRange || !dayPicker.value) return;
+    // Back to the opening view, not to the whole day: on today that re-arms follow mode,
+    // which is what an operator who has finished inspecting a spike actually wants back.
+    loadInitialRange(dayPicker.value);
 });
 dayPicker.addEventListener('change', loadSelectedDay);
-resolutionEl.addEventListener('change', () => {
-    if (dynamicResolutionEl.checked || !selectedDayRange) return;
-    const resolution = getSelectedResolution(selectedDayRange.endMs - selectedDayRange.startMs);
+
+// The range currently on screen, clamped to the selected day. Both resolution controls reload
+// through this rather than through selectedDayRange: re-fetching the whole day would throw
+// away whatever the operator had navigated to (including the opening live window) as a side
+// effect of changing how finely it is sampled.
+function currentViewRange() {
+    if (!selectedDayRange) return null;
+    const xs = panels[0]?.chart.scales?.x;
+    const min = Number(xs?.min);
+    const max = Number(xs?.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return selectedDayRange;
+    return {
+        startMs: Math.max(selectedDayRange.startMs, Math.floor(min)),
+        endMs: Math.min(selectedDayRange.endMs, Math.ceil(max)),
+    };
+}
+
+function reloadAtCurrentView() {
+    const view = currentViewRange();
+    if (!view) return;
     lastHistoryRequest = null;
-    loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
+    loadHistoryRange(view.startMs, view.endMs,
+                     getSelectedResolution(view.endMs - view.startMs), false);
+}
+
+resolutionEl.addEventListener('change', () => {
+    if (dynamicResolutionEl.checked) return;
+    reloadAtCurrentView();
 });
 dynamicResolutionEl.addEventListener('change', () => {
     syncResolutionControl();
-    if (!selectedDayRange) return;
-    const resolution = getSelectedResolution(selectedDayRange.endMs - selectedDayRange.startMs);
-    lastHistoryRequest = null;
-    loadHistoryRange(selectedDayRange.startMs, selectedDayRange.endMs, resolution, true);
+    reloadAtCurrentView();
 });
 gridEl.addEventListener('wheel', () => {
     scheduleViewportReload();
@@ -984,9 +1050,23 @@ socket.on('new_temp', (msg) => {
     // diagnostics block (which now carries disk & network alongside cpu/gpu/memory). A metric
     // the machine doesn't report is simply skipped for that tick.
     const diagnostics = msg.diagnostics || {};
+    // Re-anchor the window on this reading BEFORE the per-panel loop, and apply it to every
+    // panel rather than only the ones that carried a value this tick -- a grid whose panels
+    // sat on two different time axes because one sensor went quiet is exactly the confusion
+    // the cross-panel mirroring elsewhere in this file exists to prevent.
+    // Date.now() as well as x: a machine whose clock runs behind the browser's would
+    // otherwise park the window in the past and never show the live edge.
+    const followMax = followLive ? Math.max(x, Date.now()) : null;
     for (const p of panels) {
+        if (followLive) {
+            p.chart.options.scales.x.min = followMax - LIVE_WINDOW_MS;
+            p.chart.options.scales.x.max = followMax;
+        }
         const y = p.metric.key === 'temp' ? Number(msg.temp) : Number(diagnostics[p.metric.diag]);
-        if (!Number.isFinite(y)) continue;
+        if (!Number.isFinite(y)) {
+            if (followLive) p.chart.update('none');
+            continue;
+        }
         p.chart.data.datasets[0].data.push({ x, y });
         p.emptyEl.style.display = 'none';
         p.chart.update('none');

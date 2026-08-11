@@ -5,6 +5,7 @@ import functools
 import os
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
@@ -100,6 +101,65 @@ def main():
         check("agent posts result -> 200", r.status_code == 200)
         r = c.get(f"/api/fleet/commands/{cid}")
         check("console sees command done", r.get_json()["status"] == fleet.STATUS_DONE)
+
+        print("\n== Command push over HTTP ==")
+        # No wait asked for: unchanged behaviour, and `waited` says so. An older agent sends
+        # no `wait` at all and must keep getting exactly this.
+        r = c.get("/api/agent/commands", headers=auth)
+        body = r.get_json()
+        check("a plain poll still answers immediately",
+              r.status_code == 200 and body["commands"] == [] and body["waited"] is False)
+        # A garbage wait is not an error and is not an unbounded hold -- it reads as no wait.
+        started = time.monotonic()
+        body = c.get("/api/agent/commands?wait=nonsense", headers=auth).get_json()
+        check("an unparseable wait falls back to not waiting",
+              body["waited"] is False and (time.monotonic() - started) < 2.0)
+        # The hold is bounded by the hub's setting as well as the agent's ask, so an agent
+        # that requests more than this hub allows comes back at the hub's ceiling. Pinned at
+        # a small value here so the test doesn't sit for the shipped 25 seconds.
+        settings.set_many(db_path, {"fleet.command_push_hold_seconds": 5,
+                                    "fleet.command_push_max_agents": 4})
+        started = time.monotonic()
+        body = c.get("/api/agent/commands?wait=600", headers=auth).get_json()
+        elapsed = time.monotonic() - started
+        check("the hub's hold setting caps what the agent may ask for",
+              body["waited"] is True and body["commands"] == [] and 4.0 < elapsed < 20.0)
+        # And the setting that turns push off has to actually turn it off, not shorten it.
+        settings.set_many(db_path, {"fleet.command_push_max_agents": 0})
+        started = time.monotonic()
+        body = c.get("/api/agent/commands?wait=600", headers=auth).get_json()
+        check("max agents 0 turns push off; the request is answered at once",
+              body["waited"] is False and (time.monotonic() - started) < 2.0)
+        # The feature itself, end to end and through the real endpoints: an agent holding its
+        # request open, an operator issuing a command from the console, and the command coming
+        # back down the held connection instead of waiting for the next poll. This is the one
+        # assertion that would fail if the doorbell were never rung from create_command.
+        held = {}
+
+        def hold_open():
+            agent_c = app.test_client()
+            started_at = time.monotonic()
+            body = agent_c.get("/api/agent/commands?wait=20", headers=auth).get_json()
+            held["body"] = body
+            held["elapsed"] = time.monotonic() - started_at
+
+        settings.set_many(db_path, {"fleet.command_push_max_agents": 4})
+        holder = threading.Thread(target=hold_open)
+        holder.start()
+        time.sleep(0.5)                          # let the agent get its hold established
+        r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "restart"})
+        pushed_id = r.get_json()["command_id"]
+        holder.join(timeout=25)
+        pushed = held.get("body") or {}
+        check("issuing a command wakes the held agent request",
+              [x["id"] for x in pushed.get("commands", [])] == [pushed_id])
+        check("...and it arrives in about a round trip, not at the hold's deadline",
+              pushed.get("waited") is True and held.get("elapsed", 99) < 5.0)
+        check("a pushed command is claimed, exactly like a polled one",
+              c.get(f"/api/fleet/commands/{pushed_id}").get_json()["status"]
+              == fleet.STATUS_CLAIMED)
+        settings.reset(db_path, ["fleet.command_push_hold_seconds",
+                                 "fleet.command_push_max_agents"])
 
         print("\n== Agent reports shell cwd on the result ==")
         r = c.post("/api/fleet/commands", json={"machine": "PC-01", "type": "run_script",
