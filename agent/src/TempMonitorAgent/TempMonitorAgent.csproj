@@ -72,7 +72,7 @@
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
-    <PackageReference Include="SIPSorcery" Version="10.0.12" />
+    <PackageReference Include="SIPSorcery" Version="10.0.14" />
     <!-- VP8 fallback codec. Media Foundation has no in-box VP8 encoder, so this wraps libvpx
          (a native DLL, which IncludeNativeLibrariesForSelfExtract above carries into the
          single-file publish). H.264 stays the default: VP8 is software-only and costs
