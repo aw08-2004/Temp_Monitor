@@ -72,7 +72,12 @@
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
-    <PackageReference Include="SIPSorcery" Version="10.0.12" />
+    <!-- 10.0.14 is the floor: 10.0.12 and earlier carry two high-severity DoS advisories,
+         GHSA-jwjp-4649-v8jp (out-of-bounds read parsing an SCTP SACK chunk) and
+         GHSA-pfvm-w89x-94jw (a malformed UDP datagram kills the TURN receive loop). The
+         SCTP one is the one that matters here: our data channel is SCTP, and the chunk is
+         parsed before anything checks who sent it. Keep this at or above 10.0.14. -->
+    <PackageReference Include="SIPSorcery" Version="10.0.15" />
     <!-- VP8 fallback codec. Media Foundation has no in-box VP8 encoder, so this wraps libvpx
          (a native DLL, which IncludeNativeLibrariesForSelfExtract above carries into the
          single-file publish). H.264 stays the default: VP8 is software-only and costs
