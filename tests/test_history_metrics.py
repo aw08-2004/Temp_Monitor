@@ -345,6 +345,40 @@ def test_ingest_stores_metric_columns():
     check("gpu_power_w column", m["gpu_power_w"] == 120.0)
 
 
+def test_sensor_blob_is_throttled_but_metrics_are_not():
+    """A machine whose page somebody has open reports every second (see hub/live.py). The
+    ~36 KB sensor blob must NOT ride every one of those rows -- that is ~130 MB an hour for
+    one machine, for a blob nothing reads except as "the newest one". The typed columns the
+    charts actually read are written on every single reading, which is what makes the fast
+    cadence show up in history at all."""
+    print("\n-- a 1 Hz machine stores 1 Hz metrics and one sensor blob per 10s --")
+    client = _client()
+    # Three reports a second apart, stamped explicitly: readings are uniquely indexed on
+    # (ts_epoch, machine, temp) and the stored temperature is re-derived from the sensor
+    # block, so same-second reports would collapse into one row by design and this test
+    # would be asserting on the index instead of on the throttle.
+    now = int(time.time())
+    for offset in (3, 2, 1):
+        resp = client.post("/api/report", json={
+            "machine": "FAST-PC", "temp": 60.0, "sensors": BLOCK,
+            "client_ts": now - offset,
+        })
+        check("report accepted", resp.status_code == 200)
+    _drain()
+    with app.get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT temp, sensors_json, cpu_load_pct FROM readings WHERE machine = 'FAST-PC' "
+            "ORDER BY id ASC").fetchall()
+    check("every report is a reading", len(rows) == 3)
+    check("...and every one of them carries the charted metrics",
+          all(r["cpu_load_pct"] == 12.0 for r in rows))
+    check("...but only the first carried the blob",
+          sum(1 for r in rows if r["sensors_json"]) == 1)
+    # And the picker's fallback still finds one, which is the only thing that reads it back.
+    check("the newest stored block is still available",
+          app._recent_sensors_for("FAST-PC") is not None)
+
+
 def test_ingest_respects_collection_toggles():
     print("\n-- a toggled-off metric is recorded NULL, not silently kept --")
     client = _client()
@@ -481,6 +515,7 @@ if __name__ == "__main__":
     test_package_power_prefers_the_package()
     test_diagnostics_empty_has_all_keys()
     test_ingest_stores_metric_columns()
+    test_sensor_blob_is_throttled_but_metrics_are_not()
     test_ingest_respects_collection_toggles()
     test_sensorless_report_stores_null_metrics()
     test_all_sensors_endpoint()

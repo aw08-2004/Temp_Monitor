@@ -1021,6 +1021,64 @@ document.addEventListener('visibilitychange', syncSensorPolling);
 // doesn't wait on the network.
 sensorFilterEl.addEventListener('input', renderSensorTree);
 
+// ---- "Somebody is watching this" ------------------------------------------------
+// A machine reports every five seconds normally, with a full sensor block every other
+// report -- so the panels on this page, whose window is sixty seconds wide, drew about a
+// dozen points a minute and a three-second spike was one dot or none. While this page is
+// OPEN AND IN FRONT we tell the hub so, and that machine reports every second instead (see
+// hub/live.py). Nobody looking, nothing extra: the cost is bounded by attention.
+//
+// Pinging IS the subscription, and there is no unsubscribe -- the watch lapses ~20 seconds
+// after the last ping, which is what covers the tab being closed, the laptop sleeping, or
+// the browser being killed, none of which get to send a farewell.
+//
+// Deliberately NOT conditional on follow mode: an operator who panned to look at the last
+// thirty seconds is still watching this machine live, and every reading still lands on the
+// panels whether the axis is following or not.
+const LIVE_WATCH_MS = (Number(config.dataset.livePollSeconds) || 5) * 1000;
+let liveWatchTimer = null;
+
+function observingLive() {
+    return viewingToday && document.visibilityState === 'visible';
+}
+
+async function pingLiveWatch() {
+    if (!observingLive()) return;
+    try {
+        await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/live/watch`,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: '{}' });
+    } catch (e) {
+        // A missed ping costs one slower cadence cycle; the next one renews. Never worth
+        // anything visible on the page.
+    }
+}
+
+// One timer for the life of the page rather than start/stop on every state change: the
+// condition is re-tested each tick, so switching days, hiding the tab or coming back needs
+// no wiring. Only the "came back to the tab" case is worth being prompt about, and that is
+// the listener below -- otherwise the operator watches five-second steps for one more tick
+// after alt-tabbing back.
+liveWatchTimer = setInterval(pingLiveWatch, LIVE_WATCH_MS);
+document.addEventListener('visibilitychange', pingLiveWatch);
+pingLiveWatch();
+
+// At 1 Hz a page left open all day would otherwise accumulate ~86k points per panel, so the
+// live tail is bounded. Trimmed only while follow mode is on -- that is precisely when
+// everything being dropped is off-screen to the left -- and generously, so panning back over
+// the last couple of hours still finds the points it had. Anything older than the tail comes
+// back from the history endpoint on the next viewport load, or on Reset.
+const LIVE_TAIL_MS = 2 * 60 * 60 * 1000;
+
+function trimLiveTail(chart, newestMs) {
+    const data = chart.data.datasets[0].data;
+    const cutoff = newestMs - LIVE_TAIL_MS;
+    if (!data.length || data[0].x >= cutoff) return;
+    let drop = 0;
+    while (drop < data.length && data[drop].x < cutoff) drop += 1;
+    data.splice(0, drop);
+}
+
 dayPicker.value = getLocalDateString();
 syncResolutionControl();
 buildPanels();
@@ -1068,6 +1126,7 @@ socket.on('new_temp', (msg) => {
             continue;
         }
         p.chart.data.datasets[0].data.push({ x, y });
+        if (followLive) trimLiveTail(p.chart, followMax);
         p.emptyEl.style.display = 'none';
         p.chart.update('none');
     }

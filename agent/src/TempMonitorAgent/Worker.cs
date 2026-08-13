@@ -128,7 +128,14 @@ public sealed class Worker : BackgroundService
 
     /// <summary>Sensors in, /api/report out. Owns the three telemetry cadences (temp, full
     /// sensor block, uptime) and nothing else -- a slow or failing sensor read now costs
-    /// only the next temperature sample.</summary>
+    /// only the next temperature sample.
+    ///
+    /// Two of those three speed up while an operator has this machine's page open (see
+    /// Telemetry/LiveTelemetry): a report every second instead of every five, each carrying
+    /// the full sensor block, because eleven of that page's twelve panels are drawn from the
+    /// block and a temperature moving at 1 Hz next to eleven panels stepping every ten
+    /// seconds would read as a broken page rather than a faster one. Uptime does not: it is
+    /// a number that changes by one per second and is rendered to the minute.</summary>
     private async Task TelemetryLoopAsync(CancellationToken ct)
     {
         var lastSensor = DateTime.MinValue;
@@ -136,10 +143,14 @@ public sealed class Worker : BackgroundService
 
         while (!ct.IsCancellationRequested)
         {
+            // Read once per tick: the flag can flip between here and the delay at the bottom,
+            // and a tick that sampled as "watched" should also be paced as one.
+            var live = LiveTelemetry.Wanted;
             try
             {
                 var now = DateTime.UtcNow;
-                bool includeSensors = (now - lastSensor).TotalSeconds >= AgentConfig.SensorIntervalSeconds;
+                bool includeSensors = live ||
+                    (now - lastSensor).TotalSeconds >= AgentConfig.SensorIntervalSeconds;
                 bool includeUptime = (now - lastUptime).TotalSeconds >= AgentConfig.UptimeIntervalSeconds;
 
                 var snapshot = _sensors.Read();
@@ -168,7 +179,11 @@ public sealed class Worker : BackgroundService
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Telemetry tick failed"); }
 
-            if (!await DelayAsync(AgentConfig.IntervalSeconds, ct)) break;
+            // LiveTelemetry.IntervalSeconds is the fast cadence only while the hub says
+            // somebody is watching, and the ordinary one the rest of the time -- re-read here
+            // rather than reusing `live` above so that a watch which lapsed DURING this tick
+            // slows the machine down immediately instead of one report later.
+            if (!await DelayAsync(LiveTelemetry.IntervalSeconds, ct)) break;
         }
     }
 
@@ -347,6 +362,13 @@ public sealed class Worker : BackgroundService
     /// samples only while the hub says somebody has that card open, and this loop does
     /// nothing at all until it does.
     ///
+    /// **It carries the other watch too.** The two-second poll below asks the hub one
+    /// question -- "who is looking at this machine?" -- and the answer covers both the
+    /// process card and the machine page's live charts (see FleetClient.PollWatchAsync and
+    /// Telemetry/LiveTelemetry). This loop paces itself on the process half; the telemetry
+    /// loop reads the other. They share a request because an unwatched machine should make
+    /// one of these every two seconds, not two.
+    ///
     /// **It ASKS whether it is wanted rather than waiting to be told.** The heartbeat reply
     /// carries the same flag, but a heartbeat is a 10-second tick, and an operator who opened
     /// the card was made to wait out that tick, then a sampling window, then a console poll,
@@ -380,7 +402,7 @@ public sealed class Worker : BackgroundService
                 // the asking that makes the card responsive.
                 watching = ProcessReporter.Wanted;
                 if (!watching && _fleet.IsEnrolled)
-                    watching = await _fleet.PollProcessWatchAsync(ct);
+                    watching = await _fleet.PollWatchAsync(ct);
 
                 // Sampled in the SAME iteration the answer arrived in, deliberately: waiting
                 // for the next tick would hand back the two seconds this poll exists to save.

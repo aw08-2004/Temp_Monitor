@@ -9,7 +9,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.27.0";
+    public const string Version = "3.28.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -46,6 +46,11 @@ public static class AgentConfig
     public static string CommandsUrl_Waiting(int waitSeconds) =>
         CommandsUrl + "?wait=" + waitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
     public static string ProcessWatchUrl => HubBase + "/api/agent/processes/wanted";
+
+    /// <summary>"Is anybody looking at this machine, and at what?" -- the process list, the
+    /// live charts, or neither. One request for both watches; ProcessWatchUrl above is the
+    /// older half of it, kept for hubs that predate this route (they 404 here).</summary>
+    public static string WatchUrl => HubBase + "/api/agent/watch";
     public static string CommandResultUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
     public static string CommandOutputUrl(string commandId) =>
@@ -92,6 +97,19 @@ public static class AgentConfig
     // is what made the console feel unresponsive while a machine was doing something else.
     public const int IntervalSeconds = 5;         // temp report
     public const int SensorIntervalSeconds = 10;  // full sensor block
+
+    // ...and the cadence while an operator has this machine's page OPEN (see
+    // Telemetry/LiveTelemetry). The panels on that page show a sixty-second window, which at
+    // the five-second cadence above is a dozen points -- so a spike that lasts three seconds
+    // is one dot, or none, and "watch this while I get them to run it" does not work. While
+    // somebody is watching, telemetry goes out every second AND carries the full sensor block
+    // every time, because eleven of the twelve panels are drawn from that block.
+    //
+    // Only while watched, and one machine at a time: this is the same demand-driven bargain
+    // as the process list (see ProcessReporter), and it is affordable for the same reason --
+    // attention does not scale with the fleet. A machine nobody has open reports exactly what
+    // it always did.
+    public const int LiveIntervalSeconds = 1;
     public const int UptimeIntervalSeconds = 600; // uptime field
     public const int HeartbeatSeconds = 10;       // liveness + config (well under 90s online window)
     public const int CommandPollSeconds = 10;     // idle command poll (the fallback cadence)

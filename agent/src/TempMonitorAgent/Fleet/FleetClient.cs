@@ -191,6 +191,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             var text = await resp.Content.ReadAsStringAsync(ct);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
+            ApplyLiveWatchFromHeartbeat(text);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -259,6 +260,35 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     }
 
     /// <summary>
+    /// Apply the hub's answer to "is anybody watching this machine's charts?", which decides
+    /// whether telemetry runs at one second or five (see LiveTelemetry).
+    ///
+    /// Its own method and its own try/catch for the same reason as the process watch above:
+    /// two independent flags on one reply must not be able to lose each other to a parse
+    /// failure in something unrelated.
+    ///
+    /// Unlike the process watch this one DOES fall back to false when the field is absent,
+    /// and that is deliberate rather than an oversight: absent means a hub that predates the
+    /// feature, and the correct cadence against such a hub is the one it has always received.
+    /// A malformed reply is still left alone (see the catch).
+    /// </summary>
+    private void ApplyLiveWatchFromHeartbeat(string body)
+    {
+        try
+        {
+            var root = JsonNode.Parse(body);
+            var wanted = root?["live_wanted"]?.GetValue<bool>() ?? false;
+            var interval = root?["live_interval_seconds"]?.GetValue<int>();
+            TempMonitorAgent.Telemetry.LiveTelemetry.SetWanted(wanted, interval);
+        }
+        catch
+        {
+            // One unreadable reply is not the hub saying "slow down"; the next heartbeat is
+            // ten seconds away and will say so properly if it meant it.
+        }
+    }
+
+    /// <summary>
     /// Ask the hub whether an operator is looking at this machine's processes, and apply the
     /// answer. Returns whether we are now wanted.
     ///
@@ -276,6 +306,71 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// serve this route 404s, which is the same story -- those machines fall back to learning
     /// from the heartbeat, which is exactly how this worked before.
     /// </summary>
+    /// <summary>
+    /// Ask the hub who is looking at this machine -- its process list, its live charts, or
+    /// neither -- and apply both answers. Returns whether the process list is wanted, which
+    /// is the one the caller's loop paces itself on.
+    ///
+    /// **One request for two watches.** Both questions have the same shape (a tiny indexed
+    /// lookup answered every couple of seconds by every machine in the fleet), and asking
+    /// them separately would exactly double the only traffic an unwatched machine generates
+    /// for either feature.
+    ///
+    /// **A hub that predates /api/agent/watch 404s**, and this falls back to the older
+    /// process-only route for it -- permanently would be wrong, since the hub is upgraded
+    /// while these agents keep running, so the fallback is re-probed periodically. Such a hub
+    /// has no live watch to report either, and the ordinary five-second telemetry it already
+    /// expects is exactly what it keeps getting.
+    /// </summary>
+    public async Task<bool> PollWatchAsync(CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return false;
+        if (_watchRouteMissingUntil > DateTime.UtcNow)
+            return await PollProcessWatchAsync(ct);
+
+        try
+        {
+            using var req = Authorized(HttpMethod.Get, AgentConfig.WatchUrl);
+            using var resp = await _http.SendAsync(req, ct);
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                _watchRouteMissingUntil = DateTime.UtcNow.AddMinutes(WatchRouteRetryMinutes);
+                return await PollProcessWatchAsync(ct);
+            }
+            if (!resp.IsSuccessStatusCode)
+                return TempMonitorAgent.Telemetry.ProcessReporter.Wanted;
+
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            var root = JsonNode.Parse(text);
+            var procs = root?["processes"]?.GetValue<bool>() ?? false;
+            TempMonitorAgent.Telemetry.ProcessReporter.SetWanted(procs);
+            TempMonitorAgent.Telemetry.LiveTelemetry.SetWanted(
+                root?["live"]?.GetValue<bool>() ?? false,
+                root?["live_interval_seconds"]?.GetValue<int>());
+            return procs;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Watch poll failed: {Msg}", e.Message);
+            return TempMonitorAgent.Telemetry.ProcessReporter.Wanted;
+        }
+        catch (Exception e)
+        {
+            // Same reasoning as the process-only poll below: neither watch is cleared over an
+            // unreadable body, and a loop that can throw every two seconds is a loop that
+            // fills the log.
+            _log.LogDebug("Watch poll returned something unreadable: {Msg}", e.Message);
+            return TempMonitorAgent.Telemetry.ProcessReporter.Wanted;
+        }
+    }
+
+    /// <summary>How long a 404 on /api/agent/watch keeps us on the older route before trying
+    /// again. Long enough that an old hub costs one extra request per agent per ten minutes,
+    /// short enough that a hub upgraded under a running fleet is picked up the same shift --
+    /// agents do not restart when the hub does.</summary>
+    private const int WatchRouteRetryMinutes = 10;
+    private DateTime _watchRouteMissingUntil = DateTime.MinValue;
+
     public async Task<bool> PollProcessWatchAsync(CancellationToken ct)
     {
         if (!_identity.IsEnrolled) return false;

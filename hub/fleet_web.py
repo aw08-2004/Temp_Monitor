@@ -36,6 +36,7 @@ import backups
 import bios
 import firmware
 import fleet
+import live
 import permissions
 import permissions_web
 import processes
@@ -205,12 +206,25 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
             payload["processes_wanted"] = processes.is_watched(db_path, machine)
         except Exception as e:
             print(f"[processes] Could not resolve the watch for {machine}: {e}")
+        # The other demand-driven flag, answered on every heartbeat for the same reason:
+        # this is how a machine learns to go BACK to its ordinary five-second telemetry
+        # after somebody closes the machine page (see live.py). Never fatal, and its own
+        # try/except -- a failure here must not cost the process flag above.
+        try:
+            payload["live_wanted"] = live.is_watched(db_path, machine)
+            payload["live_interval_seconds"] = live.FAST_INTERVAL_SECONDS
+        except Exception as e:
+            print(f"[live] Could not resolve the watch for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])
     @agent_auth
     def agent_processes_wanted(agent_id, machine):
         """Does anybody want this machine's process list RIGHT NOW?
+
+        Superseded by /api/agent/watch above, which answers this and the live-telemetry
+        watch in one request; agents from 3.28.0 call that instead. Kept because every agent
+        already in the field calls this one, and it must keep working unchanged.
 
         The same question the heartbeat answers, asked on its own so it can be answered
         promptly. The heartbeat is a 10-second tick carrying config, inventory and liveness;
@@ -239,6 +253,48 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
             print(f"[processes] Could not resolve the watch for {machine}: {e}")
             wanted = False
         return jsonify({"wanted": wanted}), 200
+
+    @bp.route("/api/agent/watch", methods=["GET"])
+    @agent_auth
+    def agent_watch(agent_id, machine):
+        """Is anybody looking at this machine RIGHT NOW, and at what?
+
+        The successor to /api/agent/processes/wanted below, and the reason it takes both
+        questions at once: an agent that asked them separately would double the only request
+        an unwatched machine ever makes for either feature. One bearer-authenticated call,
+        two indexed lookups on single-row-per-machine tables, no writes, a ~60-byte answer.
+
+          * `processes` -- start sampling the process list (the Processes card).
+          * `live`      -- report telemetry every `live_interval_seconds` with a full sensor
+                           block, instead of every five seconds with one every other time
+                           (the machine page's charts). See live.py.
+
+        Both are also answered on the heartbeat, which stays authoritative for a hub that
+        predates this route -- but a heartbeat is a 10-second tick, and both of these exist
+        to make something feel like it responded to a click rather than eventually caught up.
+        The agent has no inbound port, so asking often is the only way to answer promptly.
+
+        Scoped to the caller's own machine by construction: `machine` comes from the bearer
+        token, never from the request, so one agent cannot learn who is looking at another.
+        """
+        # Each in its own try, and false on failure: a hub that cannot answer must not leave
+        # a machine enumerating processes -- or shipping a sensor block every second -- on
+        # the strength of an error.
+        try:
+            wants_processes = processes.is_watched(db_path, machine)
+        except Exception as e:
+            print(f"[processes] Could not resolve the watch for {machine}: {e}")
+            wants_processes = False
+        try:
+            wants_live = live.is_watched(db_path, machine)
+        except Exception as e:
+            print(f"[live] Could not resolve the watch for {machine}: {e}")
+            wants_live = False
+        return jsonify({
+            "processes": wants_processes,
+            "live": wants_live,
+            "live_interval_seconds": live.FAST_INTERVAL_SECONDS,
+        }), 200
 
     @bp.route("/api/agent/commands", methods=["GET"])
     @agent_auth

@@ -40,6 +40,7 @@ import bios
 import firmware
 import wake
 import processes
+import live
 import authconfig
 import apitokens
 import i18n
@@ -84,7 +85,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.76.0"
+HUB_VERSION = "1.77.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -182,6 +183,34 @@ def get_latest_temp(machine):
 
 latest_sensors = {}
 latest_sensors_lock = threading.Lock()
+
+# When each machine last had a full sensor BLOB written into its readings row, so a machine
+# reporting at 1 Hz (see live.py -- somebody has its page open) does not multiply the size of
+# the readings table by twelve for as long as they are looking. The blob is ~36 KB and the
+# whole of it is stored per row; at a second apart that is ~130 MB an hour for ONE machine,
+# for a page that reads none of it.
+#
+# What the charts read is the typed metric columns beside it, and those are a handful of
+# REALs -- they keep being written on every single reading, so the fast cadence is fully
+# represented in history. The blob is only ever read back as "the newest one" (the sensor
+# picker's fallback after a restart), which does not care whether it is one second old or
+# ten. So it is throttled to the cadence it always had.
+_last_sensor_blob_epoch = {}
+_last_sensor_blob_lock = threading.Lock()
+# The agent's own unwatched sensor cadence (AgentConfig.SensorIntervalSeconds). Storing a
+# blob more often than a machine normally produces one buys nothing.
+SENSOR_BLOB_MIN_SECONDS = 10
+
+
+def _should_store_sensor_blob(machine_name, timestamp_epoch):
+    """Has enough time passed since this machine's last stored sensor blob? Records the
+    decision, so callers must only ask when they are about to write the row."""
+    with _last_sensor_blob_lock:
+        last = _last_sensor_blob_epoch.get(machine_name)
+        if last is not None and 0 <= timestamp_epoch - last < SENSOR_BLOB_MIN_SECONDS:
+            return False
+        _last_sensor_blob_epoch[machine_name] = timestamp_epoch
+        return True
 
 def set_latest_sensors(machine, sensors):
     if not sensors:
@@ -2127,7 +2156,13 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     if WRITE_CSV_ARCHIVE:
         append_csv_archive(timestamp_str, machine_name, temp_value)
 
-    sensors_json = json.dumps(sensors) if sensors else None
+    # The blob rides at most one reading every SENSOR_BLOB_MIN_SECONDS -- see
+    # _should_store_sensor_blob for why, and why the charts do not notice. The METRICS below
+    # are extracted from every report regardless, so a machine reporting at 1 Hz because
+    # somebody is watching it stores 1 Hz history.
+    sensors_json = (json.dumps(sensors)
+                    if sensors and _should_store_sensor_blob(machine_name, timestamp_epoch)
+                    else None)
     # Promote the chartable metrics from THIS report's sensor block into their own columns,
     # each gated by its collection toggle -- a toggled-off metric is recorded as NULL.
     reading_metrics = metrics_for_storage(sensors)
@@ -2268,6 +2303,8 @@ def _evict_live_status(machine_name):
         latest_sensors.pop(machine_name, None)
     with _last_live_status_persist_lock:
         _last_live_status_persist.pop(machine_name, None)
+    with _last_sensor_blob_lock:
+        _last_sensor_blob_epoch.pop(machine_name, None)
 
 
 def merge_machines(survivor, dropped, actor="system:dedup"):
@@ -2617,6 +2654,12 @@ def retention_pruner():
                 processes.prune_watches(DB_PATH)
             except Exception as e:
                 print(f"[retention] Process-watch prune failed: {e}")
+            # And the live-chart watches, which are the same kind of row for the same kind
+            # of reason (see live.py). Its own try, as above.
+            try:
+                live.prune_watches(DB_PATH)
+            except Exception as e:
+                print(f"[retention] Live-watch prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 
@@ -3075,6 +3118,7 @@ bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
+live.init_live_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 apitokens.init_apitokens_db(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
@@ -3346,6 +3390,32 @@ def _recent_sensors_for(machine_name):
         return None
 
 
+@app.route('/api/machines/<machine>/live/watch', methods=['POST'])
+@login_required
+@access.require_machine(permissions.VIEW)
+def note_live_watch(machine):
+    """"Somebody is watching this machine's charts" -- renewed while the page is open.
+
+    Pinging this IS the subscription (see live.py): it tells the machine to report every
+    second with a full sensor block instead of every five with one every other time, and it
+    lapses on its own about twenty seconds after the browser stops pinging. There is no
+    endpoint to cancel it, because a tab that is closed or suspended never gets to call one.
+
+    Gated on `view` + machine scope, the same gate that renders the charts this speeds up --
+    it changes how OFTEN an operator sees numbers they can already see, and nothing else.
+
+    Answers with the cadence numbers so the browser doesn't carry its own copy of them.
+    """
+    machine_name = str(machine).strip()
+    live.note_watch(DB_PATH, machine_name, watcher=permissions_web.current_actor())
+    return jsonify({
+        "machine": machine_name,
+        "poll_interval": live.POLL_INTERVAL_SECONDS,
+        "watch_ttl": live.WATCH_TTL_SECONDS,
+        "interval_seconds": live.FAST_INTERVAL_SECONDS,
+    }), 200
+
+
 @app.route('/api/machines/<machine>/sensors')
 @login_required
 @access.require_machine(permissions.VIEW)
@@ -3490,6 +3560,8 @@ def delete_machine(machine):
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.
     processes.forget_machine(DB_PATH, machine_name)
+    # ...and any live-chart watch on it, for the same reason.
+    live.forget_machine(DB_PATH, machine_name)
     # Its BIOS setup password override lives in the secret file rather than the database, so
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.
@@ -3963,6 +4035,10 @@ def machine_page(machine):
         high_temp_threshold=settings.get_int(DB_PATH, "hub.high_temp_threshold"),
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
         live_window_seconds=settings.get_int(DB_PATH, "hub.live_default_window_seconds"),
+        # How often the page renews its "somebody is watching this" ping. Served rather than
+        # hardcoded in machine.js so the ping rate and the watch TTL it has to beat stay one
+        # decision (see live.py).
+        live_poll_seconds=live.POLL_INTERVAL_SECONDS,
         enabled_metrics=enabled_history_metrics(),
         hub_version=HUB_VERSION,
         latest_agent_version=get_latest_agent_version()

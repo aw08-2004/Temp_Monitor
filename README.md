@@ -236,6 +236,36 @@ OIDC sign-in plus permission groups, see below):
 - `/audit` -- the audit log (see below); `/packages`, `/backups` -- their own
   sections below; `/settings`, `/users`, `/permissions` -- administration
 
+### The machine page reports at 1 Hz while you are watching it
+
+A machine reports every 5s, and only every other report carries the full sensor block the
+CPU/GPU/memory/fan/power panels are drawn from -- so a page whose window is sixty seconds
+wide drew about six points a minute on most panels, and a three-second spike was one dot or
+none. **While an operator has a machine page open and in front, that machine reports every
+second with a sensor block on every report.** Nothing to enable.
+
+It works exactly like the Processes card's watch, and for the same reason (see
+[live.py](hub/live.py) and `Telemetry/LiveTelemetry.cs`): the page pings
+`POST /api/machines/<machine>/live/watch` (`view` + scope) every 5s, that watch lapses ~20s
+after the pings stop, and the machine asks `GET /api/agent/watch` every couple of seconds to
+find out. Hidden tab, past day, closed window, killed browser, sleeping laptop -- all of them
+stop the pings, and the watch expires on its own rather than waiting for a goodbye that would
+never arrive. A fleet nobody has open reports exactly what it always did; the extra traffic
+(~12x, for one machine) is bounded by attention rather than by fleet size.
+
+**History keeps the detail; the database does not grow twelve-fold.** Every fast reading is
+stored with its typed metric columns, so the charts have a point per second for that period.
+The raw ~36 KB LibreHardwareMonitor blob that rides alongside is throttled to one per 10s
+(`SENSOR_BLOB_MIN_SECONDS`) -- nothing reads it back except "the newest one" (the sensor
+picker's fallback after a hub restart), and storing it per second would cost ~130 MB an hour
+for a single watched machine.
+
+`GET /api/agent/watch` answers **both** watches -- process list and live charts -- in one
+bearer-authenticated request, because the alternative is doubling the only traffic an
+unwatched machine generates for either. `processes_wanted`/`live_wanted` also ride the
+heartbeat, which is how a machine learns to stop, and the only path for an agent older than
+v3.28.0 (which keeps polling `GET /api/agent/processes/wanted` and never speeds up).
+
 ### Temperature alerts
 
 A machine is flagged as running hot when its **average** temperature over a
