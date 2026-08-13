@@ -19,7 +19,7 @@
         .\release.ps1 -Version 3.0.1
         .\release.ps1 -Version 3.0.1 -NotesFile .\release-notes\3.0.1.md -Push
         .\release.ps1 -Version 3.0.1 -Notes "Fix rename executor"
-        .\release.ps1 -Version 3.0.1 -DryRun     # print the plan, touch nothing external
+        .\release.ps1 -Version 3.0.1 -DryRun     # print the plan + the notes body, touch nothing external
 
     Prefer -NotesFile for anything longer than a sentence. -Notes is fine for a one-liner
     with no quotes or backslashes in it; past that, see the comment at the release-creation
@@ -128,6 +128,38 @@ if ($DryRun) {
 Step "GitHub release $Tag"
 if ($DryRun) {
     Say "[dry-run] gh release view $Tag --repo $Repo   (create if missing)"
+
+    # Print the body that would be published. A dry run that shows only the plan cannot
+    # catch the failure this script exists to prevent -- notes are the one input here
+    # nobody can eyeball from a command line, and the two releases that went out wrong
+    # both looked fine as an invocation. Resolve the source the same way step 3 does, so
+    # what is shown is what gh would read.
+    if ($NotesFile) {
+        if (-not (Test-Path $NotesFile)) { Die "No notes file at $NotesFile." }
+        # ReadAllText(UTF8), not Get-Content -Raw: Get-Content decodes as the system ANSI
+        # codepage on 5.1, which would show mojibake for the dashes and arrows the notes
+        # use and send you hunting a corruption that is not in the file.
+        $notesBody = [System.IO.File]::ReadAllText((Resolve-Path $NotesFile), [System.Text.Encoding]::UTF8)
+        $notesFrom = $NotesFile
+    } else {
+        $notesBody = if ($Notes) { $Notes } else { "Agent v$Version" }
+        $notesFrom = if ($Notes) { "-Notes argument" } else { "default (no notes given)" }
+    }
+
+    $notesLines = ($notesBody -split "`r?`n").Count
+    Say ""
+    Say "Notes from: $notesFrom  ($notesLines lines, $($notesBody.Length) chars)"
+    Say ("-" * 72)
+    # The console codepage is usually 437/1252 on 5.1, which prints '?' for anything
+    # non-ASCII. Switch it for the duration of the dump so the preview is the text, not
+    # an artifact of the terminal -- then put it back.
+    $prevEnc = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        foreach ($line in ($notesBody -split "`r?`n")) { Write-Host "  | $line" }
+    } finally { [Console]::OutputEncoding = $prevEnc }
+    Say ("-" * 72)
+    Say ""
 } else {
     $exists = $true
     try {
