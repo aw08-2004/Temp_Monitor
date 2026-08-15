@@ -41,6 +41,11 @@ import time
 KIND_DUPLICATE_SERIAL = "duplicate_serial"
 KIND_HIGH_TEMP = "high_temperature"
 KIND_AD_UNMATCHED = "ad_unmatched"
+# Raised by an operator-written rule's `alert` action (see rules.py). Unlike the three above,
+# this kind's meaning is not fixed by the hub -- the text comes from the rule -- so `detail`
+# carries the rule id and name, and `rule_id` is a real column because two DIFFERENT rules
+# firing on ONE machine are two separate alerts, not one being overwritten.
+KIND_RULE = "rule"
 # What KIND_HIGH_TEMP was called before the rename. Only init_alerts_db()'s migration reads
 # it -- no other code path should ever match on it again.
 _LEGACY_KIND_HIGH_TEMP = "overheat"
@@ -113,9 +118,18 @@ def init_alerts_db(db_path):
         # index so it does not disturb the serial one and so a duplicate_serial row
         # (machine IS NULL) is exempt.
         conn.execute("DROP INDEX IF EXISTS idx_alerts_open_kind_machine")
+        # `rule_id` widens the per-machine episode key. A machine can legitimately be inside
+        # an active episode of the "uptime > 7 days" rule AND the "disk nearly full" rule at
+        # once; keyed on (kind, machine) alone the second would collide with the first and
+        # one of the two would silently never be raised. IFNULL(-1) makes the key behave
+        # exactly as before for every non-rule kind, whose rule_id is always NULL -- so this
+        # is a widening, not a change, for the three kinds that predate it.
+        if "rule_id" not in alert_columns:
+            conn.execute("ALTER TABLE alerts ADD COLUMN rule_id INTEGER")
+        conn.execute("DROP INDEX IF EXISTS idx_alerts_open_kind_machine_active")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_machine_active "
-            "ON alerts(kind, machine) "
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_machine_rule_active "
+            "ON alerts(kind, machine, IFNULL(rule_id, -1)) "
             "WHERE status = 'open' AND machine IS NOT NULL AND episode_ended_at IS NULL"
         )
 
@@ -248,6 +262,67 @@ def resolve_high_temp(db_path, machine):
             "UPDATE alerts SET status=?, updated_at=? "
             "WHERE kind=? AND machine=? AND status=?",
             (STATUS_RESOLVED, int(time.time()), KIND_HIGH_TEMP, machine, STATUS_OPEN),
+        )
+
+
+def upsert_rule(db_path, machine, rule_id, rule_name, text, now=None):
+    """Raise or refresh the ACTIVE episode of rule `rule_id` on `machine`. Returns the id.
+
+    Same episode model as high temperature, and for the same reason: a rule that stays
+    matched for a week is one alert, not one per evaluation tick, but the NEXT time it
+    matches after clearing it is a new alert beside the old one rather than an overwrite of
+    it. `count` in the detail records how many times the episode was refreshed, which is the
+    cheapest honest answer to "has this been going on all week or did it just start".
+    """
+    machine = str(machine).strip()
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, detail FROM alerts "
+            "WHERE kind=? AND machine=? AND rule_id=? AND status=? AND episode_ended_at IS NULL",
+            (KIND_RULE, machine, rule_id, STATUS_OPEN),
+        ).fetchone()
+        count = 1
+        if row:
+            try:
+                previous = json.loads(row["detail"]) if row["detail"] else {}
+            except (TypeError, ValueError):
+                previous = {}
+            count = int(previous.get("count") or 1) + 1
+        detail = json.dumps({"rule_id": rule_id, "rule_name": str(rule_name or ""),
+                             "text": str(text or ""), "count": count})
+        if row:
+            conn.execute("UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
+                         (detail, now, row["id"]))
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO alerts(kind, machine, rule_id, detail, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (KIND_RULE, machine, rule_id, detail, STATUS_OPEN, now, now),
+        )
+        return cur.lastrowid
+
+
+def end_rule_episode(db_path, machine, rule_id, now=None):
+    """The rule stopped matching this machine: close the active episode, leave the alert
+    open and visible. Mirrors end_high_temp_episode."""
+    machine = str(machine).strip()
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE alerts SET episode_ended_at=? "
+            "WHERE kind=? AND machine=? AND rule_id=? AND status=? AND episode_ended_at IS NULL",
+            (int(time.time() if now is None else now), KIND_RULE, machine, rule_id, STATUS_OPEN),
+        )
+        return cur.rowcount > 0
+
+
+def resolve_for_rule(db_path, rule_id):
+    """Resolve every open alert a rule raised -- called when the rule is deleted or
+    disabled, because an alert whose rule no longer exists cannot be explained or acted on."""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE alerts SET status=?, updated_at=? WHERE kind=? AND rule_id=? AND status=?",
+            (STATUS_RESOLVED, int(time.time()), KIND_RULE, rule_id, STATUS_OPEN),
         )
 
 

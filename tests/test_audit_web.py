@@ -56,6 +56,7 @@ def _register_sidebar_stubs(app):
         app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
     for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),
                            ("users", "users_page"), ("bios", "firmware_page"),
+                           ("rules", "rules_page"),
                            ("apitokens", "download_page")):
         bp = Blueprint(name, __name__)
         bp.add_url_rule(f"/_stub/{name}", endpoint, lambda: "", methods=["GET"])

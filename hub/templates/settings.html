@@ -35,6 +35,8 @@
                 aria-controls="tab-directory" aria-selected="false" tabindex="-1">{{ t('settings.section.directory') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-wake"
                 aria-controls="tab-wake" aria-selected="false" tabindex="-1">{{ t('settings.section.wake') }}</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-rules"
+                aria-controls="tab-rules" aria-selected="false" tabindex="-1">{{ t('settings.section.rules') }}</button>
         {# Sign-in has no schema-rendered fields at all -- its settings live in .env, not
            the settings table, because they are credentials and the perimeter itself.
            settings-auth.js builds the whole panel. #}
@@ -50,6 +52,7 @@
         <div class="tab-panel" id="tab-remote" role="tabpanel" aria-labelledby="tab-btn-remote"></div>
         <div class="tab-panel" id="tab-directory" role="tabpanel" aria-labelledby="tab-btn-directory"></div>
         <div class="tab-panel" id="tab-wake" role="tabpanel" aria-labelledby="tab-btn-wake"></div>
+        <div class="tab-panel" id="tab-rules" role="tabpanel" aria-labelledby="tab-btn-rules"></div>
         <div class="tab-panel" id="tab-signin" role="tabpanel" aria-labelledby="tab-btn-signin"></div>
     </div>
 </div>

@@ -28,7 +28,8 @@
     "close": "Close navigation",
     "open": "Open navigation",
     "firmware": "Firmware",
-    "download": "Download Client"
+    "download": "Download Client",
+    "rules": "Rules"
   },
   "topbar": {
     "hub_version": "Hub v{version}",
@@ -381,6 +382,10 @@
       "manage_permission_groups": {
         "label": "Manage permission groups",
         "description": "Create and edit permission groups -- i.e. grant anyone, including themselves, any of the above."
+      },
+      "manage_rules": {
+        "label": "Manage rules",
+        "description": "Create and edit rules: conditions over machine data, and what happens when they match. A rule that sends commands to PCs also needs Issue commands."
       }
     }
   },
@@ -399,7 +404,8 @@
       "directory": "Active Directory",
       "firmware": "Firmware Updates",
       "signin": "Sign-in",
-      "wake": "Wake-on-LAN"
+      "wake": "Wake-on-LAN",
+      "rules": "Rules"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -722,6 +728,38 @@
       "hub.device_token_lifetime_days": {
         "label": "Device access lifetime",
         "help": "How long a paired app keeps working without being used. Every use extends it. Devices already paired keep the lifetime they were paired with."
+      },
+      "rules.evaluator_interval_seconds": {
+        "label": "Evaluate rules every",
+        "help": "How often the hub checks every enabled rule against every PC it targets. Lower reacts sooner; higher costs less on a large fleet."
+      },
+      "rules.actions_enabled": {
+        "label": "Let rules run their actions",
+        "help": "Off, rules still evaluate and still record what they would have done, but nothing is sent. Useful while writing a rule you are not yet sure about."
+      },
+      "rules.command_actions_enabled": {
+        "label": "Let rules send commands to PCs",
+        "help": "Separate from the switch above, and off by default. Alerting on a condition and restarting a PC on a condition are different levels of trust."
+      },
+      "rules.max_targets_per_tick": {
+        "label": "Most PCs one rule may act on at once",
+        "help": "A ceiling every rule is clamped to. A rule aimed at more PCs than this stalls at the limit and says so, instead of acting on the whole fleet at once."
+      },
+      "rules.command_cooldown_floor_seconds": {
+        "label": "Shortest gap between commands from one rule",
+        "help": "Applied to any rule that sends commands, whatever it asks for. Prevents a restart rule from firing again while the PC is still on its way down."
+      },
+      "rules.history_retention_days": {
+        "label": "Keep rule history for",
+        "help": "How long to keep the record of which rule acted on which PC, and how the person at the PC answered."
+      },
+      "rules.probes_allow_script": {
+        "label": "Allow script probes",
+        "help": "Script probes run PowerShell you write on every PC a rule looks at, on a schedule. The other probe kinds only read a registry value, a file or a WMI property."
+      },
+      "rules.probes_per_tick": {
+        "label": "Most probe requests per pass",
+        "help": "Spreads collection over time instead of asking the whole fleet at once."
       }
     },
     "_choice": [
@@ -2112,5 +2150,329 @@
       "ios": "iOS",
       "unknown": "Client"
     }
+  },
+  "rules": {
+    "heading": "Rules",
+    "intro": "Conditions over the data your PCs report, and what should happen when they match.",
+    "new": "New rule",
+    "edit": "Edit",
+    "delete": "Delete",
+    "save": "Save rule",
+    "cancel": "Cancel",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "name": "Name",
+    "description": "Description",
+    "empty": "No rules yet.",
+    "empty_hint": "A rule is a condition, the PCs it applies to, and what happens when it matches.",
+    "matching": "matching now",
+    "targets": "PCs targeted",
+    "confirm_delete": "Delete this rule and its history?",
+    "actions_disabled": "Rules are evaluating but their actions are switched off fleet-wide.",
+    "commands_disabled": "Command actions are switched off fleet-wide. This rule will evaluate but send nothing.",
+    "section_target": "Which PCs",
+    "section_condition": "When",
+    "section_actions": "Then",
+    "section_timing": "Pacing",
+    "section_history": "History",
+    "include": "Include",
+    "exclude": "Except",
+    "add_selector": "Add",
+    "target_all": "Every PC",
+    "target_machines": "These PCs",
+    "target_ad_ou": "An AD organisational unit",
+    "target_field": "PCs where a field equals",
+    "include_children": "and sub-OUs",
+    "builder": "Builder",
+    "expression": "Expression",
+    "add_clause": "Add condition",
+    "match_all": "Match all of",
+    "match_any": "Match any of",
+    "preview": "Test",
+    "preview_result": "{true} match, {false} do not, {unknown} unknown",
+    "unknown_warning": "Unknown means the hub has no current value. A rule never acts on unknown.",
+    "for_seconds": "Only after the condition has held for",
+    "for_seconds_help": "Stops a value that wobbles around the threshold from acting over and over.",
+    "cooldown": "Then wait at least",
+    "cooldown_help": "Before acting on the same PC again.",
+    "max_targets": "At most this many PCs per pass",
+    "max_targets_help": "A safety limit. A rule aimed at more PCs stops here and says so.",
+    "add_action": "Add action",
+    "message_title": "Title",
+    "message_body": "Message",
+    "message_buttons": "Buttons",
+    "message_timeout": "Close by itself after",
+    "on_response": "When the person clicks",
+    "nothing": "Do nothing",
+    "insert_variable": "Insert a value",
+    "fired_at": "Acted",
+    "outcome": {
+      "timeout": "Nobody answered",
+      "dismissed": "Closed the window",
+      "no_session": "Nobody was signed in",
+      "failed": "Could not be shown"
+    },
+    "no_history": "This rule has not acted yet.",
+    "operator": {
+      ">": {
+        "label": "is more than"
+      },
+      ">=": {
+        "label": "is at least"
+      },
+      "<": {
+        "label": "is less than"
+      },
+      "<=": {
+        "label": "is at most"
+      },
+      "==": {
+        "label": "is"
+      },
+      "!=": {
+        "label": "is not"
+      },
+      "contains": {
+        "label": "contains"
+      },
+      "not_contains": {
+        "label": "does not contain"
+      },
+      "starts_with": {
+        "label": "starts with"
+      },
+      "ends_with": {
+        "label": "ends with"
+      },
+      "matches": {
+        "label": "matches the pattern"
+      },
+      "in": {
+        "label": "is one of"
+      },
+      "not_in": {
+        "label": "is none of"
+      },
+      "is_known": {
+        "label": "is known"
+      },
+      "is_unknown": {
+        "label": "is unknown"
+      }
+    },
+    "action": {
+      "show_message": {
+        "label": "Show a message on the PC",
+        "description": "A dialog on the signed-in user's screen. What they click decides what happens next."
+      },
+      "alert": {
+        "label": "Raise an alert",
+        "description": "Shows on the Alerts page. Nobody is interrupted."
+      },
+      "command": {
+        "label": "Send a command",
+        "description": "Acts on the PC without asking. Needs the Issue commands permission."
+      },
+      "snooze": {
+        "label": "Wait before asking again",
+        "description": "Holds this rule off for this one PC only."
+      },
+      "webhook": {
+        "label": "Call a webhook",
+        "description": "Posts the details to an https URL you choose."
+      },
+      "email": {
+        "label": "Send an email",
+        "description": "Needs SMTP details in the hub's .env file."
+      }
+    },
+    "button": {
+      "ok": "OK",
+      "cancel": "Cancel",
+      "yes": "Yes",
+      "no": "No",
+      "later": "Later",
+      "accept": "Accept",
+      "decline": "Decline"
+    },
+    "buttons": {
+      "ok": "OK",
+      "ok_cancel": "OK / Cancel",
+      "yes_no": "Yes / No",
+      "yes_no_later": "Yes / No / Later",
+      "accept_decline": "Accept / Decline",
+      "acknowledge_only": "Acknowledge only"
+    },
+    "target": {
+      "all": "Every PC",
+      "machines": "Named PCs",
+      "ad_ou": "AD organisational unit",
+      "field": "By custom field"
+    },
+    "variable": {
+      "sys.machine": {
+        "label": "PC name"
+      },
+      "sys.uptime_seconds": {
+        "label": "Time since last boot"
+      },
+      "sys.uptime_days": {
+        "label": "Days since last boot"
+      },
+      "sys.status": {
+        "label": "Online or offline"
+      },
+      "sys.online": {
+        "label": "Is online"
+      },
+      "sys.enrolled": {
+        "label": "Has an agent enrolled"
+      },
+      "sys.last_seen_seconds_ago": {
+        "label": "Time since last contact"
+      },
+      "sys.agent_version": {
+        "label": "Agent version"
+      },
+      "hw.model": {
+        "label": "Model"
+      },
+      "hw.manufacturer": {
+        "label": "Manufacturer"
+      },
+      "hw.serial_number": {
+        "label": "Serial number"
+      },
+      "hw.service_tag": {
+        "label": "Service tag"
+      },
+      "hw.asset_tag": {
+        "label": "Asset tag"
+      },
+      "metric.cpu_temp": {
+        "label": "CPU temperature"
+      },
+      "metric.cpu_load_pct": {
+        "label": "CPU load"
+      },
+      "metric.cpu_power_w": {
+        "label": "CPU power draw"
+      },
+      "metric.gpu_temp": {
+        "label": "GPU temperature"
+      },
+      "metric.gpu_load_pct": {
+        "label": "GPU load"
+      },
+      "metric.gpu_power_w": {
+        "label": "GPU power draw"
+      },
+      "metric.memory_load_pct": {
+        "label": "Memory in use"
+      },
+      "metric.mem_used_gb": {
+        "label": "Memory used"
+      },
+      "metric.mem_total_gb": {
+        "label": "Memory fitted"
+      },
+      "metric.disk_load_pct": {
+        "label": "Disk in use"
+      },
+      "metric.fan_rpm": {
+        "label": "Fastest fan speed"
+      },
+      "metric.net_rx_bps": {
+        "label": "Network received"
+      },
+      "metric.net_tx_bps": {
+        "label": "Network sent"
+      },
+      "disk.count": {
+        "label": "Number of drives"
+      },
+      "disk.max_used_pct": {
+        "label": "Fullest drive"
+      },
+      "disk.min_free_gb": {
+        "label": "Free space on the tightest drive"
+      },
+      "session.count": {
+        "label": "People signed in"
+      },
+      "session.user": {
+        "label": "Signed-in user"
+      },
+      "session.account": {
+        "label": "Signed-in account"
+      },
+      "session.domain": {
+        "label": "Signed-in user's domain"
+      },
+      "session.console_active": {
+        "label": "Somebody is at the keyboard"
+      },
+      "session.at_logon_screen": {
+        "label": "Sitting at the sign-in screen"
+      },
+      "net.ipv4": {
+        "label": "IP address"
+      },
+      "net.mac": {
+        "label": "MAC address"
+      },
+      "net.link_up": {
+        "label": "Network cable connected"
+      },
+      "net.wake_enabled": {
+        "label": "Wake-on-LAN enabled"
+      },
+      "net.fast_startup": {
+        "label": "Fast Startup enabled"
+      },
+      "bios.version": {
+        "label": "BIOS version"
+      },
+      "bios.vendor": {
+        "label": "BIOS vendor"
+      },
+      "bios.support": {
+        "label": "BIOS management support"
+      },
+      "bios.password_set": {
+        "label": "BIOS password set"
+      },
+      "ad.ou": {
+        "label": "AD organisational unit"
+      },
+      "ad.dn": {
+        "label": "AD distinguished name"
+      },
+      "ad.owner": {
+        "label": "AD owner"
+      },
+      "ad.os": {
+        "label": "Operating system (from AD)"
+      },
+      "ad.disabled": {
+        "label": "Disabled in AD"
+      },
+      "proc.count": {
+        "label": "Running processes"
+      },
+      "proc.cpu_cores": {
+        "label": "CPU cores"
+      },
+      "proc.mem_total_mb": {
+        "label": "Memory fitted (MB)"
+      }
+    },
+    "field_kind": {
+      "text": "Text",
+      "number": "Number",
+      "bool": "Yes / No",
+      "choice": "Pick from a list"
+    },
+    "fields_heading": "Custom fields"
   }
 }

@@ -10,6 +10,7 @@ using TempMonitorAgent.Remote;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
+using TempMonitorAgent.UserMessage;
 
 // Remote view/control (roadmap #2): the service session-injects THIS SAME BINARY with
 // --remote-helper <session-file> into the interactive desktop. That process is not a service
@@ -17,6 +18,13 @@ using TempMonitorAgent.Update;
 // the helper before anything else touches the service's logger or host.
 if (RemoteHelper.TryGetSessionFileArg(args) is { } remoteSessionFile)
     return RemoteHelper.Run(remoteSessionFile);
+
+// A rule's message to the person at the PC. Same shape and same reason as the remote helper
+// above: session 0 has no desktop, so a dialog created there is created onto nothing. The
+// service session-injects this binary with --show-message <request-file>; this process shows
+// the dialog and writes the answer beside the request.
+if (MessageHelper.TryGetRequestFileArg(args) is { } messageRequestFile)
+    return MessageHelper.Run(messageRequestFile);
 
 // Standalone capture+encode self-test (roadmap #2, phase 2): writes an Annex-B .h264 file so
 // the DXGI/GDI capture and H.264 encoder can be validated on real hardware with no hub.
@@ -122,6 +130,15 @@ try
     // clicked -- see ProcessGuard.
     builder.Services.AddSingleton<ICommandExecutor, KillProcessExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RestartProcessExecutor>();
+    // Messages to the person at the PC (rules engine). The only command whose subject is a
+    // human: it session-injects a dialog and reports back which button was pressed, which the
+    // hub maps onto follow-up actions. The agent deliberately never learns what a button
+    // means -- see ShowMessageExecutor.
+    builder.Services.AddSingleton<ICommandExecutor, ShowMessageExecutor>();
+    // Probe collection for the rules engine: read one specific registry value, file version
+    // or WMI property that no regular telemetry carries. Four of its five kinds cannot change
+    // the machine; the fifth (script) is gated behind a hub setting that starts off.
+    builder.Services.AddSingleton<ICommandExecutor, CollectProbeExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-update

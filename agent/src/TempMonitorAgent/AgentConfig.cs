@@ -359,6 +359,15 @@ public static class AgentConfig
     // session, and keeping its diagnostics separate makes a field capture issue legible.
     public static string RemoteHelperLogPath => Path.Combine(ProgramDataDir, "remote-helper.log");
 
+    // --- Messages to the person at the PC (rules engine) ------------------
+    // Same one-binary, session-injected shape as the remote helper above, and for the same
+    // reason: a dialog created in session 0 is created onto nothing. The request (title,
+    // body, buttons) goes via a file rather than the command line -- not for secrecy here,
+    // but because a message body is arbitrary operator text and putting it through command
+    // line quoting is a bug waiting for the first apostrophe.
+    public const string ShowMessageArg = "--show-message";
+    public static string MessageStateDir => Path.Combine(ProgramDataDir, "messages");
+
     public static string AgentIdentityPath => Path.Combine(ProgramDataDir, "agent.json");
     /// <summary>Hub-delivered operational config (see RuntimeConfig). Persisted so a
     /// restart or self-update doesn't fall back to compiled defaults until the next

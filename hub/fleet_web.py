@@ -63,10 +63,16 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
-def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
+def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
+                           on_command_result=None):
     """Build the fleet Blueprint. `login_required` (app.py's session gate) and `access`
     (the permission-group layer) are both passed in, to avoid a circular import and to
-    keep one source of truth for each."""
+    keep one source of truth for each.
+
+    `on_command_result(command_id, machine, success, result, output)` is an optional hook fired
+    after a command result is recorded. The rules engine uses it to route a show_message
+    answer to its follow-up actions -- passed in rather than imported for the same reason as
+    the two above, and so this module keeps no opinion about what any command means."""
     bp = Blueprint("fleet", __name__)
     can_view = access.require(permissions.VIEW)
 
@@ -368,6 +374,16 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access):
             return jsonify({"error": "unknown command"}), 404
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
+        # Post-result hook (the rules engine's message routing). Deliberately after the
+        # result is committed and deliberately non-fatal: the agent has already done the
+        # work, and answering it 500 because a follow-up action threw would make it retry a
+        # result that landed -- which, for a message whose answer restarts the machine, would
+        # restart it twice.
+        if on_command_result is not None:
+            try:
+                on_command_result(command_id, machine, success, data.get("result"), output)
+            except Exception as e:                    # noqa: BLE001
+                print(f"[fleet] Command-result hook failed for {command_id}: {e}")
         return jsonify({"status": "recorded"}), 200
 
     # ---------------- Console-facing ----------------
