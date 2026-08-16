@@ -528,6 +528,19 @@ check("an over-long expression is refused", err is not None)
 
 err, _ = rules.validate_condition({"op": "and", "nodes": []}, EXTRA)
 check("an empty group is refused at save time", err is not None)
+
+# Error text reaches a browser, so it must never carry what a stdlib exception would put in
+# it. Parser messages ARE ours and stay verbatim (they are the point of the text editor);
+# anything built from a foreign exception must not echo the input back.
+err = rules.validate_regex("Windows ((10|11")
+check("a bad regex is refused", err is not None)
+check("...without echoing the pattern back", "Windows" not in err)
+check("...but still says where", "character" in err)
+
+err, _ = parse("sys.uptime_days > 7)")
+check("a parse error still names the offending token and position",
+      err and "character" in err)
+check("...and carries no traceback", err and "Traceback" not in err and "File \"" not in err)
 check("...and reads UNKNOWN if one somehow reaches the evaluator",
       rules.evaluate({"op": "and", "nodes": []}, vars1) is UNKNOWN)
 

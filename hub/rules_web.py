@@ -22,7 +22,17 @@ A rule that must not survive its author is a rule to delete, and deleting one is
 Bodies are JSON everywhere, which is load-bearing CSRF protection -- see fleet_web.py's
 module docstring, which applies here verbatim. There are no multipart endpoints in this file
 and there should not be.
+
+ERROR TEXT IS SPLIT IN TWO, deliberately. Validation messages produced by rules.py ("unknown
+variable: sys.uptim", "operator '>' cannot be used with sys.online") are written by us out of
+the caller's own input, and they go back verbatim -- an expression editor whose errors all
+read "invalid expression" is one nobody can use. Anything thrown by code we did not write
+(SQLite, the resolver, the OS) does NOT: it is logged and answered with a fixed sentence, via
+_log_generic. Exception text from those layers carries statement fragments, file paths and
+schema details, and this response goes to a browser.
 """
+import traceback
+
 from flask import Blueprint, jsonify, render_template, request
 
 import alerts
@@ -34,6 +44,23 @@ import rules
 
 def _lang():
     return i18n.current()
+
+
+# The one sentence any unexpected failure in this module answers with. Fixed text, so no
+# caller can learn anything about the hub's internals from the shape of a failure.
+GENERIC_ERROR = "the hub could not complete that request; see the hub log for details"
+
+
+def _log_generic(context):
+    """Log the exception currently being handled, and return the caller-safe message.
+
+    Called from inside an `except` block. The traceback goes to the hub's log -- the same
+    place every other scheduler and blueprint prints its failures -- and the return value is
+    a constant. Splitting it this way means adding a new broad `except` here cannot
+    accidentally start leaking, because there is nothing to interpolate.
+    """
+    print(f"[rules] Failed while {context}:\n{traceback.format_exc()}")
+    return GENERIC_ERROR
 
 
 def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_config):
@@ -311,8 +338,12 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
         """
         try:
             machines = rules.resolve_targets(db_path, target)
-        except Exception as exc:                      # noqa: BLE001
-            return f"target: {exc}"
+        except Exception:                             # noqa: BLE001
+            # Deliberately NOT the exception's text. This catches anything the target
+            # resolver can throw -- SQLite errors carry statement fragments and file paths,
+            # and this response goes to a browser. The detail belongs in the hub's log,
+            # where an operator debugging it can see it and a caller cannot.
+            return _log_generic("resolving a rule's targets")
         outside = [m for m in machines if not access.in_scope(m)]
         if outside:
             return ("this rule would target machines outside your access: "
@@ -368,8 +399,12 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
             try:
                 resolved = resolve_vars(machine)
                 outcome = rules._result_name(rules.evaluate(condition, resolved))
-            except Exception as exc:                  # noqa: BLE001
-                results.append({"machine": machine, "result": "unknown", "error": str(exc)})
+            except Exception:                         # noqa: BLE001
+                # Same reasoning as _scope_error: one machine failing to resolve must not
+                # put a raw exception into a preview an operator is reading, and must not
+                # abandon the other three hundred machines either.
+                results.append({"machine": machine, "result": "unknown",
+                                "error": _log_generic(f"previewing {machine}")})
                 tally["unknown"] += 1
                 continue
             tally[outcome] += 1

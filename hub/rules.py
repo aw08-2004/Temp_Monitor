@@ -1307,7 +1307,11 @@ def validate_regex(pattern):
     try:
         re.compile(pattern)
     except re.error as exc:
-        return f"invalid pattern: {exc}"
+        # Only the position and the stdlib's short reason, both rebuilt here rather than
+        # interpolating the exception: re.error's str() also embeds the pattern, and a
+        # pattern is operator input we should not echo back into a response verbatim.
+        where = f" at character {exc.pos + 1}" if getattr(exc, "pos", None) is not None else ""
+        return f"the pattern is not valid regular expression syntax{where}"
     return None
 
 
@@ -1678,11 +1682,27 @@ Token = namedtuple("Token", "kind value pos")
 
 
 class ExpressionError(ValueError):
-    """A parse error with the character offset, so the editor can point at it."""
+    """A parse error with the character offset, so the editor can point at it.
+
+    `reason` is kept as a plain attribute and is the ONLY thing that may be shown to a
+    caller. Every raise site below constructs it from our own wording plus the offending
+    token, never from another exception -- so `client_message()` cannot leak a stack trace,
+    a file path or a database error the way `str(some_exception)` can. That distinction is
+    the whole reason this class exists rather than a bare ValueError, and it is why the
+    HTTP layer is allowed to pass this particular text through verbatim: an expression
+    editor whose errors all read "invalid expression" is an expression editor nobody can
+    use.
+    """
 
     def __init__(self, message, pos=None):
         super().__init__(message)
+        self.reason = str(message)
         self.pos = pos
+
+    def client_message(self):
+        if self.pos is None:
+            return self.reason
+        return f"{self.reason} (at character {self.pos + 1})"
 
 
 def _tokenize(text):
@@ -1910,9 +1930,7 @@ def parse_expression(text, extra=None):
             return "expression is empty", None
         node = _Parser(tokens, extra).parse()
     except ExpressionError as exc:
-        if exc.pos is not None:
-            return f"{exc} (at character {exc.pos + 1})", None
-        return str(exc), None
+        return exc.client_message(), None
     return validate_condition(node, extra)
 
 
@@ -2090,7 +2108,7 @@ def parse_arithmetic(text, extra=None):
     try:
         node = parse_expr()
     except ExpressionError as exc:
-        return (f"{exc} (at character {exc.pos + 1})" if exc.pos is not None else str(exc)), None
+        return exc.client_message(), None
     if state["i"] != len(tokens):
         return f"unexpected {tokens[state['i']][1]!r}", None
     return None, node
