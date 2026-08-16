@@ -76,6 +76,16 @@ MANAGE_FIRMWARE = "manage_firmware"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
+# Writing rules: conditions over machine data, and what happens when they match. Its own
+# capability rather than a reuse of MANAGE_SETTINGS, because a rule is not a setting -- it is
+# a standing instruction that acts on machines without anybody present, which is a different
+# thing to hand out than a threshold.
+#
+# It is deliberately NOT sufficient on its own to write a rule that issues COMMANDS: that
+# additionally requires ISSUE_COMMANDS, checked in rules.validate_actions. Someone who may
+# raise alerts on a condition has not thereby been handed a fleet-wide reboot button.
+# READING rules, and the custom fields they use, is VIEW.
+MANAGE_RULES = "manage_rules"
 
 CAPABILITIES = (
     VIEW,
@@ -86,6 +96,7 @@ CAPABILITIES = (
     DEPLOY_PACKAGES,
     MANAGE_BACKUPS,
     MANAGE_FIRMWARE,
+    MANAGE_RULES,
     MANAGE_SETTINGS,
     MANAGE_USERS,
     MANAGE_PERMISSION_GROUPS,

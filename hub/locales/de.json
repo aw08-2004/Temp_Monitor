@@ -18,7 +18,8 @@
     "close": "Navigation schließen",
     "open": "Navigation öffnen",
     "firmware": "Firmware",
-    "download": "Client herunterladen"
+    "download": "Client herunterladen",
+    "rules": "Regeln"
   },
   "topbar": {
     "hub_version": "Hub v{version}",
@@ -329,6 +330,10 @@
       "manage_permission_groups": {
         "label": "Berechtigungsgruppen verwalten",
         "description": "Berechtigungsgruppen anlegen und bearbeiten – also jedem, auch sich selbst, jede der obigen Berechtigungen erteilen."
+      },
+      "manage_rules": {
+        "label": "Regeln verwalten",
+        "description": "Regeln erstellen und bearbeiten: Bedingungen über Maschinendaten und was bei Zutreffen geschieht. Eine Regel, die Befehle an PCs sendet, benötigt zusätzlich Befehle erteilen."
       }
     }
   },
@@ -347,7 +352,8 @@
       "directory": "Active Directory",
       "firmware": "Firmware-Updates",
       "signin": "Anmeldung",
-      "wake": "Wake-on-LAN"
+      "wake": "Wake-on-LAN",
+      "rules": "Regeln"
     },
     "unit": {
       "celsius": "°C",
@@ -657,6 +663,38 @@
       "hub.device_token_lifetime_days": {
         "label": "Gültigkeit des Gerätezugriffs",
         "help": "Wie lange eine gekoppelte App ohne Nutzung weiter funktioniert. Jede Nutzung verlängert sie. Bereits gekoppelte Geräte behalten ihre ursprüngliche Gültigkeit."
+      },
+      "rules.evaluator_interval_seconds": {
+        "label": "Regeln auswerten alle",
+        "help": "Wie oft der Hub jede aktive Regel für jeden erfassten PC prüft. Kleinere Werte reagieren schneller, größere belasten eine große Flotte weniger."
+      },
+      "rules.actions_enabled": {
+        "label": "Regeln dürfen ihre Aktionen ausführen",
+        "help": "Ausgeschaltet werden Regeln weiterhin ausgewertet und protokollieren, was sie getan hätten, aber es wird nichts gesendet. Nützlich beim Schreiben einer noch unsicheren Regel."
+      },
+      "rules.command_actions_enabled": {
+        "label": "Regeln dürfen Befehle an PCs senden",
+        "help": "Unabhängig vom Schalter darüber und standardmäßig aus. Bei einer Bedingung zu warnen und bei einer Bedingung einen PC neu zu starten sind unterschiedliche Vertrauensstufen."
+      },
+      "rules.max_targets_per_tick": {
+        "label": "Höchstzahl PCs, auf die eine Regel gleichzeitig wirken darf",
+        "help": "Eine Obergrenze, auf die jede Regel begrenzt wird. Eine Regel mit mehr Zielen stoppt an der Grenze und meldet dies, statt auf die gesamte Flotte zu wirken."
+      },
+      "rules.command_cooldown_floor_seconds": {
+        "label": "Kürzester Abstand zwischen Befehlen einer Regel",
+        "help": "Gilt für jede Regel, die Befehle sendet, unabhängig vom angeforderten Wert. Verhindert, dass eine Neustart-Regel erneut auslöst, während der PC noch herunterfährt."
+      },
+      "rules.history_retention_days": {
+        "label": "Regelverlauf aufbewahren für",
+        "help": "Wie lange festgehalten wird, welche Regel auf welchen PC gewirkt hat und wie die Person am PC geantwortet hat."
+      },
+      "rules.probes_allow_script": {
+        "label": "Skript-Sonden erlauben",
+        "help": "Skript-Sonden führen von Ihnen geschriebenes PowerShell planmäßig auf jedem PC aus, den eine Regel betrachtet. Die anderen Sondenarten lesen nur einen Registrierungswert, eine Datei oder eine WMI-Eigenschaft."
+      },
+      "rules.probes_per_tick": {
+        "label": "Höchstzahl Sondenanfragen pro Durchlauf",
+        "help": "Verteilt die Erfassung über die Zeit, statt die ganze Flotte auf einmal zu fragen."
       }
     },
     "choice": {
@@ -2001,5 +2039,329 @@
       "ios": "iOS",
       "unknown": "Client"
     }
+  },
+  "rules": {
+    "heading": "Regeln",
+    "intro": "Bedingungen über die von Ihren PCs gemeldeten Daten und was bei Zutreffen geschehen soll.",
+    "new": "Neue Regel",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "save": "Regel speichern",
+    "cancel": "Abbrechen",
+    "enabled": "Aktiviert",
+    "disabled": "Deaktiviert",
+    "name": "Name",
+    "description": "Beschreibung",
+    "empty": "Noch keine Regeln.",
+    "empty_hint": "Eine Regel besteht aus einer Bedingung, den betroffenen PCs und dem, was bei Zutreffen geschieht.",
+    "matching": "trifft derzeit zu",
+    "targets": "erfasste PCs",
+    "confirm_delete": "Diese Regel und ihren Verlauf löschen?",
+    "actions_disabled": "Regeln werden ausgewertet, ihre Aktionen sind flottenweit jedoch abgeschaltet.",
+    "commands_disabled": "Befehlsaktionen sind flottenweit abgeschaltet. Diese Regel wird ausgewertet, sendet aber nichts.",
+    "section_target": "Welche PCs",
+    "section_condition": "Wann",
+    "section_actions": "Dann",
+    "section_timing": "Taktung",
+    "section_history": "Verlauf",
+    "include": "Einschließen",
+    "exclude": "Außer",
+    "add_selector": "Hinzufügen",
+    "target_all": "Alle PCs",
+    "target_machines": "Diese PCs",
+    "target_ad_ou": "Eine AD-Organisationseinheit",
+    "target_field": "PCs, bei denen ein Feld gleich ist",
+    "include_children": "und Unter-OUs",
+    "builder": "Baukasten",
+    "expression": "Ausdruck",
+    "add_clause": "Bedingung hinzufügen",
+    "match_all": "Alle erfüllen",
+    "match_any": "Eine erfüllen",
+    "preview": "Testen",
+    "preview_result": "{true} treffen zu, {false} nicht, {unknown} unbekannt",
+    "unknown_warning": "Unbekannt heißt, der Hub hat keinen aktuellen Wert. Eine Regel handelt nie bei unbekannt.",
+    "for_seconds": "Erst wenn die Bedingung angehalten hat für",
+    "for_seconds_help": "Verhindert, dass ein um den Schwellwert schwankender Wert immer wieder auslöst.",
+    "cooldown": "Danach mindestens warten",
+    "cooldown_help": "Bevor derselbe PC erneut behandelt wird.",
+    "max_targets": "Höchstens so viele PCs pro Durchlauf",
+    "max_targets_help": "Eine Sicherheitsgrenze. Eine Regel mit mehr Zielen stoppt hier und meldet dies.",
+    "add_action": "Aktion hinzufügen",
+    "message_title": "Titel",
+    "message_body": "Nachricht",
+    "message_buttons": "Schaltflächen",
+    "message_timeout": "Von selbst schließen nach",
+    "on_response": "Wenn die Person klickt",
+    "nothing": "Nichts tun",
+    "insert_variable": "Wert einfügen",
+    "fired_at": "Ausgeführt",
+    "outcome": {
+      "timeout": "Niemand hat geantwortet",
+      "dismissed": "Fenster geschlossen",
+      "no_session": "Niemand war angemeldet",
+      "failed": "Konnte nicht angezeigt werden"
+    },
+    "no_history": "Diese Regel hat noch nicht ausgelöst.",
+    "operator": {
+      ">": {
+        "label": "ist größer als"
+      },
+      ">=": {
+        "label": "ist mindestens"
+      },
+      "<": {
+        "label": "ist kleiner als"
+      },
+      "<=": {
+        "label": "ist höchstens"
+      },
+      "==": {
+        "label": "ist"
+      },
+      "!=": {
+        "label": "ist nicht"
+      },
+      "contains": {
+        "label": "enthält"
+      },
+      "not_contains": {
+        "label": "enthält nicht"
+      },
+      "starts_with": {
+        "label": "beginnt mit"
+      },
+      "ends_with": {
+        "label": "endet mit"
+      },
+      "matches": {
+        "label": "entspricht dem Muster (* und ?)"
+      },
+      "in": {
+        "label": "ist eines von"
+      },
+      "not_in": {
+        "label": "ist keines von"
+      },
+      "is_known": {
+        "label": "ist bekannt"
+      },
+      "is_unknown": {
+        "label": "ist unbekannt"
+      }
+    },
+    "action": {
+      "show_message": {
+        "label": "Eine Nachricht auf dem PC anzeigen",
+        "description": "Ein Dialog auf dem Bildschirm des angemeldeten Benutzers. Der Klick entscheidet, was als Nächstes geschieht."
+      },
+      "alert": {
+        "label": "Eine Warnung auslösen",
+        "description": "Erscheint auf der Warnungsseite. Niemand wird unterbrochen."
+      },
+      "command": {
+        "label": "Einen Befehl senden",
+        "description": "Wirkt ohne Rückfrage auf den PC. Erfordert die Berechtigung Befehle erteilen."
+      },
+      "snooze": {
+        "label": "Warten, bevor erneut gefragt wird",
+        "description": "Hält diese Regel nur für diesen einen PC zurück."
+      },
+      "webhook": {
+        "label": "Einen Webhook aufrufen",
+        "description": "Sendet die Details an eine von Ihnen gewählte https-URL."
+      },
+      "email": {
+        "label": "Eine E-Mail senden",
+        "description": "Erfordert SMTP-Angaben in der .env-Datei des Hubs."
+      }
+    },
+    "button": {
+      "ok": "OK",
+      "cancel": "Abbrechen",
+      "yes": "Ja",
+      "no": "Nein",
+      "later": "Später",
+      "accept": "Annehmen",
+      "decline": "Ablehnen"
+    },
+    "buttons": {
+      "ok": "OK",
+      "ok_cancel": "OK / Abbrechen",
+      "yes_no": "Ja / Nein",
+      "yes_no_later": "Ja / Nein / Später",
+      "accept_decline": "Annehmen / Ablehnen",
+      "acknowledge_only": "Nur bestätigen"
+    },
+    "target": {
+      "all": "Alle PCs",
+      "machines": "Bestimmte PCs",
+      "ad_ou": "AD-Organisationseinheit",
+      "field": "Nach eigenem Feld"
+    },
+    "variable": {
+      "sys.machine": {
+        "label": "PC-Name"
+      },
+      "sys.uptime_seconds": {
+        "label": "Zeit seit letztem Start"
+      },
+      "sys.uptime_days": {
+        "label": "Tage seit letztem Start"
+      },
+      "sys.status": {
+        "label": "Online oder offline"
+      },
+      "sys.online": {
+        "label": "Ist online"
+      },
+      "sys.enrolled": {
+        "label": "Hat einen registrierten Agenten"
+      },
+      "sys.last_seen_seconds_ago": {
+        "label": "Zeit seit letztem Kontakt"
+      },
+      "sys.agent_version": {
+        "label": "Agent-Version"
+      },
+      "hw.model": {
+        "label": "Modell"
+      },
+      "hw.manufacturer": {
+        "label": "Hersteller"
+      },
+      "hw.serial_number": {
+        "label": "Seriennummer"
+      },
+      "hw.service_tag": {
+        "label": "Service-Tag"
+      },
+      "hw.asset_tag": {
+        "label": "Inventarnummer"
+      },
+      "metric.cpu_temp": {
+        "label": "CPU-Temperatur"
+      },
+      "metric.cpu_load_pct": {
+        "label": "CPU-Auslastung"
+      },
+      "metric.cpu_power_w": {
+        "label": "CPU-Leistungsaufnahme"
+      },
+      "metric.gpu_temp": {
+        "label": "GPU-Temperatur"
+      },
+      "metric.gpu_load_pct": {
+        "label": "GPU-Auslastung"
+      },
+      "metric.gpu_power_w": {
+        "label": "GPU-Leistungsaufnahme"
+      },
+      "metric.memory_load_pct": {
+        "label": "Speicherauslastung"
+      },
+      "metric.mem_used_gb": {
+        "label": "Belegter Speicher"
+      },
+      "metric.mem_total_gb": {
+        "label": "Eingebauter Speicher"
+      },
+      "metric.disk_load_pct": {
+        "label": "Datenträgerauslastung"
+      },
+      "metric.fan_rpm": {
+        "label": "Schnellste Lüfterdrehzahl"
+      },
+      "metric.net_rx_bps": {
+        "label": "Netzwerk empfangen"
+      },
+      "metric.net_tx_bps": {
+        "label": "Netzwerk gesendet"
+      },
+      "disk.count": {
+        "label": "Anzahl Laufwerke"
+      },
+      "disk.max_used_pct": {
+        "label": "Vollstes Laufwerk"
+      },
+      "disk.min_free_gb": {
+        "label": "Freier Speicher auf dem knappsten Laufwerk"
+      },
+      "session.count": {
+        "label": "Angemeldete Personen"
+      },
+      "session.user": {
+        "label": "Angemeldeter Benutzer"
+      },
+      "session.account": {
+        "label": "Angemeldetes Konto"
+      },
+      "session.domain": {
+        "label": "Domäne des angemeldeten Benutzers"
+      },
+      "session.console_active": {
+        "label": "Jemand sitzt an der Tastatur"
+      },
+      "session.at_logon_screen": {
+        "label": "Am Anmeldebildschirm"
+      },
+      "net.ipv4": {
+        "label": "IP-Adresse"
+      },
+      "net.mac": {
+        "label": "MAC-Adresse"
+      },
+      "net.link_up": {
+        "label": "Netzwerkkabel verbunden"
+      },
+      "net.wake_enabled": {
+        "label": "Wake-on-LAN aktiviert"
+      },
+      "net.fast_startup": {
+        "label": "Schnellstart aktiviert"
+      },
+      "bios.version": {
+        "label": "BIOS-Version"
+      },
+      "bios.vendor": {
+        "label": "BIOS-Hersteller"
+      },
+      "bios.support": {
+        "label": "BIOS-Verwaltungsunterstützung"
+      },
+      "bios.password_set": {
+        "label": "BIOS-Kennwort gesetzt"
+      },
+      "ad.ou": {
+        "label": "AD-Organisationseinheit"
+      },
+      "ad.dn": {
+        "label": "AD-DN"
+      },
+      "ad.owner": {
+        "label": "AD-Besitzer"
+      },
+      "ad.os": {
+        "label": "Betriebssystem (aus AD)"
+      },
+      "ad.disabled": {
+        "label": "In AD deaktiviert"
+      },
+      "proc.count": {
+        "label": "Laufende Prozesse"
+      },
+      "proc.cpu_cores": {
+        "label": "CPU-Kerne"
+      },
+      "proc.mem_total_mb": {
+        "label": "Eingebauter Speicher (MB)"
+      }
+    },
+    "field_kind": {
+      "text": "Text",
+      "number": "Zahl",
+      "bool": "Ja / Nein",
+      "choice": "Aus einer Liste wählen"
+    },
+    "fields_heading": "Eigene Felder"
   }
 }

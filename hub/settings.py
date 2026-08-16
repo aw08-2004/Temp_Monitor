@@ -375,11 +375,44 @@ REGISTRY = (
     # default because waking a fleet at 3am is a decision, not a side effect of scheduling
     # a deploy.
     _s("wake.auto_wake_targets", "wake", "bool", False),
+
+    # ---------------- Rules: conditions over machine data, and what they do ----------------
+    # A rule is "condition + who it applies to + what happens". These knobs are the fuses
+    # around the last third of that, because a rule engine that can issue commands is a
+    # fleet-wide button on a timer.
+    #
+    # `actions_enabled` is the master switch: off, rules still evaluate and still record
+    # what they WOULD have done, which is exactly what you want while writing one.
+    # `command_actions_enabled` is separate and off by default -- alerting on a condition and
+    # rebooting on a condition are different orders of trust, and arming the second should be
+    # a deliberate act rather than something inherited by turning the feature on.
+    _s("rules.evaluator_interval_seconds", "rules", "int", 60, minimum=15, maximum=3600,
+       unit="seconds"),
+    _s("rules.actions_enabled", "rules", "bool", True),
+    _s("rules.command_actions_enabled", "rules", "bool", False),
+    # The per-tick ceiling a rule's own max_targets_per_tick is clamped to. A misscoped rule
+    # then stalls at the cap and says so, instead of restarting four hundred PCs at 09:05.
+    _s("rules.max_targets_per_tick", "rules", "int", 25, minimum=1, maximum=500),
+    # Floor on how often a rule may fire again for the SAME machine when it issues a command.
+    # An hour, because the failure this prevents is a reboot loop: restart, condition still
+    # true on the way down, restart again.
+    _s("rules.command_cooldown_floor_seconds", "rules", "int", 3600, minimum=60,
+       maximum=86400, unit="seconds"),
+    # How long a fired rule's history is kept. Long enough to answer "who declined the
+    # restart, and when" during the next quarter's audit.
+    _s("rules.history_retention_days", "rules", "int", 90, minimum=7, maximum=3650,
+       unit="days"),
+    # Probes: values a rule needs that no regular telemetry carries, fetched on demand.
+    # The four read-only kinds (registry, file, file version, WMI query) are always
+    # available. `script` is not a read -- it is arbitrary code, on a schedule, on every
+    # targeted PC -- so it gets its own switch and starts off.
+    _s("rules.probes_allow_script", "rules", "bool", False),
+    _s("rules.probes_per_tick", "rules", "int", 50, minimum=1, maximum=500),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "wake")
+            "directory", "firmware", "wake", "rules")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

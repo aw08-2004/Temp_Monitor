@@ -64,6 +64,16 @@
             {{ t('nav.packages') }}
         </a>
         {% endif %}
+        {# Gated on VIEW, which is what the page route itself requires: a standing
+           instruction that acts on a PC is something anyone who can see that PC should be
+           able to read. Writing one additionally needs MANAGE_RULES, and the page enforces
+           that itself by hiding its editor. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'rules.rules_page' else '' }}" data-nav-prefix="/rules" href="{{ url_for('rules.rules_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h6"/><path d="M14 6h6"/><circle cx="12" cy="6" r="2"/><path d="M4 14h4"/><circle cx="10" cy="14" r="2"/><path d="M12 14h8"/><path d="M4 20h10"/><circle cx="16" cy="20" r="2"/><path d="M18 20h2"/></svg>
+            {{ t('nav.rules') }}
+        </a>
+        {% endif %}
         {% if cap.MANAGE_FIRMWARE in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'bios.firmware_page' else '' }}" data-nav-prefix="/firmware" href="{{ url_for('bios.firmware_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>

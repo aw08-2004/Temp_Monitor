@@ -39,6 +39,8 @@ import directory
 import bios
 import firmware
 import wake
+import rules
+import notify
 import processes
 import live
 import authconfig
@@ -56,6 +58,7 @@ from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from wake_web import create_wake_blueprint
 from processes_web import create_processes_blueprint
+from rules_web import create_rules_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -85,7 +88,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.77.0"
+HUB_VERSION = "1.78.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1575,8 +1578,38 @@ access = create_access(DB_PATH, ALLOWED_EMAILS)
 
 # Fleet command-channel endpoints (agent-facing token auth + console-facing
 # login_required). Registered here, once login_required exists to hand in.
+def _on_command_result(command_id, machine, success, result, output=None):
+    """Route a rule-issued show_message answer to its follow-up actions.
+
+    The agent reports its answer as the command's OUTPUT -- a JSON object -- rather than in a
+    new wire field, so the result envelope is unchanged and an agent too old to know about
+    messages cannot send something this misreads. A structured `result` field is honoured
+    first in case a later agent sends one.
+
+    rules.handle_message_result returns None immediately for any command that was not a
+    rule-issued message, which is very nearly all of them: one indexed lookup per result.
+    """
+    if result is None and output:
+        try:
+            parsed = json.loads(output)
+            result = parsed if isinstance(parsed, dict) else None
+        except (TypeError, ValueError):
+            result = None
+    # Probe answers arrive the same way and are told apart by the command's own type, so one
+    # hook serves both rather than two competing ones racing on the same endpoint.
+    if rules.handle_probe_result(DB_PATH, command_id, success=success, result=result,
+                                 output=output) is not None:
+        return None
+    return rules.handle_message_result(
+        DB_PATH, command_id,
+        status=fleet.STATUS_DONE if success else fleet.STATUS_FAILED,
+        result=result, config=_rules_config(), deliver=notify.deliver, audit=_rules_audit,
+    )
+
+
 app.register_blueprint(create_fleet_blueprint(
-    DB_PATH, AGENT_ENROLLMENT_SECRET, login_required, access
+    DB_PATH, AGENT_ENROLLMENT_SECRET, login_required, access,
+    on_command_result=_on_command_result,
 ))
 # Settings endpoints (console-facing only). Same reason for being registered here.
 app.register_blueprint(create_settings_blueprint(DB_PATH, login_required, access))
@@ -1643,6 +1676,15 @@ app.register_blueprint(create_wake_blueprint(
 # process behind `issue_commands` -- no new capability, because this is strictly less
 # dangerous than the `shutdown` and the SYSTEM shell that gate already covers.
 app.register_blueprint(create_processes_blueprint(DB_PATH, login_required, access))
+# The rules engine. resolve_rule_vars and _rules_config are handed in for the same reason
+# the evaluator thread takes them: rules.py stays free of Flask, settings and sensor parsing.
+# Wrapped in lambdas because both are defined further down this file than blueprints are
+# registered -- the names only need to resolve when a request arrives, not now.
+app.register_blueprint(create_rules_blueprint(
+    DB_PATH, login_required, access,
+    lambda machine: resolve_rule_vars(machine),
+    lambda: _rules_config(),
+))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
@@ -1993,6 +2035,18 @@ def init_db():
         # know what this is yet" rather than "unsupported".
         if "manufacturer" not in existing_columns:
             conn.execute("ALTER TABLE machine_info ADD COLUMN manufacturer TEXT")
+        # When this machine last booted, as an epoch second, derived at report time as
+        # (report time - the agent's uptime_seconds). Stored ALONGSIDE last_uptime_seconds
+        # rather than replacing it, because the two answer different questions: the agent
+        # reports elapsed seconds only every 600s (AgentConfig.UptimeIntervalSeconds), so
+        # last_uptime_seconds is up to ten minutes stale the instant it is read, while a boot
+        # time is a fixed point that stays correct as the clock advances. The rules engine
+        # needs the latter -- "up for more than 7 days" evaluated against a figure that lags
+        # by ten minutes is a rule that fires ten minutes late and, worse, reports a number
+        # that disagrees with the machine page. Null on any machine that has not reported
+        # uptime since this shipped, which reads as "fall back to last_uptime_seconds".
+        if "boot_epoch" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN boot_epoch INTEGER")
 
 def write_readings_batch(records):
     if not records:
@@ -2117,17 +2171,26 @@ def persist_live_status(machine, temp, uptime_seconds):
             return
         _last_live_status_persist[machine_name] = now
 
+    # Turn elapsed-seconds into a fixed boot time, so uptime keeps advancing between the
+    # agent's ten-minutely uptime reports instead of sitting stale. COALESCE on the way in:
+    # most reports carry no uptime at all (the agent sends it every 600s, not every 5s), and
+    # those must not blank a boot time we already know.
+    boot_epoch = int(now - uptime_seconds) if uptime_seconds is not None else None
+
     with get_db_conn() as conn:
         conn.execute(
             """
-            INSERT INTO machine_info(machine, last_temp, last_uptime_seconds, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO machine_info(machine, last_temp, last_uptime_seconds, boot_epoch,
+                                     updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 last_temp = excluded.last_temp,
                 last_uptime_seconds = excluded.last_uptime_seconds,
+                boot_epoch = COALESCE(excluded.boot_epoch, machine_info.boot_epoch),
                 updated_at = excluded.updated_at
             """,
-            (machine_name, temp, uptime_seconds, to_timestamp_str(datetime.now())),
+            (machine_name, temp, uptime_seconds, boot_epoch,
+             to_timestamp_str(datetime.now())),
         )
 
 def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timestamp_epoch=None,
@@ -2942,6 +3005,126 @@ def start_high_temp_evaluator():
                      name="high_temp_evaluator").start()
 
 
+# ================================
+# RULES EVALUATOR  --  operator-written conditions over machine data (see rules.py).
+#
+# A thread of its own rather than another sweep inside high_temp_evaluator, on the same
+# precedent as deploy_scheduler and wake_scheduler: its cadence is operator-settable
+# (rules.evaluator_interval_seconds), and folding a settable cadence into a fixed-tick thread
+# means the setting quietly does nothing.
+# ================================
+
+def _rules_config():
+    """The settings the evaluator obeys, read fresh each pass.
+
+    Read here rather than inside rules.py so that module stays free of settings/i18n/Flask,
+    exactly as packages.py takes its ttl from the caller. Re-read every tick so a kill switch
+    thrown in the console takes effect on the next pass rather than at the next restart --
+    which is the entire point of having a kill switch.
+    """
+    return {
+        "actions_enabled": settings.get_bool(DB_PATH, "rules.actions_enabled"),
+        "command_actions_enabled": settings.get_bool(DB_PATH, "rules.command_actions_enabled"),
+        "max_targets_per_tick": settings.get_int(DB_PATH, "rules.max_targets_per_tick"),
+        "command_cooldown_floor_seconds": settings.get_int(
+            DB_PATH, "rules.command_cooldown_floor_seconds"),
+        "command_ttl_seconds": settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+        "probes_allow_script": settings.get_bool(DB_PATH, "rules.probes_allow_script"),
+        "probes_per_tick": settings.get_int(DB_PATH, "rules.probes_per_tick"),
+    }
+
+
+def resolve_rule_vars(machine, now=None):
+    """Build one machine's variable map for the rules engine.
+
+    This is the seam that keeps rules.py app-free: it needs extract_diagnostics (which lives
+    here, alongside the sensor parsing it depends on) and the in-memory live caches, neither
+    of which rules.py can see. Everything else it reads from the database itself.
+    """
+    now = int(now if now is not None else time.time())
+    diagnostics = extract_diagnostics(_recent_sensors_for(machine))
+    live = {
+        "temp": get_latest_temp(machine),
+        "uptime_seconds": get_latest_uptime(machine),
+    }
+    return rules.resolve_machine_vars(
+        DB_PATH, machine, now=now, diagnostics=diagnostics, live=live,
+        online_window=settings.get_int(DB_PATH, "fleet.dashboard_online_window_seconds"),
+        enrolled=fleet.is_enrolled(DB_PATH, machine),
+    )
+
+
+def _rules_audit(actor, action, target, detail):
+    fleet.audit(DB_PATH, actor=actor, action=action, level=fleet.LEVEL_SECURITY,
+                target=target, detail=detail)
+
+
+def evaluate_rules_once(now=None):
+    return rules.evaluate_once(DB_PATH, resolve_rule_vars, now=now, config=_rules_config(),
+                               deliver=notify.deliver, audit=_rules_audit)
+
+
+def collect_probes_once(now=None):
+    """Issue any due probe collections.
+
+    Narrowed to machines that are ENROLLED (there is an agent to ask) and ONLINE (it will
+    hear the command before it expires). Without the online filter a fleet coming back on a
+    Monday would find every probe expired and re-issue the lot at once.
+    """
+    config = _rules_config()
+    online = [row["machine"] for row in fleet.list_agent_status(
+        DB_PATH, offline_after=settings.get_int(DB_PATH, "fleet.offline_after_seconds"))
+        if row.get("status") == "online"]
+    return rules.collect_probes_once(DB_PATH, online, now=now,
+                                     max_per_tick=config["probes_per_tick"],
+                                     ttl_seconds=config["command_ttl_seconds"])
+
+
+RULES_PRUNE_EVERY_TICKS = 60
+
+
+def rule_evaluator():
+    """Wake on the configured cadence and evaluate every enabled rule.
+
+    Same failure discipline as the other schedulers: one bad pass is logged and the thread
+    lives on. rules.evaluate_once already isolates a single bad RULE from the others, so a
+    throw reaching here means something structural, not one operator's typo.
+    """
+    ticks = 0
+    while True:
+        # Probes first: a rule written over probe.x should see the freshest value the fleet
+        # has managed to report, and collecting after evaluating would make every probe-based
+        # rule act on data one full tick old.
+        try:
+            collect_probes_once()
+        except Exception as e:
+            print(f"[rules] Probe collection failed: {e}")
+        try:
+            summary = evaluate_rules_once()
+            if summary.get("fired") or summary.get("errors") or summary.get("capped"):
+                print(f"[rules] {summary['fired']} fired, {summary['matched']} matching, "
+                      f"{summary['rules']} rules; capped={summary['capped']} "
+                      f"errors={summary['errors'][:3]}")
+        except Exception as e:
+            print(f"[rules] Evaluation pass failed: {e}")
+        ticks += 1
+        if ticks % RULES_PRUNE_EVERY_TICKS == 0:
+            try:
+                rules.prune_fires(DB_PATH,
+                                  settings.get_int(DB_PATH, "rules.history_retention_days"))
+            except Exception as e:
+                print(f"[rules] History prune failed: {e}")
+        try:
+            interval = settings.get_int(DB_PATH, "rules.evaluator_interval_seconds")
+        except Exception:
+            interval = 60
+        time.sleep(max(15, interval))
+
+
+def start_rule_evaluator():
+    threading.Thread(target=rule_evaluator, daemon=True, name="rule_evaluator").start()
+
+
 # How often the backup scheduler wakes to ask whether a backup is due. Same reasoning as
 # PRUNE_TICK_SECONDS: sleeping the whole interval would mean an operator who shortens
 # "back up every" from weekly to daily sees no effect for up to a week, which reads as
@@ -3121,6 +3304,11 @@ processes.init_processes_db(DB_PATH)
 live.init_live_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 apitokens.init_apitokens_db(DB_PATH)
+rules.init_rules_db(DB_PATH)
+# Points notify at the database and starts its delivery worker. Separate from the init_*
+# calls because it also owns a thread -- the rules evaluator hands messages to it and must
+# never block on a mail server that has stopped answering.
+notify.configure(DB_PATH)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
@@ -3137,6 +3325,7 @@ start_wake_scheduler()
 start_backup_scheduler()
 start_high_temp_evaluator()
 start_directory_sync_scheduler()
+start_rule_evaluator()
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD

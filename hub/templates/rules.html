@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.rules') }} - FleetHub{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('rules.heading') }}</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('rules.intro') }}</p>
+
+{# Shown when rules.actions_enabled is off: the rules still evaluate, so the page looks
+   entirely normal, and without this banner an operator would reasonably conclude their rule
+   was broken rather than switched off. #}
+<div class="card" id="rules-actions-banner" hidden
+     style="margin-bottom: var(--space-4); border-left: 3px solid var(--color-warning, #d29922);">
+    <p class="stat-card__meta" style="margin: 0;">{{ t('rules.actions_disabled') }}</p>
+</div>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <button id="rules-new" type="button" class="btn btn--primary" hidden>{{ t('rules.new') }}</button>
+    <span class="stat-card__meta" id="rules-count"></span>
+</div>
+
+<div class="card">
+    <table class="table" id="rules-table">
+        <thead>
+            <tr>
+                <th>{{ t('rules.name') }}</th>
+                <th>{{ t('rules.section_condition') }}</th>
+                <th>{{ t('rules.section_actions') }}</th>
+                <th>{{ t('rules.matching') }}</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="rules-body"></tbody>
+    </table>
+    <p class="stat-card__meta" id="rules-empty" hidden>
+        {{ t('rules.empty') }}<br><span>{{ t('rules.empty_hint') }}</span>
+    </p>
+</div>
+
+{# ------------------------------------------------------------------ editor ------- #}
+<div class="card" id="rule-editor" hidden style="margin-top: var(--space-5);">
+    <div class="toolbar" style="margin-bottom: var(--space-4);">
+        <input class="input" id="rule-name" type="text" placeholder="{{ t('rules.name') }}"
+               style="min-width: 260px;">
+        <label class="stat-card__meta">
+            <input type="checkbox" id="rule-enabled" checked> {{ t('rules.enabled') }}
+        </label>
+    </div>
+    <input class="input" id="rule-description" type="text"
+           placeholder="{{ t('rules.description') }}" style="width: 100%; margin-bottom: var(--space-5);">
+
+    <h2 class="section-title">{{ t('rules.section_target') }}</h2>
+    <div id="rule-target-include"></div>
+    <div class="toolbar" style="margin: var(--space-2) 0 var(--space-4);">
+        <select class="input" id="rule-target-kind"></select>
+        <button type="button" class="btn btn--ghost" id="rule-target-add">{{ t('rules.add_selector') }}</button>
+    </div>
+    <h3 class="stat-card__meta">{{ t('rules.exclude') }}</h3>
+    <div id="rule-target-exclude"></div>
+    <div class="toolbar" style="margin: var(--space-2) 0 var(--space-4);">
+        <select class="input" id="rule-exclude-kind"></select>
+        <button type="button" class="btn btn--ghost" id="rule-exclude-add">{{ t('rules.add_selector') }}</button>
+    </div>
+    <p class="stat-card__meta" id="rule-target-count"></p>
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('rules.section_condition') }}</h2>
+    <div class="toolbar" style="margin-bottom: var(--space-3);">
+        <button type="button" class="btn btn--ghost" id="rule-mode-builder">{{ t('rules.builder') }}</button>
+        <button type="button" class="btn btn--ghost" id="rule-mode-expression">{{ t('rules.expression') }}</button>
+        <select class="input" id="rule-join">
+            <option value="and">{{ t('rules.match_all') }}</option>
+            <option value="or">{{ t('rules.match_any') }}</option>
+        </select>
+    </div>
+    <div id="rule-clauses"></div>
+    <div class="toolbar" id="rule-builder-tools" style="margin: var(--space-2) 0;">
+        <button type="button" class="btn btn--ghost" id="rule-add-clause">{{ t('rules.add_clause') }}</button>
+    </div>
+    {# The expression editor is the same condition, typed. Both write one AST -- see
+       rules.parse_expression / format_expression -- so switching views never changes meaning. #}
+    <textarea class="input" id="rule-expression" hidden rows="3" spellcheck="false"
+              style="width: 100%; font-family: var(--font-mono, monospace);"></textarea>
+    <p class="stat-card__meta" id="rule-condition-error" style="color: var(--color-danger, #f85149);"></p>
+
+    <div class="toolbar" style="margin: var(--space-3) 0;">
+        <button type="button" class="btn btn--ghost" id="rule-preview">{{ t('rules.preview') }}</button>
+        <span class="stat-card__meta" id="rule-preview-result"></span>
+    </div>
+    <div id="rule-preview-rows"></div>
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('rules.section_actions') }}</h2>
+    <div id="rule-actions"></div>
+    <div class="toolbar" style="margin: var(--space-2) 0 var(--space-4);">
+        <select class="input" id="rule-action-kind"></select>
+        <button type="button" class="btn btn--ghost" id="rule-action-add">{{ t('rules.add_action') }}</button>
+    </div>
+    <p class="stat-card__meta" id="rule-commands-warning" hidden>{{ t('rules.commands_disabled') }}</p>
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('rules.section_timing') }}</h2>
+    <div class="toolbar">
+        <label class="stat-card__meta">{{ t('rules.for_seconds') }}
+            <input class="input" id="rule-for" type="number" min="0" value="0" style="width: 8rem;"> s
+        </label>
+        <label class="stat-card__meta">{{ t('rules.cooldown') }}
+            <input class="input" id="rule-cooldown" type="number" min="0" value="3600" style="width: 8rem;"> s
+        </label>
+        <label class="stat-card__meta">{{ t('rules.max_targets') }}
+            <input class="input" id="rule-max-targets" type="number" min="1" value="25" style="width: 6rem;">
+        </label>
+    </div>
+    <p class="stat-card__meta">{{ t('rules.for_seconds_help') }} {{ t('rules.cooldown_help') }} {{ t('rules.max_targets_help') }}</p>
+
+    <div class="toolbar" style="margin-top: var(--space-5);">
+        <button type="button" class="btn btn--primary" id="rule-save">{{ t('rules.save') }}</button>
+        <button type="button" class="btn btn--ghost" id="rule-cancel">{{ t('rules.cancel') }}</button>
+        <span class="stat-card__meta" id="rule-save-error" style="color: var(--color-danger, #f85149);"></span>
+    </div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/rules.js') }}?v={{ hub_version }}"></script>
+{% endblock %}

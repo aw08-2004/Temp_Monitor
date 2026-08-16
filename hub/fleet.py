@@ -195,6 +195,34 @@ PROCESS_COMMANDS = frozenset({
     "restart_process",
 })
 
+# Messages to the person sitting at the PC (roadmap: rules engine).
+#
+# `show_message` is the only command in this whole catalog whose subject is a HUMAN rather
+# than the machine. It puts a dialog on the logged-on user's desktop and reports back which
+# button they pressed; the hub decides what that answer means (see rules.handle_message_result),
+# which is why the agent is told button IDs and never button semantics -- changing what
+# "Later" does must not require shipping a new agent.
+#
+# It IS favoritable, unlike most of the specialised sets above: its params carry no session
+# id, no change id and no snapshot of anything that expires, and "send this notice to these
+# twelve PCs" is precisely the shape a favorite is for. It is also deliberately NOT in
+# fleet_web's refusal list -- an operator sending an ad-hoc notice by hand should not have to
+# write a rule first.
+USER_MESSAGE_COMMANDS = frozenset({
+    "show_message",
+})
+
+# Probe collection for the rules engine: go and read one specific thing (a registry value, a
+# file version, a WMI property) that no regular telemetry carries, and report it back.
+#
+# NOT favoritable, and not issuable by hand from /api/fleet/commands: its params are a
+# snapshot of one probe definition and its answer is only meaningful when filed against that
+# probe, so a hand-rolled copy would produce a value with nowhere to go. The probe scheduler
+# is the only thing that should ever issue one.
+PROBE_COMMANDS = frozenset({
+    "collect_probe",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -206,7 +234,7 @@ ALL_COMMANDS = frozenset({
     "update_bios",
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
-      | PROCESS_COMMANDS)
+      | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS)
 
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent

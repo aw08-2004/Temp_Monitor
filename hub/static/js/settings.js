@@ -24,6 +24,7 @@ const panels = {
     // complete while Active Directory could not actually be configured from the console.
     directory: document.getElementById('tab-directory'),
     wake: document.getElementById('tab-wake'),
+    rules: document.getElementById('tab-rules'),
 };
 
 // NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`
