@@ -2245,7 +2245,7 @@
         "label": "ends with"
       },
       "matches": {
-        "label": "matches the pattern"
+        "label": "matches the pattern (* and ?)"
       },
       "in": {
         "label": "is one of"

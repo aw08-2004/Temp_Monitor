@@ -2134,7 +2134,7 @@
         "label": "endet mit"
       },
       "matches": {
-        "label": "entspricht dem Muster"
+        "label": "entspricht dem Muster (* und ?)"
       },
       "in": {
         "label": "ist eines von"

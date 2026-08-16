@@ -361,11 +361,11 @@ check("empty expression is refused", err is not None)
 err, ast = parse("sys.uptime_days > 7)")
 check("unbalanced paren is refused", err is not None)
 
-err, ast = parse('ad.os matches "(a+)+b"')
-check("nested-quantifier regex is refused", err is not None)
+err, ast = parse('ad.os matches "Windows 1*"')
+check("a wildcard pattern is accepted", err is None)
 
-err, ast = parse('ad.os matches "Windows (10|11)"')
-check("a sane regex is accepted", err is None)
+err, ast = parse('ad.os matches "%s"' % ("a" * 250))
+check("an over-long pattern is refused", err is not None)
 
 err, ast = parse('field.headcount > 5')
 check("custom number field parses", err is None and ast["value"] == 5)
@@ -462,8 +462,31 @@ check("contains is case-insensitive",
       ev('ad.os contains "windows"', vars_of(ad__os="Windows 11 Pro")) is True)
 check("starts_with", ev('hw.serial_number starts with "5cg"',
                         vars_of(hw__serial_number="5CG1234")) is True)
-check("matches", ev('ad.os matches "Windows (10|11)"',
-                    vars_of(ad__os="Windows 11 Pro")) is True)
+check("matches (wildcard)", ev('ad.os matches "Windows 1*"',
+                              vars_of(ad__os="Windows 11 Pro")) is True)
+check("matches is anchored, not a substring search",
+      ev('ad.os matches "Windows"', vars_of(ad__os="Windows 11 Pro")) is False)
+check("...so a leading star makes it one",
+      ev('ad.os matches "*11*"', vars_of(ad__os="Windows 11 Pro")) is True)
+check("? matches exactly one character",
+      ev('ad.os matches "Windows 1? Pro"', vars_of(ad__os="Windows 11 Pro")) is True)
+check("a regex is now a literal, not a pattern",
+      ev('ad.os matches "Windows (10|11)"', vars_of(ad__os="Windows 11 Pro")) is False)
+# The shape that used to be able to hang the evaluator. It must now be fast and simply not
+# match -- the matcher cannot backtrack exponentially, so there is no pattern that spins it.
+# The shape that used to be exploitable: as a regex, `(a*)`-style repetition against a long
+# non-matching subject is the classic exponential blow-up. As wildcards it is answered
+# immediately, and correctly -- the trailing `*` absorbs the final 'b', so it DOES match.
+_evil_start = time.time()
+_evil = ev('ad.os matches "%s"' % ("a*" * 40), vars_of(ad__os="a" * 200 + "b"))
+check("a catastrophic-looking pattern is answered promptly",
+      _evil is True and (time.time() - _evil_start) < 1.0)
+# ...and the same shape with no trailing wildcard fails just as fast, which is the case a
+# backtracking engine would have spun on.
+_evil_start = time.time()
+_evil2 = ev('ad.os matches "%sc"' % ("a*" * 40), vars_of(ad__os="a" * 200 + "b"))
+check("...and so is the non-matching variant",
+      _evil2 is False and (time.time() - _evil_start) < 1.0)
 check("in", ev('field.site in ["Branch 1", "Branch 2"]',
                vars_of(field__site="Branch 2")) is True)
 check("not_in", ev('field.site not in ["Branch 1"]',
@@ -532,10 +555,9 @@ check("an empty group is refused at save time", err is not None)
 # Error text reaches a browser, so it must never carry what a stdlib exception would put in
 # it. Parser messages ARE ours and stay verbatim (they are the point of the text editor);
 # anything built from a foreign exception must not echo the input back.
-err = rules.validate_regex("Windows ((10|11")
-check("a bad regex is refused", err is not None)
-check("...without echoing the pattern back", "Windows" not in err)
-check("...but still says where", "character" in err)
+err = rules.validate_pattern("a" * (rules.MAX_PATTERN_CHARS + 1))
+check("an over-long pattern is refused", err is not None)
+check("...without echoing the pattern back", "aaaa" not in err)
 
 err, _ = parse("sys.uptime_days > 7)")
 check("a parse error still names the offending token and position",

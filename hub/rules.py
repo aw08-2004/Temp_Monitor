@@ -1294,33 +1294,72 @@ LIST_OPERATORS = frozenset(_MEMBERSHIP)
 # i18n key root for operator labels: rules.operator.<op>.label
 OPERATOR_TEXT_KEY = "rules.operator"
 
-MAX_REGEX_CHARS = 200
+MAX_PATTERN_CHARS = 200
 MAX_CONDITION_NODES = 60
 MAX_CONDITION_DEPTH = 8
 MAX_LIST_ITEMS = 100
 
-# A crude but effective guard against catastrophic backtracking: a quantified group whose
-# body is itself quantified, i.e. the (a+)+ family. Not a proof of safety -- nothing short of
-# a different regex engine is -- but it rejects the shapes that actually blow up, and the
-# inputs are bounded (text variables are short, field values capped at 512 chars), which
-# bounds the damage of whatever slips past.
-_NESTED_QUANTIFIER_RE = re.compile(r"\([^()]*[*+}][^()]*\)\s*[*+{]")
+# `matches` takes a WILDCARD pattern -- `*` for any run of characters, `?` for one -- and is
+# matched by the hand-written comparison below. It is deliberately NOT a regular expression.
+#
+# It was one, briefly, and that was a mistake on two counts CodeQL was right to flag. An
+# operator-supplied regex compiled and run by the hub is regex INJECTION: the pattern is
+# attacker-controlled input reaching a compiler. And Python's `re` has no timeout, so a
+# catastrophic pattern -- the (a+)+ family -- would spin the evaluator thread, which runs
+# every rule against every targeted machine on a fixed tick. A hung evaluator does not just
+# break one rule; it silently stops the entire feature fleet-wide, which is the worst
+# possible failure for something whose whole job is to notice problems.
+#
+# The previous guard was a length cap plus a regex that looked for nested quantifiers. Its
+# own comment admitted it was a heuristic and not a proof, and heuristics are the wrong tool
+# against a language as expressive as PCRE. Wildcards remove the class of problem instead of
+# bounding it: there is no backtracking to exploit and nothing user-supplied is compiled.
+#
+# What this costs is alternation -- `Windows (10|11)` no longer works. `in ["Windows 10",
+# "Windows 11"]` says that better anyway, and `contains` covers the loose case.
 
 
-def validate_regex(pattern):
-    if len(pattern) > MAX_REGEX_CHARS:
-        return f"pattern must be at most {MAX_REGEX_CHARS} characters"
-    if _NESTED_QUANTIFIER_RE.search(pattern):
-        return "pattern has nested repetition, which can hang the evaluator"
-    try:
-        re.compile(pattern)
-    except re.error as exc:
-        # Only the position and the stdlib's short reason, both rebuilt here rather than
-        # interpolating the exception: re.error's str() also embeds the pattern, and a
-        # pattern is operator input we should not echo back into a response verbatim.
-        where = f" at character {exc.pos + 1}" if getattr(exc, "pos", None) is not None else ""
-        return f"the pattern is not valid regular expression syntax{where}"
+def validate_pattern(pattern):
+    """Check a wildcard pattern. Length is the only limit worth having now that the matcher
+    cannot backtrack pathologically."""
+    if len(pattern) > MAX_PATTERN_CHARS:
+        return f"pattern must be at most {MAX_PATTERN_CHARS} characters"
+    if not pattern:
+        return "pattern is empty"
     return None
+
+
+def wildcard_match(pattern, text):
+    """Case-insensitive `*` / `?` matching, iteratively.
+
+    Two pointers with one backtrack point, which is the standard linear-in-practice glob
+    algorithm: on a mismatch it rewinds to just after the last `*` and advances the text by
+    one. Worst case is O(len(text) x len(pattern)) with both bounded (200 and 1000 chars),
+    so the absolute ceiling is trivial work -- unlike a regex engine, there is no input that
+    makes this take exponential time.
+    """
+    pattern = str(pattern or "").lower()
+    text = str(text or "").lower()
+    p = t = 0
+    star = -1
+    resume = 0
+    while t < len(text):
+        if p < len(pattern) and pattern[p] in ("?", text[t]):
+            p += 1
+            t += 1
+        elif p < len(pattern) and pattern[p] == "*":
+            star = p
+            resume = t
+            p += 1
+        elif star >= 0:
+            p = star + 1
+            resume += 1
+            t = resume
+        else:
+            return False
+    while p < len(pattern) and pattern[p] == "*":
+        p += 1
+    return p == len(pattern)
 
 
 # ---------------------------------------------------------------------------------------
@@ -1380,13 +1419,10 @@ def _compare(cmp_op, left, right):
     if cmp_op == CMP_ENDS_WITH:
         return haystack.lower().endswith(needle.lower())
     if cmp_op == CMP_MATCHES:
-        try:
-            return re.search(needle, haystack, re.IGNORECASE) is not None
-        except re.error:
-            # Validation rejects a bad pattern at save time; a stored rule that somehow has
-            # one reads UNKNOWN rather than raising, so one malformed rule cannot take the
-            # whole evaluation tick down with it.
-            return UNKNOWN
+        # Wildcards, not a regular expression, and matched by our own bounded matcher -- see
+        # wildcard_match. Nothing user-supplied is compiled, so there is no pattern an
+        # operator can save that hangs the evaluator.
+        return wildcard_match(needle, haystack)
     return UNKNOWN
 
 
@@ -1583,7 +1619,7 @@ def validate_condition(node, extra=None, _depth=0, _counter=None):
 
     if cmp_op == CMP_MATCHES:
         pattern = str(raw or "")
-        err = validate_regex(pattern)
+        err = validate_pattern(pattern)
         if err:
             return err, None
         return None, {"var": name, "cmp": cmp_op, "value": pattern}
