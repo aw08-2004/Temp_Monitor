@@ -1073,6 +1073,68 @@ check("a rule cannot issue collect_probe itself",
       val_actions([{"type": "command",
                     "params": {"command_type": "collect_probe"}}])[0] is not None)
 
+
+# =======================================================================================
+print("\n-- author scope is bound at evaluation, not just at save --")
+#
+# The reported escalation: a scoped operator saves a DYNAMIC target (`all`) at a moment when
+# it resolves only to machines they can see. Every machine enrolled afterwards falls inside
+# that same selector, so without a persisted author scope the rule silently starts acting on
+# PCs its author could never reach -- and the author need do nothing for it to happen.
+err, scoped_rule = rules.save_rule(
+    DB, dict(BASE_RULE, name="Scoped", for_seconds=0, cooldown_seconds=0,
+             target={"include": [{"kind": "all"}]},
+             actions=[{"type": "alert", "params": {"text": "x"}}]),
+    actor="scoped@x.com", now=NOW, author_scope=["PC1", "PC3"])
+check("a rule records its author's scope", err is None
+      and scoped_rule["author_scope"] == ["PC1", "PC3"])
+
+everyone_now = rules.resolve_targets(DB, scoped_rule["target"])
+check("the raw target resolves fleet-wide", len(everyone_now) > 2)
+check("...but the rule is bound to its author's scope",
+      sorted(rules.scoped_targets(scoped_rule, everyone_now)) == ["PC1", "PC3"])
+
+# A machine enrolled AFTER the rule was saved must not be picked up.
+seed_machine("LATECOMER", boot_epoch=NOW - (30 * 86400))
+after = rules.resolve_targets(DB, scoped_rule["target"])
+check("a newly enrolled machine falls inside the raw target", "LATECOMER" in after)
+check("...and is still excluded by the author's scope",
+      "LATECOMER" not in rules.scoped_targets(scoped_rule, after))
+
+# An unrestricted author keeps a fully dynamic rule -- they can see the whole fleet anyway,
+# and pinning would stop legitimate fleet-wide rules covering new PCs.
+err, open_rule = rules.save_rule(
+    DB, dict(BASE_RULE, name="Unscoped", target={"include": [{"kind": "all"}]},
+             actions=[{"type": "alert", "params": {"text": "x"}}]),
+    actor="root@x.com", now=NOW, author_scope=None)
+check("an unrestricted author stores no scope", open_rule["author_scope"] is None)
+check("...and their rule stays dynamic",
+      "LATECOMER" in rules.scoped_targets(open_rule, after))
+
+# Re-stamped on edit, so a narrower operator editing a rule narrows it.
+err, renarrowed = rules.save_rule(
+    DB, dict(BASE_RULE, name="Unscoped", target={"include": [{"kind": "all"}]},
+             actions=[{"type": "alert", "params": {"text": "x"}}]),
+    rule_id=open_rule["id"], actor="scoped@x.com", now=NOW, author_scope=["PC1"])
+check("an edit re-stamps the scope rather than carrying the old one forward",
+      renarrowed["author_scope"] == ["PC1"])
+
+# And the evaluator honours it end to end.
+RESOLVED["LATECOMER"] = rules.resolve_machine_vars(DB, "LATECOMER", now=NOW,
+                                                   online_window=120)
+for rid in (r["id"] for r in rules.list_rules(DB)):
+    rules.delete_rule(DB, rid)
+err, bound = rules.save_rule(
+    DB, dict(BASE_RULE, name="Bound", for_seconds=0, cooldown_seconds=0,
+             target={"include": [{"kind": "all"}]},
+             actions=[{"type": "alert", "params": {"text": "x"}}]),
+    actor="scoped@x.com", now=NOW, author_scope=["PC1"])
+summary = rules.evaluate_once(DB, resolve, now=NOW + 100000)
+fired_machines = {f["machine"] for f in rules.list_fires(DB, bound["id"])}
+check("the evaluator fires only inside the author's scope",
+      fired_machines <= {"PC1"})
+check("...and not on the machine enrolled later", "LATECOMER" not in fired_machines)
+
 fleet.create_command = _real_create
 
 print(f"\n==== rules: {PASS} passed, {FAIL} failed ====")

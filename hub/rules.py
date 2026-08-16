@@ -322,6 +322,7 @@ def init_rules_db(db_path):
                 target_json          TEXT NOT NULL,
                 condition_json       TEXT NOT NULL,
                 condition_text       TEXT NOT NULL DEFAULT '',
+                scope_json           TEXT,
                 for_seconds          INTEGER NOT NULL DEFAULT 0,
                 cooldown_seconds     INTEGER NOT NULL DEFAULT 3600,
                 max_targets_per_tick INTEGER NOT NULL DEFAULT 25,
@@ -380,6 +381,13 @@ def init_rules_db(db_path):
             )
             """
         )
+        # `scope_json` on an already-created table. NULL means "the author was unrestricted",
+        # which is also what every pre-existing row reads -- correct, because until this
+        # column existed only the save-time check bounded a rule, and re-interpreting old
+        # rows as scoped would silently stop them acting on machines they legitimately cover.
+        rule_columns = {row["name"] for row in conn.execute("PRAGMA table_info(rules)")}
+        if "scope_json" not in rule_columns:
+            conn.execute("ALTER TABLE rules ADD COLUMN scope_json TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_fires_rule "
                      "ON rule_fires(rule_id, fired_at DESC)")
         # The routing lookup: a show_message result arrives knowing only its command id.
@@ -3097,13 +3105,36 @@ MAX_COOLDOWN_SECONDS = 30 * 86400
 def _decode_rule(row):
     rule = dict(row)
     for column, key in (("target_json", "target"), ("condition_json", "condition"),
-                        ("actions_json", "actions")):
+                        ("actions_json", "actions"), ("scope_json", "author_scope")):
         try:
-            rule[key] = json.loads(rule.pop(column) or "null")
+            rule[key] = json.loads(rule.pop(column, None) or "null")
         except (TypeError, ValueError):
             rule[key] = None
     rule["enabled"] = bool(rule.get("enabled"))
     return rule
+
+
+def scoped_targets(rule, machines):
+    """Narrow a rule's resolved targets to what its AUTHOR was allowed to reach.
+
+    This is the second half of scope enforcement, and it exists because the save-time check
+    alone is not enough. A scoped operator can save a target that is DYNAMIC -- `all`, or an
+    AD OU -- at a moment when it happens to resolve to nothing outside their scope. Every
+    machine enrolled afterwards then falls inside that same selector, and the rule would
+    start alerting on, messaging, or restarting machines its author was never able to see.
+    The escalation needs no action from them at all; it arrives with the next enrolment.
+
+    `author_scope` is NULL for a rule written by an unrestricted operator, and those stay
+    fully dynamic -- somebody who can already see the whole fleet gains nothing from a
+    pinned list, and pinning one would stop legitimate fleet-wide rules covering new PCs.
+    For everyone else it is the set of machines they could reach when they saved, so the
+    rule can only ever shrink relative to that, never grow past it.
+    """
+    scope = rule.get("author_scope")
+    if scope is None:
+        return machines
+    allowed = {str(m).strip().lower() for m in scope}
+    return [m for m in machines if str(m).strip().lower() in allowed]
 
 
 def list_rules(db_path):
@@ -3191,23 +3222,34 @@ def validate_rule(db_path, payload, *, extra=None, allow_command=True,
     }
 
 
-def save_rule(db_path, payload, *, rule_id=None, actor="", now=None, **kwargs):
-    """Create or update a rule. Returns (error, rule)."""
+def save_rule(db_path, payload, *, rule_id=None, actor="", now=None, author_scope=None,
+              **kwargs):
+    """Create or update a rule. Returns (error, rule).
+
+    `author_scope` is the set of machines the operator saving this could reach, or None if
+    they were unrestricted. It is re-stamped on every UPDATE, not just on create -- so a rule
+    edited by a narrower operator narrows with them, and one edited by an unrestricted
+    operator becomes dynamic again. Carrying the original author's scope forward would mean
+    an edit could not tighten a rule, which is the wrong direction for the one field whose
+    whole job is to bound what the rule may touch.
+    """
     err, rule = validate_rule(db_path, payload, **kwargs)
     if err:
         return err, None
     now = int(now if now is not None else time.time())
+    scope_json = None if author_scope is None else json.dumps(sorted(set(author_scope)))
     values = (rule["name"], rule["description"], 1 if rule["enabled"] else 0,
               json.dumps(rule["target"]), json.dumps(rule["condition"]),
-              rule["condition_text"], rule["for_seconds"], rule["cooldown_seconds"],
-              rule["max_targets_per_tick"], json.dumps(rule["actions"]))
+              rule["condition_text"], scope_json, rule["for_seconds"],
+              rule["cooldown_seconds"], rule["max_targets_per_tick"],
+              json.dumps(rule["actions"]))
     with get_conn(db_path) as conn:
         if rule_id:
             cur = conn.execute(
                 "UPDATE rules SET name=?, description=?, enabled=?, target_json=?, "
-                "condition_json=?, condition_text=?, for_seconds=?, cooldown_seconds=?, "
-                "max_targets_per_tick=?, actions_json=?, updated_at=?, updated_by=? "
-                "WHERE id=?",
+                "condition_json=?, condition_text=?, scope_json=?, for_seconds=?, "
+                "cooldown_seconds=?, max_targets_per_tick=?, actions_json=?, updated_at=?, "
+                "updated_by=? WHERE id=?",
                 values + (now, str(actor or ""), rule_id),
             )
             if not cur.rowcount:
@@ -3216,9 +3258,9 @@ def save_rule(db_path, payload, *, rule_id=None, actor="", now=None, **kwargs):
         else:
             cur = conn.execute(
                 "INSERT INTO rules (name, description, enabled, target_json, condition_json, "
-                "condition_text, for_seconds, cooldown_seconds, max_targets_per_tick, "
-                "actions_json, created_at, created_by, updated_at, updated_by) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "condition_text, scope_json, for_seconds, cooldown_seconds, "
+                "max_targets_per_tick, actions_json, created_at, created_by, updated_at, "
+                "updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values + (now, str(actor or ""), now, str(actor or "")),
             )
             new_id = cur.lastrowid
@@ -3345,7 +3387,11 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     for rule in active:
         summary["rules"] += 1
         try:
-            targets = resolve_targets(db_path, rule["target"], machines)
+            # scoped_targets is the fire-time half of scope enforcement. The save-time check
+            # cannot bind a DYNAMIC target (`all`, an AD OU) against machines that did not
+            # exist yet, so without this a scoped operator's rule silently widens with every
+            # new enrolment. See scoped_targets.
+            targets = scoped_targets(rule, resolve_targets(db_path, rule["target"], machines))
         except Exception as exc:                      # noqa: BLE001 - one bad rule must not
             summary["errors"].append(f"rule {rule['id']}: target: {exc}")  # stop the others
             continue

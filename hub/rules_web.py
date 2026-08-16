@@ -12,12 +12,20 @@ Two gates, and the difference between them is the point:
     so that a follow-up action nested inside a message's on_response map gets exactly the
     same check as a top-level one.
 
-Scope is enforced on TARGETS, twice. A rule may not address a machine outside its author's
-scope, checked when it is saved; and the evaluator re-checks nothing, because a rule outlives
-the session that wrote it -- so `POST /api/rules/<id>/preview` and the target-count endpoint
-report the resolved membership honestly, and narrowing an operator's scope later is handled
-by the fact that the rule itself is a stored, auditable object rather than an ambient grant.
-A rule that must not survive its author is a rule to delete, and deleting one is one click.
+Scope is enforced on TARGETS in two places, and both are needed.
+
+At SAVE time the resolved membership must lie inside the caller's scope, so an operator
+cannot name a machine they cannot see. That check alone is not sufficient, because a target
+can be DYNAMIC: `{"kind": "all"}` saved by a scoped operator resolves to only their machines
+today and to somebody else's the moment one is enrolled. So the author's scope is also
+PERSISTED with the rule (`scope_json`) and intersected at evaluation time -- see
+rules.scoped_targets. A rule can therefore shrink relative to its author's reach but never
+grow past it, and the escalation needs no action from the author to occur, which is exactly
+why it cannot be left to the save-time check.
+
+An unrestricted author stores NULL and stays fully dynamic: somebody who can already see the
+whole fleet gains nothing from a pinned list, and pinning one would stop legitimate
+fleet-wide rules ever covering a new PC.
 
 Bodies are JSON everywhere, which is load-bearing CSRF protection -- see fleet_web.py's
 module docstring, which applies here verbatim. There are no multipart endpoints in this file
@@ -82,6 +90,16 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
 
     def _actor():
         return access.email() or "unknown"
+
+    def _author_scope():
+        """The machines this caller can reach, or None if they are unrestricted.
+
+        Stored on the rule and intersected at evaluation time. `permissions["machines"]` is
+        already the fully-resolved set (AD OU scopes included), and None there means
+        unrestricted -- the same convention this returns, so the two cannot drift.
+        """
+        machines = (access.current() or {}).get("machines")
+        return None if machines is None else sorted(machines)
 
     def _catalog_entry(var, value=None):
         key = f"{rules.VARIABLE_TEXT_KEY}.{var.name}"
@@ -452,7 +470,7 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
         if error:
             return jsonify({"error": error}), 400
         error, rule = rules.save_rule(
-            db_path, body, actor=_actor(), extra=_extra(),
+            db_path, body, actor=_actor(), extra=_extra(), author_scope=_author_scope(),
             allow_command=_may_issue_commands(),
             max_targets_cap=config["max_targets_per_tick"],
             command_cooldown_floor=config["command_cooldown_floor_seconds"],
@@ -489,6 +507,7 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
             return jsonify({"error": error}), 400
         error, rule = rules.save_rule(
             db_path, body, rule_id=rule_id, actor=_actor(), extra=_extra(),
+            author_scope=_author_scope(),
             allow_command=_may_issue_commands(),
             max_targets_cap=config["max_targets_per_tick"],
             command_cooldown_floor=config["command_cooldown_floor_seconds"],
