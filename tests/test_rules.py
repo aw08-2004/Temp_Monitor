@@ -472,6 +472,16 @@ check("? matches exactly one character",
       ev('ad.os matches "Windows 1? Pro"', vars_of(ad__os="Windows 11 Pro")) is True)
 check("a regex is now a literal, not a pattern",
       ev('ad.os matches "Windows (10|11)"', vars_of(ad__os="Windows 11 Pro")) is False)
+# A literal `*` in the SUBJECT used to satisfy the matcher's literal branch before its
+# wildcard branch, so the pattern's star was spent matching that one character instead of
+# the run it should have swallowed. Paths, command lines and probe output all contain
+# asterisks, so this was reachable without anyone writing a strange pattern.
+check("a literal * in the text does not eat the pattern's star",
+      rules.wildcard_match("*x", "*abx") is True)
+check("...nor when the star is mid-pattern",
+      rules.wildcard_match("a*b", "a*zb") is True)
+check("a literal * still matches a literal * with no wildcard in play",
+      rules.wildcard_match("a*b", "ab") is True)
 # The shape that used to be able to hang the evaluator. It must now be fast and simply not
 # match -- the matcher cannot backtrack exponentially, so there is no pattern that spins it.
 # The shape that used to be exploitable: as a regex, `(a*)`-style repetition against a long

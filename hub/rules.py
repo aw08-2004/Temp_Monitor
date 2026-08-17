@@ -1337,6 +1337,13 @@ def wildcard_match(pattern, text):
     one. Worst case is O(len(text) x len(pattern)) with both bounded (200 and 1000 chars),
     so the absolute ceiling is trivial work -- unlike a regex engine, there is no input that
     makes this take exponential time.
+
+    The `*` branch is tested BEFORE the literal branch, and the order is load-bearing: a
+    text character that happens to BE `*` would otherwise satisfy `pattern[p] in ("?",
+    text[t])` and consume the pattern's star as a literal, spending the one backtrack point
+    on the wrong match. `matches "*x"` then failed against `*abx` -- rare in a hostname, but
+    these patterns also run against paths, process command lines and probe output, where a
+    literal asterisk is ordinary.
     """
     pattern = str(pattern or "").lower()
     text = str(text or "").lower()
@@ -1344,13 +1351,13 @@ def wildcard_match(pattern, text):
     star = -1
     resume = 0
     while t < len(text):
-        if p < len(pattern) and pattern[p] in ("?", text[t]):
-            p += 1
-            t += 1
-        elif p < len(pattern) and pattern[p] == "*":
+        if p < len(pattern) and pattern[p] == "*":
             star = p
             resume = t
             p += 1
+        elif p < len(pattern) and pattern[p] in ("?", text[t]):
+            p += 1
+            t += 1
         elif star >= 0:
             p = star + 1
             resume += 1
