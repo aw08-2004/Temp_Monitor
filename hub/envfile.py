@@ -19,6 +19,111 @@ with LF newlines, and tolerates reading one somebody else left behind.
 """
 import os
 import re
+import sys
+
+# Well-known SIDs, in string form. NEVER account names: "Administrators" is localised
+# ("Administradores", "Administratoren", ...), and a name lookup that misses would write an
+# ACL with no administrator ACE at all.
+_SYSTEM_SID = "S-1-5-18"
+_ADMINISTRATORS_SID = "S-1-5-32-544"
+_SE_DACL_PROTECTED = 0x1000
+# ACE_HEADER.AceFlags bit meaning "this ACE arrived by inheritance". Spelled out here
+# because pywin32 exposes it on neither win32security nor ntsecuritycon.
+_INHERITED_ACE = 0x10
+
+
+def protect(env_path):
+    """Restrict `.env` to SYSTEM and Administrators. Returns a note worth logging, or None
+    when it was already correct (the steady state, and therefore silent).
+
+    WHY. `.env` is the hub's secret store -- FLASK_SECRET_KEY, AGENT_ENROLLMENT_SECRET,
+    BACKUP_MASTER_KEY, the OAuth client secret, DIRECTORY_BIND_PASSWORD, REMOTE_TURN_SECRET
+    -- and it lives under STATE_ROOT, which sits beneath C:\\Program Files. That directory
+    hands every file it contains an inherited `BUILTIN\\Users:(OI)(CI)(IO)(GR,GE)`, so
+    nothing but this stops every local user on the hub server from reading all of it.
+
+    FLASK_SECRET_KEY is the one that makes this urgent rather than untidy: it signs the
+    session cookie, so anyone holding it can mint a session for any address in
+    ALLOWED_EMAILS -- and ALLOWED_EMAILS is the entire authorization perimeter, over a
+    console that runs arbitrary commands as SYSTEM on every machine in the fleet.
+
+    Applied at every boot, not only by the installer: the installer runs once, and the hubs
+    that most need this are the ones already deployed. `set_vars` rewrites the file in place
+    (open "w" truncates but keeps the ACL), so a protected .env stays protected.
+
+    Fails soft -- a hub that cannot re-ACL its own config must still start, or this turns an
+    exposure into an outage. The caller logs what comes back.
+    """
+    if sys.platform != "win32" or not env_path or not os.path.exists(env_path):
+        return None
+    try:
+        import win32api
+        import win32security
+        import ntsecuritycon
+    except ImportError:      # pragma: no cover - pywin32 is a hard requirement in practice
+        return f"Could not restrict permissions on {env_path}: pywin32 is not installed."
+
+    try:
+        wanted = [win32security.ConvertStringSidToSid(s)
+                  for s in (_SYSTEM_SID, _ADMINISTRATORS_SID)]
+
+        # ...plus whoever this process is, which is NOT redundant and is load-bearing.
+        #
+        # In production it is: the hub runs as LocalSystem, so this adds nothing. In a dev
+        # checkout it is the developer, and without it protect() locks the person running
+        # the hub out of the .env they are editing -- an unprivileged account cannot even
+        # read the ACL back to undo it, so recovery needs an elevated shell. The security
+        # property being bought here is "not readable by EVERY local user", and keeping the
+        # running account's own access costs none of it.
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+        try:
+            me = win32security.GetTokenInformation(token, ntsecuritycon.TokenUser)[0]
+        finally:
+            win32api.CloseHandle(token)
+        if not any(me == w for w in wanted):
+            wanted.append(me)
+
+        # The Named variants throughout, NOT Get/SetFileSecurity: the legacy pair predates
+        # auto-inheritance and does not maintain its control bits. SetFileSecurity with
+        # PROTECTED_DACL_SECURITY_INFORMATION does strip the inherited ACEs, but leaves
+        # SE_DACL_PROTECTED clear -- so the Users read grant returns the next time Windows
+        # recomputes inheritance, and the check below can never see a settled state.
+        obj = win32security.SE_FILE_OBJECT
+        info = win32security.DACL_SECURITY_INFORMATION
+        sd = win32security.GetNamedSecurityInfo(env_path, obj, info)
+        control, _revision = sd.GetSecurityDescriptorControl()
+        dacl = sd.GetSecurityDescriptorDacl()
+
+        # Already exactly right: inheritance broken, and every ACE belongs to one of the two
+        # principals allowed to read this. Checked rather than blindly rewritten so the
+        # common path neither churns the ACL nor logs on every restart.
+        if control & _SE_DACL_PROTECTED and dacl is not None:
+            extra = False
+            for i in range(dacl.GetAceCount()):
+                (_ace_type, ace_flags), _mask, sid = dacl.GetAce(i)
+                if ace_flags & _INHERITED_ACE or not any(sid == w for w in wanted):
+                    extra = True
+                    break
+            if not extra:
+                return None
+
+        replacement = win32security.ACL()
+        for sid in wanted:
+            replacement.AddAccessAllowedAce(
+                win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
+        # PROTECTED_DACL_SECURITY_INFORMATION is what drops the inherited ACEs and keeps them
+        # dropped. Without it the Users read grant comes straight back and this achieves
+        # nothing.
+        win32security.SetNamedSecurityInfo(
+            env_path, obj, info | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+            None, None, replacement, None)
+        return (f"Restricted {env_path} to SYSTEM, Administrators and this hub's own "
+                f"account (it was readable by every local user on this machine).")
+    except Exception as e:
+        return (f"Could not restrict permissions on {env_path}: {e}. Every local user on "
+                f"this machine can read it. Fix with: icacls \"{env_path}\" /inheritance:r "
+                f"/grant *{_SYSTEM_SID}:F *{_ADMINISTRATORS_SID}:F")
 
 # KEY=value, allowing `export KEY=value` and leading whitespace. Comments and blank lines
 # fail to match and are therefore preserved untouched by the rewriter below.
@@ -26,9 +131,19 @@ _ENV_KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
 def read_all(env_path):
-    """Every KEY=value in the file, as a dict. Values are returned raw -- no quote
-    stripping -- because everything this module writes is unquoted, and a value somebody
-    quoted by hand is theirs to own."""
+    """Every KEY=value in the file, as a dict.
+
+    Surrounding whitespace is stripped, because python-dotenv strips it and python-dotenv is
+    what actually puts these values in os.environ. Everything this module writes is
+    `key=value` with no padding, so the two only diverged on a HAND-EDITED file -- and there
+    the divergence was the damaging kind: this function is what the console shows as the
+    current value and what set_vars diffs against to decide whether anything changed, so
+    `KEY = value` was read here as " value" while the running hub held "value", making an
+    unchanged setting look changed and a matching secret look mismatched.
+
+    Quotes are still NOT stripped, which is a different case and deliberate: everything this
+    module writes is unquoted, so a value somebody quoted by hand is theirs to own.
+    """
     values = {}
     if not env_path or not os.path.exists(env_path):
         return values
@@ -36,7 +151,7 @@ def read_all(env_path):
         for line in fh.read().splitlines():
             match = _ENV_KEY_RE.match(line)
             if match:
-                values[match.group(1)] = line.split("=", 1)[1]
+                values[match.group(1)] = line.split("=", 1)[1].strip()
     return values
 
 

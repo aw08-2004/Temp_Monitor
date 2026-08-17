@@ -40,7 +40,11 @@ if (RemoteHelper.IsDesktopProbe(args))
 // Rotating file log under %ProgramData% so field issues on client machines are
 // diagnosable. Console sink too,
 // useful when run interactively for testing.
+// Created AND re-ACLed before the first write: the inherited ACL from C:\ProgramData lets
+// any local user create files in here and in every subdirectory below it, which is a
+// privilege-escalation primitive against the self-updater's staging dir. See StateDirectory.
 Directory.CreateDirectory(AgentConfig.ProgramDataDir);
+var aclNote = StateDirectory.Harden(AgentConfig.ProgramDataDir);
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.File(
@@ -54,6 +58,7 @@ Log.Logger = new LoggerConfiguration()
 
 // Resolved during the ProgramDataDir touch above, before the logger existed.
 if (AgentConfig.TakeMigrationNote() is { Length: > 0 } note) Log.Information("{Note}", note);
+if (aclNote is { Length: > 0 }) Log.Information("{Note}", aclNote);
 
 try
 {

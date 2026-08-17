@@ -45,6 +45,7 @@ import processes
 import live
 import authconfig
 import apitokens
+import envfile
 import i18n
 import permissions_web
 from fleet_web import create_fleet_blueprint
@@ -83,12 +84,21 @@ STATE_ROOT = os.path.abspath(os.environ.get("HUB_STATE_DIR") or os.path.dirname(
 ENV_PATH = os.path.join(STATE_ROOT, ".env")
 load_dotenv(ENV_PATH, encoding="utf-8-sig")
 
+# Lock .env down to SYSTEM + Administrators before anything else runs. It sits under
+# C:\Program Files, whose inherited ACL makes every file in it readable by all local users,
+# and this one holds FLASK_SECRET_KEY -- enough to forge a session for any ALLOWED_EMAILS
+# address. Done here rather than only in install.ps1 because the installer runs once and the
+# hubs that need this most are already deployed. See envfile.protect; it never raises.
+_env_acl_note = envfile.protect(ENV_PATH)
+if _env_acl_note:
+    print(f"[hub] {_env_acl_note}")
+
 # ================================
 # CONFIG
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.78.1"
+HUB_VERSION = "1.79.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"

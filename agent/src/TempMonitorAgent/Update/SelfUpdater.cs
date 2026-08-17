@@ -95,6 +95,22 @@ public sealed class SelfUpdater
             }
             await File.WriteAllBytesAsync(stagedPath, exeBytes, ct);
 
+            // 6b. Re-verify FROM DISK, because what step 7 moves into place is the file, not
+            // the byte array checked above. Staging lives under %ProgramData%, whose ACL is
+            // now locked to SYSTEM/Administrators (see StateDirectory) -- but this path ends
+            // at "the SCM runs these bytes as SYSTEM", so it does not rest on the ACL alone.
+            // A pre-created, attacker-owned file at stagedPath survives our write with its
+            // owner's full control intact; reading back what we are about to move is what
+            // makes that not matter.
+            var stagedSha = Convert.ToHexString(
+                SHA256.HashData(await File.ReadAllBytesAsync(stagedPath, ct))).ToLowerInvariant();
+            if (!string.Equals(stagedSha, actualSha, StringComparison.Ordinal))
+            {
+                _log.LogWarning("[update] staged file changed after verification — aborting");
+                try { File.Delete(stagedPath); } catch { /* ignore */ }
+                return false;
+            }
+
             // 7. Swap: rename running exe aside, move new one into place.
             var currentPath = Environment.ProcessPath;
             if (string.IsNullOrEmpty(currentPath))

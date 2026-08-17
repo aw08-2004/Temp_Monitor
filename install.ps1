@@ -234,6 +234,64 @@ function Read-DotEnv([string]$Path) {
     return $result
 }
 
+function Protect-SecretFile([string]$Path) {
+    <#
+      Restrict a file to SYSTEM and Administrators.
+
+      The hub's .env is the fleet's secret store -- FLASK_SECRET_KEY, AGENT_ENROLLMENT_SECRET,
+      BACKUP_MASTER_KEY, the OAuth client secret, DIRECTORY_BIND_PASSWORD, REMOTE_TURN_SECRET.
+      It lands under $InstallRoot, which is beneath C:\Program Files, and that directory hands
+      every child this ACE by inheritance:
+
+          BUILTIN\Users:(OI)(CI)(IO)(GR,GE)
+
+      Generic Read, inherited by files. So without this, .env was readable by EVERY local user
+      on the hub server -- and FLASK_SECRET_KEY alone is enough to forge a session cookie for
+      any address in ALLOWED_EMAILS, which is the whole authorization perimeter. A single
+      unprivileged foothold on the hub box would have meant the entire fleet.
+
+      Only the hub service (LocalSystem) and an administrator ever need to read it, so the
+      ACL is rebuilt to exactly those two.
+
+      Well-known SIDs, never group NAMES: "Administrators" is localised (this is
+      "Administradores" on a Spanish install, "Administratoren" on German), and a name lookup
+      that misses would either throw or silently write an ACL missing its admin ACE.
+
+      DACL only -- GetAccessControl() with no argument also fetches the SACL, and writing
+      that back needs SeSecurityPrivilege, which even an elevated shell does not hold by
+      default. Asking for Access alone is what keeps this from failing on a correct install.
+    #>
+    try {
+        $file = New-Object System.IO.FileInfo $Path
+        $acl  = $file.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+
+        # Drop inheritance ($false = do not copy the inherited ACEs down), then clear whatever
+        # explicit ACEs remain, so the result is exactly the two rules added below. Purging
+        # matters: AddAccessRule MERGES into an existing ACE for the same identity rather than
+        # replacing it, so a stray grant would survive an ACL that looks rebuilt.
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+            $acl.PurgeAccessRules($rule.IdentityReference) | Out-Null
+        }
+
+        foreach ($wk in @('LocalSystemSid', 'BuiltinAdministratorsSid')) {
+            $sid = New-Object System.Security.Principal.SecurityIdentifier `
+                   ([System.Security.Principal.WellKnownSidType]::$wk), $null
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule `
+                $sid, 'FullControl', 'None', 'None', 'Allow'))
+        }
+
+        $file.SetAccessControl($acl)
+    }
+    catch {
+        # Never fatal: a hub that is otherwise correctly installed must not be left half-built
+        # over an ACL. Loud, though -- this one is a real exposure and the operator has to know.
+        Warn "Could not restrict permissions on $Path -- $($_.Exception.Message)"
+        Warn "Every local user on this machine can read it. Fix with:"
+        Warn "  icacls `"$Path`" /inheritance:r /grant *S-1-5-18:F *S-1-5-32-544:F"
+    }
+}
+
 function Invoke-Wsl {
     <#
       The single door to wsl.exe. Two things make a naive `& wsl ...` unreliable here:
@@ -2238,6 +2296,7 @@ function Install-Hub {
     # which python-dotenv folds into the first key (﻿GOOGLE_CLIENT_ID) so the hub reads its
     # config as unset and crash-loops. UTF8Encoding($false) = no BOM.
     [System.IO.File]::WriteAllLines($envPath, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+    Protect-SecretFile $envPath
     Ok "Wrote $envPath"
 
     if ($turnControlUrl) {
