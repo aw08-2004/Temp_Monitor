@@ -77,6 +77,25 @@ class Machine {
       );
 }
 
+/// The one human sentence to show for an alert.
+///
+/// `detail` is an OBJECT, not a string -- its shape differs per kind -- so handing it
+/// straight to `toString()` puts a raw Dart map on the alerts list. A rule alert already
+/// carries the sentence its author wrote, in `detail.text`, and that is the whole point of
+/// the kind; anything else falls back to the kind name, which is at least true.
+String _alertMessage(Map<String, dynamic> json) {
+  final message = json['message'];
+  if (message is String && message.isNotEmpty) return message;
+  final detail = json['detail'];
+  if (detail is Map) {
+    for (final key in const ['text', 'rule_name']) {
+      final value = detail[key];
+      if (value is String && value.isNotEmpty) return value;
+    }
+  }
+  return '';
+}
+
 /// One open alert as `/api/alerts` reports it.
 class Alert {
   const Alert({
@@ -97,7 +116,7 @@ class Alert {
         id: _asString(json['id']),
         kind: _asString(json['kind']),
         machine: _asString(json['machine']),
-        message: _asString(json['message'] ?? json['detail']),
+        message: _alertMessage(json),
         raisedAt: _asInt(json['raised_at'] ?? json['created_at']),
       );
 }

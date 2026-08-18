@@ -33,13 +33,15 @@ let mode = 'builder';
 // that switching between the builder and the expression view never loses a half-typed
 // clause.
 let draft = null;
+let commandByName = new Map();
+let actionByName = new Map();
+let scriptByName = new Map();
 
-const ACTION_KINDS = ['show_message', 'alert', 'command', 'webhook', 'email'];
-// Commands a rule may issue. Mirrors rules.RULE_ALLOWED_COMMANDS minus the ones whose
-// params a rule cannot meaningfully supply; the server is the authority and refuses
-// anything else, so a drift here costs an error message, not correctness.
-const RULE_COMMANDS = ['restart', 'shutdown', 'gpupdate', 'run_script', 'install_app',
-                       'prepare_wake', 'refresh_bios_inventory'];
+// The action types, the commands and their parameters, the button presets and the message
+// outcomes all now arrive from GET /api/rules/variables. This file used to carry a hand-kept
+// copy of every one of them and every copy had drifted -- seven of twelve commands, five of
+// six action types, five of six presets -- which is exactly what the house rule at the top of
+// this file exists to prevent. `catalog` holds them; there are no lists here any more.
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -76,10 +78,19 @@ function fmtTime(epoch) {
 
 // ---------------------------------------------------------------- catalog
 
+let scriptCatalog = { scripts: [], can_edit: false, shells: ['powershell'], max_body_chars: 10000 };
+
 async function loadCatalog() {
     catalog = await api('/api/rules/variables');
     byName = new Map(catalog.variables.map((v) => [v.name, v]));
+    commandByName = new Map((catalog.commands || []).map((c) => [c.name, c]));
+    actionByName = new Map((catalog.action_types || []).map((a) => [a.name, a]));
+    scriptCatalog = await api('/api/rules/scripts');
+    scriptByName = new Map((scriptCatalog.scripts || []).map((x) => [x.name, x]));
 }
+
+function commandSpec(name) { return commandByName.get(name) || null; }
+function scriptSpec(name) { return scriptByName.get(name) || null; }
 
 function variableLabel(name) {
     const entry = byName.get(name);
@@ -120,19 +131,31 @@ async function loadRules() {
         if (rule.blocked) {
             nameCell.appendChild(el('div', 'stat-card__meta', rule.blocked));
         }
-        if (rule.description) nameCell.appendChild(el('div', 'stat-card__meta', rule.description));
+        if (rule.description) {
+            // Clamped to two lines in CSS; the full text goes on `title` so a long description
+            // is shortened in the list rather than lost.
+            const desc = el('div', 'stat-card__meta rules-table__description', rule.description);
+            desc.title = rule.description;
+            nameCell.appendChild(desc);
+        }
         row.appendChild(nameCell);
-        row.appendChild(el('td', null, rule.condition_text));
+        row.appendChild(el('td', 'rules-table__condition', rule.condition_text));
         row.appendChild(el('td', null, (rule.actions || [])
             .map((a) => t(`rules.action.${a.type}.label`)).join(', ')));
         row.appendChild(el('td', null, String(rule.matching || 0)));
 
         const tools = el('td');
+        // The buttons go in a flex row rather than straight into the cell: appended bare they
+        // are inline elements with no gap, and the actions column is the one the table squeezes
+        // first, so Edit / Disable / Delete wrapped onto three lines and set the height of
+        // every row in the list. See .rules-table in components.css for the other half.
+        const toolRow = el('div', 'rules-table__tools');
+        tools.appendChild(toolRow);
         if (canManage) {
             const edit = el('button', 'btn btn--ghost', t('rules.edit'));
             edit.type = 'button';
             edit.addEventListener('click', () => openEditor(rule));
-            tools.appendChild(edit);
+            toolRow.appendChild(edit);
 
             const toggle = el('button', 'btn btn--ghost',
                 rule.enabled ? t('rules.disabled') : t('rules.enabled'));
@@ -141,7 +164,7 @@ async function loadRules() {
                 await api(`/api/rules/${rule.id}/enabled`, json('PUT', { enabled: !rule.enabled }));
                 loadRules();
             });
-            tools.appendChild(toggle);
+            toolRow.appendChild(toggle);
 
             const remove = el('button', 'btn btn--ghost', t('rules.delete'));
             remove.type = 'button';
@@ -150,7 +173,7 @@ async function loadRules() {
                 await api(`/api/rules/${rule.id}`, { method: 'DELETE' });
                 loadRules();
             });
-            tools.appendChild(remove);
+            toolRow.appendChild(remove);
         }
         row.appendChild(tools);
         rulesBody.appendChild(row);
@@ -169,6 +192,7 @@ function blankDraft() {
         join: 'and',
         condition_text: 'sys.uptime_days > 7',
         actions: [],
+        fire_once_per_match: false,
         for_seconds: 0,
         cooldown_seconds: 3600,
         max_targets_per_tick: 25,
@@ -206,6 +230,7 @@ function openEditor(rule) {
             join: shape.join,
             condition_text: rule.condition_text || '',
             actions: rule.actions || [],
+            fire_once_per_match: rule.fire_once_per_match,
             for_seconds: rule.for_seconds,
             cooldown_seconds: rule.cooldown_seconds,
             max_targets_per_tick: rule.max_targets_per_tick,
@@ -222,6 +247,7 @@ function openEditor(rule) {
     document.getElementById('rule-name').value = draft.name;
     document.getElementById('rule-description').value = draft.description;
     document.getElementById('rule-enabled').checked = draft.enabled;
+    document.getElementById('rule-fire-once').checked = !!draft.fire_once_per_match;
     document.getElementById('rule-for').value = draft.for_seconds;
     document.getElementById('rule-cooldown').value = draft.cooldown_seconds;
     document.getElementById('rule-max-targets').value = draft.max_targets_per_tick;
@@ -454,24 +480,44 @@ async function runPreview() {
 function renderActions() {
     const host = document.getElementById('rule-actions');
     host.textContent = '';
-    draft.actions.forEach((action, index) => host.appendChild(actionCard(action, index)));
-    document.getElementById('rule-commands-warning').hidden =
-        commandActionsEnabled || !draft.actions.some((a) => a.type === 'command'
-            || Object.values(a.on_response || {}).some(
-                (list) => (list || []).some((f) => f.type === 'command')));
+    draft.actions.forEach((action) => host.appendChild(actionCard(action, () => {
+        draft.actions.splice(draft.actions.indexOf(action), 1);
+        renderActions();
+    })));
+    syncCommandsWarning();
 }
 
-function actionCard(action, index) {
+// Kept separate from renderActions because it has to run on changes that must NOT rebuild
+// the editor: choosing "restart" for a message's Yes is exactly when this warning becomes
+// relevant, and re-rendering there would throw away the operator's focus mid-edit. It used
+// to be inline, so picking that follow-up left the banner hidden -- the one moment the rule
+// starts depending on a switch that is off by default was the one moment it said nothing.
+function syncCommandsWarning() {
+    const mutates = (list) => (list || []).some(
+        (f) => f.type === 'command' || f.type === 'script');
+    document.getElementById('rule-commands-warning').hidden =
+        commandActionsEnabled || !draft.actions.some(
+            (a) => a.type === 'command' || a.type === 'script'
+                || Object.values(a.on_response || {}).some(mutates));
+}
+
+// One card per action, used at the top level AND inside a message's follow-up rows.
+//
+// `onRemove` is a callback rather than an index because the same card now lives in two
+// different lists -- draft.actions and action.on_response[outcome] -- and an index into "the
+// list" stopped being a well-defined thing the moment follow-ups became real actions.
+function actionCard(action, onRemove) {
     const card = el('div', 'card');
     card.style.marginBottom = 'var(--space-3)';
     const head = el('div', 'toolbar');
-    head.appendChild(el('strong', null, t(`rules.action.${action.type}.label`)));
+    const spec = actionByName.get(action.type);
+    head.appendChild(el('strong', null, (spec && spec.label) || action.type));
     const remove = el('button', 'btn btn--ghost', '×');
     remove.type = 'button';
-    remove.addEventListener('click', () => { draft.actions.splice(index, 1); renderActions(); });
+    remove.addEventListener('click', onRemove);
     head.appendChild(remove);
     card.appendChild(head);
-    card.appendChild(el('p', 'stat-card__meta', t(`rules.action.${action.type}.description`)));
+    if (spec && spec.description) card.appendChild(el('p', 'stat-card__meta', spec.description));
 
     action.params = action.params || {};
     if (action.type === 'alert') {
@@ -479,15 +525,9 @@ function actionCard(action, index) {
     } else if (action.type === 'snooze') {
         card.appendChild(numberField(action.params, 'seconds', t('rules.cooldown'), 3600));
     } else if (action.type === 'command') {
-        const select = el('select', 'input');
-        RULE_COMMANDS.forEach((c) => select.appendChild(opt(c, c)));
-        select.value = action.params.command_type || 'restart';
-        action.params.command_type = select.value;
-        select.addEventListener('change', () => { action.params.command_type = select.value; });
-        card.appendChild(select);
-        if (!canIssueCommands) {
-            card.appendChild(el('p', 'stat-card__meta', t('rules.action.command.description')));
-        }
+        card.appendChild(commandEditor(action.params));
+    } else if (action.type === 'script') {
+        card.appendChild(scriptEditor(action.params));
     } else if (action.type === 'webhook') {
         card.appendChild(textField(action.params, 'url', 'https://…'));
         card.appendChild(textField(action.params, 'template', t('rules.message_body')));
@@ -507,6 +547,184 @@ function actionCard(action, index) {
         card.appendChild(messageEditor(action));
     }
     return card;
+}
+
+// ---------------------------------------------------------------- params editor
+//
+// ONE editor, used by top-level actions AND by a message's follow-ups. They render the same
+// fields because they ARE the same thing -- the server validates a follow-up through the very
+// same _validate_action -- and two implementations would drift the moment one gained a field.
+//
+// Every control writes on `change`, never at render time. That matters more than it looks:
+// numberField below stamps bag[key] while BUILDING the field, so reusing it here would write
+// a default into every action merely by opening the rule, and the next save would persist it.
+// Opening a rule and saving it unchanged must leave the stored JSON untouched.
+function paramsEditor(host, spec, bag) {
+    host.textContent = '';
+    if (!spec) return host;
+    if (!spec.described) {
+        host.appendChild(el('p', 'stat-card__meta', t('rules.command_undescribed')));
+        return host;
+    }
+    (spec.params || []).forEach((param) => host.appendChild(paramField(param, bag)));
+    if ((spec.one_of || []).length) {
+        host.appendChild(el('p', 'stat-card__meta',
+            t('rules.command_one_of', { params: spec.one_of.join(', ') })));
+    }
+    return host;
+}
+
+function paramField(param, bag) {
+    const wrap = el('div');
+    wrap.style.marginTop = 'var(--space-2)';
+
+    if (param.kind === 'bool') {
+        const label = el('label', 'stat-card__meta');
+        const box = el('input');
+        box.type = 'checkbox';
+        box.style.marginRight = 'var(--space-2)';
+        box.checked = bag[param.name] === true;
+        box.addEventListener('change', () => {
+            // Only store it when true. An unchecked box means "the agent's default", which is
+            // not the same fact as an explicit false, and storing one would freeze it.
+            if (box.checked) bag[param.name] = true; else delete bag[param.name];
+        });
+        label.appendChild(box);
+        label.append(param.label);
+        wrap.appendChild(label);
+        if (param.help) wrap.appendChild(el('p', 'stat-card__meta', param.help));
+        return wrap;
+    }
+
+    wrap.appendChild(el('label', 'stat-card__meta', param.label + (param.required ? ' *' : '')));
+
+    let input;
+    if (param.kind === 'enum') {
+        input = el('select', 'input');
+        (param.choices || []).forEach((choice) => input.appendChild(opt(choice, choice)));
+        input.value = bag[param.name] || param.default || (param.choices || [])[0] || '';
+    } else if (param.kind === 'int') {
+        input = el('input', 'input');
+        input.type = 'number';
+        if (param.minimum !== null && param.minimum !== undefined) input.min = param.minimum;
+        if (param.maximum !== null && param.maximum !== undefined) input.max = param.maximum;
+        // The declared default is the PLACEHOLDER, never the value: an empty box means "let
+        // the agent decide", and showing that as an editable 60 would make it look chosen.
+        if (param.default !== null && param.default !== undefined) input.placeholder = param.default;
+        input.value = bag[param.name] === undefined ? '' : bag[param.name];
+    } else if (param.kind === 'text') {
+        input = el('textarea', 'input');
+        input.rows = 8;
+        input.spellcheck = false;
+        input.style.fontFamily = 'var(--font-mono)';
+        input.value = bag[param.name] || '';
+    } else {
+        input = el('input', 'input');
+        input.type = 'text';
+        if (param.default) input.placeholder = param.default;
+        input.value = bag[param.name] || '';
+    }
+    input.style.width = '100%';
+    input.style.marginTop = 'var(--space-1)';
+    input.addEventListener('change', () => {
+        const raw = input.value.trim();
+        if (raw === '') { delete bag[param.name]; return; }
+        bag[param.name] = param.kind === 'int' ? Number(raw) : input.value;
+    });
+    wrap.appendChild(input);
+    if (param.help) wrap.appendChild(el('p', 'stat-card__meta', param.help));
+    return wrap;
+}
+
+// The command picker plus whatever that command takes. Re-rendering only the params host on
+// change keeps the operator's place in the form.
+function commandEditor(params) {
+    const wrap = el('div');
+    const select = el('select', 'input');
+    (catalog.commands || []).forEach((command) => {
+        const option = opt(command.name, command.label);
+        if (!command.available) {
+            // Shown, but unpickable, with the reason. A command that simply vanished from the
+            // list is a support question; one greyed out with a reason answers it.
+            option.disabled = true;
+            option.textContent = `${command.label} — ${command.unavailable_reason}`;
+        }
+        select.appendChild(option);
+    });
+    const available = (catalog.commands || []).filter((c) => c.available);
+    if (!params.command_type && available.length) params.command_type = available[0].name;
+    select.value = params.command_type || '';
+    wrap.appendChild(select);
+
+    const spec = commandSpec(select.value);
+    if (spec && spec.description) wrap.appendChild(el('p', 'stat-card__meta', spec.description));
+
+    params.params = params.params || {};
+    const host = el('div');
+    paramsEditor(host, spec, params.params);
+    wrap.appendChild(host);
+
+    select.addEventListener('change', () => {
+        params.command_type = select.value;
+        // A new command means new parameters; keeping the old ones would send `script` to
+        // gpupdate and be refused on save with a confusing message.
+        params.params = {};
+        paramsEditor(host, commandSpec(select.value), params.params);
+    });
+    return wrap;
+}
+
+// A reference to a saved script, plus a value for each input it declares.
+function scriptEditor(params) {
+    const wrap = el('div');
+    if (!(scriptCatalog.scripts || []).length) {
+        wrap.appendChild(el('p', 'stat-card__meta', t('rules.no_scripts')));
+        return wrap;
+    }
+    const select = el('select', 'input');
+    scriptCatalog.scripts.forEach((script) => {
+        const option = opt(script.name, script.label || script.name);
+        if (!script.enabled) {
+            option.disabled = true;
+            option.textContent = `${script.label || script.name} — ${t('rules.script_disabled')}`;
+        }
+        select.appendChild(option);
+    });
+    const enabled = scriptCatalog.scripts.filter((x) => x.enabled);
+    if (!params.script && enabled.length) params.script = enabled[0].name;
+    select.value = params.script || '';
+    wrap.appendChild(select);
+
+    const host = el('div');
+    wrap.appendChild(host);
+    const renderInputs = () => {
+        host.textContent = '';
+        const script = scriptSpec(select.value);
+        if (!script) return;
+        if (script.description) host.appendChild(el('p', 'stat-card__meta', script.description));
+        params.inputs = params.inputs || {};
+        (script.inputs || []).forEach((input) => {
+            host.appendChild(paramField({
+                name: input.name,
+                kind: 'str',
+                label: input.label || input.name,
+                required: input.required,
+                default: input.default,
+                help: '',
+            }, params.inputs));
+        });
+        if ((script.variables || []).length) {
+            host.appendChild(el('p', 'stat-card__meta',
+                t('rules.script_reads', { variables: script.variables.join(', ') })));
+        }
+    };
+    renderInputs();
+    select.addEventListener('change', () => {
+        params.script = select.value;
+        params.inputs = {};
+        renderInputs();
+    });
+    return wrap;
 }
 
 function textField(bag, key, placeholder) {
@@ -549,15 +767,17 @@ function messageEditor(action) {
     wrap.appendChild(body);
     wrap.appendChild(el('p', 'stat-card__meta', t('rules.insert_variable') + ': {{sys.machine}}, {{sys.uptime_days}}'));
 
+    const presets = catalog.button_presets || {};
     const preset = el('select', 'input');
-    ['ok', 'ok_cancel', 'yes_no', 'yes_no_later', 'accept_decline']
-        .forEach((p) => preset.appendChild(opt(p, t(`rules.buttons.${p}`))));
+    Object.keys(presets).forEach((name) => preset.appendChild(opt(name, presets[name].label)));
     preset.value = action.params.preset || 'yes_no_later';
     action.params.preset = preset.value;
-    delete action.params.buttons;
+    // `params.buttons` used to be deleted on every render, which destroyed hand-authored
+    // button labels merely by OPENING the rule. It is left alone now: the preset is what this
+    // editor edits, and the server expands it (_validate_buttons prefers `buttons` when both
+    // are present, so a rule built by hand keeps its labels).
     preset.addEventListener('change', () => {
         action.params.preset = preset.value;
-        delete action.params.buttons;
         renderActions();
     });
     const presetLabel = el('label', 'stat-card__meta', t('rules.message_buttons') + ' ');
@@ -567,58 +787,66 @@ function messageEditor(action) {
     wrap.appendChild(numberField(action.params, 'timeout_seconds', t('rules.message_timeout'), 900));
 
     action.on_response = action.on_response || {};
-    const outcomes = (PRESET_BUTTONS[preset.value] || ['ok'])
-        .concat(['timeout', 'dismissed', 'no_session']);
+    // Every outcome the message can produce gets a row, including the ones that are not button
+    // presses. `failed` is what the agent reports when the dialog could not be put on the
+    // desktop at all -- the one outcome meaning "they never saw it" -- and it used to be the
+    // one outcome a rule could not react to.
+    const buttons = (presets[preset.value] || {}).buttons || ['ok'];
+    const outcomes = buttons.concat((catalog.outcomes || []).map((o) => o.name));
+    const outcomeLabel = new Map((catalog.outcomes || []).map((o) => [o.name, o.label]));
+
     outcomes.forEach((outcome) => {
-        const row = el('div', 'toolbar');
-        row.style.marginTop = 'var(--space-2)';
-        const isButton = !!PRESET_BUTTON_SET.has(outcome);
-        row.appendChild(el('span', 'stat-card__meta',
-            (isButton ? t('rules.on_response') + ' ' + t(`rules.button.${outcome}`)
-                      : t(`rules.outcome.${outcome}`)) + ':'));
-        const choice = el('select', 'input');
-        choice.appendChild(opt('', t('rules.nothing')));
-        choice.appendChild(opt('restart', t('rules.action.command.label') + ': restart'));
-        choice.appendChild(opt('shutdown', t('rules.action.command.label') + ': shutdown'));
-        choice.appendChild(opt('snooze', t('rules.action.snooze.label')));
-        choice.appendChild(opt('alert', t('rules.action.alert.label')));
-        choice.value = followupKey(action.on_response[outcome]);
-        choice.addEventListener('change', () => {
-            action.on_response[outcome] = followupFor(choice.value, outcome);
+        const section = el('div');
+        section.style.marginTop = 'var(--space-3)';
+        const head = el('div', 'toolbar');
+        head.appendChild(el('span', 'stat-card__meta',
+            (outcomeLabel.has(outcome)
+                ? outcomeLabel.get(outcome)
+                : t('rules.on_response') + ' ' + t(`rules.button.${outcome}`)) + ':'));
+
+        // A follow-up is a full action now, chosen from the same vocabulary as a top-level
+        // one. It used to be one of four fixed choices whose params were synthesised, so
+        // "Yes -> run this script" and "Yes -> restart in five minutes" were both unsayable.
+        const kind = el('select', 'input');
+        (catalog.action_types || []).filter((a) => a.nestable)
+            .forEach((a) => kind.appendChild(opt(a.name, a.label)));
+        head.appendChild(kind);
+        const add = el('button', 'btn btn--ghost', t('rules.add_action'));
+        add.type = 'button';
+        head.appendChild(add);
+        section.appendChild(head);
+
+        const list = el('div');
+        list.style.marginLeft = 'var(--space-4)';
+        section.appendChild(list);
+
+        const renderFollowups = () => {
+            list.textContent = '';
+            (action.on_response[outcome] || []).forEach((followup) => {
+                list.appendChild(actionCard(followup, () => {
+                    const all = action.on_response[outcome];
+                    all.splice(all.indexOf(followup), 1);
+                    if (!all.length) delete action.on_response[outcome];
+                    renderFollowups();
+                    syncCommandsWarning();
+                }));
+            });
+            if (!(action.on_response[outcome] || []).length) {
+                list.appendChild(el('p', 'stat-card__meta', t('rules.nothing')));
+            }
+        };
+        renderFollowups();
+
+        add.addEventListener('click', () => {
+            action.on_response[outcome] = action.on_response[outcome] || [];
+            action.on_response[outcome].push({ type: kind.value, params: {} });
+            renderFollowups();
+            syncCommandsWarning();
         });
-        row.appendChild(choice);
-        wrap.appendChild(row);
+
+        wrap.appendChild(section);
     });
     return wrap;
-}
-
-const PRESET_BUTTONS = {
-    ok: ['ok'],
-    ok_cancel: ['ok', 'cancel'],
-    yes_no: ['yes', 'no'],
-    yes_no_later: ['yes', 'no', 'later'],
-    accept_decline: ['accept', 'decline'],
-};
-const PRESET_BUTTON_SET = new Set(['ok', 'cancel', 'yes', 'no', 'later', 'accept', 'decline']);
-
-function followupKey(list) {
-    if (!list || !list.length) return '';
-    const first = list[0];
-    if (first.type === 'command') return first.params.command_type;
-    return first.type;
-}
-
-function followupFor(key, outcome) {
-    if (!key) return [];
-    if (key === 'snooze') {
-        // "Later" defers longer than a timeout does: one is somebody actively asking for
-        // more time, the other is nobody having been there.
-        return [{ type: 'snooze', params: { seconds: outcome === 'later' ? 14400 : 3600 } }];
-    }
-    if (key === 'alert') {
-        return [{ type: 'alert', params: { text: '{{sys.machine}}: ' + outcome } }];
-    }
-    return [{ type: 'command', params: { command_type: key, params: {} } }];
 }
 
 // ---------------------------------------------------------------- save
@@ -632,6 +860,7 @@ async function saveRule() {
         enabled: document.getElementById('rule-enabled').checked,
         target: draft.target,
         actions: draft.actions,
+        fire_once_per_match: document.getElementById('rule-fire-once').checked,
         for_seconds: Number(document.getElementById('rule-for').value),
         cooldown_seconds: Number(document.getElementById('rule-cooldown').value),
         max_targets_per_tick: Number(document.getElementById('rule-max-targets').value),
@@ -665,7 +894,10 @@ function fillKindSelects() {
     });
     const actionSelect = document.getElementById('rule-action-kind');
     actionSelect.textContent = '';
-    ACTION_KINDS.forEach((kind) => actionSelect.appendChild(opt(kind, t(`rules.action.${kind}.label`))));
+    // From the server, so a new action type appears here without a JS change. `snooze` was
+    // renderable but not addable for exactly as long as this list was hand-kept.
+    (catalog.action_types || []).forEach(
+        (a) => actionSelect.appendChild(opt(a.name, a.label)));
 }
 
 document.getElementById('rules-new').addEventListener('click', () => openEditor(null));
@@ -699,14 +931,216 @@ document.getElementById('rule-add-clause').addEventListener('click', () => {
         refreshTargetCount();
     });
 });
+// A day, in seconds. The default deferral when somebody declines a message.
+const DECLINE_SNOOZE_SECONDS = 86400;
+
 document.getElementById('rule-action-add').addEventListener('click', () => {
     const kind = document.getElementById('rule-action-kind').value;
-    draft.actions.push({ type: kind, params: {} });
+    const action = { type: kind, params: {} };
+    if (kind === 'show_message') {
+        // A new message defers for a day when the person says No.
+        //
+        // The default matters because the alternative is silence: an unrouted answer is an
+        // explicit no-op, so a rule whose condition stays true -- "up for more than 7 days"
+        // stays true until somebody reboots -- would re-ask on every cooldown, and clicking
+        // No would buy the person nothing at all. Prefilled rather than forced: it is an
+        // ordinary snooze action, visible in the editor, with an editable duration, and
+        // removable like any other.
+        action.on_response = { no: [{ type: 'snooze',
+                                      params: { seconds: DECLINE_SNOOZE_SECONDS } }] };
+    }
+    draft.actions.push(action);
     renderActions();
+});
+
+// ---------------------------------------------------------------- scripts
+//
+// The Scripts panel. Writing needs `issue_commands` -- a script body is code that runs as
+// SYSTEM on every machine a rule targets -- so the server tells us in `can_edit` whether this
+// operator may, and the page is read-only when they may not. The gate is enforced server-side;
+// hiding the buttons is courtesy, not security.
+
+let scriptDraft = null;
+
+function renderScripts() {
+    const body = document.getElementById('scripts-body');
+    const empty = document.getElementById('scripts-empty');
+    const list = scriptCatalog.scripts || [];
+    body.textContent = '';
+    empty.hidden = list.length > 0;
+    document.getElementById('scripts-new').hidden = !scriptCatalog.can_edit;
+    document.getElementById('scripts-read-only').hidden = scriptCatalog.can_edit;
+
+    list.forEach((script) => {
+        const row = el('tr');
+        const nameCell = el('td');
+        nameCell.appendChild(el('strong', null, script.label || script.name));
+        if (!script.enabled) {
+            nameCell.appendChild(document.createTextNode(' '));
+            nameCell.appendChild(el('span', 'badge', t('scripts.script_disabled_badge')));
+        }
+        nameCell.appendChild(el('div', 'stat-card__meta', script.name));
+        if (script.description) {
+            nameCell.appendChild(el('div', 'stat-card__meta rules-table__description',
+                                    script.description));
+        }
+        row.appendChild(nameCell);
+        row.appendChild(el('td', 'rules-table__condition', script.shell));
+        row.appendChild(el('td', null, (script.inputs || []).map((i) => i.name).join(', ')));
+
+        const tools = el('td');
+        const toolRow = el('div', 'rules-table__tools');
+        tools.appendChild(toolRow);
+        if (scriptCatalog.can_edit) {
+            const edit = el('button', 'btn btn--ghost', t('rules.edit'));
+            edit.type = 'button';
+            edit.addEventListener('click', () => openScript(script.name));
+            toolRow.appendChild(edit);
+
+            const remove = el('button', 'btn btn--ghost', t('scripts.delete'));
+            remove.type = 'button';
+            remove.addEventListener('click', () => deleteScript(script.name));
+            toolRow.appendChild(remove);
+        }
+        row.appendChild(tools);
+        body.appendChild(row);
+    });
+}
+
+function blankScript() {
+    return { name: '', label: '', description: '', shell: 'powershell', body: '',
+             inputs: [], timeout_seconds: 600, enabled: true };
+}
+
+async function openScript(name) {
+    // The BODY is only readable with issue_commands, so it comes from the single-script
+    // endpoint rather than the list -- the list is deliberately metadata-only.
+    scriptDraft = name ? await api('/api/rules/scripts/' + encodeURIComponent(name))
+                       : blankScript();
+    const shell = document.getElementById('script-shell');
+    shell.textContent = '';
+    (scriptCatalog.shells || ['powershell']).forEach((x) => shell.appendChild(opt(x, x)));
+
+    document.getElementById('script-name').value = scriptDraft.name || '';
+    // The reference name is what rules store, so changing it would silently repoint nothing.
+    // Renaming is deliberately delete-and-recreate, which the in-use check then covers.
+    document.getElementById('script-name').disabled = !!name;
+    document.getElementById('script-label').value = scriptDraft.label || '';
+    document.getElementById('script-description').value = scriptDraft.description || '';
+    document.getElementById('script-enabled').checked = scriptDraft.enabled !== false;
+    shell.value = scriptDraft.shell || 'powershell';
+    document.getElementById('script-timeout').value = scriptDraft.timeout_seconds || 600;
+    document.getElementById('script-body').value = scriptDraft.body || '';
+    document.getElementById('script-save-error').textContent = '';
+    renderScriptInputs();
+    document.getElementById('script-editor').hidden = false;
+}
+
+function closeScript() {
+    scriptDraft = null;
+    document.getElementById('script-editor').hidden = true;
+}
+
+function renderScriptInputs() {
+    const host = document.getElementById('script-inputs');
+    host.textContent = '';
+    (scriptDraft.inputs || []).forEach((input) => {
+        const row = el('div', 'toolbar');
+        row.style.marginTop = 'var(--space-2)';
+
+        const name = el('input', 'input');
+        name.type = 'text';
+        name.placeholder = t('scripts.input_name');
+        name.value = input.name || '';
+        name.addEventListener('change', () => { input.name = name.value.trim().toLowerCase(); });
+        row.appendChild(name);
+
+        const label = el('input', 'input');
+        label.type = 'text';
+        label.placeholder = t('scripts.input_label');
+        label.value = input.label || '';
+        label.addEventListener('change', () => { input.label = label.value; });
+        row.appendChild(label);
+
+        const def = el('input', 'input');
+        def.type = 'text';
+        def.placeholder = t('scripts.input_default');
+        def.value = input.default || '';
+        def.addEventListener('change', () => { input.default = def.value; });
+        row.appendChild(def);
+
+        const requiredLabel = el('label', 'stat-card__meta');
+        const required = el('input');
+        required.type = 'checkbox';
+        required.style.marginRight = 'var(--space-2)';
+        required.checked = input.required !== false;
+        required.addEventListener('change', () => { input.required = required.checked; });
+        requiredLabel.appendChild(required);
+        requiredLabel.append(t('scripts.input_required'));
+        row.appendChild(requiredLabel);
+
+        const remove = el('button', 'btn btn--ghost', '×');
+        remove.type = 'button';
+        remove.addEventListener('click', () => {
+            scriptDraft.inputs.splice(scriptDraft.inputs.indexOf(input), 1);
+            renderScriptInputs();
+        });
+        row.appendChild(remove);
+        host.appendChild(row);
+    });
+}
+
+async function saveScript() {
+    const error = document.getElementById('script-save-error');
+    error.textContent = '';
+    const payload = {
+        name: document.getElementById('script-name').value.trim().toLowerCase(),
+        label: document.getElementById('script-label').value,
+        description: document.getElementById('script-description').value,
+        shell: document.getElementById('script-shell').value,
+        body: document.getElementById('script-body').value,
+        timeout_seconds: Number(document.getElementById('script-timeout').value),
+        enabled: document.getElementById('script-enabled').checked,
+        inputs: (scriptDraft.inputs || []).filter((i) => i.name),
+    };
+    try {
+        await api('/api/rules/scripts', json('POST', payload));
+        closeScript();
+        await reloadScripts();
+    } catch (e) {
+        error.textContent = t('scripts.save_failed', { error: e.message });
+    }
+}
+
+async function deleteScript(name) {
+    if (!window.confirm(t('scripts.confirm_delete'))) return;
+    try {
+        await api('/api/rules/scripts/' + encodeURIComponent(name), { method: 'DELETE' });
+        await reloadScripts();
+    } catch (e) {
+        // The 409 body names the rules using it, which is the whole point of refusing.
+        window.alert(t('scripts.delete_failed', { error: e.message }));
+    }
+}
+
+async function reloadScripts() {
+    scriptCatalog = await api('/api/rules/scripts');
+    scriptByName = new Map((scriptCatalog.scripts || []).map((x) => [x.name, x]));
+    renderScripts();
+}
+
+document.getElementById('scripts-new').addEventListener('click', () => openScript(null));
+document.getElementById('script-cancel').addEventListener('click', closeScript);
+document.getElementById('script-save').addEventListener('click', saveScript);
+document.getElementById('script-input-add').addEventListener('click', () => {
+    scriptDraft.inputs = scriptDraft.inputs || [];
+    scriptDraft.inputs.push({ name: '', label: '', required: true, default: '' });
+    renderScriptInputs();
 });
 
 (async function start() {
     await loadCatalog();
     fillKindSelects();
+    renderScripts();
     await loadRules();
 })();

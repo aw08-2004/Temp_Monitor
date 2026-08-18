@@ -23,6 +23,7 @@ os.environ["ALLOWED_EMAILS"] = "root@x.com"
 
 import app
 import fleet
+import permissions
 import rules
 
 PASS = 0
@@ -160,8 +161,16 @@ rule_id = resp.get_json()["id"]
 check("the condition was stored as an AST",
       resp.get_json()["condition"] == {"var": "sys.uptime_days", "cmp": ">", "value": 7})
 
+def authored(payload):
+    """The rules this TEST created. Every hub carries one it did not: the boot migration
+    seeds a disabled "High temperature" rule to replace the retired built-in alerter, and it
+    targets the whole fleet, so it turns up in every list and on every machine page. Counting
+    raw lengths here would make these assertions a test of the migration instead."""
+    return [r for r in payload["rules"] if r["name"] != app.HIGH_TEMP_RULE_NAME]
+
+
 resp = client.get("/api/rules")
-check("list rules", resp.status_code == 200 and len(resp.get_json()["rules"]) == 1)
+check("list rules", resp.status_code == 200 and len(authored(resp.get_json())) == 1)
 check("the list reports the fleet-wide switches",
       resp.get_json()["command_actions_enabled"] is False)
 
@@ -206,10 +215,15 @@ check("a command cooldown floor was applied",
 
 resp = client.get("/api/machines/RULEPC-1/rules")
 check("the machine page can see which rules apply",
-      resp.status_code == 200 and len(resp.get_json()["rules"]) == 2)
+      resp.status_code == 200 and len(authored(resp.get_json())) == 2)
 resp = client.get("/api/machines/RULEPC-2/rules")
 check("...and a machine outside the target sees none",
-      resp.get_json()["rules"] == [])
+      authored(resp.get_json()) == [])
+# The seeded rule is fleet-wide, so it DOES apply to a machine no authored rule targets --
+# which is how an operator finds it on the machine page and decides whether to enable it.
+check("...but the seeded temperature rule still applies, disabled",
+      [r for r in resp.get_json()["rules"]
+       if r["name"] == app.HIGH_TEMP_RULE_NAME and not r["enabled"]])
 
 resp = client.put(f"/api/rules/{rule_id}/enabled", json={"enabled": False})
 check("disable a rule", resp.status_code == 200 and resp.get_json()["enabled"] is False)
@@ -261,6 +275,125 @@ check("with command actions disarmed, Yes does not issue a restart",
       not any(c["type"] == "restart" for c in issued))
 
 fleet.create_command = _real_create
+
+
+# =======================================================================================
+print("\n-- the action catalog --")
+
+catalog = client.get("/api/rules/variables").get_json()
+commands = {c["name"]: c for c in catalog["commands"]}
+check("the catalog carries the commands a rule may issue", len(commands) >= 10)
+check("...with run_script's parameters described",
+      [p["name"] for p in commands["run_script"]["params"]]
+      == ["script", "shell", "timeout_seconds"])
+check("...including the bounds an operator is typing against",
+      next(p for p in commands["restart"]["params"] if p["name"] == "delay_seconds")["maximum"]
+      == 86400)
+# A command that can never work is shown with its reason rather than dropped: a missing entry
+# is a support question, a greyed-out one with a reason answers it.
+check("install_driver is offered but marked unavailable",
+      commands["install_driver"]["available"] is False
+      and commands["install_driver"]["unavailable_reason"])
+check("show_message is NOT offered as a raw command (its own action type covers it)",
+      "show_message" not in commands)
+check("update_bios is not offered at all", "update_bios" not in commands)
+check("a command with no parameters is described as taking none",
+      commands["gpupdate"]["described"] is True and commands["gpupdate"]["params"] == [])
+
+check("the catalog carries the action types",
+      {a["name"] for a in catalog["action_types"]} >= {"alert", "command", "script", "snooze"})
+check("...and marks show_message as not nestable",
+      next(a for a in catalog["action_types"]
+           if a["name"] == "show_message")["nestable"] is False)
+check("the catalog carries the button presets, translated",
+      catalog["button_presets"]["yes_no"]["label"] == "Yes / No")
+check("...and the non-button outcomes, translated",
+      {o["name"] for o in catalog["outcomes"]}
+      == {"timeout", "dismissed", "no_session", "failed"}
+      and all(not o["label"].startswith("rules.") for o in catalog["outcomes"]))
+
+
+# =======================================================================================
+print("\n-- scripts --")
+
+SCRIPT = {"name": "clear_spooler", "label": "Clear the print queue",
+          "shell": "powershell", "timeout_seconds": 900,
+          "body": 'Restart-Service -Name "{{input.service_name}}" # {{sys.machine}}',
+          "inputs": [{"name": "service_name", "required": True}]}
+
+resp = client.post("/api/rules/scripts", json=SCRIPT)
+check("an operator with issue_commands can save a script", resp.status_code == 200)
+resp = client.get("/api/rules/scripts")
+check("the list is served", resp.status_code == 200 and len(resp.get_json()["scripts"]) == 1)
+check("...WITHOUT the body", "body" not in resp.get_json()["scripts"][0])
+check("...and says this caller may edit", resp.get_json()["can_edit"] is True)
+check("the single-script read carries the body",
+      client.get("/api/rules/scripts/clear_spooler").get_json()["body"].startswith("Restart-Service"))
+check("an unknown script reads 404",
+      client.get("/api/rules/scripts/ghost").status_code == 404)
+
+resp = client.post("/api/rules/scripts", json=dict(SCRIPT, body="Write-Host {{field.owner}}"))
+check("a script interpolating a custom field is refused", resp.status_code == 400)
+
+# Saving a script silently changes what every rule using it does, WITHOUT touching those
+# rules -- so the audit row is the only trace, and it has to name them.
+rows = [r for r in fleet.list_audit(app.DB_PATH, action="save_script",
+                                    limit=50)["entries"]]
+check("saving a script is audited at security level",
+      rows and rows[0]["level"] == fleet.LEVEL_SECURITY)
+
+resp = client.post("/api/rules", json={
+    "name": "Spooler fix", "target": {"include": [{"kind": "all"}], "exclude": []},
+    "condition": {"var": "sys.uptime_days", "cmp": ">", "value": 1},
+    "actions": [{"type": "script", "params": {"script": "clear_spooler",
+                                              "inputs": {"service_name": "Spooler"}}}]})
+check("a rule may reference the script", resp.status_code == 201)
+
+resp = client.delete("/api/rules/scripts/clear_spooler")
+check("deleting a script a rule uses is refused with 409", resp.status_code == 409)
+check("...and the refusal names the rule", resp.get_json()["rules"] == ["Spooler fix"])
+client.delete(f"/api/rules/{resp.status_code and client.get('/api/rules').get_json()['rules'][-1]['id']}")
+
+# =======================================================================================
+# THE ESCALATION PATH THIS DESIGN EXISTS TO CLOSE.
+#
+# A script body runs as SYSTEM, unattended, on every machine a rule targets. Writing one is
+# therefore the same act as issuing a command and is gated on the same capability. Neither
+# `view` (which can write a fleet FAVORITE, and that is fine because running one needs a human
+# holding issue_commands) nor `manage_rules` (which may write rules but deliberately may not
+# issue commands) is enough.
+print("\n-- scripts: the capability gate --")
+
+with client.session_transaction() as sess:
+    sess["user"] = {"email": "root@x.com"}
+for name, caps, member in (
+        ("Viewers", [permissions.VIEW], "viewer@x.com"),
+        ("Rule authors", [permissions.VIEW, permissions.MANAGE_RULES], "author@x.com")):
+    client.post("/api/permissions/groups",
+                json={"name": name, "capabilities": caps, "members": [member]})
+
+for who, may_read_body in (("viewer@x.com", False), ("author@x.com", False)):
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": who}
+    label = who.split("@")[0]
+    check(f"{label}: may LIST scripts (the rules editor needs the names)",
+          client.get("/api/rules/scripts").status_code == 200)
+    check(f"{label}: is told they may not edit",
+          client.get("/api/rules/scripts").get_json()["can_edit"] is False)
+    check(f"{label}: may NOT read a script's body",
+          client.get("/api/rules/scripts/clear_spooler").status_code == 403)
+    check(f"{label}: may NOT create a script",
+          client.post("/api/rules/scripts", json=dict(SCRIPT, name="sneaky")).status_code == 403)
+    check(f"{label}: may NOT overwrite an existing one",
+          client.post("/api/rules/scripts",
+                      json=dict(SCRIPT, body="whoami")).status_code == 403)
+    check(f"{label}: may NOT delete one",
+          client.delete("/api/rules/scripts/clear_spooler").status_code == 403)
+
+with client.session_transaction() as sess:
+    sess["user"] = {"email": "root@x.com"}
+check("and the body was never actually changed",
+      "Restart-Service" in client.get("/api/rules/scripts/clear_spooler").get_json()["body"])
 
 
 print("\n-- gates --")

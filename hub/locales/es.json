@@ -101,13 +101,28 @@
   },
   "alerts": {
     "heading": "Alertas",
-    "intro": "Situaciones que requieren tu atención. Los equipos que funcionan calientes —cuya temperatura media durante la ventana configurada alcanza o supera el umbral de temperatura alta— aparecen aquí y permanecen hasta que los descartes, con una tarjeta por episodio: un equipo que se calienta repetidamente acumula una tarjeta por episodio en lugar de reemplazar la anterior. Lo mismo ocurre con los equipos duplicados que comparten n.º de serie mientras ambos están en línea: el hub no fusiona equipos activos automáticamente, así que elige qué registro conservar y los demás se fusionarán en él (su historial de temperatura se conserva).",
+    "intro": "Condiciones que requieren su atención. Las reglas que usted escribe generan una alerta cuando coinciden con un equipo, una tarjeta por episodio: una regla que sigue coincidiendo acumula una tarjeta por racha en lugar de sustituir la anterior. Los equipos duplicados que comparten número de serie estando ambos en línea también aparecen aquí: el hub no fusiona equipos activos de forma automática, así que elija qué registro conservar y el resto se fusionará en él (su historial de temperatura se conserva).",
     "empty": "No hay alertas abiertas. Todo está al día.",
     "load_failed": "No se pudieron cargar las alertas.",
     "view_machine": "Ver equipo",
     "dismiss": "Descartar",
     "dismiss_failed": "No se pudo descartar la alerta: {error}",
     "unknown_machine": "(equipo desconocido)",
+    "rule": {
+      "unnamed": "(regla sin nombre)",
+      "title": "{rule}: {machine}",
+      "title_ended": "{rule} (finalizada): {machine}",
+      "ongoing": "Sigue coincidiendo. Coincidió por primera vez el {since}.",
+      "ongoing_count": {
+        "one": "Sigue coincidiendo. Coincidió por primera vez el {since}.",
+        "other": "Sigue coincidiendo, comprobada {count} veces. Coincidió por primera vez el {since}."
+      },
+      "ended": "Coincidió desde {from} hasta {until}."
+    },
+    "ad_unmatched": {
+      "title": "No está en Active Directory: {machine}",
+      "body": "Este hub gestiona {machine}, pero el directorio configurado no tiene un objeto de equipo para él. Se resuelve por sí sola en cuanto el equipo aparezca en una sincronización posterior."
+    },
     "high_temp": {
       "title": "Temperatura alta: {machine}",
       "title_ended": "Temperatura alta (finalizada): {machine}",
@@ -137,7 +152,8 @@
         "other": "¿Conservar «{survivor}» y fusionar {count} equipos en él?\n\nEl historial de temperatura de los equipos fusionados pasa a «{survivor}»; sus registros duplicados y sus inscripciones en la flota se eliminan. No se puede deshacer."
       },
       "merge_failed": "No se pudo fusionar: {error}"
-    }
+    },
+    "unknown_kind": "Alerta de un tipo no reconocido ({kind})"
   },
   "audit": {
     "heading": "Registro de auditoría",
@@ -373,14 +389,6 @@
       "computer.primary_sensor_preference": {
         "label": "Preferencia de sensor de temperatura de CPU",
         "help": "Ordenada, la mejor primero. El hub vuelve a deducir la temperatura principal de cada equipo a partir del bloque de sensores que informa, usando el primer nombre que coincida. Si no coincide ninguno, se conserva la temperatura que eligió el agente. Se aplica solo a las lecturas nuevas: el historial mantiene el valor registrado en su momento."
-      },
-      "hub.high_temp_threshold": {
-        "label": "Umbral de temperatura alta",
-        "help": "Cuando la temperatura MEDIA de un equipo durante la ventana de abajo alcanza o supera este valor, se genera una alerta de temperatura en la pestaña Alertas. La página del equipo también resalta una lectura en vivo que lo alcance o supere."
-      },
-      "hub.high_temp_avg_window_seconds": {
-        "label": "Ventana de promediado de temperatura alta",
-        "help": "Un equipo se marca como caliente solo cuando su temperatura MEDIA durante esta ventana alcanza o supera el umbral anterior, de modo que un pico breve no genera una alerta. 300 = cinco minutos."
       },
       "hub.low_load_threshold": {
         "label": "Umbral de carga baja",
@@ -874,8 +882,6 @@
     "uptime_unknown": "Tiempo activo: --",
     "serial_prefix": "N.º de serie: {value}",
     "asset_prefix": "Activo: {value}",
-    "high_temp_title": "Temperatura alta",
-    "high_temp_body": "{machine} está a alta temperatura: {temp} °C",
     "language_changed": "Idioma actualizado.",
     "language_change_failed": "No se pudo cambiar el idioma.",
     "cancel": "Cancelar",
@@ -2058,7 +2064,7 @@
     "targets": "PC seleccionados",
     "confirm_delete": "¿Eliminar esta regla y su historial?",
     "actions_disabled": "Las reglas se evalúan, pero sus acciones están desactivadas en toda la flota.",
-    "commands_disabled": "Las acciones de comando están desactivadas en toda la flota. Esta regla se evaluará pero no enviará nada.",
+    "commands_disabled": "Las acciones de comando están desactivadas en toda la flota, por lo que esta regla se evaluará pero no emitirá ningún comando, incluido aquel al que dirija la respuesta de un mensaje, como reiniciar después de que el usuario pulse Sí. Active «acciones de comando habilitadas» en Configuración → Reglas para permitirlo.",
     "section_target": "Qué PC",
     "section_condition": "Cuándo",
     "section_actions": "Entonces",
@@ -2084,6 +2090,8 @@
     "for_seconds_help": "Evita que un valor que oscila alrededor del umbral actúe una y otra vez.",
     "cooldown": "Después esperar al menos",
     "cooldown_help": "Antes de volver a actuar sobre el mismo PC.",
+    "fire_once": "Preguntar una vez y esperar hasta que deje de cumplirse",
+    "fire_once_help": "Con esto desactivado, la regla vuelve a dispararse tras cada periodo de espera mientras la condición se cumpla, así que una condición como «encendido más de 7 días» sigue preguntando cada hora hasta que alguien reinicie. Con esto activado, se dispara una vez y calla hasta que la condición deje de cumplirse de verdad, y entonces vuelve a armarse.",
     "max_targets": "Como máximo estos PC por pasada",
     "max_targets_help": "Un límite de seguridad. Una regla dirigida a más PC se detiene aquí y lo indica.",
     "add_action": "Añadir acción",
@@ -2173,6 +2181,89 @@
       "email": {
         "label": "Enviar un correo",
         "description": "Requiere los datos SMTP en el archivo .env del hub."
+      },
+      "script": {
+        "label": "Ejecutar un script guardado",
+        "description": "Ejecuta uno de sus scripts guardados en el equipo. Edite el script una vez y todas las reglas que lo usan lo siguen."
+      }
+    },
+    "command": {
+      "gpupdate": {
+        "label": "Actualizar directivas de grupo",
+        "description": "Ejecuta gpupdate /force."
+      },
+      "install_app": {
+        "label": "Instalar una aplicación",
+        "description": "Instala mediante un id de paquete de winget o desde un MSI ya presente en el equipo."
+      },
+      "install_driver": {
+        "label": "Instalar un controlador",
+        "description": "El agente aún no lo implementa."
+      },
+      "prepare_wake": {
+        "label": "Preparar para Wake-on-LAN",
+        "description": "Configura el adaptador de red para poder despertar el equipo más tarde."
+      },
+      "refresh_bios_inventory": {
+        "label": "Releer la configuración de firmware",
+        "description": "Recopila el inventario de BIOS actual del equipo."
+      },
+      "restart": {
+        "label": "Reiniciar el equipo",
+        "description": "Reinicia el equipo tras una cuenta atrás."
+      },
+      "run_script": {
+        "label": "Ejecutar un script",
+        "description": "Ejecuta PowerShell o cmd en el equipo como SYSTEM."
+      },
+      "set_virtual_display_mode": {
+        "label": "Aplicar el modo de pantalla virtual",
+        "description": "Vuelve a aplicar la resolución configurada de la pantalla virtual."
+      },
+      "shutdown": {
+        "label": "Apagar el equipo",
+        "description": "Apaga el equipo tras una cuenta atrás."
+      },
+      "uninstall_virtual_display": {
+        "label": "Quitar la pantalla virtual",
+        "description": "Desinstala el controlador de pantalla virtual."
+      }
+    },
+    "command_param": {
+      "delay_seconds": {
+        "label": "Cuenta atrás",
+        "help": "Segundos de espera para que la persona en el equipo esté avisada."
+      },
+      "force": {
+        "label": "Forzar",
+        "help": "Cierra las aplicaciones en ejecución sin guardar para que no puedan cancelarlo."
+      },
+      "id": {
+        "label": "Id de paquete winget",
+        "help": "Por ejemplo Google.Chrome. Déjelo vacío si instala desde un MSI."
+      },
+      "msi_path": {
+        "label": "Ruta del MSI",
+        "help": "Una ruta en el equipo. Déjela vacía si indicó un id de winget."
+      },
+      "new_name": {
+        "label": "Nuevo nombre del equipo",
+        "help": "Surte efecto en el próximo reinicio."
+      },
+      "script": {
+        "label": "Script",
+        "help": "Se ejecuta como SYSTEM. {{sys.machine}} y otras variables de regla se sustituyen antes de ejecutarlo."
+      },
+      "shell": {
+        "label": "Intérprete",
+        "help": "Qué intérprete ejecuta el script."
+      },
+      "timeout_seconds": {
+        "label": "Rendirse tras",
+        "help": "Segundos que puede ejecutarse antes de que el agente lo detenga."
+      },
+      "update_id": {
+        "label": "Id de actualización de firmware"
       }
     },
     "button": {
@@ -2362,6 +2453,42 @@
       "bool": "Sí / No",
       "choice": "Elegir de una lista"
     },
-    "fields_heading": "Campos personalizados"
+    "fields_heading": "Campos personalizados",
+    "command_undescribed": "Este hub no describe los parámetros de este comando, así que se enviará sin ninguno.",
+    "command_one_of": "Rellene uno de estos: {params}.",
+    "no_scripts": "Aún no hay scripts. Cree uno primero en la pestaña Scripts.",
+    "script_disabled": "desactivado",
+    "script_reads": "Lee: {variables}"
+  },
+  "scripts": {
+    "body": "Script",
+    "body_help": "Se ejecuta como SYSTEM. Use {{sys.machine}} para los valores del propio equipo y {{input.nombre}} para un valor que aporte la regla.",
+    "confirm_delete": "¿Eliminar este script?",
+    "delete": "Eliminar",
+    "delete_failed": "No se pudo eliminar: {error}",
+    "description": "Descripción",
+    "empty": "Aún no hay scripts.",
+    "enabled": "Activado",
+    "heading": "Scripts",
+    "input_add": "Añadir una entrada",
+    "input_default": "Valor por defecto",
+    "input_label": "Etiqueta",
+    "input_name": "Nombre",
+    "input_required": "Obligatoria",
+    "inputs": "Entradas que aporta la regla",
+    "intro": "Scripts que una regla puede ejecutar en un equipo. Un script se ejecuta como SYSTEM, así que guardarlo requiere el permiso Emitir comandos. Edite un script y todas las reglas que lo usan lo seguirán en su próxima ejecución.",
+    "label": "Título",
+    "name": "Nombre de referencia",
+    "name_help": "Minúsculas, dígitos y guiones bajos. Es lo que guarda la regla, así que no puede cambiarse después.",
+    "new": "Nuevo script",
+    "read_only": "Necesita el permiso Emitir comandos para añadir o cambiar un script.",
+    "save": "Guardar script",
+    "save_failed": "No se pudo guardar: {error}",
+    "script_disabled_badge": "desactivado",
+    "shell": "Intérprete",
+    "tab_rules": "Reglas",
+    "tab_scripts": "Scripts",
+    "timeout": "Rendirse tras (segundos)",
+    "used_by": "Usado por {rules}"
   }
 }

@@ -157,9 +157,6 @@ REGISTRY = (
        DEFAULT_SENSOR_PREFERENCE, agent=True),
 
     # ---------------- Hub: thresholds and internals ----------------
-    _s("hub.high_temp_threshold", "hub", "int", 85, minimum=40, maximum=120, unit="celsius"),
-    _s("hub.high_temp_avg_window_seconds", "hub", "int", 300, minimum=60, maximum=3600,
-       unit="seconds"),
     _s("hub.low_load_threshold", "hub", "int", 40, minimum=0, maximum=100, unit="percent"),
     _s("hub.live_status_cache_seconds", "hub", "int", 600, minimum=60, maximum=86400,
        unit="seconds"),
@@ -435,10 +432,11 @@ def get_conn(db_path):
 # stored as rows, and _build() SKIPS a row whose key is not in the registry -- so without
 # this an upgrade would silently revert a customised value to the shipped default while the
 # operator's real choice sat unreachable in the table.
-RENAMED_KEYS = (
-    ("hub.overheat_threshold", "hub.high_temp_threshold"),
-    ("hub.overheat_avg_window_seconds", "hub.high_temp_avg_window_seconds"),
-)
+# Nothing is renamed at the moment. The two entries that lived here carried the pre-rename
+# `hub.overheat_*` rows onto `hub.high_temp_*`, and both of those keys have since been
+# retired along with the built-in temperature alerter -- see app.seed_high_temp_rule, which
+# reads whatever those rows still hold before deleting them.
+RENAMED_KEYS = ()
 
 
 def _migrate_renamed_keys(conn):

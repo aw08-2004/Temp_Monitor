@@ -42,6 +42,7 @@ from datetime import datetime
 
 import alerts
 import fleet
+import scripts
 
 # ---------------------------------------------------------------------------------------
 # UNKNOWN
@@ -260,6 +261,11 @@ def get_conn(db_path):
 def init_rules_db(db_path):
     """Create the rules-engine tables if absent. Idempotent -- called next to
     app.init_db()/fleet.init_fleet_db()/alerts.init_alerts_db() on every hub start."""
+    # The scripts a `script` action references. Created here rather than only from app.py because
+    # validate_rule now READS it on every save -- anything that can save a rule must have the
+    # table, and a caller that set up the rules schema and got a missing-table error on the
+    # first save would be right to call that a bug in this function. Idempotent either way.
+    scripts.init_scripts_db(db_path)
     with get_conn(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
         # Operator-defined per-machine fields. The DEFINITION is fleet-wide (one row per
@@ -388,6 +394,12 @@ def init_rules_db(db_path):
         rule_columns = {row["name"] for row in conn.execute("PRAGMA table_info(rules)")}
         if "scope_json" not in rule_columns:
             conn.execute("ALTER TABLE rules ADD COLUMN scope_json TEXT")
+        # "Ask once, then stay quiet until the condition actually clears." Defaults to 0, so
+        # every existing rule keeps firing on the cooldown timer exactly as it did -- this
+        # changes behaviour only for a rule whose author asks for it.
+        if "fire_once_per_match" not in rule_columns:
+            conn.execute("ALTER TABLE rules ADD COLUMN fire_once_per_match "
+                         "INTEGER NOT NULL DEFAULT 0")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_fires_rule "
                      "ON rule_fires(rule_id, fired_at DESC)")
         # The routing lookup: a show_message result arrives knowing only its command id.
@@ -1203,6 +1215,53 @@ def render_template(text, variables):
         return format_value(value)
 
     return _TEMPLATE_RE.sub(replace, str(text))
+
+
+def render_template_checked(text, variables):
+    """Like render_template, but reports the names it could not resolve.
+
+    render_template substitutes the literal word "unknown" for an unresolvable name, which is
+    right for a sentence a person reads -- "up for unknown days" looks like missing data,
+    which is what it is. It is WRONG for code. `Stop-Service -Name "unknown"` and
+    `Remove-Item -Recurse unknown` do not look like missing data to Windows; they look like
+    instructions, and it carries them out.
+
+    So command params use this instead, and a caller that gets a non-empty `missing` back must
+    not issue the command. Message and alert text keep calling render_template, unchanged.
+    """
+    missing = []
+
+    def replace(match):
+        name = match.group(1)
+        entry = (variables or {}).get(name)
+        value = entry.value if isinstance(entry, Value) else entry
+        if entry is None or value is UNKNOWN or value is None:
+            missing.append(name)
+            return UNKNOWN_PLACEHOLDER
+        return format_value(value)
+
+    rendered = _TEMPLATE_RE.sub(replace, str(text or ""))
+    return rendered, sorted(set(missing))
+
+
+def render_params_checked(params, variables):
+    """Render every STRING param. Returns (rendered, missing).
+
+    Strings only: an int or a bool has no placeholders in it, and walking into one would only
+    risk turning 60 into "60". The params dict is flat by construction -- fleet.COMMAND_PARAMS
+    declares no nested shapes -- so this does not recurse, and if a nested shape is ever added
+    the flatness of this function is the thing that should be revisited deliberately.
+    """
+    rendered = {}
+    missing = []
+    for key, value in (params or {}).items():
+        if isinstance(value, str):
+            text, gaps = render_template_checked(value, variables)
+            rendered[key] = text
+            missing.extend(gaps)
+        else:
+            rendered[key] = value
+    return rendered, sorted(set(missing))
 
 
 def template_names(text):
@@ -2786,13 +2845,30 @@ ACTION_SHOW_MESSAGE = "show_message"
 ACTION_SNOOZE = "snooze"
 ACTION_WEBHOOK = "webhook"
 ACTION_EMAIL = "email"
-ACTION_TYPES = (ACTION_ALERT, ACTION_COMMAND, ACTION_SHOW_MESSAGE, ACTION_SNOOZE,
-                ACTION_WEBHOOK, ACTION_EMAIL)
+# Run a named script from the scripts store (scripts.py). Its own type rather than a
+# `run_script` command carrying a reference, because the two are different things: a command
+# action freezes its params into the rule, while this holds a REFERENCE that is read afresh on
+# every fire -- editing the script changes what every rule using it runs, which is the whole
+# point of a library. Keeping them apart also keeps `run_script`'s params meaning exactly what
+# the agent's executor says they mean.
+ACTION_SCRIPT = "script"
+ACTION_TYPES = (ACTION_ALERT, ACTION_COMMAND, ACTION_SCRIPT, ACTION_SHOW_MESSAGE,
+                ACTION_SNOOZE, ACTION_WEBHOOK, ACTION_EMAIL)
 ACTION_TEXT_KEY = "rules.action"
+# Where a COMMAND's words live. Keyed by command type; parameters are keyed by param NAME
+# rather than by (command, name), because the same `timeout_seconds` means the same thing to
+# every command that takes one and five copies of that sentence is five things to translate.
+COMMAND_TEXT_KEY = "rules.command"
+COMMAND_PARAM_TEXT_KEY = "rules.command_param"
 
 # Actions that change a machine rather than telling somebody about it. These are the ones
 # behind the command kill switch and the cooldown floor.
-MUTATING_ACTIONS = frozenset({ACTION_COMMAND})
+# ACTION_SCRIPT is here for the same reason ACTION_COMMAND is, and its membership is
+# load-bearing: it is what makes the fleet-wide command kill switch, the cooldown floor, and
+# the ISSUE_COMMANDS requirement in validate_actions all apply to a script without a second
+# implementation of any of them. A script IS a command -- it becomes a `run_script` at
+# dispatch -- and anything that treats it as merely an alert would be wrong.
+MUTATING_ACTIONS = frozenset({ACTION_COMMAND, ACTION_SCRIPT})
 
 MAX_ACTIONS = 10
 MAX_MESSAGE_CHARS = 2000
@@ -2810,11 +2886,37 @@ RULE_FORBIDDEN_COMMANDS = (fleet.SESSION_CONTROL_COMMANDS | fleet.SCHEDULED_COMM
                            | fleet.REMOTE_CONTROL_COMMANDS | fleet.UNSAVEABLE_FIRMWARE_COMMANDS
                            | fleet.UNSAVEABLE_WAKE_COMMANDS | fleet.PROCESS_COMMANDS
                            | fleet.PROBE_COMMANDS
-                           | frozenset({"install_virtual_display", "rename"}))
+                           # `update_bios` belongs with the one-shot params above and was only
+                           # ever absent from that list because it sits in the base ALL_COMMANDS
+                           # literal rather than in FIRMWARE_COMMANDS. Its `update_id` is minted
+                           # per target per maintenance window by firmware.py, so a rule can only
+                           # ever replay a stale one -- UpdateBiosExecutor refuses it with "the
+                           # hub would not supply this firmware update". Allowing it produced a
+                           # rule that could never succeed, which is precisely what this set
+                           # exists to prevent. No UI ever offered it, so nothing can be using it.
+                           | frozenset({"install_virtual_display", "rename", "update_bios"}))
 RULE_ALLOWED_COMMANDS = frozenset(fleet.ALL_COMMANDS) - RULE_FORBIDDEN_COMMANDS
 
+# Allowed as a command, but NOT offered in the "send a command" picker, because a better
+# action already covers it. `show_message` as a raw command would queue a dialog whose answer
+# nothing routes -- the whole on_response machinery hangs off ACTION_SHOW_MESSAGE, and a rule
+# author who picked it from the command list would get a prompt that silently does nothing
+# whichever button is pressed. Still permitted if a caller composes one by hand, so this is a
+# statement about the MENU, not about what the engine will run.
+COMMAND_ACTION_SUPERSEDED = {
+    ACTION_SHOW_MESSAGE: ACTION_SHOW_MESSAGE,
+}
 
-def validate_actions(actions, extra=None, allow_command=True, _nested=False):
+
+def offered_commands():
+    """The command types the rules editor offers, best-first by name. Unavailable ones are
+    included -- see fleet.COMMAND_UNAVAILABLE for why a broken command is shown greyed out
+    rather than dropped."""
+    return sorted(RULE_ALLOWED_COMMANDS - set(COMMAND_ACTION_SUPERSEDED))
+
+
+def validate_actions(actions, extra=None, allow_command=True, _nested=False,
+                     script_specs=None):
     """Check an action list. Returns (error, normalised).
 
     `allow_command` is the author's ISSUE_COMMANDS capability, checked here rather than at
@@ -2830,14 +2932,14 @@ def validate_actions(actions, extra=None, allow_command=True, _nested=False):
         return f"too many actions (limit {MAX_ACTIONS})", None
     normalised = []
     for action in actions:
-        err, clean = _validate_action(action, extra, allow_command, _nested)
+        err, clean = _validate_action(action, extra, allow_command, _nested, script_specs)
         if err:
             return err, None
         normalised.append(clean)
     return None, normalised
 
 
-def _validate_action(action, extra, allow_command, nested):
+def _validate_action(action, extra, allow_command, nested, script_specs=None):
     if not isinstance(action, dict):
         return "action must be an object", None
     kind = action.get("type")
@@ -2874,20 +2976,51 @@ def _validate_action(action, extra, allow_command, nested):
             return (f"'{command_type}' cannot be issued by a rule: its parameters name a "
                     "specific live session, change or deployment, which a saved rule "
                     "cannot know about"), None
-        command_params = params.get("params") or {}
-        if not isinstance(command_params, dict):
-            return "command params must be an object", None
+        # The command's OWN params, against the schema fleet.py declares for that type. This
+        # used to accept any dict at all, which is how `run_script` came to be offerable from
+        # a rule with no way to supply a script: nothing on the hub knew the command needed
+        # one. Nested follow-ups reach this same branch through
+        # _validate_show_message -> validate_actions(_nested=True), so there is exactly one
+        # place that decides what a command's params may be. Do not add a second.
+        err, command_params = fleet.validate_command_params(command_type,
+                                                            params.get("params") or {})
+        if err:
+            return f"{command_type}: {err}", None
         try:
             encoded = json.dumps(command_params)
         except (TypeError, ValueError):
             return "command params must be JSON-serialisable", None
-        if len(encoded) > 4000:
+        # Kept as a backstop behind the schema: a `text` param has its own max_chars, but an
+        # undescribed command type passes through unchecked and still must not be unbounded.
+        if len(encoded) > 4000 + fleet.MAX_SCRIPT_CHARS:
             return "command params are too large", None
         return None, {"type": kind, "params": {"command_type": command_type,
                                                "params": command_params}}
 
+    if kind == ACTION_SCRIPT:
+        # Gated exactly as ACTION_COMMAND is: a script becomes a run_script, and a capability
+        # check that only guarded one of the two would be trivially sidestepped by using the
+        # other.
+        if not allow_command:
+            return "you do not have permission to create a rule that runs scripts", None
+        script_name = str(params.get("script") or "").strip().lower()
+        # script_specs is None in unit tests and wherever a caller has no database to hand.
+        # Skipping the reference check there is right -- the alternative is this module
+        # reaching for a connection it was not given -- and the fire-time resolve refuses a
+        # missing script anyway, so nothing runs on the strength of an unchecked reference.
+        if script_specs is not None:
+            err, clean_inputs = scripts.validate_reference(script_specs, script_name,
+                                                          params.get("inputs"))
+            if err:
+                return err, None
+        else:
+            if not script_name:
+                return "a script action needs a script", None
+            clean_inputs = {str(k): str(v) for k, v in (params.get("inputs") or {}).items()}
+        return None, {"type": kind, "params": {"script": script_name, "inputs": clean_inputs}}
+
     if kind == ACTION_SHOW_MESSAGE:
-        return _validate_show_message(action, extra, allow_command, nested)
+        return _validate_show_message(action, extra, allow_command, nested, script_specs)
 
     if kind == ACTION_WEBHOOK:
         return _validate_webhook(params)
@@ -2943,7 +3076,7 @@ MIN_MESSAGE_TIMEOUT = 30
 MAX_MESSAGE_TIMEOUT = 12 * 3600
 
 
-def _validate_show_message(action, extra, allow_command, nested):
+def _validate_show_message(action, extra, allow_command, nested, script_specs=None):
     if nested:
         # A message whose answer opens another message is a loop with a human in it. One
         # level of follow-up is expressive enough for every case the feature exists for.
@@ -3006,7 +3139,8 @@ def _validate_show_message(action, extra, allow_command, nested):
                     f"expected one of {', '.join(sorted(routable))}"), None
         if not followups:
             continue
-        err, clean = validate_actions(followups, extra, allow_command, _nested=True)
+        err, clean = validate_actions(followups, extra, allow_command, _nested=True,
+                                      script_specs=script_specs)
         if err:
             return f"response to '{outcome}': {err}", None
         normalised_response[outcome] = clean
@@ -3125,16 +3259,48 @@ def rule_can_run(actions, command_actions_enabled):
     return True, None
 
 
+def iter_actions(actions):
+    """Every action in a rule, INCLUDING the follow-ups hanging off a message's answers.
+
+    One recursion, used by everything that has to ask a question about a rule's actions. The
+    nested case is the one that gets forgotten -- a follow-up is still a command the rule
+    issues, and a check that only walked the top level would be answering a different question
+    than the one it was asked.
+    """
+    for action in actions or []:
+        yield action
+        for followups in (action.get("on_response") or {}).values():
+            yield from iter_actions(followups)
+
+
 def actions_include_command(actions):
     """Does this rule (including any message follow-up) issue a command? Drives the
     cooldown floor and the extra capability check."""
-    for action in actions or []:
-        if action.get("type") in MUTATING_ACTIONS:
-            return True
-        for followups in (action.get("on_response") or {}).values():
-            if actions_include_command(followups):
-                return True
-    return False
+    return any(action.get("type") in MUTATING_ACTIONS for action in iter_actions(actions))
+
+
+def rules_using_script(db_path, script_name):
+    """Every rule referencing `script_name`, as [{id, name}]. Used to refuse its deletion.
+
+    A JSON walk, not `WHERE actions_json LIKE '%name%'`: a script named `restart` would match
+    the text of half the rules in the table and produce refusals nobody can explain. The rules
+    table holds tens of rows, so scanning it costs nothing worth optimising.
+    """
+    name = str(script_name or "").strip().lower()
+    users = []
+    with get_conn(db_path) as conn:
+        rows = conn.execute("SELECT id, name, actions_json FROM rules ORDER BY name").fetchall()
+    for row in rows:
+        try:
+            actions = json.loads(row["actions_json"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        for action in iter_actions(actions):
+            if (action.get("type") == ACTION_SCRIPT
+                    and str((action.get("params") or {}).get("script") or "").lower() == name):
+                users.append({"id": row["id"], "name": row["name"]})
+                break
+    return users
 
 
 # ---------------------------------------------------------------------------------------
@@ -3154,6 +3320,7 @@ def _decode_rule(row):
         except (TypeError, ValueError):
             rule[key] = None
     rule["enabled"] = bool(rule.get("enabled"))
+    rule["fire_once_per_match"] = bool(rule.get("fire_once_per_match"))
     return rule
 
 
@@ -3226,7 +3393,11 @@ def validate_rule(db_path, payload, *, extra=None, allow_command=True,
         if err:
             return f"condition: {err}", None
 
-    err, actions = validate_actions(payload.get("actions"), extra, allow_command)
+    # Built once per save and threaded down, the same way `extra` is: _validate_action stays
+    # pure and unit-testable, and one save does one read of the scripts table however many
+    # script actions (and nested follow-ups) the rule turns out to contain.
+    err, actions = validate_actions(payload.get("actions"), extra, allow_command,
+                                    script_specs=scripts.specs(db_path))
     if err:
         return f"actions: {err}", None
 
@@ -3255,6 +3426,7 @@ def validate_rule(db_path, payload, *, extra=None, allow_command=True,
         "name": name,
         "description": str(payload.get("description") or "")[:1000],
         "enabled": bool(payload.get("enabled", True)),
+        "fire_once_per_match": bool(payload.get("fire_once_per_match", False)),
         "target": target,
         "condition": condition,
         "condition_text": format_expression(condition),
@@ -3285,14 +3457,14 @@ def save_rule(db_path, payload, *, rule_id=None, actor="", now=None, author_scop
               json.dumps(rule["target"]), json.dumps(rule["condition"]),
               rule["condition_text"], scope_json, rule["for_seconds"],
               rule["cooldown_seconds"], rule["max_targets_per_tick"],
-              json.dumps(rule["actions"]))
+              json.dumps(rule["actions"]), 1 if rule["fire_once_per_match"] else 0)
     with get_conn(db_path) as conn:
         if rule_id:
             cur = conn.execute(
                 "UPDATE rules SET name=?, description=?, enabled=?, target_json=?, "
                 "condition_json=?, condition_text=?, scope_json=?, for_seconds=?, "
-                "cooldown_seconds=?, max_targets_per_tick=?, actions_json=?, updated_at=?, "
-                "updated_by=? WHERE id=?",
+                "cooldown_seconds=?, max_targets_per_tick=?, actions_json=?, "
+                "fire_once_per_match=?, updated_at=?, updated_by=? WHERE id=?",
                 values + (now, str(actor or ""), rule_id),
             )
             if not cur.rowcount:
@@ -3302,8 +3474,8 @@ def save_rule(db_path, payload, *, rule_id=None, actor="", now=None, author_scop
             cur = conn.execute(
                 "INSERT INTO rules (name, description, enabled, target_json, condition_json, "
                 "condition_text, scope_json, for_seconds, cooldown_seconds, "
-                "max_targets_per_tick, actions_json, created_at, created_by, updated_at, "
-                "updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "max_targets_per_tick, actions_json, fire_once_per_match, created_at, "
+                "created_by, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values + (now, str(actor or ""), now, str(actor or "")),
             )
             new_id = cur.lastrowid
@@ -3407,7 +3579,9 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     `deliver(action, context) -> (ok, detail)` handles webhook/email (notify.py, phase 5).
     None means those actions are recorded as skipped rather than attempted.
 
-    `audit(actor, action, target, detail)` records a fire in the security trail.
+    `audit(actor, action, target, detail, level=None)` records a fire in the security trail.
+    `level` is optional and defaults to the security level; it is passed only for entries that
+    are operational rather than security-relevant (see handle_message_result).
 
     The pass is deliberately ordered read -> decide -> dispatch -> write, with no database
     connection held across the dispatch step. fleet.create_command opens its OWN connection,
@@ -3483,6 +3657,25 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
 
             last_fired = previous.get("last_fired_at")
             if last_fired and now - int(last_fired) < int(rule["cooldown_seconds"] or 0):
+                state_writes.append((rule["id"], machine, matched_since, 1, None))
+                continue
+
+            # "Ask once, then stay quiet until the condition actually clears."
+            #
+            # The cooldown above is a TIMER, which is the wrong shape for a condition that
+            # stays true: `sys.uptime_days > 7` holds until the machine reboots, so an hourly
+            # cooldown means the dialog returns every hour forever and clicking No buys the
+            # person nothing. This latch is the other shape -- fire on the transition, not on
+            # a clock.
+            #
+            # `last_fired_at >= matched_since` is what "already fired during THIS match" looks
+            # like in the state that already exists. Note it is NOT enough to test
+            # `last_fired_at IS NOT NULL`: _write_state deliberately leaves last_fired_at
+            # alone when it is passed None, so the timestamp SURVIVES the condition going
+            # false. `matched_since` is the thing that gets cleared, so comparing the two is
+            # what distinguishes "fired in this episode" from "fired in an earlier one".
+            if (rule.get("fire_once_per_match") and last_fired is not None
+                    and int(last_fired) >= int(matched_since)):
                 state_writes.append((rule["id"], machine, matched_since, 1, None))
                 continue
 
@@ -3572,7 +3765,18 @@ def _fire(db_path, fire, *, now, config, deliver=None, audit=None):
         allowed=fire["allowed"], block_reason=fire["block_reason"], fire_id=fire_id,
     )
 
-    command_id = next((d.get("command_id") for d in dispatched if d.get("command_id")), None)
+    # The show_message id WINS over any other command this fire issued. This column exists
+    # for exactly one job -- handle_message_result looks an incoming answer up by it -- and a
+    # rule whose action list happens to put a `command` action BEFORE its `show_message` used
+    # to store the command's id here instead. The answer then matched no fire row, so it was
+    # dropped at handle_message_result's early return and the follow-up ("yes" -> restart)
+    # silently never ran. Falls back to the first id for a fire with no message in it, which
+    # is what the audit entry below wants.
+    command_id = next(
+        (d.get("command_id") for d in dispatched
+         if d.get("type") == ACTION_SHOW_MESSAGE and d.get("command_id")),
+        None,
+    ) or next((d.get("command_id") for d in dispatched if d.get("command_id")), None)
     with get_conn(db_path) as conn:
         conn.execute("UPDATE rule_fires SET actions_json=?, command_id=? WHERE id=?",
                      (json.dumps(dispatched), command_id, fire_id))
@@ -3626,13 +3830,21 @@ def dispatch_actions(db_path, actions, machine, variables, *, rule, now, config,
                 _snooze(db_path, rule["id"], machine, until, now)
                 record["snoozed_until"] = until
             elif kind == ACTION_COMMAND:
-                record["command_id"] = fleet.create_command(
-                    db_path, machine, params["command_type"], params.get("params") or {},
-                    issued_by=f"rule:{rule['id']}",
-                    ttl_seconds=int(config.get("command_ttl_seconds")
-                                    or fleet.DEFAULT_COMMAND_TTL_SECONDS),
-                )
+                command_params, missing = render_params_checked(params.get("params") or {},
+                                                                variables)
                 record["command_type"] = params["command_type"]
+                if missing:
+                    record["skipped"] = _unresolved_reason(missing)
+                else:
+                    record["command_id"] = fleet.create_command(
+                        db_path, machine, params["command_type"], command_params,
+                        issued_by=_issued_by(rule),
+                        ttl_seconds=int(config.get("command_ttl_seconds")
+                                        or fleet.DEFAULT_COMMAND_TTL_SECONDS),
+                    )
+            elif kind == ACTION_SCRIPT:
+                record.update(_dispatch_script(db_path, params, machine, variables,
+                                               rule=rule, config=config))
             elif kind == ACTION_SHOW_MESSAGE:
                 record.update(_dispatch_message(db_path, action, machine, variables,
                                                 rule=rule, now=now, config=config,
@@ -3652,6 +3864,66 @@ def dispatch_actions(db_path, actions, machine, variables, *, rule, now, config,
             record["error"] = str(exc)
         results.append(record)
     return results
+
+
+def _issued_by(rule):
+    """Who the agent is told issued a command.
+
+    `rule:<id>` and NOT the rule's name: the agent keys its persistent shell session on this
+    string (RunScriptExecutor -> ShellSessionManager), so it has to be stable across a rename
+    and unique per rule. See _dispatch_script for why that session matters.
+    """
+    return f"rule:{rule['id']}"
+
+
+def _unresolved_reason(missing):
+    names = ", ".join("{{" + name + "}}" for name in missing)
+    return (f"{names} could not be resolved on this machine. A command is not sent with "
+            f"unresolved values in it -- see render_template_checked.")
+
+
+def _dispatch_script(db_path, params, machine, variables, *, rule, config):
+    """Resolve a script reference into a run_script command. Returns the record fields.
+
+    The script is read HERE, at fire time, not copied into the rule at save time. That is what
+    makes the store a library: editing a script changes what every rule using it runs. The cost
+    is that a script deleted out from under a rule has to fail cleanly, which is why a missing
+    or disabled one records an error and issues nothing rather than falling back to anything.
+    """
+    name = str(params.get("script") or "").strip().lower()
+    script = scripts.get_script(db_path, name)
+    if script is None:
+        return {"script": name, "error": f"there is no script named '{name}'"}
+    if not script["enabled"]:
+        return {"script": name, "skipped": f"the script '{name}' is switched off"}
+
+    # Inputs are rendered against the machine's variables first, then the body is rendered
+    # against those variables PLUS the resolved inputs. One pass each, and the body's result is
+    # never re-expanded -- an input value containing {{...}} is data, not a second template.
+    namespace = dict(variables or {})
+    for item in script["inputs"]:
+        supplied = params.get("inputs", {}).get(item["name"])
+        raw = supplied if supplied not in (None, "") else item.get("default", "")
+        value, gaps = render_template_checked(raw, variables)
+        if gaps:
+            return {"script": name, "skipped": _unresolved_reason(gaps)}
+        namespace[f"{scripts.INPUT_PREFIX}{item['name']}"] = value
+
+    body, missing = render_template_checked(script["body"], namespace)
+    if missing:
+        return {"script": name, "skipped": _unresolved_reason(missing)}
+
+    command_id = fleet.create_command(
+        db_path, machine, "run_script",
+        {"script": body, "shell": script["shell"],
+         "timeout_seconds": script["timeout_seconds"]},
+        issued_by=_issued_by(rule),
+        ttl_seconds=int(config.get("command_ttl_seconds")
+                        or fleet.DEFAULT_COMMAND_TTL_SECONDS),
+    )
+    # `script` in the record is what makes a fire row say WHICH script ran -- the rendered body
+    # is in the command, but the name is what an operator reading the history needs.
+    return {"script": name, "command_type": "run_script", "command_id": command_id}
 
 
 def _dispatch_message(db_path, action, machine, variables, *, rule, now, config, fire_id):
@@ -3676,7 +3948,7 @@ def _dispatch_message(db_path, action, machine, variables, *, rule, now, config,
         ttl = max(ttl, timeout + 300)
 
     command_id = fleet.create_command(db_path, machine, ACTION_SHOW_MESSAGE, params,
-                                      issued_by=f"rule:{rule['id']}", ttl_seconds=ttl)
+                                      issued_by=_issued_by(rule), ttl_seconds=ttl)
     if fire_id:
         with get_conn(db_path) as conn:
             conn.execute("UPDATE rule_fires SET detail=? WHERE id=?",
@@ -3754,6 +4026,19 @@ def handle_message_result(db_path, command_id, *, status=None, result=None, now=
         audit(f"rule:{rule['id']}", "rule_message_answered", machine,
               {"rule_id": rule["id"], "rule": rule["name"], "outcome": outcome,
                "actions": [d.get("type") for d in dispatched]})
+        # A follow-up that did not run gets its OWN entry, at notice level. A person read a
+        # dialog and pressed a button; if the thing that button promised was then dropped --
+        # most often because rules.command_actions_enabled is off fleet-wide, which is how
+        # "I pressed Yes and it did not restart" happens -- that is a fact about the fleet
+        # that has to be findable. Folded into the entry above it would be a list element
+        # nobody reads.
+        skipped = [d for d in dispatched if d.get("skipped")]
+        if skipped:
+            audit(f"rule:{rule['id']}", "rule_followup_skipped", machine,
+                  {"rule_id": rule["id"], "rule": rule["name"], "outcome": outcome,
+                   "skipped": [{"type": d.get("type"), "reason": d.get("skipped")}
+                               for d in skipped]},
+                  level=fleet.LEVEL_NOTICE)
     return {"outcome": outcome, "actions": dispatched}
 
 

@@ -101,13 +101,28 @@
   },
   "alerts": {
     "heading": "Warnungen",
-    "intro": "Zustände, die Ihre Aufmerksamkeit brauchen. Heiß laufende Computer – deren Durchschnittstemperatur im konfigurierten Zeitfenster den Schwellenwert erreicht oder überschreitet – erscheinen hier und bleiben, bis Sie sie schließen: eine Karte pro Episode, damit ein wiederholt heiß laufender Computer je Episode eine eigene Karte bekommt, statt die vorherige zu ersetzen. Ebenso doppelte Computer, die dieselbe Seriennummer melden, während beide online sind: der Hub führt aktive Computer nicht automatisch zusammen, also wählen Sie den Datensatz, der bleiben soll – die übrigen werden in ihn zusammengeführt (ihr Temperaturverlauf bleibt erhalten).",
+    "intro": "Zustände, die Ihre Aufmerksamkeit brauchen. Von Ihnen geschriebene Regeln lösen einen Alarm aus, wenn sie auf einen Rechner zutreffen — eine Karte pro Episode, sodass eine dauerhaft zutreffende Regel Karte um Karte anlegt, statt die letzte zu ersetzen. Doppelte Rechner mit derselben Seriennummer, die beide online sind, erscheinen ebenfalls hier: Der Hub führt laufende Rechner nicht automatisch zusammen, wählen Sie also den zu behaltenden Datensatz aus, die übrigen werden hineingeführt (ihr Temperaturverlauf bleibt erhalten).",
     "empty": "Keine offenen Warnungen. Alles erledigt.",
     "load_failed": "Die Warnungen konnten nicht geladen werden.",
     "view_machine": "Computer anzeigen",
     "dismiss": "Schließen",
     "dismiss_failed": "Die Warnung konnte nicht geschlossen werden: {error}",
     "unknown_machine": "(unbekannter Computer)",
+    "rule": {
+      "unnamed": "(unbenannte Regel)",
+      "title": "{rule}: {machine}",
+      "title_ended": "{rule} (beendet): {machine}",
+      "ongoing": "Trifft weiterhin zu. Erstmals zugetroffen am {since}.",
+      "ongoing_count": {
+        "one": "Trifft weiterhin zu. Erstmals zugetroffen am {since}.",
+        "other": "Trifft weiterhin zu, {count}-mal erneut geprüft. Erstmals zugetroffen am {since}."
+      },
+      "ended": "Traf von {from} bis {until} zu."
+    },
+    "ad_unmatched": {
+      "title": "Nicht im Active Directory: {machine}",
+      "body": "Dieser Hub verwaltet {machine}, aber das konfigurierte Verzeichnis hat kein Computerobjekt dafür. Der Alarm löst sich von selbst auf, sobald der Rechner in einer späteren Synchronisierung auftaucht."
+    },
     "high_temp": {
       "title": "Hohe Temperatur: {machine}",
       "title_ended": "Hohe Temperatur (beendet): {machine}",
@@ -137,7 +152,8 @@
         "other": "„{survivor}“ behalten und {count} Computer hineinführen?\n\nDer Temperaturverlauf der zusammengeführten Computer geht auf „{survivor}“ über; ihre doppelten Datensätze und Flottenregistrierungen werden entfernt. Das kann nicht rückgängig gemacht werden."
       },
       "merge_failed": "Zusammenführen nicht möglich: {error}"
-    }
+    },
+    "unknown_kind": "Alarm eines unbekannten Typs ({kind})"
   },
   "audit": {
     "heading": "Auditprotokoll",
@@ -373,14 +389,6 @@
       "computer.primary_sensor_preference": {
         "label": "Bevorzugte CPU-Temperatursensoren",
         "help": "Geordnet, bester zuerst. Der Hub leitet die Haupttemperatur jedes Computers aus dessen gemeldetem Sensorblock neu ab und nimmt den ersten passenden Namen. Passt keiner, bleibt die vom Agenten gewählte Temperatur bestehen. Gilt nur für neue Messwerte – der Verlauf behält den damals aufgezeichneten Wert."
-      },
-      "hub.high_temp_threshold": {
-        "label": "Schwelle für hohe Temperatur",
-        "help": "Erreicht oder überschreitet die DURCHSCHNITTSTEMPERATUR eines Computers über das unten eingestellte Fenster diesen Wert, wird im Reiter Warnungen eine Temperaturwarnung ausgelöst. Die Computerseite hebt einen Live-Messwert ab diesem Wert ebenfalls hervor."
-      },
-      "hub.high_temp_avg_window_seconds": {
-        "label": "Mittelungsfenster für hohe Temperatur",
-        "help": "Ein Computer gilt erst dann als heiß, wenn seine DURCHSCHNITTSTEMPERATUR über dieses Fenster die Schwelle oben erreicht oder überschreitet – eine kurze Spitze löst also keine Warnung aus. 300 = fünf Minuten."
       },
       "hub.low_load_threshold": {
         "label": "Schwelle für niedrige Last",
@@ -874,8 +882,6 @@
     "uptime_unknown": "Laufzeit: --",
     "serial_prefix": "S/N: {value}",
     "asset_prefix": "Anlage: {value}",
-    "high_temp_title": "Hohe Temperatur",
-    "high_temp_body": "{machine} läuft heiß: {temp} °C",
     "language_changed": "Sprache aktualisiert.",
     "language_change_failed": "Die Sprache konnte nicht geändert werden.",
     "cancel": "Abbrechen",
@@ -2058,7 +2064,7 @@
     "targets": "erfasste PCs",
     "confirm_delete": "Diese Regel und ihren Verlauf löschen?",
     "actions_disabled": "Regeln werden ausgewertet, ihre Aktionen sind flottenweit jedoch abgeschaltet.",
-    "commands_disabled": "Befehlsaktionen sind flottenweit abgeschaltet. Diese Regel wird ausgewertet, sendet aber nichts.",
+    "commands_disabled": "Befehlsaktionen sind flottenweit abgeschaltet. Diese Regel wird also ausgewertet, erteilt aber keinen Befehl — auch nicht den, auf den die Antwort einer Nachricht verweist, etwa ein Neustart, nachdem der Benutzer auf Ja geklickt hat. Schalten Sie „Befehlsaktionen aktiviert“ unter Einstellungen → Regeln ein, damit sie ausgeführt wird.",
     "section_target": "Welche PCs",
     "section_condition": "Wann",
     "section_actions": "Dann",
@@ -2084,6 +2090,8 @@
     "for_seconds_help": "Verhindert, dass ein um den Schwellwert schwankender Wert immer wieder auslöst.",
     "cooldown": "Danach mindestens warten",
     "cooldown_help": "Bevor derselbe PC erneut behandelt wird.",
+    "fire_once": "Einmal fragen, dann warten, bis die Bedingung nicht mehr zutrifft",
+    "fire_once_help": "Ist dies aus, löst die Regel nach jeder Abkühlzeit erneut aus, solange die Bedingung zutrifft — eine Bedingung wie „läuft seit mehr als 7 Tagen“ fragt also stündlich weiter, bis jemand neu startet. Ist dies an, löst sie einmal aus und bleibt still, bis die Bedingung wirklich nicht mehr zutrifft, und ist dann wieder scharf.",
     "max_targets": "Höchstens so viele PCs pro Durchlauf",
     "max_targets_help": "Eine Sicherheitsgrenze. Eine Regel mit mehr Zielen stoppt hier und meldet dies.",
     "add_action": "Aktion hinzufügen",
@@ -2173,6 +2181,89 @@
       "email": {
         "label": "Eine E-Mail senden",
         "description": "Erfordert SMTP-Angaben in der .env-Datei des Hubs."
+      },
+      "script": {
+        "label": "Gespeichertes Skript ausführen",
+        "description": "Führt eines Ihrer gespeicherten Skripte auf dem PC aus. Bearbeiten Sie das Skript einmal, und jede Regel, die es verwendet, folgt."
+      }
+    },
+    "command": {
+      "gpupdate": {
+        "label": "Gruppenrichtlinien aktualisieren",
+        "description": "Führt gpupdate /force aus."
+      },
+      "install_app": {
+        "label": "App installieren",
+        "description": "Installiert über eine winget-Paket-ID oder aus einer MSI-Datei auf dem Rechner."
+      },
+      "install_driver": {
+        "label": "Treiber installieren",
+        "description": "Vom Agenten noch nicht implementiert."
+      },
+      "prepare_wake": {
+        "label": "Für Wake-on-LAN vorbereiten",
+        "description": "Richtet den Netzwerkadapter so ein, dass der Rechner später geweckt werden kann."
+      },
+      "refresh_bios_inventory": {
+        "label": "Firmware-Einstellungen neu einlesen",
+        "description": "Erfasst die aktuelle BIOS-Inventur des Rechners."
+      },
+      "restart": {
+        "label": "PC neu starten",
+        "description": "Startet den Rechner nach einem Countdown neu."
+      },
+      "run_script": {
+        "label": "Skript ausführen",
+        "description": "Führt PowerShell oder cmd als SYSTEM auf dem Rechner aus."
+      },
+      "set_virtual_display_mode": {
+        "label": "Modus der virtuellen Anzeige anwenden",
+        "description": "Wendet die konfigurierte Auflösung der virtuellen Anzeige erneut an."
+      },
+      "shutdown": {
+        "label": "PC herunterfahren",
+        "description": "Schaltet den Rechner nach einem Countdown aus."
+      },
+      "uninstall_virtual_display": {
+        "label": "Virtuelle Anzeige entfernen",
+        "description": "Deinstalliert den Treiber für die virtuelle Anzeige."
+      }
+    },
+    "command_param": {
+      "delay_seconds": {
+        "label": "Countdown",
+        "help": "Sekunden Wartezeit, damit die Person am Rechner vorgewarnt ist."
+      },
+      "force": {
+        "label": "Erzwingen",
+        "help": "Schließt laufende Anwendungen ohne zu speichern, damit sie es nicht abbrechen können."
+      },
+      "id": {
+        "label": "winget-Paket-ID",
+        "help": "Zum Beispiel Google.Chrome. Leer lassen, wenn Sie aus einer MSI installieren."
+      },
+      "msi_path": {
+        "label": "MSI-Pfad",
+        "help": "Ein Pfad auf dem Rechner. Leer lassen, wenn Sie eine winget-ID angegeben haben."
+      },
+      "new_name": {
+        "label": "Neuer Computername",
+        "help": "Wird beim nächsten Neustart wirksam."
+      },
+      "script": {
+        "label": "Skript",
+        "help": "Läuft als SYSTEM. {{sys.machine}} und andere Regelvariablen werden vor der Ausführung ersetzt."
+      },
+      "shell": {
+        "label": "Shell",
+        "help": "Welcher Interpreter das Skript ausführt."
+      },
+      "timeout_seconds": {
+        "label": "Abbrechen nach",
+        "help": "Sekunden, die es laufen darf, bevor der Agent es beendet."
+      },
+      "update_id": {
+        "label": "Firmware-Update-ID"
       }
     },
     "button": {
@@ -2362,6 +2453,42 @@
       "bool": "Ja / Nein",
       "choice": "Aus einer Liste wählen"
     },
-    "fields_heading": "Eigene Felder"
+    "fields_heading": "Eigene Felder",
+    "command_undescribed": "Dieser Hub beschreibt die Parameter dieses Befehls nicht; er wird ohne Parameter gesendet.",
+    "command_one_of": "Füllen Sie eines davon aus: {params}.",
+    "no_scripts": "Noch keine Skripte. Legen Sie zuerst eines im Reiter „Skripte“ an.",
+    "script_disabled": "abgeschaltet",
+    "script_reads": "Liest: {variables}"
+  },
+  "scripts": {
+    "body": "Skript",
+    "body_help": "Läuft als SYSTEM. Verwenden Sie {{sys.machine}} für Werte des Rechners und {{input.name}} für einen Wert, den die Regel liefert.",
+    "confirm_delete": "Dieses Skript löschen?",
+    "delete": "Löschen",
+    "delete_failed": "Löschen fehlgeschlagen: {error}",
+    "description": "Beschreibung",
+    "empty": "Noch keine Skripte.",
+    "enabled": "Aktiviert",
+    "heading": "Skripte",
+    "input_add": "Eingabe hinzufügen",
+    "input_default": "Standard",
+    "input_label": "Bezeichnung",
+    "input_name": "Name",
+    "input_required": "Erforderlich",
+    "inputs": "Von der Regel gelieferte Eingaben",
+    "intro": "Skripte, die eine Regel auf einem Rechner ausführen kann. Ein Skript läuft als SYSTEM, daher ist zum Speichern die Berechtigung „Befehle erteilen“ nötig. Bearbeiten Sie ein Skript, und jede Regel, die es verwendet, folgt beim nächsten Lauf.",
+    "label": "Titel",
+    "name": "Referenzname",
+    "name_help": "Kleinbuchstaben, Ziffern und Unterstriche. Dies speichert die Regel, daher später nicht änderbar.",
+    "new": "Neues Skript",
+    "read_only": "Zum Anlegen oder Ändern eines Skripts benötigen Sie die Berechtigung „Befehle erteilen“.",
+    "save": "Skript speichern",
+    "save_failed": "Speichern fehlgeschlagen: {error}",
+    "script_disabled_badge": "abgeschaltet",
+    "shell": "Shell",
+    "tab_rules": "Regeln",
+    "tab_scripts": "Skripte",
+    "timeout": "Abbrechen nach (Sekunden)",
+    "used_by": "Verwendet von {rules}"
   }
 }

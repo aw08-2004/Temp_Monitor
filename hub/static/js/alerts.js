@@ -1,13 +1,14 @@
-// Alerts: operator-facing conditions that want attention. Two kinds:
+// Alerts: operator-facing conditions that want attention. Four kinds:
+//   * rule -- raised by an operator-written rule's `alert` action. The text comes from the
+//     rule, so the card just states it; one card per EPISODE, like the others.
 //   * duplicate_serial -- two machines sharing a serial while both online. The hub refuses
 //     to auto-merge live machines, so the operator picks a survivor here and the rest are
 //     merged into it (POST /api/machines/merge).
-//   * high_temperature -- a machine whose AVERAGE temperature over the configured window
-//     is at or above the threshold. Raised server-side; the operator must Dismiss it (it
-//     no longer auto-resolves, to ensure the operator sees it). One card per EPISODE, so a
-//     machine that runs hot repeatedly stacks up several cards rather than having the older
-//     ones overwritten -- `episode_ended_at` says whether the machine is still hot right
-//     now or this card is a past episode.
+//   * ad_unmatched -- a machine this hub manages that Active Directory has no computer
+//     object for.
+//   * high_temperature -- RETIRED. The hub no longer raises these (temperature is a rule
+//     now), but rows an operator has not dismissed are still in the table, so the renderer
+//     stays.
 // Reads /api/alerts, acts via /api/machines/merge and /api/alerts/<id>/dismiss. Mirrors
 // inventory.js: build DOM with textContent (never innerHTML from data), poll to stay fresh.
 
@@ -81,65 +82,50 @@ async function dismissAlert(alertId, cardEl, btnEl) {
     }
 }
 
+// An explicit table rather than a chain of ifs with a fall-through default. The fall-through
+// is what broke this: `rule` and `ad_unmatched` were both added server-side after this file
+// was written, and both landed in renderDuplicateSerial -- which titles the card from
+// `alert.serial_number` (always null on those kinds, so "unknown serial") and offers a Merge
+// button with nothing to merge. An unknown kind now gets renderGeneric, so the next kind
+// added degrades to a plain, true card instead of a confidently wrong one.
+const RENDERERS = {
+    rule: renderRule,
+    duplicate_serial: renderDuplicateSerial,
+    ad_unmatched: renderAdUnmatched,
+    high_temperature: renderHighTemp,
+};
+
 function renderAlert(alert) {
-    if (alert.kind === 'high_temperature') return renderHighTemp(alert);
-    return renderDuplicateSerial(alert);
+    return (RENDERERS[alert.kind] || renderGeneric)(alert);
 }
 
-// A temperature alert: one episode of a machine's windowed AVERAGE crossing the threshold.
-// There is nothing to decide (unlike a merge), so the card just states the condition, links
-// to the machine, and offers Dismiss. It remains open until the operator dismisses it, and
-// a later hot spell on the same machine arrives as its own card.
-function renderHighTemp(alert) {
+// Every card shares this shape: a bold title, a meta paragraph, then an action row that
+// always ends in Dismiss. Factored out so a new kind is a title and a sentence rather than
+// forty lines of DOM, and so the four cards cannot drift apart visually.
+function alertCard(title, meta, machine) {
     const card = document.createElement('div');
     card.className = 'card';
     card.style.marginBottom = 'var(--space-5)';
 
-    const ongoing = !alert.episode_ended_at;
+    const titleEl = document.createElement('div');
+    titleEl.style.fontWeight = '600';
+    titleEl.style.marginBottom = 'var(--space-2)';
+    titleEl.textContent = title;
+    card.appendChild(titleEl);
 
-    const title = document.createElement('div');
-    title.style.fontWeight = '600';
-    title.style.marginBottom = 'var(--space-2)';
-    const machineName = alert.machine || t('alerts.unknown_machine');
-    title.textContent = ongoing
-        ? t('alerts.high_temp.title', { machine: machineName })
-        : t('alerts.high_temp.title_ended', { machine: machineName });
-    card.appendChild(title);
-
-    const detail = alert.detail || {};
-    const meta = document.createElement('p');
-    meta.className = 'stat-card__meta';
-    meta.style.marginBottom = 'var(--space-4)';
-    const windowMins = detail.window_seconds ? Math.round(detail.window_seconds / 60) : null;
-    const avg = typeof detail.avg_temp === 'number' ? detail.avg_temp.toFixed(1) : '?';
-    const peak = typeof detail.peak_temp === 'number' ? detail.peak_temp.toFixed(1) : null;
-    const threshold = detail.threshold != null ? detail.threshold : '?';
-    // Four whole sentences in the catalog rather than one assembled from clauses. The
-    // English original read fine concatenated; translated, the clause order and the
-    // punctuation between them differ per language, so a sentence built by `+` here is one
-    // no translator can repair. Only the window is a fragment, and it has its own key.
-    const windowLabel = windowMins
-        ? t('alerts.high_temp.window_minutes', { minutes: windowMins })
-        : t('alerts.high_temp.window_unknown');
-    // Past episodes lead with the peak: the last average before it cooled is the least
-    // interesting number on a card about something that already happened.
-    if (ongoing) {
-        const params = { window: windowLabel, avg, threshold, since: formatEpoch(alert.created_at) };
-        meta.textContent = (peak && peak !== avg)
-            ? t('alerts.high_temp.ongoing_peak', Object.assign({ peak }, params))
-            : t('alerts.high_temp.ongoing', params);
-    } else {
-        const params = {
-            threshold,
-            from: formatEpoch(alert.created_at),
-            until: formatEpoch(alert.episode_ended_at),
-        };
-        meta.textContent = peak
-            ? t('alerts.high_temp.ended_peak', Object.assign({ peak, window: windowLabel }, params))
-            : t('alerts.high_temp.ended', params);
+    if (meta) {
+        const metaEl = document.createElement('p');
+        metaEl.className = 'stat-card__meta';
+        metaEl.style.marginBottom = 'var(--space-4)';
+        metaEl.textContent = meta;
+        card.appendChild(metaEl);
     }
-    card.appendChild(meta);
+    return card;
+}
 
+// The action row for a card with nothing to decide: optionally a link to the machine, then
+// Dismiss. Appended by the caller so a card can put its own controls in first.
+function alertActions(alert, card) {
     const actions = document.createElement('div');
     actions.style.marginTop = 'var(--space-4)';
     actions.style.display = 'flex';
@@ -159,29 +145,123 @@ function renderHighTemp(alert) {
     dismissBtn.textContent = t('alerts.dismiss');
     dismissBtn.addEventListener('click', () => dismissAlert(alert.id, card, dismissBtn));
     actions.appendChild(dismissBtn);
+    return actions;
+}
 
-    card.appendChild(actions);
+// A rule alert: one episode of one rule matching one machine. The body text is the rule
+// author's, rendered from their template server-side, so it goes on the card verbatim --
+// this renderer's job is to say WHICH rule and for HOW LONG, not to editorialise.
+function renderRule(alert) {
+    const detail = alert.detail || {};
+    const ongoing = !alert.episode_ended_at;
+    const machineName = alert.machine || t('alerts.unknown_machine');
+    const ruleName = detail.rule_name || t('alerts.rule.unnamed');
+
+    const card = alertCard(
+        ongoing
+            ? t('alerts.rule.title', { rule: ruleName, machine: machineName })
+            : t('alerts.rule.title_ended', { rule: ruleName, machine: machineName }),
+        detail.text || '');
+
+    // Whole sentences from the catalog, never clauses joined with `+` -- see the note on
+    // the high-temperature bodies below for why.
+    const when = document.createElement('p');
+    when.className = 'stat-card__meta';
+    when.style.marginBottom = 'var(--space-4)';
+    const count = Number(detail.count) || 1;
+    if (ongoing) {
+        when.textContent = count > 1
+            ? tPlural('alerts.rule.ongoing_count', count,
+                      { since: formatEpoch(alert.created_at), count })
+            : t('alerts.rule.ongoing', { since: formatEpoch(alert.created_at) });
+    } else {
+        when.textContent = t('alerts.rule.ended', {
+            from: formatEpoch(alert.created_at),
+            until: formatEpoch(alert.episode_ended_at),
+        });
+    }
+    card.appendChild(when);
+
+    card.appendChild(alertActions(alert, card));
+    return card;
+}
+
+// A machine this hub manages that Active Directory has no computer object for. Nothing to
+// decide here either: the fix is in AD, not in this console.
+function renderAdUnmatched(alert) {
+    const machineName = alert.machine || t('alerts.unknown_machine');
+    const card = alertCard(t('alerts.ad_unmatched.title', { machine: machineName }),
+                           t('alerts.ad_unmatched.body', { machine: machineName }));
+    card.appendChild(alertActions(alert, card));
+    return card;
+}
+
+// A kind this build does not know about -- an older console against a newer hub. Says
+// exactly that and offers Dismiss, rather than guessing at a layout and misreporting it.
+function renderGeneric(alert) {
+    const card = alertCard(t('alerts.unknown_kind', { kind: alert.kind || '?' }),
+                           alert.machine || '');
+    card.appendChild(alertActions(alert, card));
+    return card;
+}
+
+// A temperature alert: one episode of a machine's windowed AVERAGE crossing the threshold.
+// RETIRED -- nothing raises this kind any more (temperature is an ordinary rule now), but
+// alerts an operator has not yet dismissed are still in the table and must still render.
+// There is nothing to decide (unlike a merge), so the card just states the condition, links
+// to the machine, and offers Dismiss.
+function renderHighTemp(alert) {
+    const ongoing = !alert.episode_ended_at;
+    const machineName = alert.machine || t('alerts.unknown_machine');
+    const detail = alert.detail || {};
+
+    const windowMins = detail.window_seconds ? Math.round(detail.window_seconds / 60) : null;
+    const avg = typeof detail.avg_temp === 'number' ? detail.avg_temp.toFixed(1) : '?';
+    const peak = typeof detail.peak_temp === 'number' ? detail.peak_temp.toFixed(1) : null;
+    const threshold = detail.threshold != null ? detail.threshold : '?';
+    // Four whole sentences in the catalog rather than one assembled from clauses. The
+    // English original read fine concatenated; translated, the clause order and the
+    // punctuation between them differ per language, so a sentence built by `+` here is one
+    // no translator can repair. Only the window is a fragment, and it has its own key.
+    const windowLabel = windowMins
+        ? t('alerts.high_temp.window_minutes', { minutes: windowMins })
+        : t('alerts.high_temp.window_unknown');
+    // Past episodes lead with the peak: the last average before it cooled is the least
+    // interesting number on a card about something that already happened.
+    let body;
+    if (ongoing) {
+        const params = { window: windowLabel, avg, threshold, since: formatEpoch(alert.created_at) };
+        body = (peak && peak !== avg)
+            ? t('alerts.high_temp.ongoing_peak', Object.assign({ peak }, params))
+            : t('alerts.high_temp.ongoing', params);
+    } else {
+        const params = {
+            threshold,
+            from: formatEpoch(alert.created_at),
+            until: formatEpoch(alert.episode_ended_at),
+        };
+        body = peak
+            ? t('alerts.high_temp.ended_peak', Object.assign({ peak, window: windowLabel }, params))
+            : t('alerts.high_temp.ended', params);
+    }
+
+    const card = alertCard(
+        ongoing
+            ? t('alerts.high_temp.title', { machine: machineName })
+            : t('alerts.high_temp.title_ended', { machine: machineName }),
+        body);
+    card.appendChild(alertActions(alert, card));
     return card;
 }
 
 function renderDuplicateSerial(alert) {
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.style.marginBottom = 'var(--space-5)';
-
-    const title = document.createElement('div');
-    title.style.fontWeight = '600';
-    title.style.marginBottom = 'var(--space-2)';
-    title.textContent = t('alerts.duplicate.title', {
-        serial: alert.serial_number || t('alerts.duplicate.unknown_serial'),
-    });
-    card.appendChild(title);
-
-    const meta = document.createElement('p');
-    meta.className = 'stat-card__meta';
-    meta.style.marginBottom = 'var(--space-4)';
-    meta.textContent = t('alerts.duplicate.intro');
-    card.appendChild(meta);
+    // The one kind that does NOT use alertActions: it has a decision to offer (which record
+    // survives), so it builds its own action row with Merge in front of Dismiss.
+    const card = alertCard(
+        t('alerts.duplicate.title', {
+            serial: alert.serial_number || t('alerts.duplicate.unknown_serial'),
+        }),
+        t('alerts.duplicate.intro'));
 
     const machines = alert.machines || [];
     // Default survivor: the first still-online machine, else the first row.

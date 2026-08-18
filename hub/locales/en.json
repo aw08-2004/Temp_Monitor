@@ -127,13 +127,28 @@
   },
   "alerts": {
     "heading": "Alerts",
-    "intro": "Conditions that want your attention. Machines running hot — whose average temperature over the configured window is at or above the high-temperature threshold — show here and stay until you dismiss them, one card per episode, so a machine that runs hot repeatedly builds up a card per spell rather than replacing the last one. So do duplicate machines that share a serial number while both are online: the hub won't merge live machines automatically, so pick which record to keep and the others are merged into it (their temperature history is preserved).",
+    "intro": "Conditions that want your attention. Rules you have written raise an alert when they match a machine, one card per episode — a rule that keeps matching builds up a card per spell rather than replacing the last one. Duplicate machines that share a serial number while both are online show here too: the hub won't merge live machines automatically, so pick which record to keep and the others are merged into it (their temperature history is preserved).",
     "empty": "No open alerts. You're all caught up.",
     "load_failed": "Failed to load alerts.",
     "view_machine": "View machine",
     "dismiss": "Dismiss",
     "dismiss_failed": "Could not dismiss alert: {error}",
     "unknown_machine": "(unknown machine)",
+    "rule": {
+      "unnamed": "(unnamed rule)",
+      "title": "{rule}: {machine}",
+      "title_ended": "{rule} (ended): {machine}",
+      "ongoing": "Still matching. First matched {since}.",
+      "ongoing_count": {
+        "one": "Still matching. First matched {since}.",
+        "other": "Still matching, re-checked {count} times. First matched {since}."
+      },
+      "ended": "Matched from {from} until {until}."
+    },
+    "ad_unmatched": {
+      "title": "Not in Active Directory: {machine}",
+      "body": "This hub manages {machine}, but the configured directory has no computer object for it. It resolves by itself once the machine appears in a later sync."
+    },
     "high_temp": {
       "title": "High temperature: {machine}",
       "title_ended": "High temperature (ended): {machine}",
@@ -168,7 +183,8 @@
         "other": "Keep \"{survivor}\" and merge {count} machines into it?\n\nThe merged machines' temperature history moves onto \"{survivor}\"; their duplicate records and fleet enrollments are removed. This cannot be undone."
       },
       "merge_failed": "Could not merge: {error}"
-    }
+    },
+    "unknown_kind": "Alert of an unrecognised type ({kind})"
   },
   "audit": {
     "heading": "Audit Log",
@@ -438,14 +454,6 @@
       "computer.primary_sensor_preference": {
         "label": "CPU temperature sensor preference",
         "help": "Ordered, best first. The hub re-derives each machine's primary temperature from its reported sensor block, using the first name that matches. If none match, the temperature the agent picked is kept. Applies to new readings only -- history keeps the value recorded at the time."
-      },
-      "hub.high_temp_threshold": {
-        "label": "High temperature threshold",
-        "help": "When a machine's AVERAGE temperature over the window below is at or above this, a temperature alert is raised in the Alerts tab. The machine page also highlights a live reading at or above it."
-      },
-      "hub.high_temp_avg_window_seconds": {
-        "label": "High temperature averaging window",
-        "help": "A machine is flagged as running hot only when its AVERAGE temperature over this window is at or above the threshold above, so a brief spike doesn't raise an alert. 300 = five minutes."
       },
       "hub.low_load_threshold": {
         "label": "Low-load threshold",
@@ -949,8 +957,6 @@
     "uptime_unknown": "Uptime: --",
     "serial_prefix": "SN: {value}",
     "asset_prefix": "Asset: {value}",
-    "high_temp_title": "High temperature",
-    "high_temp_body": "{machine} is running hot: {temp} °C",
     "language_changed": "Language updated.",
     "language_change_failed": "Could not change the language.",
     "cancel": "Cancel",
@@ -2169,7 +2175,7 @@
     "targets": "PCs targeted",
     "confirm_delete": "Delete this rule and its history?",
     "actions_disabled": "Rules are evaluating but their actions are switched off fleet-wide.",
-    "commands_disabled": "Command actions are switched off fleet-wide. This rule will evaluate but send nothing.",
+    "commands_disabled": "Command actions are switched off fleet-wide, so this rule will evaluate but issue no command — including a command a message's answer routes to, such as restarting after the user presses Yes. Turn on \"command actions enabled\" under Settings → Rules to let it run.",
     "section_target": "Which PCs",
     "section_condition": "When",
     "section_actions": "Then",
@@ -2195,6 +2201,8 @@
     "for_seconds_help": "Stops a value that wobbles around the threshold from acting over and over.",
     "cooldown": "Then wait at least",
     "cooldown_help": "Before acting on the same PC again.",
+    "fire_once": "Ask once, then wait until it stops matching",
+    "fire_once_help": "With this off, the rule fires again every cooldown for as long as the condition holds — so a condition like \"up for more than 7 days\" keeps asking every hour until somebody reboots. With it on, it fires once and stays quiet until the condition actually clears, then arms itself again.",
     "max_targets": "At most this many PCs per pass",
     "max_targets_help": "A safety limit. A rule aimed at more PCs stops here and says so.",
     "add_action": "Add action",
@@ -2284,6 +2292,89 @@
       "email": {
         "label": "Send an email",
         "description": "Needs SMTP details in the hub's .env file."
+      },
+      "script": {
+        "label": "Run a saved script",
+        "description": "Runs one of your saved scripts on the PC. Edit the script once and every rule using it follows."
+      }
+    },
+    "command": {
+      "gpupdate": {
+        "label": "Refresh group policy",
+        "description": "Runs gpupdate /force."
+      },
+      "install_app": {
+        "label": "Install an app",
+        "description": "Installs by winget package id, or from an MSI already on the machine."
+      },
+      "install_driver": {
+        "label": "Install a driver",
+        "description": "Not implemented by the agent yet."
+      },
+      "prepare_wake": {
+        "label": "Prepare for Wake-on-LAN",
+        "description": "Sets the network adapter up so the machine can be woken later."
+      },
+      "refresh_bios_inventory": {
+        "label": "Re-read firmware settings",
+        "description": "Collects the machine's current BIOS inventory."
+      },
+      "restart": {
+        "label": "Restart the PC",
+        "description": "Reboots the machine after a countdown."
+      },
+      "run_script": {
+        "label": "Run a script",
+        "description": "Runs PowerShell or cmd on the machine as SYSTEM."
+      },
+      "set_virtual_display_mode": {
+        "label": "Apply the virtual display mode",
+        "description": "Re-applies the configured virtual display resolution."
+      },
+      "shutdown": {
+        "label": "Shut the PC down",
+        "description": "Powers the machine off after a countdown."
+      },
+      "uninstall_virtual_display": {
+        "label": "Remove the virtual display",
+        "description": "Uninstalls the virtual display driver."
+      }
+    },
+    "command_param": {
+      "delay_seconds": {
+        "label": "Countdown",
+        "help": "Seconds to wait before it happens, so the person at the desk has warning."
+      },
+      "force": {
+        "label": "Force",
+        "help": "Closes running applications without saving so they cannot cancel it."
+      },
+      "id": {
+        "label": "winget package id",
+        "help": "For example Google.Chrome. Leave empty if you are installing from an MSI."
+      },
+      "msi_path": {
+        "label": "MSI path",
+        "help": "A path on the machine. Leave empty if you gave a winget id."
+      },
+      "new_name": {
+        "label": "New computer name",
+        "help": "Takes effect on the next restart."
+      },
+      "script": {
+        "label": "Script",
+        "help": "Runs as SYSTEM. {{sys.machine}} and other rule variables are substituted before it runs."
+      },
+      "shell": {
+        "label": "Shell",
+        "help": "Which interpreter runs the script."
+      },
+      "timeout_seconds": {
+        "label": "Give up after",
+        "help": "Seconds to let it run before the agent stops it."
+      },
+      "update_id": {
+        "label": "Firmware update id"
       }
     },
     "button": {
@@ -2473,6 +2564,42 @@
       "bool": "Yes / No",
       "choice": "Pick from a list"
     },
-    "fields_heading": "Custom fields"
+    "fields_heading": "Custom fields",
+    "command_undescribed": "This hub does not describe this command's parameters, so it will be sent without any.",
+    "command_one_of": "Fill in one of: {params}.",
+    "no_scripts": "No scripts yet. Add one on the Scripts tab first.",
+    "script_disabled": "switched off",
+    "script_reads": "Reads: {variables}"
+  },
+  "scripts": {
+    "body": "Script",
+    "body_help": "Runs as SYSTEM. Use {{sys.machine}} for the machine's own values and {{input.name}} for a value the rule supplies.",
+    "confirm_delete": "Delete this script?",
+    "delete": "Delete",
+    "delete_failed": "Could not delete: {error}",
+    "description": "Description",
+    "empty": "No scripts yet.",
+    "enabled": "Enabled",
+    "heading": "Scripts",
+    "input_add": "Add an input",
+    "input_default": "Default",
+    "input_label": "Label",
+    "input_name": "Name",
+    "input_required": "Required",
+    "inputs": "Inputs the rule supplies",
+    "intro": "Scripts a rule can run on a machine. A script runs as SYSTEM, so saving one needs the Issue commands permission. Edit a script and every rule using it follows on its next run.",
+    "label": "Title",
+    "name": "Reference name",
+    "name_help": "Lowercase letters, digits and underscores. This is what a rule stores, so it cannot be changed later.",
+    "new": "New script",
+    "read_only": "You need the Issue commands permission to add or change a script.",
+    "save": "Save script",
+    "save_failed": "Could not save: {error}",
+    "script_disabled_badge": "switched off",
+    "shell": "Shell",
+    "tab_rules": "Rules",
+    "tab_scripts": "Scripts",
+    "timeout": "Give up after (seconds)",
+    "used_by": "Used by {rules}"
   }
 }

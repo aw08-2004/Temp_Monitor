@@ -40,6 +40,7 @@ import bios
 import firmware
 import wake
 import rules
+import scripts
 import notify
 import processes
 import live
@@ -98,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.79.0"
+HUB_VERSION = "1.81.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2260,7 +2261,6 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
         'timestamp': timestamp_str,
         'timestamp_epoch': timestamp_epoch,
         'temp': temp_value,
-        'threshold': settings.get_int(DB_PATH, "hub.high_temp_threshold"),
         'low_load_threshold': settings.get_int(DB_PATH, "hub.low_load_threshold"),
         'uptime_seconds': get_latest_uptime(machine_name),
         'diagnostics': extract_diagnostics(get_latest_sensors(machine_name)),
@@ -2898,88 +2898,24 @@ def wake_pending_targets(machines, online, reason):
     return sum(1 for r in results if r["status"] == wake.STATUS_PENDING)
 
 
-# How often the temperature-alert evaluator wakes. A machine reports every few seconds and
-# the average is over minutes, so a 30-second cadence surfaces a hot machine within a tick of
-# the average crossing without churning the alerts table.
-HIGH_TEMP_TICK_SECONDS = 30
+# How often the housekeeping sweep wakes. Everything on this tick is an expiry or a reap
+# whose deadline is measured in minutes or hours, so 30 seconds is comfortably prompt and
+# cheap. It used to be the temperature-alert evaluator's cadence; that evaluator is gone
+# (temperature alerting is an ordinary rule now) but the sweeps it carried are not.
+SWEEP_TICK_SECONDS = 30
 # How long a firmware change may sit unresolved before the hub gives up on hearing back
 # (roadmap #9). Deliberately not the command TTL: the command expiring means the machine never
 # CLAIMED it, while this covers the machine that claimed it and then vanished mid-write.
 BIOS_CHANGE_TIMEOUT_SECONDS = 60 * 60
 
 
-def evaluate_high_temp_once(db_path=None, now=None):
-    """One pass of the temperature-alert evaluator. Returns (raised, episodes_ended).
-
-    Raises a high-temperature alert for every ONLINE machine whose AVERAGE temperature
-    over the configured window is at or above the threshold. The average is what makes a
-    brief spike NOT an alert -- the whole point of the feature.
-
-    A machine that has cooled, gone offline or stopped reporting does not have its alert
-    resolved -- alerts stay on the tab until an operator dismisses them -- but its EPISODE
-    is ended, so the next time it runs hot it accumulates a new alert beside the old one
-    instead of overwriting it.
-
-    Pure except for the database; `now` is injectable so tests drive it deterministically
-    without sleeping. Scope-agnostic like the duplicate_serial hook -- an operator's
-    machine scope is applied when the Alerts tab reads, never when the alert is raised.
-    """
-    db_path = db_path or DB_PATH
-    now = int(time.time() if now is None else now)
-    threshold = settings.get_int(db_path, "hub.high_temp_threshold")
-    window = settings.get_int(db_path, "hub.high_temp_avg_window_seconds")
-    online_window = settings.get_int(db_path, "fleet.dashboard_online_window_seconds")
-    cutoff = now - window
-    online_cutoff = now - online_window
-
-    conn = sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT machine, AVG(temp) AS avg_temp, MAX(ts_epoch) AS last "
-            "FROM readings WHERE ts_epoch >= ? GROUP BY machine",
-            (cutoff,),
-        ).fetchall()
-    finally:
-        conn.close()
-
-    hot = {}       # machine -> windowed average, for machines online AND at/above threshold
-    for row in rows:
-        # A machine whose most recent reading is older than the online window is not
-        # "currently hot" -- its average is stale, and an alert held open on it would
-        # linger after the machine was shut down or decommissioned.
-        if row["last"] is None or row["last"] < online_cutoff:
-            continue
-        if row["avg_temp"] is not None and row["avg_temp"] >= threshold:
-            hot[row["machine"]] = row["avg_temp"]
-
-    # Reconcile against the episodes currently running: refresh the still/newly hot, and
-    # end the episode of every machine that is no longer hot (cooled, offline, or gone).
-    # This covers machines that dropped out of the window entirely, which the query above
-    # can't return. Ending an episode does NOT resolve the alert -- it stays on the Alerts
-    # tab until an operator dismisses it -- it only means the next heat-up starts a new one.
-    active_machines = {a.get("machine") for a in alerts.list_open(db_path)
-                       if a["kind"] == alerts.KIND_HIGH_TEMP and a.get("machine")
-                       and not a.get("episode_ended_at")}
-    for machine, avg_temp in hot.items():
-        alerts.upsert_high_temp(db_path, machine, avg_temp, threshold, window, now=now)
-    ended = 0
-    for machine in active_machines - set(hot):
-        if alerts.end_high_temp_episode(db_path, machine, now=now):
-            ended += 1
-    return len(hot), ended
-
-
-def high_temp_evaluator():
-    """Wake on a fixed cadence and raise/resolve temperature alerts. Same shape and
-    failure discipline as retention_pruner: errors are logged, never fatal -- an
-    evaluator thread that died in March must not silently stop alerting in July."""
+def sweep_worker():
+    """Wake on a fixed cadence and run the hub's expiry/reap sweeps. Same shape and failure
+    discipline as retention_pruner: each sweep is guarded on its own and errors are logged,
+    never fatal -- a thread that died in March must not silently stop reaping in July, and
+    one sweep throwing must not take the other three down with it."""
     while True:
-        try:
-            evaluate_high_temp_once()
-        except Exception as e:
-            print(f"[high-temp] Evaluation pass failed: {e}")
-        # Remote sessions expire on the same heartbeat (roadmap #2), same reasoning as
+        # Remote sessions expire on this heartbeat (roadmap #2), same reasoning as
         # fleet.expire_stale_commands: a browser tab that vanished without a clean stop must
         # not leave a session -- and its minted TURN credential -- live forever.
         try:
@@ -3007,18 +2943,17 @@ def high_temp_evaluator():
             bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS)
         except Exception as e:
             print(f"[bios] Stale change sweep failed: {e}")
-        time.sleep(HIGH_TEMP_TICK_SECONDS)
+        time.sleep(SWEEP_TICK_SECONDS)
 
 
-def start_high_temp_evaluator():
-    threading.Thread(target=high_temp_evaluator, daemon=True,
-                     name="high_temp_evaluator").start()
+def start_sweep_worker():
+    threading.Thread(target=sweep_worker, daemon=True, name="sweep_worker").start()
 
 
 # ================================
 # RULES EVALUATOR  --  operator-written conditions over machine data (see rules.py).
 #
-# A thread of its own rather than another sweep inside high_temp_evaluator, on the same
+# A thread of its own rather than another sweep inside sweep_worker, on the same
 # precedent as deploy_scheduler and wake_scheduler: its cadence is operator-settable
 # (rules.evaluator_interval_seconds), and folding a settable cadence into a fixed-tick thread
 # means the setting quietly does nothing.
@@ -3064,9 +2999,13 @@ def resolve_rule_vars(machine, now=None):
     )
 
 
-def _rules_audit(actor, action, target, detail):
-    fleet.audit(DB_PATH, actor=actor, action=action, level=fleet.LEVEL_SECURITY,
-                target=target, detail=detail)
+def _rules_audit(actor, action, target, detail, level=None):
+    """The rules engine's audit sink. Defaults to the security trail -- a rule firing is a
+    machine being acted on by something nobody typed -- but takes a level so the engine can
+    record an OPERATIONAL fact (a follow-up that was skipped) without claiming it is a
+    security event."""
+    fleet.audit(DB_PATH, actor=actor, action=action,
+                level=level or fleet.LEVEL_SECURITY, target=target, detail=detail)
 
 
 def evaluate_rules_once(now=None):
@@ -3133,6 +3072,116 @@ def rule_evaluator():
 
 def start_rule_evaluator():
     threading.Thread(target=rule_evaluator, daemon=True, name="rule_evaluator").start()
+
+
+# The hub used to evaluate high temperature itself, on a fixed thread, from two global
+# settings. That is now an ordinary rule, which is the same condition expressed once instead
+# of twice and -- unlike the built-in evaluator -- can be targeted at some machines and not
+# others. This migration carries an upgrading hub across so nobody silently loses the alert
+# they had yesterday.
+#
+# Written as a marker row under a reserved key rather than a schema version: settings._build
+# skips any row whose key is not in the registry, so the marker is inert, never reaches the
+# Settings page, and cannot be reset from it.
+HIGH_TEMP_RULE_MARKER = "_migration.high_temp_rule_seeded"
+HIGH_TEMP_RULE_NAME = "High temperature"
+# The registry defaults these keys carried before they were removed. A hub that never
+# overrode them has no row to read, and it was still alerting at 85 degrees over a 5-minute
+# window -- so those, not zero, are what "what did this hub do yesterday" means.
+LEGACY_HIGH_TEMP_THRESHOLD = 85
+LEGACY_HIGH_TEMP_WINDOW_SECONDS = 300
+# Both key generations, newest first. `hub.overheat_*` predates the rename to `high_temp_*`,
+# and settings.RENAMED_KEYS no longer carries it forward -- the key it renamed onto is gone
+# too -- so a hub upgrading from before that rename would otherwise seed from the default
+# and quietly lose the threshold its operator actually chose.
+LEGACY_THRESHOLD_KEYS = ("hub.high_temp_threshold", "hub.overheat_threshold")
+LEGACY_WINDOW_KEYS = ("hub.high_temp_avg_window_seconds", "hub.overheat_avg_window_seconds")
+
+
+def _legacy_setting_int(conn, keys, fallback):
+    """First readable value among `keys`, else `fallback`. Reads the settings table directly:
+    these keys are no longer in the registry, so settings.get_int() cannot see them."""
+    for key in keys:
+        row = conn.execute("SELECT value_json FROM settings WHERE key=?", (key,)).fetchone()
+        if row is None:
+            continue
+        try:
+            return int(json.loads(row["value_json"]))
+        except (TypeError, ValueError):
+            continue
+    return fallback
+
+
+def seed_high_temp_rule(db_path=None):
+    """One-shot: recreate the retired built-in temperature alert as a DISABLED rule.
+
+    Returns the new rule's id, or None if it had already run. Idempotent on the marker rather
+    than on the rule's name, so an operator who renames or deletes the seeded rule does not
+    get it back on the next restart -- a migration that keeps re-creating something you threw
+    away is worse than one that never ran.
+
+    The rule is disabled because the condition is not equivalent, and the difference should be
+    reviewed by a person rather than assumed: the old evaluator averaged temperature over the
+    window, while a rule's `for_seconds` requires the condition to hold CONTINUOUSLY for that
+    long (rules.evaluate_once resets the clock on any non-true result, UNKNOWN included). That
+    is stricter -- one dip below the threshold restarts it -- so a machine that used to alert
+    on a lumpy average may not alert on the rule until the window is tuned.
+    """
+    db_path = db_path or DB_PATH
+    with sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS) as conn:
+        conn.row_factory = sqlite3.Row
+        done = conn.execute("SELECT 1 FROM settings WHERE key=?",
+                            (HIGH_TEMP_RULE_MARKER,)).fetchone()
+        if done:
+            return None
+        threshold = _legacy_setting_int(conn, LEGACY_THRESHOLD_KEYS,
+                                        LEGACY_HIGH_TEMP_THRESHOLD)
+        window = _legacy_setting_int(conn, LEGACY_WINDOW_KEYS,
+                                     LEGACY_HIGH_TEMP_WINDOW_SECONDS)
+
+    payload = {
+        "name": HIGH_TEMP_RULE_NAME,
+        "description": (
+            "Carried over from the built-in high-temperature alert this hub used before "
+            f"{HUB_VERSION}. It fired on the AVERAGE temperature over {window} seconds; a "
+            "rule instead requires the condition to hold continuously for that long, which "
+            "is stricter. Review the threshold and the hold time, then enable it. Narrow the "
+            "target if only some machines should be watched -- the built-in alert could not."
+        ),
+        "enabled": False,
+        "target": {"include": [{"kind": "all"}], "exclude": []},
+        "condition": {"var": "metric.cpu_temp", "cmp": ">=", "value": threshold},
+        "for_seconds": window,
+        "cooldown_seconds": 3600,
+        "actions": [{"type": "alert", "params": {
+            "text": "{{sys.machine}} has been at or above "
+                    f"{threshold} °C for {window // 60} minutes.",
+        }}],
+    }
+    # Through the same validation the API uses, never a raw INSERT: a seeded rule an operator
+    # cannot then open and edit in the UI would be worse than no seeded rule at all.
+    err, rule = rules.save_rule(db_path, payload, actor="system:migration")
+    if err:
+        # Not fatal, and deliberately not marked done -- a hub that boots again gets another
+        # attempt rather than silently ending up with no rule and no way to notice.
+        print(f"[migrate] Could not seed the '{HIGH_TEMP_RULE_NAME}' rule: {err}")
+        return None
+
+    now = int(time.time())
+    with sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings(key, value_json, updated_at, updated_by) "
+            "VALUES (?, ?, ?, ?)",
+            (HIGH_TEMP_RULE_MARKER, json.dumps(rule["id"]), now, "system:migration"),
+        )
+        # The keys these values came from are no longer in the registry, so their rows are
+        # unreachable -- read once here, then cleared rather than left as litter.
+        for key in LEGACY_THRESHOLD_KEYS + LEGACY_WINDOW_KEYS:
+            conn.execute("DELETE FROM settings WHERE key=?", (key,))
+    settings.invalidate()
+    print(f"[migrate] Seeded the disabled rule '{HIGH_TEMP_RULE_NAME}' "
+          f"(>= {threshold} C held for {window}s) from the retired built-in alert.")
+    return rule["id"]
 
 
 # How often the backup scheduler wakes to ask whether a backup is due. Same reasoning as
@@ -3314,6 +3363,7 @@ processes.init_processes_db(DB_PATH)
 live.init_live_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 apitokens.init_apitokens_db(DB_PATH)
+scripts.init_scripts_db(DB_PATH)
 rules.init_rules_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
@@ -3326,6 +3376,14 @@ try:
     resolve_all_duplicate_serials()
 except Exception as e:
     print(f"[dedup] Startup duplicate sweep failed: {e}")
+# Recreate the retired built-in high-temperature alert as a disabled rule, once. After
+# rules.init_rules_db (it writes a rule) and settings.init_settings_db (it reads and then
+# clears the two retired keys), and guarded like the sweep above -- a migration that throws
+# must not stop the hub from serving.
+try:
+    seed_high_temp_rule()
+except Exception as e:
+    print(f"[migrate] High-temperature rule seed failed: {e}")
 start_agent_version_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
@@ -3333,7 +3391,7 @@ start_deploy_scheduler()
 start_firmware_scheduler()
 start_wake_scheduler()
 start_backup_scheduler()
-start_high_temp_evaluator()
+start_sweep_worker()
 start_directory_sync_scheduler()
 start_rule_evaluator()
 
@@ -3390,9 +3448,6 @@ def local_logger():
             if temp is not None:
                 if last_temp and abs(temp - last_temp) >= SPIKE_THRESHOLD:
                     print(f"WARNING SPIKE: {last_temp} -> {temp}")
-                if temp >= settings.get_int(DB_PATH, "hub.high_temp_threshold"):
-                    print(f"HIGH TEMPERATURE: {temp}°C")
-                
                 save_and_emit_temp(LOCAL_MACHINE, temp, get_uptime_seconds())
                 last_temp = temp
                 
@@ -3779,7 +3834,14 @@ def delete_machine(machine):
 def get_alerts():
     """Open alerts for the Alerts tab. Each duplicate_serial alert is enriched with the
     current status/model of every machine involved, so the UI can show which are still
-    online and let the operator pick a survivor to merge into."""
+    online and let the operator pick a survivor to merge into.
+
+    Everything else is a PER-MACHINE alert (alerts.PER_MACHINE_KINDS) and takes the branch
+    above it: scoped on its one subject machine and returned as-is. That membership test used
+    to name a single kind, which meant every kind added after it -- `rule` and `ad_unmatched`
+    -- fell into the duplicate-serial branch below, where `machines` is empty, so the
+    `if involved and not in_scope` guard was falsy and the alert was returned to operators
+    whose scope excluded its machine."""
     open_alerts = alerts.list_open(DB_PATH)
     with get_db_conn() as conn:
         info = {r["machine"]: r for r in conn.execute(
@@ -3788,10 +3850,10 @@ def get_alerts():
     keep = access.machine_filter()
     visible = []
     for alert in open_alerts:
-        # A per-machine alert (high temperature) is scoped on its single subject machine; there is
-        # nothing to enrich or let the operator merge, so it passes straight through with
-        # its `detail` payload once scope allows.
-        if alert["kind"] == alerts.KIND_HIGH_TEMP:
+        # A per-machine alert is scoped on its single subject machine; there is nothing to
+        # enrich or let the operator merge, so it passes straight through with its `detail`
+        # payload once scope allows.
+        if alert["kind"] in alerts.PER_MACHINE_KINDS:
             machine = alert.get("machine")
             if machine and keep is not None and not keep(machine):
                 continue
@@ -3888,12 +3950,11 @@ def _scoped_open_alert_count():
         return alerts.count_open(DB_PATH)
 
     def _in_scope(a):
-        # Per-machine alerts (high temperature) scope on their single subject; the
-        # duplicate_serial `machines` list scopes if it touches any kept machine. Such an
-        # alert carries an empty `machines`, so it must be checked on `machine` first --
-        # otherwise "no machines" would read as fleet-wide and leak the count across a
-        # scope boundary.
-        if a["kind"] == alerts.KIND_HIGH_TEMP:
+        # Per-machine alerts scope on their single subject; the duplicate_serial `machines`
+        # list scopes if it touches any kept machine. Such an alert carries an empty
+        # `machines`, so it must be checked on `machine` first -- otherwise "no machines"
+        # would read as fleet-wide and leak the count across a scope boundary.
+        if a["kind"] in alerts.PER_MACHINE_KINDS:
             return bool(a.get("machine")) and keep(a["machine"])
         return not a.get("machines") or any(keep(m) for m in a["machines"])
 
@@ -4231,7 +4292,6 @@ def remote_page():
 def machine_page(machine):
     return render_template(
         "machine.html", machine=machine,
-        high_temp_threshold=settings.get_int(DB_PATH, "hub.high_temp_threshold"),
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
         live_window_seconds=settings.get_int(DB_PATH, "hub.live_default_window_seconds"),
         # How often the page renews its "somebody is watching this" ping. Served rather than

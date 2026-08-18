@@ -1,8 +1,8 @@
 // The Dashboard is a live temperature + online-status view and deliberately does NOT flag
-// high temperatures. A hot machine is evaluated server-side from a rolling AVERAGE (a momentary
-// spike is not an alert) and surfaced in the Alerts tab, so a red card here -- based on a
-// single instantaneous reading -- would both contradict the average and duplicate the
-// alert. See app.evaluate_high_temp_once and the Alerts tab.
+// high temperatures. What counts as too hot is an operator-written rule (metric.cpu_temp held
+// over the rule's `for_seconds`), and it surfaces in the Alerts tab -- so a red card here,
+// based on a single instantaneous reading, would both contradict the rule and duplicate the
+// alert it raises. See rules.py and the Alerts tab.
 const socket = connectSocketWithStatus();
 const machineCards = document.getElementById('machine-cards');
 const emptyStateEl = document.getElementById('empty-state');

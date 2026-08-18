@@ -45,18 +45,78 @@ Mostly done:
 - `data.retention_days`, `data.prune_interval_seconds`, `data.ingest_max_backdate_days`,
   `data.command_output_retention_seconds` — retention knobs.
 
-Temperature alerts (hub 1.34.0): a high temperature is evaluated hub-side from a rolling
-**average** over `hub.high_temp_avg_window_seconds` (default 300 s) against
-`hub.high_temp_threshold`, so a momentary spike no longer flags a machine. It surfaces as a
-real alert in the Alerts tab (`alerts.KIND_HIGH_TEMP`, raised by `app.evaluate_high_temp_once`
-on a 30 s thread), one card per hot **episode**, held open until an operator dismisses it —
-not on the Dashboard, which is now a plain live temp/status view. See below.
+Temperature alerts (hub 1.34.0, **retired in hub 1.80.0**): the hub used to evaluate a high
+temperature itself, from a rolling **average** over `hub.high_temp_avg_window_seconds` against
+`hub.high_temp_threshold`, on a 30 s thread (`app.evaluate_high_temp_once`), surfacing as
+`alerts.KIND_HIGH_TEMP`. That was a second alerting engine sitting beside the rules engine,
+expressing a condition the rules engine could already express — and, being fleet-wide, it was
+the reason **per-machine alert thresholds** were listed here as a gap.
+
+**It is now an ordinary rule.** `metric.cpu_temp >= N` held for the rule's `for_seconds` says
+the same thing, can be targeted at some machines and not others, and can raise an alert, run a
+command, ask the user, or notify — the whole action list, rather than the one hardcoded alert.
+`for_seconds` replaces the rolling average and is *stricter*: it requires the condition to hold
+continuously, so one dip below the threshold restarts the clock, where an average would have
+absorbed it.
+
+Upgrading hubs get a **disabled** rule named "High temperature", seeded by
+`app.seed_high_temp_rule` from whatever the two retired settings held (falling back to 85 °C /
+300 s), so nobody silently loses the alert they had — but somebody has to review and enable it.
+Both settings are gone from the registry. `alerts.KIND_HIGH_TEMP` survives as a read-only kind
+so alerts raised before the upgrade still render and can still be dismissed.
 
 Remaining gaps: no per-metric retention (one global window for all readings), no
-sampling/reporting-cadence setting, no per-metric or **per-machine** alert thresholds (the
-high-temperature threshold and window are still global), no sensor *preference* list for
-GPU/disk/network (only CPU temp has one — the others are on/off only). Fold these in
-opportunistically; no dedicated feature push planned.
+sampling/reporting-cadence setting, no sensor *preference* list for GPU/disk/network (only CPU
+temp has one — the others are on/off only). Fold these in opportunistically; no dedicated
+feature push planned.
+
+---
+
+## ✅ Rules: real command parameters + a Scripts library   ·   hub 1.81.0 + agent 3.32.0
+
+Three things the rules editor could not express, all of which the engine behind it already
+could.
+
+**Commands now declare their parameters.** `fleet.COMMAND_PARAMS` describes what each command
+type takes (name, kind, bounds, default), `fleet.validate_command_params` enforces it at the
+rules boundary, and `GET /api/rules/variables` serves the catalog so the console renders the
+fields instead of carrying a hand-kept list. Before this, `actionCard` offered seven of the
+twelve permitted commands and **no parameter editor at all** — so choosing `run_script` queued a
+command the agent rejected for having no script, and a restart's countdown was unreachable.
+`install_driver` is served marked unavailable (its agent executor is a stub that always fails)
+rather than dropped; `update_bios` moved into `RULE_FORBIDDEN_COMMANDS`, where it always
+belonged — its `update_id` is minted per target per maintenance window, so a saved rule could
+only ever replay a stale one.
+
+**Scripts are a store.** `hub/scripts.py` + `/api/rules/scripts`, edited on a Scripts tab beside
+Rules. A script has a reference name, a shell, a body, a timeout and declared **inputs** that the
+referencing rule supplies. A rule points at one with the new `script` action and the body is
+read at **fire time**, so editing a script changes what every rule using it runs. Deleting one a
+rule references is refused with the rule names (409).
+
+Deliberately NOT `fleet_favorites`, which is the same shape: favorites are writable with `view`,
+which is safe only because *running* one needs a human holding `issue_commands`. A rule removes
+the human, so writing a script needs `issue_commands` and reading a script's **body** does too —
+listing is `view`, because the rules editor must offer the names.
+
+**A message's answer can now be any action, with real parameters** — the four synthesised
+choices are gone. `render_template` is applied to string command params at dispatch, and a
+placeholder that cannot be resolved **skips the action** instead of running code containing the
+literal word `unknown`; message text keeps the old behaviour, where "unknown" reads as missing
+data rather than as an instruction.
+
+**A rule can now ask once instead of on a timer.** `fire_once_per_match` (default off, so
+nothing existing changes) fires on the TRANSITION rather than every `cooldown_seconds`. The
+cooldown is a timer, which is the wrong shape for a condition that stays true: `sys.uptime_days
+> 7` holds until somebody reboots, so the dialog returned every hour and clicking No bought the
+person at the desk nothing. The latch is `last_fired_at >= matched_since` — note it is NOT
+`last_fired_at IS NOT NULL`, because `_write_state` deliberately leaves that timestamp alone
+when passed None, so it survives the condition going false. `matched_since` is what gets
+cleared. New message rules also prefill a one-day snooze on the No answer.
+
+**Agent 3.32.0** gives a rule-issued script a fresh shell per firing. `RunScriptExecutor` keys
+its persistent session on `issued_by`, so every fire of one rule was reusing a single PowerShell
+process complete with the last fire's working directory and variables.
 
 ---
 
@@ -1713,8 +1773,8 @@ the real providers, so the WIRING is pinned rather than the unit. Both new tests
 against the old code, one of them reporting the two toasts an operator would have seen.
 
 The console is a good web app, but it is a *web* app: watching a fleet means keeping a tab
-open, and a high-temperature alert raised at 02:00 by `evaluate_high_temp_once` reaches
-nobody until someone looks at the Alerts tab. This adds a **native client** — Flutter, one
+open, and an alert raised at 02:00 by a rule reaches nobody until someone looks at the
+Alerts tab. This adds a **native client** — Flutter, one
 codebase, **Windows desktop in v1**, Android/iOS as an addition rather than a rewrite.
 
 v1 scope is the fleet list, machine detail, alerts with OS notifications, Wake-on-LAN and

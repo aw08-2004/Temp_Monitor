@@ -264,8 +264,8 @@ def test_missing_translation_falls_back_to_english():
 def test_bad_placeholders_never_raise():
     """_SafeFormat's whole reason to exist: a translator's typo must not 500 a page."""
     i18n.invalidate()
-    out = i18n.translate("common.high_temp_body", "en", machine="PC-1")
-    check("missing param renders as itself, does not raise", "{temp}" in out)
+    out = i18n.translate("alerts.rule.title", "en", machine="PC-1")
+    check("missing param renders as itself, does not raise", "{rule}" in out)
     check("supplied param still interpolated", "PC-1" in out)
     check("extra unused params are ignored",
           i18n.translate("nav.alerts", "en", nonsense=1) == "Alerts")

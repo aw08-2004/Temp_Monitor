@@ -43,6 +43,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from collections import namedtuple
 import uuid
 
 # ================================
@@ -236,6 +237,186 @@ ALL_COMMANDS = frozenset({
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS)
 
+# ================================
+# COMMAND PARAMETERS
+# ================================
+# What each command type actually takes. Until this existed the agent executors were the ONLY
+# description of a command's parameters anywhere -- create_command checks that params is a
+# dict and nothing more -- so the console could only offer a command it had been taught about
+# by hand, in JavaScript. It had been taught seven of them, with no parameter editor at all,
+# which is why picking `run_script` from a rule queued a command the agent rejected for having
+# no script.
+#
+# The executors remain the authority on BEHAVIOUR; this is that contract restated where the
+# hub can check it and the console can render it. Each entry cites the executor it mirrors, so
+# the two can be diffed by eye when one changes.
+#
+# Deliberately NOT enforced inside create_command(): an operator driving the fleet API by hand
+# is not the audience, the agent validates its own params anyway, and a hub-side schema that
+# refused a command a NEWER agent understands would be the worst kind of drift. It is enforced
+# where a human is choosing from a list -- rules._validate_action -- and served to the console
+# so that list can be generated rather than typed.
+
+Param = namedtuple("Param", [
+    "name",       # the key in the command's params dict
+    "kind",       # "int" | "bool" | "str" | "text" | "enum"
+    "default",    # applied when the key is absent; None means "omit it entirely"
+    "minimum",    # numeric bounds, None for non-numeric kinds
+    "maximum",
+    "choices",    # for "enum"
+    "required",   # refuse the command if this is missing or blank
+    "max_chars",  # for "str"/"text"
+])
+
+
+def _p(name, kind, default=None, *, minimum=None, maximum=None, choices=None,
+       required=False, max_chars=None):
+    return Param(name, kind, default, minimum, maximum, choices, required, max_chars)
+
+
+# Matches packages.MAX_SCRIPT_CHARS rather than inventing a second ceiling for the same thing.
+MAX_SCRIPT_CHARS = 10000
+
+# Bounds are the executors' own clamps, restated so an operator is told "1 to 86400" while
+# typing rather than having the value silently clamped later on the machine.
+COMMAND_PARAMS = {
+    # LowRiskExecutors.cs RestartExecutor/ShutdownExecutor: GetInt("delay_seconds", 60) and
+    # GetBool("force"), where force adds /f -- see the agent 3.31.0 release note.
+    "restart": (_p("delay_seconds", "int", 60, minimum=0, maximum=86400),
+                _p("force", "bool", False)),
+    "shutdown": (_p("delay_seconds", "int", 60, minimum=0, maximum=86400),
+                 _p("force", "bool", False)),
+    # RunScriptExecutor.cs:28-34. The timeout bounds are its own Math.Clamp(1, 24h).
+    "run_script": (_p("script", "text", required=True, max_chars=MAX_SCRIPT_CHARS),
+                   _p("shell", "enum", "powershell", choices=("powershell", "cmd")),
+                   _p("timeout_seconds", "int", 600, minimum=1, maximum=86400)),
+    # LowRiskExecutors.cs InstallAppExecutor: a winget id OR an msi path, tried in that order.
+    "install_app": (_p("id", "str", max_chars=200),
+                    _p("msi_path", "str", max_chars=400)),
+    # Bios/UpdateBiosExecutor.cs: the id of a firmware update row on the hub.
+    "update_bios": (_p("update_id", "str", required=True, max_chars=64),),
+    "rename": (_p("new_name", "str", required=True, max_chars=63),),
+    # No parameters at all. Empty tuples on purpose: "this command takes nothing" and "nobody
+    # has described this command yet" are different facts, and only the first should render as
+    # a command with no fields -- see command_param_schema.
+    "gpupdate": (),
+    "prepare_wake": (),
+    "refresh_bios_inventory": (),
+    "uninstall_virtual_display": (),
+    "set_virtual_display_mode": (),
+}
+
+# Commands where exactly one of a group of params must be supplied. A separate table rather
+# than a flag on Param, because the constraint is about the SET; one general constraint
+# expression would be a language nobody asked for.
+COMMAND_ONE_OF = {
+    "install_app": ("id", "msi_path"),
+}
+
+# Types the hub will queue and an agent will always refuse. `install_driver` is registered as
+# `new StubExecutor("install_driver")` (agent Program.cs) and answers "install_driver is not
+# implemented yet". It is offered to the console marked unavailable, WITH that reason, rather
+# than quietly omitted: a command that vanishes from a list raises a support question, one
+# that is greyed out with a reason answers it.
+COMMAND_UNAVAILABLE = {
+    "install_driver": "the agent has no implementation for this command yet",
+}
+
+_TRUE_TEXT = {"1", "true", "yes", "on"}
+_FALSE_TEXT = {"0", "false", "no", "off"}
+
+
+def command_param_schema(command_type):
+    """The declared params for a command type, or None if the type is undescribed.
+
+    None and () mean different things -- see the comment on the no-parameter entries above --
+    so callers must not conflate them.
+    """
+    return COMMAND_PARAMS.get(command_type)
+
+
+def validate_command_params(command_type, params):
+    """Coerce and bounds-check one command's params. Returns (error, cleaned).
+
+    Sloppy JSON types are coerced rather than refused, exactly as settings.coerce_and_validate
+    does and for the same reason: "60" from a form field is the number the operator typed, and
+    telling them otherwise is a transport detail leaking into their face.
+
+    A command with no declared schema passes through untouched. That is the honest answer for
+    a type this table has not described yet; refusing it would make adding a command to the
+    agent a breaking change for the hub.
+    """
+    schema = command_param_schema(command_type)
+    if schema is None:
+        return None, dict(params or {})
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return "command params must be an object", None
+
+    declared = {param.name: param for param in schema}
+    unknown = sorted(set(params) - set(declared))
+    if unknown:
+        return f"'{command_type}' takes no parameter named '{unknown[0]}'", None
+
+    cleaned = {}
+    for param in schema:
+        raw = params.get(param.name)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            if param.required:
+                return f"'{command_type}' needs {param.name}", None
+            # Defaults are NOT written into the stored params. Two reasons, both load-bearing:
+            # the AGENT's default stays the single source of truth (baking delay_seconds=60
+            # into two hundred saved rules would freeze a value the agent is still free to
+            # change), and it preserves the property that opening a rule and saving it again
+            # does not alter what was stored. `default` is carried in the catalog so the
+            # console can show it as a placeholder, which is where a default belongs.
+            continue
+
+        if param.kind == "bool":
+            if isinstance(raw, bool):
+                cleaned[param.name] = raw
+            else:
+                text = str(raw).strip().lower()
+                if text in _TRUE_TEXT:
+                    cleaned[param.name] = True
+                elif text in _FALSE_TEXT:
+                    cleaned[param.name] = False
+                else:
+                    return f"{param.name} must be true or false", None
+
+        elif param.kind == "int":
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                return f"{param.name} must be a whole number", None
+            if param.minimum is not None and value < param.minimum:
+                return f"{param.name} must be at least {param.minimum}", None
+            if param.maximum is not None and value > param.maximum:
+                return f"{param.name} must be at most {param.maximum}", None
+            cleaned[param.name] = value
+
+        elif param.kind == "enum":
+            text = str(raw).strip()
+            if param.choices and text not in param.choices:
+                return f"{param.name} must be one of {', '.join(param.choices)}", None
+            cleaned[param.name] = text
+
+        else:
+            # "str" and "text" differ only in how the console renders them -- one line versus
+            # a textarea -- so a script keeps its leading whitespace and a name does not.
+            text = str(raw).strip() if param.kind == "str" else str(raw)
+            if param.max_chars and len(text) > param.max_chars:
+                return f"{param.name} must be {param.max_chars} characters or fewer", None
+            cleaned[param.name] = text
+
+    one_of = COMMAND_ONE_OF.get(command_type)
+    if one_of and not any(cleaned.get(name) for name in one_of):
+        return f"'{command_type}' needs one of: {', '.join(one_of)}", None
+
+    return None, cleaned
+
+
 # Command lifecycle states.
 STATUS_PENDING = "pending"    # queued, not yet handed to an agent
 STATUS_CLAIMED = "claimed"    # delivered to the agent, awaiting a result
@@ -278,6 +459,12 @@ ACTION_LEVELS = {
     "enroll": LEVEL_SECURITY,
     "revoke_agent": LEVEL_SECURITY,
     "issue_command": LEVEL_SECURITY,
+    # Saving a script IS writing code that runs as SYSTEM on every machine a rule targets,
+    # so it belongs with issue_command rather than with the rule edits it enables. Note that
+    # a script is read afresh on every fire: editing one changes what existing rules do
+    # WITHOUT touching those rules, which makes this row the only record that it happened.
+    "save_script": LEVEL_SECURITY,
+    "delete_script": LEVEL_SECURITY,
     # Device tokens (roadmap #11): the native client's credential. Pairing MINTS a
     # long-lived bearer credential that leaves the hub on somebody's laptop, which is the
     # same class of event as enrolling an agent. `device.first_use` is separate because
@@ -342,6 +529,11 @@ ACTION_LEVELS = {
     "backup_files_run_fleet": LEVEL_NOTICE,
     "backup_files_cancel": LEVEL_NOTICE,
     "backup_files_cancel_fleet": LEVEL_NOTICE,
+    # A rule's follow-up that did NOT run -- most often because the fleet-wide command switch
+    # is off, or because a variable the command needed was unresolvable on that machine.
+    # Operational rather than security-sensitive: nothing happened, and the point of the row is
+    # that a person pressed "Yes" and should be able to find out why nothing did.
+    "rule_followup_skipped": LEVEL_NOTICE,
     # Wake-on-LAN (roadmap #10). Recorded SEPARATELY from the `issue_command` row the same
     # request eventually writes, because that row names the RELAY -- the awake peer that
     # sends the packet -- and an auditor reading "issued wake_machine to PC-3" would have to

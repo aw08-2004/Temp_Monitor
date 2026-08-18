@@ -56,30 +56,6 @@ function setMachineStatusPill(el, row) {
     el.title = unenrolled ? t('common.status.unenrolled_help') : '';
 }
 
-function requestNotificationPermission() {
-    if (typeof Notification === 'undefined') return;
-    if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-        Notification.requestPermission();
-    }
-}
-
-// Distinguishes "hot because it's under heavy load" (expected) from "hot while
-// mostly idle" (worth investigating -- possible cooling/thermal-paste/dust issue).
-// Unknown load (older agent, no sensors yet) conservatively reads as "investigate".
-function classifyTemperatureStatus(temp, highTempThreshold, cpuLoadPct, lowLoadThreshold) {
-    if (temp === undefined || temp === null || temp < highTempThreshold) return 'normal';
-    if (typeof cpuLoadPct === 'number' && cpuLoadPct >= lowLoadThreshold) return 'high-temp-expected';
-    return 'high-temp-investigate';
-}
-
-function notifyHighTemp(machine, temp) {
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    new Notification(t('common.high_temp_title'), {
-        body: t('common.high_temp_body', { machine: machine, temp: temp }),
-        icon: 'https://cdn-icons-png.flaticon.com/512/3248/3248139.png'
-    });
-}
-
 // An element of the app chrome, wherever this page happens to be rendered. Under the app
 // shell (see shell.js) the topbar belongs to the parent document, not to this one, so a page
 // that owns a piece of chrome has to reach out of its frame for it. Same-origin, so this is

@@ -1,7 +1,5 @@
 const config = document.getElementById('machine-config');
 const MACHINE = config.dataset.machine;
-const HIGH_TEMP_THRESHOLD = Number(config.dataset.highTempThreshold);
-const LOW_LOAD_THRESHOLD = Number(config.dataset.lowLoadThreshold);
 // How much history the panels OPEN on, from hub.live_default_window_seconds. Small by
 // default (a minute), because this page is watched live far more often than it is read as an
 // archive -- a whole day fitted into 400 px is a flat line you have to zoom into before it
@@ -14,8 +12,6 @@ if (zoomPlugin) Chart.register(zoomPlugin.default || zoomPlugin);
 
 const rootStyles = getComputedStyle(document.documentElement);
 const chartGridColor = rootStyles.getPropertyValue('--card-border').trim();
-
-requestNotificationPermission();
 
 const socket = connectSocketWithStatus();
 const dayPicker = document.getElementById('day-picker');

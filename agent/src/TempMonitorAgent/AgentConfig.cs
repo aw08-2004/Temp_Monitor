@@ -1,4 +1,4 @@
-namespace TempMonitorAgent;
+﻿namespace TempMonitorAgent;
 
 /// <summary>
 /// Static configuration for the agent: versions, intervals, endpoints, embedded
@@ -9,7 +9,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.30.0";
+    public const string Version = "3.32.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level

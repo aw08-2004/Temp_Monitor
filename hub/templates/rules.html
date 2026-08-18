@@ -2,6 +2,19 @@
 {% block title %}{{ t('nav.rules') }} - FleetHub{% endblock %}
 {% block content %}
 <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('rules.heading') }}</h1>
+
+{# Two panels on one page rather than a fourteenth sidebar row: a script exists to be run by a
+   rule, and the two are edited in the same sitting. Driven by the shared controller in
+   tabs.js (the same one the machine, settings, packages, backups and users pages use), which
+   remembers the selection and fires `tab:shown` when a panel becomes visible. #}
+<div class="tabs" role="tablist" aria-label="{{ t('rules.heading') }}" data-tabs-key="rules">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab"
+            id="tab-btn-rules" aria-controls="tab-rules" aria-selected="true">{{ t('scripts.tab_rules') }}</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-scripts"
+            aria-controls="tab-scripts" aria-selected="false" tabindex="-1">{{ t('scripts.tab_scripts') }}</button>
+</div>
+
+<div class="tab-panel" id="tab-rules" role="tabpanel" aria-labelledby="tab-btn-rules">
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('rules.intro') }}</p>
 
 {# Shown when rules.actions_enabled is off: the rules still evaluate, so the page looks
@@ -18,18 +31,25 @@
 </div>
 
 <div class="card">
-    <table class="table" id="rules-table">
-        <thead>
-            <tr>
-                <th>{{ t('rules.name') }}</th>
-                <th>{{ t('rules.section_condition') }}</th>
-                <th>{{ t('rules.section_actions') }}</th>
-                <th>{{ t('rules.matching') }}</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody id="rules-body"></tbody>
-    </table>
+    {# `data-table` is the shared table style (see components.css) -- this table used to
+       carry `class="table"`, which matches nothing in any stylesheet, so it rendered with no
+       cell padding, no row separators and no header treatment at all. `rules-table` adds only
+       what this table needs on top: its name column stacks a title, a badge and a
+       description, so its rows are taller than Inventory's single-line ones. #}
+    <div class="table-scroll">
+        <table class="data-table rules-table" id="rules-table">
+            <thead>
+                <tr>
+                    <th>{{ t('rules.name') }}</th>
+                    <th>{{ t('rules.section_condition') }}</th>
+                    <th>{{ t('rules.section_actions') }}</th>
+                    <th>{{ t('rules.matching') }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="rules-body"></tbody>
+        </table>
+    </div>
     <p class="stat-card__meta" id="rules-empty" hidden>
         {{ t('rules.empty') }}<br><span>{{ t('rules.empty_hint') }}</span>
     </p>
@@ -92,7 +112,7 @@
         <select class="input" id="rule-action-kind"></select>
         <button type="button" class="btn btn--ghost" id="rule-action-add">{{ t('rules.add_action') }}</button>
     </div>
-    <p class="stat-card__meta" id="rule-commands-warning" hidden>{{ t('rules.commands_disabled') }}</p>
+    <p class="banner banner--warn" id="rule-commands-warning" hidden>{{ t('rules.commands_disabled') }}</p>
 
     <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('rules.section_timing') }}</h2>
     <div class="toolbar">
@@ -108,13 +128,89 @@
     </div>
     <p class="stat-card__meta">{{ t('rules.for_seconds_help') }} {{ t('rules.cooldown_help') }} {{ t('rules.max_targets_help') }}</p>
 
+    <label class="stat-card__meta" style="display: block; margin-top: var(--space-3);">
+        <input type="checkbox" id="rule-fire-once" style="margin-right: var(--space-2);">
+        {{ t('rules.fire_once') }}
+    </label>
+    <p class="stat-card__meta">{{ t('rules.fire_once_help') }}</p>
+
     <div class="toolbar" style="margin-top: var(--space-5);">
         <button type="button" class="btn btn--primary" id="rule-save">{{ t('rules.save') }}</button>
         <button type="button" class="btn btn--ghost" id="rule-cancel">{{ t('rules.cancel') }}</button>
         <span class="stat-card__meta" id="rule-save-error" style="color: var(--color-danger, #f85149);"></span>
     </div>
 </div>
+</div>{# /tab-rules #}
+
+{# ------------------------------------------------------------------ scripts ------- #}
+<div class="tab-panel" id="tab-scripts" role="tabpanel" aria-labelledby="tab-btn-scripts" hidden>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('scripts.intro') }}</p>
+
+<p class="banner banner--warn" id="scripts-read-only" hidden>{{ t('scripts.read_only') }}</p>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <button id="scripts-new" type="button" class="btn btn--primary" hidden>{{ t('scripts.new') }}</button>
+</div>
+
+<div class="card">
+    <div class="table-scroll">
+        <table class="data-table rules-table" id="scripts-table">
+            <thead>
+                <tr>
+                    <th>{{ t('scripts.label') }}</th>
+                    <th>{{ t('scripts.shell') }}</th>
+                    <th>{{ t('scripts.inputs') }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="scripts-body"></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="scripts-empty" hidden>{{ t('scripts.empty') }}</p>
+</div>
+
+<div class="card" id="script-editor" hidden style="margin-top: var(--space-5);">
+    <div class="toolbar" style="margin-bottom: var(--space-4);">
+        <input class="input" id="script-name" type="text" placeholder="{{ t('scripts.name') }}"
+               style="min-width: 220px;">
+        <input class="input" id="script-label" type="text" placeholder="{{ t('scripts.label') }}"
+               style="min-width: 260px;">
+        <label class="stat-card__meta">
+            <input type="checkbox" id="script-enabled" checked> {{ t('scripts.enabled') }}
+        </label>
+    </div>
+    <p class="stat-card__meta" id="script-name-help">{{ t('scripts.name_help') }}</p>
+
+    <input class="input" id="script-description" type="text" style="width: 100%; margin-top: var(--space-3);"
+           placeholder="{{ t('scripts.description') }}">
+
+    <div class="toolbar" style="margin-top: var(--space-4);">
+        <label class="stat-card__meta">{{ t('scripts.shell') }}
+            <select class="input" id="script-shell"></select>
+        </label>
+        <label class="stat-card__meta">{{ t('scripts.timeout') }}
+            <input class="input" id="script-timeout" type="number" min="1" value="600" style="width: 8rem;">
+        </label>
+    </div>
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('scripts.inputs') }}</h2>
+    <div id="script-inputs"></div>
+    <button type="button" class="btn btn--ghost" id="script-input-add">{{ t('scripts.input_add') }}</button>
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('scripts.body') }}</h2>
+    <textarea class="input" id="script-body" rows="14" spellcheck="false"
+              style="width: 100%; font-family: var(--font-mono);"></textarea>
+    <p class="stat-card__meta">{{ t('scripts.body_help') }}</p>
+
+    <div class="toolbar" style="margin-top: var(--space-5);">
+        <button type="button" class="btn btn--primary" id="script-save">{{ t('scripts.save') }}</button>
+        <button type="button" class="btn btn--ghost" id="script-cancel">{{ t('rules.cancel') }}</button>
+        <span class="stat-card__meta" id="script-save-error" style="color: var(--color-danger, #f85149);"></span>
+    </div>
+</div>
+</div>{# /tab-scripts #}
 {% endblock %}
 {% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}?v={{ hub_version }}"></script>
 <script src="{{ url_for('static', filename='js/rules.js') }}?v={{ hub_version }}"></script>
 {% endblock %}

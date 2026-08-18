@@ -98,30 +98,54 @@ def test_store_lifecycle():
         check("dismiss again returns False (already closed)", alerts.dismiss(db_path, aid3) is False)
         check("count_open back to 0", alerts.count_open(db_path) == 0)
 
-        print("  -- high_temperature kind --")
-        oid = alerts.upsert_high_temp(db_path, "PC-HOT", 91.4, 85, 300)
-        check("high-temp upsert opens an alert", oid is not None
+        print("  -- rule kind --")
+        rid = alerts.upsert_rule(db_path, "PC-RULE", 7, "Disk nearly full", "C: is at 96%")
+        check("rule upsert opens an alert", rid is not None
               and alerts.count_open(db_path) == 1)
-        got = alerts.get(db_path, oid)
-        check("high-temp alert carries its machine and decoded detail",
-              got["machine"] == "PC-HOT" and got["detail"]["avg_temp"] == 91.4
-              and got["detail"]["threshold"] == 85 and got["detail"]["window_seconds"] == 300)
-        oid2 = alerts.upsert_high_temp(db_path, "PC-HOT", 88.0, 85, 300)
-        check("re-upsert refreshes the SAME row", oid2 == oid
+        got = alerts.get(db_path, rid)
+        check("rule alert carries its machine, rule_id and decoded detail",
+              got["machine"] == "PC-RULE" and got["rule_id"] == 7
+              and got["detail"]["rule_name"] == "Disk nearly full"
+              and got["detail"]["text"] == "C: is at 96%")
+        # THE regression this file exists to pin now: a rule alert must never look like a
+        # duplicate-serial one. `serial_number` NULL is what the Alerts tab keys its renderer
+        # off, and a non-null value here is how the card came out titled "unknown serial"
+        # with a Merge button on it.
+        check("rule alert has NO serial_number", got["serial_number"] is None)
+        check("rule alert has no machines list", got["machines"] == [])
+
+        rid2 = alerts.upsert_rule(db_path, "PC-RULE", 7, "Disk nearly full", "C: is at 97%")
+        check("re-upsert refreshes the SAME row", rid2 == rid
               and alerts.count_open(db_path) == 1)
-        check("...and updates the detail", alerts.get(db_path, oid)["detail"]["avg_temp"] == 88.0)
-        # A different machine is a separate subject -> its own open row.
-        alerts.upsert_high_temp(db_path, "PC-HOT-2", 90.0, 85, 300)
-        check("a second hot machine gets its own alert", alerts.count_open(db_path) == 2)
-        # high_temperature and duplicate_serial share the table, not the open-per-subject index.
+        check("...and counts the refresh", alerts.get(db_path, rid)["detail"]["count"] == 2)
+
+        # A DIFFERENT rule on the SAME machine is a separate alert, not an overwrite -- this
+        # is what rule_id in the partial unique index buys.
+        other = alerts.upsert_rule(db_path, "PC-RULE", 9, "Uptime > 7 days", "up 9 days")
+        check("a second rule on one machine gets its own alert",
+              other != rid and alerts.count_open(db_path) == 2)
+
+        # rule and duplicate_serial share the table, not the open-per-subject index.
         alerts.upsert_duplicate(db_path, "S-COEXIST", ["x", "y"])
-        check("high_temperature and duplicate_serial coexist", alerts.count_open(db_path) == 3)
-        alerts.resolve_high_temp(db_path, "PC-HOT")
-        check("resolve_high_temp closes only that machine", alerts.count_open(db_path) == 2
-              and alerts.get(db_path, oid)["status"] == "resolved")
-        listed = [a for a in alerts.list_open(db_path) if a["kind"] == "high_temperature"]
-        check("list_open surfaces machine + detail on high-temp rows",
-              all(a.get("machine") and a.get("detail") for a in listed))
+        check("rule and duplicate_serial coexist", alerts.count_open(db_path) == 3)
+
+        # Ending an episode leaves the alert OPEN; the next match opens a new row beside it.
+        check("end_rule_episode reports it ended one",
+              alerts.end_rule_episode(db_path, "PC-RULE", 7) is True)
+        check("...and the alert is still open", alerts.count_open(db_path) == 3
+              and alerts.get(db_path, rid)["episode_ended_at"] is not None)
+        rid3 = alerts.upsert_rule(db_path, "PC-RULE", 7, "Disk nearly full", "C: is at 98%")
+        check("the next match accumulates a NEW alert", rid3 != rid
+              and alerts.count_open(db_path) == 4)
+
+        alerts.resolve_for_rule(db_path, 7)
+        check("resolve_for_rule closes only that rule's alerts",
+              alerts.count_open(db_path) == 2
+              and alerts.get(db_path, rid)["status"] == "resolved"
+              and alerts.get(db_path, other)["status"] == "open")
+        listed = [a for a in alerts.list_open(db_path) if a["kind"] == alerts.KIND_RULE]
+        check("list_open surfaces machine + detail on rule rows",
+              listed and all(a.get("machine") and a.get("detail") for a in listed))
     finally:
         # Best-effort: on Windows the WAL connections sqlite3 leaves open (a `with conn`
         # block commits but doesn't close) can still hold the temp file. It's in TEMP.
@@ -158,10 +182,15 @@ def test_kind_rename_migration():
         alerts.init_alerts_db(db_path)
         again = [a for a in alerts.list_open(db_path) if a.get("machine") == "PC-LEGACY"]
         check("re-running the migration changes nothing", len(again) == 1)
-        alerts.upsert_high_temp(db_path, "PC-LEGACY", 95.0, 85, 300)
-        check("the migrated row is refreshed, not duplicated",
-              len([a for a in alerts.list_open(db_path)
-                   if a.get("machine") == "PC-LEGACY"]) == 1)
+        # Nothing writes the kind any more, so there is no upsert to re-run here. What still
+        # has to hold is that the migrated row remains readable and dismissable -- an alert
+        # an operator has not yet acted on must not become unreachable just because the hub
+        # stopped raising its kind.
+        legacy = again[0]
+        check("the migrated row still decodes its detail",
+              legacy["detail"] == {"avg_temp": 92.0})
+        check("the migrated row is still dismissable",
+              alerts.dismiss(db_path, legacy["id"]) is True)
     finally:
         try:
             os.remove(db_path)
@@ -271,123 +300,136 @@ def test_auth_required():
                     json={"survivor": "a", "victims": ["b"]}).status_code == 401)
 
 
-def _seed_readings(machine, temps, base, step=5):
-    """Insert `temps` for `machine`, one every `step`s ending at epoch `base` (newest
-    first). Uses the same readings table the evaluator averages over."""
-    with app.get_db_conn() as conn:
-        for i, t in enumerate(temps):
-            ts = base - i * step
-            conn.execute(
-                "INSERT OR IGNORE INTO readings(ts_text, ts_epoch, machine, temp) "
-                "VALUES (?, ?, ?, ?)", (str(ts), ts, machine, t))
-
-
-def _high_temps(machine):
-    """Every open high-temperature alert for `machine`, newest activity first."""
+def _rule_alerts(machine):
+    """Every open rule alert for `machine`, newest activity first."""
     return [a for a in alerts.list_open(app.DB_PATH)
-            if a["kind"] == "high_temperature" and a.get("machine") == machine]
+            if a["kind"] == alerts.KIND_RULE and a.get("machine") == machine]
 
 
-def _open_high_temp(machine):
-    """The ACTIVE episode for `machine` (the machine is hot right now), if any. Ended
-    episodes stay open and visible, so this deliberately ignores them."""
-    return next((a for a in _high_temps(machine) if not a.get("episode_ended_at")), None)
+def test_rule_alert_api_and_scope():
+    """A rule alert over /api/alerts: its own shape, and scoped to its one machine.
 
-
-def test_high_temp_evaluator():
-    print("\n-- high-temperature evaluator: average, spike immunity, episodes, offline --")
-    settings.set_many(app.DB_PATH, {
-        "hub.high_temp_threshold": 80,
-        "hub.high_temp_avg_window_seconds": 300,
-        "fleet.dashboard_online_window_seconds": 120,
-    })
-    now = 1_950_000_000
-
-    # Sustained: 40 readings at 90 over ~200s -> average 90 -> alert.
-    _seed_readings("ovHot", [90] * 40, base=now)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now)
-    a = _open_high_temp("ovHot")
-    check("a sustained hot average raises exactly one alert",
-          a is not None and a["detail"]["avg_temp"] == 90.0)
-    check("...carrying the threshold and window it was judged against",
-          a["detail"]["threshold"] == 80 and a["detail"]["window_seconds"] == 300)
-
-    # A single 120 spike in an otherwise-50 window averages ~51.8 -> NO alert. This is the
-    # whole point of the feature over the old instantaneous flag.
-    _seed_readings("ovSpike", [50] * 39 + [120], base=now)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now)
-    check("a lone spike inside a cool window does NOT raise",
-          _open_high_temp("ovSpike") is None)
-
-    # Refreshing while still hot must not pile up rows, and must remember the peak.
-    # Seeded past the 300s window so the average is purely the new (cooler but still hot)
-    # readings, not a blend with the 90s above.
-    _seed_readings("ovHot", [86] * 40, base=now + 400)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now + 400)
-    check("staying hot refreshes the SAME episode", len(_high_temps("ovHot")) == 1)
-    check("...tracking the current average and the episode's peak",
-          _open_high_temp("ovHot")["detail"]["avg_temp"] == 86.0
-          and _open_high_temp("ovHot")["detail"]["peak_temp"] == 90.0)
-
-    # Newer cool readings pull the average down -> the episode ends, but the alert stays
-    # open and visible until an operator dismisses it.
-    _seed_readings("ovHot", [50] * 40, base=now + 1000)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now + 1000)
-    check("cooling back down ends the episode without closing the alert",
-          _open_high_temp("ovHot") is None and len(_high_temps("ovHot")) == 1
-          and _high_temps("ovHot")[0]["episode_ended_at"] == now + 1000)
-
-    # ...and heating up again ACCUMULATES a second alert instead of overwriting the first.
-    _seed_readings("ovHot", [95] * 40, base=now + 5000)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now + 5000)
-    episodes = _high_temps("ovHot")
-    check("a second hot spell raises a NEW alert beside the old one", len(episodes) == 2)
-    check("...the earlier episode keeping its own numbers",
-          sorted(e["detail"]["peak_temp"] for e in episodes) == [90.0, 95.0])
-    # Only one of them is live, so the unique index still bounds the table.
-    check("...and only one episode is active at a time",
-          sum(1 for e in episodes if not e["episode_ended_at"]) == 1)
-    for e in episodes:
-        alerts.dismiss(app.DB_PATH, e["id"])
-
-    # Hot but last reading older than the online window -> not currently online, no alert.
-    _seed_readings("ovGone", [95] * 40, base=now - 10_000)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now)
-    check("a hot machine that stopped reporting is not alerted",
-          _open_high_temp("ovGone") is None)
-
-    # A machine that was hot and then goes offline entirely (drops out of the window) has
-    # its episode ended, not left dangling open forever.
-    _seed_readings("ovDrop", [95] * 40, base=now + 2000)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now + 2000)
-    check("hot machine alerts while online", _open_high_temp("ovDrop") is not None)
-    # Evaluate far in the future: ovDrop's readings are now well outside the window.
-    app.evaluate_high_temp_once(app.DB_PATH, now=now + 2000 + 100_000)
-    check("...and its episode ends once it drops out of the window entirely",
-          _open_high_temp("ovDrop") is None and len(_high_temps("ovDrop")) == 1)
-
-
-def test_high_temp_api_and_scope():
-    print("\n-- high-temperature alerts over /api/alerts, with scope --")
-    settings.set_many(app.DB_PATH, {
-        "hub.high_temp_threshold": 80,
-        "hub.high_temp_avg_window_seconds": 300,
-        "fleet.dashboard_online_window_seconds": 120,
-    })
-    now = 1_960_000_000
-    _seed_readings("apiHot", [88] * 40, base=now)
-    app.evaluate_high_temp_once(app.DB_PATH, now=now)
+    Both halves are regressions. get_alerts used to special-case exactly ONE per-machine
+    kind, so a rule alert took the duplicate_serial branch instead -- where `machines` is
+    empty, `serial_number` is null, and the scope guard reads `if involved and not in_scope`.
+    An empty `involved` makes that falsy, so the alert was handed to every operator whose
+    scope excluded its machine, and the Alerts tab drew it as a duplicate-serial card titled
+    "unknown serial" with a Merge button that had nothing to merge.
+    """
+    print("\n-- rule alerts over /api/alerts, with scope --")
+    alerts.upsert_rule(app.DB_PATH, "ruleHot", 11, "Disk nearly full", "C: is at 96%")
 
     resp = client.get("/api/alerts")
     check("GET /api/alerts 200", resp.status_code == 200)
     row = next((x for x in resp.get_json()
-                if x["kind"] == "high_temperature" and x["machine"] == "apiHot"), None)
-    check("high-temp alert is returned with its detail",
-          row is not None and row["detail"]["avg_temp"] == 88.0)
+                if x["kind"] == alerts.KIND_RULE and x["machine"] == "ruleHot"), None)
+    check("rule alert is returned with its detail",
+          row is not None and row["detail"]["rule_name"] == "Disk nearly full"
+          and row["detail"]["text"] == "C: is at 96%")
+    # What the Alerts tab keys its renderer off. A rule alert that carries a serial or a
+    # machines list is one the duplicate-serial card would happily render.
+    check("rule alert carries NO serial_number", row and row["serial_number"] is None)
+    check("rule alert carries no machines list", row and not row["machines"])
+
+    # Scope. The session user is a break-glass superuser, so machine_filter() is None and
+    # everything is visible; narrow it by hand to prove the alert is actually filtered
+    # rather than merely happening to be in scope.
+    original = app.access.machine_filter
+    try:
+        app.access.machine_filter = lambda: (lambda m: m != "ruleHot")
+        body = client.get("/api/alerts").get_json()
+        check("an out-of-scope rule alert is withheld",
+              not any(x["kind"] == alerts.KIND_RULE and x.get("machine") == "ruleHot"
+                      for x in body))
+        count = client.get("/api/alerts/count").get_json()
+        check("...and is not counted in the badge either",
+              count["count"] == len(body))
+    finally:
+        app.access.machine_filter = original
+
+    check("it is visible again once in scope",
+          any(x["kind"] == alerts.KIND_RULE and x.get("machine") == "ruleHot"
+              for x in client.get("/api/alerts").get_json()))
 
     resp = client.post(f"/api/alerts/{row['id']}/dismiss", json={})
-    check("a high-temp alert can be dismissed", resp.status_code == 200
-          and _open_high_temp("apiHot") is None)
+    check("a rule alert can be dismissed", resp.status_code == 200
+          and not _rule_alerts("ruleHot"))
+
+
+def test_retired_high_temp_alert_still_renders():
+    """A high_temperature row an operator never dismissed survives the kind's retirement.
+
+    Nothing raises the kind any more, so this writes one the way the old evaluator did. The
+    point is that it stays visible, stays scoped on its machine, and stays dismissable --
+    retiring a feature must not strand the alerts it already raised.
+    """
+    print("\n-- retired high_temperature rows stay readable --")
+    with alerts.get_conn(app.DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO alerts(kind, machine, detail, status, created_at, updated_at) "
+            "VALUES (?, 'oldHot', '{\"avg_temp\": 91.4, \"threshold\": 85, "
+            "\"window_seconds\": 300}', 'open', 1, 1)", (alerts.KIND_HIGH_TEMP,))
+
+    row = next((x for x in client.get("/api/alerts").get_json()
+                if x["kind"] == alerts.KIND_HIGH_TEMP and x["machine"] == "oldHot"), None)
+    check("the legacy alert is still served with its detail",
+          row is not None and row["detail"]["avg_temp"] == 91.4)
+
+    original = app.access.machine_filter
+    try:
+        app.access.machine_filter = lambda: (lambda m: m != "oldHot")
+        check("...and is still scoped on its machine",
+              not any(x.get("machine") == "oldHot"
+                      for x in client.get("/api/alerts").get_json()))
+    finally:
+        app.access.machine_filter = original
+
+    check("...and can still be dismissed",
+          client.post(f"/api/alerts/{row['id']}/dismiss", json={}).status_code == 200)
+
+
+def test_nothing_raises_high_temperature_any_more():
+    """The built-in evaluator is gone: hot readings alone must not produce an alert.
+
+    Temperature alerting is an operator-written rule now. The seeded 'High temperature' rule
+    ships DISABLED, so a fresh hub that ingests a scorching reading should raise nothing at
+    all -- if this fails, some path is still auto-alerting behind the rules engine's back.
+    """
+    print("\n-- no automatic temperature alert is raised --")
+    check("the evaluator function is gone", not hasattr(app, "evaluate_high_temp_once"))
+    check("the store cannot write the kind", not hasattr(alerts, "upsert_high_temp"))
+
+    before = alerts.count_open(app.DB_PATH)
+    for _ in range(12):
+        report("scorching", "SER-HOT-NEW", temp=99.0)
+    check("a very hot machine raises no alert by itself",
+          alerts.count_open(app.DB_PATH) == before
+          and not [a for a in alerts.list_open(app.DB_PATH)
+                   if a["kind"] == alerts.KIND_HIGH_TEMP and a.get("machine") == "scorching"])
+
+
+def test_seeded_high_temp_rule():
+    """The migration that carries an upgrading hub across. It runs at import, so by now the
+    rule exists -- disabled, targeting everything, alerting via the rules engine."""
+    print("\n-- the retired alerter was seeded as a disabled rule --")
+    import rules
+    seeded = next((r for r in rules.list_rules(app.DB_PATH)
+                   if r["name"] == app.HIGH_TEMP_RULE_NAME), None)
+    check("the rule exists", seeded is not None)
+    check("it is DISABLED, so an operator reviews it before it fires",
+          seeded and not seeded["enabled"])
+    check("it conditions on the temperature metric",
+          seeded and "metric.cpu_temp" in seeded["condition_text"])
+    check("it holds for the old averaging window rather than firing on a spike",
+          seeded and seeded["for_seconds"] > 0)
+    check("it raises an alert", seeded
+          and [a for a in seeded["actions"] if a["type"] == "alert"])
+    check("it targets the whole fleet by default",
+          seeded and seeded["target"]["include"] == [{"kind": "all"}])
+    check("re-running the migration is a no-op",
+          app.seed_high_temp_rule(app.DB_PATH) is None
+          and len([r for r in rules.list_rules(app.DB_PATH)
+                   if r["name"] == app.HIGH_TEMP_RULE_NAME]) == 1)
 
 
 def test_sidebar_badge_renders():
@@ -441,8 +483,10 @@ if __name__ == "__main__":
     test_dismiss_endpoint()
     test_merge_endpoint_validation()
     test_auth_required()
-    test_high_temp_evaluator()
-    test_high_temp_api_and_scope()
+    test_rule_alert_api_and_scope()
+    test_retired_high_temp_alert_still_renders()
+    test_nothing_raises_high_temperature_any_more()
+    test_seeded_high_temp_rule()
     test_sidebar_badge_renders()
     test_alert_count_endpoint()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")

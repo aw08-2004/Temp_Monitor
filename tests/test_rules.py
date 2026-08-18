@@ -581,6 +581,7 @@ check("...and reads UNKNOWN if one somehow reaches the evaluator",
 print("\n-- targeting --")
 import fleet
 import alerts
+import scripts
 
 fleet.init_fleet_db(DB)
 alerts.init_alerts_db(DB)
@@ -981,6 +982,289 @@ check("...and the outcome is visible in the history", fires[0]["outcome"] == "di
 # A command that was not issued by a rule is ignored entirely.
 check("a non-rule command result is ignored",
       rules.handle_message_result(DB, "cmd-does-not-exist") is None)
+
+# ---------------------------------------------------------------------------------------
+# REGRESSION: a rule whose action list puts a command BEFORE its show_message.
+#
+# rule_fires.command_id is what handle_message_result looks an incoming answer up by, and
+# _fire used to store the FIRST dispatched command id. With the actions in this order that
+# was the gpupdate, not the dialog -- so the answer matched no fire row, handle_message_result
+# returned at its early guard, and "yes -> restart" silently never ran. The order is legal and
+# nothing warned about it.
+COMMANDS.clear()
+err, _ = rules.save_rule(DB, dict(BASE_RULE, name="Command first", for_seconds=0,
+                                  cooldown_seconds=0,
+                                  actions=[{"type": "command",
+                                            "params": {"command_type": "gpupdate", "params": {}}},
+                                           MESSAGE],
+                                  target={"include": [{"kind": "machines",
+                                                       "machines": ["PC1"]}]}),
+                         rule_id=RULE_ID, actor="tester", now=NOW, command_cooldown_floor=0)
+check("a command-then-message rule saves", err is None)
+rules.evaluate_once(DB, resolve, now=NOW + 120000, config={"command_actions_enabled": True})
+check("both commands were issued", len(COMMANDS) == 2
+      and {c["type"] for c in COMMANDS} == {"gpupdate", "show_message"})
+# The fire row must point at the DIALOG, not at the command that happened to go first.
+message_index = next(i for i, c in enumerate(COMMANDS, start=1) if c["type"] == "show_message")
+out = rules.handle_message_result(DB, f"cmd-{message_index}", status=fleet.STATUS_DONE,
+                                  result={"outcome": "yes"}, now=NOW + 120100,
+                                  config={"command_actions_enabled": True})
+check("the answer still routes when a command action came first",
+      out is not None and out["outcome"] == "yes")
+check("...and the restart was actually issued",
+      any(c["type"] == "restart" for c in COMMANDS))
+
+# ---------------------------------------------------------------------------------------
+# The kill switch must be LOUD. With command actions off fleet-wide the follow-up cannot run
+# -- that is the switch working -- but the operator has to be able to find out why, because
+# from the user's chair this is "I pressed Yes and my PC did not restart".
+COMMANDS.clear()
+AUDIT = []
+rules.evaluate_once(DB, resolve, now=NOW + 140000, config={"command_actions_enabled": True})
+message_index = next(i for i, c in enumerate(COMMANDS, start=1) if c["type"] == "show_message")
+out = rules.handle_message_result(
+    DB, f"cmd-{message_index}", status=fleet.STATUS_DONE, result={"outcome": "yes"},
+    now=NOW + 140100, config={"command_actions_enabled": False},
+    audit=lambda actor, action, target, detail, level=None:
+        AUDIT.append((action, detail, level)))
+check("the answer is still recorded", out is not None and out["outcome"] == "yes")
+check("the follow-up is skipped, not run",
+      out["actions"] and out["actions"][0].get("skipped")
+      and not any(c["type"] == "restart" for c in COMMANDS))
+check("...and the skip is audited on its own",
+      any(a == "rule_followup_skipped" for a, _detail, _level in AUDIT))
+check("...naming the reason, so the setting is findable",
+      any("command_actions_enabled" in str(detail)
+          for action, detail, _level in AUDIT if action == "rule_followup_skipped"))
+
+# ---------------------------------------------------------------------------------------
+# `force` on a restart follow-up survives validate -> save -> dispatch. It reaches the agent
+# as a command param (RestartExecutor adds /f), so anything that drops it silently restores
+# the polite restart an app with unsaved work can veto.
+FORCING = copy.deepcopy(MESSAGE)
+FORCING["on_response"]["yes"] = [{"type": "command",
+                                  "params": {"command_type": "restart",
+                                             "params": {"delay_seconds": 60, "force": True}}}]
+err, clean = val_actions([FORCING])
+check("a forcing follow-up validates", err is None)
+check("...and force survives validation",
+      err is None
+      and clean[0]["on_response"]["yes"][0]["params"]["params"]["force"] is True)
+
+COMMANDS.clear()
+err, _ = rules.save_rule(DB, dict(BASE_RULE, name="Forcing nag", for_seconds=0,
+                                  cooldown_seconds=0, actions=[FORCING],
+                                  target={"include": [{"kind": "machines",
+                                                       "machines": ["PC1"]}]}),
+                         rule_id=RULE_ID, actor="tester", now=NOW, command_cooldown_floor=0)
+check("a forcing rule saves", err is None)
+rules.evaluate_once(DB, resolve, now=NOW + 160000, config={"command_actions_enabled": True})
+message_index = next(i for i, c in enumerate(COMMANDS, start=1) if c["type"] == "show_message")
+rules.handle_message_result(DB, f"cmd-{message_index}", status=fleet.STATUS_DONE,
+                            result={"outcome": "yes"}, now=NOW + 160100,
+                            config={"command_actions_enabled": True})
+restart = next((c for c in COMMANDS if c["type"] == "restart"), None)
+check("force reaches the agent on the restart command",
+      restart is not None and restart["params"].get("force") is True)
+
+# =======================================================================================
+# COMMAND PARAMETERS -- the schema fleet.py declares, enforced at the rules boundary.
+print("\n-- command parameters --")
+
+err, clean = val_actions([{"type": "command", "params": {
+    "command_type": "restart", "params": {"delay_seconds": 300, "force": True}}}])
+check("a restart with a countdown and force validates", err is None)
+check("...and the params are stored as typed values", err is None
+      and clean[0]["params"]["params"] == {"delay_seconds": 300, "force": True})
+
+check("an out-of-range countdown is refused",
+      val_actions([{"type": "command", "params": {
+          "command_type": "restart", "params": {"delay_seconds": 999999}}}])[0] is not None)
+check("a parameter the command does not take is refused",
+      val_actions([{"type": "command", "params": {
+          "command_type": "restart", "params": {"nonsense": 1}}}])[0] is not None)
+check("run_script without a script is refused",
+      val_actions([{"type": "command", "params": {
+          "command_type": "run_script", "params": {}}}])[0] is not None)
+check("an unknown shell is refused",
+      val_actions([{"type": "command", "params": {"command_type": "run_script",
+          "params": {"script": "Get-Date", "shell": "bash"}}}])[0] is not None)
+check("install_app with neither an id nor an msi is refused",
+      val_actions([{"type": "command", "params": {
+          "command_type": "install_app", "params": {}}}])[0] is not None)
+# Sloppy JSON types are coerced, exactly as settings does: "300" is the number the operator
+# typed, and refusing it would be a transport detail leaking into their face.
+err, clean = val_actions([{"type": "command", "params": {
+    "command_type": "restart", "params": {"delay_seconds": "300", "force": "yes"}}}])
+check("string-typed numbers and booleans are coerced", err is None
+      and clean[0]["params"]["params"] == {"delay_seconds": 300, "force": True})
+# A default left blank is NOT written into the rule -- the agent's default stays authoritative
+# and opening a rule cannot change what was stored.
+err, clean = val_actions([{"type": "command", "params": {
+    "command_type": "restart", "params": {}}}])
+check("an unset parameter is not materialised", err is None
+      and clean[0]["params"]["params"] == {})
+
+check("update_bios cannot be issued by a rule (its id is minted per window)",
+      val_actions([{"type": "command", "params": {
+          "command_type": "update_bios", "params": {"update_id": "x"}}}])[0] is not None)
+
+# THE regression this whole change hangs on: a follow-up is validated by the same funnel as a
+# top-level action. There is one _validate_action; a second path would eventually disagree.
+check("a nested follow-up gets the SAME parameter validation",
+      val_actions([{"type": "show_message",
+                    "params": {"title": "T", "body": "B", "preset": "yes_no"},
+                    "on_response": {"yes": [{"type": "command", "params": {
+                        "command_type": "restart",
+                        "params": {"delay_seconds": 999999}}}]}}])[0] is not None)
+check("...and accepts a valid one",
+      val_actions([{"type": "show_message",
+                    "params": {"title": "T", "body": "B", "preset": "yes_no"},
+                    "on_response": {"yes": [{"type": "command", "params": {
+                        "command_type": "run_script",
+                        "params": {"script": "Get-Date"}}}]}}])[0] is None)
+
+
+# =======================================================================================
+# TEMPLATING IN COMMAND PARAMS, and the refusal to run code containing "unknown".
+print("\n-- templating command params --")
+
+VARS_OK = {"sys.machine": rules.Value("WKS-1", True, 0)}
+rendered, missing = rules.render_params_checked(
+    {"script": "Write-Host {{sys.machine}}", "timeout_seconds": 60}, VARS_OK)
+check("a string param is templated", rendered["script"] == "Write-Host WKS-1")
+check("a non-string param is left alone", rendered["timeout_seconds"] == 60)
+check("nothing is reported missing", missing == [])
+
+rendered, missing = rules.render_params_checked({"script": "Stop-Service {{sys.machine}}"}, {})
+check("an unresolvable name is REPORTED, not silently substituted", missing == ["sys.machine"])
+# The behaviour that must NOT change for messages: a sentence a person reads still says
+# "unknown", because there it means "missing data" rather than an instruction.
+check("render_template still substitutes 'unknown' for message text",
+      rules.render_template("up for {{sys.uptime_days}} days", {}) == "up for unknown days")
+
+
+# =======================================================================================
+# THE SCRIPT ACTION
+print("\n-- the script action --")
+
+err, _ = scripts.save_script(
+    DB, "restart_svc", "Restart a service", "", "powershell",
+    'Write-Host "{{sys.machine}}"\nRestart-Service -Name "{{input.service_name}}"',
+    [{"name": "service_name", "required": True}], 900,
+    known_variable=lambda n: rules.lookup_variable(n, None) is not None, actor="tester")
+check("a script saves for the rule to reference", err is None)
+
+SCRIPT_ACTION = {"type": "script",
+                 "params": {"script": "restart_svc", "inputs": {"service_name": "Spooler"}}}
+err, rule = rules.save_rule(DB, dict(BASE_RULE, name="Fix the spooler", for_seconds=0,
+                                     cooldown_seconds=0, actions=[SCRIPT_ACTION],
+                                     target={"include": [{"kind": "machines",
+                                                          "machines": ["PC1"]}]}),
+                            rule_id=RULE_ID, actor="tester", now=NOW, command_cooldown_floor=0)
+check("a rule referencing it saves", err is None)
+
+check("a reference to a missing script is refused at save",
+      rules.save_rule(DB, dict(BASE_RULE, name="Ghost", actions=[
+          {"type": "script", "params": {"script": "ghost", "inputs": {}}}]),
+          actor="tester", now=NOW, command_cooldown_floor=0)[0] is not None)
+check("a script action needs ISSUE_COMMANDS like any other command",
+      rules.save_rule(DB, dict(BASE_RULE, name="NoPerm", actions=[SCRIPT_ACTION]),
+                      actor="tester", now=NOW, allow_command=False,
+                      command_cooldown_floor=0)[0] is not None)
+check("a script counts as a command for the cooldown floor",
+      rules.actions_include_command([SCRIPT_ACTION]) is True)
+check("...including when it is only a follow-up",
+      rules.actions_include_command([{"type": "show_message", "params": {},
+                                      "on_response": {"yes": [SCRIPT_ACTION]}}]) is True)
+
+COMMANDS.clear()
+rules.evaluate_once(DB, resolve, now=NOW + 200000, config={"command_actions_enabled": True})
+issued = next((c for c in COMMANDS if c["type"] == "run_script"), None)
+check("firing it issues a run_script command", issued is not None)
+check("...carrying the RENDERED body, not the template",
+      issued and "{{" not in issued["params"]["script"]
+      and "Restart-Service -Name \"Spooler\"" in issued["params"]["script"])
+check("...with the script's own shell and timeout",
+      issued and issued["params"]["shell"] == "powershell"
+      and issued["params"]["timeout_seconds"] == 900)
+
+# A machine whose variables cannot be resolved must not run code with "unknown" spliced in.
+COMMANDS.clear()
+out = rules.dispatch_actions(DB, [SCRIPT_ACTION], "PC1", {}, rule=rule, now=NOW,
+                             config={**rules.DEFAULT_CONFIG, "command_actions_enabled": True},
+                             allowed=True)
+check("an unresolvable variable skips the script", bool(out[0].get("skipped")))
+check("...and issues nothing at all", not COMMANDS)
+
+# The fleet-wide kill switch reaches scripts, because ACTION_SCRIPT is in MUTATING_ACTIONS.
+COMMANDS.clear()
+out = rules.dispatch_actions(DB, [SCRIPT_ACTION], "PC1",
+                             {"sys.machine": rules.Value("PC1", True, 0)}, rule=rule, now=NOW,
+                             config={**rules.DEFAULT_CONFIG, "command_actions_enabled": False},
+                             allowed=False, block_reason="command actions are disabled")
+check("the command kill switch also stops a script", bool(out[0].get("skipped")))
+check("...and issues nothing", not COMMANDS)
+
+check("rules_using_script finds the rule",
+      [r["name"] for r in rules.rules_using_script(DB, "restart_svc")] == ["Fix the spooler"])
+
+# =======================================================================================
+# "Ask once, then wait until it stops matching."
+#
+# The bug this exists for: a cooldown is a TIMER, so a condition that stays true re-fires
+# forever. `sys.uptime_days > 7` holds until somebody reboots, so the dialog came back every
+# hour and clicking No bought the person at the desk nothing.
+print("\n-- fire once per match --")
+
+COMMANDS.clear()
+ONCE = dict(BASE_RULE, name="Ask once", for_seconds=0, cooldown_seconds=60,
+            fire_once_per_match=True,
+            actions=[{"type": "alert", "params": {"text": "up too long"}}],
+            target={"include": [{"kind": "machines", "machines": ["PC1"]}]})
+err, once_rule = rules.save_rule(DB, ONCE, actor="tester", now=NOW, command_cooldown_floor=0)
+check("a fire-once rule saves", err is None)
+check("...and the flag round-trips",
+      rules.get_rule(DB, once_rule["id"])["fire_once_per_match"] is True)
+
+ONCE_ID = once_rule["id"]
+T = NOW + 2_000_000
+
+
+def fires_at(when):
+    """How many times the fire-once rule fired on this pass."""
+    before = len(rules.list_fires(DB, ONCE_ID, limit=500))
+    rules.evaluate_once(DB, resolve, now=when, config={"command_actions_enabled": True})
+    return len(rules.list_fires(DB, ONCE_ID, limit=500)) - before
+
+
+check("it fires the first time the condition holds", fires_at(T) == 1)
+# Well past the 60s cooldown: a timer-only rule would fire again here, which is the whole
+# complaint.
+check("...and NOT again while it keeps matching", fires_at(T + 5000) == 0)
+check("...still not, however long it holds", fires_at(T + 200000) == 0)
+
+# The condition clears (the machine rebooted, so uptime reset), then holds again.
+RESOLVED["PC1"] = dict(vars1, **{"sys.uptime_days": rules.Value(0, True, 0)})
+check("nothing fires while it does not match", fires_at(T + 300000) == 0)
+RESOLVED["PC1"] = vars1
+check("it arms itself again once the condition has cleared and returned",
+      fires_at(T + 400000) == 1)
+
+# And the default is unchanged: without the flag a rule still fires on the cooldown timer.
+TIMER = dict(BASE_RULE, name="Ask hourly", for_seconds=0, cooldown_seconds=60,
+             actions=[{"type": "alert", "params": {"text": "up too long"}}],
+             target={"include": [{"kind": "machines", "machines": ["PC1"]}]})
+err, timer_rule = rules.save_rule(DB, TIMER, actor="tester", now=NOW, command_cooldown_floor=0)
+check("a rule without the flag defaults to the old behaviour",
+      err is None and timer_rule["fire_once_per_match"] is False)
+TIMER_ID = timer_rule["id"]
+before = len(rules.list_fires(DB, TIMER_ID, limit=500))
+rules.evaluate_once(DB, resolve, now=T + 500000, config={"command_actions_enabled": True})
+rules.evaluate_once(DB, resolve, now=T + 500100, config={"command_actions_enabled": True})
+check("...firing again once its cooldown has elapsed",
+      len(rules.list_fires(DB, TIMER_ID, limit=500)) - before == 2)
+
 
 fleet.create_command = _real_create
 

@@ -1,4 +1,4 @@
-using System.Management;
+﻿using System.Management;
 using Microsoft.Extensions.Logging;
 
 namespace TempMonitorAgent.Fleet.Executors;
@@ -6,7 +6,14 @@ namespace TempMonitorAgent.Fleet.Executors;
 // restart/shutdown/rename take onOutput but ignore it: they return in well under the
 // console's poll interval, so there is no progress to narrate.
 
-/// <summary>restart: reboot the machine after an optional delay (default 60s).</summary>
+/// <summary>restart: reboot the machine after an optional delay (default 60s).
+///
+/// <c>force</c> (default false) adds <c>/f</c>. Without it Windows lets an application with
+/// unsaved work VETO the shutdown -- and it does so after shutdown.exe has already exited 0,
+/// so the hub is told the restart was scheduled and the machine simply never goes down. That
+/// is indistinguishable from the command having been ignored, and it is the usual answer to
+/// "the user pressed Yes and nothing happened". Forcing is not the default because it closes
+/// those applications without saving; it is the rule author's call, made per rule.</summary>
 public sealed class RestartExecutor : ICommandExecutor
 {
     public string Type => "restart";
@@ -14,15 +21,20 @@ public sealed class RestartExecutor : ICommandExecutor
     public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         int delay = cmd.Params.GetInt("delay_seconds", 60);
+        bool force = cmd.Params.GetBool("force");
         var outcome = await ProcessRunner.RunAsync(
-            "shutdown.exe", $"/r /t {delay} /c \"TempMonitor fleet restart\"", ct, timeoutSeconds: 30);
+            "shutdown.exe", $"/r /t {delay}{(force ? " /f" : "")} /c \"TempMonitor fleet restart\"",
+            ct, timeoutSeconds: 30);
         return outcome.ExitCode == 0
-            ? CommandResult.Ok($"restart scheduled in {delay}s")
+            ? CommandResult.Ok($"restart scheduled in {delay}s{(force ? " (forced)" : "")}")
             : CommandResult.Fail($"shutdown /r exited {outcome.ExitCode}: {outcome.Output}");
     }
 }
 
-/// <summary>shutdown: power off the machine after an optional delay (default 60s).</summary>
+/// <summary>shutdown: power off the machine after an optional delay (default 60s).
+/// <c>force</c> behaves exactly as it does on restart above, and exists here for the same
+/// reason -- the two are a matched pair, and a flag that worked on one but not the other
+/// would be its own bug report.</summary>
 public sealed class ShutdownExecutor : ICommandExecutor
 {
     public string Type => "shutdown";
@@ -30,10 +42,12 @@ public sealed class ShutdownExecutor : ICommandExecutor
     public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         int delay = cmd.Params.GetInt("delay_seconds", 60);
+        bool force = cmd.Params.GetBool("force");
         var outcome = await ProcessRunner.RunAsync(
-            "shutdown.exe", $"/s /t {delay} /c \"TempMonitor fleet shutdown\"", ct, timeoutSeconds: 30);
+            "shutdown.exe", $"/s /t {delay}{(force ? " /f" : "")} /c \"TempMonitor fleet shutdown\"",
+            ct, timeoutSeconds: 30);
         return outcome.ExitCode == 0
-            ? CommandResult.Ok($"shutdown scheduled in {delay}s")
+            ? CommandResult.Ok($"shutdown scheduled in {delay}s{(force ? " (forced)" : "")}")
             : CommandResult.Fail($"shutdown /s exited {outcome.ExitCode}: {outcome.Output}");
     }
 }

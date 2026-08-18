@@ -48,6 +48,7 @@ import fleet
 import i18n
 import permissions
 import rules
+import scripts
 
 
 def _lang():
@@ -81,6 +82,12 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
     bp = Blueprint("rules", __name__)
     can_view = access.require(permissions.VIEW)
     can_manage = access.require(permissions.MANAGE_RULES)
+    # Scripts are gated on ISSUE_COMMANDS, NOT on MANAGE_RULES like everything else on this
+    # blueprint. A script body is code that a rule runs as SYSTEM, unattended, on every machine
+    # it targets -- so writing one is the same act as issuing a command, and is gated by the
+    # same capability. MANAGE_RULES deliberately does not carry that (see permissions.py), and
+    # a script store writable with it would hand fleet-wide code execution to every rule author.
+    can_run_code = access.require(permissions.ISSUE_COMMANDS)
 
     def _extra():
         return rules.all_extra_variables(db_path)
@@ -124,6 +131,69 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
             entry["age_seconds"] = value.age_seconds
         return entry
 
+    def _action_entry(action_type):
+        """One action type for the "add action" picker."""
+        key = f"{rules.ACTION_TEXT_KEY}.{action_type}"
+        label = i18n.translate(f"{key}.label", _lang())
+        description = i18n.translate(f"{key}.description", _lang())
+        return {
+            "name": action_type,
+            "label": action_type if label == f"{key}.label" else label,
+            "description": "" if description == f"{key}.description" else description,
+            # A message cannot be the answer to another message (_validate_show_message refuses
+            # it outright), so the follow-up picker must not offer it. Sent as a flag rather
+            # than a second filtered list, so the browser has one vocabulary, not two.
+            "nestable": action_type != rules.ACTION_SHOW_MESSAGE,
+        }
+
+    def _command_entry(command_type):
+        """One command as the editor needs it: its words, its parameters, and whether it works.
+
+        Same fall-back-to-the-name rule as _catalog_entry, and for the same reason -- the
+        translation happens HERE, server-side, because tests/test_i18n.py's key scan only sees
+        literal t('...') calls. A t(`rules.command.${type}.label`) in the browser would be
+        invisible to it, and a command added without catalog entries would caption its own
+        button with a raw key.
+        """
+        key = f"{rules.COMMAND_TEXT_KEY}.{command_type}"
+        label = i18n.translate(f"{key}.label", _lang())
+        description = i18n.translate(f"{key}.description", _lang())
+        schema = fleet.command_param_schema(command_type)
+        unavailable = fleet.COMMAND_UNAVAILABLE.get(command_type)
+        return {
+            "name": command_type,
+            "label": command_type if label == f"{key}.label" else label,
+            "description": "" if description == f"{key}.description" else description,
+            # None (undescribed) is flattened to [] for the wire, but `described` keeps the
+            # distinction the console needs: a command with no parameters renders as a bare
+            # choice, while an undescribed one must not pretend it takes nothing.
+            "described": schema is not None,
+            "params": [_param_entry(p) for p in (schema or ())],
+            "one_of": list(fleet.COMMAND_ONE_OF.get(command_type, ())),
+            "available": unavailable is None,
+            "unavailable_reason": unavailable or "",
+        }
+
+    def _param_entry(param):
+        """One command parameter. Params are keyed by NAME, not by (command, name): the same
+        `timeout_seconds` means the same thing to every command that takes one, and a catalog
+        with a separate entry per pair would be five copies of one sentence to translate."""
+        key = f"{rules.COMMAND_PARAM_TEXT_KEY}.{param.name}"
+        label = i18n.translate(f"{key}.label", _lang())
+        help_text = i18n.translate(f"{key}.help", _lang())
+        return {
+            "name": param.name,
+            "kind": param.kind,
+            "label": param.name if label == f"{key}.label" else label,
+            "help": "" if help_text == f"{key}.help" else help_text,
+            "default": param.default,
+            "minimum": param.minimum,
+            "maximum": param.maximum,
+            "choices": list(param.choices or ()),
+            "required": bool(param.required),
+            "max_chars": param.max_chars,
+        }
+
     # ---------------- The variable catalog ----------------
 
     @bp.route("/api/rules/variables", methods=["GET"])
@@ -142,6 +212,20 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
             "operators": {op: i18n.translate(f"{rules.OPERATOR_TEXT_KEY}.{op}.label", _lang())
                           for op in rules.ALL_OPERATORS},
             "groups": list(dict.fromkeys(v.group for v in rules.catalog(db_path))),
+            # The rest of the editor's vocabulary, served for the same reason the variables
+            # are: rules.js used to carry hand-maintained copies of all of it, and every copy
+            # had drifted -- seven of twelve commands, five of six action types, five of six
+            # button presets. The module docstring in rules.js already claimed the server was
+            # the source; this makes that true.
+            "action_types": [_action_entry(t) for t in rules.ACTION_TYPES],
+            "commands": [_command_entry(c) for c in rules.offered_commands()],
+            "button_presets": {name: {
+                "label": i18n.translate(f"{rules.BUTTON_PRESET_TEXT_KEY}.{name}", _lang()),
+                "buttons": list(buttons),
+            } for name, buttons in rules.BUTTON_PRESETS.items()},
+            "outcomes": [{"name": o,
+                          "label": i18n.translate(f"{rules.OUTCOME_TEXT_KEY}.{o}", _lang())}
+                         for o in rules.NON_BUTTON_OUTCOMES],
         }), 200
 
     @bp.route("/api/rules/variables/<machine>", methods=["GET"])
@@ -344,6 +428,83 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
     def remove_probe(name):
         if not rules.delete_probe(db_path, name):
             return jsonify({"error": "no such probe"}), 404
+        return jsonify({"status": "deleted"}), 200
+
+    # ---------------- Scripts ----------------
+    #
+    # Reading is split on purpose. LISTING is `view`: the rules editor has to offer the names
+    # to reference one, and an operator reading a rule should be able to see which script it
+    # runs. The BODY is `issue_commands`: it is SYSTEM-privileged code, and handing it to every
+    # viewer would leak the contents of the fleet's automation to anyone who can open a page.
+
+    @bp.route("/api/rules/scripts", methods=["GET"])
+    @login_required
+    @can_view
+    def list_all_scripts():
+        return jsonify({
+            "scripts": scripts.list_scripts(db_path),
+            "shells": list(scripts.SHELLS),
+            "max_body_chars": scripts.MAX_BODY_CHARS,
+            "can_edit": _may_issue_commands(),
+        }), 200
+
+    @bp.route("/api/rules/scripts/<name>", methods=["GET"])
+    @login_required
+    @can_run_code
+    def get_one_script(name):
+        script = scripts.get_script(db_path, name)
+        if script is None:
+            return jsonify({"error": "no such script"}), 404
+        return jsonify(script), 200
+
+    @bp.route("/api/rules/scripts", methods=["POST"])
+    @login_required
+    @can_run_code
+    def save_one_script():
+        body = request.get_json(silent=True) or {}
+        extra = _extra()
+        error, script = scripts.save_script(
+            db_path,
+            body.get("name"), body.get("label"), body.get("description"),
+            body.get("shell"), body.get("body"), body.get("inputs"),
+            body.get("timeout_seconds"),
+            enabled=bool(body.get("enabled", True)),
+            # Whether a {{name}} is real is a question only rules.py can answer, so it is
+            # handed in rather than imported -- scripts.py stays a leaf. Same seam
+            # rules.evaluate_once uses for its `resolve` callback.
+            known_variable=lambda ref: rules.lookup_variable(ref, extra) is not None,
+            actor=_actor())
+        if error:
+            return jsonify({"error": error}), 400
+        # LEVEL_SECURITY, like a settings change and unlike a rule edit: the detail of what
+        # this row records is the content of code that will run as SYSTEM. `used_by` is in the
+        # detail because editing a script silently changes what every one of those rules does
+        # -- the rules themselves are untouched, so this row is the only trace of it.
+        fleet.audit(db_path, actor=_actor(), action="save_script",
+                    level=fleet.LEVEL_SECURITY, target=script["name"],
+                    detail={"shell": script["shell"],
+                            "chars": len(script["body"]),
+                            "inputs": [i["name"] for i in script["inputs"]],
+                            "used_by": [r["name"]
+                                        for r in rules.rules_using_script(db_path,
+                                                                          script["name"])]})
+        return jsonify(script), 200
+
+    @bp.route("/api/rules/scripts/<name>", methods=["DELETE"])
+    @login_required
+    @can_run_code
+    def remove_script(name):
+        in_use = rules.rules_using_script(db_path, name)
+        error, deleted = scripts.delete_script(db_path, name, in_use=in_use)
+        if error:
+            # 409, not 400: the request is well-formed and the caller is allowed to make it --
+            # it conflicts with the state of something else, and the fix is to edit those rules.
+            return jsonify({"error": error,
+                            "rules": [r["name"] for r in in_use]}), 409
+        if not deleted:
+            return jsonify({"error": "no such script"}), 404
+        fleet.audit(db_path, actor=_actor(), action="delete_script",
+                    level=fleet.LEVEL_SECURITY, target=str(name))
         return jsonify({"status": "deleted"}), 200
 
     # ---------------- Targets and preview ----------------
