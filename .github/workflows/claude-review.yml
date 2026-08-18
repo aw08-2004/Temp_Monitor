@@ -1,0 +1,85 @@
+name: "Claude review"
+
+# Reviews a pull request when it opens and again on every later push to it.
+#
+# Complements CodeQL rather than repeating it: CodeQL finds a fixed catalogue of security
+# patterns and says nothing about whether the change is CORRECT, whether it matches the
+# conventions of the file it landed in, or whether the tests actually pin the behaviour the
+# commit message claims. That is what this is for.
+#
+# Costs API credits on every run, and `synchronize` means every push to an open PR is a run.
+# If that gets expensive on a long-lived branch, drop `synchronize` and it will review each PR
+# once when it opens.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+# Skip a review that is already obsolete: pushing three commits in a minute should produce one
+# review of the final state, not three of intermediate ones.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review the diff
+    runs-on: ubuntu-latest
+    # Dependabot and other bots get a PR body they cannot act on, and the secret is not
+    # available to a fork's PR anyway -- so the job would fail rather than review.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read          # read the diff
+      pull-requests: write    # post the review comments
+      id-token: write         # OIDC for the action
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # The base branch is needed to diff against it -- with the default shallow fetch
+          # there is no merge-base and `gh pr diff` is the only way to see the change.
+          fetch-depth: 0
+
+      - name: Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. The PR branch is already checked out.
+
+            Review ONLY the diff, not the repository around it. `gh pr diff` is the change.
+
+            Look for, roughly in this order:
+
+            1. Correctness. Does the change do what its commit message and PR body claim?
+               State a concrete failing input or sequence, not a worry. A finding you cannot
+               make fail is a guess, and guesses cost the author more time than they save.
+            2. Security. This product runs an agent as SYSTEM on every machine in a fleet and
+               the hub can make it execute code, so pay particular attention to: anything that
+               widens who may cause code to run (the capability split between `view`,
+               `manage_rules` and `issue_commands` is load-bearing and deliberate), anything
+               interpolated into a shell command or a script body, and anything that reads a
+               machine-supplied value as trusted. `hub/permissions.py` documents which
+               capability means what and why they are separate.
+            3. Conventions. This codebase comments the WHY, not the what, and existing
+               comments explain decisions rather than restating code. A change that matches
+               the local style is worth more than one that is merely correct. Reuse over
+               reinvention: if a helper already exists, say which one.
+            4. Tests. Does a new behaviour have a test that would fail without the change?
+               Deleted or weakened assertions are worth calling out explicitly.
+
+            Do not comment on formatting, line length, or anything a linter would catch.
+            Do not restate what the diff does. If the change looks good, say so briefly
+            rather than manufacturing findings to look thorough.
+
+            Post ONLY GitHub comments -- do not return the review as a message.
+            Use `gh pr comment` for the overall verdict.
+            Use `mcp__github_inline_comment__create_inline_comment` (with `confirmed: true`)
+            for anything anchored to a specific line.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git show:*)"
