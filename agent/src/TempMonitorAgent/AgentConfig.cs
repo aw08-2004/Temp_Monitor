@@ -1,4 +1,4 @@
-ï»¿namespace TempMonitorAgent;
+namespace TempMonitorAgent;
 
 /// <summary>
 /// Static configuration for the agent: versions, intervals, endpoints, embedded
@@ -9,7 +9,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.32.0";
+    public const string Version = "3.31.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -61,7 +61,7 @@ public static class AgentConfig
     ///
     /// The question that decides whether a request carries this agent's bearer token, so it
     /// has to be answered on the URL's parsed ORIGIN and never on its spelling. A plain
-    /// <c>url.StartsWith(HubBase)</c> â€” which is what this replaces â€” says yes to
+    /// <c>url.StartsWith(HubBase)</c> — which is what this replaces — says yes to
     /// <c>https://hub.example.com.attacker.net/x</c> and to
     /// <c>https://hub.example.com@attacker.net/x</c>, whose real hosts are
     /// <c>attacker.net</c> in both cases. Either one hands the agent's credential to
