@@ -85,7 +85,7 @@
     {% if shell_mode != 'framed' %}{% include "partials/_sidebar.html" %}{% endif %}
     <div class="app-shell__main">
         {% if shell_mode != 'framed' %}{% include "partials/_topbar.html" %}{% endif %}
-        <main class="app-shell__content">
+        <main class="app-shell__content{% block content_class %}{% endblock %}">
             {% block content %}{% endblock %}
         </main>
     </div>

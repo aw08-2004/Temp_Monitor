@@ -131,7 +131,7 @@
             row.appendChild(el('td', null, fmtSize(image.size_bytes)));
             row.appendChild(el('td', null, fmtTime(image.created_at)));
 
-            const actions = el('td');
+            const actions = el('td', 'data-table__actions');
             const flashBtn = el('button', 'btn btn--ghost', t('firmware.flash_button'));
             flashBtn.type = 'button';
             flashBtn.addEventListener('click', () => openFlash(image));
@@ -244,7 +244,7 @@
             // "refused" alone is not.
             row.appendChild(el('td', null, target.error || ''));
 
-            const actions = el('td');
+            const actions = el('td', 'data-table__actions');
             if (target.status === 'pending' || target.status === 'in_flight') {
                 const cancel = el('button', 'btn btn--ghost', t('firmware.cancel_target'));
                 cancel.type = 'button';

@@ -893,6 +893,22 @@ label.checkbox input {
     font-size: var(--text-sm);
 }
 
+/* The trailing Edit / Delete / … cell. Two things it has to do: keep its buttons on one
+   line (the actions column is the one a table squeezes first, and wrapped buttons set the
+   height of every row), and size itself to those buttons instead of taking an equal share
+   of the width -- `width: 1%` on a table cell means "as narrow as the content allows".
+   Rules and Permissions solve the same problem with their own flex rows; this is the class
+   to reach for in new tables. */
+.data-table__actions {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.data-table__actions .btn + .btn {
+    margin-left: var(--space-2);
+}
+
 /* Sortable headers: click to sort, click again to reverse. The active column shows a
    ▲/▼ glyph via ::after so no layout shifts as the arrow appears. */
 .data-table--sortable th[data-sort] {

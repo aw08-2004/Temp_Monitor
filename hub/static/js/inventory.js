@@ -169,6 +169,7 @@ function renderRow(row) {
     seenTd.textContent = formatLastSeen(row.updated_at);
 
     const actionTd = document.createElement('td');
+    actionTd.className = 'data-table__actions';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn btn--ghost';

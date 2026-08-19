@@ -89,7 +89,7 @@
             row.appendChild(el('td', null, when(device.last_used_at)));
             row.appendChild(el('td', null, when(device.expires_at)));
 
-            const actions = el('td');
+            const actions = el('td', 'data-table__actions');
             if (device.revoked) {
                 // Kept visible rather than filtered out: "this laptop was revoked in
                 // March" is the answer somebody is looking for when they ask why an app
