@@ -1060,11 +1060,10 @@ function renderDestinationRow(dest) {
     row.appendChild(el('td', null, dest.has_credentials
         ? t('backups.destinations.stored') : t('backups.destinations.missing')));
 
-    const actions = el('td');
+    const actions = el('td', 'data-table__actions');
     const edit = el('button', 'btn', t('common.edit'));
     edit.addEventListener('click', () => openDestination(dest));
     const remove = el('button', 'btn', t('common.delete'));
-    remove.style.marginLeft = 'var(--space-2)';
     remove.addEventListener('click', async () => {
         if (!confirm(t('backups.destinations.confirm_delete', { name: dest.name }))) return;
         try {

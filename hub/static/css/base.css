@@ -62,6 +62,15 @@ button, select, input {
     width: 100%;
 }
 
+/* Pages whose main table genuinely needs the room -- Packages carries full download URLs,
+   step chains and a three-button action column, and at 1280px those columns squeeze until
+   the buttons wrap one per line. Opt in per page with {% block content_class %} in the
+   template rather than raising the cap for everyone; a page of prose or cards reads worse
+   the wider it gets. */
+.app-shell__content--wide {
+    max-width: 1600px;
+}
+
 /* The app shell (static/js/shell.js): chrome that stays, pages in a frame under it.
 
    height, not min-height: the frame has to be given a definite box to fill, and the scrolling

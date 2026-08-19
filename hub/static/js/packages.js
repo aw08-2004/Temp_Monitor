@@ -199,7 +199,7 @@ function renderPackageRow(pkg) {
 
     tr.appendChild(el('td', 'pkg-target-error', detectionSummary(pkg.detection)));
 
-    const actions = el('td');
+    const actions = el('td', 'data-table__actions');
     const deployBtn = el('button', 'btn btn--primary', t('packages.deploy'));
     deployBtn.type = 'button';
     deployBtn.addEventListener('click', () => openDeploy(pkg));
@@ -207,13 +207,11 @@ function renderPackageRow(pkg) {
 
     const editBtn = el('button', 'btn', t('common.edit'));
     editBtn.type = 'button';
-    editBtn.style.marginLeft = 'var(--space-2)';
     editBtn.addEventListener('click', () => openPackage(pkg));
     actions.appendChild(editBtn);
 
     const delBtn = el('button', 'btn', t('common.delete'));
     delBtn.type = 'button';
-    delBtn.style.marginLeft = 'var(--space-2)';
     delBtn.addEventListener('click', async () => {
         if (!confirm(t('packages.confirm_delete', { package: pkg.name }))) return;
         try {
@@ -1042,7 +1040,7 @@ function renderDeployments(list) {
         progressCell.appendChild(renderTally(dep.target_counts));
         tr.appendChild(progressCell);
 
-        const actions = el('td');
+        const actions = el('td', 'data-table__actions');
         const view = el('button', 'btn', t('packages.deployments.view'));
         view.type = 'button';
         view.addEventListener('click', () => openProgress(dep.id));

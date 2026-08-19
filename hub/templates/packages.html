@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ t('nav.packages') }} - FleetHub{% endblock %}
+{# The widest table in the app: payload URLs, step chains and three action buttons.
+   See .app-shell__content--wide in base.css. #}
+{% block content_class %} app-shell__content--wide{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
