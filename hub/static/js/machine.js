@@ -165,6 +165,10 @@ const ENABLED_METRICS = (() => {
 // nine-digit tick and the latter is a flat line at the bottom of the axis.
 // `bits: true` additionally renders that rate in bits, which is the unit network hardware
 // is specified and sold in. Network only -- see BIT_UNITS.
+// A rate metric's `unit` never reaches the screen: panelConfig() replaces the axis title
+// with t('machine.per_second') and the tooltip returns formatRate(), both of which carry
+// the unit per-tick instead. It stays in the table as the row's own documentation of what
+// it charts -- which is exactly why the network rows say 'b/s' and the disk rows 'B/s'.
 // `label` is a function, not a string: this table is built at module load, and a panel
 // title has to be the operator's language rather than whatever the file was written in.
 // One literal key per metric, so the key scan in tests/test_i18n.py can see them all.
