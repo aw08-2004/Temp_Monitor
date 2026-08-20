@@ -21,6 +21,13 @@
     "download": "Client herunterladen",
     "rules": "Regeln"
   },
+  "hub_update": {
+    "available": "Hub v{version} ist verfügbar",
+    "update_now": "Jetzt aktualisieren",
+    "dismiss": "Ausblenden",
+    "updating": "Aktualisierung läuft… der Hub startet gleich neu.",
+    "failed": "Aktualisierung fehlgeschlagen. Bitte das Hub-Protokoll prüfen."
+  },
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agent v{version}",

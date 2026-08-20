@@ -105,5 +105,25 @@
         </a>
         {% endif %}
     </nav>
+    {# Pinned to the bottom of the sidebar (.sidebar is a flex column, so margin-top:auto
+       on .sidebar__update does it). Gated on MANAGE_SETTINGS to match the two endpoints
+       behind it: the grant that may flip hub.auto_update is the one that may apply an
+       update by hand, and an operator who cannot act on this should not be nagged by it.
+       Always in the DOM, hidden when there is nothing to announce -- same reason as the
+       alerts badge above: common.js has to have something to find when the poller
+       discovers an update on a shell document that never reloads. #}
+    {% if cap.MANAGE_SETTINGS in user_capabilities %}
+    <div class="sidebar__update banner banner--warn" id="hub-update-notice"
+         data-hub-latest="{{ latest_hub_version or '' }}" {% if not hub_update_available %}hidden{% endif %}>
+        <button type="button" class="sidebar__update-dismiss" id="hub-update-dismiss"
+                aria-label="{{ t('hub_update.dismiss') }}" title="{{ t('hub_update.dismiss') }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <p class="sidebar__update-text" id="hub-update-text">{{ t('hub_update.available', version=latest_hub_version or '') }}</p>
+        <button type="button" class="btn btn--ghost sidebar__update-action" id="hub-update-action">
+            {{ t('hub_update.update_now') }}
+        </button>
+    </div>
+    {% endif %}
 </aside>
 <div class="nav-scrim" id="nav-scrim" hidden></div>

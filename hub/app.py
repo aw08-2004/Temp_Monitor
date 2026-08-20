@@ -99,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.81.1"
+HUB_VERSION = "1.82.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1013,6 +1013,37 @@ HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/h
 # mode by making the archive, not a hand-kept tuple, authoritative about the file set.
 HUB_ARCHIVE_SUBDIR = "hub"
 
+# Last version seen on main, cached exactly like latest_agent_version above. The watcher
+# fills this in on every tick whether or not self-update is enabled -- knowing a new hub
+# exists is useful precisely when the hub is NOT going to install it by itself, which is
+# what the sidebar notice is for.
+latest_hub_version = None
+latest_hub_version_lock = threading.Lock()
+# What an operator-triggered update is currently doing, for /api/hub/version to report.
+# status: "idle" | "running" | "failed"; "succeeded" is never observed, because a
+# successful update ends with os._exit and the process comes back at the new version.
+hub_update_state = {"status": "idle", "error": None}
+hub_update_state_lock = threading.Lock()
+
+def get_latest_hub_version():
+    with latest_hub_version_lock:
+        return latest_hub_version
+
+def get_hub_update_state():
+    with hub_update_state_lock:
+        return dict(hub_update_state)
+
+def _set_hub_update_state(status, error=None):
+    with hub_update_state_lock:
+        hub_update_state["status"] = status
+        hub_update_state["error"] = error
+
+def hub_update_available():
+    """Whether main carries a hub newer than the one running. False while we have never
+    managed to read main -- an unknown remote is not an update."""
+    latest = get_latest_hub_version()
+    return bool(latest and cmp_versions(latest, HUB_VERSION) > 0)
+
 def parse_hub_version(text):
     """Pull the HUB_VERSION string out of an app.py source blob, or None. Pure; mirrors
     the version parse in refresh_latest_agent_version()."""
@@ -1190,12 +1221,21 @@ def hub_auto_update_enabled():
 
 
 def hub_update_watcher():
+    global latest_hub_version
     while True:
         try:
+            # The read is unconditional -- it used to sit behind the auto-update gate, but
+            # a hub that only looks when it intends to install can never TELL anyone a new
+            # version exists, and the sidebar notice is for exactly the deployments where
+            # self-update is off. One raw-GitHub GET every 15 minutes, same as
+            # agent_version_watcher() has always done.
+            remote = fetch_remote_hub_version()
+            if remote:
+                with latest_hub_version_lock:
+                    latest_hub_version = remote
             # Re-read every tick: an operator toggling this in Settings must take effect
             # without a hub restart (and a restart is exactly what this thread causes).
             if hub_auto_update_enabled():
-                remote = fetch_remote_hub_version()
                 if remote and cmp_versions(remote, HUB_VERSION) > 0:
                     print(f"[hub-update] main is {remote} (running {HUB_VERSION}); updating.")
                     if perform_hub_update(HUB_CODE_DIR):
@@ -3974,6 +4014,74 @@ def get_alert_count():
         return jsonify({"count": 0}), 200
 
 
+# ================================
+# HUB UPDATE NOTICE  --  the console half of the self-updater above.
+#
+# Both endpoints are gated on MANAGE_SETTINGS, the same grant that can flip
+# hub.auto_update from the Settings tab: deciding that this hub runs a newer build of
+# itself is the same decision either way, and there is no point telling an operator about
+# an update they are not allowed to apply.
+# ================================
+def _hub_update_worker(target_version):
+    """Apply the update and exit for the supervisor. Runs on its own thread so the POST
+    that started it can finish -- restart_hub() is os._exit, which would otherwise take
+    the worker down mid-response and the browser would see a dropped connection instead
+    of the 202."""
+    try:
+        if perform_hub_update(HUB_CODE_DIR):
+            restart_hub()  # does not return
+        _set_hub_update_state("failed", "update failed -- see the hub log")
+    except Exception as e:
+        print(f"[hub-update] Manual update failed: {e}")
+        _set_hub_update_state("failed", str(e))
+
+
+@app.route('/api/hub/version')
+@login_required
+@access.require(permissions.MANAGE_SETTINGS)
+def get_hub_version_info():
+    """What the sidebar notice polls. Cheap and side-effect free: it reports the version
+    the watcher last saw on main, and never goes to GitHub itself."""
+    state = get_hub_update_state()
+    return jsonify({
+        "current": HUB_VERSION,
+        "latest": get_latest_hub_version(),
+        "update_available": hub_update_available(),
+        # The notice stays out of the way when the hub will install this by itself.
+        "auto_update": hub_auto_update_enabled(),
+        "status": state["status"],
+        "error": state["error"],
+    }), 200
+
+
+@app.route('/api/hub/update', methods=["POST"])
+@login_required
+@access.require(permissions.MANAGE_SETTINGS)
+def post_hub_update():
+    """Apply the available update now, then restart. The body is read with silent=True and
+    never force=True: requiring application/json is what keeps a cross-origin form from
+    reaching an endpoint that pulls and runs code from main. See settings_web.py's module
+    docstring -- the same reasoning, one step further along."""
+    request.get_json(silent=True)
+    if get_hub_update_state()["status"] == "running":
+        return jsonify({"error": "an update is already running"}), 409
+    latest = get_latest_hub_version()
+    if not hub_update_available():
+        return jsonify({"error": "no newer hub version is available"}), 409
+
+    # Audited before anything is touched, because the successful path never returns here:
+    # perform_hub_update overwrites this file and restart_hub() calls os._exit.
+    actor = permissions_web.current_actor()
+    fleet.audit(DB_PATH, actor, "hub.update", HUB_VERSION,
+                {"from": HUB_VERSION, "to": latest},
+                level=fleet.LEVEL_SECURITY)
+    print(f"[hub-update] {actor} requested update to {latest} (running {HUB_VERSION}).")
+    _set_hub_update_state("running")
+    threading.Thread(target=_hub_update_worker, args=(latest,),
+                     daemon=True, name="hub_manual_update").start()
+    return jsonify({"status": "updating", "from": HUB_VERSION, "to": latest}), 202
+
+
 def _resolve_history_window(args):
     """Parse the date/from/to/resolution/limit query params into
     (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
@@ -4200,6 +4308,16 @@ def _frame_policy(response):
     return response
 
 
+def _hub_update_notice_visible():
+    """Whether the sidebar should announce an update: one is available AND the hub is not
+    going to install it unattended. Never raises -- hub_auto_update_enabled() reads the
+    settings table, and the nav context renders on the login page too."""
+    try:
+        return hub_update_available() and not hub_auto_update_enabled()
+    except Exception:
+        return False
+
+
 @app.context_processor
 def inject_nav_context():
     """Feed the sidebar on every page render: the Alerts badge, and which nav links the
@@ -4222,7 +4340,11 @@ def inject_nav_context():
                "is_superuser": False, "cap": permissions,
                "hub_version": HUB_VERSION,
                "shell_mode": _shell_mode(),
-               "latest_agent_version": get_latest_agent_version()}
+               "latest_agent_version": get_latest_agent_version(),
+               # First-paint state for the sidebar update notice, so it is correct before
+               # its poller has run once. The template also gates on MANAGE_SETTINGS.
+               "latest_hub_version": get_latest_hub_version(),
+               "hub_update_available": _hub_update_notice_visible()}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
         return context

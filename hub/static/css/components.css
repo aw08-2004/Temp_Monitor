@@ -187,6 +187,70 @@
     border-radius: 999px;
 }
 
+/* Hub-update notice, pinned to the bottom of the sidebar.
+   margin-top:auto is what pins it: .sidebar is a flex column, so the auto margin eats
+   the leftover space above and the notice sits on the floor however short the nav is.
+   The zeroed bottom margin drops .banner's, which is sized for the gap between stacked
+   form elements and reads as a dangling edge here. It carries .banner--warn for the
+   surface, so the colours are the same "you have something to do" tint used on the Rules
+   and Backups pages.
+
+   Selected on TWO classes, not one: .banner sets `margin` as a shorthand and lives
+   further down this file, so at equal specificity it would win on source order and the
+   auto margin would silently never apply. */
+.sidebar__update.banner {
+    margin-top: auto;
+    margin-bottom: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    /* Room on the right for the absolutely-positioned dismiss button. */
+    padding-right: var(--space-6);
+    /* The sidebar scrolls when the nav is taller than the viewport; without this the
+       notice would be squeezed instead of pushing the nav into that scroll. */
+    flex-shrink: 0;
+}
+
+.sidebar__update-text {
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: 1.4;
+}
+
+.sidebar__update-action {
+    /* Sized down to sit inside a 240px column without wrapping its label. */
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+}
+
+.sidebar__update-dismiss {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    width: 20px;
+    height: 20px;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: none;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+}
+
+.sidebar__update-dismiss:hover {
+    opacity: 1;
+}
+
+.sidebar__update-dismiss svg {
+    width: 100%;
+    height: 100%;
+}
+
 /* ============ Topbar ============ */
 .topbar {
     display: flex;

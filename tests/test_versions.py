@@ -12,6 +12,8 @@ Run from the repo root so `import app` resolves.
 """
 import os
 import sys
+import threading
+import time
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
@@ -23,6 +25,10 @@ _TMPDIR = tempfile.mkdtemp(prefix="hub-version-test-")
 # before importing app to keep a standalone run off the real logs/.
 os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
 os.chdir(_TMPDIR)
+# Pinned rather than inherited from a developer's .env: the hub-update endpoints below are
+# gated on manage_settings, and ALLOWED_EMAILS membership is the break-glass grant that
+# hands a session every capability. Set before importing app, which reads it at import time.
+os.environ["ALLOWED_EMAILS"] = "tester@example.com"
 
 import app
 
@@ -320,6 +326,125 @@ def test_hub_self_update():
         app._install_requirements = orig_install
 
 
+def test_hub_update_notice():
+    """The console half: the watcher's cached view of main, and the two endpoints the
+    sidebar notice reads and acts on.
+
+    The point of the first block is that the version read is NOT behind the auto-update
+    gate any more. It used to be, and a hub with self-update off could therefore never
+    tell anyone that a release existed -- which is exactly the deployment the notice is
+    for. So: cached either way, applied only when enabled.
+    """
+    import settings as _settings
+
+    saved_latest = app.latest_hub_version
+    saved_env = app.HUB_AUTO_UPDATE_ENV
+    orig_fetch = app.fetch_remote_hub_version
+    orig_perform = app.perform_hub_update
+
+    def _tick():
+        """One pass of hub_update_watcher's body, without its sleep."""
+        applied.clear()
+        app.hub_update_watcher_thread = None
+        thread = threading.Thread(target=app.hub_update_watcher, daemon=True)
+        thread.start()
+        # The loop caches, decides, then sleeps for 15 minutes; a moment is plenty.
+        time.sleep(0.5)
+
+    applied = []
+    try:
+        print("\n-- hub update notice: the version read is not behind the auto-update gate --")
+        app.fetch_remote_hub_version = lambda: "999.0.0"
+        app.perform_hub_update = lambda code_dir: applied.append(code_dir) or False
+        _settings.set_many(app.DB_PATH, {"hub.auto_update": False})
+        app.latest_hub_version = None
+        _tick()
+        check("watcher caches main's version with self-update off",
+              app.get_latest_hub_version() == "999.0.0")
+        check("...and does not install it", applied == [])
+        check("hub_update_available() sees the newer version",
+              app.hub_update_available() is True)
+
+        _settings.set_many(app.DB_PATH, {"hub.auto_update": True})
+        _tick()
+        check("with self-update on it still installs", applied == [app.HUB_CODE_DIR])
+        _settings.set_many(app.DB_PATH, {"hub.auto_update": False})
+
+        print("\n-- hub update notice: availability --")
+        app.latest_hub_version = None
+        check("unknown remote is not an update", app.hub_update_available() is False)
+        app.latest_hub_version = app.HUB_VERSION
+        check("same version is not an update", app.hub_update_available() is False)
+        app.latest_hub_version = "0.0.1"
+        check("older remote is not an update", app.hub_update_available() is False)
+        app.latest_hub_version = "999.0.0"
+        check("newer remote is an update", app.hub_update_available() is True)
+
+        print("\n-- hub update notice: /api/hub/version --")
+        client = app.app.test_client()
+        check("signed out -> not served", client.get("/api/hub/version").status_code != 200)
+
+        with client.session_transaction() as sess:
+            sess["user"] = {"email": "nobody@example.com"}
+        check("signed in without manage_settings -> 403",
+              client.get("/api/hub/version").status_code == 403)
+        check("...and cannot trigger an update either",
+              client.post("/api/hub/update", json={}).status_code == 403)
+
+        with client.session_transaction() as sess:
+            sess["user"] = {"email": "tester@example.com"}
+        resp = client.get("/api/hub/version")
+        body = resp.get_json()
+        check("manage_settings -> 200", resp.status_code == 200)
+        check("reports the running version", body["current"] == app.HUB_VERSION)
+        check("reports main's version", body["latest"] == "999.0.0")
+        check("reports update_available", body["update_available"] is True)
+        check("reports the auto-update setting", body["auto_update"] is False)
+        check("reports idle status", body["status"] == "idle")
+
+        print("\n-- hub update notice: POST /api/hub/update --")
+        app.latest_hub_version = app.HUB_VERSION
+        resp = client.post("/api/hub/update", json={})
+        check("nothing newer -> 409", resp.status_code == 409)
+
+        app.latest_hub_version = "999.0.0"
+        # Stub the worker rather than the update itself: the real one ends in os._exit,
+        # which would take the test runner with it.
+        orig_worker = app._hub_update_worker
+        started = []
+        app._hub_update_worker = lambda target: started.append(target)
+        try:
+            resp = client.post("/api/hub/update", json={})
+            body = resp.get_json()
+            time.sleep(0.2)  # the worker runs on its own thread
+            check("update accepted -> 202", resp.status_code == 202)
+            check("names the target version", body["to"] == "999.0.0")
+            check("worker started with the target version", started == ["999.0.0"])
+
+            import fleet as _fleet
+            hit = _fleet.list_audit(app.DB_PATH, action="hub.update", limit=200)["entries"]
+            check("audited", len(hit) == 1)
+            check("audited at security level -- this runs code pulled from main",
+                  hit and hit[0]["level"] == _fleet.LEVEL_SECURITY)
+            check("attributed to the signed-in operator",
+                  hit and hit[0]["actor"] == "tester@example.com")
+
+            # The state left behind by that POST is what makes the next one a 409, and
+            # what the notice reads to say "updating" instead of offering the button again.
+            check("status is running", client.get("/api/hub/version").get_json()["status"] == "running")
+            check("a second update while one runs -> 409",
+                  client.post("/api/hub/update", json={}).status_code == 409)
+        finally:
+            app._hub_update_worker = orig_worker
+            app._set_hub_update_state("idle")
+    finally:
+        app.fetch_remote_hub_version = orig_fetch
+        app.perform_hub_update = orig_perform
+        app.latest_hub_version = saved_latest
+        app.HUB_AUTO_UPDATE_ENV = saved_env
+        _settings.reset(app.DB_PATH, ["hub.auto_update"])
+
+
 if __name__ == "__main__":
     test_version_compare()
     test_pre_agent_clients_get_nothing()
@@ -327,5 +452,6 @@ if __name__ == "__main__":
     test_unknown_train()
     test_report_endpoint()
     test_hub_self_update()
+    test_hub_update_notice()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

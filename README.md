@@ -170,10 +170,20 @@ were a Python script.
 The hub can keep itself current too, but it's **off by default** — set
 `HUB_AUTO_UPDATE=1` in the hub's `.env` to enable it (a dev clone left unset never
 touches itself). The `hub.auto_update` setting overrides the `.env` value when set,
-so it can also be flipped from the Settings tab. When enabled, the hub checks
-`HUB_VERSION` on `main` every 15 minutes; when `main` is ahead it updates itself, best-effort re-installs
+so it can also be flipped from the Settings tab. The hub checks
+`HUB_VERSION` on `main` every 15 minutes either way — the *check* is unconditional, only
+the *installing* is opt-in. When enabled and `main` is ahead it updates itself, best-effort re-installs
 `requirements.txt`, then exits non-zero so the `FleetHub - Hub` Windows Service
 auto-restarts waitress on the new code (WinSW `onfailure`, ~5 s downtime).
+
+**When self-update is off**, that same check feeds a notice at the bottom of the left
+sidebar: *"Hub vX.Y.Z is available"*, with an **Update now** button that applies the
+update once and restarts, exactly as the watcher would have. Both the notice and the
+endpoints behind it (`GET /api/hub/version`, `POST /api/hub/update`) are gated on
+`manage_settings` — the same grant that can flip `hub.auto_update`, since it is the same
+decision — and every manual update is written to the audit log at security level. The
+notice can be dismissed per-browser; it comes back for the next release, and it stays out
+of the way entirely while `hub.auto_update` is on.
 
 How it updates depends on the layout, decided by whether a `.git` directory is present:
 

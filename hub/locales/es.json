@@ -21,6 +21,13 @@
     "download": "Descargar cliente",
     "rules": "Reglas"
   },
+  "hub_update": {
+    "available": "Hub v{version} está disponible",
+    "update_now": "Actualizar ahora",
+    "dismiss": "Descartar",
+    "updating": "Actualizando… el hub se reiniciará en breve.",
+    "failed": "Error al actualizar. Consulta el registro del hub."
+  },
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agente v{version}",

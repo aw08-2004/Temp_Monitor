@@ -31,6 +31,18 @@
     "download": "Download Client",
     "rules": "Rules"
   },
+  "hub_update": {
+    "_note": [
+      "The sidebar notice shown when main carries a newer hub than this one is running",
+      "AND self-update is off. Only operators with manage_settings ever see it -- they",
+      "are the ones who can apply it."
+    ],
+    "available": "Hub v{version} is available",
+    "update_now": "Update now",
+    "dismiss": "Dismiss",
+    "updating": "Updating… the hub will restart shortly.",
+    "failed": "Update failed. Check the hub log."
+  },
   "topbar": {
     "hub_version": "Hub v{version}",
     "agent_version": "Agent v{version}",

@@ -240,9 +240,164 @@ function initAlertBadge() {
     });
 }
 
+// ============ Hub update notice ============
+// Bottom-of-sidebar notice for "main has a newer hub than this one, and this hub is not
+// going to install it by itself". The server does the comparing (hub_update_watcher polls
+// GitHub every 15 minutes and caches the answer); /api/hub/version just reports it, so
+// polling this faster than the watcher refreshes it would buy nothing.
+//
+// Everything here is gated on the element existing, and the element only renders for
+// operators with manage_settings -- so on every other account this whole section is a
+// single null check and stops.
+
+const HUB_UPDATE_POLL_MS = 5 * 60 * 1000;
+// While an update we started is applying, the hub disappears for a few seconds and comes
+// back on the new version. Poll fast through that window so the notice clears promptly.
+const HUB_UPDATE_RESTART_POLL_MS = 3000;
+const HUB_UPDATE_DISMISS_KEY = 'tempmonitor:hubUpdateDismissed';
+
+// Same reach-through as alertBadgeEl(): in shell mode the sidebar lives in the OUTER
+// document. Kept separate rather than generalised because only the owning document ever
+// calls this -- initHubUpdate() returns early in the frame.
+function hubUpdateEls() {
+    const notice = document.getElementById('hub-update-notice');
+    if (!notice) return null;
+    return {
+        notice,
+        text: document.getElementById('hub-update-text'),
+        action: document.getElementById('hub-update-action'),
+        dismiss: document.getElementById('hub-update-dismiss'),
+    };
+}
+
+function initHubUpdate() {
+    const els = hubUpdateEls();
+    // Not our document (framed page), or an operator without manage_settings.
+    if (!els) return;
+
+    let timer = null;
+    let requestedByUs = false;
+
+    function schedule(ms) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(refresh, ms);
+    }
+
+    function dismissedVersion() {
+        try {
+            return localStorage.getItem(HUB_UPDATE_DISMISS_KEY);
+        } catch (e) {
+            return null;  // storage disabled: the notice simply is not dismissible
+        }
+    }
+
+    function render(data) {
+        const latest = data.latest || '';
+        els.notice.dataset.hubLatest = latest;
+
+        if (data.status === 'running') {
+            els.text.textContent = t('hub_update.updating');
+            els.action.hidden = true;
+            // No dismissing something that is already rewriting the hub underneath us.
+            els.dismiss.hidden = true;
+            els.notice.hidden = false;
+            return;
+        }
+
+        // The update we asked for finished: the hub is back on a version with nothing
+        // newer to fetch. Reload so the topbar version badge and the rest of the page
+        // stop describing the build that is no longer running.
+        if (requestedByUs && !data.update_available) {
+            window.location.reload();
+            return;
+        }
+
+        els.action.hidden = false;
+        els.dismiss.hidden = false;
+
+        if (data.status === 'failed') {
+            // Left visible with the action button intact, so a failure that was a
+            // transient network problem can simply be retried.
+            els.text.textContent = data.error
+                ? `${t('hub_update.failed')} (${data.error})`
+                : t('hub_update.failed');
+            els.notice.hidden = false;
+            return;
+        }
+
+        // auto_update on means the watcher will install this without anyone's help --
+        // announcing it would be noise, and the "Update now" button a race.
+        const relevant = data.update_available && !data.auto_update;
+        els.text.textContent = t('hub_update.available', { version: latest });
+        els.notice.hidden = !relevant || dismissedVersion() === latest;
+    }
+
+    async function refresh() {
+        let running = false;
+        try {
+            const resp = await fetch('/api/hub/version');
+            if (resp.ok) {
+                const data = await resp.json();
+                running = data.status === 'running';
+                render(data);
+            }
+        } catch (e) {
+            // Offline, or the hub mid-restart because we just told it to update. Keep
+            // whatever the notice currently says and try again -- blanking it here would
+            // erase the "updating" message at exactly the moment it is true.
+            running = requestedByUs;
+        }
+        schedule(running || requestedByUs ? HUB_UPDATE_RESTART_POLL_MS : HUB_UPDATE_POLL_MS);
+    }
+
+    els.action.addEventListener('click', async () => {
+        els.action.disabled = true;
+        try {
+            const resp = await fetch('/api/hub/update', {
+                method: 'POST',
+                // Not decoration: the endpoint reads the body as JSON, and requiring this
+                // content type is what makes a cross-origin form unable to reach it.
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+            });
+            if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                render({ status: 'failed', error: data.error || `http ${resp.status}`,
+                         latest: els.notice.dataset.hubLatest, update_available: true });
+                return;
+            }
+            requestedByUs = true;
+            render({ status: 'running', latest: els.notice.dataset.hubLatest });
+            schedule(HUB_UPDATE_RESTART_POLL_MS);
+        } finally {
+            els.action.disabled = false;
+        }
+    });
+
+    els.dismiss.addEventListener('click', () => {
+        try {
+            // Stamped with the version, so the notice comes back for the NEXT release
+            // rather than being silenced forever by one click.
+            localStorage.setItem(HUB_UPDATE_DISMISS_KEY, els.notice.dataset.hubLatest || '');
+        } catch (e) { /* storage disabled: hide it for this page view only */ }
+        els.notice.hidden = true;
+    });
+
+    // The server-rendered state is already correct for this page load; the first poll is
+    // for the tab left open across a release.
+    if (dismissedVersion() && dismissedVersion() === els.notice.dataset.hubLatest) {
+        els.notice.hidden = true;
+    }
+    schedule(HUB_UPDATE_POLL_MS);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refresh();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initMobileNav();
     initTopbarMore();
     initAlertBadge();
+    initHubUpdate();
 });
