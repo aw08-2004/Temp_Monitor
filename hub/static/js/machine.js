@@ -163,6 +163,8 @@ const ENABLED_METRICS = (() => {
 // and tooltip through formatRate() instead of pinning a fixed "B/s", so a 400 MB/s NVMe
 // and a 2 KB/s idle NIC are both readable -- at a fixed B/s the former is an unreadable
 // nine-digit tick and the latter is a flat line at the bottom of the axis.
+// `bits: true` additionally renders that rate in bits, which is the unit network hardware
+// is specified and sold in. Network only -- see BIT_UNITS.
 // `label` is a function, not a string: this table is built at module load, and a panel
 // title has to be the operator's language rather than whatever the file was written in.
 // One literal key per metric, so the key scan in tests/test_i18n.py can see them all.
@@ -170,8 +172,8 @@ const METRICS = [
     { key: 'cpu_load',   label: () => t('machine.metric.cpu_load'),   unit: '%',   color: '#10b981', max: 100, diag: 'cpu_load_pct' },
     { key: 'memory',     label: () => t('machine.metric.memory'),     unit: '%',   color: '#f59e0b', max: 100, diag: 'memory_load_pct' },
     { key: 'disk',       label: () => t('machine.metric.disk'),       unit: '%',   color: '#3b82f6', max: 100, diag: 'disk_load_pct' },
-    { key: 'net_rx',     label: () => t('machine.metric.net_rx'),     unit: 'B/s', color: '#22d3ee', rate: true, diag: 'net_rx_bps' },
-    { key: 'net_tx',     label: () => t('machine.metric.net_tx'),     unit: 'B/s', color: '#ec4899', rate: true, diag: 'net_tx_bps' },
+    { key: 'net_rx',     label: () => t('machine.metric.net_rx'),     unit: 'b/s', color: '#22d3ee', rate: true, bits: true, diag: 'net_rx_bps' },
+    { key: 'net_tx',     label: () => t('machine.metric.net_tx'),     unit: 'b/s', color: '#ec4899', rate: true, bits: true, diag: 'net_tx_bps' },
     { key: 'disk_read',  label: () => t('machine.metric.disk_read'),  unit: 'B/s', color: '#14b8a6', rate: true, diag: 'disk_read_bps' },
     { key: 'disk_write', label: () => t('machine.metric.disk_write'), unit: 'B/s', color: '#f43f5e', rate: true, diag: 'disk_write_bps' },
     { key: 'gpu_temp',   label: () => t('machine.metric.gpu_temp'),   unit: '°C',  color: '#8b5cf6', diag: 'gpu_temp' },
@@ -189,12 +191,17 @@ function metricLabel(metric) {
 }
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+// Network throughput is quoted in BITS everywhere an operator would check it against
+// something: the NIC is a 1 Gb/s card, the switch port is 100 Mb/s, the ISP sells 500 Mb/s.
+// A chart labelled MB/s is the same reading off by 8x from all of them. Disk deliberately
+// stays in bytes for the mirror-image reason -- drives are specified in MB/s.
+const BIT_UNITS = ['b', 'Kb', 'Mb', 'Gb', 'Tb'];
 
-function scaleBytes(bytes, base) {
+function scaleBytes(bytes, base, units = BYTE_UNITS) {
     let value = Math.abs(Number(bytes));
     let step = 0;
-    while (value >= base && step < BYTE_UNITS.length - 1) { value /= base; step += 1; }
-    return { value: Number(bytes) < 0 ? -value : value, unit: BYTE_UNITS[step] };
+    while (value >= base && step < units.length - 1) { value /= base; step += 1; }
+    return { value: Number(bytes) < 0 ? -value : value, unit: units[step] };
 }
 
 // Throughput scales in 1000s, capacity in 1024s -- deliberately different, because each
@@ -203,13 +210,19 @@ function scaleBytes(bytes, base) {
 // decimal makes those gridlines land on 400 KB/s and 800 KB/s, and it is what network gear
 // reports anyway. Disk capacity stays binary so "476 GB" matches what Explorer shows for
 // the same drive.
-function formatRate(bytesPerSecond) {
+//
+// `asBits` converts the same stored bytes/s to bits for display. Presentation only -- the
+// agent reports bytes, the database stores bytes, and rule thresholds on metric.net_*_bps
+// stay in bytes. Only the two network panels pass it.
+function formatRate(bytesPerSecond, asBits) {
     if (!Number.isFinite(Number(bytesPerSecond))) return '--';
-    const { value, unit } = scaleBytes(bytesPerSecond, 1000);
+    const units = asBits ? BIT_UNITS : BYTE_UNITS;
+    const scaled = asBits ? Number(bytesPerSecond) * 8 : Number(bytesPerSecond);
+    const { value, unit } = scaleBytes(scaled, 1000, units);
     // Whole numbers below 1 KB/s: a "0.0 B/s" axis tick reads as broken. One decimal above
     // -- enough to tell 1.4 from 1.9 MB/s without noise. Round values keep their integer
     // form, so an 800 KB/s gridline is labelled "800 KB/s", not "800.0 KB/s".
-    if (unit === 'B' || Number.isInteger(value)) return `${Math.round(value)} ${unit}/s`;
+    if (unit === units[0] || Number.isInteger(value)) return `${Math.round(value)} ${unit}/s`;
     return `${value.toFixed(1)} ${unit}/s`;
 }
 
@@ -261,7 +274,7 @@ function panelConfig(metric) {
         // zoom lands on. The axis title drops the unit -- it now lives on every tick.
         yScale.min = 0;
         yScale.title.text = t('machine.per_second');
-        yScale.ticks = { callback: (value) => formatRate(value) };
+        yScale.ticks = { callback: (value) => formatRate(value, metric.bits) };
     }
     return {
         type: 'line',
@@ -289,7 +302,7 @@ function panelConfig(metric) {
                     callbacks: {
                         label: (ctx) => {
                             if (metric.key === 'memory') return formatMemTooltip(ctx.parsed.y);
-                            if (metric.rate) return formatRate(ctx.parsed.y);
+                            if (metric.rate) return formatRate(ctx.parsed.y, metric.bits);
                             return `${ctx.parsed.y.toFixed(metric.decimals ?? 1)} ${metric.unit}`;
                         },
                     },
