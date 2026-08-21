@@ -379,13 +379,21 @@ def main():
         check("fleet-pty.js leaves pasting to the browser",
               "clipboard.readText" not in pty_js)
 
-        # Both terminals share one toolbar and fleet-terminal.js binds it first. The pty
-        # console has to replace those nodes to drop the legacy handlers -- its Save reads a
-        # textarea that is hidden and empty in this mode, so leaving it bound means the
-        # button refuses with "nothing to save".
-        for button in ("terminal-clear", "terminal-favorites", "terminal-save-fav"):
-            check(f"the pty console takes over the shared {button} button",
-                  f"'{button}'" in pty_js)
+        # Both terminals share one toolbar, so exactly one of them must answer a click on
+        # it. fleet-terminal.js binds the three buttons once and dispatches on which
+        # terminal is in front; fleet-pty.js exposes the handlers for its half. It used to
+        # steal the buttons by replacing the nodes, which drops every listener on them --
+        # that works exactly once, and a page whose machine can change re-runs activate().
+        # A second run against a machine too old for a pseudoconsole would have found the
+        # clones in place and BOTH sets of handlers gone.
+        term_js = read_static("js", "fleet-terminal.js")
+        check("the pty console no longer steals the shared buttons by cloning them",
+              "replaceWith(fresh)" not in pty_js)
+        for handler in ("clearActive", "openFavorites", "saveFavorite"):
+            check(f"fleet-pty.js exposes its {handler} for the shared toolbar",
+                  f"FleetPty.{handler}()" in term_js)
+        check("...and fleet-terminal.js picks between them on who is in front",
+              "owner === 'pty'" in term_js)
 
         print("\n== Terminals are not favoritable ==")
         # Nothing reusable to save: the params name a live session.

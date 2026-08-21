@@ -41,9 +41,13 @@
 
     const stripEl = document.getElementById('terminal-tabs');
     const screensEl = document.getElementById('terminal-screens');
-    if (!stripEl || !screensEl || !window.FleetApi || !FleetApi.machine) return;
+    if (!stripEl || !screensEl || !window.FleetApi) return;
 
-    const MACHINE = FleetApi.machine;
+    // A call, not a constant. On the Tools page the operator picks a different PC without
+    // the page reloading, and a console opened after that has to be opened on the machine
+    // chosen now. Note there is deliberately no "no machine yet" guard here: this module
+    // does nothing until activate() is called, and by then one has been picked.
+    const currentMachine = () => FleetApi.machine;
     const paneEl = document.getElementById('terminal-pty');
     const legacyEl = document.getElementById('terminal-legacy');
     const shellEl = document.getElementById('terminal-shell');
@@ -97,17 +101,17 @@
     // hub, so this decides which tab is selected on arrival, nothing more. A tab restored
     // after a browser restart, or a second browser tab on the same machine, finds every live
     // console either way.
-    const REMEMBERED_KEY = `fleethub:pty:${MACHINE}`;
+    const rememberedKey = () => `fleethub:pty:${currentMachine()}`;
 
     function remember(id) {
         try {
-            if (id) sessionStorage.setItem(REMEMBERED_KEY, id);
-            else sessionStorage.removeItem(REMEMBERED_KEY);
+            if (id) sessionStorage.setItem(rememberedKey(), id);
+            else sessionStorage.removeItem(rememberedKey());
         } catch (e) { /* private mode: we fall back to the oldest console */ }
     }
 
     function remembered() {
-        try { return sessionStorage.getItem(REMEMBERED_KEY); } catch (e) { return null; }
+        try { return sessionStorage.getItem(rememberedKey()); } catch (e) { return null; }
     }
 
     // ---------------- The strip ----------------
@@ -192,7 +196,7 @@
                 'aria-selected', record.id === activeId ? 'true' : 'false');
             record.selectEl.title = record.status === 'closed'
                 ? t('machine.pty.tab_ended')
-                : t('machine.pty.tab_title', { name, machine: MACHINE });
+                : t('machine.pty.tab_title', { name, machine: currentMachine() });
             // Append in order; appendChild on an existing child MOVES it, so this is also
             // the re-order.
             stripEl.insertBefore(record.tabEl, addBtn);
@@ -386,7 +390,7 @@
             // be resized away from on the first frame.
             const front = activeConsole();
             const body = await FleetApi.postJson('/api/fleet/pty', {
-                machine: MACHINE,
+                machine: currentMachine(),
                 shell: shellEl ? shellEl.value : 'powershell',
                 cols: front && front.term ? front.term.cols : 120,
                 rows: front && front.term ? front.term.rows : 30,
@@ -400,7 +404,7 @@
             renderStrip();
             activate(record.id);
             note(record, t('machine.pty.opening',
-                           { shell: body.shell, machine: MACHINE }) + '\r\n');
+                           { shell: body.shell, machine: currentMachine() }) + '\r\n');
         } catch (e) {
             const front = activeConsole();
             if (front) {
@@ -607,7 +611,7 @@
         let open;
         try {
             const body = await FleetApi.getJson(
-                `/api/fleet/pty?machine=${encodeURIComponent(MACHINE)}`);
+                `/api/fleet/pty?machine=${encodeURIComponent(currentMachine())}`);
             open = body.sessions || [];
         } catch (e) {
             return false;   // leave the strip alone; the poll loops carry on regardless
@@ -741,10 +745,30 @@
         });
     }
 
+    // Clear the hub's replay buffer too, not just the local view -- otherwise the
+    // scrollback you just cleared comes back the next time you navigate away and return,
+    // which reads as the button not having worked.
+    function clearActive() {
+        const record = activeConsole();
+        if (!record) return;
+        if (record.term) record.term.clear();
+        FleetApi.postJson(`/api/fleet/pty/${encodeURIComponent(record.id)}/clear`, {})
+            .catch(() => {});
+    }
+
     // ---------------- Public surface ----------------
     // fleet-terminal.js owns the one agent-version lookup and calls activate() when the
     // machine can do a pseudoconsole. Keeping the decision in one place stops the two
-    // terminals from both deciding they are in charge.
+    // terminals from both deciding they are in charge -- and it is also why the three
+    // SHARED toolbar buttons (Clear, Favorites, Save-as-favorite) are bound over there and
+    // delegate to the three handlers below rather than being rebound here.
+    //
+    // They used to be rebound here, by cloning the nodes to drop fleet-terminal.js's
+    // listeners. That worked exactly once. Now that the machine can change under a live
+    // page, activate() can run again -- against a PC whose agent is too old for a
+    // pseudoconsole, the clones would still be in place and BOTH sets of handlers gone.
+    let wired = false;
+
     window.FleetPty = {
         activate() {
             if (paneEl) paneEl.hidden = false;
@@ -755,88 +779,94 @@
                 if (el) el.hidden = true;
             }
 
-            // Clear, Favorites and Save-as-favorite live in the SHARED toolbar above both
-            // terminals, and fleet-terminal.js has already bound its own handlers to them by
-            // the time we get here (it binds synchronously; this runs after its async version
-            // lookup). Leaving those in place would open two favorites dialogs on one click,
-            // and its save handler reads the LEGACY textarea -- which is hidden and empty in
-            // this mode, so it would refuse with "nothing to save".
-            // Replacing the nodes drops every listener registered on them -- so this has to
-            // happen BEFORE we bind ours, and we have to re-read the references afterwards.
-            const shared = {};
-            for (const id of ['terminal-clear', 'terminal-favorites', 'terminal-save-fav']) {
-                const stale = document.getElementById(id);
-                if (!stale) continue;
-                const fresh = stale.cloneNode(true);
-                stale.replaceWith(fresh);
-                shared[id] = fresh;
-            }
-
             if (hintEl) {
                 hintEl.className = 'terminal__hint';
                 hintEl.textContent = t('machine.pty.hint', { max: MAX_CONSOLES });
             }
 
-            if (shared['terminal-clear']) {
-                // Clear the hub's replay buffer too, not just the local view -- otherwise
-                // the scrollback you just cleared comes back the next time you navigate
-                // away and return, which reads as the button not having worked.
-                shared['terminal-clear'].title = t('machine.pty.clear_title');
-                shared['terminal-clear'].addEventListener('click', () => {
-                    const record = activeConsole();
-                    if (!record) return;
-                    if (record.term) record.term.clear();
-                    FleetApi.postJson(
-                        `/api/fleet/pty/${encodeURIComponent(record.id)}/clear`, {})
-                        .catch(() => {});
-                });
-            }
-            if (shared['terminal-favorites']) {
-                shared['terminal-favorites'].addEventListener(
-                    'click', () => FleetFavorites.open({ onPick: usePick }));
-            }
-            if (shared['terminal-save-fav']) {
-                shared['terminal-save-fav'].title = t('machine.pty.save_fav_title');
-                shared['terminal-save-fav'].addEventListener('click', saveFavorite);
-            }
-            if (addBtn) addBtn.addEventListener('click', openConsole);
+            const clearBtn = document.getElementById('terminal-clear');
+            if (clearBtn) clearBtn.title = t('machine.pty.clear_title');
+            const saveFavBtn = document.getElementById('terminal-save-fav');
+            if (saveFavBtn) saveFavBtn.title = t('machine.pty.save_fav_title');
             // The shell dropdown picks what "+" opens next, and follows whichever console is
             // in front. It deliberately does NOT restart anything: a running powershell
             // cannot become cmd, and ending the session an operator is working in because
             // they touched a dropdown was never a good trade.
-            if (shellEl) {
-                shellEl.title = t('machine.pty.shell_title');
-            }
+            if (shellEl) shellEl.title = t('machine.pty.shell_title');
 
-            window.addEventListener('resize', () => refit(activeConsole()));
+            // Everything below binds a listener, so it happens once per document however
+            // many times a machine is picked.
+            if (!wired) {
+                wired = true;
+                if (addBtn) addBtn.addEventListener('click', openConsole);
+                window.addEventListener('resize', () => refit(activeConsole()));
 
-            // The panel starts hidden and xterm cannot measure a hidden element, so consoles
-            // are only built and connected once the tab is actually shown.
-            if (panelEl) {
-                panelEl.addEventListener('tab:shown', () => {
-                    refit(activeConsole());
-                    scheduleSync(0);
-                    const record = activeConsole();
-                    if (record && record.term) record.term.focus();
-                });
-                if (!panelEl.hidden) scheduleSync(0);
-            }
-            document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState !== 'visible') return;
-                scheduleSync(0);
-                for (const record of consoles.values()) {
-                    if (record.status !== 'closed') schedulePoll(record, 0);
+                // The panel starts hidden and xterm cannot measure a hidden element, so
+                // consoles are only built and connected once the tab is actually shown.
+                if (panelEl) {
+                    panelEl.addEventListener('tab:shown', () => {
+                        refit(activeConsole());
+                        scheduleSync(0);
+                        const record = activeConsole();
+                        if (record && record.term) record.term.focus();
+                    });
                 }
-            });
-            // Leaving the page deliberately does NOT end any session -- that is the whole
-            // point of persistence, and it is why there is no close-on-unload here. The
-            // shells keep running (and keep printing into the hub's replay buffers) so that
-            // coming back re-attaches to them. Abandonment is bounded on the hub instead, by
-            // a clock that only the console's own polls refresh; see PTY_ABANDONED_SECONDS.
-            window.addEventListener('pagehide', () => {
-                if (syncTimer) clearTimeout(syncTimer);
-                for (const record of consoles.values()) stopPolling(record);
-            });
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState !== 'visible') return;
+                    scheduleSync(0);
+                    for (const record of consoles.values()) {
+                        if (record.status !== 'closed') schedulePoll(record, 0);
+                    }
+                });
+                // Leaving the page deliberately does NOT end any session -- that is the
+                // whole point of persistence, and it is why there is no close-on-unload
+                // here. The shells keep running (and keep printing into the hub's replay
+                // buffers) so that coming back re-attaches to them. Abandonment is bounded
+                // on the hub instead, by a clock that only the console's own polls refresh;
+                // see PTY_ABANDONED_SECONDS.
+                window.addEventListener('pagehide', () => {
+                    if (syncTimer) clearTimeout(syncTimer);
+                    for (const record of consoles.values()) stopPolling(record);
+                });
+            }
+
+            if (panelEl && !panelEl.hidden) scheduleSync(0);
         },
+
+        /**
+         * Let go of this machine's consoles, WITHOUT closing them.
+         *
+         * That distinction is the whole feature: the sessions live on the hub, so dropping
+         * the local xterms and re-selecting the machine later re-attaches to the same
+         * shells with their scrollback intact (syncSessions replays it). Closing them here
+         * would end a running build because somebody clicked a different row.
+         *
+         * What must not survive is anything that keeps TICKING: a poll loop left running
+         * would write the previous PC's output into a strip now showing another one.
+         */
+        deactivate() {
+            if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+            for (const record of consoles.values()) {
+                stopPolling(record);
+                if (record.term) record.term.dispose();
+                if (record.screenEl) record.screenEl.remove();
+                if (record.tabEl) record.tabEl.remove();
+            }
+            consoles.clear();
+            activeId = null;
+            opening = false;
+            // Re-armed deliberately: arriving at the next machine's empty Terminal tab
+            // should land you at a prompt, exactly as arriving at this one did.
+            autoOpened = false;
+            setPill();
+            renderStrip();
+            if (paneEl) paneEl.hidden = true;
+            if (legacyEl) legacyEl.hidden = false;
+        },
+
+        /** The shared toolbar's three buttons, driven by fleet-terminal.js. */
+        clearActive,
+        openFavorites() { FleetFavorites.open({ onPick: usePick }); },
+        saveFavorite,
     };
 })();
