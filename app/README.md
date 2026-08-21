@@ -132,6 +132,9 @@ What should this release be?
   or type a version like 1.4.2
 ```
 
+What counts as a patch, a minor or a major here is the same rule the hub and the agent
+follow — [VERSIONING.md](../VERSIONING.md).
+
 Blank picks the patch bump rather than "keep", deliberately: keeping is the answer that
 silently publishes nothing new — **no installed client is ever offered an update to a
 version that is not strictly newer** — so the mistake this prompt exists to prevent should

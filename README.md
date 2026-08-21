@@ -203,7 +203,8 @@ trust GitHub over HTTPS plus push access to `main` (the pinned git origin for a 
 the branch archive over TLS for a files-only install). The Ed25519 trust root still
 gates agent binaries and is untouched by this. As with every hub change, bump
 `HUB_VERSION` near the top of `hub/app.py` on each push to `main`, or the hub won't know
-to update. (The installer offers to set
+to update — see [VERSIONING.md](VERSIONING.md) for which digit to move, and why the
+format is narrower than it looks. (The installer offers to set
 `HUB_AUTO_UPDATE=1` for you; on hubs still on the older scheduled-task deployment the
 same exit instead relies on the task's 2-minute repetition.)
 
