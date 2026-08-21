@@ -115,30 +115,9 @@
     margin-top: var(--space-6);
 }
 
-/* The default disclosure triangle is replaced by our own so the row can be a flex line
-   with the count sitting beside the title. */
-.sensor-browser__summary {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    cursor: pointer;
-    list-style: none;
-}
-
-.sensor-browser__summary::-webkit-details-marker {
-    display: none;
-}
-
-.sensor-browser__summary::before {
-    content: '▶';
-    font-size: var(--text-sm);
-    color: var(--muted);
-    transition: transform 0.15s ease;
-}
-
-.sensor-browser[open] .sensor-browser__summary::before {
-    transform: rotate(90deg);
-}
+/* The disclosure rules for .sensor-browser__summary live in components.css alongside
+   .fold, which generalises them -- every section on this page folds now, not just
+   this one and the process browser. */
 
 /* Columns rather than one long list: a workstation reports several hundred sensors, and a
    single column turns the rest of the page into a scroll target. Capped and scrolled

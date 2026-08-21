@@ -575,6 +575,106 @@
     border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
+/* ============ Foldable sections ============ */
+/* A section an operator can fold away, and which remembers being folded (collapse.js).
+   Native <details>/<summary>: the browser supplies the disclosure semantics, the keyboard
+   handling and aria-expanded, none of which a div and a click handler would get right.
+
+   .sensor-browser is the original spelling of this, from when only the sensor and process
+   browsers folded. It is kept as an alias rather than renamed so nothing that already
+   works has to move; new sections use .fold. */
+.fold__summary,
+.sensor-browser__summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    cursor: pointer;
+    /* The default triangle is replaced with our own so the row can be a flex line with a
+       count or a status sitting beside the title. */
+    list-style: none;
+}
+
+.fold__summary::-webkit-details-marker,
+.sensor-browser__summary::-webkit-details-marker {
+    display: none;
+}
+
+.fold__summary::before,
+.sensor-browser__summary::before {
+    content: '▶';
+    font-size: var(--text-sm);
+    color: var(--muted);
+    transition: transform 0.15s ease;
+}
+
+.fold[open] > .fold__summary::before,
+.sensor-browser[open] > .sensor-browser__summary::before {
+    transform: rotate(90deg);
+}
+
+/* Spacing between stacked sections, matching the gap the cards they replaced had. */
+.fold + .fold,
+.fold + .card,
+.card + .fold {
+    margin-top: var(--space-6);
+}
+
+/* A fold whose children are already cards (the stat grid) carries no .card of its own, so
+   its summary needs the padding the card would have given it. */
+.fold:not(.card) > .fold__summary {
+    padding: var(--space-2) 0;
+}
+
+/* ============ Machine picker list ============ */
+/* One row per machine, the row itself the button. Scrolls inside its container rather than
+   growing it, so a fleet of hundreds renders the same size as a fleet of three.
+   Shared by the Remote page's picker dialog and the Tools page's machine column. */
+.picker-list {
+    margin-top: var(--space-4);
+    max-height: 42vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+/* A <button> reset back to a row: buttons bring their own font, centring and background,
+   none of which belong on something shaped like a list item. */
+.picker-list__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.picker-list__item:hover {
+    background: var(--control-bg);
+}
+
+/* Keyboard focus gets the same treatment as hover PLUS a ring: arrowing down the list plays
+   the same role as the pointer moving over it, and one click/Enter connects either way. */
+.picker-list__item:focus-visible {
+    background: var(--control-bg);
+    border-color: var(--accent, var(--card-border));
+    outline: none;
+}
+
+.picker-list__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .settings-layout {
     display: flex;
     align-items: flex-start;

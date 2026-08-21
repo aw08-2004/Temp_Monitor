@@ -13,17 +13,20 @@
 //    fleet shows the real fleet list rather than a stale guess.
 
 (function () {
-    const pane = document.getElementById('tab-backup');
+    const PANEL_ID = 'tab-backup';
+    const pane = document.getElementById(PANEL_ID);
     if (!pane) return;      // no manage_backups: the tab was never rendered
 
-    const machineConfig = document.getElementById('machine-config');
-    const MACHINE = machineConfig.dataset.machine;
+    // The machine this panel is currently showing. A call, not a constant: on the Tools
+    // page the operator picks a different PC without the page reloading, and every URL
+    // below has to be built against the machine chosen now rather than the one that
+    // happened to be current when this file was parsed.
+    const currentMachine = () => window.MachineContext.current();
 
     let data = null;
     let draftInclude = [];
     let draftExclude = [];
     let dirty = false;
-    let loaded = false;
 
     // ---- restore browser state ----
     // `selected` is a Map of path -> {dir}. A ticked FOLDER is stored as one entry, not
@@ -91,16 +94,48 @@
         return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     }
 
-    // Loaded lazily on first reveal: a machine page is opened far more often to look at
-    // temperatures than to change a backup policy, and this costs a request plus a path
-    // expansion on the server.
-    pane.addEventListener('tab:shown', () => { if (!loaded) load(); });
+    // Loaded lazily on first reveal, and re-loaded from scratch when the operator picks a
+    // different PC: a machine page is opened far more often to look at temperatures than to
+    // change a backup policy, and this costs a request plus a path expansion on the server.
+    // ToolPanels owns that sequencing; see tool-panels.js.
+    ToolPanels.register('backup', {
+        panelId: PANEL_ID,
+        load,
+        teardown: reset,
+        // Nothing to show without a machine; the Tools page draws its own prompt.
+        requires: (machine) => !!machine
+    });
+
+    // Everything this panel accumulated about ONE machine. A half-reset here is how a
+    // restore aimed at the previous PC's folder tree survives a machine switch, so this
+    // deliberately names every piece of state declared above.
+    function reset() {
+        data = null;
+        draftInclude = [];
+        draftExclude = [];
+        dirty = false;
+        manifest = null;
+        manifestPath = '';
+        manifestSearch = '';
+        manifestError = '';
+        selected = new Map();
+        restoreBusy = false;
+        restoreStatus = '';
+        restoreOpen = false;
+        machineOptions = [];
+        restoreTarget = null;
+        restoreDir = '';
+        restoreOverwrite = false;
+        runBusy = false;
+        runMessage = '';
+        runError = '';
+        pane.replaceChildren();
+    }
 
     async function load() {
-        loaded = true;
         pane.replaceChildren(el('p', 'stat-card__meta', 'Loading…'));
         try {
-            data = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`);
+            data = await api(`/api/backups/machines/${encodeURIComponent(currentMachine())}`);
         } catch (e) {
             pane.replaceChildren(el('p', 'setting__error', e.message));
             return;
@@ -254,7 +289,7 @@
         const seq = ++policySaveSeq;
         setPolicyStatus(t('common.saving'), '');
         try {
-            const body = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`,
+            const body = await api(`/api/backups/machines/${encodeURIComponent(currentMachine())}`,
                              json('PUT', {
                                  enabled: value === '' ? null : value === 'on',
                                  include: draftInclude,
@@ -424,7 +459,7 @@
                 ? `search=${encodeURIComponent(manifestSearch)}`
                 : `path=${encodeURIComponent(manifestPath)}`;
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/manifest?${query}`);
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/manifest?${query}`);
             manifest = body.result;
             data.manifest = body.summary;
         } catch (e) {
@@ -459,7 +494,7 @@
         const crumbs = el('div', 'bk-crumbs');
         const root = el('button', 'bk-crumb');
         root.type = 'button';
-        root.textContent = MACHINE;
+        root.textContent = currentMachine();
         root.addEventListener('click', () => goTo(''));
         crumbs.appendChild(root);
         if (!manifestSearch) {
@@ -620,7 +655,7 @@
                                   t('backups.tab.restore_onto')));
         const target = el('input', 'input');
         target.id = 'restore-target';
-        target.value = restoreTarget === null ? MACHINE : restoreTarget;
+        target.value = restoreTarget === null ? currentMachine() : restoreTarget;
         target.setAttribute('list', 'restore-machine-options');
         target.style.width = '100%';
         target.addEventListener('input', () => { restoreTarget = target.value; });
@@ -683,8 +718,8 @@
     }
 
     async function startRestore() {
-        const targetMachine = (restoreTarget === null ? MACHINE : restoreTarget).trim()
-                              || MACHINE;
+        const targetMachine = (restoreTarget === null ? currentMachine() : restoreTarget).trim()
+                              || currentMachine();
         const targetDir = restoreDir.trim();
         const overwrite = restoreOverwrite;
 
@@ -706,7 +741,7 @@
         render();
         try {
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/restore`,
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/restore`,
                 json('POST', {
                     target: targetMachine,
                     target_dir: targetDir,
@@ -781,7 +816,7 @@
             // history and the pending-request line below refresh from the same response
             // rather than needing a second fetch.
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/run`,
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/run`,
                 json('POST', {}));
             runMessage = body.message || 'Requested.';
             data = body;
@@ -810,7 +845,7 @@
         render();
         try {
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/cancel`,
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/cancel`,
                 json('POST', {}));
             runMessage = body.message || 'Cancelled.';
             data = body;
@@ -900,6 +935,4 @@
         return card;
     }
 
-    // Deep link from the Backups page's exceptions table: /machine/PC-1#backup.
-    if (window.location.hash === '#backup') load();
 })();

@@ -4,6 +4,12 @@
 // Follows the ARIA tabs pattern: exactly one tab is in the tab order at a time
 // (roving tabindex) and arrows move between them, so Tab jumps past the whole strip to
 // the panel content rather than walking every tab.
+//
+// Two ways to be linkable, and a tablist opts into the second. By default the fragment
+// names the panel (#tab-computer), which is what every in-page anchor in this console
+// already does. A tablist carrying data-tabs-param="tab" instead reads and writes a query
+// parameter against each tab's data-tab-slug, because the Tools page needs the tab AND the
+// machine in one shareable URL and a fragment cannot carry two independent things.
 (function () {
     'use strict';
 
@@ -15,6 +21,24 @@
 
         const key = STORAGE_PREFIX + (tablist.dataset.tabsKey || 'default');
         const panelFor = (tab) => document.getElementById(tab.getAttribute('aria-controls'));
+
+        // Opt-in. Absent on every tablist that shipped before the Tools page, so their
+        // behaviour is byte-for-byte what it was.
+        const param = tablist.dataset.tabsParam || null;
+        const tabForParam = () => {
+            if (!param) return null;
+            const wanted = new URLSearchParams(location.search).get(param);
+            return wanted ? tabs.find((tb) => tb.dataset.tabSlug === wanted) : null;
+        };
+        function writeParam(tab) {
+            if (!param || !tab.dataset.tabSlug) return;
+            const url = new URL(location.href);
+            if (url.searchParams.get(param) === tab.dataset.tabSlug) return;
+            url.searchParams.set(param, tab.dataset.tabSlug);
+            // Shared with the shell so the address bar and any bookmark agree; see
+            // common.js for why this is replaceState on both sides.
+            if (typeof syncUrl === 'function') syncUrl(url.pathname + url.search + url.hash);
+        }
 
         function activate(tab, { focus = false, persist = true } = {}) {
             for (const other of tabs) {
@@ -33,6 +57,7 @@
             // Let a panel react to becoming visible (e.g. a chart that must resize, or
             // the terminal focusing its prompt). Hidden elements have no dimensions, so
             // anything measuring itself has to wait for this.
+            if (persist) writeParam(tab);
             const panel = panelFor(tab);
             if (panel) panel.dispatchEvent(new CustomEvent('tab:shown', { bubbles: true }));
         }
@@ -73,14 +98,31 @@
             if (target) activate(target);
         });
 
-        // Restore, in priority order: an explicit #hash (so a tab is linkable), then the
-        // last tab this browser used, else whatever the markup marked active.
+        // The query-parameter equivalent of the hashchange handler above: the shell
+        // navigates the frame with the History API, so arriving at a different ?tab= is
+        // also a same-document change that DOMContentLoaded will not see again.
+        if (param) {
+            window.addEventListener('popstate', () => {
+                const target = tabForParam();
+                if (target) activate(target);
+            });
+        }
+
+        // Restore, in priority order: an explicit ?tab= (opt-in, and it beats the fragment
+        // because it is the form a link from another page carries), then an explicit #hash
+        // (so a tab is linkable), then the last tab this browser used, else whatever the
+        // markup marked active.
+        const fromParam = tabForParam();
         const fromHash = tabForHash();
         let stored = null;
         try { stored = localStorage.getItem(key); } catch (e) { /* ignore */ }
         const fromStorage = stored ? tabs.find((t) => t.id === stored) : null;
-        const initial = fromHash || fromStorage || tabs.find((t) => t.classList.contains('tabs__tab--active')) || tabs[0];
+        const initial = fromParam || fromHash || fromStorage || tabs.find((t) => t.classList.contains('tabs__tab--active')) || tabs[0];
+        // persist:false skips the storage write on restore, but the URL must still be
+        // brought into line -- a page opened with no ?tab= that restores from storage
+        // should be sharable as the tab you are actually looking at.
         activate(initial, { persist: false });
+        writeParam(initial);
     }
 
     document.addEventListener('DOMContentLoaded', () => {

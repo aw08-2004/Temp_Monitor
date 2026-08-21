@@ -498,8 +498,14 @@
 </dialog>
 {% endblock %}
 {% block page_scripts %}
-{# Order matters: fleet-api.js defines the window.FleetApi the others use, and
-   fleet-terminal.js calls into window.FleetFavorites. #}
+{# Order matters. machine-context.js answers "which machine is this page about" and
+   fleet-api.js reads through it; tool-panels.js owns the load/teardown sequencing every
+   tool panel registers with, so both come before the tools themselves. fleet-terminal.js
+   calls into window.FleetFavorites. collapse.js goes LAST -- it restores folded sections
+   by setting the `open` attribute, and the modules that poll only while their section is
+   open have to have registered their `toggle` listeners by then. #}
+<script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
@@ -517,4 +523,5 @@
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/wake.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

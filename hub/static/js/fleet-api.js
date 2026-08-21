@@ -7,10 +7,17 @@
 (function () {
     'use strict';
 
+    // null on pages without a machine (dashboard/history), and on the Tools page until
+    // one is picked. Consumers early-return on it, matching the existing guard idiom.
+    //
+    // Read through MachineContext rather than captured once: on the Tools page the answer
+    // changes while the document stays put. The fallback keeps this file usable on a page
+    // that loads it without machine-context.js.
     const machineConfig = document.getElementById('machine-config');
-    // null on pages without a machine (dashboard/history). Consumers early-return on it,
-    // matching the existing guard idiom.
-    const MACHINE = machineConfig ? machineConfig.dataset.machine : null;
+    function currentMachine() {
+        if (window.MachineContext) return window.MachineContext.current();
+        return machineConfig ? machineConfig.dataset.machine : null;
+    }
 
     async function getJson(url) {
         const response = await fetch(url);
@@ -50,14 +57,14 @@
     }
 
     window.FleetApi = {
-        machine: MACHINE,
         getJson,
         postJson,
         formatTime,
 
         /** Queue a command. Returns its id. */
         async issueCommand(type, params) {
-            const data = await postJson('/api/fleet/commands', { machine: MACHINE, type, params });
+            const data = await postJson('/api/fleet/commands',
+                                        { machine: currentMachine(), type, params });
             return data.command_id;
         },
 
@@ -85,4 +92,8 @@
             }
         }
     };
+
+    // An accessor, not a value: every existing `FleetApi.machine` read keeps its spelling
+    // and starts asking the question at the moment it is asked.
+    Object.defineProperty(window.FleetApi, 'machine', { get: currentMachine, enumerable: true });
 })();
