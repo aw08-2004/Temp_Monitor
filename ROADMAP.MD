@@ -2,6 +2,18 @@
 
 Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
+> **Note on where things live (hub 1.87.0).** The console was reorganised around what you
+> are doing rather than which PC you are doing it to. **Terminal, Backup, Firmware and
+> Network left the machine page** for a **Tools** page, one tool per tab with the machine
+> picked from a column beside them; the standalone **Firmware** and **Backups** pages folded
+> into the matching tabs as their fleet halves, and both old urls redirect. The machine page
+> keeps **Overview only** (every section of which now folds and remembers it) plus deep links
+> into Tools. The **Dashboard is fleet-wide** — counts, OS mix, live aggregates, activity and
+> a few ranked attention lists, from one `/api/fleet/summary` — and machines are reached
+> through Asset Inventory. Entries below describe the features themselves and still hold;
+> where one says "the Firmware tab on the machine page" or "the Backups page", read it as
+> the corresponding Tools tab.
+
 > **Note on `companion.py`.** The Python companion agent has been removed from the repo;
 > the C#/.NET agent in `agent/` is the only telemetry client. Entries below that credit a
 > companion release (e.g. "agent 3.18.0 / companion 2.12.0") are kept as accurate release
