@@ -99,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.85.0"
+HUB_VERSION = "1.86.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -886,6 +886,80 @@ def derive_machine_status(updated_at):
     # settings.get() is a dict lookup off a copy-on-write cache, no DB round-trip.
     window = settings.get_int(DB_PATH, "fleet.dashboard_online_window_seconds")
     return "online" if (datetime.now() - parsed).total_seconds() <= window else "offline"
+
+#: The buckets a fleet is counted in. Deliberately coarse: the Dashboard's question is
+#: "what are we still running", and a breakdown by build number answers a different one
+#: (that lives on the machine page, where the exact caption and build are shown as-is).
+OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "unknown")
+
+#: Substrings that put a caption in a bucket, checked in order. Server is first because a
+#: Server caption also contains "Windows".
+_OS_MATCHES = (
+    ("windows_server", ("windows server", "server 20")),
+    ("windows_11", ("windows 11",)),
+    ("windows_10", ("windows 10",)),
+    ("linux", ("linux", "ubuntu", "debian", "red hat", "rhel", "centos", "fedora",
+               "suse", "alma", "rocky")),
+)
+
+#: The first Windows 11 build. Below it is 10, at or above it is 11 -- see normalize_os.
+_WINDOWS_11_BUILD = 22000
+
+
+def _bucket_from_caption(caption):
+    """Bucket a raw OS name, or None if it says nothing recognisable."""
+    text = str(caption or "").strip().lower()
+    if not text:
+        return None
+    for bucket, needles in _OS_MATCHES:
+        if any(needle in text for needle in needles):
+            return bucket
+    return None
+
+
+def normalize_os(os_caption, os_build, ad_os):
+    """Decide which operating system a machine is running, and say where that came from.
+
+    Returns {"bucket", "label", "source"}: `bucket` is one of OS_BUCKETS and is what the
+    fleet is counted by; `label` is the raw string to show a human, which is ARBITRARY TEXT
+    from a remote machine and must be rendered with textContent; `source` is "agent", "ad"
+    or None.
+
+    Two decisions worth spelling out.
+
+    THE BUILD NUMBER BEATS THE CAPTION. Early Windows 11 machines report a caption that
+    still says "Windows 10" -- Microsoft shipped 11 as build 22000 of the same product and
+    did not change the product name in WMI. A console that trusted the caption would report
+    a fleet as years behind on an upgrade it had already done. So a parseable build decides
+    between 10 and 11, and the caption only decides what it alone can (Server, Linux).
+
+    AD IS THE FALLBACK, NOT THE OTHER WAY ROUND. machine_info.ad_os is the directory sync's
+    copy of the same fact, and it is what every machine has until its agent is new enough to
+    report OS itself. It is coarse (a raw `operatingSystem` attribute, no build number) and
+    it is as fresh as the last sync rather than the last heartbeat, so the agent wins
+    wherever both exist. `source` is how the UI can say which one it is looking at.
+    """
+    caption = str(os_caption or "").strip()
+    if caption:
+        bucket = _bucket_from_caption(caption)
+        # Only 10-vs-11 is decided by the build; a Server or Linux caption is already
+        # unambiguous, and no build number would improve it.
+        if bucket in (None, "windows_10", "windows_11"):
+            try:
+                build = int(str(os_build or "").strip().split(".")[0])
+            except (TypeError, ValueError):
+                build = None
+            if build is not None and (bucket is not None or "windows" in caption.lower()):
+                bucket = "windows_11" if build >= _WINDOWS_11_BUILD else "windows_10"
+        return {"bucket": bucket or "unknown", "label": caption, "source": "agent"}
+
+    directory = str(ad_os or "").strip()
+    if directory:
+        return {"bucket": _bucket_from_caption(directory) or "unknown",
+                "label": directory, "source": "ad"}
+
+    return {"bucket": "unknown", "label": None, "source": None}
+
 
 # ================================
 # VERSION WATCHER  --  lets agents self-update promptly instead of waiting for
@@ -2098,6 +2172,21 @@ def init_db():
         # uptime since this shipped, which reads as "fall back to last_uptime_seconds".
         if "boot_epoch" not in existing_columns:
             conn.execute("ALTER TABLE machine_info ADD COLUMN boot_epoch INTEGER")
+        # What OPERATING SYSTEM this machine runs, as Win32_OperatingSystem reports it.
+        # Four columns rather than one string because the fleet question ("how many are
+        # still on Windows 10?") and the support question ("which build is this one on?")
+        # want different halves of it, and splitting a caption back apart is guesswork.
+        #
+        # os_build is TEXT, not INTEGER: WMI hands back a string, and a Linux agent's build
+        # is not a number at all. It is compared numerically exactly once, in normalize_os,
+        # which is prepared for it not to parse.
+        #
+        # Null on every machine until its agent is new enough to report OS -- which is why
+        # normalize_os falls back to machine_info.ad_os, the directory sync's copy of the
+        # same fact. See hub/directory.py.
+        for _os_column in ("os_caption", "os_version", "os_build", "os_arch"):
+            if _os_column not in existing_columns:
+                conn.execute(f"ALTER TABLE machine_info ADD COLUMN {_os_column} TEXT")
 
 def write_readings_batch(records):
     if not records:
@@ -2317,7 +2406,8 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     socketio.emit('new_temp', payload, room=machine_room(machine_name))
 
 def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None,
-                      service_tag=None, manufacturer=None):
+                      service_tag=None, manufacturer=None,
+                      os_caption=None, os_version=None, os_build=None, os_arch=None):
     machine_name = str(machine).strip()
     asset_tag = (str(asset_tag).strip() or None) if asset_tag else None
     serial_number = (str(serial_number).strip() or None) if serial_number else None
@@ -2325,15 +2415,23 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
     companion_version = (str(companion_version).strip() or None) if companion_version else None
     service_tag = (str(service_tag).strip() or None) if service_tag else None
     manufacturer = (str(manufacturer).strip() or None) if manufacturer else None
+    os_caption = (str(os_caption).strip() or None) if os_caption else None
+    os_version = (str(os_version).strip() or None) if os_version else None
+    os_build = (str(os_build).strip() or None) if os_build else None
+    os_arch = (str(os_arch).strip() or None) if os_arch else None
+    # The OS fields belong in this guard, not only in the INSERT below: a report carrying
+    # nothing BUT an operating system would otherwise be dropped on the floor, and that is
+    # exactly the shape of the first report from a machine the hub already has identity for.
     if not machine_name or not any([asset_tag, serial_number, model, companion_version,
-                                    service_tag, manufacturer]):
+                                    service_tag, manufacturer,
+                                    os_caption, os_version, os_build, os_arch]):
         return
 
     with get_db_conn() as conn:
         conn.execute(
             """
-            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, service_tag, manufacturer, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, service_tag, manufacturer, os_caption, os_version, os_build, os_arch, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 asset_tag = COALESCE(excluded.asset_tag, machine_info.asset_tag),
                 -- WRITE-ONCE, unlike every other field here, and the argument order is the
@@ -2351,10 +2449,18 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
                 companion_version = COALESCE(excluded.companion_version, machine_info.companion_version),
                 service_tag = COALESCE(excluded.service_tag, machine_info.service_tag),
                 manufacturer = COALESCE(excluded.manufacturer, machine_info.manufacturer),
+                -- Last-write-wins, unlike serial_number above: an operating system is the
+                -- one field here that legitimately CHANGES. A machine upgraded from 10 to
+                -- 11, or moved to a new build on patch Tuesday, has to be able to say so.
+                os_caption = COALESCE(excluded.os_caption, machine_info.os_caption),
+                os_version = COALESCE(excluded.os_version, machine_info.os_version),
+                os_build = COALESCE(excluded.os_build, machine_info.os_build),
+                os_arch = COALESCE(excluded.os_arch, machine_info.os_arch),
                 updated_at = excluded.updated_at
             """,
             (machine_name, asset_tag, serial_number, model, companion_version, service_tag,
-             manufacturer, to_timestamp_str(datetime.now())),
+             manufacturer, os_caption, os_version, os_build, os_arch,
+             to_timestamp_str(datetime.now())),
         )
 
 # ================================
@@ -2446,7 +2552,8 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
                      (survivor, dropped))
         conn.execute("DELETE FROM readings WHERE machine = ?", (dropped,))
         d = conn.execute(
-            "SELECT asset_tag, serial_number, service_tag, manufacturer, model, companion_version "
+            "SELECT asset_tag, serial_number, service_tag, manufacturer, model, companion_version, "
+            "os_caption, os_version, os_build, os_arch "
             "FROM machine_info WHERE machine = ?",
             (dropped,),
         ).fetchone()
@@ -2459,11 +2566,16 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
                     service_tag = COALESCE(service_tag, ?),
                     manufacturer = COALESCE(manufacturer, ?),
                     model = COALESCE(model, ?),
-                    companion_version = COALESCE(companion_version, ?)
+                    companion_version = COALESCE(companion_version, ?),
+                    os_caption = COALESCE(os_caption, ?),
+                    os_version = COALESCE(os_version, ?),
+                    os_build = COALESCE(os_build, ?),
+                    os_arch = COALESCE(os_arch, ?)
                 WHERE machine = ?
                 """,
                 (d["asset_tag"], d["serial_number"], d["service_tag"], d["manufacturer"],
-                 d["model"], d["companion_version"], survivor),
+                 d["model"], d["companion_version"], d["os_caption"], d["os_version"],
+                 d["os_build"], d["os_arch"], survivor),
             )
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (dropped,))
     fleet.delete_machine(DB_PATH, dropped)
@@ -3561,6 +3673,10 @@ def report_temp():
         reported_version,
         service_tag=data.get('service_tag'),
         manufacturer=data.get('manufacturer'),
+        os_caption=data.get('os_caption'),
+        os_version=data.get('os_version'),
+        os_build=data.get('os_build'),
+        os_arch=data.get('os_arch'),
     )
     # Now that this machine's identity is fresh (and online), collapse any offline
     # duplicate reporting the same BIOS serial -- the OpenClaw -> OPENCLAW rename case.
@@ -3590,7 +3706,8 @@ def get_machines():
     with get_db_conn() as conn:
         rows = conn.execute(
             "SELECT machine, asset_tag, serial_number, service_tag, manufacturer, model, "
-            "companion_version, updated_at "
+            "companion_version, os_caption, os_version, os_build, os_arch, ad_os, "
+            "updated_at "
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     result = [dict(row) for row in rows]
@@ -3602,7 +3719,8 @@ def get_machines():
             result.append({
                 'machine': machine, 'asset_tag': None, 'serial_number': None,
                 'service_tag': None, 'manufacturer': None, 'model': None,
-                'companion_version': None, 'updated_at': None,
+                'companion_version': None, 'os_caption': None, 'os_version': None,
+                'os_build': None, 'os_arch': None, 'ad_os': None, 'updated_at': None,
             })
             known_machines.add(machine)
     # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
@@ -3620,6 +3738,14 @@ def get_machines():
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
         row['status'] = derive_machine_status(row['updated_at'])
         row['enrolled'] = row['machine'] in enrolled
+        # Derived server-side, and only here, so /api/machines, the fleet summary and the
+        # Inventory column cannot disagree about what a machine is running. os_label is
+        # flattened onto the row alongside the object because inventory.js searches and
+        # sorts over flat fields.
+        row['os'] = normalize_os(row.get('os_caption'), row.get('os_build'),
+                                 row.get('ad_os'))
+        row['os_label'] = row['os']['label']
+        row['os_bucket'] = row['os']['bucket']
     result.sort(key=lambda row: row['machine'])
     return jsonify(result)
 
@@ -3633,7 +3759,7 @@ def get_machine(machine):
     with get_db_conn() as conn:
         row = conn.execute(
             "SELECT machine, asset_tag, serial_number, service_tag, manufacturer, model, "
-            "companion_version, "
+            "companion_version, os_caption, os_version, os_build, os_arch, "
             "updated_at, ad_ou, ad_dn, ad_owner, ad_os, ad_disabled, ad_synced_at "
             "FROM machine_info WHERE machine = ?",
             (machine_name,),
@@ -3646,7 +3772,8 @@ def get_machine(machine):
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
         'service_tag': None, 'manufacturer': None, 'model': None,
-        'companion_version': None, 'updated_at': None,
+        'companion_version': None, 'os_caption': None, 'os_version': None,
+        'os_build': None, 'os_arch': None, 'updated_at': None,
         'ad_ou': None, 'ad_dn': None, 'ad_owner': None, 'ad_os': None,
         'ad_disabled': None, 'ad_synced_at': None,
     }
@@ -3661,6 +3788,11 @@ def get_machine(machine):
     # Same field the list carries, for the same reason -- see get_machines.
     result['enrolled'] = fleet.is_enrolled(DB_PATH, machine_name)
     result['primary_sensor_name'] = get_primary_sensor_override(machine_name)
+    # Same derivation the list uses, from the same function -- see get_machines. The raw
+    # os_caption/os_version/os_build/os_arch are alongside it, because the support question
+    # here ("which build is this one on?") wants the detail the bucket throws away.
+    result['os'] = normalize_os(result.get('os_caption'), result.get('os_build'),
+                                result.get('ad_os'))
     return jsonify(result)
 
 

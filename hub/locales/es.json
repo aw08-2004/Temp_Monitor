@@ -86,7 +86,8 @@
       "service_tag": "Service tag",
       "asset_tag": "Etiqueta de activo",
       "temp": "Última temp.",
-      "last_seen": "Visto por última vez"
+      "last_seen": "Visto por última vez",
+      "os": "SO"
     },
     "empty": "Todavía no ha informado ningún equipo.",
     "no_match": "Ningún equipo coincide con tu búsqueda.",
@@ -105,7 +106,8 @@
     "wake_all_title": "Pedir a un PC encendido de cada subred que encienda los PC apagados.",
     "wake_all_result": "Se solicitó el encendido de {count} PC.",
     "wake_all_none": "Todos los PC que puede ver ya están encendidos.",
-    "wake_all_failed": "No se pudo solicitar un encendido para toda la flota."
+    "wake_all_failed": "No se pudo solicitar un encendido para toda la flota.",
+    "os_from_directory": "Reportado por Active Directory, no por la propia máquina."
   },
   "alerts": {
     "heading": "Alertas",
@@ -1897,7 +1899,9 @@
       "backup": "Copia de seguridad",
       "firmware": "Firmware",
       "network": "Red"
-    }
+    },
+    "os": "SO: {value}",
+    "os_build": " (compilación {build})"
   },
   "remote": {
     "title": "Remoto",

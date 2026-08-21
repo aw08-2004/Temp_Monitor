@@ -799,8 +799,32 @@ async function loadMachineInfo() {
             t('machine.service_tag', { value: info.service_tag || dash });
         document.getElementById('stat-asset').textContent =
             t('machine.asset_tag', { value: info.asset_tag || dash });
+        showOperatingSystem(info);
         showDirectoryFacts(info);
     } catch (e) { /* non-critical */ }
+}
+
+// What this PC is running, with its build where one is known.
+//
+// The hub does the bucketing (normalize_os in app.py) and hands back the raw label, so this
+// only decides how to say it. Hidden entirely when nothing is known: on a fleet whose
+// agents predate OS reporting and whose hub has no directory sync, a permanent "--" reads
+// as broken rather than as not-yet-collected.
+//
+// The build is appended rather than replacing the caption, because the two answer different
+// questions -- "Windows 11 Pro" is what somebody asks for, "26100" is what decides whether
+// a patch applies -- and an early Windows 11 machine reports a caption that still says 10,
+// which is precisely when seeing both is worth something.
+function showOperatingSystem(info) {
+    const el = document.getElementById('stat-os');
+    if (!el) return;
+    const os = info.os || {};
+    if (!os.label) { el.hidden = true; return; }
+    el.hidden = false;
+    const build = info.os_build ? t('machine.os_build', { build: info.os_build }) : '';
+    el.textContent = t('machine.os', { value: os.label + build });
+    // Where it came from. Only worth saying when it is NOT the machine's own answer.
+    el.title = os.source === 'ad' ? t('inventory.os_from_directory') : '';
 }
 
 // Active Directory facts (roadmap #4). Each row appears only when the directory actually

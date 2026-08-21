@@ -117,7 +117,8 @@
       "service_tag": "Service tag",
       "asset_tag": "Asset tag",
       "temp": "Last temp",
-      "last_seen": "Last seen"
+      "last_seen": "Last seen",
+      "os": "OS"
     },
     "empty": "No machines have reported in yet.",
     "no_match": "No machines match your search.",
@@ -136,7 +137,8 @@
     "wake_all_title": "Ask an awake PC on each subnet to wake the PCs that are switched off.",
     "wake_all_result": "Asked for {count} PCs to be woken.",
     "wake_all_none": "Every PC you can see is already awake.",
-    "wake_all_failed": "Could not request a fleet-wide wake."
+    "wake_all_failed": "Could not request a fleet-wide wake.",
+    "os_from_directory": "Reported by Active Directory, not by the machine itself."
   },
   "alerts": {
     "heading": "Alerts",
@@ -2008,7 +2010,9 @@
       "backup": "Backup",
       "firmware": "Firmware",
       "network": "Network"
-    }
+    },
+    "os": "OS: {value}",
+    "os_build": " (build {build})"
   },
   "remote": {
     "title": "Remote",

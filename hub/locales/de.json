@@ -86,7 +86,8 @@
       "service_tag": "Service-Tag",
       "asset_tag": "Anlagenkennzeichen",
       "temp": "Letzte Temp.",
-      "last_seen": "Zuletzt gesehen"
+      "last_seen": "Zuletzt gesehen",
+      "os": "Betriebssystem"
     },
     "empty": "Bisher hat kein Computer Daten gemeldet.",
     "no_match": "Kein Computer entspricht Ihrer Suche.",
@@ -105,7 +106,8 @@
     "wake_all_title": "Einen wachen PC in jedem Subnetz bitten, die ausgeschalteten PCs aufzuwecken.",
     "wake_all_result": "Aufwecken für {count} PCs angefordert.",
     "wake_all_none": "Alle für Sie sichtbaren PCs sind bereits wach.",
-    "wake_all_failed": "Ein flottenweites Aufwecken konnte nicht angefordert werden."
+    "wake_all_failed": "Ein flottenweites Aufwecken konnte nicht angefordert werden.",
+    "os_from_directory": "Von Active Directory gemeldet, nicht vom Rechner selbst."
   },
   "alerts": {
     "heading": "Warnungen",
@@ -1897,7 +1899,9 @@
       "backup": "Sicherung",
       "firmware": "Firmware",
       "network": "Netzwerk"
-    }
+    },
+    "os": "Betriebssystem: {value}",
+    "os_build": " (Build {build})"
   },
   "remote": {
     "title": "Remote",
