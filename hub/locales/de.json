@@ -1128,7 +1128,6 @@
     "heading": "Sicherungen",
     "intro": "Ein konsistenter Snapshot der Hub-Datenbank, komprimiert, hier verschlüsselt und nach Zeitplan außer Haus geschoben. Der Speicheranbieter sieht immer nur Chiffretext.",
     "run_now": "Jetzt sichern",
-    "views_nav": "Sicherungsansichten",
     "tab_hub": "Hub-Datenbank",
     "tab_settings": "Sicherungseinstellungen",
     "tab_destinations": "Ziele",
@@ -1702,7 +1701,6 @@
       "password_ready": "Auf diesem Rechner ist ein BIOS-Setup-Kennwort gesetzt, und hier ist eines hinterlegt, das mit einer Änderung gesendet wird.",
       "password_unknown": "Die Firmware dieses Rechners gibt nicht an, ob ein Setup-Kennwort gesetzt ist. Wird eine Änderung abgelehnt, ist das der erste Punkt zum Prüfen.",
       "updates_title": "BIOS-Updates",
-      "updates_link": "Firmware-Seite",
       "no_updates": "An diesen Rechner wurde kein Firmware-Update gesendet.",
       "update_line": "{name} → BIOS {version} · {when}",
       "update": {

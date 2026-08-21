@@ -619,6 +619,18 @@
     margin-top: var(--space-6);
 }
 
+/* Controls that belong to a folded section but must NOT be inside its <summary>: a click
+   anywhere in a summary toggles the disclosure, including one that landed on a button or a
+   text field in it. They sit on their own row directly under the title instead. */
+.fold__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin: var(--space-3) 0;
+}
+
 /* A fold whose children are already cards (the stat grid) carries no .card of its own, so
    its summary needs the padding the card would have given it. */
 .fold:not(.card) > .fold__summary {

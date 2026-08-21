@@ -1128,7 +1128,6 @@
     "heading": "Copias de seguridad",
     "intro": "Una instantánea coherente de la base de datos del hub, comprimida, cifrada aquí y enviada fuera del servidor según una programación. El proveedor de almacenamiento solo ve texto cifrado.",
     "run_now": "Copiar ahora",
-    "views_nav": "Vistas de copias de seguridad",
     "tab_hub": "Base de datos del hub",
     "tab_settings": "Ajustes de copia",
     "tab_destinations": "Destinos",
@@ -1702,7 +1701,6 @@
       "password_ready": "Este equipo tiene una contraseña de configuración de la BIOS, y aquí hay una guardada para enviarla con el cambio.",
       "password_unknown": "El firmware de este equipo no indica si tiene contraseña de configuración. Si se rechaza un cambio, es lo primero que hay que comprobar.",
       "updates_title": "Actualizaciones de BIOS",
-      "updates_link": "Página de firmware",
       "no_updates": "A este equipo no se le ha enviado ninguna actualización de firmware.",
       "update_line": "{name} → BIOS {version} · {when}",
       "update": {

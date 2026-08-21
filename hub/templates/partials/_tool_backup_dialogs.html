@@ -1,45 +1,4 @@
-{% extends "base.html" %}
-{% block title %}{{ t('nav.backups') }} - FleetHub{% endblock %}
-{% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
-{% endblock %}
-{% block content %}
-{#
-   Structure only. The key banner, schedule form, destination list and run history are
-   all built by backups.js from GET /api/backups -- including the destination-kind
-   vocabulary, so adding a kind to backups.DESTINATION_KINDS is a single edit.
-
-   The key banner sits ABOVE the tabs rather than inside one, because "the key that
-   decrypts every backup has never been written down" is not a detail of one view. It is
-   the thing that decides whether any of this is a backup at all.
-#}
-<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
-    <div>
-        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('backups.heading') }}</h1>
-        <p class="stat-card__meta">
-            {{ t('backups.intro') }}
-        </p>
-    </div>
-    <button class="btn btn--primary" type="button" id="run-now">{{ t('backups.run_now') }}</button>
-</div>
-
-<div id="key-banner"></div>
-
-<div class="tabs" role="tablist" aria-label="{{ t('backups.views_nav') }}" data-tabs-key="backups">
-    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-hub"
-            aria-controls="hub-pane" aria-selected="true">{{ t('backups.tab_hub') }}</button>
-    <button class="tabs__tab" type="button" role="tab" id="tab-btn-settings"
-            aria-controls="settings-pane" aria-selected="false" tabindex="-1">{{ t('backups.tab_settings') }}</button>
-    <button class="tabs__tab" type="button" role="tab" id="tab-btn-destinations"
-            aria-controls="destinations-pane" aria-selected="false" tabindex="-1">{{ t('backups.tab_destinations') }}</button>
-</div>
-
-<div class="tab-panel" id="hub-pane" role="tabpanel" aria-labelledby="tab-btn-hub"></div>
-<div class="tab-panel" id="settings-pane" role="tabpanel" aria-labelledby="tab-btn-settings" hidden></div>
-<div class="tab-panel" id="destinations-pane" role="tabpanel" aria-labelledby="tab-btn-destinations" hidden></div>
-
+{# The destination editor and the master-key dialog, from the standalone /backups page. #}
 <!-- ------------------------------------------------------ destination editor -->
 <dialog class="modal" id="destination-modal">
     <form method="dialog" id="destination-form">
@@ -151,8 +110,3 @@
         </div>
     </form>
 </dialog>
-{% endblock %}
-{% block page_scripts %}
-<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
-<script src="{{ url_for('static', filename='js/backups.js') }}"></script>
-{% endblock %}

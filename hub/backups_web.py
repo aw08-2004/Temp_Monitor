@@ -33,7 +33,7 @@ page polls the run list, exactly as the packages page polls a deployment.
 import threading
 import time
 
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, redirect, request, url_for
 
 import backup_paths
 import backups
@@ -230,7 +230,18 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     @login_required
     @can_manage
     def backups_page():
-        return render_template("backups.html")
+        """Kept as a redirect to where backups live now: Tools, Backup tab.
+
+        The fleet half -- the master-key banner, the hub's own schedule, the fleet file
+        policy and the destination list -- moved there whole, above the per-machine policy
+        that used to be a tab on the machine page. The two halves were always one subject
+        described in two places.
+
+        The endpoint stays because bookmarks and url_for() calls do, and its gate stays with
+        it: an operator without manage_backups gets the same 403 they always did, since the
+        decorator runs before the redirect.
+        """
+        return redirect(url_for("tools_page") + "?tab=backup")
 
     # ---------------- Console: overview ----------------
     @bp.route("/api/backups", methods=["GET"])

@@ -14,7 +14,12 @@
 
 (function () {
     const PANEL_ID = 'tool-backup';
-    const pane = document.getElementById(PANEL_ID);
+    // The tab panel is what ToolPanels watches (is it visible, was it just shown); `pane` is
+    // the container this file OWNS inside it. They are different elements because the panel
+    // also holds the fleet policy above this, and everything below replaceChildren()s its
+    // container on every state change -- ticking one checkbox would otherwise wipe the
+    // fleet half off the tab.
+    const pane = document.getElementById('backup-machine-pane');
     if (!pane) return;      // no manage_backups: the tab was never rendered
 
     // The machine this panel is currently showing. A call, not a constant: on the Tools
@@ -80,6 +85,25 @@
         if (className) node.className = className;
         if (text !== undefined && text !== null) node.textContent = text;
         return node;
+    }
+
+    /**
+     * A card that folds, and remembers being folded.
+     *
+     * Collapse.attach() is called HERE, before the node is in the document, deliberately:
+     * this pane is rebuilt from scratch on every state change -- ticking one checkbox
+     * redraws all four cards -- so a section restored to its stored state after insertion
+     * would flash open on every keystroke.
+     */
+    function foldCard(key, title) {
+        const card = el('details', 'card fold');
+        card.dataset.foldKey = key;
+        card.open = true;
+        const summary = el('summary', 'fold__summary');
+        summary.appendChild(el('span', 'section-title', title));
+        card.appendChild(summary);
+        window.Collapse.attach(card);
+        return card;
     }
 
     function fmtTime(epoch) {
@@ -189,8 +213,7 @@
     }
 
     function policyCard() {
-        const card = el('div', 'card');
-        card.appendChild(el('h2', 'section-title', t('backups.tab.policy')));
+        const card = foldCard('tools:backup:policy', t('backups.tab.policy'));
 
         const effective = data.effective || {};
         const config = data.config || {};
@@ -359,9 +382,7 @@
     }
 
     function previewCard() {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', t('backups.tab.resolves_to')));
+        const card = foldCard('tools:backup:preview', t('backups.tab.resolves_to'));
 
         if (!data.has_profiles) {
             card.appendChild(el('p', 'setting__default', t('backups.tab.no_profiles')));
@@ -406,9 +427,7 @@
     // Collapsed until asked for: opening a machine page must not cost a manifest query on
     // a table with a row per file version.
     function restoreCard() {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', t('backups.tab.restore_title')));
+        const card = foldCard('tools:backup:restore', t('backups.tab.restore_title'));
 
         const summary = (data.manifest || {});
         if (!summary.file_count) {
@@ -858,9 +877,7 @@
     }
 
     function runsCard() {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', t('backups.tab.history_title')));
+        const card = foldCard('tools:backup:runs', t('backups.tab.history_title'));
 
         const actions = el('div', 'card-actions');
         const run = el('button', 'btn btn--primary',

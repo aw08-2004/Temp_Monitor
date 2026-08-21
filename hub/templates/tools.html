@@ -6,8 +6,11 @@
    panels were written against. They changed pages, not stylesheets. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tools.css') }}">
-{% if cap.MANAGE_BACKUPS in user_capabilities %}
+{# permissions.css and packages.css carry the chip and .pkg-row rules the firmware and
+   backup editors were written against; both halves of both tabs need them. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
 {% endif %}
 {% endblock %}
@@ -73,33 +76,57 @@
                         aria-controls="tool-network" aria-selected="false" tabindex="-1">{{ t('tools.tab.network') }}</button>
             </div>
 
-            {# One prompt for all four panels rather than four copies of it: with no machine
-               chosen there is nothing any of them can render, and tools.js hides them. #}
+            {# One prompt rather than four copies of it. tools.js hides the .tool-machine-only
+               halves while nothing is selected; the fleet halves of Firmware and Backup stay,
+               because an image library and a destination list are not about one PC. #}
             <p class="card stat-card__meta" id="tools-pick-prompt" hidden>{{ t('tools.pick_a_machine') }}</p>
 
             <div class="tab-panel" id="tool-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal">
+                <div class="tool-machine-only">
 {% include "partials/_tool_terminal.html" %}
+                </div>
             </div>
 
             {% if cap.MANAGE_BACKUPS in user_capabilities %}
-            {# Structure only -- backup-tab.js builds everything from
-               GET /api/backups/machines/<machine>, including the resolved path preview, so
-               the token grammar has exactly one renderer shared with the Backups page. #}
-            <div class="tab-panel" id="tool-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden></div>
+            <div class="tab-panel" id="tool-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden>
+{% include "partials/_tool_backup_fleet.html" %}
+                {# Structure only -- backup-tab.js builds this half from
+                   GET /api/backups/machines/<machine>, including the resolved path preview,
+                   so the token grammar has exactly one renderer shared with the fleet policy
+                   above it. Its own container rather than the panel itself, because it
+                   replaceChildren()s whatever it is given on every state change. #}
+                <div id="backup-machine-pane" class="tool-machine-only"></div>
+            </div>
             {% endif %}
 
             <div class="tab-panel" id="tool-firmware" role="tabpanel" aria-labelledby="tab-btn-firmware" hidden>
+                {# The image library and the job list are fleet-wide and need manage_firmware.
+                   The per-machine BIOS card below is not gated at all -- what a PC is set to
+                   is inventory -- so the two halves carry different gates on purpose. #}
+                {% if cap.MANAGE_FIRMWARE in user_capabilities %}
+{% include "partials/_tool_firmware_fleet.html" %}
+                {% endif %}
+                <div class="tool-machine-only">
 {% include "partials/_tool_firmware.html" %}
+                </div>
             </div>
 
             <div class="tab-panel" id="tool-network" role="tabpanel" aria-labelledby="tab-btn-network" hidden>
+                <div class="tool-machine-only">
 {% include "partials/_tool_network.html" %}
+                </div>
             </div>
         </div>
     </div>
 </div>
 
 {% include "partials/_tool_dialogs.html" %}
+{% if cap.MANAGE_FIRMWARE in user_capabilities %}
+{% include "partials/_tool_firmware_dialogs.html" %}
+{% endif %}
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+{% include "partials/_tool_backup_dialogs.html" %}
+{% endif %}
 {% endblock %}
 {% block page_scripts %}
 {# Same order as the machine page used, for the same reasons: machine-context.js answers
@@ -120,7 +147,12 @@
 <script src="{{ url_for('static', filename='js/fleet-pty.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
+<script src="{{ url_for('static', filename='js/backups.js') }}"></script>
 <script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
+{% endif %}
+{% if cap.MANAGE_FIRMWARE in user_capabilities %}
+{# autocomplete.js is already loaded by base.html for every page. #}
+<script src="{{ url_for('static', filename='js/firmware-images.js') }}"></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/wake.js') }}"></script>

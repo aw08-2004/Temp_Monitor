@@ -1,0 +1,41 @@
+{# The fleet half of Backups, lifted from the standalone /backups page when that page
+   folded into this tab. It renders with NO machine selected: the master key, the hub's own
+   schedule, the fleet-wide file policy and the destination list are all fleet decisions.
+
+   The key banner sits ABOVE everything else, exactly as it did, because "the key that
+   decrypts every backup has never been written down" is not a detail of one view. It is
+   the thing that decides whether any of this is a backup at all.
+
+   The three views used to be a tab strip of their own. They are folds now -- a tablist
+   nested inside a tablist is two different meanings for the same control, and the operator
+   would have had to learn which one the arrow keys were talking to. #}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h2 class="section-title" style="font-size: var(--text-lg); margin-bottom: var(--space-2);">{{ t('backups.heading') }}</h2>
+        <p class="stat-card__meta">{{ t('backups.intro') }}</p>
+    </div>
+    <button class="btn btn--primary" type="button" id="run-now">{{ t('backups.run_now') }}</button>
+</div>
+
+<div id="key-banner"></div>
+
+<details class="card fold" data-fold-key="tools:backup:hub" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('backups.tab_hub') }}</span>
+    </summary>
+    <div id="hub-pane"></div>
+</details>
+
+<details class="card fold" data-fold-key="tools:backup:hub_settings">
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('backups.tab_settings') }}</span>
+    </summary>
+    <div id="settings-pane"></div>
+</details>
+
+<details class="card fold" data-fold-key="tools:backup:destinations">
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('backups.tab_destinations') }}</span>
+    </summary>
+    <div id="destinations-pane"></div>
+</details>

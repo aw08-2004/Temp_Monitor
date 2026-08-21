@@ -35,6 +35,20 @@
     min-height: 0;
 }
 
+/* In a 250px column a name and its status pill do not sit side by side without the name
+   being truncated to nothing, so the row stacks instead. The dialog version on the Remote
+   page keeps the side-by-side layout it has the width for. */
+.tools-layout__machines .picker-list__item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+}
+
+.tools-layout__machines .picker-list__name {
+    max-width: 100%;
+}
+
 /* min-width:0 is load-bearing, exactly as it is for .settings-layout__panels: a flex item
    defaults to min-content, and xterm's screen would otherwise push the whole layout past
    the viewport instead of shrinking inside it. */
@@ -52,9 +66,11 @@
     font-weight: 600;
 }
 
-/* No machine picked: the panels have nothing to render, and #tools-pick-prompt says so
-   once instead of each of them saying it separately. */
-.tab-panel--no-machine {
+/* No machine picked. Only the per-machine halves go away -- the Firmware image library and
+   the Backup destination list are fleet decisions and have something to show regardless.
+   #tools-pick-prompt says once what the hidden halves are waiting for, instead of each of
+   them saying it separately. */
+#tools-root.tools--no-machine .tool-machine-only {
     display: none;
 }
 

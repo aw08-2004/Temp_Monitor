@@ -1,0 +1,39 @@
+{# The fleet half of Firmware, lifted from the standalone /firmware page when that page
+   folded into this tab. Unchanged apart from the two cards becoming folds -- the image
+   library and the job list are each a table you scroll past to reach the other.
+
+   It renders with NO machine selected, deliberately. Uploading tonight's BIOS image is not
+   a thing you do to one PC, and making it wait behind picking an irrelevant one would be a
+   worse page than the one this replaced. Only the per-machine card below needs a machine.
+
+   The warning is not decoration. Every other feature in this console has an undo -- a
+   backup to restore, a package to reinstall, a setting to write back. A failed flash has
+   none, which is why it is said before the first button. #}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h2 class="section-title" style="font-size: var(--text-lg); margin-bottom: var(--space-2);">{{ t('firmware.heading') }}</h2>
+        <p class="stat-card__meta">{{ t('firmware.intro') }}</p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-image">{{ t('firmware.new_image') }}</button>
+</div>
+
+<div class="notice notice--warn" style="margin-bottom: var(--space-5);">
+    <div class="section-title" style="margin-bottom: var(--space-2);">{{ t('firmware.warning_title') }}</div>
+    <p class="stat-card__meta">{{ t('firmware.warning_body') }}</p>
+</div>
+
+<details class="card fold" data-fold-key="tools:firmware:images" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('firmware.images_title') }}</span>
+    </summary>
+    <p class="stat-card__meta">{{ t('firmware.images_help') }}</p>
+    <div id="images-body"></div>
+</details>
+
+<details class="card fold" data-fold-key="tools:firmware:jobs" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('firmware.jobs_title') }}</span>
+    </summary>
+    <p class="stat-card__meta">{{ t('firmware.jobs_help') }}</p>
+    <div id="jobs-body"></div>
+</details>

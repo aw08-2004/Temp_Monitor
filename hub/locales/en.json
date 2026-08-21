@@ -1226,7 +1226,6 @@
     "heading": "Backups",
     "intro": "A consistent snapshot of the hub database, compressed, encrypted here, and pushed offsite on a schedule. The storage provider only ever sees ciphertext.",
     "run_now": "Back up now",
-    "views_nav": "Backup views",
     "tab_hub": "Hub database",
     "tab_settings": "Backup Settings",
     "tab_destinations": "Destinations",
@@ -1813,7 +1812,6 @@
       "password_ready": "A BIOS setup password is set on this machine, and one is stored here to send with a change.",
       "password_unknown": "This machine's firmware does not say whether a setup password is set. If a change is refused, that is the first thing to check.",
       "updates_title": "BIOS updates",
-      "updates_link": "Firmware page",
       "no_updates": "This machine has not been sent a firmware update.",
       "update_line": "{name} → BIOS {version} · {when}",
       "update": {

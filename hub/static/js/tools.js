@@ -155,18 +155,21 @@
     }
 
     /**
-     * Hide the tools when there is nothing for them to act on.
+     * Hide the halves that have nothing to act on.
      *
-     * With no machine chosen every panel would render an error or an empty frame, four
-     * times over. One sentence is the better answer -- and on a hub where the operator's
-     * scope is empty, the tab strip itself is noise.
+     * Only the per-machine halves: with no machine chosen each of them would render an
+     * error or an empty frame, four times over, and one sentence is the better answer. The
+     * FLEET halves of Firmware and Backup stay -- an image library and a destination list
+     * are not about one PC, and making them wait behind picking an irrelevant one would be
+     * a worse page than the standalone ones they replaced.
+     *
+     * On a hub where the operator's scope is empty there is no machine to pick at all, so
+     * the tab strip itself is noise.
      */
     function applyEmptyState() {
         const has = !!selected;
         if (tabsEl) tabsEl.hidden = !pickable.length;
-        for (const panel of root.querySelectorAll('.tab-panel')) {
-            panel.classList.toggle('tab-panel--no-machine', !has);
-        }
+        root.classList.toggle('tools--no-machine', !has);
         if (!promptEl) return;
         promptEl.hidden = has && !notice;
         promptEl.textContent = notice || t('tools.pick_a_machine');

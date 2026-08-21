@@ -99,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.84.0"
+HUB_VERSION = "1.85.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4425,6 +4425,9 @@ def tools_page():
     with ?tab=, and both are written by the page itself with replaceState.
     """
     return render_template("tools.html", hub_version=HUB_VERSION,
+                           # The firmware image editor shows the cap before an upload is
+                           # attempted; the endpoint enforces the same number itself.
+                           max_upload_mb=settings.get_int(DB_PATH, "firmware.max_upload_mb"),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/machine/<machine>")
