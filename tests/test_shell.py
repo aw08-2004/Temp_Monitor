@@ -132,8 +132,7 @@ def test_the_frame_opens_on_the_requested_url():
 def test_the_fragment_is_carried_into_the_frame():
     """A fragment never reaches the server, so the server-rendered src cannot carry it and an
     inline script has to put it back. Without that, a bookmarked or middle-clicked
-    /machine/PC-1#backup frames /machine/PC-1: backup-tab.js's deep link from the Backups
-    exceptions table never fires, and tabs.js never restores the linked tab. The frame's load
+    /settings#tab-computer frames /settings and tabs.js never restores the linked tab. The frame's load
     handler then rewrites the address bar to the frame's own hash-less url, so the fragment is
     gone from both sides -- which is why the fixup has to run inline, next to the frame, while
     the fragment still exists and before the framed document has run anything."""
@@ -153,8 +152,12 @@ def test_the_fragment_is_carried_into_the_frame():
     check("shell.js is not where this is attempted", "location.hash" not in js)
 
     # The consumers this protects, pinned so a rename shows up here rather than as a dead link.
-    check("backup-tab.js still deep-links on a fragment",
-          "window.location.hash === '#backup'" in read(STATIC, "js", "backup-tab.js"))
+    # The Backup tab used to be one of them, via /machine/PC-1#backup; it now lives on the
+    # Tools page and is linked with ?tab=, which travels in the url proper and needs no fixup.
+    # In-page anchors to a tab -- the primary-sensor help text's link to /settings#tab-computer
+    # -- are what is left, so that is what is pinned.
+    check("a template still deep-links a tab by fragment",
+          "#tab-computer" in read(TEMPLATES, "machine.html"))
     check("tabs.js still restores a tab from one", "location.hash" in read(STATIC, "js", "tabs.js"))
 
 

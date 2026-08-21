@@ -13,17 +13,25 @@
 //    fleet shows the real fleet list rather than a stale guess.
 
 (function () {
-    const pane = document.getElementById('tab-backup');
+    const PANEL_ID = 'tool-backup';
+    // The tab panel is what ToolPanels watches (is it visible, was it just shown); `pane` is
+    // the container this file OWNS inside it. They are different elements because the panel
+    // also holds the fleet policy above this, and everything below replaceChildren()s its
+    // container on every state change -- ticking one checkbox would otherwise wipe the
+    // fleet half off the tab.
+    const pane = document.getElementById('backup-machine-pane');
     if (!pane) return;      // no manage_backups: the tab was never rendered
 
-    const machineConfig = document.getElementById('machine-config');
-    const MACHINE = machineConfig.dataset.machine;
+    // The machine this panel is currently showing. A call, not a constant: on the Tools
+    // page the operator picks a different PC without the page reloading, and every URL
+    // below has to be built against the machine chosen now rather than the one that
+    // happened to be current when this file was parsed.
+    const currentMachine = () => window.MachineContext.current();
 
     let data = null;
     let draftInclude = [];
     let draftExclude = [];
     let dirty = false;
-    let loaded = false;
 
     // ---- restore browser state ----
     // `selected` is a Map of path -> {dir}. A ticked FOLDER is stored as one entry, not
@@ -79,6 +87,25 @@
         return node;
     }
 
+    /**
+     * A card that folds, and remembers being folded.
+     *
+     * Collapse.attach() is called HERE, before the node is in the document, deliberately:
+     * this pane is rebuilt from scratch on every state change -- ticking one checkbox
+     * redraws all four cards -- so a section restored to its stored state after insertion
+     * would flash open on every keystroke.
+     */
+    function foldCard(key, title) {
+        const card = el('details', 'card fold');
+        card.dataset.foldKey = key;
+        card.open = true;
+        const summary = el('summary', 'fold__summary');
+        summary.appendChild(el('span', 'section-title', title));
+        card.appendChild(summary);
+        window.Collapse.attach(card);
+        return card;
+    }
+
     function fmtTime(epoch) {
         return epoch ? new Date(epoch * 1000).toLocaleString() : '—';
     }
@@ -91,16 +118,48 @@
         return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     }
 
-    // Loaded lazily on first reveal: a machine page is opened far more often to look at
-    // temperatures than to change a backup policy, and this costs a request plus a path
-    // expansion on the server.
-    pane.addEventListener('tab:shown', () => { if (!loaded) load(); });
+    // Loaded lazily on first reveal, and re-loaded from scratch when the operator picks a
+    // different PC: a machine page is opened far more often to look at temperatures than to
+    // change a backup policy, and this costs a request plus a path expansion on the server.
+    // ToolPanels owns that sequencing; see tool-panels.js.
+    ToolPanels.register('backup', {
+        panelId: PANEL_ID,
+        load,
+        teardown: reset,
+        // Nothing to show without a machine; the Tools page draws its own prompt.
+        requires: (machine) => !!machine
+    });
+
+    // Everything this panel accumulated about ONE machine. A half-reset here is how a
+    // restore aimed at the previous PC's folder tree survives a machine switch, so this
+    // deliberately names every piece of state declared above.
+    function reset() {
+        data = null;
+        draftInclude = [];
+        draftExclude = [];
+        dirty = false;
+        manifest = null;
+        manifestPath = '';
+        manifestSearch = '';
+        manifestError = '';
+        selected = new Map();
+        restoreBusy = false;
+        restoreStatus = '';
+        restoreOpen = false;
+        machineOptions = [];
+        restoreTarget = null;
+        restoreDir = '';
+        restoreOverwrite = false;
+        runBusy = false;
+        runMessage = '';
+        runError = '';
+        pane.replaceChildren();
+    }
 
     async function load() {
-        loaded = true;
         pane.replaceChildren(el('p', 'stat-card__meta', 'Loading…'));
         try {
-            data = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`);
+            data = await api(`/api/backups/machines/${encodeURIComponent(currentMachine())}`);
         } catch (e) {
             pane.replaceChildren(el('p', 'setting__error', e.message));
             return;
@@ -154,8 +213,7 @@
     }
 
     function policyCard() {
-        const card = el('div', 'card');
-        card.appendChild(el('h2', 'section-title', t('backups.tab.policy')));
+        const card = foldCard('tools:backup:policy', t('backups.tab.policy'));
 
         const effective = data.effective || {};
         const config = data.config || {};
@@ -254,7 +312,7 @@
         const seq = ++policySaveSeq;
         setPolicyStatus(t('common.saving'), '');
         try {
-            const body = await api(`/api/backups/machines/${encodeURIComponent(MACHINE)}`,
+            const body = await api(`/api/backups/machines/${encodeURIComponent(currentMachine())}`,
                              json('PUT', {
                                  enabled: value === '' ? null : value === 'on',
                                  include: draftInclude,
@@ -324,9 +382,7 @@
     }
 
     function previewCard() {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', t('backups.tab.resolves_to')));
+        const card = foldCard('tools:backup:preview', t('backups.tab.resolves_to'));
 
         if (!data.has_profiles) {
             card.appendChild(el('p', 'setting__default', t('backups.tab.no_profiles')));
@@ -371,9 +427,7 @@
     // Collapsed until asked for: opening a machine page must not cost a manifest query on
     // a table with a row per file version.
     function restoreCard() {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', t('backups.tab.restore_title')));
+        const card = foldCard('tools:backup:restore', t('backups.tab.restore_title'));
 
         const summary = (data.manifest || {});
         if (!summary.file_count) {
@@ -424,7 +478,7 @@
                 ? `search=${encodeURIComponent(manifestSearch)}`
                 : `path=${encodeURIComponent(manifestPath)}`;
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/manifest?${query}`);
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/manifest?${query}`);
             manifest = body.result;
             data.manifest = body.summary;
         } catch (e) {
@@ -459,7 +513,7 @@
         const crumbs = el('div', 'bk-crumbs');
         const root = el('button', 'bk-crumb');
         root.type = 'button';
-        root.textContent = MACHINE;
+        root.textContent = currentMachine();
         root.addEventListener('click', () => goTo(''));
         crumbs.appendChild(root);
         if (!manifestSearch) {
@@ -620,7 +674,7 @@
                                   t('backups.tab.restore_onto')));
         const target = el('input', 'input');
         target.id = 'restore-target';
-        target.value = restoreTarget === null ? MACHINE : restoreTarget;
+        target.value = restoreTarget === null ? currentMachine() : restoreTarget;
         target.setAttribute('list', 'restore-machine-options');
         target.style.width = '100%';
         target.addEventListener('input', () => { restoreTarget = target.value; });
@@ -683,8 +737,8 @@
     }
 
     async function startRestore() {
-        const targetMachine = (restoreTarget === null ? MACHINE : restoreTarget).trim()
-                              || MACHINE;
+        const targetMachine = (restoreTarget === null ? currentMachine() : restoreTarget).trim()
+                              || currentMachine();
         const targetDir = restoreDir.trim();
         const overwrite = restoreOverwrite;
 
@@ -706,7 +760,7 @@
         render();
         try {
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/restore`,
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/restore`,
                 json('POST', {
                     target: targetMachine,
                     target_dir: targetDir,
@@ -781,7 +835,7 @@
             // history and the pending-request line below refresh from the same response
             // rather than needing a second fetch.
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/run`,
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/run`,
                 json('POST', {}));
             runMessage = body.message || 'Requested.';
             data = body;
@@ -810,7 +864,7 @@
         render();
         try {
             const body = await api(
-                `/api/backups/machines/${encodeURIComponent(MACHINE)}/cancel`,
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}/cancel`,
                 json('POST', {}));
             runMessage = body.message || 'Cancelled.';
             data = body;
@@ -823,9 +877,7 @@
     }
 
     function runsCard() {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        card.appendChild(el('h2', 'section-title', t('backups.tab.history_title')));
+        const card = foldCard('tools:backup:runs', t('backups.tab.history_title'));
 
         const actions = el('div', 'card-actions');
         const run = el('button', 'btn btn--primary',
@@ -900,6 +952,4 @@
         return card;
     }
 
-    // Deep link from the Backups page's exceptions table: /machine/PC-1#backup.
-    if (window.location.hash === '#backup') load();
 })();

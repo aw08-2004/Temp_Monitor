@@ -15,6 +15,10 @@
 // so this page is a viewer of that state and never a driver of it — closing the tab does
 // not stop or start anything.
 
+// Lives in the Tools page's Backup tab now, above the per-PC policy that backup-tab.js
+// renders. What used to be this page's own tab strip (Hub / Settings / Destinations) is
+// three folds instead: a tablist nested inside the Tools tablist would be two meanings for
+// one control, and the operator would have had to work out which one the arrow keys meant.
 const hubPane = document.getElementById('hub-pane');
 const settingsPane = document.getElementById('settings-pane');
 const destinationsPane = document.getElementById('destinations-pane');
@@ -474,7 +478,12 @@ document.getElementById('run-now').addEventListener('click', async () => {
 // come and go, so the editor leads with the token reference and a live preview against a
 // real machine — a pattern you cannot see the effect of is a pattern you cannot trust.
 
-settingsPane.addEventListener('tab:shown', () => { renderSettingsPane(); refreshPreview(); });
+// Rendered when its fold is opened rather than on load: the preview costs a round trip
+// that resolves the token grammar against a real machine, and most visits to this tab are
+// to look at the run history above.
+foldFor(settingsPane).addEventListener('toggle', () => {
+    if (foldFor(settingsPane).open) { renderSettingsPane(); refreshPreview(); }
+});
 
 function renderSettingsPane() {
     // Preserve focus across the re-render: this pane redraws on every chip add, and
@@ -959,7 +968,9 @@ async function loadExceptions() {
         const row = el('tr');
         const nameCell = el('td');
         const link = el('a', null, m.machine);
-        link.href = `/machine/${encodeURIComponent(m.machine)}#backup`;
+        // Straight to this machine's policy in the half below, rather than to its page --
+        // the per-PC backup view left /machine/<name> when the tools did.
+        link.href = `/tools?tab=backup&machine=${encodeURIComponent(m.machine)}`;
         nameCell.appendChild(link);
         row.appendChild(nameCell);
         row.appendChild(el('td', null, m.overridden.enabled
@@ -996,7 +1007,9 @@ async function loadMachineOptions() {
 
 // ---------------------------------------------------------------- destinations
 
-destinationsPane.addEventListener('tab:shown', () => renderDestinations());
+foldFor(destinationsPane).addEventListener('toggle', () => {
+    if (foldFor(destinationsPane).open) renderDestinations();
+});
 
 function renderDestinations() {
     destinationsPane.replaceChildren();
@@ -1205,8 +1218,39 @@ document.getElementById('destination-cancel').addEventListener('click', () => {
     destinationModal.close();
 });
 
-loadMachineOptions();
-load().catch((e) => {
+/** The <details> a pane sits in, so "became visible" is one question with one answer. */
+function foldFor(pane) {
+    return pane.closest('details');
+}
+
+/**
+ * Boot when the Backup tab is first shown, not when the page parses.
+ *
+ * The Tools page loads every tool's script up front, and three of the four tabs are hidden
+ * at that moment. Fetching the fleet backup state for somebody who came to open a terminal
+ * is a request nobody asked for -- and on this tab in particular it is the request that
+ * decides whether the master-key banner is shown, which should happen when the operator is
+ * looking at it.
+ */
+function boot() {
+    loadMachineOptions();
+    load().catch(onLoadFailed);
+    // Whichever folds are open on arrival still need their contents; the toggle listeners
+    // above only fire on a change.
+    if (foldFor(settingsPane).open) { renderSettingsPane(); refreshPreview(); }
+    if (foldFor(destinationsPane).open) renderDestinations();
+}
+
+const backupPanel = document.getElementById('tool-backup');
+let booted = false;
+backupPanel.addEventListener('tab:shown', () => {
+    if (booted) return;
+    booted = true;
+    boot();
+});
+if (!backupPanel.hidden) { booted = true; boot(); }
+
+function onLoadFailed(e) {
     keyBanner.replaceChildren();
     const banner = el('div', 'bk-banner bk-banner--danger');
     const body = el('div', 'bk-banner__body');
@@ -1214,4 +1258,4 @@ load().catch((e) => {
     body.appendChild(el('div', 'bk-banner__text', e.message));
     banner.appendChild(body);
     keyBanner.appendChild(banner);
-});
+}

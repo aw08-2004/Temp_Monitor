@@ -23,11 +23,15 @@
 (function () {
     'use strict';
 
-    const pane = document.getElementById('tab-firmware');
+    const PANEL_ID = 'tool-firmware';
+    const pane = document.getElementById(PANEL_ID);
     if (!pane) return;
 
-    const machineConfig = document.getElementById('machine-config');
-    const MACHINE = machineConfig.dataset.machine;
+    // The machine this panel is currently showing. A call, not a constant: on the Tools
+    // page the operator picks a different PC without the page reloading, and every URL
+    // below has to be built against the machine chosen now rather than the one that
+    // happened to be current when this file was parsed.
+    const currentMachine = () => window.MachineContext.current();
 
     const statusPill = document.getElementById('firmware-status');
     const statusText = document.getElementById('firmware-status-text');
@@ -42,7 +46,6 @@
     const resetBtn = document.getElementById('firmware-reset-btn');
 
     let data = null;
-    let loaded = false;
     let filter = '';
     let notice = '';
     // name -> chosen value, for rows the operator has changed. Keyed on the machine's own
@@ -130,15 +133,31 @@
             === String(b === undefined || b === null ? '' : b).trim().toLowerCase();
     }
 
-    // Loaded lazily on first reveal, like the Backup tab: most machine pages are opened to
-    // look at a temperature graph, not a BIOS attribute list.
-    pane.addEventListener('tab:shown', () => { if (!loaded) load(); });
+    // Loaded lazily on first reveal and re-loaded on a machine switch, like the Backup
+    // tab: most machine pages are opened to look at a temperature graph, not a BIOS
+    // attribute list. ToolPanels owns that sequencing; see tool-panels.js.
+    ToolPanels.register('firmware', {
+        panelId: PANEL_ID,
+        load,
+        teardown: reset,
+        requires: (machine) => !!machine
+    });
+
+    // A staged edit belongs to the machine it was staged against, so leaving one behind on
+    // a machine switch would apply somebody's Dell settings to a Lenovo.
+    function reset() {
+        stopPolling();
+        data = null;
+        filter = '';
+        notice = '';
+        edits = new Map();
+        pollsLeft = 0;
+    }
 
     async function load() {
-        loaded = true;
         setStatus('muted', t('common.loading'));
         try {
-            data = await api(`/api/bios/${encodeURIComponent(MACHINE)}`);
+            data = await api(`/api/bios/${encodeURIComponent(currentMachine())}`);
         } catch (e) {
             data = null;
             setStatus('danger', t('machine.firmware.state.error'));
@@ -221,7 +240,7 @@
             cancel.addEventListener('click', async () => {
                 cancel.disabled = true;
                 try {
-                    await api(`/api/bios/${encodeURIComponent(MACHINE)}/changes/`
+                    await api(`/api/bios/${encodeURIComponent(currentMachine())}/changes/`
                               + encodeURIComponent(change.id), { method: 'DELETE' });
                     notice = '';
                 } catch (e) {
@@ -327,7 +346,7 @@
         let jobs;
         try {
             const resp = await api(
-                `/api/firmware/jobs?machine=${encodeURIComponent(MACHINE)}`);
+                `/api/firmware/jobs?machine=${encodeURIComponent(currentMachine())}`);
             jobs = resp.jobs || [];
         } catch (e) {
             updatesBody.replaceChildren(el('p', 'setting__error', e.message));
@@ -346,7 +365,7 @@
             const detail = await api(`/api/firmware/jobs/${encodeURIComponent(job.id)}`)
                 .catch(() => null);
             const mine = detail && (detail.targets || [])
-                .find((target) => target.machine === MACHINE);
+                .find((target) => target.machine === currentMachine());
             const item = el('li');
             const pill = el('span',
                             `status-pill status-pill--${UPDATE_TONES[mine && mine.status] || 'muted'}`);
@@ -535,7 +554,7 @@
             refreshBtn.disabled = true;
             notice = '';
             try {
-                await api(`/api/bios/${encodeURIComponent(MACHINE)}/refresh`, {
+                await api(`/api/bios/${encodeURIComponent(currentMachine())}/refresh`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: '{}',
@@ -561,7 +580,7 @@
             applyBtn.disabled = true;
             notice = '';
             try {
-                await api(`/api/bios/${encodeURIComponent(MACHINE)}/settings`, {
+                await api(`/api/bios/${encodeURIComponent(currentMachine())}/settings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ changes }),
@@ -597,7 +616,7 @@
         pollTimer = setInterval(async () => {
             if (pollsLeft-- <= 0) { stopPolling(); return; }
             try {
-                const fresh = await api(`/api/bios/${encodeURIComponent(MACHINE)}`);
+                const fresh = await api(`/api/bios/${encodeURIComponent(currentMachine())}`);
                 data = fresh;
                 if (!isOpen((fresh.changes || [])[0])) {
                     notice = '';
@@ -628,7 +647,7 @@
         function url() {
             return scope.value === 'fleet'
                 ? '/api/bios-password'
-                : `/api/bios-password/${encodeURIComponent(MACHINE)}`;
+                : `/api/bios-password/${encodeURIComponent(currentMachine())}`;
         }
 
         function fail(message) {

@@ -19,7 +19,8 @@
     "open": "Navigation öffnen",
     "firmware": "Firmware",
     "download": "Client herunterladen",
-    "rules": "Regeln"
+    "rules": "Regeln",
+    "tools": "Werkzeuge"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -54,8 +55,76 @@
     "back": "Zurück zur Übersicht"
   },
   "dashboard": {
-    "heading": "CPU-Live-Überwachung",
-    "empty": "Bisher hat kein Computer Daten gemeldet."
+    "heading": "Flottenübersicht",
+    "empty": "Bisher hat sich kein Rechner gemeldet.",
+    "intro": "Alles unten bezieht sich auf die gesamte Flotte. Für einen einzelnen Rechner öffne das",
+    "intro_link": "Anlagenverzeichnis",
+    "generated_at": "Stand {time}",
+    "health": {
+      "title": "Flottenzustand",
+      "total": "Rechner",
+      "online": "Online",
+      "offline": "Offline",
+      "never_enrolled": "Nicht registriert",
+      "never_enrolled_hint": "Meldet Telemetrie, nimmt keine Befehle an",
+      "open_alerts": "Offene Warnungen",
+      "agents_outdated": "Veraltete Agents",
+      "agent_latest": "aktuell ist {version}"
+    },
+    "os": {
+      "title": "Betriebssysteme",
+      "help": "Was auf der Flotte läuft. Rechner, deren Agent kein Betriebssystem gemeldet hat, greifen auf Active Directory zurück und zählen als unbekannt, wenn beides fehlt.",
+      "count": "{count} ({pct} %)",
+      "bucket": {
+        "windows_11": "Windows 11",
+        "windows_10": "Windows 10",
+        "windows_server": "Windows Server",
+        "linux": "Linux",
+        "unknown": "Unbekannt"
+      }
+    },
+    "telemetry": {
+      "title": "Live-Messwerte",
+      "help": "Über die aktuell meldenden Rechner. Live-Messwerte, keine Aufzeichnung -- der Verlauf eines einzelnen Rechners steht auf seiner eigenen Seite.",
+      "avg_temp": "Durchschn. CPU-Temperatur",
+      "peak_temp": "Aktuell am heißesten",
+      "over_threshold": "Über {threshold} °C",
+      "avg_load": "Durchschn. CPU-Last",
+      "disk_free": "Freier Speicherplatz",
+      "of_total": "von {value}",
+      "low_disk": "Unter {threshold} % frei",
+      "reporting": "Meldend",
+      "reporting_hint": "Rechner, über die gemittelt wird",
+      "celsius": "{value} °C",
+      "percent": "{value} %",
+      "gb": "{value} GB"
+    },
+    "activity": {
+      "title": "Läuft gerade",
+      "deployments_running": "Laufende Verteilungen",
+      "deployments_failed": "Fehlgeschlagene Verteilungen (24 h)",
+      "backups_ok": "Sicherungen erledigt (24 h)",
+      "backups_failed": "Fehlgeschlagene Sicherungen (24 h)",
+      "firmware_jobs": "Offene Firmware-Aufträge",
+      "wake_requests": "Laufende Weckvorgänge",
+      "alerts_title": "Offene Warnungen",
+      "fleet_wide": "Flottenweit"
+    },
+    "attention": {
+      "title": "Einen Blick wert",
+      "help": "Nur die ersten Rechner je Liste, nicht die ganze Flotte. Jeder Name öffnet seine Seite.",
+      "hottest": "Am heißesten",
+      "low_disk": "Wenigster freier Speicher",
+      "longest_offline": "Am längsten offline",
+      "free_pct": "{pct} % frei ({gb} GB)",
+      "never": "nie gemeldet",
+      "days": "{count} T",
+      "hours": "{count} Std.",
+      "minutes": "{count} Min.",
+      "no_readings": "Kein Rechner meldet eine Temperatur.",
+      "no_disks": "Kein Rechner meldet Speicherplatz.",
+      "all_online": "Alles ist online."
+    }
   },
   "history": {
     "resolution": "Auflösung:",
@@ -85,7 +154,8 @@
       "service_tag": "Service-Tag",
       "asset_tag": "Anlagenkennzeichen",
       "temp": "Letzte Temp.",
-      "last_seen": "Zuletzt gesehen"
+      "last_seen": "Zuletzt gesehen",
+      "os": "Betriebssystem"
     },
     "empty": "Bisher hat kein Computer Daten gemeldet.",
     "no_match": "Kein Computer entspricht Ihrer Suche.",
@@ -104,7 +174,8 @@
     "wake_all_title": "Einen wachen PC in jedem Subnetz bitten, die ausgeschalteten PCs aufzuwecken.",
     "wake_all_result": "Aufwecken für {count} PCs angefordert.",
     "wake_all_none": "Alle für Sie sichtbaren PCs sind bereits wach.",
-    "wake_all_failed": "Ein flottenweites Aufwecken konnte nicht angefordert werden."
+    "wake_all_failed": "Ein flottenweites Aufwecken konnte nicht angefordert werden.",
+    "os_from_directory": "Von Active Directory gemeldet, nicht vom Rechner selbst."
   },
   "alerts": {
     "heading": "Warnungen",
@@ -710,6 +781,16 @@
       "rules.probes_per_tick": {
         "label": "Höchstzahl Sondenanfragen pro Durchlauf",
         "help": "Verteilt die Erfassung über die Zeit, statt die ganze Flotte auf einmal zu fragen."
+      },
+      "hub": {
+        "hot_temp_threshold_c": {
+          "label": "Dashboard-Hitzeschwelle",
+          "help": "Das Dashboard zählt, wie viele Rechner diesen Wert erreichen oder überschreiten. Ein Filter für die Startseite, keine Warnung -- was zu heiß ist, legst du als Regel fest."
+        },
+        "low_disk_free_pct": {
+          "label": "Dashboard-Schwelle für wenig Speicher",
+          "help": "Ein Volume mit weniger als diesem Anteil an freiem Speicher gilt im Dashboard als knapp. Ebenfalls ein Filter, keine Warnung."
+        }
       }
     },
     "choice": {
@@ -1127,7 +1208,6 @@
     "heading": "Sicherungen",
     "intro": "Ein konsistenter Snapshot der Hub-Datenbank, komprimiert, hier verschlüsselt und nach Zeitplan außer Haus geschoben. Der Speicheranbieter sieht immer nur Chiffretext.",
     "run_now": "Jetzt sichern",
-    "views_nav": "Sicherungsansichten",
     "tab_hub": "Hub-Datenbank",
     "tab_settings": "Sicherungseinstellungen",
     "tab_destinations": "Ziele",
@@ -1400,14 +1480,6 @@
     "unknown": "—"
   },
   "machine": {
-    "views_nav": "Computeransichten",
-    "tab": {
-      "overview": "Übersicht",
-      "terminal": "Terminal",
-      "backup": "Sicherung",
-      "firmware": "Firmware",
-      "network": "Netzwerk"
-    },
     "live_temp": "Live-Temperatur",
     "uptime": "Laufzeit",
     "cpu_load": "CPU-Last",
@@ -1709,7 +1781,6 @@
       "password_ready": "Auf diesem Rechner ist ein BIOS-Setup-Kennwort gesetzt, und hier ist eines hinterlegt, das mit einer Änderung gesendet wird.",
       "password_unknown": "Die Firmware dieses Rechners gibt nicht an, ob ein Setup-Kennwort gesetzt ist. Wird eine Änderung abgelehnt, ist das der erste Punkt zum Prüfen.",
       "updates_title": "BIOS-Updates",
-      "updates_link": "Firmware-Seite",
       "no_updates": "An diesen Rechner wurde kein Firmware-Update gesendet.",
       "update_line": "{name} → BIOS {version} · {when}",
       "update": {
@@ -1896,7 +1967,19 @@
         "requested_by": "Angefordert von",
         "detail": "Detail"
       }
-    }
+    },
+    "fold": {
+      "stats": "Auf einen Blick"
+    },
+    "open": {
+      "label": "In Werkzeugen öffnen:",
+      "terminal": "Terminal",
+      "backup": "Sicherung",
+      "firmware": "Firmware",
+      "network": "Netzwerk"
+    },
+    "os": "Betriebssystem: {value}",
+    "os_build": " (Build {build})"
   },
   "remote": {
     "title": "Remote",
@@ -2497,5 +2580,22 @@
     "tab_scripts": "Skripte",
     "timeout": "Abbrechen nach (Sekunden)",
     "used_by": "Verwendet von {rules}"
+  },
+  "tools": {
+    "heading": "Werkzeuge",
+    "intro": "Erst das Werkzeug wählen, dann den Rechner. Alles hier wirkt auf jeweils einen PC.",
+    "views_nav": "Werkzeuge",
+    "tab": {
+      "terminal": "Terminal",
+      "backup": "Sicherung",
+      "firmware": "Firmware",
+      "network": "Netzwerk"
+    },
+    "machines_title": "Rechner",
+    "machine_search": "Rechner suchen",
+    "no_machines": "Bisher hat sich kein Rechner gemeldet.",
+    "no_match": "Keine Rechner passen zu deiner Suche.",
+    "pick_a_machine": "Wähle links einen Rechner, um diese Werkzeuge darauf anzuwenden.",
+    "machine_unavailable": "{machine} ist für dich nicht verfügbar. Wähle einen anderen Rechner aus der Liste."
   }
 }

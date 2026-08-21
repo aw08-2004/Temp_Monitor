@@ -1,0 +1,106 @@
+/* Tools page: a permanent machine column beside the tool panels.
+   The rows themselves are .picker-list, shared with the Remote page's picker dialog and
+   defined in components.css. Only the column around them is here. */
+
+.tools-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-5);
+}
+
+/* Sticky, and scrolling inside its own height: on a fleet of hundreds the list is longer
+   than the panel beside it, and a column that scrolled the PAGE would take the terminal
+   off screen to reach the next PC -- which is the exact click this page exists to save. */
+.tools-layout__machines {
+    flex: 0 0 250px;
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100vh - var(--space-8));
+    display: flex;
+    flex-direction: column;
+    padding-right: var(--space-4);
+    border-right: 1px solid var(--card-border);
+}
+
+.tools-layout__machines .input {
+    width: 100%;
+    margin-top: var(--space-2);
+}
+
+/* The list is the part that scrolls; the title and the search box stay put. max-height is
+   dropped here (components.css sizes it for a dialog) in favour of filling what is left. */
+.tools-layout__machines .picker-list {
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+}
+
+/* In a 250px column a name and its status pill do not sit side by side without the name
+   being truncated to nothing, so the row stacks instead. The dialog version on the Remote
+   page keeps the side-by-side layout it has the width for. */
+.tools-layout__machines .picker-list__item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+}
+
+.tools-layout__machines .picker-list__name {
+    max-width: 100%;
+}
+
+/* min-width:0 is load-bearing, exactly as it is for .settings-layout__panels: a flex item
+   defaults to min-content, and xterm's screen would otherwise push the whole layout past
+   the viewport instead of shrinking inside it. */
+.tools-layout__main {
+    flex: 1;
+    min-width: 0;
+}
+
+/* The selected machine. Distinct from :hover and :focus-visible, which say "you are
+   pointing at this" -- this one says "this is what the panel beside you is showing". */
+.picker-list__item--active,
+.picker-list__item--active:hover {
+    background: var(--control-bg);
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+/* No machine picked. Only the per-machine halves go away -- the Firmware image library and
+   the Backup destination list are fleet decisions and have something to show regardless.
+   #tools-pick-prompt says once what the hidden halves are waiting for, instead of each of
+   them saying it separately. */
+#tools-root.tools--no-machine .tool-machine-only {
+    display: none;
+}
+
+/* Narrow screens: the column becomes a horizontal strip above the panels. A 250px column
+   plus a terminal does not fit a phone, and the list is the half that can be laid on its
+   side without losing anything. */
+@media (max-width: 900px) {
+    .tools-layout {
+        display: block;
+    }
+
+    .tools-layout__machines {
+        position: static;
+        max-height: none;
+        padding-right: 0;
+        padding-bottom: var(--space-4);
+        margin-bottom: var(--space-4);
+        border-right: none;
+        border-bottom: 1px solid var(--card-border);
+    }
+
+    .tools-layout__machines .picker-list {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        max-height: none;
+    }
+
+    .tools-layout__machines .picker-list__item {
+        width: auto;
+        flex: 0 0 auto;
+    }
+}

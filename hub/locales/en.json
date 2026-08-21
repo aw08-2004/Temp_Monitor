@@ -29,7 +29,8 @@
     "open": "Open navigation",
     "firmware": "Firmware",
     "download": "Download Client",
-    "rules": "Rules"
+    "rules": "Rules",
+    "tools": "Tools"
   },
   "hub_update": {
     "_note": [
@@ -79,8 +80,76 @@
     "back": "Back to dashboard"
   },
   "dashboard": {
-    "heading": "Live CPU Monitor",
-    "empty": "No machines have reported in yet."
+    "heading": "Fleet overview",
+    "empty": "No machines have reported in yet.",
+    "intro": "Everything below is about the whole fleet. To look at one machine, open the",
+    "intro_link": "Asset Inventory",
+    "generated_at": "as of {time}",
+    "health": {
+      "title": "Fleet health",
+      "total": "Machines",
+      "online": "Online",
+      "offline": "Offline",
+      "never_enrolled": "Not enrolled",
+      "never_enrolled_hint": "Reports telemetry, accepts no commands",
+      "open_alerts": "Open alerts",
+      "agents_outdated": "Agents behind",
+      "agent_latest": "latest is {version}"
+    },
+    "os": {
+      "title": "Operating systems",
+      "help": "What the fleet is running. Machines whose agent has not reported an OS fall back to Active Directory, and count as unknown where neither has said.",
+      "count": "{count} ({pct}%)",
+      "bucket": {
+        "windows_11": "Windows 11",
+        "windows_10": "Windows 10",
+        "windows_server": "Windows Server",
+        "linux": "Linux",
+        "unknown": "Unknown"
+      }
+    },
+    "telemetry": {
+      "title": "Live readings",
+      "help": "Across the machines currently reporting. These are live readings, not a record -- the history for any one machine is on its own page.",
+      "avg_temp": "Average CPU temp",
+      "peak_temp": "Hottest right now",
+      "over_threshold": "Over {threshold} °C",
+      "avg_load": "Average CPU load",
+      "disk_free": "Free disk space",
+      "of_total": "of {value}",
+      "low_disk": "Under {threshold}% free",
+      "reporting": "Reporting",
+      "reporting_hint": "machines these averages are of",
+      "celsius": "{value} °C",
+      "percent": "{value}%",
+      "gb": "{value} GB"
+    },
+    "activity": {
+      "title": "Happening now",
+      "deployments_running": "Deployments in flight",
+      "deployments_failed": "Deploy failures (24h)",
+      "backups_ok": "Backups done (24h)",
+      "backups_failed": "Backup failures (24h)",
+      "firmware_jobs": "Firmware jobs open",
+      "wake_requests": "Wakes in flight",
+      "alerts_title": "Open alerts",
+      "fleet_wide": "Fleet-wide"
+    },
+    "attention": {
+      "title": "Worth a look",
+      "help": "A few machines at the top of each list, not the whole fleet. Every name opens its page.",
+      "hottest": "Hottest",
+      "low_disk": "Least free disk",
+      "longest_offline": "Longest offline",
+      "free_pct": "{pct}% free ({gb} GB)",
+      "never": "never reported",
+      "days": "{count}d",
+      "hours": "{count}h",
+      "minutes": "{count}m",
+      "no_readings": "Nothing is reporting a temperature.",
+      "no_disks": "No machine is reporting disk space.",
+      "all_online": "Everything is online."
+    }
   },
   "history": {
     "resolution": "Resolution:",
@@ -116,7 +185,8 @@
       "service_tag": "Service tag",
       "asset_tag": "Asset tag",
       "temp": "Last temp",
-      "last_seen": "Last seen"
+      "last_seen": "Last seen",
+      "os": "OS"
     },
     "empty": "No machines have reported in yet.",
     "no_match": "No machines match your search.",
@@ -135,7 +205,8 @@
     "wake_all_title": "Ask an awake PC on each subnet to wake the PCs that are switched off.",
     "wake_all_result": "Asked for {count} PCs to be woken.",
     "wake_all_none": "Every PC you can see is already awake.",
-    "wake_all_failed": "Could not request a fleet-wide wake."
+    "wake_all_failed": "Could not request a fleet-wide wake.",
+    "os_from_directory": "Reported by Active Directory, not by the machine itself."
   },
   "alerts": {
     "heading": "Alerts",
@@ -780,6 +851,16 @@
       "rules.probes_per_tick": {
         "label": "Most probe requests per pass",
         "help": "Spreads collection over time instead of asking the whole fleet at once."
+      },
+      "hub": {
+        "hot_temp_threshold_c": {
+          "label": "Dashboard hot threshold",
+          "help": "The Dashboard counts how many machines are at or above this. A filter for the front page, not an alert -- what counts as too hot is a rule you write, on Rules."
+        },
+        "low_disk_free_pct": {
+          "label": "Dashboard low-disk threshold",
+          "help": "A volume with less than this share of its space free counts as low on the Dashboard. Also a filter, not an alert."
+        }
       }
     },
     "_choice": [
@@ -1225,7 +1306,6 @@
     "heading": "Backups",
     "intro": "A consistent snapshot of the hub database, compressed, encrypted here, and pushed offsite on a schedule. The storage provider only ever sees ciphertext.",
     "run_now": "Back up now",
-    "views_nav": "Backup views",
     "tab_hub": "Hub database",
     "tab_settings": "Backup Settings",
     "tab_destinations": "Destinations",
@@ -1507,14 +1587,6 @@
     "unknown": "—"
   },
   "machine": {
-    "views_nav": "Machine views",
-    "tab": {
-      "overview": "Overview",
-      "terminal": "Terminal",
-      "backup": "Backup",
-      "firmware": "Firmware",
-      "network": "Network"
-    },
     "live_temp": "Live Temperature",
     "uptime": "Uptime",
     "cpu_load": "CPU Load",
@@ -1820,7 +1892,6 @@
       "password_ready": "A BIOS setup password is set on this machine, and one is stored here to send with a change.",
       "password_unknown": "This machine's firmware does not say whether a setup password is set. If a change is refused, that is the first thing to check.",
       "updates_title": "BIOS updates",
-      "updates_link": "Firmware page",
       "no_updates": "This machine has not been sent a firmware update.",
       "update_line": "{name} → BIOS {version} · {when}",
       "update": {
@@ -2007,7 +2078,19 @@
         "requested_by": "Asked by",
         "detail": "Detail"
       }
-    }
+    },
+    "fold": {
+      "stats": "At a glance"
+    },
+    "open": {
+      "label": "Open in Tools:",
+      "terminal": "Terminal",
+      "backup": "Backup",
+      "firmware": "Firmware",
+      "network": "Network"
+    },
+    "os": "OS: {value}",
+    "os_build": " (build {build})"
   },
   "remote": {
     "title": "Remote",
@@ -2613,5 +2696,22 @@
     "tab_scripts": "Scripts",
     "timeout": "Give up after (seconds)",
     "used_by": "Used by {rules}"
+  },
+  "tools": {
+    "heading": "Tools",
+    "intro": "Pick a tool, then the machine to use it on. Everything here acts on one PC at a time.",
+    "views_nav": "Tools",
+    "tab": {
+      "terminal": "Terminal",
+      "backup": "Backup",
+      "firmware": "Firmware",
+      "network": "Network"
+    },
+    "machines_title": "Machines",
+    "machine_search": "Search machines",
+    "no_machines": "No machines have reported in yet.",
+    "no_match": "No machines match your search.",
+    "pick_a_machine": "Pick a machine from the list to use these tools on it.",
+    "machine_unavailable": "{machine} is not available to you. Pick another machine from the list."
   }
 }

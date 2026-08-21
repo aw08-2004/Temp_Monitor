@@ -1,44 +1,4 @@
-{% extends "base.html" %}
-{% block title %}{{ t('nav.firmware') }} - FleetHub{% endblock %}
-{% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
-{% endblock %}
-{% block content %}
-{#
-   Structure only. Both lists are built by firmware-images.js from the API, for the same
-   reason the Packages page does it: a table whose rows are per-machine states reads better
-   from one renderer than from a Jinja loop that cannot see the state machine.
-
-   The warning below is not decoration. Every other feature in this console has an undo --
-   a backup to restore, a package to reinstall, a setting to write back. A failed flash has
-   none, which is why the page says so before the first button.
-#}
-<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
-    <div>
-        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('firmware.heading') }}</h1>
-        <p class="stat-card__meta">{{ t('firmware.intro') }}</p>
-    </div>
-    <button class="btn btn--primary" type="button" id="new-image">{{ t('firmware.new_image') }}</button>
-</div>
-
-<div class="notice notice--warn" style="margin-bottom: var(--space-5);">
-    <div class="section-title" style="margin-bottom: var(--space-2);">{{ t('firmware.warning_title') }}</div>
-    <p class="stat-card__meta">{{ t('firmware.warning_body') }}</p>
-</div>
-
-<div class="card" style="margin-bottom: var(--space-5);">
-    <div class="section-title">{{ t('firmware.images_title') }}</div>
-    <p class="stat-card__meta">{{ t('firmware.images_help') }}</p>
-    <div id="images-body"></div>
-</div>
-
-<div class="card">
-    <div class="section-title">{{ t('firmware.jobs_title') }}</div>
-    <p class="stat-card__meta">{{ t('firmware.jobs_help') }}</p>
-    <div id="jobs-body"></div>
-</div>
-
+{# The image editor and the flash dialog, from the standalone /firmware page. #}
 <!-- ------------------------------------------------------ image editor -->
 {# An image is uploaded first and described second, deliberately: the sha256 the agent
    verifies is computed by the hub from the bytes it stored, so there is nothing to describe
@@ -139,8 +99,3 @@
         </div>
     </form>
 </dialog>
-{% endblock %}
-{% block page_scripts %}
-{# autocomplete.js is already loaded by base.html for every page. #}
-<script src="{{ url_for('static', filename='js/firmware-images.js') }}"></script>
-{% endblock %}

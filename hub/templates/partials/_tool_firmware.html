@@ -1,0 +1,60 @@
+{# The PER-MACHINE half of the Firmware tab: what THIS PC's BIOS is set to. The fleet half
+   -- the image library and the job list -- is _tool_firmware_fleet.html, above it.
+
+   Moved out of machine.html when the tools left the per-PC page. The tab panel around it
+   lives in tools.html, because the panel id is the one thing that differs between the two
+   homes it has had.
+
+   Both cards fold. Note what is and is not inside the <summary>: the title and the status
+   pill are, the search box and the buttons are NOT. A click anywhere in a <summary> toggles
+   the disclosure, including one that landed on a control inside it -- so typing in the
+   filter would have collapsed the table it was filtering. #}
+    <details class="card fold" data-fold-key="tools:firmware:settings" id="firmware-card" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.title') }}</span>
+            <span class="status-pill status-pill--muted" id="firmware-status">
+                <span class="status-pill__dot"></span><span id="firmware-status-text">{{ t('common.loading') }}</span></span>
+        </summary>
+        <div class="terminal__head-actions fold__actions">
+            <input type="search" id="firmware-search" class="input"
+                   placeholder="{{ t('machine.firmware.search') }}"
+                   aria-label="{{ t('machine.firmware.search') }}">
+            {% if cap.MANAGE_FIRMWARE in user_capabilities %}
+            <button id="firmware-password" type="button" class="btn btn--ghost"
+                    title="{{ t('machine.firmware.password_title') }}">{{ t('machine.firmware.password_button') }}</button>
+            {% endif %}
+            {% if cap.ISSUE_COMMANDS in user_capabilities %}
+            <button id="firmware-refresh" type="button" class="btn btn--ghost"
+                    title="{{ t('machine.firmware.refresh_title') }}">{{ t('machine.firmware.refresh') }}</button>
+            {% endif %}
+        </div>
+        <div id="firmware-meta" class="terminal__hint"></div>
+        {# The pending/last change, above the table on purpose: while a change is in
+           flight every value in that table may be about to be wrong. #}
+        <div id="firmware-change"></div>
+        <div id="firmware-body"></div>
+        {# Only rendered into when at least one row has been edited. An apply bar that is
+           always present invites the click that submits nothing. #}
+        <div id="firmware-apply" hidden>
+            <span id="firmware-apply-count" class="stat-card__meta"></span>
+            <button id="firmware-apply-btn" type="button" class="btn btn--primary">{{ t('machine.firmware.apply') }}</button>
+            <button id="firmware-reset-btn" type="button" class="btn btn--ghost">{{ t('machine.firmware.discard') }}</button>
+        </div>
+    </details>
+
+    {# BIOS UPDATES for this PC, as distinct from its settings above. Read-only here on
+       purpose: an update is aimed from the image library at the top of this tab, because
+       the thing you choose first is the image. What belongs to the machine is the answer
+       to "has this PC been flashed, and did it take".
+
+       There used to be a "see all updates" link here, pointing at the standalone Firmware
+       page. That page is now the fold at the top of this same tab, so the link would have
+       gone nowhere -- scrolling up is the answer. #}
+    {% if cap.MANAGE_FIRMWARE in user_capabilities %}
+    <details class="card fold" data-fold-key="tools:firmware:updates" id="firmware-updates-card" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.updates_title') }}</span>
+        </summary>
+        <div id="firmware-updates-body"></div>
+    </details>
+    {% endif %}

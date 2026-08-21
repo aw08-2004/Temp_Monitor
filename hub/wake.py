@@ -731,6 +731,42 @@ def open_request_for(db_path, machine):
     return _row(row) if row is not None else None
 
 
+
+# ---------------------------------------------------------------- Dashboard tallies
+#
+# Counted in SQL rather than by loading rows and length-ing them. The Dashboard asks all of
+# these on one poll, from every open console, so a helper that returned a hundred rows for a
+# number would be the most expensive thing on the page by a wide margin.
+#
+# `machines` is an optional iterable used as the scope filter, applied HERE rather than by
+# the caller for the same reason: dropping out-of-scope rows in Python means reading them
+# first, and an operator scoped to three machines would still pay for the whole fleet.
+
+
+def count_open_requests(db_path, machines=None):
+    """Wake requests still in flight -- pending, relaying or sent.
+
+    "Sent" counts as open on purpose, and it is the interesting one: nothing acknowledges a
+    magic packet, so a request sits in `sent` until the machine itself checks in. A count
+    that dropped it would read zero while the fleet was still waking up.
+    """
+    statuses = sorted(OPEN_STATUSES)
+    clauses = [f"status IN ({','.join('?' for _ in statuses)})"]
+    params = list(statuses)
+
+    if machines is not None:
+        scope = list(machines)
+        if not scope:
+            return 0
+        clauses.append(f"machine IN ({','.join('?' for _ in scope)})")
+        params.extend(scope)
+
+    with get_conn(db_path) as conn:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM wake_requests WHERE " + " AND ".join(clauses),
+            params).fetchone()[0])
+
+
 def list_requests(db_path, machine=None, limit=50, open_only=False):
     clauses, params = [], []
     if machine:

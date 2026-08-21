@@ -1,0 +1,72 @@
+{# Moved verbatim out of machine.html when the tools left the per-PC page for the Tools
+   page. The markup is unchanged; the tab panel around it lives in tools.html, because the
+   panel id is the one thing that differs between the two homes it has had. #}
+    <div class="card terminal-card">
+        <div class="terminal__head">
+            <div class="section-title" style="margin-bottom: 0;">{{ t('machine.terminal.title') }}</div>
+            <span class="status-pill status-pill--muted" id="terminal-status"><span class="status-pill__dot"></span>{{ t('machine.terminal.idle') }}</span>
+            <div class="terminal__head-actions">
+                <label for="terminal-shell" class="fleet-field__label">{{ t('machine.terminal.shell') }}</label>
+                <select id="terminal-shell" class="select">
+                    <option value="powershell">PowerShell</option>
+                    <option value="cmd">cmd</option>
+                </select>
+                <label for="terminal-timeout" id="terminal-timeout-label" class="fleet-field__label">{{ t('machine.terminal.timeout') }}</label>
+                <input id="terminal-timeout" class="input terminal__timeout" type="number"
+                       min="1" value="600" title="{{ t('machine.terminal.timeout_title') }}">
+                {# Opening and ending consoles is the tab strip's job in ConPTY mode
+                   (+ and ×), so there is no New console / Reconnect button here: a
+                   terminal survives leaving the page, and ending one must be something
+                   the operator ASKS for on the tab they mean. #}
+                <button id="terminal-favorites" type="button" class="btn">{{ t('machine.terminal.favorites') }}</button>
+                <button id="terminal-save-fav" type="button" class="btn btn--ghost">{{ t('machine.terminal.save_favorite') }}</button>
+                <button id="terminal-stop" type="button" class="btn btn--ghost" disabled
+                        title="{{ t('machine.terminal.stop_title') }}">{{ t('machine.terminal.stop') }}</button>
+                <button id="terminal-reset" type="button" class="btn btn--ghost"
+                        title="{{ t('machine.terminal.reset_title') }}">{{ t('machine.terminal.reset') }}</button>
+                <button id="terminal-clear" type="button" class="btn btn--ghost">{{ t('machine.terminal.clear') }}</button>
+            </div>
+        </div>
+
+        {# TWO terminals live here and exactly one is ever shown. fleet-terminal.js does
+           the single agent-version lookup and hands over to FleetPty when the machine
+           can open a pseudoconsole; everything below stays for agents that can't yet.
+           See fleet-pty.js for why they are not the same feature. #}
+        <div id="terminal-pty" hidden>
+            {# One tab per open console. The strip is built from the HUB's list of this
+               operator's sessions, not from anything this browser remembers, so a
+               console opened on another computer shows up here too -- see
+               fleet-pty.js:syncSessions. Empty in the markup; fleet-pty.js fills it. #}
+            <div id="terminal-tabs" class="screen-tabs" role="tablist"
+                 aria-label="{{ t('machine.terminal.open_consoles') }}">
+                <button id="terminal-add" type="button" class="screen-tabs__add"
+                        aria-label="{{ t('machine.terminal.add_console') }}"
+                        title="{{ t('machine.terminal.add_console_title') }}">+</button>
+            </div>
+            {# xterm.js owns each screen it is given and measures it on open, so a screen
+               must have a real size before its terminal is built -- which is why
+               fleet-pty.js builds a console when its tab is first shown, not on load. #}
+            <div id="terminal-screens" class="screen-stack">
+                <div id="terminal-empty" class="screen-empty" hidden>
+                    {{ t('machine.terminal.no_console') }}
+                </div>
+            </div>
+        </div>
+
+        <div id="terminal-legacy">
+            {# aria-live=polite so a screen reader announces streamed output as it lands.
+               Rendered with textContent only -- this is untrusted agent-side text. #}
+            <pre class="console-surface terminal__scrollback" id="terminal-scrollback" tabindex="0"
+                 aria-live="polite" aria-label="{{ t('machine.terminal.output_label') }}"></pre>
+
+            <div class="terminal__promptline">
+                <span class="terminal__ps" id="terminal-ps" aria-hidden="true">PS {{ machine }}&gt;</span>
+                <label for="terminal-input" class="sr-only">{{ t('machine.terminal.script_label', machine=machine) }}</label>
+                <textarea id="terminal-input" class="terminal__input" rows="1" spellcheck="false"
+                          autocomplete="off" autocapitalize="off"
+                          placeholder="{{ t('machine.terminal.script_placeholder') }}"></textarea>
+                <button id="terminal-run" type="button" class="btn btn--primary">{{ t('machine.terminal.run') }}</button>
+            </div>
+        </div>
+        <div id="terminal-hint" class="terminal__hint"></div>
+    </div>

@@ -19,9 +19,11 @@
     'use strict';
 
     const scrollbackEl = document.getElementById('terminal-scrollback');
-    if (!scrollbackEl || !window.FleetApi || !FleetApi.machine) return;
+    if (!scrollbackEl || !window.FleetApi) return;
 
-    const MACHINE = FleetApi.machine;
+    // A call, not a constant: on the Tools page the machine changes without the page
+    // reloading. Null until one is picked, which is why load() below is what starts things.
+    const currentMachine = () => FleetApi.machine;
     const inputEl = document.getElementById('terminal-input');
     const runBtn = document.getElementById('terminal-run');
     const clearBtn = document.getElementById('terminal-clear');
@@ -30,13 +32,17 @@
     const shellEl = document.getElementById('terminal-shell');
     const statusEl = document.getElementById('terminal-status');
     const hintEl = document.getElementById('terminal-hint');
-    const panelEl = document.getElementById('tab-terminal');
+    const PANEL_ID = 'tool-terminal';
+    const panelEl = document.getElementById(PANEL_ID);
+    // Which of the two terminals is in front, and therefore which one the shared toolbar
+    // buttons are talking to. 'pty' from the moment refreshHint() hands off to fleet-pty.js.
+    let owner = 'legacy';
     const stopBtn = document.getElementById('terminal-stop');
     const resetBtn = document.getElementById('terminal-reset');
     const timeoutEl = document.getElementById('terminal-timeout');
     const psEl = document.getElementById('terminal-ps');
 
-    const HISTORY_KEY = `tempmonitor:termhist:${MACHINE}`;
+    const historyKey = () => `tempmonitor:termhist:${currentMachine()}`;
     const HISTORY_MAX = 100;
     const POLL_FAST_MS = 1000;
     const POLL_SLOW_MS = 2500;
@@ -59,8 +65,8 @@
     // `Read-Host` prompt never appeared and a bare Enter did nothing.
     const MIN_PTY_AGENT = '3.15.0';
 
-    let history = loadHistory();
-    let historyIndex = history.length;   // one past the end == "typing a new command"
+    let history = [];
+    let historyIndex = 0;   // one past the end == "typing a new command"
     let draft = '';
     let pollTimer = null;
     let active = null;   // { commandId, cursor, startedAt, lastChunkAt }
@@ -88,13 +94,13 @@
         scrollbackEl.textContent = '';
         const how = interactive ? t('machine.terminal.how_interactive')
                                 : t('machine.terminal.how_oneshot');
-        append(t('machine.terminal.connected', { machine: MACHINE, how }) + '\n', 'meta');
+        append(t('machine.terminal.connected', { machine: currentMachine(), how }) + '\n', 'meta');
     }
 
     // The prompt reflects the shell's real working directory once we've heard one back;
     // until then (and for a pre-3.2 agent that reports none) it falls back to the machine.
     function promptText() {
-        const where = cwd || MACHINE;
+        const where = cwd || currentMachine();
         return shellEl.value === 'cmd' ? `${where}>` : `PS ${where}>`;
     }
 
@@ -105,7 +111,7 @@
     // ---------------- Command history ----------------
     function loadHistory() {
         try {
-            const raw = localStorage.getItem(HISTORY_KEY);
+            const raw = localStorage.getItem(historyKey());
             const parsed = raw ? JSON.parse(raw) : [];
             return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
         } catch (e) {
@@ -117,7 +123,7 @@
         if (history[history.length - 1] === script) return;   // don't stack repeats
         history.push(script);
         if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
-        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) { /* ignore */ }
+        try { localStorage.setItem(historyKey(), JSON.stringify(history)); } catch (e) { /* ignore */ }
     }
 
     function recallHistory(delta) {
@@ -355,12 +361,13 @@
         hintEl.className = 'terminal__hint';
         hintEl.textContent = base;
         try {
-            const info = await FleetApi.getJson(`/api/machines/${encodeURIComponent(MACHINE)}`);
+            const info = await FleetApi.getJson(`/api/machines/${encodeURIComponent(currentMachine())}`);
             const version = info && info.companion_version;
             // A modern agent gets a REAL console (ConPTY + xterm.js) instead of any of this.
             // The decision lives here because this is the one place that looks the agent
             // version up -- two terminals both deciding they are in charge would be a mess.
             if (version && !versionLess(version, MIN_PTY_AGENT) && window.FleetPty) {
+                owner = 'pty';
                 FleetPty.activate();
                 return;
             }
@@ -434,10 +441,22 @@
     }
 
     // ---------------- Init ----------------
-    clearBtn.addEventListener('click', clearScrollback);
+    // Clear, Favorites and Save-as-favorite live in the SHARED toolbar above both terminals,
+    // so exactly one of the two modules must answer a click on them. They are bound here,
+    // once, and dispatch on who is in front -- rather than fleet-pty.js replacing the nodes
+    // to steal them, which worked only for as long as a page could change hands once.
+    clearBtn.addEventListener('click', () => {
+        if (owner === 'pty') FleetPty.clearActive(); else clearScrollback();
+    });
+    favoritesBtn.addEventListener('click', () => {
+        if (owner === 'pty') FleetPty.openFavorites();
+        else FleetFavorites.open({ onPick: usePick });
+    });
+    saveFavBtn.addEventListener('click', () => {
+        if (owner === 'pty') FleetPty.saveFavorite(); else saveCurrent();
+    });
+
     runBtn.addEventListener('click', () => { if (interactive && active) sendInput(); else run(); });
-    favoritesBtn.addEventListener('click', () => FleetFavorites.open({ onPick: usePick }));
-    saveFavBtn.addEventListener('click', saveCurrent);
     if (stopBtn) stopBtn.addEventListener('click', sendSignal);
     if (resetBtn) resetBtn.addEventListener('click', resetSession);
     if (shellEl) shellEl.addEventListener('change', updatePrompt);
@@ -445,10 +464,51 @@
         if (document.visibilityState === 'visible' && active) schedulePoll(0);
     });
     // The panel starts hidden, so focus only once it's actually shown (tabs.js fires this).
-    if (panelEl) panelEl.addEventListener('tab:shown', () => inputEl.focus());
+    // Only meaningful in legacy mode; the pseudoconsole focuses its own xterm.
+    if (panelEl) {
+        panelEl.addEventListener('tab:shown', () => { if (owner === 'legacy') inputEl.focus(); });
+    }
 
-    updatePrompt();
-    clearScrollback();
     autoGrow();
-    refreshHint();
+
+    // Which terminal this machine gets is decided per machine, by its agent's version, so
+    // it has to be decided again every time the machine changes -- and everything the last
+    // one accumulated has to go first. See tool-panels.js for the sequencing.
+    ToolPanels.register('terminal', {
+        panelId: PANEL_ID,
+        load,
+        teardown,
+        requires: (machine) => !!machine
+    });
+
+    function load() {
+        // Back to the markup's defaults before the probe decides again: a legacy machine
+        // picked after a pseudoconsole one would otherwise inherit a visible, empty strip.
+        owner = 'legacy';
+        if (panelEl) {
+            const ptyPane = document.getElementById('terminal-pty');
+            const legacyPane = document.getElementById('terminal-legacy');
+            if (ptyPane) ptyPane.hidden = true;
+            if (legacyPane) legacyPane.hidden = false;
+        }
+        history = loadHistory();
+        historyIndex = history.length;
+        draft = '';
+        cwd = null;
+        active = null;
+        if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+        setInteractive(true);
+        updatePrompt();
+        clearScrollback();
+        refreshHint();
+    }
+
+    function teardown() {
+        if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+        active = null;
+        // Drops the local xterms without ending the sessions -- they live on the hub and
+        // re-attach with their scrollback when this machine is selected again.
+        if (window.FleetPty) FleetPty.deactivate();
+        owner = 'legacy';
+    }
 })();

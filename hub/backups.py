@@ -1867,6 +1867,49 @@ def _run_row(row, names=None):
     return record
 
 
+
+# ---------------------------------------------------------------- Dashboard tallies
+#
+# Counted in SQL rather than by loading rows and length-ing them. The Dashboard asks all of
+# these on one poll, from every open console, so a helper that returned a hundred rows for a
+# number would be the most expensive thing on the page by a wide margin.
+#
+# `machines` is an optional iterable used as the scope filter, applied HERE rather than by
+# the caller for the same reason: dropping out-of-scope rows in Python means reading them
+# first, and an operator scoped to three machines would still pay for the whole fleet.
+
+
+def count_runs_since(db_path, since_epoch, machines=None):
+    """Backup runs that finished one way or the other in a window.
+
+    Covered by idx_backup_runs_started, which is on (kind, started_at DESC) -- so this scans
+    a slice of one day rather than the whole table, however long the hub has been running.
+
+    The hub's OWN database backups are counted too, not just machine ones: a scope filter
+    narrows the machine rows, but "the hub did not back itself up last night" is news to
+    every operator regardless of which PCs they can see. Hub runs carry machine = NULL,
+    which is why the scope clause has to admit them explicitly rather than relying on IN.
+    """
+    clauses = ["started_at >= ?", "status IN (?, ?)"]
+    params = [int(since_epoch), RUN_SUCCEEDED, RUN_FAILED]
+
+    if machines is not None:
+        scope = list(machines)
+        if scope:
+            placeholders = ",".join("?" for _ in scope)
+            clauses.append(f"(machine IS NULL OR machine IN ({placeholders}))")
+            params.extend(scope)
+        else:
+            clauses.append("machine IS NULL")
+
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM backup_runs WHERE "
+            + " AND ".join(clauses) + " GROUP BY status", params).fetchall()
+    tally = {row["status"]: int(row["n"]) for row in rows}
+    return {"ok": tally.get(RUN_SUCCEEDED, 0), "failed": tally.get(RUN_FAILED, 0)}
+
+
 def list_runs(db_path, limit=50, kind=None, machine=None):
     query = "SELECT * FROM backup_runs"
     clauses, params = [], []

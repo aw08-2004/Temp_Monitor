@@ -605,6 +605,41 @@ def _refresh_job_status(conn, job_id, now):
                  (status, now, job_id))
 
 
+
+# ---------------------------------------------------------------- Dashboard tallies
+#
+# Counted in SQL rather than by loading rows and length-ing them. The Dashboard asks all of
+# these on one poll, from every open console, so a helper that returned a hundred rows for a
+# number would be the most expensive thing on the page by a wide margin.
+#
+# `machines` is an optional iterable used as the scope filter, applied HERE rather than by
+# the caller for the same reason: dropping out-of-scope rows in Python means reading them
+# first, and an operator scoped to three machines would still pay for the whole fleet.
+
+
+def count_active_jobs(db_path, machines=None):
+    """Firmware jobs that have not finished -- scheduled or running.
+
+    A count of JOBS, not of targets: one job aimed at forty machines is one thing happening,
+    and "40 firmware jobs in flight" would badly overstate what is going on tonight.
+    """
+    placeholders = ",".join("?" for _ in JOB_OPEN_STATUSES)
+    sql = f"SELECT COUNT(*) FROM firmware_jobs j WHERE j.status IN ({placeholders})"
+    params = list(JOB_OPEN_STATUSES)
+
+    if machines is not None:
+        scope = [_clean(m) for m in machines]
+        if not scope:
+            return 0
+        scope_placeholders = ",".join("?" for _ in scope)
+        sql += (f" AND EXISTS (SELECT 1 FROM firmware_targets t WHERE t.job_id = j.id "
+                f"AND t.machine IN ({scope_placeholders}))")
+        params.extend(scope)
+
+    with get_conn(db_path) as conn:
+        return int(conn.execute(sql, params).fetchone()[0])
+
+
 def list_jobs(db_path, limit=100, machine=None):
     """Recent jobs with a per-status target tally, newest first. The tally is computed in
     SQL: a fleet-wide job has one row per machine and the list only needs the counts."""

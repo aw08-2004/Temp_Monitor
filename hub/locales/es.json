@@ -19,7 +19,8 @@
     "open": "Abrir navegación",
     "firmware": "Firmware",
     "download": "Descargar cliente",
-    "rules": "Reglas"
+    "rules": "Reglas",
+    "tools": "Herramientas"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -54,8 +55,76 @@
     "back": "Volver al panel"
   },
   "dashboard": {
-    "heading": "Monitor de CPU en vivo",
-    "empty": "Todavía no ha informado ningún equipo."
+    "heading": "Resumen de la flota",
+    "empty": "Todavía no se ha reportado ninguna máquina.",
+    "intro": "Todo lo de abajo trata sobre la flota entera. Para ver una máquina, abre el",
+    "intro_link": "Inventario de activos",
+    "generated_at": "a las {time}",
+    "health": {
+      "title": "Estado de la flota",
+      "total": "Máquinas",
+      "online": "En línea",
+      "offline": "Fuera de línea",
+      "never_enrolled": "Sin registrar",
+      "never_enrolled_hint": "Envía telemetría, no acepta comandos",
+      "open_alerts": "Alertas abiertas",
+      "agents_outdated": "Agentes desactualizados",
+      "agent_latest": "la última es {version}"
+    },
+    "os": {
+      "title": "Sistemas operativos",
+      "help": "Lo que ejecuta la flota. Las máquinas cuyo agente no ha reportado un SO recurren a Active Directory, y cuentan como desconocido si ninguno lo ha dicho.",
+      "count": "{count} ({pct} %)",
+      "bucket": {
+        "windows_11": "Windows 11",
+        "windows_10": "Windows 10",
+        "windows_server": "Windows Server",
+        "linux": "Linux",
+        "unknown": "Desconocido"
+      }
+    },
+    "telemetry": {
+      "title": "Lecturas en vivo",
+      "help": "Sobre las máquinas que reportan ahora. Son lecturas en vivo, no un registro: el historial de cada máquina está en su propia página.",
+      "avg_temp": "Temp. media de CPU",
+      "peak_temp": "La más caliente ahora",
+      "over_threshold": "Por encima de {threshold} °C",
+      "avg_load": "Carga media de CPU",
+      "disk_free": "Espacio libre en disco",
+      "of_total": "de {value}",
+      "low_disk": "Menos de {threshold} % libre",
+      "reporting": "Reportando",
+      "reporting_hint": "máquinas sobre las que se promedia",
+      "celsius": "{value} °C",
+      "percent": "{value} %",
+      "gb": "{value} GB"
+    },
+    "activity": {
+      "title": "Sucediendo ahora",
+      "deployments_running": "Despliegues en curso",
+      "deployments_failed": "Fallos de despliegue (24 h)",
+      "backups_ok": "Copias hechas (24 h)",
+      "backups_failed": "Fallos de copia (24 h)",
+      "firmware_jobs": "Trabajos de firmware abiertos",
+      "wake_requests": "Encendidos en curso",
+      "alerts_title": "Alertas abiertas",
+      "fleet_wide": "Toda la flota"
+    },
+    "attention": {
+      "title": "Vale la pena mirar",
+      "help": "Solo las primeras máquinas de cada lista, no toda la flota. Cada nombre abre su página.",
+      "hottest": "Más calientes",
+      "low_disk": "Menos disco libre",
+      "longest_offline": "Más tiempo sin conexión",
+      "free_pct": "{pct} % libre ({gb} GB)",
+      "never": "nunca reportó",
+      "days": "{count} d",
+      "hours": "{count} h",
+      "minutes": "{count} min",
+      "no_readings": "Nada está reportando temperatura.",
+      "no_disks": "Ninguna máquina reporta espacio en disco.",
+      "all_online": "Todo está en línea."
+    }
   },
   "history": {
     "resolution": "Resolución:",
@@ -85,7 +154,8 @@
       "service_tag": "Service tag",
       "asset_tag": "Etiqueta de activo",
       "temp": "Última temp.",
-      "last_seen": "Visto por última vez"
+      "last_seen": "Visto por última vez",
+      "os": "SO"
     },
     "empty": "Todavía no ha informado ningún equipo.",
     "no_match": "Ningún equipo coincide con tu búsqueda.",
@@ -104,7 +174,8 @@
     "wake_all_title": "Pedir a un PC encendido de cada subred que encienda los PC apagados.",
     "wake_all_result": "Se solicitó el encendido de {count} PC.",
     "wake_all_none": "Todos los PC que puede ver ya están encendidos.",
-    "wake_all_failed": "No se pudo solicitar un encendido para toda la flota."
+    "wake_all_failed": "No se pudo solicitar un encendido para toda la flota.",
+    "os_from_directory": "Reportado por Active Directory, no por la propia máquina."
   },
   "alerts": {
     "heading": "Alertas",
@@ -710,6 +781,16 @@
       "rules.probes_per_tick": {
         "label": "Máximo de solicitudes de sonda por pasada",
         "help": "Reparte la recogida en el tiempo en lugar de consultar a toda la flota a la vez."
+      },
+      "hub": {
+        "hot_temp_threshold_c": {
+          "label": "Umbral de calor del panel",
+          "help": "El panel cuenta cuántas máquinas alcanzan o superan este valor. Es un filtro de la portada, no una alerta: lo que es demasiado caliente lo defines como regla."
+        },
+        "low_disk_free_pct": {
+          "label": "Umbral de disco bajo del panel",
+          "help": "Un volumen con menos de esta proporción libre cuenta como bajo en el panel. También es un filtro, no una alerta."
+        }
       }
     },
     "choice": {
@@ -1127,7 +1208,6 @@
     "heading": "Copias de seguridad",
     "intro": "Una instantánea coherente de la base de datos del hub, comprimida, cifrada aquí y enviada fuera del servidor según una programación. El proveedor de almacenamiento solo ve texto cifrado.",
     "run_now": "Copiar ahora",
-    "views_nav": "Vistas de copias de seguridad",
     "tab_hub": "Base de datos del hub",
     "tab_settings": "Ajustes de copia",
     "tab_destinations": "Destinos",
@@ -1400,14 +1480,6 @@
     "unknown": "—"
   },
   "machine": {
-    "views_nav": "Vistas del equipo",
-    "tab": {
-      "overview": "Resumen",
-      "terminal": "Terminal",
-      "backup": "Copia",
-      "firmware": "Firmware",
-      "network": "Red"
-    },
     "live_temp": "Temperatura en vivo",
     "uptime": "Tiempo activo",
     "cpu_load": "Carga de CPU",
@@ -1709,7 +1781,6 @@
       "password_ready": "Este equipo tiene una contraseña de configuración de la BIOS, y aquí hay una guardada para enviarla con el cambio.",
       "password_unknown": "El firmware de este equipo no indica si tiene contraseña de configuración. Si se rechaza un cambio, es lo primero que hay que comprobar.",
       "updates_title": "Actualizaciones de BIOS",
-      "updates_link": "Página de firmware",
       "no_updates": "A este equipo no se le ha enviado ninguna actualización de firmware.",
       "update_line": "{name} → BIOS {version} · {when}",
       "update": {
@@ -1896,7 +1967,19 @@
         "requested_by": "Solicitado por",
         "detail": "Detalle"
       }
-    }
+    },
+    "fold": {
+      "stats": "De un vistazo"
+    },
+    "open": {
+      "label": "Abrir en Herramientas:",
+      "terminal": "Terminal",
+      "backup": "Copia de seguridad",
+      "firmware": "Firmware",
+      "network": "Red"
+    },
+    "os": "SO: {value}",
+    "os_build": " (compilación {build})"
   },
   "remote": {
     "title": "Remoto",
@@ -2497,5 +2580,22 @@
     "tab_scripts": "Scripts",
     "timeout": "Rendirse tras (segundos)",
     "used_by": "Usado por {rules}"
+  },
+  "tools": {
+    "heading": "Herramientas",
+    "intro": "Elige una herramienta y luego la máquina. Todo aquí actúa sobre un PC a la vez.",
+    "views_nav": "Herramientas",
+    "tab": {
+      "terminal": "Terminal",
+      "backup": "Copia de seguridad",
+      "firmware": "Firmware",
+      "network": "Red"
+    },
+    "machines_title": "Máquinas",
+    "machine_search": "Buscar máquinas",
+    "no_machines": "Todavía no se ha reportado ninguna máquina.",
+    "no_match": "Ninguna máquina coincide con tu búsqueda.",
+    "pick_a_machine": "Elige una máquina de la lista para usar estas herramientas en ella.",
+    "machine_unavailable": "{machine} no está disponible para ti. Elige otra máquina de la lista."
   }
 }

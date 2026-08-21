@@ -505,6 +505,26 @@
         }
     }
 
-    loadAll();
-    loadFleet();
+    // Booted when the Firmware tab is first shown, not when the page parses. The Tools page
+    // loads every tool's script up front and three of its four tabs are hidden at that
+    // moment; fetching the image library for somebody who came to open a terminal is two
+    // requests nobody asked for.
+    //
+    // Note this half needs no machine -- an image library is not about one PC -- so it is
+    // deliberately NOT registered with ToolPanels and does not reload when the machine
+    // changes. Only the per-machine BIOS card beside it does.
+    const panel = document.getElementById('tool-firmware');
+    let booted = false;
+    function boot() {
+        if (booted) return;
+        booted = true;
+        loadAll();
+        loadFleet();
+    }
+    if (panel) {
+        panel.addEventListener('tab:shown', boot);
+        if (!panel.hidden) boot();
+    } else {
+        boot();
+    }
 }());

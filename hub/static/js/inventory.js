@@ -20,7 +20,11 @@ const SORT_STORAGE_KEY = 'fleethub.inventory.sort';
 // The columns a row can be searched against -- name, the three identifiers, and the
 // manufacturer, so "dell" narrows the list to one vendor's machines. Every field here has
 // a visible column: a row that matches on something not on screen looks like a bug.
-const SEARCH_FIELDS = ['machine', 'asset_tag', 'serial_number', 'service_tag', 'manufacturer'];
+// os_label, not the nested row.os.label: this list is read flat, and the hub flattens the
+// label onto the row for exactly that reason. "windows 10" narrows the fleet to the
+// machines still on it, which is the question this column exists to answer.
+const SEARCH_FIELDS = ['machine', 'asset_tag', 'serial_number', 'service_tag',
+                       'manufacturer', 'os_label'];
 
 let allRows = [];          // the last fetch, unfiltered/unsorted
 let searchQuery = '';
@@ -157,6 +161,14 @@ function renderRow(row) {
     makeTd.textContent = row.manufacturer || '--';
     const modelTd = document.createElement('td');
     modelTd.textContent = row.model || '--';
+    // textContent, like every other cell: this string is whatever a machine reported to the
+    // unauthenticated /api/report, or whatever a directory returned.
+    const osTd = document.createElement('td');
+    osTd.textContent = row.os_label || '--';
+    // Where it came from, as a tooltip rather than a second column: on a hub with directory
+    // sync the difference between "the machine said so" and "AD said so last night" matters
+    // when the two disagree, and nowhere else.
+    if (row.os && row.os.source === 'ad') osTd.title = t('inventory.os_from_directory');
     const serialTd = document.createElement('td');
     serialTd.textContent = row.serial_number || '--';
     const serviceTd = document.createElement('td');
@@ -178,7 +190,7 @@ function renderRow(row) {
     btn.addEventListener('click', () => deleteMachine(row.machine, tr, btn));
     actionTd.appendChild(btn);
 
-    tr.append(nameTd, statusTd, makeTd, modelTd, serialTd, serviceTd, assetTd, tempTd,
+    tr.append(nameTd, statusTd, makeTd, modelTd, osTd, serialTd, serviceTd, assetTd, tempTd,
               seenTd, actionTd);
     return tr;
 }

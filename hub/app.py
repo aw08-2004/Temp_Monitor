@@ -99,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.82.2"
+HUB_VERSION = "1.87.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -886,6 +886,80 @@ def derive_machine_status(updated_at):
     # settings.get() is a dict lookup off a copy-on-write cache, no DB round-trip.
     window = settings.get_int(DB_PATH, "fleet.dashboard_online_window_seconds")
     return "online" if (datetime.now() - parsed).total_seconds() <= window else "offline"
+
+#: The buckets a fleet is counted in. Deliberately coarse: the Dashboard's question is
+#: "what are we still running", and a breakdown by build number answers a different one
+#: (that lives on the machine page, where the exact caption and build are shown as-is).
+OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "unknown")
+
+#: Substrings that put a caption in a bucket, checked in order. Server is first because a
+#: Server caption also contains "Windows".
+_OS_MATCHES = (
+    ("windows_server", ("windows server", "server 20")),
+    ("windows_11", ("windows 11",)),
+    ("windows_10", ("windows 10",)),
+    ("linux", ("linux", "ubuntu", "debian", "red hat", "rhel", "centos", "fedora",
+               "suse", "alma", "rocky")),
+)
+
+#: The first Windows 11 build. Below it is 10, at or above it is 11 -- see normalize_os.
+_WINDOWS_11_BUILD = 22000
+
+
+def _bucket_from_caption(caption):
+    """Bucket a raw OS name, or None if it says nothing recognisable."""
+    text = str(caption or "").strip().lower()
+    if not text:
+        return None
+    for bucket, needles in _OS_MATCHES:
+        if any(needle in text for needle in needles):
+            return bucket
+    return None
+
+
+def normalize_os(os_caption, os_build, ad_os):
+    """Decide which operating system a machine is running, and say where that came from.
+
+    Returns {"bucket", "label", "source"}: `bucket` is one of OS_BUCKETS and is what the
+    fleet is counted by; `label` is the raw string to show a human, which is ARBITRARY TEXT
+    from a remote machine and must be rendered with textContent; `source` is "agent", "ad"
+    or None.
+
+    Two decisions worth spelling out.
+
+    THE BUILD NUMBER BEATS THE CAPTION. Early Windows 11 machines report a caption that
+    still says "Windows 10" -- Microsoft shipped 11 as build 22000 of the same product and
+    did not change the product name in WMI. A console that trusted the caption would report
+    a fleet as years behind on an upgrade it had already done. So a parseable build decides
+    between 10 and 11, and the caption only decides what it alone can (Server, Linux).
+
+    AD IS THE FALLBACK, NOT THE OTHER WAY ROUND. machine_info.ad_os is the directory sync's
+    copy of the same fact, and it is what every machine has until its agent is new enough to
+    report OS itself. It is coarse (a raw `operatingSystem` attribute, no build number) and
+    it is as fresh as the last sync rather than the last heartbeat, so the agent wins
+    wherever both exist. `source` is how the UI can say which one it is looking at.
+    """
+    caption = str(os_caption or "").strip()
+    if caption:
+        bucket = _bucket_from_caption(caption)
+        # Only 10-vs-11 is decided by the build; a Server or Linux caption is already
+        # unambiguous, and no build number would improve it.
+        if bucket in (None, "windows_10", "windows_11"):
+            try:
+                build = int(str(os_build or "").strip().split(".")[0])
+            except (TypeError, ValueError):
+                build = None
+            if build is not None and (bucket is not None or "windows" in caption.lower()):
+                bucket = "windows_11" if build >= _WINDOWS_11_BUILD else "windows_10"
+        return {"bucket": bucket or "unknown", "label": caption, "source": "agent"}
+
+    directory = str(ad_os or "").strip()
+    if directory:
+        return {"bucket": _bucket_from_caption(directory) or "unknown",
+                "label": directory, "source": "ad"}
+
+    return {"bucket": "unknown", "label": None, "source": None}
+
 
 # ================================
 # VERSION WATCHER  --  lets agents self-update promptly instead of waiting for
@@ -2098,6 +2172,21 @@ def init_db():
         # uptime since this shipped, which reads as "fall back to last_uptime_seconds".
         if "boot_epoch" not in existing_columns:
             conn.execute("ALTER TABLE machine_info ADD COLUMN boot_epoch INTEGER")
+        # What OPERATING SYSTEM this machine runs, as Win32_OperatingSystem reports it.
+        # Four columns rather than one string because the fleet question ("how many are
+        # still on Windows 10?") and the support question ("which build is this one on?")
+        # want different halves of it, and splitting a caption back apart is guesswork.
+        #
+        # os_build is TEXT, not INTEGER: WMI hands back a string, and a Linux agent's build
+        # is not a number at all. It is compared numerically exactly once, in normalize_os,
+        # which is prepared for it not to parse.
+        #
+        # Null on every machine until its agent is new enough to report OS -- which is why
+        # normalize_os falls back to machine_info.ad_os, the directory sync's copy of the
+        # same fact. See hub/directory.py.
+        for _os_column in ("os_caption", "os_version", "os_build", "os_arch"):
+            if _os_column not in existing_columns:
+                conn.execute(f"ALTER TABLE machine_info ADD COLUMN {_os_column} TEXT")
 
 def write_readings_batch(records):
     if not records:
@@ -2317,7 +2406,8 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     socketio.emit('new_temp', payload, room=machine_room(machine_name))
 
 def save_machine_info(machine, asset_tag, serial_number, model, companion_version=None,
-                      service_tag=None, manufacturer=None):
+                      service_tag=None, manufacturer=None,
+                      os_caption=None, os_version=None, os_build=None, os_arch=None):
     machine_name = str(machine).strip()
     asset_tag = (str(asset_tag).strip() or None) if asset_tag else None
     serial_number = (str(serial_number).strip() or None) if serial_number else None
@@ -2325,15 +2415,23 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
     companion_version = (str(companion_version).strip() or None) if companion_version else None
     service_tag = (str(service_tag).strip() or None) if service_tag else None
     manufacturer = (str(manufacturer).strip() or None) if manufacturer else None
+    os_caption = (str(os_caption).strip() or None) if os_caption else None
+    os_version = (str(os_version).strip() or None) if os_version else None
+    os_build = (str(os_build).strip() or None) if os_build else None
+    os_arch = (str(os_arch).strip() or None) if os_arch else None
+    # The OS fields belong in this guard, not only in the INSERT below: a report carrying
+    # nothing BUT an operating system would otherwise be dropped on the floor, and that is
+    # exactly the shape of the first report from a machine the hub already has identity for.
     if not machine_name or not any([asset_tag, serial_number, model, companion_version,
-                                    service_tag, manufacturer]):
+                                    service_tag, manufacturer,
+                                    os_caption, os_version, os_build, os_arch]):
         return
 
     with get_db_conn() as conn:
         conn.execute(
             """
-            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, service_tag, manufacturer, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO machine_info(machine, asset_tag, serial_number, model, companion_version, service_tag, manufacturer, os_caption, os_version, os_build, os_arch, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 asset_tag = COALESCE(excluded.asset_tag, machine_info.asset_tag),
                 -- WRITE-ONCE, unlike every other field here, and the argument order is the
@@ -2351,10 +2449,18 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
                 companion_version = COALESCE(excluded.companion_version, machine_info.companion_version),
                 service_tag = COALESCE(excluded.service_tag, machine_info.service_tag),
                 manufacturer = COALESCE(excluded.manufacturer, machine_info.manufacturer),
+                -- Last-write-wins, unlike serial_number above: an operating system is the
+                -- one field here that legitimately CHANGES. A machine upgraded from 10 to
+                -- 11, or moved to a new build on patch Tuesday, has to be able to say so.
+                os_caption = COALESCE(excluded.os_caption, machine_info.os_caption),
+                os_version = COALESCE(excluded.os_version, machine_info.os_version),
+                os_build = COALESCE(excluded.os_build, machine_info.os_build),
+                os_arch = COALESCE(excluded.os_arch, machine_info.os_arch),
                 updated_at = excluded.updated_at
             """,
             (machine_name, asset_tag, serial_number, model, companion_version, service_tag,
-             manufacturer, to_timestamp_str(datetime.now())),
+             manufacturer, os_caption, os_version, os_build, os_arch,
+             to_timestamp_str(datetime.now())),
         )
 
 # ================================
@@ -2446,7 +2552,8 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
                      (survivor, dropped))
         conn.execute("DELETE FROM readings WHERE machine = ?", (dropped,))
         d = conn.execute(
-            "SELECT asset_tag, serial_number, service_tag, manufacturer, model, companion_version "
+            "SELECT asset_tag, serial_number, service_tag, manufacturer, model, companion_version, "
+            "os_caption, os_version, os_build, os_arch "
             "FROM machine_info WHERE machine = ?",
             (dropped,),
         ).fetchone()
@@ -2459,11 +2566,16 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
                     service_tag = COALESCE(service_tag, ?),
                     manufacturer = COALESCE(manufacturer, ?),
                     model = COALESCE(model, ?),
-                    companion_version = COALESCE(companion_version, ?)
+                    companion_version = COALESCE(companion_version, ?),
+                    os_caption = COALESCE(os_caption, ?),
+                    os_version = COALESCE(os_version, ?),
+                    os_build = COALESCE(os_build, ?),
+                    os_arch = COALESCE(os_arch, ?)
                 WHERE machine = ?
                 """,
                 (d["asset_tag"], d["serial_number"], d["service_tag"], d["manufacturer"],
-                 d["model"], d["companion_version"], survivor),
+                 d["model"], d["companion_version"], d["os_caption"], d["os_version"],
+                 d["os_build"], d["os_arch"], survivor),
             )
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (dropped,))
     fleet.delete_machine(DB_PATH, dropped)
@@ -3561,6 +3673,10 @@ def report_temp():
         reported_version,
         service_tag=data.get('service_tag'),
         manufacturer=data.get('manufacturer'),
+        os_caption=data.get('os_caption'),
+        os_version=data.get('os_version'),
+        os_build=data.get('os_build'),
+        os_arch=data.get('os_arch'),
     )
     # Now that this machine's identity is fresh (and online), collapse any offline
     # duplicate reporting the same BIOS serial -- the OpenClaw -> OPENCLAW rename case.
@@ -3578,6 +3694,269 @@ def report_temp():
         response_payload["latest_version"] = latest_version
     return jsonify(response_payload), 200
 
+# ================================
+# FLEET SUMMARY  --  what the Dashboard is
+# ================================
+# The Dashboard used to be a grid of per-machine cards, which made the front page a second,
+# worse Asset Inventory: the same list, with less on it, capped at whatever fit. It answers
+# fleet questions now -- how many, on what, how hot, what is happening -- and machines are
+# reached through Inventory, which was always the page for that.
+#
+# One endpoint rather than the eight the page would otherwise fan out to. The counts have to
+# agree with each other (a total that disagrees with the sum of its buckets is worse than no
+# total) and eight requests cannot be made to agree on a moment.
+
+#: How long a computed summary is served to other callers before being rebuilt. Short
+#: enough that nobody sees a stale fleet, long enough that a dozen consoles open on the
+#: Dashboard cost one computation rather than a dozen. The client polls at 30s, so this is
+#: about CONCURRENT operators, not about one operator's repeats.
+FLEET_SUMMARY_TTL_SECONDS = 10
+
+_fleet_summary_cache = {}
+_fleet_summary_lock = threading.Lock()
+
+
+def _fleet_attention_lists(rows, top, low_disk_pct):
+    """The three ranked lists: hottest, least free disk, longest offline.
+
+    Small and ranked rather than complete, deliberately -- this is the front page, and a
+    list of everything is the Inventory. Each row links to its machine.
+    """
+    hottest = sorted(
+        (r for r in rows if isinstance(r.get("temp"), (int, float))),
+        key=lambda r: r["temp"], reverse=True)[:top]
+
+    disks = []
+    for row in rows:
+        worst = None
+        for volume in (row.get("diagnostics") or {}).get("disks") or []:
+            # An agent older than 3.10.0 reports a percentage with no absolute size, so
+            # used_gb is None. Skipped rather than counted as zero: a volume whose size is
+            # unknown is not a volume with no free space, and treating it as one would put
+            # every old machine at the top of this list.
+            if not isinstance(volume.get("total_gb"), (int, float)) or not volume["total_gb"]:
+                continue
+            if not isinstance(volume.get("used_gb"), (int, float)):
+                continue
+            free_gb = volume["total_gb"] - volume["used_gb"]
+            free_pct = 100.0 * free_gb / volume["total_gb"]
+            if worst is None or free_pct < worst["free_pct"]:
+                worst = {"machine": row["machine"], "volume": volume.get("name"),
+                         "free_pct": round(free_pct, 1), "free_gb": round(free_gb, 1)}
+        if worst is not None:
+            disks.append(worst)
+    low_disk = sorted(disks, key=lambda d: d["free_pct"])[:top]
+
+    def _last_seen(row):
+        parsed = parse_request_datetime(row["updated_at"]) if row.get("updated_at") else None
+        return parsed
+
+    offline = []
+    for row in rows:
+        if row["status"] != "offline":
+            continue
+        seen = _last_seen(row)
+        offline.append({
+            "machine": row["machine"],
+            "updated_at": row.get("updated_at"),
+            # None for a machine that has never reported at all, which sorts to the top:
+            # never-seen is the longest absence there is.
+            "seconds": int((datetime.now() - seen).total_seconds()) if seen else None,
+        })
+    offline.sort(key=lambda o: (0 if o["seconds"] is None else 1,
+                                -(o["seconds"] or 0)))
+
+    return {
+        "hottest": [{"machine": r["machine"], "temp": r["temp"]} for r in hottest],
+        "low_disk": low_disk,
+        "longest_offline": offline[:top],
+        "low_disk_free_pct": low_disk_pct,
+    }
+
+
+def _build_fleet_summary(top):
+    """Compute one summary for the CURRENT caller's scope. Called under the cache lock."""
+    with get_db_conn() as conn:
+        db_rows = conn.execute(
+            "SELECT machine, companion_version, os_caption, os_build, ad_os, updated_at "
+            "FROM machine_info ORDER BY machine ASC"
+        ).fetchall()
+    rows = [dict(row) for row in db_rows]
+    known = {row["machine"] for row in rows}
+    # Same union get_machines() does: a machine that has reported telemetry but has no
+    # identity row yet still exists, and a total that omitted it would disagree with the
+    # Inventory beside it.
+    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
+        if machine not in known:
+            rows.append({"machine": machine, "companion_version": None, "os_caption": None,
+                         "os_build": None, "ad_os": None, "updated_at": None})
+            known.add(machine)
+
+    # Narrow BEFORE enriching, exactly as get_machines does -- there is no reason to extract
+    # diagnostics for machines the caller will never be shown, and every number below has to
+    # be of the caller's fleet rather than of the hub's.
+    rows = access.filter_rows(rows)
+    scoped_names = [row["machine"] for row in rows]
+    keep = access.machine_filter()
+
+    enrolled = fleet.enrolled_machines(DB_PATH)
+    latest_agent = get_latest_agent_version()
+    hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
+    low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
+
+    counts = {"total": len(rows), "online": 0, "offline": 0, "never_enrolled": 0,
+              "agents_outdated": 0, "agent_latest": latest_agent}
+    os_tally = {bucket: 0 for bucket in OS_BUCKETS}
+    temps, loads = [], []
+    over_threshold = 0
+    disk_total_gb = 0.0
+    disk_free_gb = 0.0
+    low_disk_machines = 0
+    reporting = 0
+
+    for row in rows:
+        row["status"] = derive_machine_status(row["updated_at"])
+        counts["online" if row["status"] == "online" else "offline"] += 1
+        if row["machine"] not in enrolled:
+            counts["never_enrolled"] += 1
+        version = row.get("companion_version")
+        # Only machines on the agent train are compared: a 2.x companion has no agent
+        # release to be behind, and counting it as outdated would name a number nobody can
+        # act on. See get_advertised_version.
+        if version and latest_agent and cmp_versions(version, AGENT_TRAIN_MIN_VERSION) >= 0:
+            if cmp_versions(latest_agent, version) > 0:
+                counts["agents_outdated"] += 1
+
+        bucket = normalize_os(row.get("os_caption"), row.get("os_build"), row.get("ad_os"))
+        os_tally[bucket["bucket"]] = os_tally.get(bucket["bucket"], 0) + 1
+
+        row["temp"] = get_latest_temp(row["machine"])
+        row["diagnostics"] = extract_diagnostics(get_latest_sensors(row["machine"]))
+        if isinstance(row["temp"], (int, float)):
+            reporting += 1
+            temps.append(row["temp"])
+            if row["temp"] >= hot_threshold:
+                over_threshold += 1
+        load = (row["diagnostics"] or {}).get("cpu_load_pct")
+        if isinstance(load, (int, float)):
+            loads.append(load)
+
+        machine_low = False
+        for volume in (row["diagnostics"] or {}).get("disks") or []:
+            if not isinstance(volume.get("total_gb"), (int, float)) or not volume["total_gb"]:
+                continue
+            if not isinstance(volume.get("used_gb"), (int, float)):
+                continue
+            disk_total_gb += volume["total_gb"]
+            free_gb = volume["total_gb"] - volume["used_gb"]
+            disk_free_gb += free_gb
+            if 100.0 * free_gb / volume["total_gb"] < low_disk_pct:
+                machine_low = True
+        if machine_low:
+            low_disk_machines += 1
+
+    open_alerts = [a for a in alerts.list_open(DB_PATH)
+                   if keep is None or _alert_in_scope(a, keep)]
+    counts["open_alerts"] = len(open_alerts)
+
+    day_ago = int(time.time()) - 86400
+    scope = None if keep is None else scoped_names
+    deployments = packages.count_deployment_states(DB_PATH, machines=scope, since=day_ago)
+    backup_runs = backups.count_runs_since(DB_PATH, day_ago, machines=scope)
+
+    def _round(values):
+        return round(sum(values) / len(values), 1) if values else None
+
+    return {
+        "generated_at": int(time.time()),
+        "counts": counts,
+        # A list, not a dict: the order IS the display order, and it is the order the
+        # buckets are declared in rather than whatever a dict happened to iterate.
+        "os": [{"bucket": bucket, "count": os_tally.get(bucket, 0)} for bucket in OS_BUCKETS],
+        "telemetry": {
+            "reporting": reporting,
+            "avg_cpu_temp": _round(temps),
+            "peak_cpu_temp": max(temps) if temps else None,
+            "over_threshold": over_threshold,
+            "threshold_c": hot_threshold,
+            "avg_cpu_load_pct": _round(loads),
+            "disk_total_gb": round(disk_total_gb, 1),
+            "disk_free_gb": round(disk_free_gb, 1),
+            "low_disk_machines": low_disk_machines,
+            "low_disk_free_pct": low_disk_pct,
+        },
+        "activity": {
+            "alerts_recent": [
+                # `kind` and nothing more: the alerts table has no severity column, and
+                # inventing one here would put a word on screen that no other page agrees
+                # with. What an alert IS is the useful half anyway.
+                {"id": a["id"], "kind": a["kind"], "machine": a.get("machine"),
+                 "detail": a.get("detail"), "updated_at": a.get("updated_at")}
+                for a in open_alerts[:top]
+            ],
+            "deployments_running": deployments["running"],
+            "deployments_failed_24h": deployments["failed"],
+            "backups_ok_24h": backup_runs["ok"],
+            "backups_failed_24h": backup_runs["failed"],
+            "firmware_jobs_active": firmware.count_active_jobs(DB_PATH, machines=scope),
+            "wake_requests_open": wake.count_open_requests(DB_PATH, machines=scope),
+        },
+        "attention": _fleet_attention_lists(rows, top, low_disk_pct),
+    }
+
+
+@app.route('/api/fleet/summary')
+@login_required
+@access.require(permissions.VIEW)
+def fleet_summary():
+    """Everything the Dashboard shows, in one scope-filtered answer.
+
+    NOTE ON THE TELEMETRY HALF: temperatures, loads and disk figures come from this
+    process's in-memory `latest_*` caches rather than from the database, so under more than
+    one worker two operators would see slightly different fleet averages. That is already
+    true of the `temp` field on /api/machines and is not a regression -- but it is the
+    reason these numbers are described as live readings rather than as a record.
+
+    The cache is keyed by SCOPE, not by caller: two operators with the same machine set get
+    the same answer and should, while an operator with a different one must never be served
+    another's totals.
+    """
+    try:
+        top = max(1, min(20, int(request.args.get("top", 5))))
+    except (TypeError, ValueError):
+        top = 5
+
+    keep = access.machine_filter()
+    scope_key = "all" if keep is None else frozenset(
+        m for m in _all_known_machines() if keep(m))
+    cache_key = (scope_key, top)
+
+    now = time.time()
+    with _fleet_summary_lock:
+        cached = _fleet_summary_cache.get(cache_key)
+        if cached and now - cached[0] < FLEET_SUMMARY_TTL_SECONDS:
+            return jsonify(cached[1])
+        summary = _build_fleet_summary(top)
+        _fleet_summary_cache[cache_key] = (now, summary)
+        # Bounded: one entry per (scope, top) pair, and a hub with many permission groups
+        # would otherwise accumulate one per group forever.
+        if len(_fleet_summary_cache) > 64:
+            oldest = sorted(_fleet_summary_cache.items(), key=lambda kv: kv[1][0])
+            for key, _ in oldest[:32]:
+                _fleet_summary_cache.pop(key, None)
+    return jsonify(summary)
+
+
+def _all_known_machines():
+    """Every machine name the hub knows, for building a cache key. Cheap: one indexed
+    column, plus the in-memory keys the roster union above also folds in."""
+    with get_db_conn() as conn:
+        names = {row["machine"] for row in conn.execute("SELECT machine FROM machine_info")}
+    names.update(latest_temp.keys())
+    names.update(latest_uptime.keys())
+    return names
+
+
 @app.route('/api/machines')
 @login_required
 @access.require(permissions.VIEW)
@@ -3590,7 +3969,8 @@ def get_machines():
     with get_db_conn() as conn:
         rows = conn.execute(
             "SELECT machine, asset_tag, serial_number, service_tag, manufacturer, model, "
-            "companion_version, updated_at "
+            "companion_version, os_caption, os_version, os_build, os_arch, ad_os, "
+            "updated_at "
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     result = [dict(row) for row in rows]
@@ -3602,7 +3982,8 @@ def get_machines():
             result.append({
                 'machine': machine, 'asset_tag': None, 'serial_number': None,
                 'service_tag': None, 'manufacturer': None, 'model': None,
-                'companion_version': None, 'updated_at': None,
+                'companion_version': None, 'os_caption': None, 'os_version': None,
+                'os_build': None, 'os_arch': None, 'ad_os': None, 'updated_at': None,
             })
             known_machines.add(machine)
     # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
@@ -3620,6 +4001,14 @@ def get_machines():
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
         row['status'] = derive_machine_status(row['updated_at'])
         row['enrolled'] = row['machine'] in enrolled
+        # Derived server-side, and only here, so /api/machines, the fleet summary and the
+        # Inventory column cannot disagree about what a machine is running. os_label is
+        # flattened onto the row alongside the object because inventory.js searches and
+        # sorts over flat fields.
+        row['os'] = normalize_os(row.get('os_caption'), row.get('os_build'),
+                                 row.get('ad_os'))
+        row['os_label'] = row['os']['label']
+        row['os_bucket'] = row['os']['bucket']
     result.sort(key=lambda row: row['machine'])
     return jsonify(result)
 
@@ -3633,7 +4022,7 @@ def get_machine(machine):
     with get_db_conn() as conn:
         row = conn.execute(
             "SELECT machine, asset_tag, serial_number, service_tag, manufacturer, model, "
-            "companion_version, "
+            "companion_version, os_caption, os_version, os_build, os_arch, "
             "updated_at, ad_ou, ad_dn, ad_owner, ad_os, ad_disabled, ad_synced_at "
             "FROM machine_info WHERE machine = ?",
             (machine_name,),
@@ -3646,7 +4035,8 @@ def get_machine(machine):
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
         'service_tag': None, 'manufacturer': None, 'model': None,
-        'companion_version': None, 'updated_at': None,
+        'companion_version': None, 'os_caption': None, 'os_version': None,
+        'os_build': None, 'os_arch': None, 'updated_at': None,
         'ad_ou': None, 'ad_dn': None, 'ad_owner': None, 'ad_os': None,
         'ad_disabled': None, 'ad_synced_at': None,
     }
@@ -3661,6 +4051,11 @@ def get_machine(machine):
     # Same field the list carries, for the same reason -- see get_machines.
     result['enrolled'] = fleet.is_enrolled(DB_PATH, machine_name)
     result['primary_sensor_name'] = get_primary_sensor_override(machine_name)
+    # Same derivation the list uses, from the same function -- see get_machines. The raw
+    # os_caption/os_version/os_build/os_arch are alongside it, because the support question
+    # here ("which build is this one on?") wants the detail the bucket throws away.
+    result['os'] = normalize_os(result.get('os_caption'), result.get('os_build'),
+                                result.get('ad_os'))
     return jsonify(result)
 
 
@@ -3978,6 +4373,23 @@ def dismiss_alert(alert_id):
                 level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "dismissed"}), 200
 
+def _alert_in_scope(alert, keep):
+    """Is this alert one of `keep`'s?
+
+    Per-machine alerts scope on their single subject; the duplicate_serial `machines` list
+    scopes if it touches any kept machine. Such an alert carries an EMPTY `machines`, so it
+    has to be checked on `machine` first -- otherwise "no machines" would read as fleet-wide
+    and leak the alert across a scope boundary.
+
+    Module-level rather than a closure inside the counter, because the Dashboard's summary
+    lists the same alerts the badge counts. Two implementations of "which alerts are mine"
+    is exactly how a badge saying 3 ends up over a list showing 5.
+    """
+    if alert["kind"] in alerts.PER_MACHINE_KINDS:
+        return bool(alert.get("machine")) and keep(alert["machine"])
+    return not alert.get("machines") or any(keep(m) for m in alert["machines"])
+
+
 def _scoped_open_alert_count():
     """The number the sidebar badge shows: open alerts this caller is allowed to see.
 
@@ -3988,17 +4400,7 @@ def _scoped_open_alert_count():
     keep = access.machine_filter()
     if keep is None:
         return alerts.count_open(DB_PATH)
-
-    def _in_scope(a):
-        # Per-machine alerts scope on their single subject; the duplicate_serial `machines`
-        # list scopes if it touches any kept machine. Such an alert carries an empty
-        # `machines`, so it must be checked on `machine` first -- otherwise "no machines"
-        # would read as fleet-wide and leak the count across a scope boundary.
-        if a["kind"] in alerts.PER_MACHINE_KINDS:
-            return bool(a.get("machine")) and keep(a["machine"])
-        return not a.get("machines") or any(keep(m) for m in a["machines"])
-
-    return sum(1 for a in alerts.list_open(DB_PATH) if _in_scope(a))
+    return sum(1 for a in alerts.list_open(DB_PATH) if _alert_in_scope(a, keep))
 
 
 @app.route('/api/alerts/count')
@@ -4406,6 +4808,28 @@ def remote_page():
     checks the capability AND the machine's scope again for each one.
     """
     return render_template("remote.html", hub_version=HUB_VERSION,
+                           latest_agent_version=get_latest_agent_version())
+
+@app.route("/tools")
+@login_required
+@access.require(permissions.VIEW)
+def tools_page():
+    """Terminal, Backup, Firmware and Network, with the machine picked second.
+
+    Gated on VIEW rather than on anything narrower, because that is what the four panels
+    together require: Terminal, Firmware and Network were never capability-gated on the
+    machine page (what a PC's BIOS is set to, and whether it can be woken, is inventory in
+    the sense its model is), and the Backup tab hides itself without manage_backups. Every
+    endpoint behind every panel re-checks its own capability AND the machine's scope, so
+    this route decides who sees the page, not what they can do from it.
+
+    The machine is a query parameter, not part of the path: it is page state that travels
+    with ?tab=, and both are written by the page itself with replaceState.
+    """
+    return render_template("tools.html", hub_version=HUB_VERSION,
+                           # The firmware image editor shows the cap before an upload is
+                           # attempted; the endpoint enforces the same number itself.
+                           max_upload_mb=settings.get_int(DB_PATH, "firmware.max_upload_mb"),
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/machine/<machine>")

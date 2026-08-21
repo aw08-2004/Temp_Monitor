@@ -1,17 +1,123 @@
-.machine-grid {
+/* The Dashboard is a set of numbers about the fleet, not a grid of machines.
+   The .machine-grid / .machine-card rules that used to live here went with the per-machine
+   cards; the Asset Inventory is the page that lists machines now. */
+
+/* ---------------- Tiles: one number, one label ---------------- */
+.tile-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: var(--space-5);
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-4);
 }
 
-.machine-card__name {
-    font-size: var(--text-md);
+.tile {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+}
+
+.tile__value {
+    font-size: var(--text-xl);
     font-weight: 600;
-    margin-bottom: var(--space-1);
+    line-height: 1.1;
 }
 
-.machine-card__info {
+/* Colour is applied by the caller and only when the VALUE is the news -- zero failures must
+   not be red just because the tile is about failures. */
+.tile__value--ok { color: var(--ok, #30a46c); }
+.tile__value--warn { color: var(--warn, #f5a524); }
+.tile__value--bad { color: var(--danger, #e5484d); }
+
+.tile__label {
     font-size: var(--text-sm);
     color: var(--muted);
-    margin-bottom: var(--space-3);
+    margin-top: var(--space-1);
+}
+
+.tile__hint {
+    font-size: var(--text-xs, var(--text-sm));
+    color: var(--muted);
+    opacity: 0.8;
+    margin-top: var(--space-1);
+}
+
+/* ---------------- OS breakdown: a label, a bar, a count ---------------- */
+/* A bar rather than a pie: the question is "how much of the fleet is still on X", which is
+   one length compared against another, and lengths are the comparison people read
+   accurately. */
+.breakdown__row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 3fr minmax(90px, auto);
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+}
+
+.breakdown__label {
+    font-size: var(--text-sm);
+}
+
+.breakdown__bar {
+    display: block;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--control-bg);
+    overflow: hidden;
+}
+
+.breakdown__fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+}
+
+.breakdown__count {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* ---------------- Attention lists ---------------- */
+.attention-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--space-5);
+    margin-top: var(--space-4);
+}
+
+.dashboard__subhead {
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-2);
+    margin-top: var(--space-4);
+}
+
+.attention-list__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.attention-list__row:last-child {
+    border-bottom: none;
+}
+
+/* min-width:0 plus the ellipsis, so a long hostname shortens rather than pushing its own
+   value off the end of the row. */
+.attention-list__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.attention-list__value {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    white-space: nowrap;
 }

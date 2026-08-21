@@ -40,7 +40,7 @@ request.get_json(silent=True), which requires Content-Type: application/json.
 """
 import os
 
-from flask import Blueprint, jsonify, render_template, request, send_file
+from flask import Blueprint, jsonify, redirect, request, send_file, url_for
 
 import backups
 import bios
@@ -381,19 +381,17 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
     @login_required
     @can_manage
     def firmware_page():
-        """The image library and the fleet's update history.
+        """Kept as a redirect to where firmware lives now: Tools, Firmware tab.
 
-        A page of its own rather than a tab on Packages: an installer and a BIOS image are
-        both "a file we push", and that is where the resemblance stops -- one is retried
-        three times by a scheduler, the other has no undo. Sharing a page would invite
-        sharing the mental model.
+        The page itself -- the image library, the fleet's update history, and the flash
+        dialog that queues an update from an image -- moved there whole, so that it sits
+        beside the per-machine BIOS view instead of a navigation away from it.
 
-        Queueing a flash lives here too, beside the images, for the same reason a deployment
-        is created on the Packages page: the thing you pick first is the payload.
+        The endpoint stays because bookmarks, links in tickets and url_for() calls do. Note
+        the gate stays too, and runs BEFORE the redirect: whether this route exists must not
+        become a way to learn something an operator may not see.
         """
-        return render_template("firmware.html",
-                               max_upload_mb=settings.get_int(db_path,
-                                                              "firmware.max_upload_mb"))
+        return redirect(url_for("tools_page") + "?tab=firmware")
 
     # ---------------- Console: images ----------------
     @bp.route("/api/firmware/payloads", methods=["GET"])

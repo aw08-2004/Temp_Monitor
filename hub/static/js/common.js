@@ -71,6 +71,26 @@ function shellElement(id) {
     return null;
 }
 
+// Rewrite this page's URL in place, and the shell's address bar with it.
+//
+// replaceState, never pushState: shell.js's popstate handler re-navigates the frame
+// whenever the frame's href and location.href disagree, so pushing entries from inside a
+// framed page makes Back walk in-page state changes AND fight the shell's own history.
+// shell.js's go() uses location.replace for exactly this reason.
+//
+// The second half is the part that is easy to miss. A replaceState inside the frame does
+// not move the shell's address bar -- the shell only syncs on frame load -- so a tab or
+// machine chosen after load would vanish on refresh and be absent from any bookmark or
+// copied link. Same-origin by construction, guarded like shellElement() above.
+function syncUrl(url) {
+    try { history.replaceState(history.state, '', url); } catch (e) { /* opaque origin */ }
+    try {
+        if (window.parent !== window && window.parent.history) {
+            window.parent.history.replaceState(window.parent.history.state, '', url);
+        }
+    } catch (e) { /* not our shell */ }
+}
+
 // Connects the Socket.IO client and wires up a #socket-status pill. Returns the socket
 // so callers can attach their own `new_temp` handlers.
 function connectSocketWithStatus() {

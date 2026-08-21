@@ -25,11 +25,16 @@
 (function () {
     'use strict';
 
-    const pane = document.getElementById('tab-network');
+    const PANEL_ID = 'tool-network';
+    const pane = document.getElementById(PANEL_ID);
     if (!pane) return;
 
     const t = window.t;
-    const MACHINE = document.getElementById('machine-config').dataset.machine;
+    // The machine this panel is currently showing. A call, not a constant: on the Tools
+    // page the operator picks a different PC without the page reloading, and every URL
+    // below has to be built against the machine chosen now rather than the one that
+    // happened to be current when this file was parsed.
+    const currentMachine = () => window.MachineContext.current();
 
     const statusPill = document.getElementById('network-status');
     const statusText = document.getElementById('network-status-text');
@@ -41,7 +46,6 @@
     const prepareBtn = document.getElementById('network-prepare');
 
     let data = null;
-    let loaded = false;
     // Set while a wake is in flight so the poll stops on its own. A wake resolves in seconds
     // when a peer is awake and can sit pending for its whole TTL when none is -- so this
     // polls rather than assuming, and gives up rather than polling all weekend.
@@ -128,15 +132,29 @@
                              || request.status === 'sent');
     }
 
-    // Loaded lazily on first reveal, like the Backup and Firmware tabs: most machine pages
-    // are opened to look at a temperature graph.
-    pane.addEventListener('tab:shown', () => { if (!loaded) load(); });
+    // Loaded lazily on first reveal and re-loaded on a machine switch, like the Backup and
+    // Firmware tabs: most machine pages are opened to look at a temperature graph.
+    // ToolPanels owns that sequencing; see tool-panels.js.
+    ToolPanels.register('network', {
+        panelId: PANEL_ID,
+        load,
+        teardown: reset,
+        requires: (machine) => !!machine
+    });
+
+    // stopPolling() is the load-bearing half: a wake in flight polls once a second, and a
+    // poll loop left running against the machine you just navigated away from would keep
+    // writing its result into the panel now showing a different PC.
+    function reset() {
+        stopPolling();
+        data = null;
+        pollsLeft = 0;
+    }
 
     async function load() {
-        loaded = true;
         setStatus('muted', t('common.loading'));
         try {
-            data = await api(`/api/wake/machines/${encodeURIComponent(MACHINE)}`);
+            data = await api(`/api/wake/machines/${encodeURIComponent(currentMachine())}`);
         } catch (e) {
             data = null;
             setStatus('danger', t('machine.network.load_failed'));
@@ -152,7 +170,7 @@
 
     async function refresh() {
         try {
-            data = await api(`/api/wake/machines/${encodeURIComponent(MACHINE)}`);
+            data = await api(`/api/wake/machines/${encodeURIComponent(currentMachine())}`);
             render();
         } catch (e) { /* a failed poll is not worth tearing the tab down over */ }
     }
@@ -376,7 +394,7 @@
         wakeBtn.addEventListener('click', async () => {
             wakeBtn.disabled = true;
             try {
-                data = await post(`/api/wake/machines/${encodeURIComponent(MACHINE)}`, {});
+                data = await post(`/api/wake/machines/${encodeURIComponent(currentMachine())}`, {});
                 render();
                 if (isOpen(data.request)) startPolling();
             } catch (e) {
@@ -392,7 +410,7 @@
             const original = prepareBtn.textContent;
             prepareBtn.textContent = t('machine.network.preparing');
             try {
-                await post(`/api/wake/machines/${encodeURIComponent(MACHINE)}/prepare`, {});
+                await post(`/api/wake/machines/${encodeURIComponent(currentMachine())}/prepare`, {});
                 // The agent re-reads and re-reports its own wake flags when it is done, so
                 // the answer arrives on a heartbeat rather than in this response. Polling a
                 // few times is what turns "queued" into a visibly updated diagnosis.
@@ -420,5 +438,4 @@
         }
     }
 
-    window.addEventListener('beforeunload', stopPolling);
 })();

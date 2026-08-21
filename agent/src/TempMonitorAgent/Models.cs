@@ -76,7 +76,19 @@ public sealed class SensorReading
     [JsonPropertyName("text")] public string? Text { get; set; }
 }
 
-/// <summary>Hardware identity read once at startup (BIOS/chassis).</summary>
+/// <summary>Hardware identity read once at startup (BIOS/chassis), plus the operating
+/// system on top of it.
+///
+/// The OS is read once at startup like the rest, which is correct for the same reason: a
+/// machine that is upgraded from Windows 10 to 11, or moved to a new build, reboots to get
+/// there, and this process starts again with it.
+///
+/// Four fields rather than one caption because the fleet question ("how many are still on
+/// Windows 10?") and the support question ("which build is this one on?") want different
+/// halves, and splitting a caption back apart is guesswork. In particular the BUILD is what
+/// separates 10 from 11 -- Microsoft shipped 11 as build 22000 of the same product without
+/// changing the WMI caption, so early 11 machines describe themselves as 10. The hub does
+/// that reconciling (normalize_os in app.py); the agent only reports what it is told.</summary>
 public sealed class SystemIdentity
 {
     [JsonPropertyName("serial_number")] public string? SerialNumber { get; set; }
@@ -84,6 +96,10 @@ public sealed class SystemIdentity
     [JsonPropertyName("manufacturer")] public string? Manufacturer { get; set; }
     [JsonPropertyName("asset_tag")] public string? AssetTag { get; set; }
     [JsonPropertyName("service_tag")] public string? ServiceTag { get; set; }
+    [JsonPropertyName("os_caption")] public string? OsCaption { get; set; }
+    [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
+    [JsonPropertyName("os_build")] public string? OsBuild { get; set; }
+    [JsonPropertyName("os_arch")] public string? OsArchitecture { get; set; }
 }
 
 /// <summary>The signed self-update manifest (agent.manifest.json).</summary>

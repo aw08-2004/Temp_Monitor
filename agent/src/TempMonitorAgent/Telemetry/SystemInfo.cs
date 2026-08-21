@@ -9,7 +9,8 @@ namespace TempMonitorAgent.Telemetry;
 /// asset tag (Win32_SystemEnclosure.SMBIOSAssetTag),
 /// and service tag (Win32_SystemEnclosure.SerialNumber -- the chassis serial, distinct
 /// from the BIOS serial, and where Dell's Service Tag lives) with the same placeholder
-/// filtering. Also exposes system uptime.
+/// filtering. Also reads the operating system (Win32_OperatingSystem) and exposes system
+/// uptime.
 /// </summary>
 public static class SystemInfo
 {
@@ -64,6 +65,23 @@ public static class SystemInfo
         {
             logger.LogWarning(e, "[system-info] Could not read BIOS/system info");
         }
+
+        // Its own try/catch, and deliberately AFTER the block above: an OS read that throws
+        // must not cost the machine its serial and model, which is what a single shared
+        // catch around both would have done.
+        try
+        {
+            var os = QueryFirstObject("Win32_OperatingSystem",
+                                      "Caption", "Version", "BuildNumber", "OSArchitecture");
+            info.OsCaption = Clean(os.GetValueOrDefault("Caption"));
+            info.OsVersion = Clean(os.GetValueOrDefault("Version"));
+            info.OsBuild = Clean(os.GetValueOrDefault("BuildNumber"));
+            info.OsArchitecture = Clean(os.GetValueOrDefault("OSArchitecture"));
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "[system-info] Could not read operating system info");
+        }
         return info;
     }
 
@@ -78,6 +96,32 @@ public static class SystemInfo
             }
         }
         return null;
+    }
+
+    /// <summary>Several properties of one WMI class in ONE round trip.
+    ///
+    /// <see cref="QueryFirst"/> queries per property, which is fine for the identity fields
+    /// above because they come from three different classes anyway. Four separate queries
+    /// against Win32_OperatingSystem would be three round trips of pure waste, on a class
+    /// that is not free to instantiate.</summary>
+    private static Dictionary<string, string?> QueryFirstObject(
+        string wmiClass, params string[] properties)
+    {
+        var result = new Dictionary<string, string?>();
+        using var searcher = new ManagementObjectSearcher(
+            $"SELECT {string.Join(", ", properties)} FROM {wmiClass}");
+        foreach (ManagementObject obj in searcher.Get())
+        {
+            using (obj)
+            {
+                foreach (var property in properties)
+                {
+                    result[property] = obj[property]?.ToString();
+                }
+                break;   // one OS per machine; the rest of the enumeration is not interesting
+            }
+        }
+        return result;
     }
 
     private static string? Clean(string? s)
