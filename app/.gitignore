@@ -7,7 +7,26 @@ pubspec.lock
 # Generated platform runners. `flutter create --platforms=windows .` regenerates them --
 # see README.md. Kept out of the repo so a Flutter SDK upgrade does not arrive as a
 # thousand-line diff nobody reviews.
-windows/
+#
+# The five Windows runner files below are the exception. They carry the single-instance
+# guard and the version resource, and neither can live in lib/: the guard has to run
+# before the Flutter engine starts, and the VERSIONINFO block is compiled into the exe.
+# Untracked, a fresh checkout would silently rebuild the client without both. A
+# regenerate overwrites them -- which is exactly why they are tracked: `git status` shows
+# it, `git checkout app/windows/runner` puts them back, and release_client.py refuses to
+# build if the boilerplate has crept back in. Everything else under windows/ stays
+# generated.
+#
+# Note `windows/*` rather than `windows/`: git will not descend into an excluded
+# directory, so the negations below would never be read.
+windows/*
+!windows/runner/
+windows/runner/*
+!windows/runner/CMakeLists.txt
+!windows/runner/Runner.rc
+!windows/runner/main.cpp
+!windows/runner/single_instance.cpp
+!windows/runner/single_instance.h
 android/
 ios/
 linux/

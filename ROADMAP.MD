@@ -1733,9 +1733,10 @@ comes online.
 
 ---
 
-## 🚧 11. Desktop & mobile app   ·   hub 1.69.0   ·   client 1.0.0
+## 🚧 11. Desktop & mobile app   ·   hub 1.69.0   ·   client 1.1.0
 
-**The hub half is built (1.69.0) and the client is built, signed and published as 1.0.0.**
+**The hub half is built (1.69.0), 1.0.0 is signed and published, and 1.1.0 is in the tree
+awaiting a release.**
 It analyzes clean and its 48 tests pass. The Windows binary now exists, and the app has
 been **launched**: the window opens, every plugin DLL resolves, and `local_notifier`
 registers the Start Menu shortcut that gives an unsigned non-MSIX build the application
@@ -1954,6 +1955,44 @@ constant is compiled into the binary and is what the update check compares again
 MSYS/Git Bash it returns True even with stdin redirected from `/dev/null`, so a tty check
 alone would hang a CI runner on a prompt nobody can see. `EOFError` is the real guard, and
 the safe answer to it is "publish what is in the tree" rather than a guessed bump.
+
+### Built (client side) — one instance per session (1.1.0)
+
+**Launching the exe twice used to give the operator two of everything.** The window's X
+hides to the tray rather than closing, so "running but invisible" is this app's ordinary
+resting state, and double-clicking the exe again is the ordinary way back to it — not an
+edge case. Two windows would have been cosmetic. **The cost that mattered was a second
+alert poller**: each instance keeps its own delta seen-set, so every new alert toasted
+twice, which is exactly the "operator learns to dismiss FleetHub notifications unread"
+failure the priming and reset rules above were built to prevent.
+
+A second launch now takes a named mutex, finds it held, wakes the running instance and
+exits 0; the running instance un-hides, un-minimises and takes the foreground. Three
+decisions inside that:
+
+- **The guard is in the C++ runner (`windows/runner/single_instance.cpp`), not in Dart.**
+  A Dart check runs after the engine has booted and the window exists, so the losing
+  instance would flash a window before vanishing. In `wWinMain` it is invisible.
+- **The mutex is session-scoped, not machine-wide.** Two operators on one box over RDP each
+  get a client, each signed in as themselves with their own device token. A machine-wide
+  mutex would have handed the first one an app and the second one a process that exits
+  without explanation — the wrong answer for a helpdesk group.
+- **The wake-up is a broadcast registered message.** It reaches hidden top-level windows,
+  which is the state the running instance is usually in, and it avoids identifying the
+  other process by window class — the runner's is the stock `FLUTTER_RUNNER_WIN32_WINDOW`
+  that every Flutter app on the machine shares. What a broadcast cannot do is carry data,
+  so the phase-2 `fleethub://` URL scheme will need a window lookup to forward the second
+  launch's command line.
+
+**This forced a change to how the generated runner is stored.** `app/windows/` was ignored
+wholesale so a Flutter SDK upgrade would not arrive as a thousand-line diff. The guard
+cannot live in `lib/`, and neither can the exe's `VERSIONINFO` block — which was still
+Flutter's `com.example` boilerplate, and now names a real publisher and the GPL. Five files
+under `windows/runner/` are therefore tracked, and everything else there stays generated.
+`flutter create` overwrites those five with boilerplate, which is a **silent** failure — the
+build stays green and the client just quietly opens second copies again — so
+`release_client.py` checks all five before packaging and **refuses the release** rather than
+warning, the same shape as its existing version-agreement check.
 
 ### Not yet done
 
