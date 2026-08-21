@@ -130,7 +130,8 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
 **Manual, step by step** (what the script above automates):
 1. Bump `Version` in [AgentConfig.cs](src/TempMonitorAgent/AgentConfig.cs) and
    `<Version>` in [TempMonitorAgent.csproj](src/TempMonitorAgent/TempMonitorAgent.csproj)
-   — keep them in sync.
+   — keep them in sync. Which digit moves is [VERSIONING.md](../VERSIONING.md); the short
+   version is that anything the hub can gate on takes a minor.
 2. `dotnet publish … -o agent/dist` (single-file exe).
 3. `python sign_release.py --sign-agent --file agent/dist/TempMonitorAgent.exe \
       --agent-version <v> --agent-url <release-asset-url>` → writes and signs

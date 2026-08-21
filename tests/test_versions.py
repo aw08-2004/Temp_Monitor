@@ -445,6 +445,122 @@ def test_hub_update_notice():
         _settings.reset(app.DB_PATH, ["hub.auto_update"])
 
 
+def test_hub_update_notice_hides():
+    """The notice must actually disappear when it is marked hidden.
+
+    Both the server (`{% if not hub_update_available %}hidden{% endif %}`) and the poller
+    (`els.notice.hidden = ...`) say "gone" by setting the [hidden] attribute -- and that
+    attribute only hides an element because of a UA-stylesheet rule that ANY `display`
+    declaration outranks. .sidebar__update.banner sets display:flex, so without an explicit
+    rule the notice stayed on screen permanently, announcing an update on a hub already
+    running the latest version. Pinned here because nothing else in the suite renders CSS.
+    """
+    print("\n-- hub update notice: [hidden] actually hides --")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    static = os.path.join(root, "hub", "static")
+    with open(os.path.join(static, "css", "components.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    check("the notice has a [hidden] rule beating its own display",
+          ".sidebar__update.banner[hidden]" in css)
+    # Same trap, one element down: the dismiss button is display:flex and common.js hides
+    # it while an update is applying.
+    check("so does the dismiss button", ".sidebar__update-dismiss[hidden]" in css)
+
+    # A rule that lands BEFORE the display it has to beat loses on source order at equal
+    # specificity, which is how this class of bug survives a grep for the selector.
+    check("the [hidden] rule comes after the display it overrides",
+          css.index(".sidebar__update.banner {") < css.index(".sidebar__update.banner[hidden]"))
+
+    # And the server still marks it hidden when there is nothing to announce -- the CSS
+    # above only matters if this attribute is on the element.
+    with open(os.path.join(root, "hub", "templates", "partials", "_sidebar.html"),
+                 encoding="utf-8") as fh:
+        sidebar = fh.read()
+    check("the sidebar renders [hidden] when no update is available",
+          "{% if not hub_update_available %}hidden{% endif %}" in sidebar)
+
+
+def test_version_format_policy():
+    """The mechanical half of VERSIONING.md: MAJOR.MINOR.PATCH, three numeric components,
+    no suffixes, and the two-file version pairs in sync.
+
+    None of this is house style. `parse_hub_version` accepts only [\\d.] inside the quotes,
+    so a suffixed HUB_VERSION does not raise -- it parses as None and the hub silently
+    stops discovering updates fleet-wide. The two `versionLess` copies in the console loop
+    over exactly three components. And the four comparators in this repo agree on
+    well-formed input while disagreeing on anything else. So the format is pinned here,
+    where a bad bump fails a test instead of a deployment.
+    """
+    import re
+
+    print("\n-- versioning policy: format --")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def read(*parts):
+        # errors="replace": AgentConfig.cs is not UTF-8 (a cp1252 dash in a comment), and
+        # this only ever regexes ASCII version strings out of the text.
+        with open(os.path.join(root, *parts), encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+
+    THREE = re.compile(r"^\d+\.\d+\.\d+$")
+
+    check(f"HUB_VERSION is MAJOR.MINOR.PATCH ({app.HUB_VERSION})",
+          bool(THREE.match(app.HUB_VERSION)))
+    # Round trip through the parser the self-updater actually uses, against the real file:
+    # this is what a hub reads off main to decide whether it is behind.
+    check("the declaration in hub/app.py parses back to the running version",
+          app.parse_hub_version(read("hub", "app.py")) == app.HUB_VERSION)
+    # The demonstration, not a hypothetical: this is why suffixes are banned outright.
+    check("a suffixed HUB_VERSION would parse as None (hence: no suffixes)",
+          app.parse_hub_version('HUB_VERSION = "1.83.0-rc1"') is None)
+
+    print("\n-- versioning policy: the two-file pairs stay in sync --")
+    agent_cs = re.search(r'public const string Version\s*=\s*"([^"]+)"',
+                         read("agent", "src", "TempMonitorAgent", "AgentConfig.cs"))
+    agent_proj = re.search(r"<Version>([^<]+)</Version>",
+                           read("agent", "src", "TempMonitorAgent", "TempMonitorAgent.csproj"))
+    check("AgentConfig.cs declares a version", agent_cs is not None)
+    check("the csproj declares a version", agent_proj is not None)
+    if agent_cs and agent_proj:
+        check(f"agent version is MAJOR.MINOR.PATCH ({agent_cs.group(1)})",
+              bool(THREE.match(agent_cs.group(1))))
+        # release.ps1 writes both; a hand-edit that moves one is the failure this catches.
+        check("AgentConfig.Version == csproj <Version>",
+              agent_cs.group(1) == agent_proj.group(1))
+
+    dart = re.search(r"const String clientVersion\s*=\s*'([^']+)'",
+                     read("app", "lib", "version.dart"))
+    pubspec = re.search(r"^version:\s*(\S+)\s*$", read("app", "pubspec.yaml"), re.MULTILINE)
+    check("version.dart declares a version", dart is not None)
+    check("pubspec.yaml declares a version", pubspec is not None)
+    if dart and pubspec:
+        check(f"client version is MAJOR.MINOR.PATCH ({dart.group(1)})",
+              bool(THREE.match(dart.group(1))))
+        # pubspec carries a +build suffix that version.dart deliberately does not; the
+        # part before the + is the number operators and the Download page compare.
+        check("clientVersion == pubspec version (ignoring +build)",
+              dart.group(1) == pubspec.group(1).split("+")[0])
+
+    print("\n-- versioning policy: the agent-capability gates are well-formed --")
+    # These constants ARE the compatibility contract -- they name the agent minor that
+    # introduced a feature -- and they are read by a comparator that loops exactly three
+    # times, so a two- or four-component gate would misfire rather than fail loudly.
+    gates = []
+    for name in ("fleet-terminal.js", "processes.js"):
+        js = read("hub", "static", "js", name)
+        gates += re.findall(r"(MIN_[A-Z_]*AGENT)\s*=\s*'([^']+)'", js)
+    check(f"found the MIN_*_AGENT gates ({len(gates)})", len(gates) >= 4)
+    for gate_name, value in gates:
+        check(f"{gate_name} = '{value}' is MAJOR.MINOR.PATCH", bool(THREE.match(value)))
+
+    print("\n-- versioning policy: the policy is written down --")
+    policy = read("VERSIONING.md")
+    check("VERSIONING.md exists and states the format",
+          "MAJOR.MINOR.PATCH" in policy)
+    check("README points at it", "VERSIONING.md" in read("README.md"))
+
+
 if __name__ == "__main__":
     test_version_compare()
     test_pre_agent_clients_get_nothing()
@@ -453,5 +569,7 @@ if __name__ == "__main__":
     test_report_endpoint()
     test_hub_self_update()
     test_hub_update_notice()
+    test_hub_update_notice_hides()
+    test_version_format_policy()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

@@ -213,6 +213,13 @@
     flex-shrink: 0;
 }
 
+/* The [hidden] caveat again, and this one had teeth: the display above beats the UA
+   stylesheet's [hidden] rule, so the notice rendered even when the server (or the poller)
+   had marked it hidden -- which meant it announced "an update is available" permanently,
+   including on a hub already running the latest version. Written with both classes so it
+   outranks .sidebar__update.banner regardless of source order. */
+.sidebar__update.banner[hidden] { display: none; }
+
 .sidebar__update-text {
     margin: 0;
     font-size: var(--text-xs);
@@ -241,6 +248,9 @@
     opacity: 0.6;
     cursor: pointer;
 }
+
+/* Same reason: common.js hides this button while an update is applying. */
+.sidebar__update-dismiss[hidden] { display: none; }
 
 .sidebar__update-dismiss:hover {
     opacity: 1;
