@@ -61,9 +61,31 @@ VERSION_DART = os.path.join(APP_DIR, "lib", "version.dart")
 PUBSPEC = os.path.join(APP_DIR, "pubspec.yaml")
 DIST_DIR = os.path.join(APP_DIR, "dist")
 BUILD_DIR = os.path.join(APP_DIR, "build", "windows", "x64", "runner", "Release")
+RUNNER_DIR = os.path.join(APP_DIR, "windows", "runner")
+
+# The generated Windows runner is untracked EXCEPT for these, which carry the
+# single-instance guard and the version resource -- see app/.gitignore. Each entry is
+# (file, what must be in it, what must not be). `flutter create` puts the boilerplate
+# back, and the boilerplate builds a client that opens a second copy of itself and
+# reports com.example as its publisher.
+RUNNER_CUSTOMIZATIONS = [
+    ("single_instance.cpp", "kMutexName", None),
+    ("single_instance.h", "ClaimSingleInstance", None),
+    ("main.cpp", "ClaimSingleInstance", None),
+    # The build list, not just the sources. If this file alone reverts -- a bad merge, or
+    # someone restoring files by hand instead of `git checkout app/windows/runner` --
+    # single_instance.cpp is silently dropped from the target and the failure arrives as
+    # an undefined-reference at link time, a hundred lines from anything that names the
+    # cause. Checked here so it arrives as a sentence instead.
+    ("CMakeLists.txt", "single_instance.cpp", None),
+    ("Runner.rc", "FleetHub Client", "com.example"),
+]
 
 VERSION_RE = re.compile(r"^const String clientVersion = '([^']+)';$", re.M)
-PUBSPEC_VERSION_RE = re.compile(r"^version:\s*(\S+)\s*$", re.M)
+# `[^\S\n]*` rather than `\s*` for the trailing run: `\s` matches newlines, so with re.M
+# the old pattern swallowed the blank line after `version:` and every bump ate one more
+# line of the file's spacing.
+PUBSPEC_VERSION_RE = re.compile(r"^version:[^\S\n]*(\S+)[^\S\n]*$", re.M)
 
 
 def die(message):
@@ -99,6 +121,39 @@ def run(command, cwd=APP_DIR, capture=False):
     if result.returncode != 0 and capture:
         print(output)
     return result.returncode, output
+
+
+# ---------------------------------------------------------------- runner
+def check_runner_customizations():
+    """Refuse to release a runner that has been regenerated over.
+
+    The same shape as check_versions_agree, and for the same reason: the failure it
+    guards is silent. `flutter create --platforms=windows .` is the documented way to
+    materialise the runner, it overwrites these files, and nothing about the build that
+    follows looks wrong -- you get a client that happily opens a second copy of itself
+    and calls its publisher com.example, signed and published before anyone notices.
+    """
+    broken = []
+    for name, required, forbidden in RUNNER_CUSTOMIZATIONS:
+        path = os.path.join(RUNNER_DIR, name)
+        if not os.path.exists(path):
+            broken.append(f"{name} is missing")
+            continue
+        with open(path, encoding="utf-8") as handle:
+            body = handle.read()
+        if required not in body:
+            broken.append(f"{name} no longer contains {required!r}")
+        if forbidden and forbidden in body:
+            broken.append(f"{name} still contains the placeholder {forbidden!r}")
+    if broken:
+        # chr(10) rather than an escape: this message is the one an operator reads at
+        # the moment the release stops, so it gets real line breaks.
+        line = chr(10)
+        die("the Windows runner has lost its tracked customizations:" + line + "  "
+            + (line + "  ").join(broken)
+            + line + line
+            + "This is what a re-run of `flutter create` does. Restore them with:"
+            + line + "  git checkout app/windows/runner")
 
 
 # ---------------------------------------------------------------- version
@@ -423,6 +478,9 @@ def main():
 
     current = read_version()
     check_versions_agree(current)
+    # Before the version prompt, not inside build(): --skip-build packages an exe that
+    # was built from these same files, so it needs the check just as much.
+    check_runner_customizations()
 
     # Which version is being published is a decision, so it is ASKED rather than inferred
     # from whatever was left in the tree. --version and --keep-version are the

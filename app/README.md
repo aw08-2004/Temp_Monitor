@@ -42,16 +42,63 @@ exchange.
 The token is stored with `flutter_secure_storage`, DPAPI-backed on Windows, so the stored
 blob is bound to the Windows user account.
 
+## One instance
+
+The window's X hides to the tray rather than closing, so the ordinary resting state of this
+app is **running but invisible**. That makes "the operator double-clicks the exe again" the
+normal path rather than an edge case, and it used to buy them a second process.
+
+Two windows would be a cosmetic annoyance. The real cost was **a second alert poller**: each
+instance keeps its own delta seen-set, so every new alert toasted twice — which is precisely
+the "operator learns to dismiss FleetHub notifications unread" failure the toast rules above
+exist to prevent.
+
+A second launch now takes the mutex, finds it held, wakes the running instance and exits with
+status 0. The running instance un-hides, un-minimises and takes the foreground — the same end
+state as the tray menu's "Open FleetHub".
+
+Three details that are decisions rather than defaults:
+
+- **The guard is in the C++ runner, not in Dart.** In Dart it would run after the engine has
+  booted and the window exists, so the losing instance would flash a window before vanishing.
+  In `wWinMain` it costs nothing visible.
+- **The mutex is session-scoped** (`Local\`, not `Global\`). Two operators on the same box
+  over RDP each get a client, each signed in as themselves with their own device token. A
+  machine-wide mutex would hand the first one an app and the second one a process that exits
+  without explanation.
+- **The wake-up is a broadcast** of a registered window message, not a message to a located
+  `HWND`. A broadcast reaches hidden top-level windows, which is the state the running
+  instance is usually in, and it avoids identifying the other process by window class — the
+  runner's is the stock `FLUTTER_RUNNER_WIN32_WINDOW`, which every Flutter app on the machine
+  shares. What a broadcast cannot do is carry data, so forwarding a second launch's command
+  line (a phase-2 `fleethub://` URL) will need a window lookup; `single_instance.cpp` says so
+  at the point where it would go.
+
 ## Building
 
-The platform runner directories are **not** in the repo — a Flutter SDK upgrade should not
-arrive as a thousand-line diff. Generate them once per checkout:
+The platform runner directories are **almost entirely** absent from the repo — a Flutter SDK
+upgrade should not arrive as a thousand-line diff. Generate them once per checkout:
 
 ```bash
 cd app && flutter create --platforms=windows .
 ```
 
 That writes `windows/` over this source without touching `lib/`, `test/` or `pubspec.yaml`.
+
+**Five files under `windows/runner/` are the exception and ARE tracked**, because what they
+carry cannot live in `lib/`: `main.cpp` and `single_instance.{h,cpp}` (the guard above, which
+has to run before the Flutter engine starts), `Runner.rc` (the `VERSIONINFO` block compiled
+into the exe — what Explorer shows on Properties → Details) and `CMakeLists.txt` (which names
+the new source). **The command above overwrites all five with boilerplate.** Put them back:
+
+```bash
+git checkout app/windows/runner
+```
+
+Forgetting to is a silent failure — the build is green, the client just quietly opens a second
+copy of itself and reports `com.example` as its publisher — so `release_client.py` checks for
+it and refuses the release rather than warning about it.
+
 Then:
 
 ```bash
@@ -235,4 +282,9 @@ lib/
     updater.dart     signed manifest -> "is there a newer one?"
   ui/                fleet, alerts, wake, commands, settings, update prompt
 test/                models, pairing, updater (real Ed25519), notify, session wiring
+windows/runner/      the five tracked runner files; everything else there is generated
+  main.cpp           entry point -- claims the instance mutex before anything else runs
+  single_instance.*  one client per logon session, and how a second launch wakes it
+  Runner.rc          the version resource Explorer shows on the exe
+  CMakeLists.txt     names single_instance.cpp in the build
 ```

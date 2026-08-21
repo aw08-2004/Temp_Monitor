@@ -10,4 +10,4 @@
 /// Bump it with `python release_client.py --set-version X.Y.Z`, not by hand.
 library;
 
-const String clientVersion = '1.0.0';
+const String clientVersion = '1.1.0';
