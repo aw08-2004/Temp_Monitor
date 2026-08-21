@@ -1,0 +1,33 @@
+{# Moved verbatim out of machine.html when the tools left the per-PC page for the Tools
+   page. The markup is unchanged; the tab panel around it lives in tools.html, because the
+   panel id is the one thing that differs between the two homes it has had. #}
+    <div class="card" id="network-card">
+        <div class="terminal__head">
+            <div class="section-title" style="margin-bottom: 0;">{{ t('machine.network.title') }}</div>
+            <span class="status-pill status-pill--muted" id="network-status">
+                <span class="status-pill__dot"></span><span id="network-status-text">{{ t('common.loading') }}</span></span>
+            {% if cap.ISSUE_COMMANDS in user_capabilities %}
+            <div class="terminal__head-actions">
+                {# The remedy sits beside the diagnosis on purpose: most of a Wake-on-LAN
+                   rollout is preconditions, and a console that can only name the reasons
+                   a machine will not wake sends somebody to forty desks. #}
+                <button id="network-prepare" type="button" class="btn btn--ghost"
+                        title="{{ t('machine.network.prepare_title') }}">{{ t('machine.network.prepare') }}</button>
+                <button id="network-wake" type="button" class="btn btn--primary">{{ t('machine.network.wake') }}</button>
+            </div>
+            {% endif %}
+        </div>
+        {# The in-flight wake, above the adapters: while one is running, what matters is
+           which stage it reached, not which NICs this PC has. #}
+        <div id="network-wake-state"></div>
+        <div id="network-diagnosis"></div>
+        <div id="network-body"></div>
+    </div>
+
+    <div class="card" id="network-history-card">
+        <div class="terminal__head">
+            <div class="section-title" style="margin-bottom: 0;">{{ t('machine.network.history_title') }}</div>
+        </div>
+        <p class="stat-card__meta">{{ t('machine.network.history_help') }}</p>
+        <div id="network-history"></div>
+    </div>

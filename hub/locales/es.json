@@ -19,7 +19,8 @@
     "open": "Abrir navegación",
     "firmware": "Firmware",
     "download": "Descargar cliente",
-    "rules": "Reglas"
+    "rules": "Reglas",
+    "tools": "Herramientas"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -1400,14 +1401,6 @@
     "unknown": "—"
   },
   "machine": {
-    "views_nav": "Vistas del equipo",
-    "tab": {
-      "overview": "Resumen",
-      "terminal": "Terminal",
-      "backup": "Copia",
-      "firmware": "Firmware",
-      "network": "Red"
-    },
     "live_temp": "Temperatura en vivo",
     "uptime": "Tiempo activo",
     "cpu_load": "Carga de CPU",
@@ -1899,6 +1892,13 @@
     },
     "fold": {
       "stats": "De un vistazo"
+    },
+    "open": {
+      "label": "Abrir en Herramientas:",
+      "terminal": "Terminal",
+      "backup": "Copia de seguridad",
+      "firmware": "Firmware",
+      "network": "Red"
     }
   },
   "remote": {
@@ -2500,5 +2500,22 @@
     "tab_scripts": "Scripts",
     "timeout": "Rendirse tras (segundos)",
     "used_by": "Usado por {rules}"
+  },
+  "tools": {
+    "heading": "Herramientas",
+    "intro": "Elige una herramienta y luego la máquina. Todo aquí actúa sobre un PC a la vez.",
+    "views_nav": "Herramientas",
+    "tab": {
+      "terminal": "Terminal",
+      "backup": "Copia de seguridad",
+      "firmware": "Firmware",
+      "network": "Red"
+    },
+    "machines_title": "Máquinas",
+    "machine_search": "Buscar máquinas",
+    "no_machines": "Todavía no se ha reportado ninguna máquina.",
+    "no_match": "Ninguna máquina coincide con tu búsqueda.",
+    "pick_a_machine": "Elige una máquina de la lista para usar estas herramientas en ella.",
+    "machine_unavailable": "{machine} no está disponible para ti. Elige otra máquina de la lista."
   }
 }

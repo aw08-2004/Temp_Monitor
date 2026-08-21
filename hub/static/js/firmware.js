@@ -23,7 +23,7 @@
 (function () {
     'use strict';
 
-    const PANEL_ID = 'tab-firmware';
+    const PANEL_ID = 'tool-firmware';
     const pane = document.getElementById(PANEL_ID);
     if (!pane) return;
 

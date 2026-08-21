@@ -99,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.83.0"
+HUB_VERSION = "1.84.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4406,6 +4406,25 @@ def remote_page():
     checks the capability AND the machine's scope again for each one.
     """
     return render_template("remote.html", hub_version=HUB_VERSION,
+                           latest_agent_version=get_latest_agent_version())
+
+@app.route("/tools")
+@login_required
+@access.require(permissions.VIEW)
+def tools_page():
+    """Terminal, Backup, Firmware and Network, with the machine picked second.
+
+    Gated on VIEW rather than on anything narrower, because that is what the four panels
+    together require: Terminal, Firmware and Network were never capability-gated on the
+    machine page (what a PC's BIOS is set to, and whether it can be woken, is inventory in
+    the sense its model is), and the Backup tab hides itself without manage_backups. Every
+    endpoint behind every panel re-checks its own capability AND the machine's scope, so
+    this route decides who sees the page, not what they can do from it.
+
+    The machine is a query parameter, not part of the path: it is page state that travels
+    with ?tab=, and both are written by the page itself with replaceState.
+    """
+    return render_template("tools.html", hub_version=HUB_VERSION,
                            latest_agent_version=get_latest_agent_version())
 
 @app.route("/machine/<machine>")

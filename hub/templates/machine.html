@@ -1,12 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ machine }} - FleetHub{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+{# xterm, permissions and backups left with the panels that used them; see tools.html. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
-{% if cap.MANAGE_BACKUPS in user_capabilities %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
-{% endif %}
 {# Version-pinned with subresource integrity: an unversioned CDN URL resolves to whatever
    the package publishes next, which would be a silent code-push into a console that can
    run commands fleet-wide. Bumping a version means recomputing its integrity hash. #}
@@ -30,36 +26,30 @@
 <div id="machine-config" data-machine="{{ machine }}" data-low-load-threshold="{{ low_load_threshold }}" data-live-window-seconds="{{ live_window_seconds }}" data-live-poll-seconds="{{ live_poll_seconds }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
     <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
-    <div class="tabs" role="tablist" aria-label="{{ t('machine.views_nav') }}" data-tabs-key="machine">
-        <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-overview"
-                aria-controls="tab-overview" aria-selected="true">{{ t('machine.tab.overview') }}</button>
-        <button class="tabs__tab" type="button" role="tab" id="tab-btn-terminal"
-                aria-controls="tab-terminal" aria-selected="false" tabindex="-1">{{ t('machine.tab.terminal') }}</button>
-        {# Hidden without the capability, like the sidebar links -- the routes behind it
-           are gated server-side on manage_backups AND this machine being in scope. #}
+    {# The tools this PC used to carry as tabs -- Terminal, Backup, Firmware, Network --
+       live on the Tools page now, one tool per tab with the machine picked from a column
+       beside it. This page is what the PC IS; those are things you do TO a PC, and doing
+       one of them to twenty PCs was a navigation each.
+
+       Kept as links so the PC-first route still works when you are already looking at one.
+       Plain <a>s, so shell.js's click interceptor routes them through the frame; ?tab= and
+       ?machine= are read by tabs.js and tools.js respectively.
+
+       No Remote link: remote view/control lives on the Remote page, which can hold several
+       PCs side by side. A second entry point meant two viewers for the same machine. #}
+    <div class="toolbar" style="margin-bottom: var(--space-5);">
+        <span class="stat-card__meta">{{ t('machine.open.label') }}</span>
+        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=terminal&amp;machine={{ machine|urlencode }}">{{ t('machine.open.terminal') }}</a>
         {% if cap.MANAGE_BACKUPS in user_capabilities %}
-        <button class="tabs__tab" type="button" role="tab" id="tab-btn-backup"
-                aria-controls="tab-backup" aria-selected="false" tabindex="-1">{{ t('machine.tab.backup') }}</button>
+        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=backup&amp;machine={{ machine|urlencode }}">{{ t('machine.open.backup') }}</a>
         {% endif %}
-        {# No Remote tab here: remote view/control lives on the Remote page, which can hold
-           several PCs side by side in its own tab strip. A second entry point on this page
-           meant two viewers for the same machine could be open at once. #}
-        {# Firmware (roadmap #9) is NOT capability-gated: what a PC's BIOS is set to is
-           inventory, like its model or its disks, and anyone who can open this page has
-           `view` already. The re-read button inside is the part that needs issue_commands. #}
-        <button class="tabs__tab" type="button" role="tab" id="tab-btn-firmware"
-                aria-controls="tab-firmware" aria-selected="false" tabindex="-1">{{ t('machine.tab.firmware') }}</button>
-        {# Network (roadmap #10) is NOT capability-gated either, for the same reason Firmware
-           is not: which adapters a PC has, and whether it can be woken at all, is inventory
-           in exactly the sense its model and its disks are. The wake and prepare buttons
-           inside are the parts that need issue_commands. #}
-        <button class="tabs__tab" type="button" role="tab" id="tab-btn-network"
-                aria-controls="tab-network" aria-selected="false" tabindex="-1">{{ t('machine.tab.network') }}</button>
+        {# Firmware and Network are NOT capability-gated, matching the Tools page and the
+           tabs these replaced: what a PC's BIOS is set to, and whether it can be woken at
+           all, is inventory in the sense its model and its disks are. #}
+        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
+        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
     </div>
 
-    {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
-       the Chart.js canvas below would size itself to nothing if it started hidden. #}
-    <div class="tab-panel" id="tab-overview" role="tabpanel" aria-labelledby="tab-btn-overview">
     {# Every section on this page folds and remembers being folded (collapse.js). Native
        <details>, matching the sensor and process browsers that already did -- see the
        .fold rules in components.css. Sections that were always visible ship `open`, so
@@ -262,215 +252,7 @@
         <div class="metric-grid" id="metric-grid"></div>
         <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">{{ t('machine.history.no_readings') }}</div>
     </details>
-    </div>{# /tab-overview #}
 
-    <div class="tab-panel" id="tab-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal" hidden>
-        <div class="card terminal-card">
-            <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.terminal.title') }}</div>
-                <span class="status-pill status-pill--muted" id="terminal-status"><span class="status-pill__dot"></span>{{ t('machine.terminal.idle') }}</span>
-                <div class="terminal__head-actions">
-                    <label for="terminal-shell" class="fleet-field__label">{{ t('machine.terminal.shell') }}</label>
-                    <select id="terminal-shell" class="select">
-                        <option value="powershell">PowerShell</option>
-                        <option value="cmd">cmd</option>
-                    </select>
-                    <label for="terminal-timeout" id="terminal-timeout-label" class="fleet-field__label">{{ t('machine.terminal.timeout') }}</label>
-                    <input id="terminal-timeout" class="input terminal__timeout" type="number"
-                           min="1" value="600" title="{{ t('machine.terminal.timeout_title') }}">
-                    {# Opening and ending consoles is the tab strip's job in ConPTY mode
-                       (+ and ×), so there is no New console / Reconnect button here: a
-                       terminal survives leaving the page, and ending one must be something
-                       the operator ASKS for on the tab they mean. #}
-                    <button id="terminal-favorites" type="button" class="btn">{{ t('machine.terminal.favorites') }}</button>
-                    <button id="terminal-save-fav" type="button" class="btn btn--ghost">{{ t('machine.terminal.save_favorite') }}</button>
-                    <button id="terminal-stop" type="button" class="btn btn--ghost" disabled
-                            title="{{ t('machine.terminal.stop_title') }}">{{ t('machine.terminal.stop') }}</button>
-                    <button id="terminal-reset" type="button" class="btn btn--ghost"
-                            title="{{ t('machine.terminal.reset_title') }}">{{ t('machine.terminal.reset') }}</button>
-                    <button id="terminal-clear" type="button" class="btn btn--ghost">{{ t('machine.terminal.clear') }}</button>
-                </div>
-            </div>
-
-            {# TWO terminals live here and exactly one is ever shown. fleet-terminal.js does
-               the single agent-version lookup and hands over to FleetPty when the machine
-               can open a pseudoconsole; everything below stays for agents that can't yet.
-               See fleet-pty.js for why they are not the same feature. #}
-            <div id="terminal-pty" hidden>
-                {# One tab per open console. The strip is built from the HUB's list of this
-                   operator's sessions, not from anything this browser remembers, so a
-                   console opened on another computer shows up here too -- see
-                   fleet-pty.js:syncSessions. Empty in the markup; fleet-pty.js fills it. #}
-                <div id="terminal-tabs" class="screen-tabs" role="tablist"
-                     aria-label="{{ t('machine.terminal.open_consoles') }}">
-                    <button id="terminal-add" type="button" class="screen-tabs__add"
-                            aria-label="{{ t('machine.terminal.add_console') }}"
-                            title="{{ t('machine.terminal.add_console_title') }}">+</button>
-                </div>
-                {# xterm.js owns each screen it is given and measures it on open, so a screen
-                   must have a real size before its terminal is built -- which is why
-                   fleet-pty.js builds a console when its tab is first shown, not on load. #}
-                <div id="terminal-screens" class="screen-stack">
-                    <div id="terminal-empty" class="screen-empty" hidden>
-                        {{ t('machine.terminal.no_console') }}
-                    </div>
-                </div>
-            </div>
-
-            <div id="terminal-legacy">
-                {# aria-live=polite so a screen reader announces streamed output as it lands.
-                   Rendered with textContent only -- this is untrusted agent-side text. #}
-                <pre class="console-surface terminal__scrollback" id="terminal-scrollback" tabindex="0"
-                     aria-live="polite" aria-label="{{ t('machine.terminal.output_label') }}"></pre>
-
-                <div class="terminal__promptline">
-                    <span class="terminal__ps" id="terminal-ps" aria-hidden="true">PS {{ machine }}&gt;</span>
-                    <label for="terminal-input" class="sr-only">{{ t('machine.terminal.script_label', machine=machine) }}</label>
-                    <textarea id="terminal-input" class="terminal__input" rows="1" spellcheck="false"
-                              autocomplete="off" autocapitalize="off"
-                              placeholder="{{ t('machine.terminal.script_placeholder') }}"></textarea>
-                    <button id="terminal-run" type="button" class="btn btn--primary">{{ t('machine.terminal.run') }}</button>
-                </div>
-            </div>
-            <div id="terminal-hint" class="terminal__hint"></div>
-        </div>
-    </div>{# /tab-terminal #}
-
-    {% if cap.MANAGE_BACKUPS in user_capabilities %}
-    {# Structure only -- backup-tab.js builds everything from
-       GET /api/backups/machines/<machine>, including the resolved path preview, so the
-       token grammar has exactly one renderer shared with the Backups page. #}
-    <div class="tab-panel" id="tab-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden></div>
-    {% endif %}
-
-    {# Firmware settings, as last reported on the heartbeat (roadmap #9). Structure only --
-       firmware.js renders the state (never reported / unsupported / error / N attributes)
-       and the attribute table, because four states rendered from one payload are clearer in
-       one renderer than as four Jinja branches over a value the template cannot see. #}
-    <div class="tab-panel" id="tab-firmware" role="tabpanel" aria-labelledby="tab-btn-firmware" hidden>
-        <div class="card" id="firmware-card">
-            <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.title') }}</div>
-                <span class="status-pill status-pill--muted" id="firmware-status">
-                    <span class="status-pill__dot"></span><span id="firmware-status-text">{{ t('common.loading') }}</span></span>
-                <div class="terminal__head-actions">
-                    <input type="search" id="firmware-search" class="input"
-                           placeholder="{{ t('machine.firmware.search') }}"
-                           aria-label="{{ t('machine.firmware.search') }}">
-                    {% if cap.MANAGE_FIRMWARE in user_capabilities %}
-                    <button id="firmware-password" type="button" class="btn btn--ghost"
-                            title="{{ t('machine.firmware.password_title') }}">{{ t('machine.firmware.password_button') }}</button>
-                    {% endif %}
-                    {% if cap.ISSUE_COMMANDS in user_capabilities %}
-                    <button id="firmware-refresh" type="button" class="btn btn--ghost"
-                            title="{{ t('machine.firmware.refresh_title') }}">{{ t('machine.firmware.refresh') }}</button>
-                    {% endif %}
-                </div>
-            </div>
-            <div id="firmware-meta" class="terminal__hint"></div>
-            {# The pending/last change, above the table on purpose: while a change is in
-               flight every value in that table may be about to be wrong. #}
-            <div id="firmware-change"></div>
-            <div id="firmware-body"></div>
-            {# Only rendered into when at least one row has been edited. An apply bar that is
-               always present invites the click that submits nothing. #}
-            <div id="firmware-apply" hidden>
-                <span id="firmware-apply-count" class="stat-card__meta"></span>
-                <button id="firmware-apply-btn" type="button" class="btn btn--primary">{{ t('machine.firmware.apply') }}</button>
-                <button id="firmware-reset-btn" type="button" class="btn btn--ghost">{{ t('machine.firmware.discard') }}</button>
-            </div>
-        </div>
-
-        {# BIOS UPDATES for this PC, as distinct from its settings above. Read-only here on
-           purpose: an update is aimed from the Firmware page, where the image library is,
-           because the thing you choose first is the image. What belongs on the machine is
-           the answer to "has this PC been flashed, and did it take". #}
-        {% if cap.MANAGE_FIRMWARE in user_capabilities %}
-        <div class="card" id="firmware-updates-card">
-            <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.updates_title') }}</div>
-                <div class="terminal__head-actions">
-                    <a class="btn btn--ghost" href="{{ url_for('bios.firmware_page') }}">{{ t('machine.firmware.updates_link') }}</a>
-                </div>
-            </div>
-            <div id="firmware-updates-body"></div>
-        </div>
-        {% endif %}
-    </div>
-
-    {# Network adapters and Wake-on-LAN (roadmap #10). Structure only -- wake.js renders it,
-       because the interesting part is a DIAGNOSIS (four independent reasons a machine cannot
-       be woken, any combination of which may hold) and that is one renderer rather than four
-       Jinja branches over a payload the template cannot see. #}
-    <div class="tab-panel" id="tab-network" role="tabpanel" aria-labelledby="tab-btn-network" hidden>
-        <div class="card" id="network-card">
-            <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.network.title') }}</div>
-                <span class="status-pill status-pill--muted" id="network-status">
-                    <span class="status-pill__dot"></span><span id="network-status-text">{{ t('common.loading') }}</span></span>
-                {% if cap.ISSUE_COMMANDS in user_capabilities %}
-                <div class="terminal__head-actions">
-                    {# The remedy sits beside the diagnosis on purpose: most of a Wake-on-LAN
-                       rollout is preconditions, and a console that can only name the reasons
-                       a machine will not wake sends somebody to forty desks. #}
-                    <button id="network-prepare" type="button" class="btn btn--ghost"
-                            title="{{ t('machine.network.prepare_title') }}">{{ t('machine.network.prepare') }}</button>
-                    <button id="network-wake" type="button" class="btn btn--primary">{{ t('machine.network.wake') }}</button>
-                </div>
-                {% endif %}
-            </div>
-            {# The in-flight wake, above the adapters: while one is running, what matters is
-               which stage it reached, not which NICs this PC has. #}
-            <div id="network-wake-state"></div>
-            <div id="network-diagnosis"></div>
-            <div id="network-body"></div>
-        </div>
-
-        <div class="card" id="network-history-card">
-            <div class="terminal__head">
-                <div class="section-title" style="margin-bottom: 0;">{{ t('machine.network.history_title') }}</div>
-            </div>
-            <p class="stat-card__meta">{{ t('machine.network.history_help') }}</p>
-            <div id="network-history"></div>
-        </div>
-    </div>
-</div>
-
-{# BIOS setup password. Page-level for the same reason the other dialogs are: showModal()
-   puts it in the top layer wherever it sits, and a tab panel that gets hidden would take it
-   with it. There is no field showing the CURRENT password because the hub has no endpoint
-   that returns one -- it is sent to the machine that needs it and never read back.
-
-   .modal, like every other dialog in the console -- it is the only dialog class the
-   stylesheet carries rules for. This markup used a .dialog/.field vocabulary that has no CSS
-   behind it at all, so the dialog rendered in the top-left corner with no backdrop: base.css's
-   `* { margin: 0 }` reset wipes the UA stylesheet's centring, and .modal is what puts it back.
-   No <form> wrapper, matching the favorites and remote pickers: every button is type="button"
-   and wired in firmware.js, and Esc-to-close comes from showModal(), not from the form. #}
-<dialog class="modal" id="firmware-password-dialog" aria-labelledby="firmware-password-title">
-    <div class="modal__head">
-        <h2 class="modal__title" id="firmware-password-title">{{ t('machine.firmware.password_title') }}</h2>
-    </div>
-    <div class="modal__body">
-        <p class="stat-card__meta">{{ t('machine.firmware.password_help') }}</p>
-
-        <label class="setting__label" for="firmware-password-scope" style="margin-top: var(--space-4);">{{ t('machine.firmware.password_scope') }}</label>
-        <select class="select" id="firmware-password-scope" style="width: 100%;">
-            <option value="machine">{{ t('machine.firmware.password_scope_machine') }}</option>
-            <option value="fleet">{{ t('machine.firmware.password_scope_fleet') }}</option>
-        </select>
-
-        <label class="setting__label" for="firmware-password-value" style="margin-top: var(--space-4);">{{ t('machine.firmware.password_label') }}</label>
-        <input class="input" type="password" id="firmware-password-value" autocomplete="off" style="width: 100%;">
-
-        <p class="setting__error" id="firmware-password-error" hidden></p>
-    </div>
-    <div class="modal__foot">
-        <button type="button" id="firmware-password-clear" class="btn btn--ghost">{{ t('machine.firmware.password_clear') }}</button>
-        <button type="button" id="firmware-password-cancel" class="btn btn--ghost">{{ t('common.close') }}</button>
-        <button type="button" id="firmware-password-save" class="btn btn--primary">{{ t('common.save') }}</button>
-    </div>
-</dialog>
 
 {# Ending or restarting a process on somebody else's PC destroys their unsaved work, and the
    list it was clicked from is a few seconds old -- so it is confirmed against the NAME and
@@ -513,42 +295,17 @@
 </div>
 {% endif %}
 
-{# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
-   the top layer regardless of where it sits in the DOM. #}
-<dialog class="modal" id="favorites-dialog" aria-labelledby="favorites-title">
-    <div class="modal__head">
-        <div class="modal__title" id="favorites-title">{{ t('machine.favorites.title') }}</div>
-        <button type="button" id="favorites-close" class="btn btn--icon" aria-label="{{ t('machine.favorites.close') }}">&times;</button>
-    </div>
-    <div class="modal__body" id="favorites-body"></div>
-    <div class="modal__foot" id="favorites-foot"></div>
-</dialog>
 {% endblock %}
 {% block page_scripts %}
-{# Order matters. machine-context.js answers "which machine is this page about" and
-   fleet-api.js reads through it; tool-panels.js owns the load/teardown sequencing every
-   tool panel registers with, so both come before the tools themselves. fleet-terminal.js
-   calls into window.FleetFavorites. collapse.js goes LAST -- it restores folded sections
-   by setting the `open` attribute, and the modules that poll only while their section is
-   open have to have registered their `toggle` listeners by then. #}
+{# Order matters. machine-context.js answers "which machine is this page about", and
+   processes.js reads the rest of #machine-config's data-*. collapse.js goes LAST -- it
+   restores folded sections by setting the `open` attribute, and the modules that poll only
+   while their section is open have to have registered their `toggle` listeners by then.
+
+   The terminal, backup, firmware, network and favorites scripts left with their panels; see
+   tools.html. xterm is no longer loaded here either, which is most of this page's weight. #}
 <script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
-<script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
-<script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
-<script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
-{# Vendored, not a CDN: the Terminal tab must work on an isolated LAN, and a third
-   party must not be able to inject script into a page that runs code as SYSTEM.
-   See static/vendor/README.md for versions and checksums. #}
-<script src="{{ url_for('static', filename='vendor/xterm.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/xterm-addon-fit.js') }}"></script>
-<script src="{{ url_for('static', filename='js/fleet-pty.js') }}"></script>
-<script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
-{% if cap.MANAGE_BACKUPS in user_capabilities %}
-<script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
-{% endif %}
 <script src="{{ url_for('static', filename='js/processes.js') }}"></script>
-<script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
-<script src="{{ url_for('static', filename='js/wake.js') }}"></script>
-<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

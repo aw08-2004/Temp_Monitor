@@ -1,0 +1,51 @@
+{# Moved verbatim out of machine.html when the tools left the per-PC page for the Tools
+   page. The markup is unchanged; the tab panel around it lives in tools.html, because the
+   panel id is the one thing that differs between the two homes it has had. #}
+    <div class="card" id="firmware-card">
+        <div class="terminal__head">
+            <div class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.title') }}</div>
+            <span class="status-pill status-pill--muted" id="firmware-status">
+                <span class="status-pill__dot"></span><span id="firmware-status-text">{{ t('common.loading') }}</span></span>
+            <div class="terminal__head-actions">
+                <input type="search" id="firmware-search" class="input"
+                       placeholder="{{ t('machine.firmware.search') }}"
+                       aria-label="{{ t('machine.firmware.search') }}">
+                {% if cap.MANAGE_FIRMWARE in user_capabilities %}
+                <button id="firmware-password" type="button" class="btn btn--ghost"
+                        title="{{ t('machine.firmware.password_title') }}">{{ t('machine.firmware.password_button') }}</button>
+                {% endif %}
+                {% if cap.ISSUE_COMMANDS in user_capabilities %}
+                <button id="firmware-refresh" type="button" class="btn btn--ghost"
+                        title="{{ t('machine.firmware.refresh_title') }}">{{ t('machine.firmware.refresh') }}</button>
+                {% endif %}
+            </div>
+        </div>
+        <div id="firmware-meta" class="terminal__hint"></div>
+        {# The pending/last change, above the table on purpose: while a change is in
+           flight every value in that table may be about to be wrong. #}
+        <div id="firmware-change"></div>
+        <div id="firmware-body"></div>
+        {# Only rendered into when at least one row has been edited. An apply bar that is
+           always present invites the click that submits nothing. #}
+        <div id="firmware-apply" hidden>
+            <span id="firmware-apply-count" class="stat-card__meta"></span>
+            <button id="firmware-apply-btn" type="button" class="btn btn--primary">{{ t('machine.firmware.apply') }}</button>
+            <button id="firmware-reset-btn" type="button" class="btn btn--ghost">{{ t('machine.firmware.discard') }}</button>
+        </div>
+    </div>
+
+    {# BIOS UPDATES for this PC, as distinct from its settings above. Read-only here on
+       purpose: an update is aimed from the Firmware page, where the image library is,
+       because the thing you choose first is the image. What belongs on the machine is
+       the answer to "has this PC been flashed, and did it take". #}
+    {% if cap.MANAGE_FIRMWARE in user_capabilities %}
+    <div class="card" id="firmware-updates-card">
+        <div class="terminal__head">
+            <div class="section-title" style="margin-bottom: 0;">{{ t('machine.firmware.updates_title') }}</div>
+            <div class="terminal__head-actions">
+                <a class="btn btn--ghost" href="{{ url_for('bios.firmware_page') }}">{{ t('machine.firmware.updates_link') }}</a>
+            </div>
+        </div>
+        <div id="firmware-updates-body"></div>
+    </div>
+    {% endif %}

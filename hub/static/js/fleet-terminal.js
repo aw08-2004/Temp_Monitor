@@ -32,7 +32,7 @@
     const shellEl = document.getElementById('terminal-shell');
     const statusEl = document.getElementById('terminal-status');
     const hintEl = document.getElementById('terminal-hint');
-    const PANEL_ID = 'tab-terminal';
+    const PANEL_ID = 'tool-terminal';
     const panelEl = document.getElementById(PANEL_ID);
     // Which of the two terminals is in front, and therefore which one the shared toolbar
     // buttons are talking to. 'pty' from the moment refreshHint() hands off to fleet-pty.js.

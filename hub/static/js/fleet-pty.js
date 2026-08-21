@@ -53,7 +53,8 @@
     const shellEl = document.getElementById('terminal-shell');
     const statusEl = document.getElementById('terminal-status');
     const hintEl = document.getElementById('terminal-hint');
-    const panelEl = document.getElementById('tab-terminal');
+    // The same panel fleet-terminal.js registers with ToolPanels; see its PANEL_ID.
+    const panelEl = document.getElementById('tool-terminal');
     const addBtn = document.getElementById('terminal-add');
     const emptyEl = document.getElementById('terminal-empty');
 

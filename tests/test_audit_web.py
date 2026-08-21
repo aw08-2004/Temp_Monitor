@@ -51,7 +51,7 @@ def _register_sidebar_stubs(app):
     defines those; this minimal app must stand them up or rendering /audit is a BuildError
     that has nothing to do with the audit log. Stubbing them also means the sidebar really
     is exercised here -- including the capability gate on the Audit Log link itself."""
-    for endpoint in ("index", "inventory_page", "alerts_page",
+    for endpoint in ("index", "inventory_page", "alerts_page", "tools_page",
                      "remote_page", "settings_page", "permissions_page", "logout"):
         app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
     for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),

@@ -52,6 +52,15 @@
             {{ t('nav.remote') }}
         </a>
         {% endif %}
+        {# Terminal, Backup, Firmware and Network. Gated on VIEW, matching the route: the
+           four panels behind it were between them never gated on more than that, and each
+           endpoint re-checks its own capability and the machine's scope anyway. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'tools_page' else '' }}" data-nav-prefix="/tools" href="{{ url_for('tools_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 1 5.3 5.2l-8.4 8.4a2 2 0 0 1-2.8-2.8l8.4-8.4"/><path d="M6 12L3.5 9.5a3.5 3.5 0 0 1 4.9-4.9L11 7"/></svg>
+            {{ t('nav.tools') }}
+        </a>
+        {% endif %}
         {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" data-nav-prefix="/audit" href="{{ url_for('audit.audit_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>

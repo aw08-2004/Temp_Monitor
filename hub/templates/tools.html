@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.tools') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+{# machine.css carries the terminal, screen-strip and firmware/network table rules these
+   panels were written against. They changed pages, not stylesheets. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tools.css') }}">
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
+{% endif %}
+{% endblock %}
+{% block content %}
+{# The tools, with the machine picked second.
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   These four panels used to be tabs inside /machine/<name>, which made each of them a
+   per-PC view: to open a console you first picked a PC, even though the console was the
+   thing you came for. Here the tool is the page and the machine is a row in the column
+   beside it, so doing the same job on the next PC is one click rather than a navigation.
+
+   The machine is NOT in the url path -- it is a query parameter, alongside ?tab=, because
+   both are page state rather than page identity and they have to travel together in one
+   shareable link. tools.js owns ?machine=, tabs.js owns ?tab=; both write with
+   replaceState (common.js syncUrl says why never pushState).
+
+   There is deliberately no #machine-config here. That id means "this document is about one
+   fixed machine", and processes.js, machine.js and fleet-api.js's fallback all key off it;
+   a second one would half-boot them. MachineContext answers the question on this page. #}
+<div id="tools-root">
+    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('tools.heading') }}</h1>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('tools.intro') }}</p>
+
+    <div class="tools-layout">
+        <aside class="tools-layout__machines" aria-labelledby="tools-machines-title">
+            <div class="section-title" id="tools-machines-title">{{ t('tools.machines_title') }}</div>
+            <label for="tools-machine-search" class="sr-only">{{ t('tools.machine_search') }}</label>
+            <input type="search" id="tools-machine-search" class="input"
+                   placeholder="{{ t('tools.machine_search') }}"
+                   aria-label="{{ t('tools.machine_search') }}" autocomplete="off">
+            {# Same rows as the Remote page's picker (.picker-list in components.css): online
+               first, then alphabetical, the row itself the button. #}
+            <div id="tools-machine-list" class="picker-list" role="list"></div>
+            <p id="tools-machine-empty" class="stat-card__meta" hidden></p>
+        </aside>
+
+        <div class="tools-layout__main">
+            {# data-tabs-param puts the tab in ?tab= instead of the fragment: this page needs
+               the tab AND the machine in one link, and a fragment cannot carry two things.
+               The slugs are the link vocabulary -- machine.html links here by them. #}
+            <div class="tabs" role="tablist" aria-label="{{ t('tools.views_nav') }}"
+                 data-tabs-key="tools" data-tabs-param="tab" id="tools-tabs">
+                <button class="tabs__tab tabs__tab--active" type="button" role="tab"
+                        id="tab-btn-terminal" data-tab-slug="terminal"
+                        aria-controls="tool-terminal" aria-selected="true">{{ t('tools.tab.terminal') }}</button>
+                {# Hidden without the capability, like the sidebar links -- the routes behind
+                   it are gated server-side on manage_backups AND on the machine being in
+                   scope, so this is presentation only. #}
+                {% if cap.MANAGE_BACKUPS in user_capabilities %}
+                <button class="tabs__tab" type="button" role="tab"
+                        id="tab-btn-backup" data-tab-slug="backup"
+                        aria-controls="tool-backup" aria-selected="false" tabindex="-1">{{ t('tools.tab.backup') }}</button>
+                {% endif %}
+                {# Firmware and Network are NOT capability-gated, exactly as they were not on
+                   the machine page: what a PC's BIOS is set to, and whether it can be woken
+                   at all, is inventory in the sense its model and its disks are. The buttons
+                   inside are the parts that need issue_commands. #}
+                <button class="tabs__tab" type="button" role="tab"
+                        id="tab-btn-firmware" data-tab-slug="firmware"
+                        aria-controls="tool-firmware" aria-selected="false" tabindex="-1">{{ t('tools.tab.firmware') }}</button>
+                <button class="tabs__tab" type="button" role="tab"
+                        id="tab-btn-network" data-tab-slug="network"
+                        aria-controls="tool-network" aria-selected="false" tabindex="-1">{{ t('tools.tab.network') }}</button>
+            </div>
+
+            {# One prompt for all four panels rather than four copies of it: with no machine
+               chosen there is nothing any of them can render, and tools.js hides them. #}
+            <p class="card stat-card__meta" id="tools-pick-prompt" hidden>{{ t('tools.pick_a_machine') }}</p>
+
+            <div class="tab-panel" id="tool-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal">
+{% include "partials/_tool_terminal.html" %}
+            </div>
+
+            {% if cap.MANAGE_BACKUPS in user_capabilities %}
+            {# Structure only -- backup-tab.js builds everything from
+               GET /api/backups/machines/<machine>, including the resolved path preview, so
+               the token grammar has exactly one renderer shared with the Backups page. #}
+            <div class="tab-panel" id="tool-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden></div>
+            {% endif %}
+
+            <div class="tab-panel" id="tool-firmware" role="tabpanel" aria-labelledby="tab-btn-firmware" hidden>
+{% include "partials/_tool_firmware.html" %}
+            </div>
+
+            <div class="tab-panel" id="tool-network" role="tabpanel" aria-labelledby="tab-btn-network" hidden>
+{% include "partials/_tool_network.html" %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% include "partials/_tool_dialogs.html" %}
+{% endblock %}
+{% block page_scripts %}
+{# Same order as the machine page used, for the same reasons: machine-context.js answers
+   "which machine", tool-panels.js owns the load/teardown each panel registers with, and
+   both come before the tools themselves. tools.js goes after tabs.js, so a tab is chosen
+   before a machine is -- ToolPanels reloads the visible panel on a machine change, and
+   which panel that is has to already be settled. collapse.js goes last, because it restores
+   folded sections by setting `open` and whatever polls only while open must be listening. #}
+<script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
+{# Vendored, not a CDN: the Terminal tab must work on an isolated LAN, and a third party
+   must not be able to inject script into a page that runs code as SYSTEM.
+   See static/vendor/README.md for versions and checksums. #}
+<script src="{{ url_for('static', filename='vendor/xterm.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/xterm-addon-fit.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-pty.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
+<script src="{{ url_for('static', filename='js/wake.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tools.js') }}"></script>
+<script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
+{% endblock %}

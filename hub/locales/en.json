@@ -29,7 +29,8 @@
     "open": "Open navigation",
     "firmware": "Firmware",
     "download": "Download Client",
-    "rules": "Rules"
+    "rules": "Rules",
+    "tools": "Tools"
   },
   "hub_update": {
     "_note": [
@@ -1507,14 +1508,6 @@
     "unknown": "—"
   },
   "machine": {
-    "views_nav": "Machine views",
-    "tab": {
-      "overview": "Overview",
-      "terminal": "Terminal",
-      "backup": "Backup",
-      "firmware": "Firmware",
-      "network": "Network"
-    },
     "live_temp": "Live Temperature",
     "uptime": "Uptime",
     "cpu_load": "CPU Load",
@@ -2010,6 +2003,13 @@
     },
     "fold": {
       "stats": "At a glance"
+    },
+    "open": {
+      "label": "Open in Tools:",
+      "terminal": "Terminal",
+      "backup": "Backup",
+      "firmware": "Firmware",
+      "network": "Network"
     }
   },
   "remote": {
@@ -2616,5 +2616,22 @@
     "tab_scripts": "Scripts",
     "timeout": "Give up after (seconds)",
     "used_by": "Used by {rules}"
+  },
+  "tools": {
+    "heading": "Tools",
+    "intro": "Pick a tool, then the machine to use it on. Everything here acts on one PC at a time.",
+    "views_nav": "Tools",
+    "tab": {
+      "terminal": "Terminal",
+      "backup": "Backup",
+      "firmware": "Firmware",
+      "network": "Network"
+    },
+    "machines_title": "Machines",
+    "machine_search": "Search machines",
+    "no_machines": "No machines have reported in yet.",
+    "no_match": "No machines match your search.",
+    "pick_a_machine": "Pick a machine from the list to use these tools on it.",
+    "machine_unavailable": "{machine} is not available to you. Pick another machine from the list."
   }
 }

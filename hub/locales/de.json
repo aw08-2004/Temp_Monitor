@@ -19,7 +19,8 @@
     "open": "Navigation öffnen",
     "firmware": "Firmware",
     "download": "Client herunterladen",
-    "rules": "Regeln"
+    "rules": "Regeln",
+    "tools": "Werkzeuge"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -1400,14 +1401,6 @@
     "unknown": "—"
   },
   "machine": {
-    "views_nav": "Computeransichten",
-    "tab": {
-      "overview": "Übersicht",
-      "terminal": "Terminal",
-      "backup": "Sicherung",
-      "firmware": "Firmware",
-      "network": "Netzwerk"
-    },
     "live_temp": "Live-Temperatur",
     "uptime": "Laufzeit",
     "cpu_load": "CPU-Last",
@@ -1899,6 +1892,13 @@
     },
     "fold": {
       "stats": "Auf einen Blick"
+    },
+    "open": {
+      "label": "In Werkzeugen öffnen:",
+      "terminal": "Terminal",
+      "backup": "Sicherung",
+      "firmware": "Firmware",
+      "network": "Netzwerk"
     }
   },
   "remote": {
@@ -2500,5 +2500,22 @@
     "tab_scripts": "Skripte",
     "timeout": "Abbrechen nach (Sekunden)",
     "used_by": "Verwendet von {rules}"
+  },
+  "tools": {
+    "heading": "Werkzeuge",
+    "intro": "Erst das Werkzeug wählen, dann den Rechner. Alles hier wirkt auf jeweils einen PC.",
+    "views_nav": "Werkzeuge",
+    "tab": {
+      "terminal": "Terminal",
+      "backup": "Sicherung",
+      "firmware": "Firmware",
+      "network": "Netzwerk"
+    },
+    "machines_title": "Rechner",
+    "machine_search": "Rechner suchen",
+    "no_machines": "Bisher hat sich kein Rechner gemeldet.",
+    "no_match": "Keine Rechner passen zu deiner Suche.",
+    "pick_a_machine": "Wähle links einen Rechner, um diese Werkzeuge darauf anzuwenden.",
+    "machine_unavailable": "{machine} ist für dich nicht verfügbar. Wähle einen anderen Rechner aus der Liste."
   }
 }

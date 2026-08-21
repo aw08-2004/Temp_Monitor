@@ -13,7 +13,7 @@
 //    fleet shows the real fleet list rather than a stale guess.
 
 (function () {
-    const PANEL_ID = 'tab-backup';
+    const PANEL_ID = 'tool-backup';
     const pane = document.getElementById(PANEL_ID);
     if (!pane) return;      // no manage_backups: the tab was never rendered
 

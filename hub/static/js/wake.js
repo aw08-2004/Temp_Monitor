@@ -25,7 +25,7 @@
 (function () {
     'use strict';
 
-    const PANEL_ID = 'tab-network';
+    const PANEL_ID = 'tool-network';
     const pane = document.getElementById(PANEL_ID);
     if (!pane) return;
 

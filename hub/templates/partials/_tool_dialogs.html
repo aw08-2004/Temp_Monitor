@@ -1,0 +1,49 @@
+{# The two dialogs the tool panels open. Page-level rather than inside a panel: showModal()
+   puts a dialog in the top layer wherever it sits in the DOM, but a hidden tab panel takes
+   its whole subtree with it, so a dialog living in one could not be opened from another. #}
+{# BIOS setup password. Page-level for the same reason the other dialogs are: showModal()
+   puts it in the top layer wherever it sits, and a tab panel that gets hidden would take it
+   with it. There is no field showing the CURRENT password because the hub has no endpoint
+   that returns one -- it is sent to the machine that needs it and never read back.
+
+   .modal, like every other dialog in the console -- it is the only dialog class the
+   stylesheet carries rules for. This markup used a .dialog/.field vocabulary that has no CSS
+   behind it at all, so the dialog rendered in the top-left corner with no backdrop: base.css's
+   `* { margin: 0 }` reset wipes the UA stylesheet's centring, and .modal is what puts it back.
+   No <form> wrapper, matching the favorites and remote pickers: every button is type="button"
+   and wired in firmware.js, and Esc-to-close comes from showModal(), not from the form. #}
+<dialog class="modal" id="firmware-password-dialog" aria-labelledby="firmware-password-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="firmware-password-title">{{ t('machine.firmware.password_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p class="stat-card__meta">{{ t('machine.firmware.password_help') }}</p>
+
+        <label class="setting__label" for="firmware-password-scope" style="margin-top: var(--space-4);">{{ t('machine.firmware.password_scope') }}</label>
+        <select class="select" id="firmware-password-scope" style="width: 100%;">
+            <option value="machine">{{ t('machine.firmware.password_scope_machine') }}</option>
+            <option value="fleet">{{ t('machine.firmware.password_scope_fleet') }}</option>
+        </select>
+
+        <label class="setting__label" for="firmware-password-value" style="margin-top: var(--space-4);">{{ t('machine.firmware.password_label') }}</label>
+        <input class="input" type="password" id="firmware-password-value" autocomplete="off" style="width: 100%;">
+
+        <p class="setting__error" id="firmware-password-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="firmware-password-clear" class="btn btn--ghost">{{ t('machine.firmware.password_clear') }}</button>
+        <button type="button" id="firmware-password-cancel" class="btn btn--ghost">{{ t('common.close') }}</button>
+        <button type="button" id="firmware-password-save" class="btn btn--primary">{{ t('common.save') }}</button>
+    </div>
+</dialog>
+
+{# Page-level, so it isn't inside a tab panel that gets hidden. showModal() puts it in
+   the top layer regardless of where it sits in the DOM. #}
+<dialog class="modal" id="favorites-dialog" aria-labelledby="favorites-title">
+    <div class="modal__head">
+        <div class="modal__title" id="favorites-title">{{ t('machine.favorites.title') }}</div>
+        <button type="button" id="favorites-close" class="btn btn--icon" aria-label="{{ t('machine.favorites.close') }}">&times;</button>
+    </div>
+    <div class="modal__body" id="favorites-body"></div>
+    <div class="modal__foot" id="favorites-foot"></div>
+</dialog>
