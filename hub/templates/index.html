@@ -2,20 +2,74 @@
 {% block title %}{{ t('nav.dashboard') }} - FleetHub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
-{# Subresource integrity: an unversioned CDN URL resolves to whatever the package publishes
-   next, which would be a silent code-push into a console that can run commands fleet-wide.
-   Bumping a version means recomputing its integrity hash. #}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"
-        integrity="sha384-ijk2QwnixVP19l5ENflXHY2/BMo9ANUiTqH6MiVk6i7wp68I6wjNQFOcyayHgClg"
-        crossorigin="anonymous"></script>
 {% endblock %}
 {% block content %}
-{# The Dashboard no longer flags high temperatures (that moved to the Alerts tab, evaluated from
-   a rolling average server-side), so it needs no threshold data here. #}
-<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('dashboard.heading') }}</h1>
-<div class="machine-grid" id="machine-cards"></div>
-<div class="empty-state" id="empty-state" style="display:none;">{{ t('dashboard.empty') }}</div>
+{# The fleet, not the machines in it.
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   This page used to be a grid of per-machine cards, which made the front page a second and
+   worse Asset Inventory: the same list, with less on it. It answers fleet questions now --
+   how many, on what, how hot, what is happening -- and every route to an individual machine
+   goes through Inventory, which was always the page for that. The attention lists at the
+   bottom are the exception, and they are links rather than a list: a handful of machines
+   worth looking at today, not a roster.
+
+   Structure only. dashboard.js builds every number from one GET /api/fleet/summary, and it
+   is one request rather than eight on purpose -- the counts have to agree with each other,
+   and eight requests cannot be made to agree on a moment.
+
+   There is no socket.io here any more. With no per-machine cards there is nothing for a
+   `new_temp` event to update, and re-fetching a fleet aggregate at 1 Hz is not viable. The
+   topbar's live-data pill therefore stays dark on this page, which is honest: it is a
+   thirty-second poll, not a live view. The machine page is where live belongs. #}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('dashboard.heading') }}</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">
+    {{ t('dashboard.intro') }}
+    <a href="{{ url_for('inventory_page') }}">{{ t('dashboard.intro_link') }}</a>.
+</p>
+
+<p class="setting__error" id="summary-error" hidden></p>
+
+<details class="card fold" data-fold-key="dashboard:health" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.health.title') }}</span>
+        <span class="stat-card__meta" id="health-generated"></span>
+    </summary>
+    <div class="tile-grid" id="health-tiles"></div>
+</details>
+
+<details class="card fold" data-fold-key="dashboard:os" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.os.title') }}</span>
+    </summary>
+    <p class="stat-card__meta">{{ t('dashboard.os.help') }}</p>
+    <div id="os-breakdown"></div>
+</details>
+
+<details class="card fold" data-fold-key="dashboard:telemetry" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.telemetry.title') }}</span>
+    </summary>
+    <p class="stat-card__meta">{{ t('dashboard.telemetry.help') }}</p>
+    <div class="tile-grid" id="telemetry-tiles"></div>
+</details>
+
+<details class="card fold" data-fold-key="dashboard:activity" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.activity.title') }}</span>
+    </summary>
+    <div class="tile-grid" id="activity-tiles"></div>
+    <div id="activity-alerts"></div>
+</details>
+
+<details class="card fold" data-fold-key="dashboard:attention" open>
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.attention.title') }}</span>
+    </summary>
+    <p class="stat-card__meta">{{ t('dashboard.attention.help') }}</p>
+    <div class="attention-grid" id="attention-lists"></div>
+</details>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

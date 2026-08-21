@@ -80,8 +80,76 @@
     "back": "Back to dashboard"
   },
   "dashboard": {
-    "heading": "Live CPU Monitor",
-    "empty": "No machines have reported in yet."
+    "heading": "Fleet overview",
+    "empty": "No machines have reported in yet.",
+    "intro": "Everything below is about the whole fleet. To look at one machine, open the",
+    "intro_link": "Asset Inventory",
+    "generated_at": "as of {time}",
+    "health": {
+      "title": "Fleet health",
+      "total": "Machines",
+      "online": "Online",
+      "offline": "Offline",
+      "never_enrolled": "Not enrolled",
+      "never_enrolled_hint": "Reports telemetry, accepts no commands",
+      "open_alerts": "Open alerts",
+      "agents_outdated": "Agents behind",
+      "agent_latest": "latest is {version}"
+    },
+    "os": {
+      "title": "Operating systems",
+      "help": "What the fleet is running. Machines whose agent has not reported an OS fall back to Active Directory, and count as unknown where neither has said.",
+      "count": "{count} ({pct}%)",
+      "bucket": {
+        "windows_11": "Windows 11",
+        "windows_10": "Windows 10",
+        "windows_server": "Windows Server",
+        "linux": "Linux",
+        "unknown": "Unknown"
+      }
+    },
+    "telemetry": {
+      "title": "Live readings",
+      "help": "Across the machines currently reporting. These are live readings, not a record -- the history for any one machine is on its own page.",
+      "avg_temp": "Average CPU temp",
+      "peak_temp": "Hottest right now",
+      "over_threshold": "Over {threshold} °C",
+      "avg_load": "Average CPU load",
+      "disk_free": "Free disk space",
+      "of_total": "of {value}",
+      "low_disk": "Under {threshold}% free",
+      "reporting": "Reporting",
+      "reporting_hint": "machines these averages are of",
+      "celsius": "{value} °C",
+      "percent": "{value}%",
+      "gb": "{value} GB"
+    },
+    "activity": {
+      "title": "Happening now",
+      "deployments_running": "Deployments in flight",
+      "deployments_failed": "Deploy failures (24h)",
+      "backups_ok": "Backups done (24h)",
+      "backups_failed": "Backup failures (24h)",
+      "firmware_jobs": "Firmware jobs open",
+      "wake_requests": "Wakes in flight",
+      "alerts_title": "Open alerts",
+      "fleet_wide": "Fleet-wide"
+    },
+    "attention": {
+      "title": "Worth a look",
+      "help": "A few machines at the top of each list, not the whole fleet. Every name opens its page.",
+      "hottest": "Hottest",
+      "low_disk": "Least free disk",
+      "longest_offline": "Longest offline",
+      "free_pct": "{pct}% free ({gb} GB)",
+      "never": "never reported",
+      "days": "{count}d",
+      "hours": "{count}h",
+      "minutes": "{count}m",
+      "no_readings": "Nothing is reporting a temperature.",
+      "no_disks": "No machine is reporting disk space.",
+      "all_online": "Everything is online."
+    }
   },
   "history": {
     "resolution": "Resolution:",
@@ -783,6 +851,16 @@
       "rules.probes_per_tick": {
         "label": "Most probe requests per pass",
         "help": "Spreads collection over time instead of asking the whole fleet at once."
+      },
+      "hub": {
+        "hot_temp_threshold_c": {
+          "label": "Dashboard hot threshold",
+          "help": "The Dashboard counts how many machines are at or above this. A filter for the front page, not an alert -- what counts as too hot is a rule you write, on Rules."
+        },
+        "low_disk_free_pct": {
+          "label": "Dashboard low-disk threshold",
+          "help": "A volume with less than this share of its space free counts as low on the Dashboard. Also a filter, not an alert."
+        }
       }
     },
     "_choice": [

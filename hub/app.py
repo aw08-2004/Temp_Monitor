@@ -99,7 +99,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.86.0"
+HUB_VERSION = "1.87.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3694,6 +3694,269 @@ def report_temp():
         response_payload["latest_version"] = latest_version
     return jsonify(response_payload), 200
 
+# ================================
+# FLEET SUMMARY  --  what the Dashboard is
+# ================================
+# The Dashboard used to be a grid of per-machine cards, which made the front page a second,
+# worse Asset Inventory: the same list, with less on it, capped at whatever fit. It answers
+# fleet questions now -- how many, on what, how hot, what is happening -- and machines are
+# reached through Inventory, which was always the page for that.
+#
+# One endpoint rather than the eight the page would otherwise fan out to. The counts have to
+# agree with each other (a total that disagrees with the sum of its buckets is worse than no
+# total) and eight requests cannot be made to agree on a moment.
+
+#: How long a computed summary is served to other callers before being rebuilt. Short
+#: enough that nobody sees a stale fleet, long enough that a dozen consoles open on the
+#: Dashboard cost one computation rather than a dozen. The client polls at 30s, so this is
+#: about CONCURRENT operators, not about one operator's repeats.
+FLEET_SUMMARY_TTL_SECONDS = 10
+
+_fleet_summary_cache = {}
+_fleet_summary_lock = threading.Lock()
+
+
+def _fleet_attention_lists(rows, top, low_disk_pct):
+    """The three ranked lists: hottest, least free disk, longest offline.
+
+    Small and ranked rather than complete, deliberately -- this is the front page, and a
+    list of everything is the Inventory. Each row links to its machine.
+    """
+    hottest = sorted(
+        (r for r in rows if isinstance(r.get("temp"), (int, float))),
+        key=lambda r: r["temp"], reverse=True)[:top]
+
+    disks = []
+    for row in rows:
+        worst = None
+        for volume in (row.get("diagnostics") or {}).get("disks") or []:
+            # An agent older than 3.10.0 reports a percentage with no absolute size, so
+            # used_gb is None. Skipped rather than counted as zero: a volume whose size is
+            # unknown is not a volume with no free space, and treating it as one would put
+            # every old machine at the top of this list.
+            if not isinstance(volume.get("total_gb"), (int, float)) or not volume["total_gb"]:
+                continue
+            if not isinstance(volume.get("used_gb"), (int, float)):
+                continue
+            free_gb = volume["total_gb"] - volume["used_gb"]
+            free_pct = 100.0 * free_gb / volume["total_gb"]
+            if worst is None or free_pct < worst["free_pct"]:
+                worst = {"machine": row["machine"], "volume": volume.get("name"),
+                         "free_pct": round(free_pct, 1), "free_gb": round(free_gb, 1)}
+        if worst is not None:
+            disks.append(worst)
+    low_disk = sorted(disks, key=lambda d: d["free_pct"])[:top]
+
+    def _last_seen(row):
+        parsed = parse_request_datetime(row["updated_at"]) if row.get("updated_at") else None
+        return parsed
+
+    offline = []
+    for row in rows:
+        if row["status"] != "offline":
+            continue
+        seen = _last_seen(row)
+        offline.append({
+            "machine": row["machine"],
+            "updated_at": row.get("updated_at"),
+            # None for a machine that has never reported at all, which sorts to the top:
+            # never-seen is the longest absence there is.
+            "seconds": int((datetime.now() - seen).total_seconds()) if seen else None,
+        })
+    offline.sort(key=lambda o: (0 if o["seconds"] is None else 1,
+                                -(o["seconds"] or 0)))
+
+    return {
+        "hottest": [{"machine": r["machine"], "temp": r["temp"]} for r in hottest],
+        "low_disk": low_disk,
+        "longest_offline": offline[:top],
+        "low_disk_free_pct": low_disk_pct,
+    }
+
+
+def _build_fleet_summary(top):
+    """Compute one summary for the CURRENT caller's scope. Called under the cache lock."""
+    with get_db_conn() as conn:
+        db_rows = conn.execute(
+            "SELECT machine, companion_version, os_caption, os_build, ad_os, updated_at "
+            "FROM machine_info ORDER BY machine ASC"
+        ).fetchall()
+    rows = [dict(row) for row in db_rows]
+    known = {row["machine"] for row in rows}
+    # Same union get_machines() does: a machine that has reported telemetry but has no
+    # identity row yet still exists, and a total that omitted it would disagree with the
+    # Inventory beside it.
+    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
+        if machine not in known:
+            rows.append({"machine": machine, "companion_version": None, "os_caption": None,
+                         "os_build": None, "ad_os": None, "updated_at": None})
+            known.add(machine)
+
+    # Narrow BEFORE enriching, exactly as get_machines does -- there is no reason to extract
+    # diagnostics for machines the caller will never be shown, and every number below has to
+    # be of the caller's fleet rather than of the hub's.
+    rows = access.filter_rows(rows)
+    scoped_names = [row["machine"] for row in rows]
+    keep = access.machine_filter()
+
+    enrolled = fleet.enrolled_machines(DB_PATH)
+    latest_agent = get_latest_agent_version()
+    hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
+    low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
+
+    counts = {"total": len(rows), "online": 0, "offline": 0, "never_enrolled": 0,
+              "agents_outdated": 0, "agent_latest": latest_agent}
+    os_tally = {bucket: 0 for bucket in OS_BUCKETS}
+    temps, loads = [], []
+    over_threshold = 0
+    disk_total_gb = 0.0
+    disk_free_gb = 0.0
+    low_disk_machines = 0
+    reporting = 0
+
+    for row in rows:
+        row["status"] = derive_machine_status(row["updated_at"])
+        counts["online" if row["status"] == "online" else "offline"] += 1
+        if row["machine"] not in enrolled:
+            counts["never_enrolled"] += 1
+        version = row.get("companion_version")
+        # Only machines on the agent train are compared: a 2.x companion has no agent
+        # release to be behind, and counting it as outdated would name a number nobody can
+        # act on. See get_advertised_version.
+        if version and latest_agent and cmp_versions(version, AGENT_TRAIN_MIN_VERSION) >= 0:
+            if cmp_versions(latest_agent, version) > 0:
+                counts["agents_outdated"] += 1
+
+        bucket = normalize_os(row.get("os_caption"), row.get("os_build"), row.get("ad_os"))
+        os_tally[bucket["bucket"]] = os_tally.get(bucket["bucket"], 0) + 1
+
+        row["temp"] = get_latest_temp(row["machine"])
+        row["diagnostics"] = extract_diagnostics(get_latest_sensors(row["machine"]))
+        if isinstance(row["temp"], (int, float)):
+            reporting += 1
+            temps.append(row["temp"])
+            if row["temp"] >= hot_threshold:
+                over_threshold += 1
+        load = (row["diagnostics"] or {}).get("cpu_load_pct")
+        if isinstance(load, (int, float)):
+            loads.append(load)
+
+        machine_low = False
+        for volume in (row["diagnostics"] or {}).get("disks") or []:
+            if not isinstance(volume.get("total_gb"), (int, float)) or not volume["total_gb"]:
+                continue
+            if not isinstance(volume.get("used_gb"), (int, float)):
+                continue
+            disk_total_gb += volume["total_gb"]
+            free_gb = volume["total_gb"] - volume["used_gb"]
+            disk_free_gb += free_gb
+            if 100.0 * free_gb / volume["total_gb"] < low_disk_pct:
+                machine_low = True
+        if machine_low:
+            low_disk_machines += 1
+
+    open_alerts = [a for a in alerts.list_open(DB_PATH)
+                   if keep is None or _alert_in_scope(a, keep)]
+    counts["open_alerts"] = len(open_alerts)
+
+    day_ago = int(time.time()) - 86400
+    scope = None if keep is None else scoped_names
+    deployments = packages.count_deployment_states(DB_PATH, machines=scope, since=day_ago)
+    backup_runs = backups.count_runs_since(DB_PATH, day_ago, machines=scope)
+
+    def _round(values):
+        return round(sum(values) / len(values), 1) if values else None
+
+    return {
+        "generated_at": int(time.time()),
+        "counts": counts,
+        # A list, not a dict: the order IS the display order, and it is the order the
+        # buckets are declared in rather than whatever a dict happened to iterate.
+        "os": [{"bucket": bucket, "count": os_tally.get(bucket, 0)} for bucket in OS_BUCKETS],
+        "telemetry": {
+            "reporting": reporting,
+            "avg_cpu_temp": _round(temps),
+            "peak_cpu_temp": max(temps) if temps else None,
+            "over_threshold": over_threshold,
+            "threshold_c": hot_threshold,
+            "avg_cpu_load_pct": _round(loads),
+            "disk_total_gb": round(disk_total_gb, 1),
+            "disk_free_gb": round(disk_free_gb, 1),
+            "low_disk_machines": low_disk_machines,
+            "low_disk_free_pct": low_disk_pct,
+        },
+        "activity": {
+            "alerts_recent": [
+                # `kind` and nothing more: the alerts table has no severity column, and
+                # inventing one here would put a word on screen that no other page agrees
+                # with. What an alert IS is the useful half anyway.
+                {"id": a["id"], "kind": a["kind"], "machine": a.get("machine"),
+                 "detail": a.get("detail"), "updated_at": a.get("updated_at")}
+                for a in open_alerts[:top]
+            ],
+            "deployments_running": deployments["running"],
+            "deployments_failed_24h": deployments["failed"],
+            "backups_ok_24h": backup_runs["ok"],
+            "backups_failed_24h": backup_runs["failed"],
+            "firmware_jobs_active": firmware.count_active_jobs(DB_PATH, machines=scope),
+            "wake_requests_open": wake.count_open_requests(DB_PATH, machines=scope),
+        },
+        "attention": _fleet_attention_lists(rows, top, low_disk_pct),
+    }
+
+
+@app.route('/api/fleet/summary')
+@login_required
+@access.require(permissions.VIEW)
+def fleet_summary():
+    """Everything the Dashboard shows, in one scope-filtered answer.
+
+    NOTE ON THE TELEMETRY HALF: temperatures, loads and disk figures come from this
+    process's in-memory `latest_*` caches rather than from the database, so under more than
+    one worker two operators would see slightly different fleet averages. That is already
+    true of the `temp` field on /api/machines and is not a regression -- but it is the
+    reason these numbers are described as live readings rather than as a record.
+
+    The cache is keyed by SCOPE, not by caller: two operators with the same machine set get
+    the same answer and should, while an operator with a different one must never be served
+    another's totals.
+    """
+    try:
+        top = max(1, min(20, int(request.args.get("top", 5))))
+    except (TypeError, ValueError):
+        top = 5
+
+    keep = access.machine_filter()
+    scope_key = "all" if keep is None else frozenset(
+        m for m in _all_known_machines() if keep(m))
+    cache_key = (scope_key, top)
+
+    now = time.time()
+    with _fleet_summary_lock:
+        cached = _fleet_summary_cache.get(cache_key)
+        if cached and now - cached[0] < FLEET_SUMMARY_TTL_SECONDS:
+            return jsonify(cached[1])
+        summary = _build_fleet_summary(top)
+        _fleet_summary_cache[cache_key] = (now, summary)
+        # Bounded: one entry per (scope, top) pair, and a hub with many permission groups
+        # would otherwise accumulate one per group forever.
+        if len(_fleet_summary_cache) > 64:
+            oldest = sorted(_fleet_summary_cache.items(), key=lambda kv: kv[1][0])
+            for key, _ in oldest[:32]:
+                _fleet_summary_cache.pop(key, None)
+    return jsonify(summary)
+
+
+def _all_known_machines():
+    """Every machine name the hub knows, for building a cache key. Cheap: one indexed
+    column, plus the in-memory keys the roster union above also folds in."""
+    with get_db_conn() as conn:
+        names = {row["machine"] for row in conn.execute("SELECT machine FROM machine_info")}
+    names.update(latest_temp.keys())
+    names.update(latest_uptime.keys())
+    return names
+
+
 @app.route('/api/machines')
 @login_required
 @access.require(permissions.VIEW)
@@ -4110,6 +4373,23 @@ def dismiss_alert(alert_id):
                 level=fleet.LEVEL_NOTICE)
     return jsonify({"status": "dismissed"}), 200
 
+def _alert_in_scope(alert, keep):
+    """Is this alert one of `keep`'s?
+
+    Per-machine alerts scope on their single subject; the duplicate_serial `machines` list
+    scopes if it touches any kept machine. Such an alert carries an EMPTY `machines`, so it
+    has to be checked on `machine` first -- otherwise "no machines" would read as fleet-wide
+    and leak the alert across a scope boundary.
+
+    Module-level rather than a closure inside the counter, because the Dashboard's summary
+    lists the same alerts the badge counts. Two implementations of "which alerts are mine"
+    is exactly how a badge saying 3 ends up over a list showing 5.
+    """
+    if alert["kind"] in alerts.PER_MACHINE_KINDS:
+        return bool(alert.get("machine")) and keep(alert["machine"])
+    return not alert.get("machines") or any(keep(m) for m in alert["machines"])
+
+
 def _scoped_open_alert_count():
     """The number the sidebar badge shows: open alerts this caller is allowed to see.
 
@@ -4120,17 +4400,7 @@ def _scoped_open_alert_count():
     keep = access.machine_filter()
     if keep is None:
         return alerts.count_open(DB_PATH)
-
-    def _in_scope(a):
-        # Per-machine alerts scope on their single subject; the duplicate_serial `machines`
-        # list scopes if it touches any kept machine. Such an alert carries an empty
-        # `machines`, so it must be checked on `machine` first -- otherwise "no machines"
-        # would read as fleet-wide and leak the count across a scope boundary.
-        if a["kind"] in alerts.PER_MACHINE_KINDS:
-            return bool(a.get("machine")) and keep(a["machine"])
-        return not a.get("machines") or any(keep(m) for m in a["machines"])
-
-    return sum(1 for a in alerts.list_open(DB_PATH) if _in_scope(a))
+    return sum(1 for a in alerts.list_open(DB_PATH) if _alert_in_scope(a, keep))
 
 
 @app.route('/api/alerts/count')

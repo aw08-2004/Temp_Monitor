@@ -55,8 +55,76 @@
     "back": "Zurück zur Übersicht"
   },
   "dashboard": {
-    "heading": "CPU-Live-Überwachung",
-    "empty": "Bisher hat kein Computer Daten gemeldet."
+    "heading": "Flottenübersicht",
+    "empty": "Bisher hat sich kein Rechner gemeldet.",
+    "intro": "Alles unten bezieht sich auf die gesamte Flotte. Für einen einzelnen Rechner öffne das",
+    "intro_link": "Anlagenverzeichnis",
+    "generated_at": "Stand {time}",
+    "health": {
+      "title": "Flottenzustand",
+      "total": "Rechner",
+      "online": "Online",
+      "offline": "Offline",
+      "never_enrolled": "Nicht registriert",
+      "never_enrolled_hint": "Meldet Telemetrie, nimmt keine Befehle an",
+      "open_alerts": "Offene Warnungen",
+      "agents_outdated": "Veraltete Agents",
+      "agent_latest": "aktuell ist {version}"
+    },
+    "os": {
+      "title": "Betriebssysteme",
+      "help": "Was auf der Flotte läuft. Rechner, deren Agent kein Betriebssystem gemeldet hat, greifen auf Active Directory zurück und zählen als unbekannt, wenn beides fehlt.",
+      "count": "{count} ({pct} %)",
+      "bucket": {
+        "windows_11": "Windows 11",
+        "windows_10": "Windows 10",
+        "windows_server": "Windows Server",
+        "linux": "Linux",
+        "unknown": "Unbekannt"
+      }
+    },
+    "telemetry": {
+      "title": "Live-Messwerte",
+      "help": "Über die aktuell meldenden Rechner. Live-Messwerte, keine Aufzeichnung -- der Verlauf eines einzelnen Rechners steht auf seiner eigenen Seite.",
+      "avg_temp": "Durchschn. CPU-Temperatur",
+      "peak_temp": "Aktuell am heißesten",
+      "over_threshold": "Über {threshold} °C",
+      "avg_load": "Durchschn. CPU-Last",
+      "disk_free": "Freier Speicherplatz",
+      "of_total": "von {value}",
+      "low_disk": "Unter {threshold} % frei",
+      "reporting": "Meldend",
+      "reporting_hint": "Rechner, über die gemittelt wird",
+      "celsius": "{value} °C",
+      "percent": "{value} %",
+      "gb": "{value} GB"
+    },
+    "activity": {
+      "title": "Läuft gerade",
+      "deployments_running": "Laufende Verteilungen",
+      "deployments_failed": "Fehlgeschlagene Verteilungen (24 h)",
+      "backups_ok": "Sicherungen erledigt (24 h)",
+      "backups_failed": "Fehlgeschlagene Sicherungen (24 h)",
+      "firmware_jobs": "Offene Firmware-Aufträge",
+      "wake_requests": "Laufende Weckvorgänge",
+      "alerts_title": "Offene Warnungen",
+      "fleet_wide": "Flottenweit"
+    },
+    "attention": {
+      "title": "Einen Blick wert",
+      "help": "Nur die ersten Rechner je Liste, nicht die ganze Flotte. Jeder Name öffnet seine Seite.",
+      "hottest": "Am heißesten",
+      "low_disk": "Wenigster freier Speicher",
+      "longest_offline": "Am längsten offline",
+      "free_pct": "{pct} % frei ({gb} GB)",
+      "never": "nie gemeldet",
+      "days": "{count} T",
+      "hours": "{count} Std.",
+      "minutes": "{count} Min.",
+      "no_readings": "Kein Rechner meldet eine Temperatur.",
+      "no_disks": "Kein Rechner meldet Speicherplatz.",
+      "all_online": "Alles ist online."
+    }
   },
   "history": {
     "resolution": "Auflösung:",
@@ -713,6 +781,16 @@
       "rules.probes_per_tick": {
         "label": "Höchstzahl Sondenanfragen pro Durchlauf",
         "help": "Verteilt die Erfassung über die Zeit, statt die ganze Flotte auf einmal zu fragen."
+      },
+      "hub": {
+        "hot_temp_threshold_c": {
+          "label": "Dashboard-Hitzeschwelle",
+          "help": "Das Dashboard zählt, wie viele Rechner diesen Wert erreichen oder überschreiten. Ein Filter für die Startseite, keine Warnung -- was zu heiß ist, legst du als Regel fest."
+        },
+        "low_disk_free_pct": {
+          "label": "Dashboard-Schwelle für wenig Speicher",
+          "help": "Ein Volume mit weniger als diesem Anteil an freiem Speicher gilt im Dashboard als knapp. Ebenfalls ein Filter, keine Warnung."
+        }
       }
     },
     "choice": {

@@ -158,6 +158,17 @@ REGISTRY = (
 
     # ---------------- Hub: thresholds and internals ----------------
     _s("hub.low_load_threshold", "hub", "int", 40, minimum=0, maximum=100, unit="percent"),
+    # The two Dashboard thresholds. Both are FILTERS, not verdicts -- the Dashboard says
+    # "3 machines over 85 C" with the number on screen, so it reads as a question somebody
+    # asked rather than as the hub declaring a fault.
+    #
+    # That distinction is why neither of these raises an alert. "Too hot" is an
+    # operator-written rule (see rules.py) precisely because the answer depends on the
+    # machine, the room and the workload; a second, hidden definition of hot that quietly
+    # disagreed with the rules an operator wrote would be worse than no number at all.
+    _s("hub.hot_temp_threshold_c", "hub", "int", 85, minimum=30, maximum=120,
+       unit="celsius"),
+    _s("hub.low_disk_free_pct", "hub", "int", 10, minimum=1, maximum=50, unit="percent"),
     _s("hub.live_status_cache_seconds", "hub", "int", 600, minimum=60, maximum=86400,
        unit="seconds"),
     # How much history a machine's charts open on. SECONDS, and a small number of them: the

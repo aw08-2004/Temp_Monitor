@@ -1216,6 +1216,57 @@ def _epoch_or_none(value, field):
         raise ValueError(f"{field} must be a unix timestamp")
 
 
+
+# ---------------------------------------------------------------- Dashboard tallies
+#
+# Counted in SQL rather than by loading rows and length-ing them. The Dashboard asks all of
+# these on one poll, from every open console, so a helper that returned a hundred rows for a
+# number would be the most expensive thing on the page by a wide margin.
+#
+# `machines` is an optional iterable used as the scope filter, applied HERE rather than by
+# the caller for the same reason: dropping out-of-scope rows in Python means reading them
+# first, and an operator scoped to three machines would still pay for the whole fleet.
+
+
+def count_deployment_states(db_path, machines=None, since=None):
+    """How many deployment targets are in flight, and how many have failed.
+
+    Two different questions with two different time frames, which is why `since` applies to
+    the failures only. "Running" is a state a target is IN -- it is either unresolved now or
+    it is not -- while "failed" is an event, and a failure from three weeks ago on a
+    Dashboard reading "1 failed" would be a permanent, meaningless red mark.
+    """
+    running_clauses = ["t.status IN (?, ?)"]
+    running_params = [TARGET_PENDING, TARGET_IN_FLIGHT]
+    failed_clauses = ["t.status = ?"]
+    failed_params = [TARGET_FAILED]
+
+    scope = [_clean(m) for m in machines] if machines is not None else None
+    if scope is not None:
+        if not scope:
+            return {"running": 0, "failed": 0}
+        placeholders = ",".join("?" for _ in scope)
+        running_clauses.append(f"t.machine IN ({placeholders})")
+        running_params.extend(scope)
+        failed_clauses.append(f"t.machine IN ({placeholders})")
+        failed_params.extend(scope)
+    if since is not None:
+        # The TARGET's updated_at, which is when it went to `failed`, not the deployment's
+        # created_at: a push scheduled last month whose target failed an hour ago is news,
+        # and a push created this morning that failed at 09:00 stops being news tomorrow.
+        failed_clauses.append("t.updated_at >= ?")
+        failed_params.append(int(since))
+
+    with get_conn(db_path) as conn:
+        running = conn.execute(
+            "SELECT COUNT(*) FROM deployment_targets t WHERE " + " AND ".join(running_clauses),
+            running_params).fetchone()[0]
+        failed = conn.execute(
+            "SELECT COUNT(*) FROM deployment_targets t WHERE "
+            + " AND ".join(failed_clauses), failed_params).fetchone()[0]
+    return {"running": int(running), "failed": int(failed)}
+
+
 def list_deployments(db_path, limit=100, machine=None):
     """Recent deployments with a per-status target tally, newest first.
 
