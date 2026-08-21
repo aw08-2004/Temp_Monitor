@@ -612,10 +612,14 @@
     transform: rotate(90deg);
 }
 
-/* Spacing between stacked sections, matching the gap the cards they replaced had. */
-.fold + .fold,
-.fold + .card,
-.card + .fold {
+/* Spacing between stacked sections, matching the gap the cards they replaced had.
+   On the section ITSELF rather than on `.fold + .fold`, because an adjacent-sibling rule
+   silently measures the wrong thing the moment anything wraps a group of folds -- and the
+   Tools page does exactly that, wrapping the per-machine half of a tab in
+   .tool-machine-only so it can be hidden while the fleet half stays. The first fold inside
+   that wrapper is a :first-child, matches no sibling rule, and butted straight up against
+   the fleet fold above it. */
+.fold {
     margin-top: var(--space-6);
 }
 

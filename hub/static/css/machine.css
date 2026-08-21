@@ -111,9 +111,8 @@
 }
 
 /* ============ All sensors ============ */
-.sensor-browser {
-    margin-top: var(--space-6);
-}
+/* Its top margin comes from .fold in components.css -- every section on this page carries
+   both classes now, and two rules setting one property is how they drift apart. */
 
 /* The disclosure rules for .sensor-browser__summary live in components.css alongside
    .fold, which generalises them -- every section on this page folds now, not just

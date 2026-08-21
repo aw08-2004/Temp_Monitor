@@ -68,6 +68,16 @@ def read(*parts):
         return fh.read()
 
 
+def rules_only(css):
+    """CSS with its comments removed.
+
+    Every rule in this codebase is explained above itself, often by naming the selector it
+    deliberately does NOT use -- so a check for "this selector is gone" run over the raw
+    file finds it in the paragraph explaining why it went.
+    """
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
 def client_for(email):
     c = app.app.test_client()
     with c.session_transaction() as sess:
@@ -186,6 +196,23 @@ def test_every_folded_section_can_remember_itself():
     # backup-tab.js builds its folds at runtime, so it has to attach them itself.
     check("backup-tab.js attaches its runtime folds",
           "Collapse.attach(card)" in read(STATIC, "js", "backup-tab.js"))
+
+    # Spacing sits on .fold itself, never on an adjacent-sibling pair. This shipped wrong
+    # once: `.fold + .fold` measures DOM adjacency, and the per-machine half of a tab is
+    # wrapped in .tool-machine-only so it can be hidden while the fleet half stays -- which
+    # makes its first fold a :first-child that matches no sibling rule. The result was every
+    # gap 24px except the one where the fleet half met the machine half, which was 0.
+    # Comments stripped first: the rules below are explained at length in prose that names
+    # the very selector it is asserting the absence of.
+    css = rules_only(read(STATIC, "css", "components.css"))
+    check("fold spacing is a property of the section, not of what precedes it",
+          ".fold + .fold" not in css and ".card + .fold" not in css)
+    check("...and every fold gets it",
+          re.search(r"^\.fold \{[^}]*margin-top:", css, re.M | re.S) is not None)
+    # Two rules setting one property is how they drift apart; .sensor-browser carries .fold.
+    check("machine.css does not set that margin a second time",
+          not re.search(r"^\.sensor-browser \{[^}]*margin-top:",
+                        rules_only(read(STATIC, "css", "machine.css")), re.M | re.S))
 
 
 def test_the_machine_page_hands_off_rather_than_duplicating():
