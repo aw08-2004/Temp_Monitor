@@ -445,6 +445,42 @@ def test_hub_update_notice():
         _settings.reset(app.DB_PATH, ["hub.auto_update"])
 
 
+def test_hub_update_notice_hides():
+    """The notice must actually disappear when it is marked hidden.
+
+    Both the server (`{% if not hub_update_available %}hidden{% endif %}`) and the poller
+    (`els.notice.hidden = ...`) say "gone" by setting the [hidden] attribute -- and that
+    attribute only hides an element because of a UA-stylesheet rule that ANY `display`
+    declaration outranks. .sidebar__update.banner sets display:flex, so without an explicit
+    rule the notice stayed on screen permanently, announcing an update on a hub already
+    running the latest version. Pinned here because nothing else in the suite renders CSS.
+    """
+    print("\n-- hub update notice: [hidden] actually hides --")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    static = os.path.join(root, "hub", "static")
+    with open(os.path.join(static, "css", "components.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    check("the notice has a [hidden] rule beating its own display",
+          ".sidebar__update.banner[hidden]" in css)
+    # Same trap, one element down: the dismiss button is display:flex and common.js hides
+    # it while an update is applying.
+    check("so does the dismiss button", ".sidebar__update-dismiss[hidden]" in css)
+
+    # A rule that lands BEFORE the display it has to beat loses on source order at equal
+    # specificity, which is how this class of bug survives a grep for the selector.
+    check("the [hidden] rule comes after the display it overrides",
+          css.index(".sidebar__update.banner {") < css.index(".sidebar__update.banner[hidden]"))
+
+    # And the server still marks it hidden when there is nothing to announce -- the CSS
+    # above only matters if this attribute is on the element.
+    with open(os.path.join(root, "hub", "templates", "partials", "_sidebar.html"),
+                 encoding="utf-8") as fh:
+        sidebar = fh.read()
+    check("the sidebar renders [hidden] when no update is available",
+          "{% if not hub_update_available %}hidden{% endif %}" in sidebar)
+
+
 if __name__ == "__main__":
     test_version_compare()
     test_pre_agent_clients_get_nothing()
@@ -453,5 +489,6 @@ if __name__ == "__main__":
     test_report_endpoint()
     test_hub_self_update()
     test_hub_update_notice()
+    test_hub_update_notice_hides()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
