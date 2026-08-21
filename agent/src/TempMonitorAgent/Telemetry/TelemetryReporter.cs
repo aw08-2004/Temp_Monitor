@@ -76,6 +76,14 @@ public sealed class TelemetryReporter : IDisposable
             ["manufacturer"] = _identity.Manufacturer,
             ["asset_tag"] = _identity.AssetTag,
             ["service_tag"] = _identity.ServiceTag,
+            // On every report, alongside the identity fields, rather than on the heartbeat:
+            // the hub COALESCEs a null away, so a report that could not read the OS costs
+            // nothing, and one that could fills the gap at the next tick rather than at the
+            // next heartbeat interval.
+            ["os_caption"] = _identity.OsCaption,
+            ["os_version"] = _identity.OsVersion,
+            ["os_build"] = _identity.OsBuild,
+            ["os_arch"] = _identity.OsArchitecture,
         };
         if (sensors is not null) payload["sensors"] = sensors;
         if (uptime is not null) payload["uptime_seconds"] = uptime;

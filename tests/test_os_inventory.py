@@ -160,12 +160,27 @@ def test_the_columns_and_the_wire_agree():
           and detail["os_caption"] == "Microsoft Windows 11 Enterprise")
 
 
+def test_the_agent_reports_what_the_hub_reads():
+    """The wire contract, checked from both ends. The hub reads four json keys; the agent's
+    payload model has to spell them the same way, and there is no shared schema between a
+    Python dict lookup and a C# JsonPropertyName to make that true by construction."""
+    print("\n-- the agent and the hub agree on the field names --")
+    agent = read(ROOT, "agent", "src", "TempMonitorAgent", "Models.cs")
+    reporter = read(ROOT, "agent", "src", "TempMonitorAgent", "Telemetry", "TelemetryReporter.cs")
+    hub = read(ROOT, "hub", "app.py")
+    for field in ("os_caption", "os_version", "os_build", "os_arch"):
+        check(f"the agent declares {field}", f'JsonPropertyName("{field}")' in agent)
+        check(f"...puts it on the wire", f'["{field}"]' in reporter or f'"{field}"' in reporter)
+        check(f"...and the hub reads it", f"data.get('{field}')" in hub)
+
+
 def main():
     test_the_build_number_beats_the_caption()
     test_the_other_buckets()
     test_nonsense_is_unknown_rather_than_wrong()
     test_the_directory_is_a_fallback_and_says_so()
     test_the_columns_and_the_wire_agree()
+    test_the_agent_reports_what_the_hub_reads()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
 
