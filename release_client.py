@@ -72,6 +72,12 @@ RUNNER_CUSTOMIZATIONS = [
     ("single_instance.cpp", "kMutexName", None),
     ("single_instance.h", "ClaimSingleInstance", None),
     ("main.cpp", "ClaimSingleInstance", None),
+    # The build list, not just the sources. If this file alone reverts -- a bad merge, or
+    # someone restoring files by hand instead of `git checkout app/windows/runner` --
+    # single_instance.cpp is silently dropped from the target and the failure arrives as
+    # an undefined-reference at link time, a hundred lines from anything that names the
+    # cause. Checked here so it arrives as a sentence instead.
+    ("CMakeLists.txt", "single_instance.cpp", None),
     ("Runner.rc", "FleetHub Client", "com.example"),
 ]
 
