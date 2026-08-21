@@ -2007,6 +2007,9 @@
         "requested_by": "Asked by",
         "detail": "Detail"
       }
+    },
+    "fold": {
+      "stats": "At a glance"
     }
   },
   "remote": {

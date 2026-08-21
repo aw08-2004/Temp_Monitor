@@ -1030,6 +1030,20 @@ function syncSensorPolling() {
 
 sensorBrowserEl.addEventListener('toggle', syncSensorPolling);
 document.addEventListener('visibilitychange', syncSensorPolling);
+
+// The History section folds too now, and Chart.js measures a canvas when it is built: one
+// built inside a folded section comes back zero pixels tall and STAYS that way, because
+// nothing re-measures it on the way out. Same fix as setPanelVisible() applies to a panel
+// hidden for having no readings, applied to the whole section at once.
+const historyCardEl = document.getElementById('history-card');
+if (historyCardEl) {
+    historyCardEl.addEventListener('toggle', () => {
+        if (!historyCardEl.open) return;
+        for (const panel of panels) {
+            if (!panel.container.hidden) panel.chart.resize();
+        }
+    });
+}
 // Re-render from what we already hold: filtering is a view of the last poll, so typing
 // doesn't wait on the network.
 sensorFilterEl.addEventListener('input', renderSensorTree);

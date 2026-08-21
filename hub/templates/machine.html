@@ -60,6 +60,15 @@
     {# Overview stays the default-active panel: a hidden panel has zero dimensions, and
        the Chart.js canvas below would size itself to nothing if it started hidden. #}
     <div class="tab-panel" id="tab-overview" role="tabpanel" aria-labelledby="tab-btn-overview">
+    {# Every section on this page folds and remembers being folded (collapse.js). Native
+       <details>, matching the sensor and process browsers that already did -- see the
+       .fold rules in components.css. Sections that were always visible ship `open`, so
+       nothing disappears for somebody who has never touched them. #}
+    <details class="fold" data-fold-key="machine:overview:stats" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.fold.stats') }}</span>
+        </summary>
+    {# No .card on the <details>: its children are already cards. #}
     <div class="card-grid">
         <div class="card stat-card" id="temp-card">
             <div class="stat-card__label">{{ t('machine.live_temp') }}</div>
@@ -112,24 +121,29 @@
             <div class="stat-card__meta" id="stat-ad-status" hidden></div>
         </div>
     </div>
+    </details>
 
     {# Live per-disk space usage, one tile per volume, built by machine.js from the
        diagnostics `disks` list. Live state rather than history, so it is a card and not a
        chart panel -- how many disks a machine has is per-machine and changes over its life. #}
-    <div class="card storage-card" id="card-storage">
-        <div class="section-title">{{ t('machine.storage') }}</div>
+    <details class="card storage-card fold" data-fold-key="machine:overview:storage" id="card-storage" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.storage') }}</span>
+        </summary>
         <div class="disk-grid" id="disk-grid"></div>
         <div id="disk-empty" class="stat-card__meta">{{ t('machine.no_disks') }}</div>
-    </div>
+    </details>
 
     {# Live per-fan speeds, built by machine.js from the diagnostics `fans` list -- same
        reasoning as the Storage card above: a per-machine list of live readings, not a
        chart. The fastest fan is charted as its own panel below. #}
-    <div class="card storage-card" id="card-cooling">
-        <div class="section-title">{{ t('machine.cooling') }}</div>
+    <details class="card storage-card fold" data-fold-key="machine:overview:cooling" id="card-cooling" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.cooling') }}</span>
+        </summary>
         <div class="fan-grid" id="fan-grid"></div>
         <div id="fan-empty" class="stat-card__meta">{{ t('machine.no_fans') }}</div>
-    </div>
+    </details>
 
     {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
        Collapsed by default and only polled while open, exactly like the sensor browser
@@ -141,7 +155,10 @@
        GROUPING (twelve chrome.exe are one row until you expand them) and a per-row decision
        about which actions are even offered -- neither of which a template can express over a
        payload it cannot see. #}
-    <details class="card sensor-browser process-card" id="process-browser">
+    {# No `open`: this one stays closed on a browser that has never been told otherwise,
+       because the machine does no process sampling at all until somebody opens it. #}
+    <details class="card sensor-browser process-card fold"
+             data-fold-key="machine:overview:processes" id="process-browser">
         <summary class="sensor-browser__summary">
             <span class="section-title" style="margin-bottom: 0;">{{ t('machine.processes.title') }}</span>
             <span class="stat-card__meta" id="process-count"></span>
@@ -167,8 +184,10 @@
     {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is
        per-machine state, like the asset tag -- Settings holds the fleet-wide preference
        order this overrides. #}
-    <div class="card sensor-card">
-        <div class="section-title">{{ t('machine.sensor.title') }}</div>
+    <details class="card sensor-card fold" data-fold-key="machine:overview:sensor_pick" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.sensor.title') }}</span>
+        </summary>
         <div class="toolbar" style="margin-bottom: var(--space-2);">
             <label for="primary-sensor">{{ t('machine.sensor.use') }}</label>
             <select id="primary-sensor" class="select">
@@ -186,13 +205,16 @@
             #}<span id="primary-sensor-order"></span>.
             {{ t('machine.sensor.help_after') }}
         </p>
-    </div>
+    </details>
 
     {# EVERY sensor the machine reports, not the handful the cards and charts pick out.
        Collapsed by default and only polled while open: a workstation reports several
        hundred readings, which is the right amount of detail when you are chasing a
        throttling PC and far too much to have permanently on screen. #}
-    <details class="card sensor-browser" id="sensor-browser">
+    {# Closed by default for the same reason as Processes above: several hundred readings,
+       polled only while open. #}
+    <details class="card sensor-browser fold"
+             data-fold-key="machine:overview:sensors" id="sensor-browser">
         <summary class="sensor-browser__summary">
             <span class="section-title" style="margin-bottom: 0;">{{ t('machine.sensors.title') }}</span>
             <span class="stat-card__meta" id="sensor-browser-count"></span>
@@ -206,8 +228,13 @@
         <div id="sensor-browser-body"></div>
     </details>
 
-    <div class="card chart-card">
-        <div class="section-title">{{ t('machine.history.title') }}</div>
+    {# machine.js listens for this one's `toggle`: Chart.js measures a canvas when it is
+       built, and one built inside a folded section comes back zero pixels tall. #}
+    <details class="card chart-card fold" data-fold-key="machine:overview:history"
+             id="history-card" open>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.history.title') }}</span>
+        </summary>
         {# The resolution vocabulary is shared with the History page -- same buckets, same
            labels, one set of keys. #}
         <div class="toolbar">
@@ -234,7 +261,7 @@
            the machine-config data-enabled-metrics flags. #}
         <div class="metric-grid" id="metric-grid"></div>
         <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">{{ t('machine.history.no_readings') }}</div>
-    </div>
+    </details>
     </div>{# /tab-overview #}
 
     <div class="tab-panel" id="tab-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal" hidden>

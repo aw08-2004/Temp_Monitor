@@ -1896,6 +1896,9 @@
         "requested_by": "Angefordert von",
         "detail": "Detail"
       }
+    },
+    "fold": {
+      "stats": "Auf einen Blick"
     }
   },
   "remote": {
