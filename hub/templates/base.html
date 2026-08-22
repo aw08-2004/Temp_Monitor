@@ -14,6 +14,12 @@
         var saved = localStorage.getItem('tempmonitor:theme');
         var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
         document.documentElement.setAttribute('data-theme', theme);
+        /* Read here, before first paint, for the same reason as the theme: the collapsed
+           sidebar is a different grid column width, and setting it from common.js would
+           let the full-width sidebar paint once and snap shut. Absent = expanded. */
+        if (localStorage.getItem('tempmonitor:sidebar') === 'collapsed') {
+            document.documentElement.setAttribute('data-sidebar', 'collapsed');
+        }
     } catch (e) { /* localStorage unavailable, default dark stays */ }
 })();
 </script>

@@ -16,6 +16,8 @@
     "permission_groups": "Berechtigungsgruppen",
     "users": "Benutzer",
     "close": "Navigation schließen",
+    "collapse": "Navigation einklappen",
+    "expand": "Navigation ausklappen",
     "open": "Navigation öffnen",
     "firmware": "Firmware",
     "download": "Client herunterladen",

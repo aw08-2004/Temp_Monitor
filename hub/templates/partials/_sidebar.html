@@ -5,6 +5,14 @@
     <div class="sidebar__brand">
         <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
         <span class="sidebar__brand-name">FleetHub</span>
+        {# Desktop only (the drawer has its own close button below, and a rail makes no
+           sense on a phone). Chevron direction is CSS, driven by the collapsed attribute on
+           <html>, so this markup describes one button in two states rather than two icons. #}
+        <button type="button" id="nav-collapse" class="sidebar__collapse"
+                aria-controls="app-sidebar" aria-expanded="true"
+                aria-label="{{ t('nav.collapse') }}" title="{{ t('nav.collapse') }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
         <button type="button" id="nav-close" class="sidebar__close" aria-label="{{ t('nav.close') }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
@@ -19,15 +27,15 @@
     <nav class="sidebar__nav">
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" data-nav-prefix="/ /machine" href="{{ url_for('index') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-            {{ t('nav.dashboard') }}
+            <span class="sidebar__link-label">{{ t('nav.dashboard') }}</span>
         </a>
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'inventory_page' else '' }}" data-nav-prefix="/inventory" href="{{ url_for('inventory_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg>
-            {{ t('nav.inventory') }}
+            <span class="sidebar__link-label">{{ t('nav.inventory') }}</span>
         </a>
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'alerts_page' else '' }}" data-nav-prefix="/alerts" href="{{ url_for('alerts_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a6 6 0 0 0-6 6c0 4-2 5-2 7h16c0-2-2-3-2-7a6 6 0 0 0-6-6z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
-            {{ t('nav.alerts') }}
+            <span class="sidebar__link-label">{{ t('nav.alerts') }}</span>
             {# Always in the DOM (hidden at zero) so the Alerts page can retitle it live after a
                dismiss -- rendering it conditionally would leave nothing for the script to find. #}
             <span class="sidebar__badge" id="alerts-badge" {% if not open_alert_count %}hidden{% endif %}>{{ open_alert_count or '' }}</span>
@@ -39,7 +47,7 @@
         {% if cap.VIEW in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'apitokens.download_page' else '' }}" data-nav-prefix="/download" href="{{ url_for('apitokens.download_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
-            {{ t('nav.download') }}
+            <span class="sidebar__link-label">{{ t('nav.download') }}</span>
         </a>
         {% endif %}
         {# Links are hidden when the caller lacks the capability behind them. This is
@@ -49,7 +57,7 @@
         {% if cap.REMOTE_CONTROL in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'remote_page' else '' }}" data-nav-prefix="/remote" href="{{ url_for('remote_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 20h10"/><path d="M11 14v6"/><rect x="17" y="10" width="5" height="10" rx="1.5"/></svg>
-            {{ t('nav.remote') }}
+            <span class="sidebar__link-label">{{ t('nav.remote') }}</span>
         </a>
         {% endif %}
         {# Terminal, Backup, Firmware and Network -- including what used to be the Firmware
@@ -63,19 +71,19 @@
         {% if cap.VIEW in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'tools_page' else '' }}" data-nav-prefix="/tools" href="{{ url_for('tools_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 1 5.3 5.2l-8.4 8.4a2 2 0 0 1-2.8-2.8l8.4-8.4"/><path d="M6 12L3.5 9.5a3.5 3.5 0 0 1 4.9-4.9L11 7"/></svg>
-            {{ t('nav.tools') }}
+            <span class="sidebar__link-label">{{ t('nav.tools') }}</span>
         </a>
         {% endif %}
         {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" data-nav-prefix="/audit" href="{{ url_for('audit.audit_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
-            {{ t('nav.audit_log') }}
+            <span class="sidebar__link-label">{{ t('nav.audit_log') }}</span>
         </a>
         {% endif %}
         {% if cap.DEPLOY_PACKAGES in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'packages.packages_page' else '' }}" data-nav-prefix="/packages" href="{{ url_for('packages.packages_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
-            {{ t('nav.packages') }}
+            <span class="sidebar__link-label">{{ t('nav.packages') }}</span>
         </a>
         {% endif %}
         {# Gated on VIEW, which is what the page route itself requires: a standing
@@ -85,25 +93,25 @@
         {% if cap.VIEW in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'rules.rules_page' else '' }}" data-nav-prefix="/rules" href="{{ url_for('rules.rules_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h6"/><path d="M14 6h6"/><circle cx="12" cy="6" r="2"/><path d="M4 14h4"/><circle cx="10" cy="14" r="2"/><path d="M12 14h8"/><path d="M4 20h10"/><circle cx="16" cy="20" r="2"/><path d="M18 20h2"/></svg>
-            {{ t('nav.rules') }}
+            <span class="sidebar__link-label">{{ t('nav.rules') }}</span>
         </a>
         {% endif %}
         {% if cap.MANAGE_SETTINGS in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'settings_page' else '' }}" data-nav-prefix="/settings" href="{{ url_for('settings_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>
-            {{ t('nav.settings') }}
+            <span class="sidebar__link-label">{{ t('nav.settings') }}</span>
         </a>
         {% endif %}
         {% if cap.MANAGE_PERMISSION_GROUPS in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'permissions_page' else '' }}" data-nav-prefix="/permissions" href="{{ url_for('permissions_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9.5 12l1.8 1.8L15 10"/></svg>
-            {{ t('nav.permission_groups') }}
+            <span class="sidebar__link-label">{{ t('nav.permission_groups') }}</span>
         </a>
         {% endif %}
         {% if cap.MANAGE_USERS in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'users.users_page' else '' }}" data-nav-prefix="/users" href="{{ url_for('users.users_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            {{ t('nav.users') }}
+            <span class="sidebar__link-label">{{ t('nav.users') }}</span>
         </a>
         {% endif %}
     </nav>

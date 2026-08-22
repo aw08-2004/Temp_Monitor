@@ -49,26 +49,39 @@ button, select, input {
     min-height: 100vh;
 }
 
+/* Collapsed sidebar (desktop). The state lives on <html> rather than on .app-shell so the
+   inline head script in base.html can set it before first paint -- .app-shell does not
+   exist yet at that point. Only the grid column changes here; what the rail itself looks
+   like is with the rest of the sidebar in components.css.
+
+   The min-width query is required, not tidy: below 900px the sidebar is a fixed-position
+   drawer and .app-shell is meant to be one column, but the rule below outweighs that
+   single-class rule on specificity -- so unscoped it would reserve a 64px column on a phone
+   for a sidebar that is no longer in the flow. 901px is the complement of the max-width: 900px
+   queries below; the two must move together. */
+@media (min-width: 901px) {
+    :root[data-sidebar="collapsed"] .app-shell {
+        grid-template-columns: var(--sidebar-width-collapsed) 1fr;
+    }
+}
+
 .app-shell__main {
     display: flex;
     flex-direction: column;
     min-width: 0;
 }
 
+/* One width for every page. Packages used to opt into a wider cap on its own because its
+   table carries full download URLs, step chains and a three-button action column, but a
+   page that is narrower than its neighbours reads as a bug rather than as restraint: the
+   sidebar stays put and the content jumps in from the right edge on every other tab. Prose
+   that shouldn't run the full 1600px sets its own measure in ch on the block itself (see
+   .backup-intro in backups.css) rather than squeezing the whole page. */
 .app-shell__content {
     flex: 1;
     padding: var(--space-6) var(--space-8);
-    max-width: 1280px;
-    width: 100%;
-}
-
-/* Pages whose main table genuinely needs the room -- Packages carries full download URLs,
-   step chains and a three-button action column, and at 1280px those columns squeeze until
-   the buttons wrap one per line. Opt in per page with {% block content_class %} in the
-   template rather than raising the cap for everyone; a page of prose or cards reads worse
-   the wider it gets. */
-.app-shell__content--wide {
     max-width: 1600px;
+    width: 100%;
 }
 
 /* The app shell (static/js/shell.js): chrome that stays, pages in a frame under it.

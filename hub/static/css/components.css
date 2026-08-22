@@ -261,6 +261,141 @@
     height: 100%;
 }
 
+/* ============ Collapsed sidebar (desktop rail) ============
+   240px of nav is a lot of screen to spend on a list you read once a session, and the
+   widest pages (Packages, Inventory, Audit) want every pixel of it. Collapsing leaves an
+   icon rail: the nav is still one click away, unlike the mobile drawer which is two.
+
+   The state is `data-sidebar="collapsed"` on <html>, set before first paint by the inline
+   script in base.html and toggled by initSidebarCollapse() in common.js. The grid column
+   itself is in base.css; everything below is what the rail looks like.
+
+   These rules sit at the END of the sidebar section on purpose: they are single-class
+   selectors under an attribute, so source order is what settles ties with the plain
+   .sidebar rules above -- the same reason the mobile rules live in this file at all. */
+.sidebar__collapse {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.sidebar__collapse:hover {
+    color: var(--text);
+    background: var(--card);
+}
+
+.sidebar__collapse svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* On a phone the sidebar is a drawer, not a column, so there is no width to reclaim and
+   the close button is the control that belongs there. Hiding it here rather than showing
+   it in a min-width query keeps the desktop case the default, matching .sidebar__close. */
+@media (max-width: 900px) {
+    .sidebar__collapse { display: none; }
+}
+
+/* Desktop only, and this is load-bearing rather than tidy: the collapsed preference is one
+   attribute on <html> that survives a resize, so without the query someone who collapsed the
+   sidebar on their desktop got a 240px mobile drawer with every label hidden -- a column of
+   unlabelled icons in a space that had room for the words. The drawer is the mobile answer to
+   the same question and owes nothing to this state.
+
+   901px is the complement of the max-width: 900px queries above; the two must move together. */
+@media (min-width: 901px) {
+    /* The one button, pointed the other way. Inside the query with the rest of them: the
+       button is display:none on mobile so this changes nothing there, but a collapsed rule
+       loose in the file is exactly the shape of the bug the query exists to prevent. */
+    :root[data-sidebar="collapsed"] .sidebar__collapse svg {
+        transform: scaleX(-1);
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar {
+        padding-left: var(--space-2);
+        padding-right: var(--space-2);
+        /* The nav gap is sized for labelled rows; a column of bare icons reads as one block
+           at that spacing. */
+        gap: var(--space-5);
+    }
+
+    /* Logo above, toggle below -- 64px has no room for them side by side, and dropping the
+       logo to make room would take the only thing on the rail that says what this is. */
+    :root[data-sidebar="collapsed"] .sidebar__brand {
+        flex-direction: column;
+        gap: var(--space-3);
+        padding: 0;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__brand-name {
+        display: none;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__collapse {
+        margin-left: 0;
+    }
+
+    /* The label is a span (not a bare text node) precisely so it can go away here. The links
+       keep their titles instead -- initSidebarCollapse() sets those from these labels, so the
+       tooltip and the nav can never disagree. */
+    :root[data-sidebar="collapsed"] .sidebar__link-label {
+        display: none;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__link {
+        justify-content: center;
+        /* position: relative so the alert badge can hang off the corner below -- with no label
+           to sit after, `margin-left: auto` has nothing left to push against. */
+        position: relative;
+        padding: var(--space-2);
+        min-height: 36px;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__badge {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        margin-left: 0;
+        min-width: 16px;
+        padding: 0 4px;
+        line-height: 16px;
+    }
+
+    /* The hub-update notice is three lines of prose and a button; none of that fits a rail.
+       Rather than hide it -- which would silently drop the only place the console says an
+       update is waiting -- it shrinks to a warning square that expands the sidebar when
+       clicked (common.js). The glyph is decorative: the element keeps the real sentence as
+       its title, set alongside the click handler. */
+    :root[data-sidebar="collapsed"] .sidebar__update.banner:not([hidden]) {
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        cursor: pointer;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__update-text,
+    :root[data-sidebar="collapsed"] .sidebar__update-action,
+    :root[data-sidebar="collapsed"] .sidebar__update-dismiss {
+        display: none;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__update.banner:not([hidden])::after {
+        content: "!";
+        font-weight: 700;
+        font-size: var(--text-md);
+        line-height: 1;
+    }
+}
+
 /* ============ Topbar ============ */
 .topbar {
     display: flex;
