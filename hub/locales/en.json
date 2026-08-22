@@ -26,6 +26,8 @@
     "permission_groups": "Permission Groups",
     "users": "Users",
     "close": "Close navigation",
+    "collapse": "Collapse navigation",
+    "expand": "Expand navigation",
     "open": "Open navigation",
     "firmware": "Firmware",
     "download": "Download Client",

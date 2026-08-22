@@ -16,6 +16,8 @@
     "permission_groups": "Grupos de permisos",
     "users": "Usuarios",
     "close": "Cerrar navegación",
+    "collapse": "Contraer navegación",
+    "expand": "Expandir navegación",
     "open": "Abrir navegación",
     "firmware": "Firmware",
     "download": "Descargar cliente",

@@ -1,6 +1,7 @@
 // Shared helpers used across dashboard/machine/history pages.
 
 const THEME_STORAGE_KEY = 'tempmonitor:theme';
+const SIDEBAR_STORAGE_KEY = 'tempmonitor:sidebar';
 
 function formatUptime(seconds) {
     const value = Number(seconds);
@@ -177,6 +178,80 @@ function initMobileNav() {
     else narrow.addListener(onChange);  // Safari < 14
 }
 
+// Desktop sidebar collapse: 240px of labelled nav <-> a 64px icon rail, so the wide pages
+// get the difference. Distinct from initMobileNav() above, which is the drawer: that one is
+// about a viewport with no room for a sidebar at all, this one is about choosing to spend
+// the room on the page instead. Below the breakpoint the button is hidden (components.css)
+// and this state is inert -- the drawer ignores it.
+//
+// The attribute lives on <html>, not on .app-shell, because base.html's inline head script
+// has to set it before first paint and .app-shell does not exist yet at that point. Under
+// the app shell only the shell document has a sidebar, so there is nothing to keep in sync
+// across the frame boundary.
+function initSidebarCollapse() {
+    const toggle = document.getElementById('nav-collapse');
+    if (!toggle) return;
+    const root = document.documentElement;
+    const sidebar = document.getElementById('app-sidebar');
+
+    const isCollapsed = () => root.getAttribute('data-sidebar') === 'collapsed';
+
+    function sync() {
+        const collapsed = isCollapsed();
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        const label = t(collapsed ? 'nav.expand' : 'nav.collapse');
+        toggle.setAttribute('aria-label', label);
+        toggle.title = label;
+        // The rail has no room for the link text, so the text becomes the tooltip -- read
+        // off the label element rather than kept in a second list, which would drift the
+        // first time a nav entry is renamed. Removed again when expanded: a tooltip that
+        // repeats the word already on screen is just noise following the pointer.
+        if (sidebar) {
+            for (const link of sidebar.querySelectorAll('.sidebar__link')) {
+                const text = (link.querySelector('.sidebar__link-label')?.textContent || '').trim();
+                if (collapsed && text) link.title = text;
+                else link.removeAttribute('title');
+            }
+        }
+        // Same trick for the update notice, which shrinks to a bare "!" on the rail.
+        const notice = document.getElementById('hub-update-notice');
+        const noticeText = document.getElementById('hub-update-text');
+        if (notice && noticeText) {
+            if (collapsed) notice.title = (noticeText.textContent || '').trim();
+            else notice.removeAttribute('title');
+        }
+    }
+
+    function setCollapsed(collapsed) {
+        if (collapsed) root.setAttribute('data-sidebar', 'collapsed');
+        else root.removeAttribute('data-sidebar');
+        try { localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? 'collapsed' : 'expanded'); }
+        catch (e) { /* private mode: the choice just does not survive the reload */ }
+        sync();
+    }
+
+    toggle.addEventListener('click', () => setCollapsed(!isCollapsed()));
+
+    // On the rail the notice is a warning square with nothing to click inside it, so the
+    // click means "show me what this is about". Capture, because the real notice carries
+    // its own buttons and we must not let a hidden Update-now be activated blind.
+    const notice = document.getElementById('hub-update-notice');
+    if (notice) {
+        notice.addEventListener('click', (e) => {
+            if (!isCollapsed()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setCollapsed(false);
+        }, true);
+    }
+
+    // The poller rewrites the notice's sentence as versions change; re-sync so the rail's
+    // tooltip does not keep quoting a version that has already been applied.
+    document.addEventListener('hubupdate:change', sync);
+
+    sync();
+}
+
 // Mobile overflow menu holding the version badges, the signed-in email and Sign out.
 function initTopbarMore() {
     const toggle = document.getElementById('topbar-more');
@@ -311,7 +386,16 @@ function initHubUpdate() {
         }
     }
 
+    // Wrapper, so the announcement happens once however `paint` returned -- it has four
+    // exits. The collapsed sidebar listens: on the rail the notice is a bare "!" and this
+    // sentence is its tooltip, which would otherwise keep quoting a version that has
+    // already been installed.
     function render(data) {
+        paint(data);
+        document.dispatchEvent(new CustomEvent('hubupdate:change'));
+    }
+
+    function paint(data) {
         const latest = data.latest || '';
         els.notice.dataset.hubLatest = latest;
 
@@ -417,6 +501,7 @@ function initHubUpdate() {
 document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initMobileNav();
+    initSidebarCollapse();
     initTopbarMore();
     initAlertBadge();
     initHubUpdate();
