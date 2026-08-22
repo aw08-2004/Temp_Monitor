@@ -64,9 +64,18 @@ def build_app():
     app.secret_key = "test"
     _register_sidebar_stubs(app)
 
+    PAGE = '{% extends "base.html" %}{% block content %}hi{% endblock %}'
+
     @app.route("/_shell")
     def shell():
-        return render_template_string('{% extends "base.html" %}{% block content %}hi{% endblock %}')
+        return render_template_string(PAGE)
+
+    # The same page as the shell renders it into its iframe. app.py's _shell_mode() picks
+    # this for any browser that can run the shell, which makes it the ORDINARY path, not an
+    # edge case -- and it is the one render where the collapsed preference must do nothing.
+    @app.route("/_framed")
+    def framed():
+        return render_template_string(PAGE, shell_mode="framed")
 
     @app.before_request
     def _seed_session():
@@ -234,6 +243,36 @@ def test_rail_styling_is_desktop_only():
           and "@media (max-width: 900px)" in css("components.css"))
 
 
+def test_framed_pages_ignore_the_collapsed_state():
+    """The framed page has no sidebar, and must not be given a column for one.
+
+    Found in review, and the same specificity trap as the mobile one with a nastier blast
+    radius. The frame is same-origin with the shell, so its own copy of the head script
+    reads the same localStorage key and stamps `data-sidebar="collapsed"` on a document
+    whose .app-shell--bare grid is meant to be a single column. That single class loses to
+    `:root[attr] .app-shell`, so collapsing the sidebar squeezed the content column of every
+    framed page to 64px -- which, since framed is the normal path, is the whole console.
+
+    Measured in a browser at 1280px before the fix: `grid-template-columns: 64px 1216px`
+    with the content column 64px wide. After: 1280px, identical with and without the
+    attribute."""
+    print("\n-- the collapsed attribute does nothing to a page with no sidebar --")
+    body = build_app().test_client().get("/_framed").get_data(as_text=True)
+
+    check("the framed page renders bare", "app-shell--bare" in body)
+    check("...with no sidebar in it", 'id="app-sidebar"' not in body)
+    # It cannot be stopped from stamping the attribute -- same origin, same head script,
+    # and the shell document needs the value read there. So the CSS has to opt out instead.
+    check("...but still stamps the attribute, which is why the CSS must exclude it",
+          "tempmonitor:sidebar" in body)
+
+    base = css("base.css")
+    rules = re.findall(r':root\[data-sidebar="collapsed"\]\s*\.app-shell[^{]*', base)
+    check(f"the grid rule exists ({len(rules)} of it)", len(rules) == 1)
+    check("...and excludes the bare (framed) shell",
+          bool(rules) and ":not(.app-shell--bare)" in rules[0])
+
+
 def test_locales_carry_both_labels():
     print("\n-- the button's two states are translated everywhere --")
     for lang in ("en", "de", "es"):
@@ -249,6 +288,7 @@ if __name__ == "__main__":
     test_toggle_markup()
     test_css_and_js_agree_on_the_attribute()
     test_rail_styling_is_desktop_only()
+    test_framed_pages_ignore_the_collapsed_state()
     test_locales_carry_both_labels()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
