@@ -11,7 +11,12 @@
     'use strict';
 
     const dialog = document.getElementById('favorites-dialog');
-    if (!dialog || !window.FleetApi || !FleetApi.machine) return;
+    // Deliberately NOT gated on FleetApi.machine. Favorites are per-operator, and every
+    // endpoint behind them is machine-independent -- the machine only matters at the
+    // moment one is RUN, which the terminal handles. The Tools page has no machine at
+    // parse time (one is picked later, without a reload), so a machine guard here meant
+    // window.FleetFavorites was never defined and the button did nothing.
+    if (!dialog || !window.FleetApi) return;
 
     const titleEl = document.getElementById('favorites-title');
     const bodyEl = document.getElementById('favorites-body');

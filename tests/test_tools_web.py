@@ -307,6 +307,27 @@ def test_the_page_is_scope_filtered():
           "machine_unavailable" in js)
 
 
+def test_favorites_do_not_wait_for_a_machine():
+    """The favourites dialog must set itself up whether or not a machine is picked yet.
+
+    fleet-favorites.js used to early-return on `!FleetApi.machine` at parse time, which was
+    harmless while the terminal only ever lived at /machine/<name> (the machine was in the
+    document). On the Tools page nothing is picked when the script runs, so the module
+    returned, `window.FleetFavorites` was never defined, and the Favorites button on the
+    terminal toolbar did nothing at all. Nothing behind the dialog is per-machine -- the
+    four /api/fleet/favorites routes are keyed on the session's email -- so the guard was
+    only ever a way to break the button."""
+    print("\n-- the favourites dialog does not need a machine to exist --")
+    js = read(STATIC, "js", "fleet-favorites.js")
+    guard = [line for line in js.splitlines()
+             if line.strip().startswith("if (!dialog")]
+    check("the module still refuses to run without its <dialog>", len(guard) == 1)
+    check("...but no longer gives up when no machine is chosen",
+          guard and "FleetApi.machine" not in guard[0])
+    check("the button that opens it is bound unconditionally",
+          "FleetFavorites.open(" in read(STATIC, "js", "fleet-terminal.js"))
+
+
 def main():
     test_the_page_answers_in_every_shell_mode()
     test_a_deep_link_survives_into_the_frame()
@@ -316,6 +337,7 @@ def main():
     test_the_two_halves_of_a_tab_keep_their_own_gates()
     test_the_absorbed_pages_still_answer_where_they_were()
     test_the_page_is_scope_filtered()
+    test_favorites_do_not_wait_for_a_machine()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
 
