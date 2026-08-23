@@ -315,8 +315,34 @@ public static class AgentConfig
     internal static string NewProgramDataDir => Path.Combine(CommonAppData, "FleetHub", "Agent");
     internal static string LegacyProgramDataDir => Path.Combine(CommonAppData, "TempMonitorAgent");
 
+    /// <summary>
+    /// Test-only redirect for the state root, honoured once inside the resolver below.
+    ///
+    /// Deliberately NOT routed through <see cref="Env"/>: that would mint a legacy
+    /// TEMP_MONITOR_STATE_DIR alias too, and machines installed before the rename already
+    /// carry TEMP_MONITOR_* vars set machine-wide. A redirect of the state root is the one
+    /// setting where a stray inherited value is unrecoverable -- the agent would not find
+    /// agent.json, would re-enrol as a NEW machine, and would duplicate the fleet. One
+    /// explicit name, no aliases, and it announces itself through the migration note so
+    /// that if it is ever set on a real install it shows up in the agent log on the very
+    /// first boot rather than silently.
+    /// </summary>
+    internal const string StateDirOverrideVar = "FLEETHUB_STATE_DIR_FOR_TESTS";
+
     private static string MigrateAndResolve()
     {
+        // Checked first and returned as-is: a redirected root is a scratch directory with no
+        // pre-rename install behind it, so there is nothing to migrate INTO it, and running
+        // the migration would copy a real machine's identity into the test tree.
+        var overridden = Environment.GetEnvironmentVariable(StateDirOverrideVar);
+        if (!string.IsNullOrWhiteSpace(overridden))
+        {
+            _migrationNote = $"{StateDirOverrideVar} is set: agent state redirected to " +
+                             $"{overridden}. This is a test-only switch -- if you are seeing " +
+                             $"this on an installed agent, clear it and restart.";
+            return overridden;
+        }
+
         // Already on the new layout (or a clean install): nothing to carry over.
         if (Directory.Exists(NewProgramDataDir)) return NewProgramDataDir;
         if (!Directory.Exists(LegacyProgramDataDir)) return NewProgramDataDir;

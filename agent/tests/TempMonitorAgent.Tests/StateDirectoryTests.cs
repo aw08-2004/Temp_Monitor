@@ -165,4 +165,22 @@ public class StateDirectoryTests : IDisposable
         Assert.True(Directory.Exists(fresh));
         Assert.Equal(default, RightsFor(Users, fresh) & FileSystemRights.WriteData);
     }
+
+    /// <summary>
+    /// The redirect in AssemblySetup is what keeps this suite off the real
+    /// %ProgramData%\FleetHub\Agent. It is a module initializer, so if it ever stops running
+    /// -- renamed, dropped, or beaten to the punch by something touching AgentConfig earlier
+    /// -- nothing else fails loudly: the tests simply go back to writing into the installed
+    /// agent's state directory, which passes on a clean box and fails on a developer's own
+    /// machine with an error naming ProgramData rather than the real cause. Pin it here so
+    /// that regression is one obvious failure instead of seven confusing ones.
+    /// </summary>
+    [Fact]
+    public void The_suite_runs_against_a_redirected_state_root_not_the_installed_agents()
+    {
+        Assert.Equal(AssemblySetup.StateRoot, AgentConfig.ProgramDataDir);
+        Assert.NotEqual(AgentConfig.NewProgramDataDir, AgentConfig.ProgramDataDir);
+        Assert.StartsWith(Path.GetTempPath(), AgentConfig.ProgramDataDir,
+                          StringComparison.OrdinalIgnoreCase);
+    }
 }
