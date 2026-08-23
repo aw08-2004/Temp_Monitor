@@ -96,8 +96,31 @@ public sealed class ShellSessionManager : IAsyncDisposable
         if (victim is { } v && _sessions.TryRemove(v.Key, out var s))
         {
             _log.LogInformation("Evicting idle shell for {Op} (session cap reached)", EmailOf(v.Key));
-            _ = s.DisposeAsync();
+            TearDownInBackground(s, v.Key);
         }
+    }
+
+    /// <summary>
+    /// Tear a shell down from a caller that cannot await: the reaper's timer callback and the
+    /// eviction path above. Fire-and-forget by necessity, but observed -- discarding the
+    /// ValueTask swallows whatever DisposeAsync threw, and here that would be a shell process
+    /// we believe we killed and did not, with nothing in the log to say so. Task.Run also
+    /// keeps the kill-the-process-tree part off the timer thread, which DisposeAsync runs
+    /// synchronously before it reaches its first await.
+    /// </summary>
+    private void TearDownInBackground(ShellSession session, string key)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await session.DisposeAsync();
+            }
+            catch (Exception e)
+            {
+                _log.LogWarning(e, "Tearing down the shell for {Op} failed", EmailOf(key));
+            }
+        });
     }
 
     private void ReapIdle()
@@ -111,7 +134,7 @@ public sealed class ShellSessionManager : IAsyncDisposable
             if (_sessions.TryRemove(key, out var s))
             {
                 _log.LogInformation("Reaping idle/dead shell for {Op}", EmailOf(key));
-                _ = s.DisposeAsync();
+                TearDownInBackground(s, key);
             }
         }
     }

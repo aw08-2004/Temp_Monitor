@@ -11,6 +11,7 @@ That keeps the module fast and isolated, at the cost of having to keep these CRE
 with app's -- so they carry only the columns the resolver actually reads, and a drift shows
 up as an UNKNOWN in the resolver tests rather than as a silent pass.
 """
+import copy
 import os
 import sqlite3
 import sys
@@ -701,8 +702,6 @@ check("interactive message validates", err is None)
 check("preset expands to three buttons",
       err is None and [b["id"] for b in clean[0]["params"]["buttons"]] == ["yes", "no", "later"])
 
-bad = json.loads(json.dumps(MESSAGE)) if False else None
-import copy
 bad = copy.deepcopy(MESSAGE)
 bad["on_response"]["Yes"] = bad["on_response"].pop("yes")
 err, _ = val_actions([bad])
