@@ -208,7 +208,7 @@ public sealed class GdiScreenCapture : IScreenCapture
     {
         IntPtr screenDc = GetDC(IntPtr.Zero);
         if (screenDc == IntPtr.Zero) return false;
-        IntPtr memDc = IntPtr.Zero, bmp = IntPtr.Zero;
+        IntPtr memDc = IntPtr.Zero, bmp = IntPtr.Zero, old = IntPtr.Zero;
         try
         {
             int w = GetSystemMetrics(SM_CXSCREEN);
@@ -216,9 +216,16 @@ public sealed class GdiScreenCapture : IScreenCapture
             if (w <= 0 || h <= 0) return false;
 
             memDc = CreateCompatibleDC(screenDc);
+            if (memDc == IntPtr.Zero) return false;
             bmp = CreateCompatibleBitmap(screenDc, w, h);
-            IntPtr old = SelectObject(memDc, bmp);
-            BitBlt(memDc, 0, 0, w, h, screenDc, 0, 0, SRCCOPY | CAPTUREBLT);
+            if (bmp == IntPtr.Zero) return false;
+            old = SelectObject(memDc, bmp);
+            // Every one of these can fail for a reason that is invisible from here: a
+            // desktop switch, the secure desktop coming up, or a display mode change
+            // mid-blit. Unchecked, the bitmap keeps whatever it held before and we hand
+            // the encoder a stale or black frame while reporting a fresh capture -- so a
+            // failure has to come back as one, and let the caller retry on the next tick.
+            if (!BitBlt(memDc, 0, 0, w, h, screenDc, 0, 0, SRCCOPY | CAPTUREBLT)) return false;
 
             Width = w; Height = h; Stride = w * 4;
             int needed = Stride * h;
@@ -233,17 +240,24 @@ public sealed class GdiScreenCapture : IScreenCapture
                 biBitCount = 32,
                 biCompression = 0,      // BI_RGB
             };
+            int copied;
             var handle = GCHandle.Alloc(Frame, GCHandleType.Pinned);
-            try { GetDIBits(memDc, bmp, 0, (uint)h, handle.AddrOfPinnedObject(), ref bmi, 0); }
+            try { copied = GetDIBits(memDc, bmp, 0, (uint)h, handle.AddrOfPinnedObject(), ref bmi, 0); }
             finally { handle.Free(); }
+            // GetDIBits returns the number of scan lines it actually copied, 0 on failure.
+            // A partial copy leaves the tail of Frame holding the previous frame, which
+            // reads as a torn image rather than a dropped one.
+            if (copied != h) return false;
 
-            SelectObject(memDc, old);
             HasFrame = true;
             return true;
         }
         catch { return false; }
         finally
         {
+            // Restore before deleting: DeleteObject refuses a bitmap still selected into
+            // a DC, which on the early-return paths would leak it.
+            if (memDc != IntPtr.Zero && old != IntPtr.Zero) SelectObject(memDc, old);
             if (bmp != IntPtr.Zero) DeleteObject(bmp);
             if (memDc != IntPtr.Zero) DeleteDC(memDc);
             ReleaseDC(IntPtr.Zero, screenDc);

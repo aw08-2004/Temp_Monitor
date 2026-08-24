@@ -45,6 +45,9 @@ public sealed class ShellSession : IAsyncDisposable
     private readonly Task _readOut;
     private readonly Task _readErr;
     private readonly string _tempDir;
+    /// <summary>Captured at construction: Process.Id throws once the Process is disposed,
+    /// and the teardown path needs it precisely when things are going wrong.</summary>
+    private readonly int _pid;
     private readonly List<string> _tempFiles = new();
 
     // Only one submission runs at a time; shell_input bypasses this to reach a blocked child.
@@ -74,6 +77,7 @@ public sealed class ShellSession : IAsyncDisposable
         _proc = proc;
         _log = log;
         _tempDir = tempDir;
+        _pid = proc.Id;
         _readOut = Task.Run(() => PumpAsync(_proc.StandardOutput, isStdout: true));
         _readErr = Task.Run(() => PumpAsync(_proc.StandardError, isStdout: false));
         _proc.EnableRaisingEvents = true;
@@ -287,13 +291,46 @@ public sealed class ShellSession : IAsyncDisposable
         foreach (var f in toDelete) { try { File.Delete(f); } catch { } }
     }
 
+    /// <summary>
+    /// Never throws: GetOrCreateAsync, ResetAsync and ShellSessionManager's own DisposeAsync
+    /// all tear sessions down on paths that cannot handle a failure, and half-disposing a
+    /// shell is worse than finishing the sweep. Never SILENT either, for the one step where
+    /// that distinction matters -- see the kill below.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        try { _proc.StandardInput.Close(); } catch { }
-        try { if (!_proc.HasExited) _proc.Kill(entireProcessTree: true); } catch { }
+        try { _proc.StandardInput.Close(); } catch { /* pipe already gone if the shell exited */ }
+
+        // This shell runs as SYSTEM, so a kill that does not take leaves a live SYSTEM process
+        // and its whole child tree on the endpoint with nothing left pointing at them. Swallowing
+        // that outright is what made "the agent believes it killed a shell and did not" an
+        // unobservable state -- the caller's own try/catch can't see it, because this method is
+        // where it happens.
+        try
+        {
+            if (!_proc.HasExited) _proc.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Exited between HasExited and Kill. That is the ordinary race on a shell the
+            // operator closed with `exit`, not a failure, and warning on it would be noise on
+            // the most common teardown there is.
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning(e, "Could not kill the {Shell} shell (pid {Pid}); it and its children "
+                             + "may still be running as SYSTEM", _shell, _pid);
+        }
+
         await Task.WhenAny(Task.WhenAll(_readOut, _readErr), Task.Delay(2000));
-        try { _proc.Dispose(); } catch { }
+        try { _proc.Dispose(); } catch { /* nothing left to salvage at this point */ }
         _runLock.Dispose();
-        try { Directory.Delete(_tempDir, recursive: true); } catch { }
+        // A stranded temp dir is a slow leak rather than a live process, so it is worth a line
+        // in the log but not a warning.
+        try { Directory.Delete(_tempDir, recursive: true); }
+        catch (Exception e)
+        {
+            _log.LogDebug(e, "Left the {Shell} shell's temp directory behind: {Dir}", _shell, _tempDir);
+        }
     }
 }

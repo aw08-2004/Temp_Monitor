@@ -174,7 +174,7 @@ internal sealed class ConsentDialog : Form
 
         // Operator on its own line, machine-independent copy under it: an email is long enough
         // that flowing it into a sentence would wrap unpredictably.
-        var wrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter };
+        using var wrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter };
         g.DrawString(_who, strong, textBrush, new RectangleF(textLeft, 60, right - textLeft, 20), wrap);
         g.DrawString("wants to view and control this computer.", body, mutedBrush,
                      new RectangleF(textLeft, 80, right - textLeft, 20), wrap);
@@ -196,12 +196,15 @@ internal sealed class ConsentDialog : Form
         using var value = new Font(Font.FontFamily, 9.75f, FontStyle.Bold);
         using var mutedBrush = new SolidBrush(Muted);
         using var textBrush = new SolidBrush(TextColor);
-        var mid = new StringFormat { LineAlignment = StringAlignment.Center };
+        // StringFormat wraps a native GDI+ handle like every Font/Brush/Pen above, and this
+        // paints on the countdown's 100ms tick -- undisposed it leaks handles for as long as
+        // the prompt is up.
+        using var mid = new StringFormat { LineAlignment = StringAlignment.Center };
+        using var midTrim = new StringFormat(mid) { Trimming = StringTrimming.EllipsisCharacter };
         g.DrawString("THIS COMPUTER", label, mutedBrush,
                      new RectangleF(r.X + 12, r.Y, 110, r.Height), mid);
         g.DrawString(text, value, textBrush,
-                     new RectangleF(r.X + 118, r.Y, r.Width - 130, r.Height),
-                     new StringFormat(mid) { Trimming = StringTrimming.EllipsisCharacter });
+                     new RectangleF(r.X + 118, r.Y, r.Width - 130, r.Height), midTrim);
     }
 
     /// <summary>A small monitor-with-an-eye mark, drawn rather than shipped as a resource so the
@@ -435,11 +438,12 @@ internal sealed class ConsentDialog : Form
 
             using var brushText = new SolidBrush(_fore);
             using var font = new Font(Font.FontFamily, 9.75f, FontStyle.Bold);
-            g.DrawString(Text, font, brushText, face, new StringFormat
+            using var centre = new StringFormat
             {
                 Alignment = StringAlignment.Center,
                 LineAlignment = StringAlignment.Center,
-            });
+            };
+            g.DrawString(Text, font, brushText, face, centre);
         }
 
         internal void PerformClick() => OnClick(EventArgs.Empty);

@@ -61,8 +61,7 @@ public sealed class ShellOpenExecutor : ICommandExecutor
         }
 
         _log.LogInformation("Opening terminal {Id} ({Shell} {Cols}x{Rows}) for {Op}",
-            sessionId, shell, cols, rows,
-            string.IsNullOrEmpty(cmd.IssuedBy) ? "unknown" : cmd.IssuedBy);
+            sessionId, shell, cols, rows, OperatorTag.For(cmd.IssuedBy));
 
         try
         {

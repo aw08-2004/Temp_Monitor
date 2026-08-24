@@ -126,7 +126,7 @@ def test_the_frame_opens_on_the_requested_url():
 
     body = get("/remote?machine=PC-2", DOCUMENT)
     check("the query string survives into the frame",
-          'src="/remote?machine=PC-2"' in body or 'src="/remote?machine=PC-2"' in body)
+          'src="/remote?machine=PC-2"' in body)
 
 
 def test_the_fragment_is_carried_into_the_frame():

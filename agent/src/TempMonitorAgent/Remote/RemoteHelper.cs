@@ -4,6 +4,7 @@ using System.Text.Json;
 using Serilog;
 using Serilog.Extensions.Logging;
 using SIPSorcery.Net;
+using TempMonitorAgent.Fleet;
 using TempMonitorAgent.State;
 
 namespace TempMonitorAgent.Remote;
@@ -184,9 +185,10 @@ public static class RemoteHelper
             }
 
             Log.Information(
-                "Session {SessionId}: monitor={Monitor} consent={Consent} issued_by={IssuedBy} " +
+                "Session {SessionId}: monitor={Monitor} consent={Consent} issued_by={Op} " +
                 "ice_servers={Ice} codec={Codec} encoder={Encoder} {Fps}fps {Kbps}kbps scale={Scale}%",
-                session.SessionId, session.Monitor, session.ConsentMode, session.IssuedBy,
+                session.SessionId, session.Monitor, session.ConsentMode,
+                OperatorTag.For(session.IssuedBy),
                 session.IceServers.Count, session.Codec, session.Encoder,
                 session.Fps, session.BitrateKbps, session.Scale);
 
@@ -230,6 +232,12 @@ public static class RemoteHelper
             Log.Information("Attended consent required; prompting the logged-in user.");
             // Its own thread, not the pool: the prompt creates a window, and a thread that owns
             // a window can never attach to another desktop again.
+            //
+            // The RAW address goes to the prompt, deliberately -- unlike the log line above,
+            // which carries an OperatorTag. Naming the person asking to watch your screen is
+            // the entire point of attended consent; an opaque tag there would be asking the
+            // user to approve a stranger. The disclosure is to the one person entitled to it,
+            // on screen, at the moment they decide -- not to anyone who later opens a log.
             bool approved = await ConsentBanner.RequestConsentAsync(
                 AgentConfig.MachineName, session.IssuedBy);
             if (!approved)
