@@ -28,25 +28,10 @@ public class StateDirectoryTests : IDisposable
     public void Dispose()
     {
         // Harden leaves the tree writable only by SYSTEM/Administrators, and the test run is
-        // neither -- so hand access back before deleting, or every run leaks a temp tree.
-        // The test user created these directories, and an owner always keeps WRITE_DAC.
-        try
-        {
-            foreach (var path in Directory.EnumerateDirectories(_dir, "*", SearchOption.AllDirectories)
-                         .Append(_dir))
-            {
-                var info = new DirectoryInfo(path);
-                var security = info.GetAccessControl(AccessControlSections.Access);
-                security.SetAccessRuleProtection(isProtected: false, preserveInheritance: true);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl,
-                    InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit,
-                    PropagationFlags.None, AccessControlType.Allow));
-                info.SetAccessControl(security);
-            }
-        }
-        catch { /* best effort */ }
-        try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+        // neither -- so access has to be handed back before deleting, or every run leaks a
+        // temp tree. TestTree does that; it is shared with AssemblySetup so the two cleanup
+        // paths cannot drift.
+        TestTree.Remove(_dir);
         GC.SuppressFinalize(this);
     }
 
@@ -164,6 +149,30 @@ public class StateDirectoryTests : IDisposable
 
         Assert.True(Directory.Exists(fresh));
         Assert.Equal(default, RightsFor(Users, fresh) & FileSystemRights.WriteData);
+    }
+
+    /// <summary>
+    /// The cleanup both this class and AssemblySetup depend on has to survive the very thing
+    /// this file is about: a tree Harden has left unwritable by the test user. A plain
+    /// Directory.Delete throws there, and a best-effort catch turns the leak silent -- one
+    /// undeletable temp tree per run. Program.cs hardens AgentConfig.ProgramDataDir, which
+    /// the state-root redirect points at the scratch tree, so this is one startup-path test
+    /// away from being the live case rather than a defensive one.
+    /// </summary>
+    [Fact]
+    public void Cleanup_removes_a_tree_that_Harden_has_locked_down()
+    {
+        var root = Path.Combine(Path.GetTempPath(),
+                                "fleethub-cleanup-test-" + Guid.NewGuid().ToString("n"));
+        // Created before Harden on purpose: afterwards only SYSTEM and Administrators may
+        // create anything here, and the test run is neither.
+        Directory.CreateDirectory(Path.Combine(root, "nested"));
+        File.WriteAllText(Path.Combine(root, "nested", "state.json"), "{}");
+        StateDirectory.Harden(root);
+
+        TestTree.Remove(root);
+
+        Assert.False(Directory.Exists(root));
     }
 
     /// <summary>

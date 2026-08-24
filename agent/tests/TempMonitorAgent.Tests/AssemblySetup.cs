@@ -34,13 +34,10 @@ internal static class AssemblySetup
             TempMonitorAgent.AgentConfig.StateDirOverrideVar, StateRoot);
 
         // Best effort: the run is over, and a leaked scratch tree under %TEMP% is harmless
-        // but adds up across runs. Some of these directories have been through
-        // StateDirectory.Harden, which strips the test user's write access -- the user still
-        // owns them, so hand access back before deleting or the delete fails.
-        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-        {
-            try { Directory.Delete(StateRoot, recursive: true); }
-            catch { /* leave it for %TEMP% cleanup */ }
-        };
+        // but adds up across runs. Via TestTree because Program.cs hardens
+        // AgentConfig.ProgramDataDir, which the redirect above now points here -- so the day
+        // a test exercises the startup path this tree comes back write-locked, and a plain
+        // Directory.Delete would quietly fail rather than clean up.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => TestTree.Remove(StateRoot);
     }
 }
