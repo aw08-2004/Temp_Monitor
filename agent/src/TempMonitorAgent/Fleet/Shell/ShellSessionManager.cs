@@ -61,7 +61,7 @@ public sealed class ShellSessionManager : IAsyncDisposable
             var shellType = key.EndsWith("\0cmd") ? "cmd" : "powershell";
             var session = await ShellSession.StartAsync(shellType, _log, ct);
             _sessions[key] = session;
-            _log.LogInformation("Opened {Shell} shell session for {Op}", shellType, EmailOf(key));
+            _log.LogInformation("Opened {Shell} shell session for {Op}", shellType, OperatorTag.For(EmailOf(key)));
             return session;
         }
         finally { _createLock.Release(); }
@@ -78,7 +78,7 @@ public sealed class ShellSessionManager : IAsyncDisposable
         if (_sessions.TryRemove(Key(email, shell), out var s))
         {
             await s.DisposeAsync();
-            _log.LogInformation("Reset {Shell} shell session for {Op}", s.Shell, email);
+            _log.LogInformation("Reset {Shell} shell session for {Op}", s.Shell, OperatorTag.For(email));
         }
     }
 
@@ -95,7 +95,7 @@ public sealed class ShellSessionManager : IAsyncDisposable
             .FirstOrDefault();
         if (victim is { } v && _sessions.TryRemove(v.Key, out var s))
         {
-            _log.LogInformation("Evicting idle shell for {Op} (session cap reached)", EmailOf(v.Key));
+            _log.LogInformation("Evicting idle shell for {Op} (session cap reached)", OperatorTag.For(EmailOf(v.Key)));
             TearDownInBackground(s, v.Key);
         }
     }
@@ -118,7 +118,7 @@ public sealed class ShellSessionManager : IAsyncDisposable
             }
             catch (Exception e)
             {
-                _log.LogWarning(e, "Tearing down the shell for {Op} failed", EmailOf(key));
+                _log.LogWarning(e, "Tearing down the shell for {Op} failed", OperatorTag.For(EmailOf(key)));
             }
         });
     }
@@ -133,7 +133,7 @@ public sealed class ShellSessionManager : IAsyncDisposable
             if (session.LastActivityUtc > cutoff && session.IsAlive) continue;
             if (_sessions.TryRemove(key, out var s))
             {
-                _log.LogInformation("Reaping idle/dead shell for {Op}", EmailOf(key));
+                _log.LogInformation("Reaping idle/dead shell for {Op}", OperatorTag.For(EmailOf(key)));
                 TearDownInBackground(s, key);
             }
         }
