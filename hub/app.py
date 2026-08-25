@@ -43,6 +43,7 @@ import rules
 import scripts
 import notify
 import processes
+import files
 import live
 import authconfig
 import apitokens
@@ -60,6 +61,7 @@ from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from wake_web import create_wake_blueprint
 from processes_web import create_processes_blueprint
+from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
@@ -99,7 +101,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.87.3"
+HUB_VERSION = "1.88.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -124,6 +126,12 @@ LOG_DIR = os.path.abspath(
 os.makedirs(LOG_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(LOG_DIR, "temp_v2.db")
+# Where the file explorer parks bytes in flight (see files.py). Beside the database rather
+# than inside it: these are whole files, up to two gigabytes of them, and a BLOB column that
+# size would be copied wholesale by every backup of the database. Nothing in here is durable
+# -- files.prune_transfers deletes anything past its hour -- so losing the directory costs at
+# most one download somebody can click again.
+FILE_SPOOL_DIR = os.path.join(LOG_DIR, "filespool")
 # Daily CSV archives are retired -- the DB is the single source of truth now.
 # Existing CSV files on disk are left untouched; we just stop writing new ones.
 WRITE_CSV_ARCHIVE = False
@@ -1626,6 +1634,12 @@ CSRF_CHECKED_METHODS = frozenset({"POST"})
 CSRF_UPLOAD_ENDPOINTS = frozenset({
     "packages.upload_package_file",
     "bios.upload_firmware_image",
+    # The file explorer's upload, and it earns the exemption the same way: it writes the
+    # bytes to a spool file, returns an id, and touches no machine. What aims them at a
+    # folder is POST .../files/push, which takes JSON and is therefore covered by the rule
+    # above. See files_web.upload_file_to_spool -- that endpoint's inertness is the whole
+    # reason this line is safe, and anything machine-facing added to it would undo this.
+    "files.upload_file_to_spool",
 })
 
 
@@ -1801,6 +1815,18 @@ app.register_blueprint(create_wake_blueprint(
 # process behind `issue_commands` -- no new capability, because this is strictly less
 # dangerous than the `shutdown` and the SYSTEM shell that gate already covers.
 app.register_blueprint(create_processes_blueprint(DB_PATH, login_required, access))
+
+# The remote file explorer: browsing a machine's disk, moving files on it, and moving bytes
+# both ways. Gated on `issue_commands` throughout -- BROWSING included, unlike the Processes
+# card above. The reason is in files_web.py's docstring: folder names are somebody's
+# documents and the same door reads the bytes in them, and this capability already grants
+# exactly that reach through the SYSTEM terminal, so gating here adds nothing to anyone
+# while gating at `view` would hand it to everyone who can see a temperature graph.
+# HUB_URL rides along for the same reason packages and firmware need it: the agent is handed
+# an absolute URL to PUT bytes to, and that must be the hub's public address rather than
+# whatever Host header reached this process.
+app.register_blueprint(create_files_blueprint(DB_PATH, FILE_SPOOL_DIR, login_required,
+                                              access, hub_url=HUB_URL))
 # The rules engine. resolve_rule_vars and _rules_config are handed in for the same reason
 # the evaluator thread takes them: rules.py stays free of Flask, settings and sensor parsing.
 # Wrapped in lambdas because both are defined further down this file than blueprints are
@@ -2610,6 +2636,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # of anyone looking, so carrying the merged-away name's copy across would only put a
     # stale list under a hostname that is about to report its own.
     processes.forget_machine(DB_PATH, dropped)
+    # Same reasoning for the file explorer's rows, and one more: a listing and a transfer
+    # both name a request the operator has already navigated away from, so there is nothing
+    # to carry across even if we wanted to.
+    files.forget_machine(DB_PATH, dropped, spool_dir=FILE_SPOOL_DIR)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -2885,6 +2915,15 @@ def retention_pruner():
                 live.prune_watches(DB_PATH)
             except Exception as e:
                 print(f"[retention] Live-watch prune failed: {e}")
+            # File-explorer leftovers: listing rows past their TTL, and expired transfers
+            # together with the spooled bytes behind them. Unlike the two above this one is
+            # not merely tidiness -- the spool holds whole files, and nothing else on the hub
+            # ever deletes them. Its own try, as above.
+            try:
+                files.prune_listings(DB_PATH)
+                files.prune_transfers(DB_PATH, FILE_SPOOL_DIR)
+            except Exception as e:
+                print(f"[retention] File-explorer prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 
@@ -3512,6 +3551,7 @@ bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
+files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 apitokens.init_apitokens_db(DB_PATH)
@@ -4249,6 +4289,12 @@ def delete_machine(machine):
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.
     processes.forget_machine(DB_PATH, machine_name)
+    # And anything the file explorer holds: the folder listings somebody browsed, and the
+    # spooled bytes of any download that was never collected. The listings are the same kind
+    # of residue as the process snapshot above -- a table row naming what was in a deleted
+    # machine's user folders -- and the spool is real disk that nothing else would reclaim
+    # before its hour was up.
+    files.forget_machine(DB_PATH, machine_name, spool_dir=FILE_SPOOL_DIR)
     # ...and any live-chart watch on it, for the same reason.
     live.forget_machine(DB_PATH, machine_name)
     # Its BIOS setup password override lives in the secret file rather than the database, so

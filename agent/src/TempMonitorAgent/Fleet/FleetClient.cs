@@ -699,7 +699,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     // ---------------------------------------------------------------- backups (#1b)
 
     /// <summary>
-    /// PUT a finished backup archive. Returns null on success, or a reason.
+    /// PUT a file — a finished backup archive, or one file the file explorer was asked to
+    /// fetch. Returns null on success, or a reason.
     ///
     /// Two shapes, because the two destination kinds differ. An S3 destination gives a
     /// PRE-SIGNED url that carries its own signature in the query string — it must be sent
@@ -709,9 +710,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     ///
     /// Streamed from disk with the long-timeout client — these are gigabytes on a link
     /// that may be a home DSL line, and the 10-second client would abort instantly.
+    ///
+    /// Named for what it does rather than for the feature that needed it first: the file
+    /// explorer's fetch_file is the second caller, and its uploads always go via the hub.
     /// </summary>
-    public async Task<string?> UploadBackupAsync(string url, string archivePath,
-                                                 bool viaHub, CancellationToken ct)
+    public async Task<string?> UploadFileAsync(string url, string archivePath,
+                                               bool viaHub, CancellationToken ct)
     {
         try
         {
@@ -949,16 +953,83 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         return false;
     }
 
+    // ---------------------------------------------------------------- file explorer
+
     /// <summary>
-    /// Download one backup archive to <paramref name="targetPath"/>. Returns null on
-    /// success, or a reason.
+    /// Report one directory listing. Returns true if the hub took it.
     ///
-    /// The mirror of UploadBackupAsync, with the same split: a pre-signed S3 URL carries
+    /// Sent here rather than as the command's output because a folder of two thousand
+    /// entries is ~200 KB, and the command channel's output is a terminal transcript the
+    /// dispatcher truncates at 16,000 characters. The command still completes normally with
+    /// a one-line summary, so "the machine answered" and "the answer is stored" stay
+    /// separately visible in the console.
+    ///
+    /// NOT retried, unlike the backup and firmware reports. An operator is watching a
+    /// spinner: by the time a retry ladder finished they will have clicked again, and the
+    /// hub answers a second request for the same folder with a fresh listing rather than a
+    /// duplicate of a stale one. Losing this costs one click; losing a backup manifest costs
+    /// an archive nothing references.
+    /// </summary>
+    public async Task<bool> ReportListingAsync(string requestId, JsonNode payload,
+                                               CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/files/listing/"
+                  + $"{Uri.EscapeDataString(requestId)}";
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused a directory listing ({Status})", (int)resp.StatusCode);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Listing POST failed: {Msg}", e.Message);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Report the outcome of one file transfer. Returns true if the hub took it.
+    ///
+    /// Only worth sending for a FAILURE, and for one specific reason: the hub can see a
+    /// success for itself (the bytes arrived, or the machine collected them), but it cannot
+    /// tell "this machine could not read the file" from "this machine has not got to it
+    /// yet". Without this the console polls a pending transfer until it expires, which reads
+    /// as a slow machine rather than one that has already answered.
+    /// </summary>
+    public async Task<bool> ReportTransferAsync(string transferId, JsonNode payload,
+                                                CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/files/transfer/"
+                  + $"{Uri.EscapeDataString(transferId)}/result";
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Transfer result POST failed: {Msg}", e.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Download one file to <paramref name="targetPath"/> — a backup archive being
+    /// restored, or the bytes of a push_file. Returns null on success, or a reason.
+    ///
+    /// The mirror of UploadFileAsync, with the same split: a pre-signed S3 URL carries
     /// its own signature and must NOT be sent our bearer header, while a hub-proxied
     /// WebDAV download is on the hub and does need it.
     /// </summary>
-    public async Task<string?> DownloadBackupAsync(string url, string targetPath,
-                                                   bool viaHub, CancellationToken ct)
+    public async Task<string?> DownloadFileAsync(string url, string targetPath,
+                                                 bool viaHub, CancellationToken ct)
     {
         try
         {

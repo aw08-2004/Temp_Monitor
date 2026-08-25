@@ -1,0 +1,69 @@
+{# The explorer's three dialogs. Page-level, like every other dialog the Tools page opens:
+   showModal() puts a dialog in the top layer wherever it sits in the DOM, but a hidden tab
+   panel takes its whole subtree with it, so one living inside the Files panel could not be
+   opened once the operator switched tabs and back. See _tool_dialogs.html. #}
+
+{# Rename and New folder share one dialog. They ask the same question -- what should this be
+   called -- and differ only in the title and in whether a name is pre-filled, which is two
+   properties rather than two dialogs. #}
+<dialog class="modal" id="files-name-dialog" aria-labelledby="files-name-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-name-title">{{ t('files.rename_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p class="stat-card__meta" id="files-name-help"></p>
+        <label class="setting__label" for="files-name-value" style="margin-top: var(--space-4);">{{ t('files.name_label') }}</label>
+        <input class="input" type="text" id="files-name-value" autocomplete="off"
+               spellcheck="false" style="width: 100%;">
+        <p class="setting__error" id="files-name-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="files-name-cancel" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="files-name-ok" class="btn btn--primary">{{ t('common.save') }}</button>
+    </div>
+</dialog>
+
+{# Delete. Its own dialog rather than a confirm() because of what it has to say: WHICH items,
+   and that there is no undo. The agent runs as SYSTEM with no interactive profile, so a
+   deletion here does not land in the user's Recycle Bin -- and an operator who assumes it
+   does is exactly the person this sentence is for. #}
+<dialog class="modal" id="files-delete-dialog" aria-labelledby="files-delete-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-delete-title">{{ t('files.delete_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p id="files-delete-text"></p>
+        <ul class="files-confirm-list" id="files-delete-list"></ul>
+        <p class="stat-card__meta">{{ t('files.delete_permanent') }}</p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="files-delete-cancel" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="files-delete-ok" class="btn btn--danger">{{ t('files.delete') }}</button>
+    </div>
+</dialog>
+
+{# Upload. The file is chosen with the native picker before this opens, so what is left to
+   ask is the two things the picker cannot: what to call it on the far end, and whether it
+   may replace something already there. Overwrite is unchecked every time it opens -- a
+   sticky destructive default is how the second push of an installer quietly replaces the
+   config beside it. #}
+<dialog class="modal" id="files-upload-dialog" aria-labelledby="files-upload-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-upload-title">{{ t('files.upload_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p class="stat-card__meta" id="files-upload-help"></p>
+        <label class="setting__label" for="files-upload-name" style="margin-top: var(--space-4);">{{ t('files.name_label') }}</label>
+        <input class="input" type="text" id="files-upload-name" autocomplete="off"
+               spellcheck="false" style="width: 100%;">
+        <label class="setting__label" style="margin-top: var(--space-4);">
+            <input type="checkbox" id="files-upload-overwrite">
+            {{ t('files.overwrite') }}
+        </label>
+        <p class="setting__error" id="files-upload-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="files-upload-cancel" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="files-upload-ok" class="btn btn--primary">{{ t('files.upload_send') }}</button>
+    </div>
+</dialog>

@@ -328,6 +328,51 @@ def test_favorites_do_not_wait_for_a_machine():
           "FleetFavorites.open(" in read(STATIC, "js", "fleet-terminal.js"))
 
 
+def test_the_files_tab_is_gated_and_wired():
+    """The Files tab, and the reason it is the only per-machine panel here that is gated.
+
+    Firmware and Network read as inventory behind `view`; a folder listing is not inventory
+    -- those are the names of somebody's documents, and the same door reads the bytes in
+    them. Every route behind this panel needs `issue_commands` (see files_web.py), so a tab
+    rendered without it would open onto a wall of 403s.
+
+    The second half of this is the joins check, and it earns its keep here more than
+    anywhere else on the page: files.js looks up roughly thirty ids across two partials, and
+    a rename of any one of them ships green and produces a button that silently does
+    nothing. So every id the module asks for is asserted to exist in the rendered page.
+    """
+    print("\n-- the Files tab: one gate, and every id its module looks up --")
+    plain = get(client_for("viewer@example.com"), "/tools", IFRAME)
+    full = get(client_for("root@example.com"), "/tools", IFRAME)
+
+    check("a plain viewer gets no Files tab at all", 'data-tab-slug="files"' not in plain)
+    check("...nor its panel", 'id="tool-files"' not in plain)
+    check("...nor its dialogs, one of which deletes things",
+          'id="files-delete-dialog"' not in plain)
+    check("...nor the module itself", "js/files.js" not in plain)
+    check("an issue_commands holder gets the tab and the panel",
+          'data-tab-slug="files"' in full and 'id="tool-files"' in full)
+
+    js = read(STATIC, "js", "files.js")
+    check("files.js registers the panel", "PANEL_ID = 'tool-files'" in js)
+    # The panel is wholly machine-only: there is no fleet-wide half of "what is in this
+    # folder", unlike the Firmware image library or the Backup destination list.
+    panel = full.split('id="tool-files"', 1)[1].split('id="tool-', 1)[0]
+    check("...and the whole of it waits for a machine to be picked",
+          "tool-machine-only" in panel)
+
+    wanted = sorted(set(re.findall(r"getElementById\('([a-z0-9-]+)'\)", js)))
+    missing = [name for name in wanted if f'id="{name}"' not in full]
+    check(f"every id files.js looks up is in the page ({len(wanted)} checked, "
+          f"missing {missing[:5]})", not missing)
+
+    # The version gate. An agent without these executors answers "unknown command type", so
+    # without a named floor the panel would report a hard failure on every click -- which,
+    # during a rollout, is every PC that has not self-updated yet.
+    check("files.js names the agent version it needs, like processes.js does",
+          "MIN_FILES_AGENT = '" in js)
+
+
 def main():
     test_the_page_answers_in_every_shell_mode()
     test_a_deep_link_survives_into_the_frame()
@@ -338,6 +383,7 @@ def main():
     test_the_absorbed_pages_still_answer_where_they_were()
     test_the_page_is_scope_filtered()
     test_favorites_do_not_wait_for_a_machine()
+    test_the_files_tab_is_gated_and_wired()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
 

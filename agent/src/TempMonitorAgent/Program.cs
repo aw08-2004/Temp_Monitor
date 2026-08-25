@@ -5,6 +5,7 @@ using TempMonitorAgent.Bios;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
+using TempMonitorAgent.Files;
 using TempMonitorAgent.Network;
 using TempMonitorAgent.Remote;
 using TempMonitorAgent.State;
@@ -144,6 +145,16 @@ try
     // or WMI property that no regular telemetry carries. Four of its five kinds cannot change
     // the machine; the fifth (script) is gated behind a hub setting that starts off.
     builder.Services.AddSingleton<ICommandExecutor, CollectProbeExecutor>();
+    // The remote file explorer. Note that listing IS a command here, unlike the process
+    // list above: browsing is human-paced (one click, one listing, no poll behind it), and
+    // "who opened this folder, and when" is a question the hub's audit trail should be able
+    // to answer -- see hub/files.py's FILE_COMMANDS. The listing itself is POSTed to the hub
+    // rather than returned as command output, because a folder of two thousand entries does
+    // not belong in a terminal transcript.
+    builder.Services.AddSingleton<ICommandExecutor, ListDirectoryExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, FileOperationExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, FetchFileExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, PushFileExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-update

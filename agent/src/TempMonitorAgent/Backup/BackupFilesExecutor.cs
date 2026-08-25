@@ -177,8 +177,8 @@ public sealed class BackupFilesExecutor : ICommandExecutor
             if (string.IsNullOrEmpty(uploadUrl))
                 return await FailRunAsync(runId, "No upload URL was supplied.", log, Say, ct);
 
-            var uploadError = await _fleet.UploadBackupAsync(uploadUrl, archivePath,
-                                                            uploadKind == "hub", ct);
+            var uploadError = await _fleet.UploadFileAsync(uploadUrl, archivePath,
+                                                          uploadKind == "hub", ct);
             if (uploadError is not null)
                 return await FailRunAsync(runId, uploadError, log, Say, ct);
             Say($"[backup] uploaded to {objectKey}");

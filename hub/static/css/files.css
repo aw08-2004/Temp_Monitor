@@ -1,0 +1,135 @@
+/* Tools page, Files tab. Only what the explorer adds -- the card, the table, the buttons and
+   the dialogs are components.css and machine.css, exactly as every other tool panel uses
+   them. What is here is the location bar, the crumbs, and the handful of rules that make a
+   long list of arbitrary filenames readable. */
+
+/* The location bar: Up, the path, Go, Refresh. The path takes whatever is left, because it
+   is the only part whose content is not a fixed word. */
+.files-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.files-bar__path {
+    flex: 1;
+    /* min-width beats flex-basis here: a flex item defaults to min-content, and a pasted
+       UNC path would otherwise stretch the bar past the panel instead of scrolling inside
+       its own input. Same reasoning as .tools-layout__main's min-width: 0. */
+    min-width: 12rem;
+    font-family: var(--font-mono, monospace);
+}
+
+/* Crumbs wrap rather than scroll. A deep path is common (six levels into a user profile is
+   ordinary), and a horizontally scrolling strip hides the crumb an operator most wants --
+   the one near the start, which is where "go back up two" lives. */
+.files-crumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin: var(--space-2) 0;
+}
+
+.files-crumb {
+    padding: var(--space-1) var(--space-2);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-sm);
+}
+
+.files-crumb__sep {
+    color: var(--text-muted);
+    user-select: none;
+}
+
+.files-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+/* A hairline between groups of verbs. Delete sits after one of these on its own, so the
+   destructive button is never adjacent to the one an operator meant to press. */
+.files-actions__sep {
+    width: 1px;
+    align-self: stretch;
+    min-height: 1.5rem;
+    background: var(--card-border);
+}
+
+.files-col-pick {
+    width: 2.5rem;
+    text-align: center;
+}
+
+/* Filenames are monospaced. Not decoration: this column is full of names that differ by a
+   character (report-v2 vs report-v3, l vs 1 vs I in a hash), and a proportional font is
+   where a helpdesk deletes the wrong one. */
+.files-name {
+    font-family: var(--font-mono, monospace);
+    word-break: break-all;
+}
+
+/* A folder is a button; a file is a span. They must not look alike, because one of them
+   does something when clicked. */
+button.files-name {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+}
+
+button.files-name:hover,
+button.files-name:focus-visible {
+    text-decoration: underline;
+}
+
+.files-name--dir {
+    font-weight: 600;
+}
+
+/* Hidden and system entries are dimmed, never omitted. An operator browsing ProgramData or
+   a user profile needs to see them -- most of what they are looking for in those folders IS
+   hidden -- but they should not compete with the rest of the list for attention. */
+.files-row--dim .files-name,
+.files-row--dim td {
+    opacity: 0.65;
+}
+
+.files-badge {
+    display: inline-block;
+    margin-left: var(--space-2);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm, 4px);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* The delete dialog's list of what is about to go. Scrolls at around eight rows: a
+   confirmation the operator has to scroll to reach the button of is a confirmation they
+   will learn to dismiss. */
+.files-confirm-list {
+    margin: var(--space-3) 0;
+    padding-left: var(--space-5);
+    max-height: 12rem;
+    overflow-y: auto;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-sm);
+    word-break: break-all;
+}
+
+@media (max-width: 720px) {
+    /* The modified column is the first thing to go on a phone: it is the widest and the
+       least often what the operator came for. Size and name stay. */
+    #files-table th:nth-child(4),
+    #files-table td:nth-child(4) {
+        display: none;
+    }
+}

@@ -134,7 +134,7 @@ public sealed class RestoreFilesExecutor : ICommandExecutor
                 {
                     Say($"[restore] archive {index + 1}/{archives.Count}: downloading "
                         + $"{wanted.Count} file(s)");
-                    var error = await _fleet.DownloadBackupAsync(
+                    var error = await _fleet.DownloadFileAsync(
                         url, staged, download.GetString("kind") == "hub", ct);
                     if (error is not null)
                     {

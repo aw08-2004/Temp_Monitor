@@ -2089,7 +2089,8 @@
       "terminal": "Terminal",
       "backup": "Backup",
       "firmware": "Firmware",
-      "network": "Network"
+      "network": "Network",
+      "files": "Files"
     },
     "os": "OS: {value}",
     "os_build": " (build {build})"
@@ -2707,7 +2708,8 @@
       "terminal": "Terminal",
       "backup": "Backup",
       "firmware": "Firmware",
-      "network": "Network"
+      "network": "Network",
+      "files": "Files"
     },
     "machines_title": "Machines",
     "machine_search": "Search machines",
@@ -2715,5 +2717,88 @@
     "no_match": "No machines match your search.",
     "pick_a_machine": "Pick a machine from the list to use these tools on it.",
     "machine_unavailable": "{machine} is not available to you. Pick another machine from the list."
+  },
+  "files": {
+    "title": "Files on this machine",
+    "up": "Up",
+    "up_title": "Go to the folder above this one",
+    "path_label": "Folder path",
+    "path_placeholder": "C:\\Users",
+    "go": "Go",
+    "refresh": "Refresh",
+    "crumbs_label": "Folder path",
+    "this_pc": "This PC",
+    "select_all": "Select every item in this folder",
+    "col": {
+      "name": "Name",
+      "size": "Size",
+      "modified": "Modified"
+    },
+    "download": "Download",
+    "upload": "Upload",
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "rename": "Rename",
+    "new_folder": "New folder",
+    "delete": "Delete",
+    "badge": {
+      "link": "link",
+      "readonly": "read-only",
+      "hidden": "hidden"
+    },
+    "empty": "This folder is empty.",
+    "free_of": "{free} free of {total}",
+    "item_count": {
+      "one": "{count} item",
+      "other": "{count} items"
+    },
+    "truncated": "{count} more items are not shown -- this folder is larger than one listing carries.",
+    "asking": "Asking the machine…",
+    "working": "Working…",
+    "fetching": "Fetching from the machine…",
+    "sending": "Sending to the machine…",
+    "ready": "Ready",
+    "refused": "The machine would not open that folder.",
+    "load_failed": "Could not read that folder.",
+    "operation_failed": "The machine could not finish that.",
+    "download_failed": "That download did not finish.",
+    "upload_failed": "That upload did not finish.",
+    "command_expired": "The machine never picked this up. It may be offline.",
+    "no_answer": "The machine has not answered. It may be offline.",
+    "agent_too_old": "This machine runs agent {version}; the file explorer needs {needed} or newer. It will appear once the machine updates itself.",
+    "clipboard_copy": {
+      "one": "{count} item ready to copy.",
+      "other": "{count} items ready to copy."
+    },
+    "clipboard_cut": {
+      "one": "{count} item ready to move.",
+      "other": "{count} items ready to move."
+    },
+    "save_file": "Save {name}",
+    "uploaded": "{name} was written to this machine.",
+    "name_label": "Name",
+    "name_required": "A name is required.",
+    "rename_title": "Rename",
+    "rename_help": "Rename {name} in this folder.",
+    "new_folder_title": "New folder",
+    "new_folder_help": "The new folder will be created in {path}.",
+    "delete_title": "Delete these?",
+    "delete_text": {
+      "one": "This will delete 1 item from the machine:",
+      "other": "This will delete {count} items from the machine:"
+    },
+    "delete_permanent": "There is no undo. The agent runs as the system account, so deleted items do not go to the Recycle Bin and the person at the PC cannot restore them.",
+    "upload_title": "Send a file to this machine",
+    "upload_help": "It will be written to {path}. Size: {size}.",
+    "upload_send": "Send",
+    "overwrite": "Replace a file that is already there",
+    "drive_type": {
+      "fixed": "fixed disk",
+      "removable": "removable",
+      "network": "network drive",
+      "cdrom": "optical",
+      "ram": "RAM disk"
+    }
   }
 }

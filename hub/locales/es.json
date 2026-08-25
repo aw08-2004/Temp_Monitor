@@ -1978,7 +1978,8 @@
       "terminal": "Terminal",
       "backup": "Copia de seguridad",
       "firmware": "Firmware",
-      "network": "Red"
+      "network": "Red",
+      "files": "Archivos"
     },
     "os": "SO: {value}",
     "os_build": " (compilación {build})"
@@ -2591,7 +2592,8 @@
       "terminal": "Terminal",
       "backup": "Copia de seguridad",
       "firmware": "Firmware",
-      "network": "Red"
+      "network": "Red",
+      "files": "Archivos"
     },
     "machines_title": "Máquinas",
     "machine_search": "Buscar máquinas",
@@ -2599,5 +2601,88 @@
     "no_match": "Ninguna máquina coincide con tu búsqueda.",
     "pick_a_machine": "Elige una máquina de la lista para usar estas herramientas en ella.",
     "machine_unavailable": "{machine} no está disponible para ti. Elige otra máquina de la lista."
+  },
+  "files": {
+    "title": "Archivos de este equipo",
+    "up": "Subir",
+    "up_title": "Ir a la carpeta superior",
+    "path_label": "Ruta de la carpeta",
+    "path_placeholder": "C:\\Users",
+    "go": "Abrir",
+    "refresh": "Actualizar",
+    "crumbs_label": "Ruta de la carpeta",
+    "this_pc": "Este equipo",
+    "select_all": "Seleccionar todos los elementos de esta carpeta",
+    "col": {
+      "name": "Nombre",
+      "size": "Tamaño",
+      "modified": "Modificado"
+    },
+    "download": "Descargar",
+    "upload": "Subir archivo",
+    "copy": "Copiar",
+    "cut": "Cortar",
+    "paste": "Pegar",
+    "rename": "Cambiar nombre",
+    "new_folder": "Nueva carpeta",
+    "delete": "Eliminar",
+    "badge": {
+      "link": "enlace",
+      "readonly": "solo lectura",
+      "hidden": "oculto"
+    },
+    "empty": "Esta carpeta está vacía.",
+    "free_of": "{free} libres de {total}",
+    "item_count": {
+      "one": "{count} elemento",
+      "other": "{count} elementos"
+    },
+    "truncated": "Hay {count} elementos más que no se muestran: esta carpeta es mayor de lo que cabe en un listado.",
+    "asking": "Consultando al equipo…",
+    "working": "Trabajando…",
+    "fetching": "Obteniendo del equipo…",
+    "sending": "Enviando al equipo…",
+    "ready": "Listo",
+    "refused": "El equipo no pudo abrir esa carpeta.",
+    "load_failed": "No se pudo leer esa carpeta.",
+    "operation_failed": "El equipo no pudo completar la operación.",
+    "download_failed": "Esa descarga no se completó.",
+    "upload_failed": "Ese envio no se completó.",
+    "command_expired": "El equipo nunca recogió la orden. Puede estar sin conexión.",
+    "no_answer": "El equipo no ha respondido. Puede estar sin conexión.",
+    "agent_too_old": "Este equipo ejecuta el agente {version}; el explorador de archivos necesita {needed} o posterior. Aparecerá cuando el equipo se actualice.",
+    "clipboard_copy": {
+      "one": "{count} elemento listo para copiar.",
+      "other": "{count} elementos listos para copiar."
+    },
+    "clipboard_cut": {
+      "one": "{count} elemento listo para mover.",
+      "other": "{count} elementos listos para mover."
+    },
+    "save_file": "Guardar {name}",
+    "uploaded": "{name} se ha escrito en este equipo.",
+    "name_label": "Nombre",
+    "name_required": "Hace falta un nombre.",
+    "rename_title": "Cambiar nombre",
+    "rename_help": "Cambiar el nombre de {name} en esta carpeta.",
+    "new_folder_title": "Nueva carpeta",
+    "new_folder_help": "La nueva carpeta se creará en {path}.",
+    "delete_title": "¿Eliminar estos elementos?",
+    "delete_text": {
+      "one": "Se eliminará 1 elemento del equipo:",
+      "other": "Se eliminarán {count} elementos del equipo:"
+    },
+    "delete_permanent": "No hay deshacer. El agente se ejecuta como cuenta del sistema, así que lo eliminado no va a la Papelera y la persona que usa el equipo no puede recuperarlo.",
+    "upload_title": "Enviar un archivo a este equipo",
+    "upload_help": "Se escribirá en {path}. Tamaño: {size}.",
+    "upload_send": "Enviar",
+    "overwrite": "Reemplazar un archivo que ya exista",
+    "drive_type": {
+      "fixed": "disco fijo",
+      "removable": "extraíble",
+      "network": "unidad de red",
+      "cdrom": "óptica",
+      "ram": "disco RAM"
+    }
   }
 }

@@ -224,6 +224,26 @@ PROBE_COMMANDS = frozenset({
     "collect_probe",
 })
 
+# The remote file explorer (see files.py) -- browsing a machine's disk, moving files on it,
+# and moving bytes between it and the operator's browser.
+#
+# Note what IS a command here, in contrast to the process card above: LISTING a directory is
+# one. The argument that keeps process enumeration off this queue is that the console polls
+# it every five seconds, so a security-level audit row per read would drown the trail that
+# nothing prunes. Browsing is the opposite on both counts -- it is human-paced, one click and
+# one listing with no poll behind it, and "who opened the payroll folder, and when" is
+# precisely the question the trail should be able to answer.
+#
+# `list_directory` and the two transfer verbs carry a one-shot id (a request row, a transfer
+# row) that the hub minted moments earlier, so a replayed copy answers into a row that is
+# finished or gone.
+FILE_COMMANDS = frozenset({
+    "list_directory",
+    "file_operation",
+    "fetch_file",
+    "push_file",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -235,7 +255,8 @@ ALL_COMMANDS = frozenset({
     "update_bios",
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
-      | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS)
+      | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
+      | FILE_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS
@@ -1619,6 +1640,16 @@ def _validate_favorite(name, command_type, params):
         raise ValueError(f"{command_type!r} commands name one process by id and cannot be "
                          f"saved as a favorite; end processes from the machine's Processes "
                          f"card instead")
+    if command_type in FILE_COMMANDS:
+        # Three of the four carry a one-shot id -- a listing request, a transfer row -- that
+        # is finished or pruned by the time a favorite is replayed, so the machine would do
+        # the work and have nowhere to report it. `file_operation` carries no id, and is here
+        # for the other reason: it names absolute paths on ONE machine's disk, and a saved
+        # "delete C:\\Temp\\build" replayed against whichever PC an operator picked next is a
+        # deletion nobody looked at first. The explorer confirms every one of these against a
+        # listing the operator is looking at, and that is where they belong.
+        raise ValueError(f"{command_type!r} commands name paths on one machine's disk and "
+                         f"cannot be saved as a favorite; use the Files tool instead")
     if params is None:
         params = {}
     if not isinstance(params, dict):

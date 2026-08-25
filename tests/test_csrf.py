@@ -144,17 +144,29 @@ def test_device_tokens_are_not_gated_either():
 
 
 def test_uploads_are_exempt_but_narrowly():
-    """The two file-upload endpoints post multipart and cannot send JSON. They are
-    exempted by ENDPOINT NAME rather than by allowing multipart everywhere, so a future
-    route cannot inherit the exemption by accident."""
+    """The file-upload endpoints post multipart and cannot send JSON. They are exempted by
+    ENDPOINT NAME rather than by allowing multipart everywhere, so a future route cannot
+    inherit the exemption by accident.
+
+    The set is pinned literally, and that is the point of this test: multipart is the one
+    state-changing shape a cross-site HTML form can still produce, so every name added here
+    is a route that stays reachable from any page on the internet with an operator's cookie
+    attached. Each one is only safe because it is INERT -- it stores bytes and returns an id,
+    creating no package, no payload record, no deployment and no command -- and the JSON call
+    that gives those bytes meaning is covered by the rule. A name appearing here without that
+    property is the bug this assertion exists to catch."""
     print("\n-- the upload exemption is by endpoint name, not by content type --")
-    check("exactly the two known uploads are exempt",
+    check("exactly the known uploads are exempt",
           app.CSRF_UPLOAD_ENDPOINTS
-          == {"packages.upload_package_file", "bios.upload_firmware_image"})
-    # Both are real, registered endpoints -- a typo here would silently un-exempt an
+          == {"packages.upload_package_file", "bios.upload_firmware_image",
+              # The file explorer's upload. Inert in the same way: it spools the file and
+              # answers with a transfer id, and POST .../files/push -- which takes JSON --
+              # is what aims it at a folder and tells the machine to collect it.
+              "files.upload_file_to_spool"})
+    # All are real, registered endpoints -- a typo here would silently un-exempt an
     # upload, which fails loudly, but a rename would silently exempt nothing at all.
     registered = set(app.app.view_functions)
-    check("both exempt endpoints actually exist",
+    check("every exempt endpoint actually exists",
           app.CSRF_UPLOAD_ENDPOINTS <= registered)
 
 
