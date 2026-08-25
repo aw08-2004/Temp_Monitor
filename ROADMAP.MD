@@ -2167,6 +2167,69 @@ than silently applied.
 
 ---
 
+## ✅ 13. Remote file explorer (Tools → Files)   ·   hub 1.88.0 (+ agent, pending a signed release)
+
+Browsing a managed machine's disk, and moving files both ways. The Tools page grows a
+**Files** tab: the machine's volumes, then folders, with **Download**, **Upload**, **Copy**,
+**Cut/Paste**, **Rename**, **New folder** and **Delete**. It answers the two calls the
+console previously could not — "the report is on my desktop and I can't open it" and "put
+this driver in C:\Temp for me" — which until now meant a SYSTEM shell, because a terminal
+moves text and not bytes.
+
+**Browsing is `issue_commands`, and that is the one departure from #12.** The Processes card
+reads behind `view` on the argument that a process list is inventory. A folder listing is
+not: those are the names of somebody's documents, and the same door reads the bytes inside
+them. The capability adds nothing to anyone who already holds it — they can open a SYSTEM
+shell on the same machine from the tab next door — while putting it at `view` would have
+handed a read of every user's files to everyone who can see a temperature graph.
+
+**A listing IS a command, unlike a process list — for the same reason, read the other way.**
+#12 keeps enumeration off the command queue because the console polls it every five seconds
+and a security-level audit row per read would drown a trail that nothing prunes. Browsing is
+the opposite on both counts: it is human-paced, one click and one listing with no poll behind
+it, and "who opened the payroll folder, and when" is exactly what the trail should be able to
+answer. So each navigation is one audited command — and the listing itself is POSTed to a
+dedicated endpoint rather than returned as command output, because two thousand entries is
+~200 KB and the command channel's output is a terminal transcript truncated at 16,000
+characters.
+
+**Transfers are two hops through a hub spool, in both directions.** The machine and the
+operator's browser are never awake on the same network at the same instant — the assumption
+this whole product exists to avoid — so a download is the agent PUTting bytes to the hub and
+the browser collecting them from `logs/filespool` when the transfer goes ready, and an upload
+is the reverse. Capped at 2 GB either way, expired after an hour with the spooled bytes
+deleted, and a folder download is **zipped on the machine** (the hub never sees the folder,
+and 200 MB of source becomes 30 MB over the link that is actually slow). Downloads are served
+`as_attachment` with an octet-stream type: those bytes are entirely under the control of
+whoever put them on that machine, and inline an uploaded `.html` would run as script on the
+hub's own origin against the operator's session.
+
+**The upload is two requests, and the split is a CSRF control rather than an ergonomic one.**
+Multipart is the one state-changing shape a cross-site HTML form can still produce, so the
+endpoint that receives the bytes is inert by construction — it spools them, returns an id,
+and touches no machine — and is exempted by name in `app.CSRF_UPLOAD_ENDPOINTS`. The JSON
+call that aims them at a folder and queues the command is covered by the ordinary rule. Same
+arrangement `packages.upload_package_file` already uses.
+
+**Paths are validated at both ends, and the agent's copy is the authority.** No relative
+paths, no `..` component (not to stop an escape — there is nothing to escape — but so the
+breadcrumb, the audit row and the command all name the same folder), no device namespaces, no
+deleting a drive, and no moving a folder inside itself. There is deliberately **no blocklist
+of folders**: the same operator can already read any file on the machine from the Terminal
+tab, so a list of forbidden directories would be a map rather than a control.
+
+**Delete is permanent and says so.** The agent runs as SYSTEM with no interactive profile, so
+a deletion cannot go to the person's Recycle Bin — it would land in SYSTEM's, where they
+cannot reach it. The confirmation names every item and states there is no undo, which is a
+better answer than an undo only a disk editor could use.
+
+**Remaining gaps.** No drag-and-drop, no multi-file upload (one file per push), no folder
+upload, no in-console preview or edit, no search within a folder, and no progress bar for a
+transfer in flight — the panel says which stage it is at, not how far through. The
+2,000-entry listing cap is counted and admitted in the UI rather than silently applied.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
@@ -2244,6 +2307,16 @@ than silently applied.
     release** (build + `sign_release.py --sign-agent` + asset upload); until then the card
     names the version it needs instead of waiting forever on a machine that will never
     report.
+13. ~~**#13 Remote file explorer**~~ — done, hub 1.88.0. Added for the same reason as #12
+    and immediately after it: the other two helpdesk calls the console could not answer
+    without a SYSTEM shell were "get that file off my desktop" and "put this one on it", and
+    a shell cannot do the second at all. It reuses the command queue for browsing and the
+    file verbs, and the backup feature's existing hub-proxied transfer helpers (renamed
+    `UploadFileAsync` / `DownloadFileAsync`, since they now have a second caller) for the
+    bytes. The one new piece is the spool directory the two hops meet in, pruned by the
+    retention thread that already prunes the process and live watches. **The agent half is
+    pending a signed release**; until then the tab names the version it needs (3.33.0)
+    instead of failing every click on a fleet that has not updated.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
@@ -2259,7 +2332,7 @@ than silently applied.
 > opportunistic remainder of #3.
 >
 > What is otherwise outstanding is not a feature but a release — two of them now: the agent
-> halves of #1, #2, #5, #6, #9 and #10 all ship in source and need a signed **agent**
+> halves of #1, #2, #5, #6, #9, #10 and #13 all ship in source and need a signed **agent**
 > release before the fleet gains any of them, and #11 needs a signed **client** release
 > before there is anything on the Download page.
 

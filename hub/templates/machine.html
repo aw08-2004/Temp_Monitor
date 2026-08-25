@@ -48,6 +48,12 @@
            all, is inventory in the sense its model and its disks are. #}
         <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
         <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
+        {# Files IS gated, and it is the only one of these that is. A folder listing is not
+           inventory the way a BIOS setting is -- those are the names of somebody's
+           documents -- and every route behind that tab needs issue_commands. #}
+        {% if cap.ISSUE_COMMANDS in user_capabilities %}
+        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=files&amp;machine={{ machine|urlencode }}">{{ t('machine.open.files') }}</a>
+        {% endif %}
     </div>
 
     {# Every section on this page folds and remembers being folded (collapse.js). Native

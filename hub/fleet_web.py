@@ -553,6 +553,14 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         if data.get("type") in fleet.PROCESS_COMMANDS:
             return jsonify({"error": "Processes are ended and restarted from the machine's "
                                      "Processes card, not the command channel."}), 400
+        # Same capability again, and the same reason as the processes card: files_web
+        # validates every path before it becomes a command (no '..', no drive roots to
+        # delete, no folder moved inside itself) and mints the one-shot listing and transfer
+        # rows the agent reports back into. A hand-rolled copy would skip the first and
+        # answer into nothing for the second.
+        if data.get("type") in fleet.FILE_COMMANDS:
+            return jsonify({"error": "Files are browsed and moved from the Files tool, "
+                                     "not the command channel."}), 400
         try:
             command_id = fleet.create_command(
                 db_path,

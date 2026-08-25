@@ -1978,7 +1978,8 @@
       "terminal": "Terminal",
       "backup": "Sicherung",
       "firmware": "Firmware",
-      "network": "Netzwerk"
+      "network": "Netzwerk",
+      "files": "Dateien"
     },
     "os": "Betriebssystem: {value}",
     "os_build": " (Build {build})"
@@ -2591,7 +2592,8 @@
       "terminal": "Terminal",
       "backup": "Sicherung",
       "firmware": "Firmware",
-      "network": "Netzwerk"
+      "network": "Netzwerk",
+      "files": "Dateien"
     },
     "machines_title": "Rechner",
     "machine_search": "Rechner suchen",
@@ -2599,5 +2601,88 @@
     "no_match": "Keine Rechner passen zu deiner Suche.",
     "pick_a_machine": "Wähle links einen Rechner, um diese Werkzeuge darauf anzuwenden.",
     "machine_unavailable": "{machine} ist für dich nicht verfügbar. Wähle einen anderen Rechner aus der Liste."
+  },
+  "files": {
+    "title": "Dateien auf diesem Computer",
+    "up": "Nach oben",
+    "up_title": "Zum übergeordneten Ordner wechseln",
+    "path_label": "Ordnerpfad",
+    "path_placeholder": "C:\\Users",
+    "go": "Öffnen",
+    "refresh": "Aktualisieren",
+    "crumbs_label": "Ordnerpfad",
+    "this_pc": "Dieser PC",
+    "select_all": "Alle Objekte in diesem Ordner auswählen",
+    "col": {
+      "name": "Name",
+      "size": "Größe",
+      "modified": "Geändert"
+    },
+    "download": "Herunterladen",
+    "upload": "Hochladen",
+    "copy": "Kopieren",
+    "cut": "Ausschneiden",
+    "paste": "Einfügen",
+    "rename": "Umbenennen",
+    "new_folder": "Neuer Ordner",
+    "delete": "Löschen",
+    "badge": {
+      "link": "Verknüpfung",
+      "readonly": "schreibgeschützt",
+      "hidden": "versteckt"
+    },
+    "empty": "Dieser Ordner ist leer.",
+    "free_of": "{free} frei von {total}",
+    "item_count": {
+      "one": "{count} Objekt",
+      "other": "{count} Objekte"
+    },
+    "truncated": "{count} weitere Objekte werden nicht angezeigt -- dieser Ordner ist größer als eine Auflistung fasst.",
+    "asking": "Computer wird gefragt …",
+    "working": "Wird ausgeführt …",
+    "fetching": "Wird vom Computer geholt …",
+    "sending": "Wird an den Computer gesendet …",
+    "ready": "Bereit",
+    "refused": "Der Computer konnte diesen Ordner nicht öffnen.",
+    "load_failed": "Dieser Ordner konnte nicht gelesen werden.",
+    "operation_failed": "Der Computer konnte das nicht abschließen.",
+    "download_failed": "Dieser Download wurde nicht abgeschlossen.",
+    "upload_failed": "Dieser Upload wurde nicht abgeschlossen.",
+    "command_expired": "Der Computer hat das nie abgeholt. Er ist möglicherweise offline.",
+    "no_answer": "Der Computer hat nicht geantwortet. Er ist möglicherweise offline.",
+    "agent_too_old": "Auf diesem Computer läuft Agent {version}; der Datei-Explorer benötigt {needed} oder neuer. Er erscheint, sobald sich der Computer aktualisiert hat.",
+    "clipboard_copy": {
+      "one": "{count} Objekt zum Kopieren bereit.",
+      "other": "{count} Objekte zum Kopieren bereit."
+    },
+    "clipboard_cut": {
+      "one": "{count} Objekt zum Verschieben bereit.",
+      "other": "{count} Objekte zum Verschieben bereit."
+    },
+    "save_file": "{name} speichern",
+    "uploaded": "{name} wurde auf diesen Computer geschrieben.",
+    "name_label": "Name",
+    "name_required": "Ein Name ist erforderlich.",
+    "rename_title": "Umbenennen",
+    "rename_help": "{name} in diesem Ordner umbenennen.",
+    "new_folder_title": "Neuer Ordner",
+    "new_folder_help": "Der neue Ordner wird in {path} erstellt.",
+    "delete_title": "Diese löschen?",
+    "delete_text": {
+      "one": "Damit wird 1 Objekt vom Computer gelöscht:",
+      "other": "Damit werden {count} Objekte vom Computer gelöscht:"
+    },
+    "delete_permanent": "Es gibt kein Rückgängig. Der Agent läuft als Systemkonto, gelöschte Objekte landen daher nicht im Papierkorb und können von der Person am PC nicht wiederhergestellt werden.",
+    "upload_title": "Eine Datei an diesen Computer senden",
+    "upload_help": "Sie wird nach {path} geschrieben. Größe: {size}.",
+    "upload_send": "Senden",
+    "overwrite": "Eine bereits vorhandene Datei ersetzen",
+    "drive_type": {
+      "fixed": "Festplatte",
+      "removable": "Wechseldatenträger",
+      "network": "Netzlaufwerk",
+      "cdrom": "optisch",
+      "ram": "RAM-Disk"
+    }
   }
 }
