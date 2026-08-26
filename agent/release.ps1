@@ -97,17 +97,35 @@ Ok "Signing key: $keyPath"
 # ----------------------------------------------------------------------
 Step "Bumping version to $Version"
 
+# "Unchanged" has two causes that must not read the same. Either the file already carries
+# this version -- normal, when the bump was made by hand in the PR that shipped the change --
+# or the regex no longer matches the file, in which case the version is NOT $Version, the
+# build below ships whatever the file does say, and the manifest will advertise a version no
+# binary reports. So the two are told apart by looking for the target version in the text,
+# and only the first one is allowed to print [ok].
 $configText = Get-Content $ConfigCs -Raw
 $newConfigText = $configText -replace 'public const string Version = "[\d.]+";', "public const string Version = `"$Version`";"
-if ($newConfigText -eq $configText) { Warn "AgentConfig.cs Version line not found/unchanged -- check the pattern." }
-elseif (-not $DryRun) { Set-Content -Path $ConfigCs -Value $newConfigText -NoNewline }
-Ok "AgentConfig.cs -> $Version$(if($DryRun){' (dry-run, not written)'})"
+if ($newConfigText -eq $configText) {
+    if ($configText -notmatch [regex]::Escape("public const string Version = `"$Version`";")) {
+        Die "AgentConfig.cs Version line does not match the pattern and is not already $Version -- check it by hand."
+    }
+    Ok "AgentConfig.cs already at $Version"
+} else {
+    if (-not $DryRun) { Set-Content -Path $ConfigCs -Value $newConfigText -NoNewline }
+    Ok "AgentConfig.cs -> $Version$(if($DryRun){' (dry-run, not written)'})"
+}
 
 $csprojText = Get-Content $Csproj -Raw
 $newCsprojText = $csprojText -replace '<Version>[\d.]+</Version>', "<Version>$Version</Version>"
-if ($newCsprojText -eq $csprojText) { Warn "TempMonitorAgent.csproj <Version> not found/unchanged." }
-elseif (-not $DryRun) { Set-Content -Path $Csproj -Value $newCsprojText -NoNewline }
-Ok "TempMonitorAgent.csproj -> $Version$(if($DryRun){' (dry-run, not written)'})"
+if ($newCsprojText -eq $csprojText) {
+    if ($csprojText -notmatch [regex]::Escape("<Version>$Version</Version>")) {
+        Die "TempMonitorAgent.csproj <Version> does not match the pattern and is not already $Version -- check it by hand."
+    }
+    Ok "TempMonitorAgent.csproj already at $Version"
+} else {
+    if (-not $DryRun) { Set-Content -Path $Csproj -Value $newCsprojText -NoNewline }
+    Ok "TempMonitorAgent.csproj -> $Version$(if($DryRun){' (dry-run, not written)'})"
+}
 
 # ----------------------------------------------------------------------
 # 2. Publish
@@ -244,11 +262,27 @@ try {
         Say "[dry-run] git commit -m `"Release agent v$Version`""
     } else {
         git add $ManifestPath "$ManifestPath.sig" $ConfigCs $Csproj
+        if ($LASTEXITCODE -ne 0) { Die "git add failed -- nothing was committed." }
         $staged = git diff --cached --name-only
         if (-not $staged) {
             Warn "Nothing staged (already committed?) -- skipping commit."
         } else {
             git commit -m "Release agent v$Version" | Out-Null
+            # Checked like every other external call in this script, and for a while it
+            # was the one that was not. A commit can fail for reasons that have nothing to
+            # do with the release -- a gpg signing key this machine does not hold, a
+            # pre-commit hook, an unmerged index -- and git says so on stderr, which
+            # Out-Null does not swallow but the eye slides straight past when the next
+            # line says [ok]. That is the worst failure this script can have: the release
+            # and its asset are already published, the manifest is signed, and the ONLY
+            # thing missing is the commit that puts it on main -- which is the one file
+            # SelfUpdater reads. A release that stops here looks finished and reaches no
+            # machine at all.
+            if ($LASTEXITCODE -ne 0) {
+                Die ("git commit failed -- the manifest is signed and staged but NOT " +
+                     "committed, so no agent will see this release. Fix the cause above, " +
+                     "then run:  git commit -m `"Release agent v$Version`"  and push.")
+            }
             Ok "Committed: $($staged -join ', ')"
         }
     }
