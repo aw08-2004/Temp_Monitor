@@ -187,6 +187,36 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
             return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 201
 
+    @bp.route("/api/machines/<machine>/files/open", methods=["POST"])
+    @login_required
+    @access.require_machine(permissions.ISSUE_COMMANDS)
+    def machine_open_item(machine):
+        """Start one file, program or folder on the machine. Answers with a command id.
+
+        The same gate as everything else here, and no additional one: `run_as: "system"`
+        starts a program as SYSTEM, which is precisely what `run_script` and the Terminal
+        already do for any operator holding this capability. What is new is the `user` half
+        -- a launch on somebody's own desktop, in their own token -- and that is strictly
+        LESS reach than the SYSTEM shell next door, not more.
+
+        Nothing is re-listed after this: opening changes nothing on the disk. The console
+        shows the agent's one-line answer (which account, which session, which pid) and
+        leaves the folder as it was.
+        """
+        refusal = _require_json()
+        if refusal:
+            return refusal
+        data = request.get_json(silent=True) or {}
+        try:
+            params = files.validate_open(data.get("path"), run_as=data.get("run_as"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        try:
+            command_id = _queue(str(machine).strip(), "open_item", params)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"command_id": command_id}), 201
+
     # ================================================================
     # Console: download (machine -> hub -> browser)
     # ================================================================

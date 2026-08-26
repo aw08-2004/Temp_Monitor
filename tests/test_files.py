@@ -137,6 +137,31 @@ def test_the_two_operations_that_destroy_data():
           == "C:\\ab")
 
 
+def test_opening_names_an_account():
+    print("\n== Opening something names the account it opens as ==")
+    check("a file opened as the signed-in user",
+          files.validate_open("C:/Users/bob/note.txt", run_as="user")
+          == {"path": "C:\\Users\\bob\\note.txt", "run_as": "user"})
+    check("...or as the system account",
+          files.validate_open("C:\\tools\\setup.exe", run_as="SYSTEM ")
+          == {"path": "C:\\tools\\setup.exe", "run_as": "system"})
+
+    # The account is required rather than defaulted here. The agent defaults it to the safe
+    # half; a hub that filled it in would be choosing whose desktop somebody's program lands
+    # on, which is the one decision this command exists to put in front of an operator.
+    check("no account is refused rather than assumed",
+          refuses(files.validate_open, "C:\\Users\\bob\\note.txt"))
+    check("an invented account is refused",
+          refuses(files.validate_open, "C:\\Users\\bob\\note.txt", run_as="admin"))
+
+    check("a relative path is refused", refuses(files.validate_open, "note.txt", run_as="user"))
+    check("a '..' is refused",
+          refuses(files.validate_open, "C:\\Users\\..\\Windows\\x.exe", run_as="user"))
+    check("a whole drive is refused -- 'open C:' is not a request anybody makes",
+          refuses(files.validate_open, "C:\\", run_as="user"))
+    check("nor is a share root", refuses(files.validate_open, "\\\\srv\\share", run_as="user"))
+
+
 # ============================== listings ==============================
 
 def test_a_listing_is_asked_once_and_answered_once(db_path):
@@ -324,6 +349,7 @@ def main():
         test_names()
         test_operations_are_validated_as_their_own_shapes()
         test_the_two_operations_that_destroy_data()
+        test_opening_names_an_account()
         test_a_listing_is_asked_once_and_answered_once(db_path)
         test_a_listing_belongs_to_one_machine(db_path)
         test_a_listing_is_capped_and_says_so(db_path)

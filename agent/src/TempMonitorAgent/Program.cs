@@ -155,6 +155,10 @@ try
     builder.Services.AddSingleton<ICommandExecutor, FileOperationExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, FetchFileExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, PushFileExecutor>();
+    // Opening is the one file command that does not touch the disk: it starts something,
+    // either as the signed-in user on their own desktop or as SYSTEM with no desktop at all.
+    // The operator names which; see OpenItemExecutor for why that is not a default.
+    builder.Services.AddSingleton<ICommandExecutor, OpenItemExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-update

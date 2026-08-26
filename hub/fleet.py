@@ -242,6 +242,7 @@ FILE_COMMANDS = frozenset({
     "file_operation",
     "fetch_file",
     "push_file",
+    "open_item",
 })
 
 ALL_COMMANDS = frozenset({
@@ -1641,12 +1642,12 @@ def _validate_favorite(name, command_type, params):
                          f"saved as a favorite; end processes from the machine's Processes "
                          f"card instead")
     if command_type in FILE_COMMANDS:
-        # Three of the four carry a one-shot id -- a listing request, a transfer row -- that
+        # Three of the five carry a one-shot id -- a listing request, a transfer row -- that
         # is finished or pruned by the time a favorite is replayed, so the machine would do
-        # the work and have nowhere to report it. `file_operation` carries no id, and is here
-        # for the other reason: it names absolute paths on ONE machine's disk, and a saved
-        # "delete C:\\Temp\\build" replayed against whichever PC an operator picked next is a
-        # deletion nobody looked at first. The explorer confirms every one of these against a
+        # the work and have nowhere to report it. `file_operation` and `open_item` carry no
+        # id, and are here for the other reason: they name absolute paths on ONE machine's
+        # disk, and a saved "delete C:\\Temp\\build" replayed against whichever PC an
+        # operator picked next is a deletion nobody looked at first. The explorer confirms every one of these against a
         # listing the operator is looking at, and that is where they belong.
         raise ValueError(f"{command_type!r} commands name paths on one machine's disk and "
                          f"cannot be saved as a favorite; use the Files tool instead")

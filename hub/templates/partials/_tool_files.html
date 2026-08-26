@@ -37,6 +37,12 @@
            between here and there first, then the ones that rearrange the machine's own disk,
            then the destructive one, last and on its own. #}
         <div class="files-actions">
+            {# Open comes first because it is the only verb that starts something rather than
+               moving bytes, and because it is what a double-click on a row does -- a toolbar
+               where the default gesture has no visible button teaches that the gesture does
+               not exist. #}
+            <button type="button" id="files-open" class="btn btn--ghost" disabled>{{ t('files.open') }}</button>
+            <span class="files-actions__sep" aria-hidden="true"></span>
             <button type="button" id="files-download" class="btn btn--ghost" disabled>{{ t('files.download') }}</button>
             <button type="button" id="files-upload" class="btn btn--ghost" disabled>{{ t('files.upload') }}</button>
             {# The file picker itself is never shown -- it is opened by the button above, so
