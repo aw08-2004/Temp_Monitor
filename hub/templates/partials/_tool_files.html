@@ -1,10 +1,11 @@
 {# The remote file explorer. One card, because it is one thing: a folder, and what you can
-   do to what is in it. Splitting the toolbar and the list into separate folds would put a
-   scroll between the Delete button and the row it is about.
+   do to what is in it.
 
-   Every action button is DISABLED in the markup and enabled by files.js against the current
-   selection. Rendering them enabled and refusing on click would teach an operator that the
-   toolbar lies; rendering them absent would make the toolbar jump as rows are selected.
+   There is no toolbar. Every verb is on the right-click menu at the bottom of this file,
+   because every verb acts on rows and that is where the rows are -- a toolbar above a
+   scrolling list puts a scroll between the Delete button and the thing it deletes. What
+   stays up here is navigation: Up, the path, Go, Refresh. Those act on the view, and a
+   folder that is empty or refused has no row to right-click.
 
    Note there is no capability gate anywhere in here. Unlike the Firmware and Network panels
    -- whose read halves are inventory and whose write halves need `issue_commands` -- every
@@ -33,34 +34,18 @@
         </div>
         <nav class="files-crumbs" id="files-crumbs" aria-label="{{ t('files.crumbs_label') }}"></nav>
 
-        {# Actions, in the order an operator reaches for them: the two that move bytes
-           between here and there first, then the ones that rearrange the machine's own disk,
-           then the destructive one, last and on its own. #}
-        <div class="files-actions">
-            {# Open comes first because it is the only verb that starts something rather than
-               moving bytes, and because it is what a double-click on a row does -- a toolbar
-               where the default gesture has no visible button teaches that the gesture does
-               not exist. #}
-            <button type="button" id="files-open" class="btn btn--ghost" disabled>{{ t('files.open') }}</button>
-            <span class="files-actions__sep" aria-hidden="true"></span>
-            <button type="button" id="files-download" class="btn btn--ghost" disabled>{{ t('files.download') }}</button>
-            <button type="button" id="files-upload" class="btn btn--ghost" disabled>{{ t('files.upload') }}</button>
-            {# The file picker itself is never shown -- it is opened by the button above, so
-               the toolbar keeps one visual vocabulary instead of one native control in the
-               middle of it. #}
-            <input type="file" id="files-file-input" hidden>
-            <span class="files-actions__sep" aria-hidden="true"></span>
-            <button type="button" id="files-copy" class="btn btn--ghost" disabled>{{ t('files.copy') }}</button>
-            <button type="button" id="files-cut" class="btn btn--ghost" disabled>{{ t('files.cut') }}</button>
-            <button type="button" id="files-paste" class="btn btn--ghost" disabled>{{ t('files.paste') }}</button>
-            <button type="button" id="files-rename" class="btn btn--ghost" disabled>{{ t('files.rename') }}</button>
-            <button type="button" id="files-new-folder" class="btn btn--ghost" disabled>{{ t('files.new_folder') }}</button>
-            <span class="files-actions__sep" aria-hidden="true"></span>
-            <button type="button" id="files-delete" class="btn btn--danger" disabled>{{ t('files.delete') }}</button>
-        </div>
+        {# The file picker. Opened by the menu's Upload entry, never shown itself -- a native
+           control sitting in the middle of the card would be the one thing here that does not
+           look like the rest of the console. #}
+        <input type="file" id="files-file-input" hidden>
 
-        {# What is on the clipboard, said out loud. A copy/cut that leaves no trace on screen
-           is a copy an operator repeats because they cannot remember whether it took. #}
+        {# Said out loud, because the menu is the only way to reach any of the verbs and a
+           panel whose actions are all invisible until you right-click is one that looks
+           broken to somebody opening it for the first time. #}
+        <p class="stat-card__meta">{{ t('files.menu.hint') }}</p>
+
+        {# What is on the clipboard, said out loud too. A copy/cut that leaves no trace on
+           screen is a copy an operator repeats because they cannot remember whether it took. #}
         <p class="stat-card__meta" id="files-clipboard" hidden></p>
         <p class="setting__error" id="files-error" hidden></p>
         <p class="stat-card__meta" id="files-note" hidden></p>
@@ -80,5 +65,48 @@
                 </thead>
                 <tbody id="files-body"></tbody>
             </table>
+        </div>
+
+        {# The action menu. Every verb in this panel lives here and nowhere else: they act on
+           the rows, so they are on the rows, which is the answer a right-click has meant in
+           every file manager since before this product existed. The location bar keeps Up, Go
+           and Refresh because those act on the VIEW -- and because an empty or refused folder
+           has no row to right-click.
+
+           Not page-level, unlike the dialogs. A dialog must outlive the tab being switched
+           away (see _tool_files_dialogs.html); a menu must NOT, and `position: fixed` inside a
+           panel that gets display:none does exactly that on its own.
+
+           Every entry is always here, disabled when it does not apply, never omitted. A menu
+           with three entries on one row and eight on another teaches an operator nothing about
+           what this panel can do -- and "Paste is grey because nothing is on the clipboard" is
+           an answer to the question the right-click asked. Same reasoning as the process menu
+           on the machine page, whose look these rules are a copy of. #}
+        <div class="files-menu" id="files-menu" role="menu" hidden tabindex="-1"
+             aria-labelledby="files-menu-target">
+            <p class="files-menu__target" id="files-menu-target"></p>
+            <button type="button" role="menuitem" id="files-menu-open"
+                    class="files-menu__item">{{ t('files.open') }}</button>
+            <button type="button" role="menuitem" id="files-menu-open-remote"
+                    class="files-menu__item">{{ t('files.menu.open_remote') }}</button>
+            <span class="files-menu__sep" role="separator"></span>
+            <button type="button" role="menuitem" id="files-menu-download"
+                    class="files-menu__item">{{ t('files.download') }}</button>
+            <button type="button" role="menuitem" id="files-menu-upload"
+                    class="files-menu__item">{{ t('files.menu.upload') }}</button>
+            <span class="files-menu__sep" role="separator"></span>
+            <button type="button" role="menuitem" id="files-menu-copy"
+                    class="files-menu__item">{{ t('files.copy') }}</button>
+            <button type="button" role="menuitem" id="files-menu-cut"
+                    class="files-menu__item">{{ t('files.cut') }}</button>
+            <button type="button" role="menuitem" id="files-menu-paste"
+                    class="files-menu__item">{{ t('files.paste') }}</button>
+            <button type="button" role="menuitem" id="files-menu-rename"
+                    class="files-menu__item">{{ t('files.rename') }}</button>
+            <button type="button" role="menuitem" id="files-menu-new-folder"
+                    class="files-menu__item">{{ t('files.new_folder') }}</button>
+            <span class="files-menu__sep" role="separator"></span>
+            <button type="button" role="menuitem" id="files-menu-delete"
+                    class="files-menu__item files-menu__item--danger">{{ t('files.delete') }}</button>
         </div>
     </div>

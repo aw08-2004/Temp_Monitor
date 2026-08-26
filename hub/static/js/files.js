@@ -14,6 +14,19 @@
 // patching its own table -- a copy that half-succeeded is a real state, and the only honest
 // way to draw it is to go and look.
 //
+// **Every verb is on the right-click menu, and nowhere else.** They act on rows, so they
+// live on the rows: the panel has no toolbar, and the location bar above the list carries
+// only what acts on the VIEW -- Up, the path, Go, Refresh. Two consequences are load-bearing.
+// The menu is built from the same `renderActions()` the toolbar used, so what it offers can
+// never disagree with what the selection allows; and because it is now the only way to reach
+// Delete, the keyboard path to it (roving tabindex, Enter, Space, the Menu key) is a
+// requirement rather than a courtesy.
+//
+// **"Open" means open it HERE.** A file is fetched and shown in the preview dialog with
+// nothing asked first, because that is what nine opens in ten are for: somebody wants to look
+// at a log. Starting a process on the far machine is its own entry one line down, and keeps
+// the account dialog -- that is the half that runs code on somebody's computer.
+//
 // **Copy and Cut fill a clipboard that survives navigation, because that is the whole
 // point.** You select in one folder and paste in another; a clipboard scoped to the current
 // listing would be a clipboard that could only paste where it copied from. It is cleared
@@ -82,20 +95,29 @@
     const selectAll = document.getElementById('files-select-all');
     const fileInput = document.getElementById('files-file-input');
 
-    const btn = {
-        open: document.getElementById('files-open'),
+    // Navigation: acts on the view, always on screen, never on the menu.
+    const nav = {
         up: document.getElementById('files-up'),
         go: document.getElementById('files-go'),
-        refresh: document.getElementById('files-refresh'),
-        download: document.getElementById('files-download'),
-        upload: document.getElementById('files-upload'),
-        copy: document.getElementById('files-copy'),
-        cut: document.getElementById('files-cut'),
-        paste: document.getElementById('files-paste'),
-        rename: document.getElementById('files-rename'),
-        newFolder: document.getElementById('files-new-folder'),
-        remove: document.getElementById('files-delete')
+        refresh: document.getElementById('files-refresh')
     };
+
+    // The verbs. Every one of them acts on the selection, and every one of them is here.
+    const menu = document.getElementById('files-menu');
+    const menuTargetEl = document.getElementById('files-menu-target');
+    const item = {
+        open: document.getElementById('files-menu-open'),
+        openRemote: document.getElementById('files-menu-open-remote'),
+        download: document.getElementById('files-menu-download'),
+        upload: document.getElementById('files-menu-upload'),
+        copy: document.getElementById('files-menu-copy'),
+        cut: document.getElementById('files-menu-cut'),
+        paste: document.getElementById('files-menu-paste'),
+        rename: document.getElementById('files-menu-rename'),
+        newFolder: document.getElementById('files-menu-new-folder'),
+        remove: document.getElementById('files-menu-delete')
+    };
+    const tableScroll = pane.querySelector('.table-scroll');
 
     const nameDialog = document.getElementById('files-name-dialog');
     const deleteDialog = document.getElementById('files-delete-dialog');
@@ -114,6 +136,8 @@
     let pendingFile = null;         // the File chosen for upload, awaiting its dialog
     let pendingOpen = null;         // the entry the Open dialog is asking about
     let previewUrl = null;          // the object URL the preview dialog is showing, if any
+    let menuRow = null;             // the <tr> the action menu is open against, if any
+    let focusName = null;           // which row holds the keyboard's place in the list
 
     // ================================================================
     // plumbing
@@ -393,6 +417,12 @@
         drives.forEach((drive) => body.appendChild(driveRow(drive)));
         entries.forEach((entry) => body.appendChild(entryRow(entry)));
         selectAll.checked = entries.length > 0 && selection.size === entries.length;
+        // Somebody has to be in the tab order or the list cannot be reached from the keyboard
+        // at all -- and with no toolbar, unreachable from the keyboard means unusable.
+        if (!body.querySelector('tr[tabindex="0"]')) {
+            const first = body.querySelector('tr[data-name]');
+            if (first) { first.tabIndex = 0; focusName = first.dataset.name; }
+        }
     }
 
     /** A volume in the root view. Not selectable: none of the verbs mean anything applied
@@ -426,6 +456,13 @@
 
     function entryRow(entry) {
         const row = el('tr');
+        // The name is the row's identity everywhere else in this file (the selection is a set
+        // of names), so it is what the menu and the keyboard look rows up by too.
+        row.dataset.name = entry.name;
+        // Roving tabindex: exactly one row is in the tab order at a time, and the arrows move
+        // it. A list of two hundred files that put every row in the tab order would be a list
+        // an operator tabs THROUGH rather than to.
+        row.tabIndex = entry.name === focusName ? 0 : -1;
         if (entry.hidden || entry.system) row.classList.add('files-row--dim');
 
         const pickCell = el('td', 'files-col-pick');
@@ -462,46 +499,48 @@
         row.appendChild(el('td', null, entry.directory ? '—' : formatSize(entry.size)));
         row.appendChild(el('td', null, formatTime(entry.modified)));
 
-        // Double-click asks the same question the Open button does, on the row under the
-        // pointer rather than on the selection -- which is what a double-click means in every
-        // file manager the operator has ever used. It selects that row first so the dialog and
-        // the toolbar cannot disagree about which item is being opened.
-        row.addEventListener('dblclick', () => {
-            if (busy) return;
-            selection.clear();
-            selection.add(entry.name);
-            renderTable();
-            renderActions();
-            askOpen(entry);
-        });
+        // What a double-click has meant in every file manager the operator has ever used:
+        // a folder is entered, a file is opened -- and here "opened" is the console's own
+        // preview, with nothing asked first. Deliberately acts on the row under the pointer
+        // rather than on the selection, because that is the row they double-clicked.
+        row.addEventListener('dblclick', () => openEntry(entry));
         return row;
     }
 
+    /**
+     * What the selection currently allows, written onto the menu.
+     *
+     * One function for both the menu and the location bar, called on every change to the
+     * selection, the clipboard or the busy flag -- so a menu that is already open when a
+     * request finishes is corrected in place rather than left offering something that has
+     * stopped being possible.
+     */
     function renderActions() {
         const picked = selectedEntries();
         const inFolder = !!path && !!listing;
         const idle = !busy && !tooOld;
 
-        // Enabled on a folder too: "open" means an Explorer window on that PC for a folder,
-        // and only the "here, in this browser" half is withheld from one. Deliberately NOT
-        // disabled on an agent too old for it -- a disabled button explains nothing and shows
-        // no tooltip either, so the click is allowed through and answered with the version it
-        // is waiting for. See MIN_OPEN_AGENT.
-        btn.open.disabled = !idle || picked.length !== 1;
-        btn.up.disabled = !idle || !path;
-        btn.refresh.disabled = !idle;
-        btn.go.disabled = !idle;
+        nav.up.disabled = !idle || !path;
+        nav.refresh.disabled = !idle;
+        nav.go.disabled = !idle;
+
+        // Open, here: a folder is entered, a file is fetched and shown. Enabled for both.
+        item.open.disabled = !idle || picked.length !== 1;
+        // Open over there. Deliberately NOT disabled on an agent too old for it -- a disabled
+        // entry explains nothing and shows no tooltip either, so the click is allowed through
+        // and answered with the version it is waiting for. See MIN_OPEN_AGENT.
+        item.openRemote.disabled = !idle || picked.length !== 1;
         // One item, and a file: a folder download is offered too -- it arrives zipped -- so
         // the only thing ruled out here is downloading several things at once, which would
         // be several files with one Save dialog between them.
-        btn.download.disabled = !idle || picked.length !== 1;
-        btn.upload.disabled = !idle || !inFolder;
-        btn.copy.disabled = !idle || picked.length === 0;
-        btn.cut.disabled = !idle || picked.length === 0;
-        btn.paste.disabled = !idle || !clipboard || !inFolder;
-        btn.rename.disabled = !idle || picked.length !== 1;
-        btn.newFolder.disabled = !idle || !inFolder;
-        btn.remove.disabled = !idle || picked.length === 0;
+        item.download.disabled = !idle || picked.length !== 1;
+        item.upload.disabled = !idle || !inFolder;
+        item.copy.disabled = !idle || picked.length === 0;
+        item.cut.disabled = !idle || picked.length === 0;
+        item.paste.disabled = !idle || !clipboard || !inFolder;
+        item.rename.disabled = !idle || picked.length !== 1;
+        item.newFolder.disabled = !idle || !inFolder;
+        item.remove.disabled = !idle || picked.length === 0;
         selectAll.disabled = !idle || !inFolder;
     }
 
@@ -580,18 +619,38 @@
     // open
     // ================================================================
     /**
-     * Ask where, and as whom, before anything is started.
+     * Open it HERE, and ask nothing.
      *
-     * Both answers are re-set every time this opens rather than remembered. "As the system
-     * account", chosen twenty minutes ago for an installer and silently reapplied to
-     * somebody's spreadsheet, is the exact surprise the two accounts exist to prevent -- and
-     * a sticky "here, in this browser" would quietly turn "open it for them" into a download
-     * they never see.
+     * The default gesture -- the menu's first entry, a double-click, Enter on a focused row --
+     * because nine opens in ten are somebody wanting to LOOK at something: a log, a
+     * screenshot, the error dialog a caller photographed. A folder is entered, which is what
+     * opening a folder has always meant; a file comes down the ordinary transfer path and is
+     * rendered in the preview dialog.
+     *
+     * Nothing here reaches MIN_OPEN_AGENT: this is a fetch_file, which every agent that can
+     * browse at all already answers. A machine halfway through a rollout can still be looked
+     * at, and only the entry below reports a version.
      */
-    function askOpen(entry) {
+    function openEntry(entry) {
+        if (busy) return;
+        if (entry.directory) { navigate(entryPath(entry)); return; }
+        openInBrowser(entry);
+    }
+
+    /**
+     * Open it over THERE: ask which account, then start it on the machine.
+     *
+     * One question, because the menu entry that got here already answered the other one. The
+     * account is re-set to the signed-in user every time this opens rather than remembered --
+     * "as the system account", chosen twenty minutes ago for an installer and silently
+     * reapplied to somebody's spreadsheet, is the exact surprise the two accounts exist to
+     * prevent.
+     */
+    function askOpenRemote(entry) {
         if (openTooOld) {
             // The status pill is left alone: the panel is idle and working, and only this one
-            // button is waiting for a newer agent.
+            // entry is waiting for a newer agent -- everything else, opening here included,
+            // still works against this machine.
             showError(t('files.open_agent_too_old', { version: openTooOld,
                                                       needed: MIN_OPEN_AGENT }));
             return;
@@ -599,20 +658,8 @@
         pendingOpen = entry;
         openHelp.textContent = t('files.open_help', { name: entry.name });
         openError.hidden = true;
-        openWhere.forEach((radio) => { radio.checked = radio.value === 'remote'; });
         openRunAs.forEach((radio) => { radio.checked = radio.value === 'user'; });
-        // A folder has nothing to render here: there are no bytes to fetch, only a window to
-        // put on somebody's desktop. Hidden rather than disabled -- a choice that can never
-        // apply to what is selected is not a choice.
-        openLocalRow.hidden = !!entry.directory;
-        renderOpenChoice();
         openDialog.showModal();
-    }
-
-    /** The account only means something for a launch on the machine. */
-    function renderOpenChoice() {
-        const where = openWhere.find((radio) => radio.checked);
-        runAsFieldset.hidden = !where || where.value !== 'remote';
     }
 
     /** Start it over there. Nothing is re-listed: opening changes nothing on the disk. */
@@ -726,17 +773,10 @@
     // ================================================================
     // download
     // ================================================================
-    async function startDownload() {
-        const picked = selectedEntries();
-        if (picked.length !== 1) return;
-        await pull(picked[0],
-                   (transferId, name, size) => offerDownload(transferId, name, size));
-    }
-
     /**
      * Fetch one entry off the machine and hand the finished transfer to `onReady`.
      *
-     * Shared by the Save button and by "open here", because they are the same three round
+     * Shared by the menu's Save entry and by "open here", because they are the same three round
      * trips -- queue a fetch_file, poll the transfer, collect it from the spool -- and differ
      * only in what becomes of the bytes at the end.
      */
@@ -931,16 +971,10 @@
     // ---- the open dialog ----
     const openHelp = document.getElementById('files-open-item');
     const openError = document.getElementById('files-open-error');
-    const openLocalRow = document.getElementById('files-open-where-local-row');
-    const runAsFieldset = document.getElementById('files-open-runas');
-    // Arrays rather than a live NodeList, so `.find` and `.forEach` read the same as they do
-    // everywhere else in this file.
-    const openWhere = Array.from(
-        document.querySelectorAll('input[name="files-open-where"]'));
+    // An array rather than a live NodeList, so `.find` and `.forEach` read the same as they
+    // do everywhere else in this file.
     const openRunAs = Array.from(
         document.querySelectorAll('input[name="files-open-runas"]'));
-
-    openWhere.forEach((radio) => radio.addEventListener('change', renderOpenChoice));
 
     document.getElementById('files-open-cancel').addEventListener('click', () => {
         openDialog.close();
@@ -949,12 +983,10 @@
     document.getElementById('files-open-ok').addEventListener('click', () => {
         const entry = pendingOpen;
         if (!entry) return;
-        const where = openWhere.find((radio) => radio.checked);
         const runAs = openRunAs.find((radio) => radio.checked);
         openDialog.close();
         pendingOpen = null;
-        if (where && where.value === 'local') openInBrowser(entry);
-        else openOnMachine(entry, runAs ? runAs.value : 'user');
+        openOnMachine(entry, runAs ? runAs.value : 'user');
     });
 
     // ---- the preview dialog ----
@@ -974,21 +1006,243 @@
     });
 
     // ================================================================
-    // wiring
+    // the action menu
     // ================================================================
-    btn.open.addEventListener('click', () => {
+    /** The row for one entry name in the table as it stands now. Looked up by scanning
+     *  rather than by selector, because a filename may contain quotes and brackets. */
+    function rowFor(name) {
+        return Array.from(body.querySelectorAll('tr[data-name]'))
+            .find((row) => row.dataset.name === name) || null;
+    }
+
+    function entryFor(name) {
+        return (listing && listing.entries ? listing.entries : [])
+            .find((entry) => entry.name === name) || null;
+    }
+
+    /** Where a menu opened from the keyboard should appear: under the row it is about, or
+     *  inside the list when it is about the folder itself. */
+    function anchorFor(row) {
+        const box = (row || tableScroll).getBoundingClientRect();
+        return row ? { x: box.left + 16, y: box.bottom }
+                   : { x: box.left + 16, y: box.top + 16 };
+    }
+
+    /**
+     * Open the menu about `name` -- or about the folder itself when that is null.
+     *
+     * The selection rule is Explorer's, and it is the one that matters: right-clicking a row
+     * that is ALREADY selected leaves the selection alone, so nine files stay nine files on
+     * the way to Delete, while right-clicking outside it replaces the selection with that one
+     * row. Anything else would silently drop a selection the operator had just built, or
+     * silently act on rows they had stopped meaning.
+     */
+    function showMenu(name, point) {
+        if (name === null) selection.clear();
+        else if (!selection.has(name)) { selection.clear(); selection.add(name); }
+        if (name !== null) focusName = name;
+        // The checkboxes have to agree with what the menu is about before it is shown, and
+        // this rebuilds the rows -- so any <tr> held from before this line is stale.
+        renderTable();
+        const row = name === null ? null : rowFor(name);
+        openMenu(row, point || anchorFor(row));
+    }
+
+    function openMenu(row, at) {
+        renderActions();
+        menuRow = row;
+        menuTargetEl.textContent = menuLabel();
+
+        // Shown before it is measured, because a hidden element has no size to position by.
+        menu.hidden = false;
+        const box = menu.getBoundingClientRect();
+        const pad = 8;
+        // Flipped rather than clamped at the near edge: a menu that ran off the bottom of the
+        // window would otherwise open with its entries shifted up under the cursor, and the
+        // last of them is Delete.
+        const left = at.x + box.width + pad > window.innerWidth
+            ? Math.max(pad, at.x - box.width) : at.x;
+        const top = at.y + box.height + pad > window.innerHeight
+            ? Math.max(pad, at.y - box.height) : at.y;
+        menu.style.left = Math.round(left) + 'px';
+        menu.style.top = Math.round(top) + 'px';
+
+        if (menuRow) menuRow.classList.add('files-row--targeted');
+        // Focus the first entry that can actually be used, so Enter does something sensible
+        // and Escape has somewhere to come back from.
+        const usable = Object.keys(item).map((key) => item[key])
+            .find((entry) => !entry.disabled);
+        (usable || menu).focus({ preventScroll: true });
+    }
+
+    /** What the menu says it is about, at the top. "Delete" over an unnamed menu is how the
+     *  wrong nine files get deleted. */
+    function menuLabel() {
         const picked = selectedEntries();
-        if (picked.length === 1) askOpen(picked[0]);
+        if (picked.length === 1) return picked[0].name;
+        if (picked.length > 1) return tPlural('files.menu.target', picked.length);
+        return path || t('files.this_pc');
+    }
+
+    function closeMenu(restoreFocus) {
+        if (menu.hidden) return;
+        const row = menuRow;
+        menuRow = null;
+        menu.hidden = true;
+        if (row) {
+            row.classList.remove('files-row--targeted');
+            if (restoreFocus && row.isConnected) row.focus({ preventScroll: true });
+        }
+    }
+
+    // Right-click anywhere in the list, rows and empty space alike -- the space below the
+    // rows is still the folder, and Paste, New folder and Upload are about the folder.
+    // Delegated, because the rows are rebuilt on every listing.
+    tableScroll.addEventListener('contextmenu', (event) => {
+        // The checkbox and the folder-name button inside a row are ordinary controls; a
+        // right-click on either of them means the row, as it does everywhere else.
+        const row = event.target.closest('tr[data-name]');
+        closeMenu(false);
+        // The Menu key fires this with no coordinates (0,0 in Chrome, -1 in others), so an
+        // absent point means "anchor it to the row" rather than "open it in the corner".
+        const point = (event.clientX > 0 && event.clientY > 0)
+            ? { x: event.clientX, y: event.clientY } : null;
+        showMenu(row ? row.dataset.name : null, point);
+        event.preventDefault();
     });
 
-    btn.up.addEventListener('click', () => {
+    // The keyboard's half of the same thing. With no toolbar left, this IS the non-mouse path
+    // to every verb in the panel, so it is built rather than assumed: the arrows move a
+    // roving tabindex through the rows, Enter opens, Space opens the menu.
+    body.addEventListener('keydown', (event) => {
+        const row = event.target.closest ? event.target.closest('tr[data-name]') : null;
+        if (!row || event.target !== row) return;
+
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            const entry = entryFor(row.dataset.name);
+            if (entry) openEntry(entry);
+            return;
+        }
+        if (event.key === ' ') {
+            event.preventDefault();       // and not the page scrolling underneath it
+            closeMenu(false);
+            showMenu(row.dataset.name, null);
+            return;
+        }
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        const rows = Array.from(body.querySelectorAll('tr[data-name]'));
+        const next = rows[rows.indexOf(row) + (event.key === 'ArrowDown' ? 1 : -1)];
+        if (!next) return;
+        event.preventDefault();
+        row.tabIndex = -1;
+        next.tabIndex = 0;
+        focusName = next.dataset.name;
+        next.focus({ preventScroll: false });
+    });
+
+    // Everything that ends a menu. `pointerdown` rather than `click` so it closes on the
+    // press, like every other menu on the platform, and capture so a press on a row's own
+    // checkbox closes it too. Scrolling is included because the menu is positioned against
+    // the viewport: the row would slide out from under it.
+    document.addEventListener('pointerdown', (event) => {
+        if (!menu.hidden && !menu.contains(event.target)) closeMenu(false);
+    }, true);
+    document.addEventListener('keydown', (event) => {
+        if (!menu.hidden && event.key === 'Escape') {
+            // Stopped, so the same Escape does not also close a dialog underneath.
+            event.stopPropagation();
+            closeMenu(true);
+        }
+    }, true);
+    window.addEventListener('scroll', () => closeMenu(false), true);
+    window.addEventListener('resize', () => closeMenu(false));
+    window.addEventListener('blur', () => closeMenu(false));
+
+    // ================================================================
+    // wiring
+    // ================================================================
+    /** Every menu entry does the same two things first: read the selection it was opened
+     *  about, and shut the menu. In that order, so the handler cannot be handed a selection
+     *  something else has already changed. */
+    function onMenu(element, handler) {
+        element.addEventListener('click', () => {
+            const picked = selectedEntries();
+            closeMenu(false);
+            handler(picked);
+        });
+    }
+
+    onMenu(item.open, (picked) => {
+        if (picked.length === 1) openEntry(picked[0]);
+    });
+    onMenu(item.openRemote, (picked) => {
+        if (picked.length === 1) askOpenRemote(picked[0]);
+    });
+    onMenu(item.download, (picked) => {
+        if (picked.length === 1) pull(picked[0], offerDownload);
+    });
+
+    onMenu(item.upload, () => {
+        // Reset first: a picker that reopens holding last time's file would send the wrong
+        // one on a second click that never touched it.
+        fileInput.value = '';
+        fileInput.click();
+    });
+
+    onMenu(item.copy, (picked) => {
+        clipboard = { op: 'copy', paths: picked.map(entryPath) };
+        renderClipboard();
+        renderActions();
+    });
+    onMenu(item.cut, (picked) => {
+        clipboard = { op: 'move', paths: picked.map(entryPath) };
+        renderClipboard();
+        renderActions();
+    });
+    onMenu(item.paste, () => {
+        if (!clipboard || !path) return;
+        const payload = { op: clipboard.op, paths: clipboard.paths, destination: path };
+        // A cut is consumed by its paste; a copy is not. That is what the two words mean
+        // everywhere else, and an operator pasting the same folder into three places should
+        // not have to re-select between them.
+        if (clipboard.op === 'move') { clipboard = null; renderClipboard(); }
+        runOperation(payload);
+    });
+
+    onMenu(item.rename, (picked) => {
+        if (picked.length !== 1) return;
+        askName(t('files.rename_title'), t('files.rename_help', { name: picked[0].name }),
+                picked[0].name, (value) => runOperation({
+                    op: 'rename', paths: [entryPath(picked[0])], new_name: value
+                }));
+    });
+
+    onMenu(item.newFolder, () => {
+        if (!path) return;
+        askName(t('files.new_folder_title'), t('files.new_folder_help', { path }), '',
+                (value) => runOperation({ op: 'new_folder', destination: path,
+                                          new_name: value }));
+    });
+
+    onMenu(item.remove, (picked) => {
+        if (!picked.length) return;
+        deleteText.textContent = tPlural('files.delete_text', picked.length);
+        deleteList.replaceChildren();
+        // The list is spelled out rather than counted. "Delete 9 items?" is a question
+        // nobody can answer correctly, and this is the panel's one irreversible verb.
+        picked.forEach((entry) => deleteList.appendChild(el('li', null, entryPath(entry))));
+        deleteDialog.showModal();
+    });
+
+    nav.up.addEventListener('click', () => {
         if (listing && listing.parent) navigate(listing.parent);
         else navigate(null);
     });
-    btn.refresh.addEventListener('click', () => navigate(path));
-    btn.go.addEventListener('click', () => navigate(pathInput.value.trim() || null));
+    nav.refresh.addEventListener('click', () => navigate(path));
+    nav.go.addEventListener('click', () => navigate(pathInput.value.trim() || null));
     pathInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') btn.go.click();
+        if (event.key === 'Enter') nav.go.click();
     });
 
     selectAll.addEventListener('change', () => {
@@ -1001,14 +1255,6 @@
         renderActions();
     });
 
-    btn.download.addEventListener('click', startDownload);
-
-    btn.upload.addEventListener('click', () => {
-        // Reset first: a picker that reopens holding last time's file would send the wrong
-        // one on a second click that never touched it.
-        fileInput.value = '';
-        fileInput.click();
-    });
     fileInput.addEventListener('change', () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
@@ -1019,53 +1265,6 @@
         uploadError.hidden = true;
         uploadDialog.showModal();
         uploadName.focus();
-    });
-
-    btn.copy.addEventListener('click', () => {
-        clipboard = { op: 'copy', paths: selectedEntries().map(entryPath) };
-        renderClipboard();
-        renderActions();
-    });
-    btn.cut.addEventListener('click', () => {
-        clipboard = { op: 'move', paths: selectedEntries().map(entryPath) };
-        renderClipboard();
-        renderActions();
-    });
-    btn.paste.addEventListener('click', async () => {
-        if (!clipboard || !path) return;
-        const payload = { op: clipboard.op, paths: clipboard.paths, destination: path };
-        // A cut is consumed by its paste; a copy is not. That is what the two words mean
-        // everywhere else, and an operator pasting the same folder into three places should
-        // not have to re-select between them.
-        if (clipboard.op === 'move') { clipboard = null; renderClipboard(); }
-        await runOperation(payload);
-    });
-
-    btn.rename.addEventListener('click', () => {
-        const picked = selectedEntries();
-        if (picked.length !== 1) return;
-        askName(t('files.rename_title'), t('files.rename_help', { name: picked[0].name }),
-                picked[0].name, (value) => runOperation({
-                    op: 'rename', paths: [entryPath(picked[0])], new_name: value
-                }));
-    });
-
-    btn.newFolder.addEventListener('click', () => {
-        if (!path) return;
-        askName(t('files.new_folder_title'), t('files.new_folder_help', { path }), '',
-                (value) => runOperation({ op: 'new_folder', destination: path,
-                                          new_name: value }));
-    });
-
-    btn.remove.addEventListener('click', () => {
-        const picked = selectedEntries();
-        if (!picked.length) return;
-        deleteText.textContent = tPlural('files.delete_text', picked.length);
-        deleteList.replaceChildren();
-        // The list is spelled out rather than counted. "Delete 9 items?" is a question
-        // nobody can answer correctly, and this is the panel's one irreversible verb.
-        picked.forEach((entry) => deleteList.appendChild(el('li', null, entryPath(entry))));
-        deleteDialog.showModal();
     });
 
     // ================================================================
@@ -1092,6 +1291,9 @@
         clipboard = null;
         pendingFile = null;
         pendingOpen = null;
+        focusName = null;
+        // A menu left standing over PC-3's file list while PC-4's listing arrives under it.
+        closeMenu(false);
         // The dialogs are page-level, so a machine switch with one open would leave it asking
         // about a path on the PC the operator just left.
         if (openDialog.open) openDialog.close();

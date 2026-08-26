@@ -39,25 +39,88 @@
 }
 
 .files-crumb__sep {
-    color: var(--text-muted);
+    color: var(--muted);
     user-select: none;
 }
 
-.files-actions {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin-bottom: var(--space-3);
+/* ============ The action menu ============ */
+/* Every verb in this panel, on the rows they act on. A copy of the .process-menu block in
+   machine.css -- same shape, same reasoning, and both sheets load on the Tools page, so
+   reusing that class literally would have worked too. It is a copy because "process-menu"
+   on a file row is a lie the next person has to read past, and promoting it to a shared
+   class would mean editing machine.html and processes.js for a rename. Twenty-five lines is
+   the cheaper of the two. If one of them changes, change both. */
+.files-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 13rem;
+    padding: var(--space-1);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    box-shadow: var(--shadow-card);
 }
 
-/* A hairline between groups of verbs. Delete sits after one of these on its own, so the
-   destructive button is never adjacent to the one an operator meant to press. */
-.files-actions__sep {
-    width: 1px;
-    align-self: stretch;
-    min-height: 1.5rem;
+.files-menu[hidden] {
+    display: none;
+}
+
+/* What the menu is about, spelled out at the top. The last entry is Delete and the list
+   underneath can be hundreds of rows long; "which file was this again?" is not a question to
+   be answering after the click. */
+.files-menu__target {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: var(--space-1);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+}
+
+.files-menu__item {
+    display: block;
+    width: 100%;
+    padding: var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.files-menu__item:hover:not(:disabled),
+.files-menu__item:focus-visible {
+    background: var(--control-bg);
+    outline: none;
+}
+
+.files-menu__item--danger:not(:disabled) {
+    color: var(--danger);
+}
+
+/* An action that does not apply right now is SHOWN, greyed, rather than left out: a menu
+   with four entries on one row and nine on another teaches nothing about what this panel can
+   do, and "Paste is grey" is the answer to why nothing was on the clipboard. */
+.files-menu__item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* A hairline between groups of verbs. Delete sits below one of these on its own, so the
+   destructive entry is never adjacent to the one an operator meant to press. */
+.files-menu__sep {
+    display: block;
+    height: 1px;
+    margin: var(--space-1) var(--space-2);
     background: var(--card-border);
+}
+
+/* The row the open menu is about, held lit while it is open -- the menu covers part of the
+   list, and the row it belongs to must not be one of the ones it hides the identity of. */
+.files-row--targeted > td {
+    background: var(--control-bg);
 }
 
 .files-col-pick {
@@ -108,7 +171,7 @@ button.files-name:focus-visible {
     border: 1px solid var(--card-border);
     border-radius: var(--radius-sm, 4px);
     font-size: var(--text-xs);
-    color: var(--text-muted);
+    color: var(--muted);
     white-space: nowrap;
 }
 

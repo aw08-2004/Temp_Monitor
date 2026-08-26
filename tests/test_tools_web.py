@@ -349,6 +349,8 @@ def test_the_files_tab_is_gated_and_wired():
     check("...nor its panel", 'id="tool-files"' not in plain)
     check("...nor its dialogs, one of which deletes things",
           'id="files-delete-dialog"' not in plain)
+    check("...nor the menu that every one of its verbs now lives on",
+          'id="files-menu"' not in plain)
     check("...nor the module itself", "js/files.js" not in plain)
     check("an issue_commands holder gets the tab and the panel",
           'data-tab-slug="files"' in full and 'id="tool-files"' in full)
@@ -371,22 +373,30 @@ def test_the_files_tab_is_gated_and_wired():
     # during a rollout, is every PC that has not self-updated yet.
     check("files.js names the agent version it needs, like processes.js does",
           "MIN_FILES_AGENT = '" in js)
-    # Opening arrived a release later and is gated on its own number, so an agent that can
-    # browse but not open loses one button rather than the whole panel.
-    check("...and a second, later floor for opening things",
+    # Opening ON THE MACHINE arrived a release later and is gated on its own number, so an
+    # agent that can browse but not launch loses one menu entry rather than the whole panel.
+    # Plain Open is a fetch_file, which every agent that can browse already answers.
+    check("...and a second, later floor for launching things on the machine",
           "MIN_OPEN_AGENT = '" in js)
 
-    # Opening is the one verb here that starts a process on somebody's PC, so the same gate
-    # has to cover it and its dialogs -- including the radio group that chooses the account.
-    check("a plain viewer gets no Open button", 'id="files-open"' not in plain)
+    # There is no toolbar: the verbs are on a right-click menu, which is the only way to
+    # reach any of them. So the menu is what the capability gate has to cover -- a panel
+    # rendered without it would browse and nothing else.
+    check("a plain viewer gets no action menu", 'id="files-menu"' not in plain)
     check("...nor the dialog that chooses the account", 'id="files-open-dialog"' not in plain)
     check("an issue_commands holder gets both",
-          'id="files-open"' in full and 'id="files-open-dialog"' in full)
-    check("...and the preview dialog the console renders files in",
+          'id="files-menu"' in full and 'id="files-open-dialog"' in full)
+    check("...including the panel's one irreversible verb",
+          'id="files-menu-delete"' in full)
+    check("...and the preview dialog that plain Open renders files in",
           'id="files-preview-dialog"' in full)
-    # Not found by the getElementById sweep above: these are read by name, as a radio group.
-    check("both halves of the where/as-whom choice are on the page",
-          'name="files-open-where"' in full and 'name="files-open-runas"' in full)
+    # The old toolbar's ids are gone, and so is half the Open dialog: "where" is answered by
+    # WHICH menu entry was used, so a dialog that asked it again would be asking twice.
+    check("the toolbar is gone", 'id="files-actions"' not in full
+          and 'id="files-download"' not in full)
+    # Not found by the getElementById sweep above: this is read by name, as a radio group.
+    check("the account choice survives, and the where-choice does not",
+          'name="files-open-runas"' in full and 'name="files-open-where"' not in full)
     # A blob URL carries this hub's origin, so a preview frame without sandbox would run an
     # untrusted file's script as the signed-in operator.
     check("the preview frame is sandboxed", "setAttribute('sandbox', '')" in js)

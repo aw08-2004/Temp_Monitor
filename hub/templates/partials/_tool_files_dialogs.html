@@ -68,32 +68,20 @@
     </div>
 </dialog>
 
-{# Open. Two questions, in the order they change each other: WHERE it opens, and then -- only
-   if that is the remote PC -- as WHOM. The second is hidden for "in this browser" because
-   there is no account involved in rendering a file here, and a control that is present but
-   meaningless is one an operator will later swear they set.
+{# Open on that PC. One question -- as WHOM -- because the menu entry that opens this dialog
+   already answered the other one. Plain "Open" shows the file here in the console and asks
+   nothing at all; this dialog is only on the path that starts a process on somebody's
+   computer, which is the half worth a confirmation.
 
-   Neither choice is sticky across opens. "As SYSTEM" remembered from an installer twenty
-   minutes ago, silently applied to somebody's spreadsheet, is exactly the surprise the two
-   modes exist to prevent. #}
+   The account is re-set to the signed-in user every time it opens, never remembered. "As
+   SYSTEM", chosen twenty minutes ago for an installer and silently reapplied to somebody's
+   spreadsheet, is exactly the surprise the two modes exist to prevent. #}
 <dialog class="modal" id="files-open-dialog" aria-labelledby="files-open-title">
     <div class="modal__head">
         <h2 class="modal__title" id="files-open-title">{{ t('files.open_title') }}</h2>
     </div>
     <div class="modal__body">
         <p class="stat-card__meta" id="files-open-item"></p>
-
-        <fieldset class="files-choice" id="files-open-where">
-            <legend class="setting__label">{{ t('files.open_where') }}</legend>
-            <label class="setting__label">
-                <input type="radio" name="files-open-where" value="remote" checked>
-                {{ t('files.open_where_remote') }}
-            </label>
-            <label class="setting__label" id="files-open-where-local-row">
-                <input type="radio" name="files-open-where" value="local">
-                {{ t('files.open_where_local') }}
-            </label>
-        </fieldset>
 
         <fieldset class="files-choice" id="files-open-runas">
             <legend class="setting__label">{{ t('files.open_run_as') }}</legend>
