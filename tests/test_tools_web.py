@@ -392,7 +392,9 @@ def test_the_files_tab_is_gated_and_wired():
           'id="files-preview-dialog"' in full)
     # The old toolbar's ids are gone, and so is half the Open dialog: "where" is answered by
     # WHICH menu entry was used, so a dialog that asked it again would be asking twice.
-    check("the toolbar is gone", 'id="files-actions"' not in full
+    # By CLASS, not by id: the toolbar div never had an id, so asserting on one would pass
+    # whether or not the toolbar came back.
+    check("the toolbar is gone", 'class="files-actions"' not in full
           and 'id="files-download"' not in full)
     # Not found by the getElementById sweep above: this is read by name, as a radio group.
     check("the account choice survives, and the where-choice does not",
