@@ -35,9 +35,15 @@ internal static class UserSessionLauncher
     }
 
     /// <summary>Launch <paramref name="applicationPath"/> in <paramref name="session"/> as
-    /// whoever is signed in there.</summary>
+    /// whoever is signed in there.
+    ///
+    /// <paramref name="arguments"/> is appended after the quoted program path, already
+    /// escaped by the caller. It exists for open_item, which cannot always launch the thing
+    /// the operator clicked: a document has to be handed to explorer.exe and a .ps1 to
+    /// powershell.exe, and both need the path as an argument. A restart, the original
+    /// caller, still passes nothing.</summary>
     internal static LaunchResult LaunchAsSessionUser(
-        string applicationPath, string workingDirectory, uint session)
+        string applicationPath, string workingDirectory, uint session, string arguments = "")
     {
         // No user token means nobody is signed in there any more -- the session is at the
         // logon screen, or it ended between the sample and the click. There is nothing to
@@ -73,6 +79,8 @@ internal static class UserSessionLauncher
             // into this buffer -- so it has to be mutable, never a string literal.
             var commandLine = new StringBuilder();
             commandLine.Append('"').Append(applicationPath).Append('"');
+            if (!string.IsNullOrWhiteSpace(arguments))
+                commandLine.Append(' ').Append(arguments);
 
             uint flags = CreateUnicodeEnvironment | CreateNewConsole;
 

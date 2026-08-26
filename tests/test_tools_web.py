@@ -371,6 +371,25 @@ def test_the_files_tab_is_gated_and_wired():
     # during a rollout, is every PC that has not self-updated yet.
     check("files.js names the agent version it needs, like processes.js does",
           "MIN_FILES_AGENT = '" in js)
+    # Opening arrived a release later and is gated on its own number, so an agent that can
+    # browse but not open loses one button rather than the whole panel.
+    check("...and a second, later floor for opening things",
+          "MIN_OPEN_AGENT = '" in js)
+
+    # Opening is the one verb here that starts a process on somebody's PC, so the same gate
+    # has to cover it and its dialogs -- including the radio group that chooses the account.
+    check("a plain viewer gets no Open button", 'id="files-open"' not in plain)
+    check("...nor the dialog that chooses the account", 'id="files-open-dialog"' not in plain)
+    check("an issue_commands holder gets both",
+          'id="files-open"' in full and 'id="files-open-dialog"' in full)
+    check("...and the preview dialog the console renders files in",
+          'id="files-preview-dialog"' in full)
+    # Not found by the getElementById sweep above: these are read by name, as a radio group.
+    check("both halves of the where/as-whom choice are on the page",
+          'name="files-open-where"' in full and 'name="files-open-runas"' in full)
+    # A blob URL carries this hub's origin, so a preview frame without sandbox would run an
+    # untrusted file's script as the signed-in operator.
+    check("the preview frame is sandboxed", "setAttribute('sandbox', '')" in js)
 
 
 def main():

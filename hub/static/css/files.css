@@ -125,6 +125,64 @@ button.files-name:focus-visible {
     word-break: break-all;
 }
 
+/* The two questions the Open dialog asks. Grouped as fieldsets because they ARE groups --
+   a screen reader announcing "On that PC" with no legend has said nothing about what the
+   choice is between -- and spaced apart because the second one appears and disappears as the
+   first is answered. */
+.files-choice {
+    border: 0;
+    padding: 0;
+    margin: var(--space-4) 0 0;
+}
+
+.files-choice .setting__label {
+    display: block;
+    font-weight: normal;
+}
+
+/* Wider than the ordinary modal (620px), because what this one holds is a page of somebody's
+   log or a scan of an invoice, and 620px of a PDF is a column of hyphens. */
+.files-preview-modal {
+    width: min(1000px, 94vw);
+}
+
+/* The Save link sits at the far end from Close: it is the one control in this dialog that
+   does something rather than dismissing it, and the foot otherwise packs everything right.
+   Same treatment .modal__foot already gives .autosave. */
+#files-preview-save {
+    margin-right: auto;
+}
+
+/* The preview. Capped in height rather than left to grow: this is a dialog, and a 4000-line
+   log that pushes its own Close button past the bottom of the screen is a dialog nobody can
+   leave. Everything inside scrolls in its own box instead. */
+.files-preview {
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.files-preview__text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-sm);
+}
+
+.files-preview__image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+}
+
+.files-preview__frame {
+    display: block;
+    width: 100%;
+    height: 60vh;
+    border: 0;
+}
+
 @media (max-width: 720px) {
     /* The modified column is the first thing to go on a phone: it is the widest and the
        least often what the operator came for. Size and name stay. */
