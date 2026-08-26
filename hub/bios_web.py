@@ -49,6 +49,7 @@ import fleet
 import packages
 import permissions
 import permissions_web
+import refusals
 import settings
 
 
@@ -151,7 +152,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
                 ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 202
 
     # ---------------- Console: write ----------------
@@ -178,7 +179,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
         try:
             changes = bios.validate_changes(inventory, data.get("changes"))
         except bios.ChangeRejected as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         existing = bios.open_change_for(db_path, machine)
         if existing is not None:
@@ -199,7 +200,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
             )
         except ValueError as e:
             bios.cancel_change(db_path, change_id)
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         bios.attach_command(db_path, change_id, command_id)
 
         # A SECOND audit row beside the `issue_command` one that create_command wrote. That
@@ -290,7 +291,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
         try:
             backups.store_secret(log_dir, master, secret_id, {"password": password})
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         fleet.audit(db_path, actor=_current_email(), action="bios_password_set",
                     level=fleet.LEVEL_SECURITY, target=machine or "fleet",
                     detail={"scope": "machine" if machine else "fleet"})
@@ -419,7 +420,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
         try:
             sha256, size = packages.store_blob(image_dir, upload.stream, max_bytes)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         except OSError as e:
             return jsonify({"error": f"Could not store the image: {e}"}), 500
         fleet.audit(db_path, actor=_current_email(), action="upload_firmware_image",
@@ -443,7 +444,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
                 install_args=data.get("install_args") or "",
                 notes=data.get("notes") or "", created_by=_current_email())
         except firmware.PayloadRejected as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"payload": firmware.get_payload(db_path, payload_id)}), 201
 
     @bp.route("/api/firmware/payloads/<payload_id>", methods=["DELETE"])
@@ -455,7 +456,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
                                               actor=_current_email(),
                                               blob_root_dir=image_dir)
         except firmware.PayloadRejected as e:
-            return jsonify({"error": str(e)}), 409
+            return refusals.refuse(e, 409)
         if not deleted:
             return jsonify({"error": "unknown firmware image"}), 404
         return jsonify({"status": "deleted"}), 200
@@ -502,7 +503,7 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
                 window_end=data.get("window_end"),
                 machine_facts=firmware.read_machine_facts(db_path, names))
         except firmware.PayloadRejected as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({
             "job_id": job_id,
             "queued": [t["machine"] for t in targets

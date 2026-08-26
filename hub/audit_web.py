@@ -31,6 +31,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 import fleet
 import permissions
+import refusals
 
 # Fetch sizes for one page of the tab. The cap matches fleet.list_audit's own clamp.
 DEFAULT_PAGE_SIZE = 50
@@ -112,7 +113,7 @@ def create_audit_blueprint(db_path, login_required, access):
             since = _parse_bound(request.args["from"]) if _arg("from") else None
             until = _parse_bound(request.args["to"], end_of_day=True) if _arg("to") else None
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         limit = _int_arg("limit")
         page = fleet.list_audit(

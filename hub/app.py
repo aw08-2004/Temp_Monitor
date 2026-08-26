@@ -28,6 +28,7 @@ import requests
 
 import fleet
 import alerts
+import refusals
 import settings
 import terminal
 import permissions
@@ -101,7 +102,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.89.0"
+HUB_VERSION = "1.90.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4611,7 +4612,7 @@ def get_machine_history(machine):
     try:
         start_epoch, end_epoch, resolution, limit = _resolve_history_window(request.args)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return refusals.refuse(e)
 
     metrics = {}
     for key in keys:

@@ -26,6 +26,7 @@ from flask import Blueprint, g, jsonify, render_template, request, session
 
 import i18n
 import permissions
+import refusals
 import users
 
 # The member picker shows at most this many matches -- enough to choose from, few enough
@@ -379,7 +380,7 @@ def create_permissions_blueprint(db_path, login_required, access):
                 actor=access.email(),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(permissions.get_group(db_path, group_id)), 201
 
     @bp.route("/api/permissions/groups/<group_id>", methods=["GET"])
@@ -414,7 +415,7 @@ def create_permissions_blueprint(db_path, login_required, access):
         except KeyError:
             return jsonify({"error": "unknown permission group"}), 404
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(group), 200
 
     @bp.route("/api/permissions/groups/<group_id>", methods=["DELETE"])

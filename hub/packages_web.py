@@ -40,6 +40,7 @@ import i18n
 import packages
 import permissions
 import permissions_web
+import refusals
 import settings
 
 
@@ -167,7 +168,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         try:
             sha256, size = packages.store_blob(blob_dir, upload.stream, max_bytes)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         except OSError as e:
             return jsonify({"error": f"Could not store the file: {e}"}), 500
         fleet.audit(db_path, actor=_current_email(), action="upload_package_file",
@@ -208,7 +209,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                 actor=_current_email(),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(packages.get_package(db_path, package_id)), 201
 
     @bp.route("/api/packages/<package_id>", methods=["GET"])
@@ -245,7 +246,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         except KeyError:
             return jsonify({"error": "unknown package"}), 404
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(package), 200
 
     @bp.route("/api/packages/<package_id>", methods=["DELETE"])
@@ -295,7 +296,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         except KeyError:
             return jsonify({"error": "unknown package"}), 404
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(_visible_deployment(deployment_id)), 201
 
     def _visible_deployment(deployment_id):
@@ -324,7 +325,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         except KeyError:
             return jsonify({"error": "unknown deployment"}), 404
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(_visible_deployment(deployment_id)), 200
 
     @bp.route("/api/deployments/<deployment_id>/retry", methods=["POST"])

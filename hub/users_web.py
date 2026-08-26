@@ -20,6 +20,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 import permissions
 import permissions_web
+import refusals
 import users
 
 
@@ -63,7 +64,7 @@ def create_users_blueprint(db_path, login_required, access):
                 actor=_actor(),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(user), 201
 
     @bp.route("/api/users/<email>", methods=["GET"])
@@ -94,7 +95,7 @@ def create_users_blueprint(db_path, login_required, access):
         except KeyError:
             return jsonify({"error": "unknown user"}), 404
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(user), 200
 
     @bp.route("/api/users/<email>", methods=["DELETE"])

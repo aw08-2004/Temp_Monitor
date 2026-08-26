@@ -39,6 +39,7 @@ import fleet
 import files
 import permissions
 import permissions_web
+import refusals
 import settings
 
 
@@ -122,7 +123,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
             try:
                 request_id, clean = files.create_listing(db_path, machine_name, raw_path)
             except ValueError as e:
-                return jsonify({"error": str(e)}), 400
+                return refusals.refuse(e)
             params = {"request_id": request_id, "path": clean}
         else:
             # The drive list is still a listing row -- same polling, same expiry, same
@@ -133,7 +134,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
         try:
             command_id = _queue(machine_name, "list_directory", params)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"request_id": request_id, "command_id": command_id,
                         "poll_interval": files.POLL_INTERVAL_SECONDS}), 201
 
@@ -179,11 +180,11 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
                 new_name=data.get("new_name"),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         try:
             command_id = _queue(str(machine).strip(), "file_operation", params)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 201
 
     @bp.route("/api/machines/<machine>/files/open", methods=["POST"])
@@ -209,11 +210,11 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
         try:
             params = files.validate_open(data.get("path"), run_as=data.get("run_as"))
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         try:
             command_id = _queue(str(machine).strip(), "open_item", params)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 201
 
     # ================================================================
@@ -256,7 +257,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
                 db_path, machine_name, files.PULL, path, download_name,
                 kind=kind, issued_by=_current_email())
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         try:
             command_id = _queue(machine_name, "fetch_file", {
@@ -268,7 +269,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
             })
         except ValueError as e:
             files.fail_transfer(db_path, transfer_id, str(e))
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"transfer_id": transfer_id, "command_id": command_id,
                         "name": download_name,
                         "poll_interval": files.POLL_INTERVAL_SECONDS}), 201
@@ -342,7 +343,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
         try:
             name = files.validate_name(secure_filename(upload.filename))
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         machine_name = str(machine).strip()
         # The destination is not known yet and is deliberately not taken from this request:
@@ -403,7 +404,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
             destination = files.validate_path(data.get("destination"))
             target = files.join_path(destination, name)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         if not files.arm_push(db_path, transfer["id"], destination, name):
             return jsonify({"error": "that upload has already been sent"}), 409
 
@@ -419,7 +420,7 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
             })
         except ValueError as e:
             files.fail_transfer(db_path, transfer["id"], str(e))
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"transfer_id": transfer["id"], "command_id": command_id,
                         "path": target,
                         "poll_interval": files.POLL_INTERVAL_SECONDS}), 201

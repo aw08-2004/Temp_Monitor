@@ -25,6 +25,7 @@ from flask import Blueprint, jsonify, request
 
 import authconfig
 import fleet
+import refusals
 
 
 def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure):
@@ -66,7 +67,7 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
         try:
             after = authconfig.validate(authconfig.merge(before, data))
         except authconfig.AuthConfigError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         changed = authconfig.describe_changes(before, after)
         if not changed:

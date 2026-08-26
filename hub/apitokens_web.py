@@ -37,6 +37,7 @@ import clientrelease
 import i18n
 import permissions
 import permissions_web
+import refusals
 import settings
 
 
@@ -151,7 +152,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
             try:
                 apitokens.validate_loopback_redirect(redirect_uri)
             except apitokens.PairingError as e:
-                return jsonify({"error": str(e)}), 400
+                return refusals.refuse(e)
 
         try:
             code = apitokens.create_grant(
@@ -165,7 +166,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
                 lifetime_days=_lifetime_days(),
             )
         except apitokens.PairingError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         answer = {"code": code, "expires_in": apitokens.PAIRING_CODE_TTL_SECONDS}
         if redirect_uri:
@@ -191,7 +192,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
         try:
             token, row = apitokens.redeem_grant(db_path, body.get("code"))
         except apitokens.PairingError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({
             # The only time this value exists outside the device. It is not stored, and
             # there is no endpoint that can show it again.
@@ -288,7 +289,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
         try:
             return jsonify(clientrelease.load_manifest(code_dir)), 200
         except clientrelease.ManifestError as e:
-            return jsonify({"error": str(e)}), 503
+            return refusals.refuse(e, 503)
 
     @bp.route("/download/manifest.json", methods=["GET"])
     def raw_manifest():
