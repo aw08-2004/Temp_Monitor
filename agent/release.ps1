@@ -92,6 +92,79 @@ $keyPath = if ($SigningKey) { $SigningKey } else { Join-Path $env:USERPROFILE ".
 if (-not (Test-Path $keyPath)) { Die "No signing key at $keyPath. Run: python sign_release.py --genkey" }
 Ok "Signing key: $keyPath"
 
+# Can git actually make the manifest commit? Asked HERE, before anything is published.
+#
+# That commit is the last step of this script and the only one that reaches the fleet: main is
+# where SelfUpdater reads agent.manifest.json, so a release whose commit fails has a published
+# GitHub release, a published asset, a signed manifest -- and no machine that will ever see
+# any of it. Finding that out at the end means unpicking a release that is already public;
+# finding it out here costs nothing.
+#
+# The failure this exists for: released from the FleetHub Terminal, this script runs as SYSTEM,
+# whose profile carried commit.gpgsign=true and no keyring to honour it with. git signs nothing
+# in this repo -- the manifest's own Ed25519 signature is what the agent verifies, not the
+# commit's -- so the fix is to unset it, and the message below says where.
+#
+# -C $RepoRoot is load-bearing: from that terminal the working directory is C:\Windows\system32,
+# and a bare `git config` there reads the ambient profile without the repo's own config, which
+# is a different answer to the question being asked.
+$signCommits = git -C $RepoRoot config --type=bool --get commit.gpgsign
+if ($signCommits -eq "true") {
+    $gpgFormat = git -C $RepoRoot config --get gpg.format
+    if ($gpgFormat -eq "ssh") {
+        # git signs with an ssh key here; gpg is not involved and there is no keyring to check.
+        Ok "Commits are signed with an ssh key (not verified here)"
+    } else {
+        $signer = git -C $RepoRoot config --get user.signingkey
+        if (-not $signer) { $signer = git -C $RepoRoot config --get user.email }
+        $gpgProgram = git -C $RepoRoot config --get gpg.program
+        if (-not $gpgProgram) { $gpgProgram = "gpg" }
+        $origin = git -C $RepoRoot config --show-origin --get commit.gpgsign
+        # "file:C:/path/.gitconfig\ttrue" -- the path is what an operator needs to unset it.
+        $originFile = ($origin -split "\s+")[0] -replace '^file:', ''
+        if (-not [System.IO.Path]::IsPathRooted($originFile)) {
+            # A repo-local setting reports as the relative ".git/config", which is only a
+            # usable instruction from inside the repo -- and the shell this failed in was
+            # sitting in system32.
+            $originFile = Join-Path $RepoRoot $originFile
+        }
+
+        $unsetHint = "git config --file `"$originFile`" --unset commit.gpgsign"
+        # git resolves gpg against its OWN bundled tools, which are not on the Windows PATH --
+        # so Get-Command alone reports "not installed" for the very gpg git is about to use,
+        # and would send an operator installing something they already have.
+        if (-not (Get-Command $gpgProgram -ErrorAction SilentlyContinue)) {
+            $bundledGpg = Join-Path (Split-Path (Split-Path (Get-Command git).Source)) "usr\bin\gpg.exe"
+            if (Test-Path $bundledGpg) { $gpgProgram = $bundledGpg }
+        }
+        if (-not (Get-Command $gpgProgram -ErrorAction SilentlyContinue)) {
+            Die ("commit.gpgsign is on (from $originFile) but $gpgProgram is not installed, so " +
+                 "the manifest commit at the end of this script would fail after the release " +
+                 "is already published. Either install it or turn signing off:  $unsetHint")
+        }
+        # --list-secret-keys rather than a test signature: it answers the same question without
+        # a passphrase prompt, which in a SYSTEM shell with no tty would hang rather than fail.
+        # $ErrorActionPreference is Stop for this whole script, and in PowerShell 5.1 a
+        # native command that writes to stderr under Stop raises a terminating
+        # NativeCommandError before the exit code can be looked at -- so gpg's own "No
+        # secret key" would kill the script with the cryptic message this check exists to
+        # replace. Dropped to Continue for exactly this one call.
+        $priorEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & $gpgProgram --batch --no-tty --list-secret-keys $signer 2>$null | Out-Null
+        $gpgExit = $LASTEXITCODE
+        $ErrorActionPreference = $priorEap
+        if ($gpgExit -ne 0) {
+            Die ("commit.gpgsign is on (from $originFile) but $gpgProgram holds no secret key " +
+                 "for $signer, so the manifest commit at the end of this script would fail " +
+                 "after the release is already published. Nothing in this repo's history is " +
+                 "gpg-signed and the agent verifies the manifest's own signature rather than " +
+                 "the commit's, so the fix is to turn it off:  $unsetHint")
+        }
+        Ok "Commit signing on, and $gpgProgram has a key for $signer"
+    }
+}
+
 # ----------------------------------------------------------------------
 # 1. Bump version in AgentConfig.cs + csproj
 # ----------------------------------------------------------------------
