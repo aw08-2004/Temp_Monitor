@@ -6,7 +6,7 @@ run", "a folder needs somewhere to be and a name". Those sentences are the produ
 operator who typed a bad path is told what is wrong with it and fixes it; a generic "400 Bad
 Request" would send them to a colleague instead.
 
-The route layer has been spelling that out by hand, eighty-odd times:
+The route layer has been spelling that out by hand, eighty times:
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -17,11 +17,11 @@ decided the answer, and what it does with the exception is now a decision record
 docstring rather than a habit copied down a file.
 
 **What this deliberately does NOT change is which message goes out.** The response bodies are
-byte-identical to what they were, because the messages are the useful part and eighty-two
+byte-identical to what they were, because the messages are the useful part and eighty
 routes quietly starting to say "invalid request" instead would be a regression dressed as a
 hardening. What changes is that there is now a single place to tighten this if that call is
 ever made -- a message allowlist, a length cap, a distinction between our own refusals and
-someone else's ValueError -- instead of eighty-two.
+someone else's ValueError -- instead of eighty.
 
 **On CodeQL's py/stack-trace-exposure.** It flags every one of these, here and in every other
 Flask app, because it cannot tell an exception carrying an authored sentence from one
@@ -29,7 +29,7 @@ carrying a traceback. Nothing reaching a client through this function is a trace
 exception types the routes catch are the hub's own refusal classes plus ValueError and
 PermissionError from its own validators. The alert is a true statement about the shape of the
 code and a false one about the risk, and it is worth having said in one place that a reviewer
-can read rather than in eighty-two places nobody reads twice.
+can read rather than in eighty places nobody reads twice.
 
 Flask-dependent by design, unlike the modules whose refusals it renders -- it IS the HTTP
 layer, and jsonify is the thing it exists to call.
