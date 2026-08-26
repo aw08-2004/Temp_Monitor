@@ -40,6 +40,7 @@ import live
 import permissions
 import permissions_web
 import processes
+import refusals
 import remote
 import settings
 import terminal
@@ -111,9 +112,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         try:
             agent_id, token = fleet.enroll_agent(db_path, machine, secret, enrollment_secret)
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 403
+            return refusals.refuse(e, 403)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         # Token is returned exactly once; the agent must persist it locally.
         return jsonify({"agent_id": agent_id, "token": token}), 200
 
@@ -356,9 +357,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             return jsonify({"error": "unknown command"}), 404
         except PermissionError as e:
             # Includes "already completed" -- the run is over, don't reopen it.
-            return jsonify({"error": str(e)}), 403
+            return refusals.refuse(e, 403)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": "ok", "truncated": truncated}), 200
 
     @bp.route("/api/agent/commands/<command_id>/result", methods=["POST"])
@@ -373,7 +374,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         except KeyError:
             return jsonify({"error": "unknown command"}), 404
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 403
+            return refusals.refuse(e, 403)
         # Post-result hook (the rules engine's message routing). Deliberately after the
         # result is committed and deliberately non-fatal: the agent has already done the
         # work, and answering it 500 because a follow-up action threw would make it retry a
@@ -467,7 +468,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 shared=bool(data.get("shared")),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"favorite_id": favorite_id}), 201
 
     @bp.route("/api/fleet/favorites/<favorite_id>", methods=["PUT"])
@@ -486,9 +487,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         except KeyError:
             return jsonify({"error": "unknown favorite"}), 404
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 403
+            return refusals.refuse(e, 403)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": "updated"}), 200
 
     @bp.route("/api/fleet/favorites/<favorite_id>", methods=["DELETE"])
@@ -500,7 +501,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         except KeyError:
             return jsonify({"error": "unknown favorite"}), 404
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 403
+            return refusals.refuse(e, 403)
         return jsonify({"status": "deleted"}), 200
 
     @bp.route("/api/fleet/commands", methods=["POST"])
@@ -571,7 +572,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 201
 
     # ---------------- Interactive terminal (ConPTY) ----------------
@@ -643,7 +644,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 rows=data.get("rows"),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         try:
             command_id = fleet.create_command(
@@ -663,7 +664,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             # Don't leave a session nothing will ever attach to sitting in the operator's
             # per-machine quota.
             terminal.finish_session(db_path, found["id"], "could not queue shell_open")
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         terminal.attach_command(db_path, found["id"], command_id)
         return jsonify({
@@ -691,9 +692,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         except KeyError:
             return jsonify({"error": "unknown terminal session"}), 404
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 409
+            return refusals.refuse(e, 409)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/fleet/pty/<session_id>/output", methods=["GET"])
@@ -768,9 +769,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         try:
             oldest = terminal.push_output(db_path, session_id, data.get("seq"), data.get("chunk"))
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 409
+            return refusals.refuse(e, 409)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": "ok", "oldest_seq": oldest}), 200
 
     @bp.route("/api/agent/pty/<session_id>/closed", methods=["POST"])

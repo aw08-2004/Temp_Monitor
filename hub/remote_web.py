@@ -26,6 +26,7 @@ from flask import Blueprint, jsonify, request, session
 import fleet
 import permissions
 import permissions_web
+import refusals
 import remote
 import settings
 
@@ -169,9 +170,9 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         except KeyError:
             return jsonify({"error": "unknown session"}), 404
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 409
+            return refusals.refuse(e, 409)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"seq": seq}), 200
 
     @bp.route("/api/agent/remote/<session_id>/ice", methods=["GET"])
@@ -247,7 +248,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         try:
             stream = _stream_params(data)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         consent_mode = settings.get(db_path, "remote.consent_mode") or "unattended"
         session_id = remote.create_session(
@@ -275,7 +276,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         except ValueError as e:
             remote.end_session(db_path, session_id, "failed to queue start command",
                                actor=_current_email())
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         return jsonify({"session_id": session_id, "ice_servers": ice,
                         "consent_mode": consent_mode, **stream}), 201
@@ -313,7 +314,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
                 ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 202
 
     @bp.route("/api/remote/session/<session_id>/signal", methods=["POST"])
@@ -328,9 +329,9 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         except KeyError:
             return jsonify({"error": "unknown session"}), 404
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 409
+            return refusals.refuse(e, 409)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"seq": seq}), 200
 
     @bp.route("/api/remote/session/<session_id>/poll", methods=["GET"])
@@ -412,7 +413,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         try:
             params = _virtual_display_settings(data)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         params.update({
             "payload_url": _agent_package_url(payload["sha256"]),
             "payload_sha256": payload["sha256"],
@@ -443,7 +444,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         try:
             params = _virtual_display_settings(request.get_json(silent=True) or {})
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         command_id, error = _queue(machine, "set_virtual_display_mode", params)
         if error:
             return jsonify({"error": error}), 400

@@ -25,6 +25,7 @@ from flask import Blueprint, jsonify
 
 import directory
 import permissions
+import refusals
 import settings
 
 
@@ -89,7 +90,7 @@ def create_directory_blueprint(db_path, login_required, access):
         except directory.DirectoryError as e:
             # 400, not 500: every one of these is a configuration problem the operator can
             # act on, and the message is written to be read by them.
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(result), 200
 
     return bp

@@ -32,6 +32,7 @@ from flask import Blueprint, jsonify, request
 import fleet
 import permissions
 import permissions_web
+import refusals
 import settings
 import wake
 
@@ -160,7 +161,7 @@ def create_wake_blueprint(db_path, login_required, access, machine_roster=None):
                                        reason=str(body.get("reason") or "")[:200],
                                        online=online, ttl_seconds=_ttl())
         except wake.WakeRejected as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         fleet.audit(db_path, actor=_current_email(), action="wake_request",
                     level=fleet.LEVEL_NOTICE, target=machine,
@@ -200,7 +201,7 @@ def create_wake_blueprint(db_path, login_required, access, machine_roster=None):
                                         reason=str(body.get("reason") or "")[:200],
                                         online=_online_names(entries), ttl_seconds=_ttl())
         except wake.WakeRejected as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         counts = {}
         for row in results:

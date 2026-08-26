@@ -41,6 +41,7 @@ import fleet
 import i18n
 import permissions
 import permissions_web
+import refusals
 import settings
 
 
@@ -93,7 +94,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         try:
             key = backups.load_master_key()
         except ValueError as e:
-            return None, (jsonify({"error": str(e)}), 400)
+            return None, refusals.refuse(e)
         if key is None:
             return None, (jsonify({
                 "error": "No backup encryption key exists yet. Create one first."
@@ -304,7 +305,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         try:
             key_b64, created = backups.ensure_master_key(env_path)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         if not created:
             return jsonify({"error": "A backup encryption key already exists."}), 409
         fleet.audit(db_path, actor=_current_email(), action="backup_key_create",
@@ -370,7 +371,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                 actor=_current_email(),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(backups.get_destination(db_path, destination_id, log_dir)), 201
 
     @bp.route("/api/backups/destinations/<destination_id>", methods=["PUT"])
@@ -392,7 +393,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         except KeyError:
             return jsonify({"error": "unknown destination"}), 404
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(record), 200
 
     @bp.route("/api/backups/destinations/<destination_id>", methods=["DELETE"])
@@ -425,7 +426,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             summary = backups.probe_destination(db_path, log_dir, destination_id,
                                                 actor=_current_email())
         except (backups.BackupError, ValueError) as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": "ok", "detail": summary}), 200
 
     # ---------------- Console: the schedule ----------------
@@ -477,7 +478,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         try:
             settings.set_many(db_path, updates, updated_by=_current_email())
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         fleet.audit(db_path, actor=_current_email(), action="backup_schedule_update",
                     level=fleet.LEVEL_NOTICE,
                     detail=updates)
@@ -576,7 +577,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                 actor=_current_email(),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(_machine_backup_payload(machine)), 200
 
     # ---------------- Console: browsing a machine's manifest ----------------
@@ -643,7 +644,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             target_dir = backups.validate_target_dir(data.get("target_dir"))
             plan = backups.plan_restore(db_path, machine, data.get("paths") or [])
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         # A restore to the ORIGINAL locations that is not allowed to overwrite is a
         # restore that does nothing on the common case (the file is still there but
@@ -662,7 +663,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                 issued_by=actor, ttl_seconds=backups.RESTORE_COMMAND_TTL_SECONDS)
         except ValueError as e:
             backups.complete_restore(db_path, restore_id, actor=actor, error=str(e))
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         backups.attach_restore_command(db_path, restore_id, command_id)
 
         return jsonify({
@@ -931,7 +932,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         try:
             client, _ = backups.open_client(db_path, log_dir, run["destination_id"])
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         length = request.content_length
         if not length:
@@ -943,7 +944,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             client.put(run["object_key"], request.stream, length, "")
         except backups.BackupError as e:
             backups.complete_file_run(db_path, run_id, error=str(e))
-            return jsonify({"error": str(e)}), 502
+            return refusals.refuse(e, 502)
         return jsonify({"status": "stored", "object_key": run["object_key"]}), 200
 
     @bp.route("/api/agent/backups/<run_id>/result", methods=["POST"])
@@ -967,7 +968,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                 db_path, log_dir, run_id, data,
                 keep_chains=settings.get_int(db_path, "backup.files_keep_chains"))
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": finished["status"]}), 200
 
     # ---------------- Agent: restore ----------------
@@ -1008,7 +1009,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             payload = backups.restore_plan_payload(db_path, log_dir, restore_id,
                                                    hub_url=hub_url)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify(payload), 200
 
     @bp.route("/api/agent/backups/restore/<restore_id>/archive/<int:index>",
@@ -1039,7 +1040,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             client, _ = backups.open_client(db_path, log_dir, restore["destination_id"])
             upstream = client.open(object_key)
         except (backups.BackupError, ValueError) as e:
-            return jsonify({"error": str(e)}), 502
+            return refusals.refuse(e, 502)
 
         def relay():
             try:
@@ -1069,7 +1070,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             finished = backups.ingest_restore_result(db_path, restore_id,
                                                      request.get_json(silent=True) or {})
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"status": finished["status"]}), 200
 
     return bp

@@ -20,6 +20,7 @@ answer.
 import fleet
 import permissions
 import permissions_web
+import refusals
 import settings
 from flask import Blueprint, jsonify, request
 
@@ -78,7 +79,7 @@ def create_settings_blueprint(db_path, login_required, access):
             # settings.set_many validates everything before writing anything, so a 400
             # here means nothing changed. The message names the offending field and is
             # shown verbatim next to it in the UI.
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
 
         _audit_changes(before, applied, "settings.update")
         return jsonify({"status": "saved", "settings": settings.schema(db_path)}), 200

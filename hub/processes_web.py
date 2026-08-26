@@ -33,6 +33,7 @@ import fleet
 import permissions
 import permissions_web
 import processes
+import refusals
 import settings
 
 
@@ -70,7 +71,7 @@ def create_processes_blueprint(db_path, login_required, access):
                 ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             )
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 201
 
     @bp.route("/api/machines/<machine>/processes", methods=["GET"])
@@ -110,7 +111,7 @@ def create_processes_blueprint(db_path, login_required, access):
             params = processes.validate_kill(
                 data.get("name"), data.get("pids"), tree=data.get("tree"))
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return _queue(str(machine).strip(), "kill_process", params)
 
     @bp.route("/api/machines/<machine>/processes/restart", methods=["POST"])
@@ -131,7 +132,7 @@ def create_processes_blueprint(db_path, login_required, access):
         try:
             params = processes.validate_restart(data.get("name"), data.get("pid"))
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return _queue(str(machine).strip(), "restart_process", params)
 
     return bp
