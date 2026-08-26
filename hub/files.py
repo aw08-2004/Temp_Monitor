@@ -144,6 +144,14 @@ NEEDS_PATHS = frozenset({COPY, MOVE, DELETE, RENAME})
 #: Operations that carry a `new_name`.
 NEEDS_NEW_NAME = frozenset({RENAME, NEW_FOLDER})
 
+# Opening is not one of the operations above and is deliberately kept out of that list: it
+# changes nothing on the disk, so it has no opposite to undo it, and the console does not
+# re-list the folder afterwards. What it does have is an account, which none of the others
+# do -- every other command in this fleet runs as SYSTEM in session 0.
+RUN_AS_USER = "user"
+RUN_AS_SYSTEM = "system"
+RUN_AS = (RUN_AS_USER, RUN_AS_SYSTEM)
+
 
 # ================================
 # PATHS
@@ -350,6 +358,30 @@ def validate_operation(op, paths=None, destination=None, new_name=None):
                 raise ValueError(f"{params['destination']} is inside {item}")
 
     return params
+
+
+def validate_open(path, run_as=None):
+    """Params for an `open_item` command, or ValueError.
+
+    A drive root is refused for the same reason it is refused for copy and delete: "open
+    C:\\" is not a request anybody makes deliberately, and the ways it could be meant --
+    browse it, or open an Explorer window on it -- are both already one click away.
+
+    The account is required to be one of two named values rather than defaulted here. The
+    agent does default it (to `user`, the safe half), but a hub that quietly filled in an
+    account would be choosing on the operator's behalf which desktop somebody's program
+    appears on -- and the whole reason this command carries the field is that the choice is
+    theirs. See OpenItemExecutor.
+    """
+    clean = validate_path(path)
+    if clean.endswith("\\") or _UNC_ROOT.match(clean):
+        raise ValueError(f"{clean} is a drive, not a file or folder")
+
+    account = str(run_as or "").strip().lower()
+    if account not in RUN_AS:
+        raise ValueError(f"unknown run_as: {run_as!r}")
+
+    return {"path": clean, "run_as": account}
 
 
 # ================================

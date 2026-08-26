@@ -67,3 +67,70 @@
         <button type="button" id="files-upload-ok" class="btn btn--primary">{{ t('files.upload_send') }}</button>
     </div>
 </dialog>
+
+{# Open. Two questions, in the order they change each other: WHERE it opens, and then -- only
+   if that is the remote PC -- as WHOM. The second is hidden for "in this browser" because
+   there is no account involved in rendering a file here, and a control that is present but
+   meaningless is one an operator will later swear they set.
+
+   Neither choice is sticky across opens. "As SYSTEM" remembered from an installer twenty
+   minutes ago, silently applied to somebody's spreadsheet, is exactly the surprise the two
+   modes exist to prevent. #}
+<dialog class="modal" id="files-open-dialog" aria-labelledby="files-open-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-open-title">{{ t('files.open_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p class="stat-card__meta" id="files-open-item"></p>
+
+        <fieldset class="files-choice" id="files-open-where">
+            <legend class="setting__label">{{ t('files.open_where') }}</legend>
+            <label class="setting__label">
+                <input type="radio" name="files-open-where" value="remote" checked>
+                {{ t('files.open_where_remote') }}
+            </label>
+            <label class="setting__label" id="files-open-where-local-row">
+                <input type="radio" name="files-open-where" value="local">
+                {{ t('files.open_where_local') }}
+            </label>
+        </fieldset>
+
+        <fieldset class="files-choice" id="files-open-runas">
+            <legend class="setting__label">{{ t('files.open_run_as') }}</legend>
+            <label class="setting__label">
+                <input type="radio" name="files-open-runas" value="user" checked>
+                {{ t('files.open_run_as_user') }}
+            </label>
+            <label class="setting__label">
+                <input type="radio" name="files-open-runas" value="system">
+                {{ t('files.open_run_as_system') }}
+            </label>
+            <p class="stat-card__meta">{{ t('files.open_run_as_note') }}</p>
+        </fieldset>
+
+        <p class="setting__error" id="files-open-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="files-open-cancel" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="files-open-ok" class="btn btn--primary">{{ t('files.open') }}</button>
+    </div>
+</dialog>
+
+{# Preview. The console's own half of "open": the bytes come down the ordinary transfer path
+   and are rendered HERE, in a sandboxed frame or as escaped text, never navigated to. A blob
+   opened in a tab would inherit the hub's origin, which for an HTML or SVG file off somebody's
+   PC means running their file's script as the signed-in operator. See files.js's renderers --
+   the type list is an allowlist for that reason, and SVG is deliberately not on it. #}
+<dialog class="modal files-preview-modal" id="files-preview-dialog" aria-labelledby="files-preview-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-preview-title"></h2>
+    </div>
+    <div class="modal__body">
+        <div id="files-preview-body" class="files-preview"></div>
+        <p class="stat-card__meta" id="files-preview-note" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <span id="files-preview-save"></span>
+        <button type="button" id="files-preview-close" class="btn btn--primary">{{ t('common.close') }}</button>
+    </div>
+</dialog>

@@ -53,6 +53,15 @@
     // report a hard failure on every click -- which, during a fleet rollout, is every PC
     // that has not self-updated yet. Same shape as processes.js's MIN_PROCESS_AGENT.
     const MIN_FILES_AGENT = '3.33.0';
+    // Opening arrived later, and is gated separately on purpose: an agent on 3.33.x browses,
+    // copies and downloads perfectly well, and disabling the whole panel over the one verb it
+    // cannot do would take four working tools away to explain a fifth.
+    const MIN_OPEN_AGENT = '3.34.0';
+
+    // A preview is pulled into the browser's memory whole, so this is a ceiling on what the
+    // console will try rather than on what it can fetch: a 300 MB log downloads fine through
+    // the Save link, and rendering it into a <pre> would hang the tab.
+    const PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 
     // How long to keep asking before giving up on one request. The machine has to poll for
     // the command, do the work and report back; a sleeping laptop may take a while to even
@@ -74,6 +83,7 @@
     const fileInput = document.getElementById('files-file-input');
 
     const btn = {
+        open: document.getElementById('files-open'),
         up: document.getElementById('files-up'),
         go: document.getElementById('files-go'),
         refresh: document.getElementById('files-refresh'),
@@ -90,6 +100,8 @@
     const nameDialog = document.getElementById('files-name-dialog');
     const deleteDialog = document.getElementById('files-delete-dialog');
     const uploadDialog = document.getElementById('files-upload-dialog');
+    const openDialog = document.getElementById('files-open-dialog');
+    const previewDialog = document.getElementById('files-preview-dialog');
 
     // ---- state ----
     let path = null;                // null means the drive list
@@ -100,6 +112,8 @@
     let generation = 0;             // bumped on teardown/navigate to orphan stale polls
     let timers = [];                // every setTimeout this panel owns
     let pendingFile = null;         // the File chosen for upload, awaiting its dialog
+    let pendingOpen = null;         // the entry the Open dialog is asking about
+    let previewUrl = null;          // the object URL the preview dialog is showing, if any
 
     // ================================================================
     // plumbing
@@ -187,6 +201,17 @@
         ram: () => t('files.drive_type.ram')
     };
 
+    // What the console will render, and nothing else. Two rules decide the membership:
+    // the type must be safe to show from a blob URL that carries this hub's origin (so no
+    // html, htm, svg, xhtml -- all of them script documents), and showing it must beat
+    // saving it. Anything absent still downloads through the Save link, which is the honest
+    // answer for a .docx: this is a console, not Word.
+    const PREVIEW_TEXT = new Set([
+        'txt', 'log', 'ini', 'cfg', 'conf', 'csv', 'json', 'xml', 'yml', 'yaml', 'md',
+        'ps1', 'bat', 'cmd', 'reg', 'inf', 'sql', 'py', 'js', 'css'
+    ]);
+    const PREVIEW_IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico']);
+
     /** The full path of one entry in the folder being shown. */
     function entryPath(entry) {
         if (entry.path) return entry.path;             // a drive row carries its own
@@ -203,6 +228,7 @@
     // the agent version gate
     // ================================================================
     let tooOld = null;
+    let openTooOld = null;      // the same question asked against MIN_OPEN_AGENT
 
     async function checkAgentVersion() {
         if (tooOld !== null) return;
@@ -210,8 +236,10 @@
             const info = await api(`/api/machines/${encodeURIComponent(currentMachine())}`);
             const version = info && info.companion_version;
             tooOld = (version && versionLess(version, MIN_FILES_AGENT)) ? version : false;
+            openTooOld = (version && versionLess(version, MIN_OPEN_AGENT)) ? version : false;
         } catch (e) {
             tooOld = false;      // unknown is not "too old"; let the command answer for itself
+            openTooOld = false;
         }
     }
 
@@ -433,6 +461,19 @@
 
         row.appendChild(el('td', null, entry.directory ? '—' : formatSize(entry.size)));
         row.appendChild(el('td', null, formatTime(entry.modified)));
+
+        // Double-click asks the same question the Open button does, on the row under the
+        // pointer rather than on the selection -- which is what a double-click means in every
+        // file manager the operator has ever used. It selects that row first so the dialog and
+        // the toolbar cannot disagree about which item is being opened.
+        row.addEventListener('dblclick', () => {
+            if (busy) return;
+            selection.clear();
+            selection.add(entry.name);
+            renderTable();
+            renderActions();
+            askOpen(entry);
+        });
         return row;
     }
 
@@ -441,6 +482,12 @@
         const inFolder = !!path && !!listing;
         const idle = !busy && !tooOld;
 
+        // Enabled on a folder too: "open" means an Explorer window on that PC for a folder,
+        // and only the "here, in this browser" half is withheld from one. Deliberately NOT
+        // disabled on an agent too old for it -- a disabled button explains nothing and shows
+        // no tooltip either, so the click is allowed through and answered with the version it
+        // is waiting for. See MIN_OPEN_AGENT.
+        btn.open.disabled = !idle || picked.length !== 1;
         btn.up.disabled = !idle || !path;
         btn.refresh.disabled = !idle;
         btn.go.disabled = !idle;
@@ -530,12 +577,170 @@
     }
 
     // ================================================================
+    // open
+    // ================================================================
+    /**
+     * Ask where, and as whom, before anything is started.
+     *
+     * Both answers are re-set every time this opens rather than remembered. "As the system
+     * account", chosen twenty minutes ago for an installer and silently reapplied to
+     * somebody's spreadsheet, is the exact surprise the two accounts exist to prevent -- and
+     * a sticky "here, in this browser" would quietly turn "open it for them" into a download
+     * they never see.
+     */
+    function askOpen(entry) {
+        if (openTooOld) {
+            // The status pill is left alone: the panel is idle and working, and only this one
+            // button is waiting for a newer agent.
+            showError(t('files.open_agent_too_old', { version: openTooOld,
+                                                      needed: MIN_OPEN_AGENT }));
+            return;
+        }
+        pendingOpen = entry;
+        openHelp.textContent = t('files.open_help', { name: entry.name });
+        openError.hidden = true;
+        openWhere.forEach((radio) => { radio.checked = radio.value === 'remote'; });
+        openRunAs.forEach((radio) => { radio.checked = radio.value === 'user'; });
+        // A folder has nothing to render here: there are no bytes to fetch, only a window to
+        // put on somebody's desktop. Hidden rather than disabled -- a choice that can never
+        // apply to what is selected is not a choice.
+        openLocalRow.hidden = !!entry.directory;
+        renderOpenChoice();
+        openDialog.showModal();
+    }
+
+    /** The account only means something for a launch on the machine. */
+    function renderOpenChoice() {
+        const where = openWhere.find((radio) => radio.checked);
+        runAsFieldset.hidden = !where || where.value !== 'remote';
+    }
+
+    /** Start it over there. Nothing is re-listed: opening changes nothing on the disk. */
+    async function openOnMachine(entry, runAs) {
+        if (busy) return;
+        const mine = ++generation;
+        busy = true;
+        showError('');
+        showNote('');
+        setStatus('muted', t('files.working'));
+        renderActions();
+        try {
+            const queued = await post(`${base()}/open`, {
+                path: entryPath(entry), run_as: runAs
+            });
+            const result = await awaitCommand(queued.command_id, mine);
+            if (result === null) return;
+            if (!result.ok) {
+                setStatus('warn', t('files.open_failed'));
+                showError(result.output || t('files.open_failed'));
+                return;
+            }
+            // The agent's own sentence when it wrote one -- which account, which session,
+            // which pid. That is the whole answer to "did it actually open", and a generic
+            // "done" would throw it away.
+            setStatus('ok', t('files.ready'));
+            showNote(result.output || t('files.opened'));
+        } catch (e) {
+            if (mine !== generation) return;
+            setStatus('danger', t('files.open_failed'));
+            showError(e.message);
+        } finally {
+            if (mine === generation) busy = false;
+            renderActions();
+        }
+    }
+
+    /** Open it here instead: the ordinary transfer, rendered in the preview dialog. */
+    async function openInBrowser(entry) {
+        if (entry.size !== null && entry.size !== undefined && entry.size > PREVIEW_MAX_BYTES) {
+            // Refused before the transfer starts rather than after it lands: pulling 300 MB
+            // across the link to then say it cannot be shown is the worst order to do this in.
+            showError(t('files.preview_too_big', { name: entry.name,
+                                                   size: formatSize(entry.size) }));
+            return;
+        }
+        await pull(entry, (transferId, name, size) => showPreview(transferId, name, size));
+    }
+
+    /**
+     * Render one downloaded file in the dialog, by an ALLOWLIST of types.
+     *
+     * The list is a security boundary, not a convenience. A blob URL inherits the origin of
+     * the page that made it, so an HTML or SVG file pulled off somebody's PC and opened in a
+     * tab would run its script as the signed-in operator, against this hub, with their
+     * session. Text is written with textContent, images go in an <img> (which never executes
+     * anything), and a PDF goes in a sandboxed iframe so its own scripting is off. Everything
+     * else keeps the Save link and says so.
+     */
+    async function showPreview(transferId, name, size) {
+        const url = `${base()}/transfers/${encodeURIComponent(transferId)}/content`;
+        const extension = (name.split('.').pop() || '').toLowerCase();
+        const kind = PREVIEW_TEXT.has(extension) ? 'text'
+            : PREVIEW_IMAGE.has(extension) ? 'image'
+            : extension === 'pdf' ? 'pdf' : null;
+
+        previewTitle.textContent = name;
+        previewBody.replaceChildren();
+        previewNote.hidden = true;
+        // The Save link is offered next to every preview, including the ones that render:
+        // having looked at a log is usually the moment somebody wants to keep it.
+        previewSave.replaceChildren(saveLink(url, name));
+        releasePreviewUrl();
+
+        if (kind === null) {
+            previewNote.hidden = false;
+            previewNote.textContent = t('files.preview_unsupported',
+                                        { kind: extension || '?' });
+            previewDialog.showModal();
+            return;
+        }
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(t('files.preview_failed'));
+        const blob = await response.blob();
+
+        if (kind === 'text') {
+            previewBody.appendChild(el('pre', 'files-preview__text', await blob.text()));
+        } else if (kind === 'image') {
+            previewUrl = URL.createObjectURL(blob);
+            const image = el('img', 'files-preview__image');
+            image.src = previewUrl;
+            image.alt = name;
+            previewBody.appendChild(image);
+        } else {
+            previewUrl = URL.createObjectURL(blob);
+            const frame = el('iframe', 'files-preview__frame');
+            frame.setAttribute('sandbox', '');
+            frame.setAttribute('title', name);
+            frame.src = previewUrl;
+            previewBody.appendChild(frame);
+        }
+        previewDialog.showModal();
+    }
+
+    function releasePreviewUrl() {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = null;
+    }
+
+    // ================================================================
     // download
     // ================================================================
     async function startDownload() {
         const picked = selectedEntries();
         if (picked.length !== 1) return;
-        const entry = picked[0];
+        await pull(picked[0],
+                   (transferId, name, size) => offerDownload(transferId, name, size));
+    }
+
+    /**
+     * Fetch one entry off the machine and hand the finished transfer to `onReady`.
+     *
+     * Shared by the Save button and by "open here", because they are the same three round
+     * trips -- queue a fetch_file, poll the transfer, collect it from the spool -- and differ
+     * only in what becomes of the bytes at the end.
+     */
+    async function pull(entry, onReady) {
         const mine = ++generation;
         busy = true;
         showError('');
@@ -557,7 +762,7 @@
                 return;
             }
             setStatus('ok', t('files.ready'));
-            offerDownload(started.transfer_id, started.name, transfer.size_bytes);
+            await onReady(started.transfer_id, started.name, transfer.size_bytes);
         } catch (e) {
             if (mine !== generation) return;
             setStatus('danger', t('files.download_failed'));
@@ -580,13 +785,19 @@
     function offerDownload(transferId, name, size) {
         noteEl.hidden = false;
         noteEl.replaceChildren();
+        const url = `${base()}/transfers/${encodeURIComponent(transferId)}/content`;
+        noteEl.appendChild(saveLink(url, name));
+        noteEl.appendChild(el('span', 'stat-card__meta', ` ${formatSize(size)}`));
+    }
+
+    /** The Save link itself, shared with the preview dialog's foot. */
+    function saveLink(url, name) {
         const link = el('a', 'btn btn--primary', t('files.save_file', { name }));
-        link.href = `${base()}/transfers/${encodeURIComponent(transferId)}/content`;
+        link.href = url;
         // The hub serves it as an attachment with an octet-stream type regardless; this is
         // for the filename the browser suggests, which is the operator-facing half.
         link.setAttribute('download', name);
-        noteEl.appendChild(link);
-        noteEl.appendChild(el('span', 'stat-card__meta', ` ${formatSize(size)}`));
+        return link;
     }
 
     /** Poll one transfer until it stops being pending. Returns null if superseded. */
@@ -717,9 +928,59 @@
         if (file) sendUpload(file, name, overwrite);
     });
 
+    // ---- the open dialog ----
+    const openHelp = document.getElementById('files-open-item');
+    const openError = document.getElementById('files-open-error');
+    const openLocalRow = document.getElementById('files-open-where-local-row');
+    const runAsFieldset = document.getElementById('files-open-runas');
+    // Arrays rather than a live NodeList, so `.find` and `.forEach` read the same as they do
+    // everywhere else in this file.
+    const openWhere = Array.from(
+        document.querySelectorAll('input[name="files-open-where"]'));
+    const openRunAs = Array.from(
+        document.querySelectorAll('input[name="files-open-runas"]'));
+
+    openWhere.forEach((radio) => radio.addEventListener('change', renderOpenChoice));
+
+    document.getElementById('files-open-cancel').addEventListener('click', () => {
+        openDialog.close();
+        pendingOpen = null;
+    });
+    document.getElementById('files-open-ok').addEventListener('click', () => {
+        const entry = pendingOpen;
+        if (!entry) return;
+        const where = openWhere.find((radio) => radio.checked);
+        const runAs = openRunAs.find((radio) => radio.checked);
+        openDialog.close();
+        pendingOpen = null;
+        if (where && where.value === 'local') openInBrowser(entry);
+        else openOnMachine(entry, runAs ? runAs.value : 'user');
+    });
+
+    // ---- the preview dialog ----
+    const previewTitle = document.getElementById('files-preview-title');
+    const previewBody = document.getElementById('files-preview-body');
+    const previewNote = document.getElementById('files-preview-note');
+    const previewSave = document.getElementById('files-preview-save');
+    document.getElementById('files-preview-close').addEventListener('click',
+                                                                    () => previewDialog.close());
+    // On close, not on the button: Escape closes a <dialog> without going anywhere near the
+    // click handler, and a blob URL left alive holds the whole file in memory until the tab
+    // is closed.
+    previewDialog.addEventListener('close', () => {
+        previewBody.replaceChildren();
+        previewSave.replaceChildren();
+        releasePreviewUrl();
+    });
+
     // ================================================================
     // wiring
     // ================================================================
+    btn.open.addEventListener('click', () => {
+        const picked = selectedEntries();
+        if (picked.length === 1) askOpen(picked[0]);
+    });
+
     btn.up.addEventListener('click', () => {
         if (listing && listing.parent) navigate(listing.parent);
         else navigate(null);
@@ -830,7 +1091,14 @@
         selection = new Set();
         clipboard = null;
         pendingFile = null;
+        pendingOpen = null;
+        // The dialogs are page-level, so a machine switch with one open would leave it asking
+        // about a path on the PC the operator just left.
+        if (openDialog.open) openDialog.close();
+        if (previewDialog.open) previewDialog.close();
+        releasePreviewUrl();
         tooOld = null;
+        openTooOld = null;
         body.replaceChildren();
         crumbs.replaceChildren();
         pathInput.value = '';

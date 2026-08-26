@@ -112,6 +112,9 @@ def main():
         check("a viewer cannot list a folder -> 403", r.status_code == 403)
         r = c.post("/api/machines/PC-1/files/download", json={"path": "C:\\Users\\a.txt"})
         check("...nor download a file -> 403", r.status_code == 403)
+        r = c.post("/api/machines/PC-1/files/open",
+                   json={"path": "C:\\Users\\a.txt", "run_as": "user"})
+        check("...nor open anything on the machine -> 403", r.status_code == 403)
 
         CURRENT_USER = "tech@x.com"
         r = c.post("/api/machines/PC-2/files/list", json={"path": "C:\\"})
@@ -190,6 +193,41 @@ def main():
         check("moving a folder inside itself is refused -> 400", r.status_code == 400)
         r = c.post("/api/machines/PC-1/files/operation", json={"op": "chmod", "paths": ["C:\\a"]})
         check("an invented verb is refused -> 400", r.status_code == 400)
+
+        # ------------------------------------------------------------------
+        print("\n== Opening carries an account, and the hub will not pick one ==")
+        r = c.post("/api/machines/PC-1/files/open",
+                   json={"path": "c:/Users/bob/notes.txt", "run_as": "user"})
+        check("opening as the signed-in user queues -> 201", r.status_code == 201)
+        queued = fleet.get_command(db_path, r.get_json()["command_id"])
+        check("...as an open_item", queued["type"] == "open_item")
+        check("...carrying the normalized path and the account",
+              queued["params"] == {"path": "C:\\Users\\bob\\notes.txt", "run_as": "user"})
+        check("...attributed to the operator who clicked", queued["issued_by"] == "tech@x.com")
+
+        r = c.post("/api/machines/PC-1/files/open",
+                   json={"path": "C:\\tools\\setup.exe", "run_as": "system"})
+        check("opening as the system account queues too -> 201", r.status_code == 201)
+        check("...and says so on the wire",
+              fleet.get_command(db_path,
+                                r.get_json()["command_id"])["params"]["run_as"] == "system")
+
+        # The account is the one thing this command exists to put in front of an operator, so
+        # a request that omits it is a request nobody made deliberately.
+        r = c.post("/api/machines/PC-1/files/open", json={"path": "C:\\tools\\setup.exe"})
+        check("no account is refused rather than defaulted -> 400", r.status_code == 400)
+        r = c.post("/api/machines/PC-1/files/open",
+                   json={"path": "C:\\tools\\setup.exe", "run_as": "administrator"})
+        check("an invented account is refused -> 400", r.status_code == 400)
+        r = c.post("/api/machines/PC-1/files/open",
+                   json={"path": "C:\\Users\\..\\Windows\\x.exe", "run_as": "user"})
+        check("a path with '..' never becomes a command -> 400", r.status_code == 400)
+        r = c.post("/api/machines/PC-1/files/open", json={"path": "C:\\", "run_as": "user"})
+        check("nor does a whole drive -> 400", r.status_code == 400)
+        r = c.post("/api/machines/PC-1/files/open",
+                   data="path=C:\\x.exe&run_as=user",
+                   content_type="application/x-www-form-urlencoded")
+        check("a cross-site form POST cannot reach it -> 415", r.status_code == 415)
 
         # ------------------------------------------------------------------
         print("\n== A download is two hops, and the machine only fills the first ==")
