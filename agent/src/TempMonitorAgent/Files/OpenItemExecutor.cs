@@ -106,8 +106,12 @@ public sealed class OpenItemExecutor : ICommandExecutor
     }
 
     /// <summary>Which program actually gets launched, with what arguments, and whether it is
-    /// a handoff to the user's shell rather than the thing itself.</summary>
-    private static (string Program, string Arguments, bool HandsOff) Resolve(
+    /// a handoff to the user's shell rather than the thing itself.
+    ///
+    /// Internal rather than private so the tests can drive it: what it returns is a COMMAND
+    /// LINE, and the .bat branch of it is one quote away from running a second command that
+    /// nobody asked for. See CmdQuoted and OpenItemExecutorTests.</summary>
+    internal static (string Program, string Arguments, bool HandsOff) Resolve(
         string path, bool isDirectory)
     {
         var system32 = Environment.SystemDirectory;
@@ -120,7 +124,8 @@ public sealed class OpenItemExecutor : ICommandExecutor
         {
             // Started directly: a real PID to report, and no dependency on a shell being up.
             ".exe" or ".com" => (path, "", false),
-            ".bat" or ".cmd" => (Path.Combine(system32, "cmd.exe"), $"/c {Quoted(path)}", false),
+            // TWO pairs of quotes, and they are load-bearing -- see CmdQuoted.
+            ".bat" or ".cmd" => (Path.Combine(system32, "cmd.exe"), $"/c {CmdQuoted(path)}", false),
             ".ps1" => (Path.Combine(system32, @"WindowsPowerShell\v1.0\powershell.exe"),
                        $"-NoLogo -ExecutionPolicy Bypass -File {Quoted(path)}", false),
             ".msi" => (Path.Combine(system32, "msiexec.exe"), $"/i {Quoted(path)}", false),
@@ -186,4 +191,33 @@ public sealed class OpenItemExecutor : ICommandExecutor
     }
 
     private static string Quoted(string path) => $"\"{path}\"";
+
+    /// <summary>A path for cmd.exe's /c, which does NOT parse its command line the way every
+    /// other program does.
+    ///
+    /// One pair of quotes is not enough, and the failure is an arbitrary command rather than
+    /// a path that will not open. From `cmd /?`: with /c, the quotes around the command are
+    /// preserved only when there are exactly two of them AND nothing between them is one of
+    /// &amp;&lt;&gt;()@^| -- otherwise cmd strips the first quote and the LAST quote and parses what
+    /// is left as an ordinary command line. Every one of those characters is legal in a
+    /// Windows filename (`Path.GetInvalidFileNameChars` does not list them, and PathRules has
+    /// no reason to), so a file named
+    ///
+    ///     report &amp; powershell -enc &lt;payload&gt; #.bat
+    ///
+    /// dropped anywhere an operator might browse turns `/c "&lt;path&gt;"` into two commands: the
+    /// batch file, and then whatever follows the ampersand. It runs in whichever account the
+    /// operator chose -- including SYSTEM -- while the audit record still names only the file
+    /// they clicked. This is Node's CVE-2024-27980 in a different language.
+    ///
+    /// Doubling the quotes takes the SECOND branch of that rule deliberately: cmd strips the
+    /// outer pair and is left with `"&lt;path&gt;"`, a quoted command name, so the metacharacters
+    /// inside are part of a filename again rather than syntax. A quote of its own cannot
+    /// appear in the path to break back out -- Windows does not allow one in a filename.
+    ///
+    /// The one thing NOT done here is dropping cmd.exe: CreateProcess cannot run a .bat at
+    /// all (it is not a PE image), so the interpreter is not optional. ArgumentList would not
+    /// help either -- .NET escapes it by the C runtime's rules, which cmd.exe does not
+    /// follow.</summary>
+    private static string CmdQuoted(string path) => $"\"\"{path}\"\"";
 }
