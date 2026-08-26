@@ -210,11 +210,11 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
         try:
             params = files.validate_open(data.get("path"), run_as=data.get("run_as"))
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         try:
             command_id = _queue(str(machine).strip(), "open_item", params)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return refusals.refuse(e)
         return jsonify({"command_id": command_id}), 201
 
     # ================================================================
