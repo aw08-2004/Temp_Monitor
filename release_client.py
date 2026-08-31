@@ -56,6 +56,11 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+# The hub owns the channel vocabulary and the manifest filenames; this script follows it
+# rather than keeping a second copy, for the reason agent/release.ps1's -Channel comment
+# gives -- three spellings of one filename is how a beta gets published where nothing reads.
+sys.path.insert(0, os.path.join(ROOT, "hub"))
+import channels  # noqa: E402  (needs ROOT on the path first)
 APP_DIR = os.path.join(ROOT, "app")
 VERSION_DART = os.path.join(APP_DIR, "lib", "version.dart")
 PUBSPEC = os.path.join(APP_DIR, "pubspec.yaml")
@@ -212,7 +217,17 @@ def check_versions_agree(version):
             f"Run: python release_client.py --set-version {version}")
 
 
-def published_version():
+def manifest_path(channel=None):
+    """This channel's client manifest inside the checkout.
+
+    Goes through channels.client_manifest_filename rather than spelling the name here, so
+    the release script, the hub's reader and the .gitattributes pin cannot drift apart --
+    the stable name in particular is baked into every installed client.
+    """
+    return os.path.join(ROOT, "hub", channels.client_manifest_filename(channel))
+
+
+def published_version(channel=None):
     """What the signed manifest in this checkout currently advertises, or None.
 
     Read WITHOUT verifying the signature, deliberately: this is used to tell an operator
@@ -220,7 +235,7 @@ def published_version():
     that matters happens in the hub (clientrelease.load_manifest) and in the client's own
     update check, and duplicating it here would imply this number is load-bearing.
     """
-    path = os.path.join(ROOT, "hub", "client.manifest.json")
+    path = manifest_path(channel)
     if not os.path.exists(path):
         return None
     try:
@@ -407,7 +422,7 @@ def repo_slug():
     return match.group(1) if match else None
 
 
-def sign(version, package_path, notes, released_at):
+def sign(version, package_path, notes, released_at, channel=None):
     slug = repo_slug() or "OWNER/REPO"
     tag = f"client-v{version}"
     url = (f"https://github.com/{slug}/releases/download/{tag}/"
@@ -423,9 +438,13 @@ def sign(version, package_path, notes, released_at):
             "url": url,
         }], f, indent=2)
 
+    # --client-manifest picks the channel's output path. sign_release.py needed no change
+    # for roadmap #21 -- it already took the path -- so a beta client is the same signer,
+    # the same key and the same bytes-exact discipline writing one file over.
     command = [sys.executable, os.path.join(ROOT, "sign_release.py"),
                "--sign-client", "--client-version", version,
-               "--builds", builds_path]
+               "--builds", builds_path,
+               "--client-manifest", manifest_path(channel)]
     if notes:
         command += ["--client-notes", notes]
     if released_at:
@@ -470,6 +489,12 @@ def main():
                     help="create the GitHub release and upload the asset with gh")
     ap.add_argument("--notes", default="", help="release note shown on the download page")
     ap.add_argument("--released-at", default="", help="release date, e.g. 2026-08-04")
+    # Release channel (roadmap #21). `beta` writes hub/client.manifest.beta.json instead, so
+    # only hubs whose hub.client_update_channel is beta serve it. Mirrors agent/release.ps1
+    # -Channel, and shares its rule: ONE version sequence, so promoting a beta is copying the
+    # manifest over the stable one rather than renumbering anything.
+    ap.add_argument("--channel", default=channels.STABLE, choices=list(channels.CHANNELS),
+                    help="which client channel to publish to (default: stable)")
     args = ap.parse_args()
 
     if args.set_version:
@@ -496,7 +521,7 @@ def main():
             print(f"note: not a terminal, so publishing the tree's version ({current}). "
                   f"Pass --version to choose one.")
     else:
-        version = prompt_version(current, published_version())
+        version = prompt_version(current, published_version(args.channel))
 
     if version != current:
         set_version(version)
@@ -512,17 +537,20 @@ def main():
         build(find_flutter(), args.skip_tests)
 
     package_path = package(version)
-    tag, url = sign(version, package_path, args.notes, args.released_at)
+    tag, url = sign(version, package_path, args.notes, args.released_at, args.channel)
+    # Named rather than hardcoded: a beta writes a different file, and telling an operator to
+    # commit the stable one is how a beta gets signed and then never published.
+    written = os.path.relpath(manifest_path(args.channel), ROOT).replace("\\", "/")
 
     if args.upload:
         upload(tag, version, package_path, args.notes)
-        print("\nDone. Commit hub/client.manifest.json + .sig and deploy the hub.")
+        print(f"\nDone. Commit {written} + .sig and deploy the hub.")
     else:
         print(f"\nNext:\n"
               f"  1. gh release create {tag} {package_path} "
               f"--title \"FleetHub client {version}\"\n"
               f"     (or run this script again with --upload)\n"
-              f"  2. commit hub/client.manifest.json + hub/client.manifest.json.sig\n"
+              f"  2. commit {written} + {written}.sig\n"
               f"  3. deploy the hub, so the Download Client page serves them\n"
               f"\nAsset URL the manifest expects:\n  {url}")
 

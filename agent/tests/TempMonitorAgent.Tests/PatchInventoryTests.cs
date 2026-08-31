@@ -299,6 +299,20 @@ Name    Id    Version    Available    Source
         Assert.True(InstallPatchesExecutor.ShouldRestart("  ALWAYS  ", false));
     }
 
+    [Fact]
+    public void Nothing_attempted_means_no_restart_even_under_always()
+    {
+        // The executor takes its "nothing to do" early-out on Attempted.Count == 0, so an
+        // empty attempted set is what stops `always` restarting a machine on which nothing
+        // was staged. That is the pairing this asserts: the two halves are in different
+        // files and only their combination is the safe behaviour.
+        var nothing = new PatchInstaller.Outcome([], false, "", false);
+        Assert.Empty(nothing.Attempted);
+        // ...and if anything ever did reach ShouldRestart with nothing staged, `always`
+        // would still fire -- which is exactly why the early-out has to come first.
+        Assert.True(InstallPatchesExecutor.ShouldRestart("always", nothing.RebootRequired));
+    }
+
     // ---- winget exit codes and package ids ----------------------------------------------
 
     [Fact]

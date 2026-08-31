@@ -62,7 +62,11 @@ public static class PatchInstaller
         if (windows.Count > 0)
         {
             var result = InstallWindowsUpdates(windows, Say, ct);
-            attempted.AddRange(windows.Select(u => u.Uid));
+            // What the live search matched, NOT what was asked for. If the two disagree --
+            // an update superseded between the outer scan and the inner search -- reporting
+            // the request would tell the executor work was staged when none was, and under
+            // `reboot_policy: "always"` it would restart the machine for nothing.
+            attempted.AddRange(result.Attempted);
             anySucceeded |= result.AnySucceeded;
             reboot |= result.RebootRequired;
         }
@@ -86,7 +90,16 @@ public static class PatchInstaller
 
     // ------------------------------------------------------------------ Windows Update
 
-    private sealed record WindowsOutcome(bool AnySucceeded, bool RebootRequired);
+    /// <summary><paramref name="Attempted"/> is what the LIVE re-search actually matched, not
+    /// what the caller asked for. The two can differ: the outer scan and this method's own
+    /// search are separate COM searches, and an update can be superseded or vanish between
+    /// them. Reporting the request rather than the result would tell the executor work was
+    /// staged when none was, and under `reboot_policy: "always"` that restarts a machine for
+    /// nothing.</summary>
+    private sealed record WindowsOutcome(
+        IReadOnlyList<string> Attempted, bool AnySucceeded, bool RebootRequired);
+
+    private static readonly WindowsOutcome NothingAttempted = new([], false, false);
 
     /// <summary>Download and install through the Windows Update Agent, late-bound for the
     /// reason <c>WindowsUpdateApi</c> gives.
@@ -106,14 +119,14 @@ public static class PatchInstaller
             if (sessionType is null || collectionType is null)
             {
                 say("This machine has no Windows Update Agent.");
-                return new WindowsOutcome(false, false);
+                return NothingAttempted;
             }
             session = Activator.CreateInstance(sessionType);
             var searcher = WindowsUpdateApi.Invoke(session, "CreateUpdateSearcher");
             var found = WindowsUpdateApi.Invoke(
                 searcher, "Search", "IsInstalled=0 AND IsHidden=0");
             var available = found is null ? null : WindowsUpdateApi.Get(found, "Updates");
-            if (available is null) return new WindowsOutcome(false, false);
+            if (available is null) return NothingAttempted;
 
             // Re-match by uid against the live search, rather than carrying COM objects out of
             // the scan: a COM update object belongs to the search that produced it, and the
@@ -122,7 +135,9 @@ public static class PatchInstaller
                                              StringComparer.OrdinalIgnoreCase);
             var batch = Activator.CreateInstance(collectionType);
             var count = WindowsUpdateApi.ToInt(WindowsUpdateApi.Get(available, "Count"));
-            var chosen = 0;
+            // The uids this search actually matched, which is what the caller is told about.
+            // An update the outer scan saw can be gone by the time this second search runs.
+            var chosen = new List<string>();
             for (var i = 0; i < count; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -135,11 +150,11 @@ public static class PatchInstaller
                 try { WindowsUpdateApi.Invoke(item, "AcceptEula"); }
                 catch (COMException) { /* most updates have no EULA */ }
                 WindowsUpdateApi.Invoke(batch, "Add", item);
-                chosen++;
+                chosen.Add(mapped.Uid);
             }
-            if (chosen == 0) return new WindowsOutcome(false, false);
+            if (chosen.Count == 0) return NothingAttempted;
 
-            say($"Downloading {chosen} update(s) through Windows Update...");
+            say($"Downloading {chosen.Count} update(s) through Windows Update...");
             var downloader = WindowsUpdateApi.Invoke(session, "CreateUpdateDownloader");
             WindowsUpdateApi.Set(downloader, "Updates", batch);
             var downloadResult = WindowsUpdateApi.Invoke(downloader, "Download");
@@ -147,7 +162,7 @@ public static class PatchInstaller
                 WindowsUpdateApi.Get(downloadResult, "ResultCode"));
             say($"Download finished with result code {downloadCode}.");
 
-            say($"Installing {chosen} update(s)...");
+            say($"Installing {chosen.Count} update(s)...");
             var installer = WindowsUpdateApi.Invoke(session, "CreateUpdateInstaller");
             WindowsUpdateApi.Set(installer, "Updates", batch);
             var installResult = WindowsUpdateApi.Invoke(installer, "Install");
@@ -161,12 +176,12 @@ public static class PatchInstaller
             var ok = installCode is 2 or 3;
             say($"Install finished with result code {installCode}" +
                 (reboot ? "; a restart is required." : "."));
-            return new WindowsOutcome(ok, reboot);
+            return new WindowsOutcome(chosen, ok, reboot);
         }
         catch (COMException e)
         {
             say($"Windows Update refused the install: 0x{e.HResult:X8}");
-            return new WindowsOutcome(false, false);
+            return NothingAttempted;
         }
         finally
         {
