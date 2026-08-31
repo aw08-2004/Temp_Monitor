@@ -46,8 +46,14 @@ def check(name, cond):
         print(f"  [XX] {name}")
 
 
-def set_agent_version(agent):
-    app.latest_agent_version = agent
+def set_agent_version(agent, beta=None):
+    """Seed the per-channel version cache.
+
+    A dict since roadmap #21 -- the hub answers for both trains at once. `beta` defaults to
+    None ("nothing published on beta"), which is the state of almost every real fleet and the
+    one every assertion below assumes.
+    """
+    app.latest_agent_version = {app.channels.STABLE: agent, app.channels.BETA: beta}
 
 
 def test_version_compare():

@@ -21,6 +21,7 @@
     "remote": "Remote",
     "audit_log": "Audit Log",
     "packages": "Packages",
+    "patches": "Patches",
     "backups": "Backups",
     "settings": "Settings",
     "permission_groups": "Permission Groups",
@@ -472,6 +473,10 @@
         "label": "Manage firmware",
         "description": "Change BIOS settings and update firmware. The only action with no way back: a failed firmware update can leave a machine unusable."
       },
+      "manage_patches": {
+        "label": "Manage patches",
+        "description": "Approve updates, schedule maintenance windows, and push a patch run outside one. Reading patch inventory and compliance only needs 'View' -- this is the capability to decide what happens about it."
+      },
       "manage_settings": {
         "label": "Manage settings",
         "description": "Change hub settings, and administer machine records (delete, merge, pin a sensor, dismiss alerts)."
@@ -504,6 +509,7 @@
       "remote": "Remote Control",
       "directory": "Active Directory",
       "firmware": "Firmware Updates",
+      "patches": "Patches",
       "signin": "Sign-in",
       "wake": "Wake-on-LAN",
       "rules": "Rules"
@@ -863,6 +869,42 @@
           "label": "Dashboard low-disk threshold",
           "help": "A volume with less than this share of its space free counts as low on the Dashboard. Also a filter, not an alert."
         }
+      },
+      "patches.auto_approve_classifications": {
+        "label": "Approve these automatically",
+        "help": "Updates of these classifications are approved as soon as a machine reports them. Only security and critical are offered: a driver is the one class of update that reliably breaks hardware, and a feature update is a Windows version migration. An update you declined by hand is never re-approved by this."
+      },
+      "patches.scheduler_interval_seconds": {
+        "label": "Run the patch scheduler every",
+        "help": "How often the hub checks whether a maintenance window has opened, sends out the patch runs that are due, and reads finished attempts back."
+      },
+      "patches.confirm_timeout_seconds": {
+        "label": "Give up on a restarting machine after",
+        "help": "How long a machine may sit staged and restarting before the run stops waiting. An install is only ever confirmed by the machine coming back and no longer offering the update, so reaching this is recorded as an install nobody could verify -- not as a failure to install."
+      },
+      "patches.default_max_attempts": {
+        "label": "Attempts per machine",
+        "help": "How many times a patch run retries one machine before giving up. Pre-fills the form; runs already created keep the value they were made with."
+      },
+      "patches.default_retry_backoff_seconds": {
+        "label": "Wait before retrying a machine",
+        "help": "The first retry delay, doubling with each further attempt. Pre-fills the form; runs already created keep the value they were made with."
+      },
+      "patches.inventory_retention_days": {
+        "label": "Forget a machine's update list after",
+        "help": "How long a machine's reported available updates survive without being re-reported. A machine that stops reporting would otherwise keep its last answer forever and hold up a compliance figure that has not been true for months."
+      },
+      "hub.update_channel": {
+        "label": "This hub's release channel",
+        "help": "Which branch this hub reads its own version from, and updates to when automatic hub updates are on. The update notice follows this either way, so you are told a newer hub exists even when this one will not install it itself."
+      },
+      "hub.client_update_channel": {
+        "label": "Client release channel",
+        "help": "Which desktop and mobile client build the Download page offers, and which one an installed client updates itself to."
+      },
+      "fleet.default_agent_channel": {
+        "label": "Default agent channel",
+        "help": "Which agent build machines update to unless they have been pinned individually. Pin a few machines to beta to try a release before it reaches the fleet — an agent release otherwise arrives everywhere within about fifteen minutes."
       }
     },
     "_choice": [
@@ -880,6 +922,22 @@
       "remote.consent_mode": {
         "unattended": "Unattended - connect immediately",
         "attended": "Attended - ask the signed-in user first"
+      },
+      "patches.auto_approve_classifications": {
+        "security": "Security",
+        "critical": "Critical"
+      },
+      "hub.update_channel": {
+        "stable": "Stable",
+        "beta": "Beta"
+      },
+      "hub.client_update_channel": {
+        "stable": "Stable",
+        "beta": "Beta"
+      },
+      "fleet.default_agent_channel": {
+        "stable": "Stable",
+        "beta": "Beta"
       }
     },
     "_error": [
@@ -2093,7 +2151,12 @@
       "files": "Files"
     },
     "os": "OS: {value}",
-    "os_build": " (build {build})"
+    "os_build": " (build {build})",
+    "channel": "Channel: {value}",
+    "channel_pinned": "Channel: {value} (pinned)",
+    "channel_pin": "Release channel",
+    "channel_follow_fleet": "Follow the fleet default",
+    "channel_ahead": "Running {running}, ahead of stable ({stable}). It will not update again until stable passes it — moving off beta does not undo an installed update."
   },
   "remote": {
     "title": "Remote",
@@ -2821,6 +2884,154 @@
       "network": "network drive",
       "cdrom": "optical",
       "ram": "RAM disk"
+    }
+  },
+  "patches": {
+    "classification": {
+      "security": {
+        "label": "Security",
+        "description": "Closes a known vulnerability. Absence is a finding, not a preference."
+      },
+      "critical": {
+        "label": "Critical",
+        "description": "A critical fix that is not itself a security patch."
+      },
+      "driver": {
+        "label": "Driver",
+        "description": "A hardware driver. The one class of update that reliably breaks hardware, so it is never auto-approved."
+      },
+      "feature": {
+        "label": "Feature update",
+        "description": "A Windows version upgrade. Never auto-approved: this is a migration, not a patch."
+      },
+      "other": {
+        "label": "Other",
+        "description": "Rollups, definition updates and the rest of the catalogue."
+      },
+      "unknown": {
+        "label": "Unclassified",
+        "description": "The source did not say. winget has no notion of classification at all, so most application updates land here."
+      }
+    },
+    "source": {
+      "windows_update": {
+        "label": "Windows Update",
+        "description": "Operating system and driver updates, read from the machine's own Windows Update service."
+      },
+      "winget": {
+        "label": "winget",
+        "description": "Application updates, from the machine's winget package manager."
+      }
+    },
+    "heading": "Patches",
+    "intro": "What the fleet is missing, what is approved to install, and when it may run. An update is only ever recorded as installed once the machine comes back and stops offering it.",
+    "views_nav": "Patch views",
+    "tab_updates": "Available",
+    "tab_windows": "Maintenance windows",
+    "tab_runs": "Runs",
+    "no_updates": "No machine is reporting an available update.",
+    "no_windows": "No maintenance window yet. Without one, only an emergency run installs anything.",
+    "no_runs": "No patch run yet.",
+    "request_failed": "The hub could not be reached.",
+    "approve": "Approve",
+    "decline": "Decline",
+    "undecide": "Undo",
+    "summary": {
+      "machines": "Machines behind",
+      "updates": "Updates outstanding",
+      "security": "Security updates"
+    },
+    "col": {
+      "update": "Update",
+      "classification": "Classification",
+      "source": "Source",
+      "machines": "Machines",
+      "decision": "Decision",
+      "actions": "Actions",
+      "window": "Window",
+      "days": "Days",
+      "time": "Time",
+      "scope": "Scope",
+      "reboot": "Restart",
+      "started": "Started",
+      "by": "By",
+      "progress": "Progress",
+      "status": "Status"
+    },
+    "decision": {
+      "approved": "Approved",
+      "declined": "Declined",
+      "undecided": "Undecided"
+    },
+    "day": {
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat",
+      "sun": "Sun"
+    },
+    "reboot": {
+      "never": "Never restart",
+      "if_required": "Restart if required",
+      "always": "Always restart"
+    },
+    "status": {
+      "scheduled": "Scheduled",
+      "running": "Running",
+      "complete": "Complete",
+      "cancelled": "Cancelled"
+    },
+    "window": {
+      "new": "New window",
+      "new_title": "New maintenance window",
+      "edit_title": "Edit maintenance window",
+      "name": "Name",
+      "name_placeholder": "Sunday night",
+      "days": "Days it opens",
+      "start": "Starts at",
+      "duration": "Minutes long",
+      "local_time_note": "Times are the hub's own local time. A window that starts at 23:00 and runs four hours is still open at 01:00 the next morning.",
+      "reboot_policy": "Restart policy",
+      "scope": "Applies to",
+      "scope_all": "Every machine",
+      "scope_machines": "Named machines",
+      "scope_count": "{count} machine(s)",
+      "machines_placeholder": "One hostname per line",
+      "every_day": "Every day",
+      "summary": "{start} for {minutes} min",
+      "disabled": "Disabled",
+      "confirm_delete": "Delete the maintenance window {name}?"
+    },
+    "run": {
+      "new": "Run patches",
+      "new_title": "Run approved patches",
+      "note": "Note",
+      "machines": "Machines",
+      "machines_placeholder": "One hostname per line",
+      "pick_machines": "Name at least one machine.",
+      "emergency": "Emergency push",
+      "emergency_help": "Ignores every maintenance window and installs as soon as each machine is reachable. These machines may restart during the working day.",
+      "emergency_badge": "Emergency",
+      "confirm_emergency": "Install now on {count} machine(s), ignoring every maintenance window? They may restart during the working day.",
+      "start": "Start run",
+      "progress": "{done} of {total}",
+      "cancel": "Cancel",
+      "cancelled": "Cancelled. {recalled} machine(s) were recalled; any already restarting were left alone, because the patches are on them.",
+      "retry": "Retry failures"
+    }
+  },
+  "channels": {
+    "channel": {
+      "stable": {
+        "label": "Stable",
+        "description": "The released build. Everything is on this unless somebody moved it."
+      },
+      "beta": {
+        "label": "Beta",
+        "description": "The next build, released here first. Meant for a handful of machines you can watch — leaving beta does not undo an update that has already installed."
+      }
     }
   }
 }

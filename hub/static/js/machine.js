@@ -914,6 +914,86 @@ async function loadPrimarySensor() {
         : '';
 }
 
+// ------------------------------------------------------------------- release channel
+//
+// Which agent build this machine follows (roadmap #21). The picker is only built when the
+// server said `can_manage`: an operator with `view` should see which train the PC is on --
+// that is inventory -- without being handed a control that would 403.
+
+const channelLine = document.getElementById('stat-channel');
+const channelNote = document.getElementById('stat-channel-note');
+const channelPicker = document.getElementById('channel-picker');
+const channelSelect = document.getElementById('channel-select');
+let savedChannel = '';
+
+async function loadChannel() {
+    const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/channel`);
+    if (!resp.ok) return;
+    const body = await resp.json();
+
+    const label = (body.channels.find((c) => c.name === body.effective_channel) || {}).label
+        || body.effective_channel;
+    channelLine.textContent = body.pinned
+        ? t('machine.channel_pinned', { value: label })
+        : t('machine.channel', { value: label });
+
+    // The line that stops a deliberately-stalled machine looking broken. Moving a PC off
+    // beta does not roll it back -- every updater installs only what is strictly newer -- so
+    // it sits on the build it has until stable passes it. Saying that here is the difference
+    // between an explained state and a support call.
+    channelNote.hidden = !body.ahead_of_stable;
+    if (body.ahead_of_stable) {
+        channelNote.textContent = t('machine.channel_ahead', {
+            running: body.running_version, stable: body.latest_stable_version,
+        });
+    }
+
+    channelPicker.hidden = !body.can_manage;
+    if (!body.can_manage) return;
+
+    savedChannel = body.channel || '';
+    channelSelect.replaceChildren();
+    const follow = document.createElement('option');
+    follow.value = '';
+    follow.textContent = t('machine.channel_follow_fleet');
+    channelSelect.appendChild(follow);
+    for (const c of body.channels) {
+        const opt = document.createElement('option');
+        opt.value = c.name;
+        // textContent, never innerHTML -- these are catalog strings, but the rule here is
+        // absolute rather than per-source.
+        opt.textContent = c.label;
+        channelSelect.appendChild(opt);
+    }
+    channelSelect.value = savedChannel;
+}
+
+let channelSaveSeq = 0;
+channelSelect.addEventListener('change', saveChannel);
+
+async function saveChannel() {
+    if (channelSelect.value === savedChannel) return;
+    const seq = ++channelSaveSeq;
+    try {
+        const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/channel`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel: channelSelect.value || null }),
+        });
+        if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${resp.status}`);
+        }
+        if (seq !== channelSaveSeq) return;
+        await loadChannel();
+    } catch (e) {
+        channelSelect.value = savedChannel;
+        window.alert(e.message);
+    }
+}
+
+loadChannel();
+
 // Picking a sensor saves it immediately -- no Save button (it stays hidden). A seq guard
 // drops a slow response that a newer pick has already superseded.
 let primarySensorSaveSeq = 0;

@@ -11,6 +11,7 @@
     "remote": "Remote",
     "audit_log": "Auditprotokoll",
     "packages": "Pakete",
+    "patches": "Patches",
     "backups": "Sicherungen",
     "settings": "Einstellungen",
     "permission_groups": "Berechtigungsgruppen",
@@ -415,6 +416,10 @@
         "label": "Firmware verwalten",
         "description": "BIOS-Einstellungen ändern und Firmware aktualisieren. Die einzige Aktion ohne Rückweg: Eine fehlgeschlagene Firmware-Aktualisierung kann einen Rechner unbrauchbar machen."
       },
+      "manage_patches": {
+        "label": "Patches verwalten",
+        "description": "Updates freigeben, Wartungsfenster planen und einen Patch-Lauf auch außerhalb davon anstoßen. Zum Lesen der Patch-Inventur und des Compliance-Stands genügt „Anzeigen“ – diese Berechtigung entscheidet, was daraufhin geschieht."
+      },
       "manage_settings": {
         "label": "Einstellungen verwalten",
         "description": "Hub-Einstellungen ändern und Computerdatensätze verwalten (löschen, zusammenführen, Sensor festlegen, Warnungen verwerfen)."
@@ -447,6 +452,7 @@
       "remote": "Fernsteuerung",
       "directory": "Active Directory",
       "firmware": "Firmware-Updates",
+      "patches": "Patches",
       "signin": "Anmeldung",
       "wake": "Wake-on-LAN",
       "rules": "Regeln"
@@ -793,6 +799,42 @@
           "label": "Dashboard-Schwelle für wenig Speicher",
           "help": "Ein Volume mit weniger als diesem Anteil an freiem Speicher gilt im Dashboard als knapp. Ebenfalls ein Filter, keine Warnung."
         }
+      },
+      "patches.auto_approve_classifications": {
+        "label": "Diese automatisch freigeben",
+        "help": "Updates dieser Klassifizierungen werden freigegeben, sobald ein Rechner sie meldet. Angeboten werden nur Sicherheit und Kritisch: Ein Treiber ist die Update-Art, die zuverlässig Hardware unbrauchbar macht, und ein Funktionsupdate ist ein Windows-Versionswechsel. Ein von Hand abgelehntes Update wird hierdurch nie erneut freigegeben."
+      },
+      "patches.scheduler_interval_seconds": {
+        "label": "Patch-Planer ausführen alle",
+        "help": "Wie oft der Hub prüft, ob ein Wartungsfenster geöffnet hat, fällige Patch-Läufe verschickt und abgeschlossene Versuche zurückliest."
+      },
+      "patches.confirm_timeout_seconds": {
+        "label": "Neu startenden Rechner aufgeben nach",
+        "help": "Wie lange ein Rechner vorbereitet und neu startend verharren darf, bevor der Lauf nicht mehr wartet. Eine Installation gilt erst als bestätigt, wenn der Rechner zurück ist und das Update nicht mehr anbietet – dieser Zeitpunkt wird daher als nicht überprüfbare Installation vermerkt, nicht als fehlgeschlagene."
+      },
+      "patches.default_max_attempts": {
+        "label": "Versuche je Rechner",
+        "help": "Wie oft ein Patch-Lauf einen Rechner wiederholt, bevor er aufgibt. Füllt das Formular vor; bereits erstellte Läufe behalten ihren eigenen Wert."
+      },
+      "patches.default_retry_backoff_seconds": {
+        "label": "Wartezeit vor einem erneuten Versuch",
+        "help": "Die erste Wartezeit, die sich mit jedem weiteren Versuch verdoppelt. Füllt das Formular vor; bereits erstellte Läufe behalten ihren eigenen Wert."
+      },
+      "patches.inventory_retention_days": {
+        "label": "Update-Liste eines Rechners vergessen nach",
+        "help": "Wie lange die gemeldeten verfügbaren Updates eines Rechners ohne neue Meldung bestehen bleiben. Ein Rechner, der nichts mehr meldet, würde sonst seine letzte Antwort für immer behalten und einen Compliance-Wert stützen, der seit Monaten nicht mehr stimmt."
+      },
+      "hub.update_channel": {
+        "label": "Release-Kanal dieses Hubs",
+        "help": "Aus welchem Branch dieser Hub seine eigene Version liest und aktualisiert, wenn automatische Hub-Updates aktiv sind. Der Update-Hinweis folgt dem in jedem Fall – Sie erfahren also von einem neueren Hub, auch wenn dieser ihn nicht selbst installiert."
+      },
+      "hub.client_update_channel": {
+        "label": "Release-Kanal des Clients",
+        "help": "Welchen Desktop- und Mobile-Client-Build die Download-Seite anbietet und auf welchen sich ein installierter Client selbst aktualisiert."
+      },
+      "fleet.default_agent_channel": {
+        "label": "Standard-Agent-Kanal",
+        "help": "Auf welchen Agent-Build Rechner aktualisieren, sofern sie nicht einzeln festgelegt wurden. Legen Sie einige Rechner auf Beta fest, um eine Version vor der Flotte zu testen – sonst erreicht ein Agent-Release innerhalb von etwa fünfzehn Minuten alle Rechner."
       }
     },
     "choice": {
@@ -805,6 +847,22 @@
       "remote.consent_mode": {
         "unattended": "Unbeaufsichtigt – sofort verbinden",
         "attended": "Beaufsichtigt – zuerst die angemeldete Person fragen"
+      },
+      "patches.auto_approve_classifications": {
+        "security": "Sicherheit",
+        "critical": "Kritisch"
+      },
+      "hub.update_channel": {
+        "stable": "Stabil",
+        "beta": "Beta"
+      },
+      "hub.client_update_channel": {
+        "stable": "Stabil",
+        "beta": "Beta"
+      },
+      "fleet.default_agent_channel": {
+        "stable": "Stabil",
+        "beta": "Beta"
       }
     },
     "error": {
@@ -1982,7 +2040,12 @@
       "files": "Dateien"
     },
     "os": "Betriebssystem: {value}",
-    "os_build": " (Build {build})"
+    "os_build": " (Build {build})",
+    "channel": "Kanal: {value}",
+    "channel_pinned": "Kanal: {value} (festgelegt)",
+    "channel_pin": "Release-Kanal",
+    "channel_follow_fleet": "Flotten-Standard folgen",
+    "channel_ahead": "Läuft mit {running} und ist damit der stabilen Version ({stable}) voraus. Es wird erst wieder aktualisiert, wenn Stabil daran vorbeizieht — der Wechsel weg von Beta macht ein installiertes Update nicht rückgängig."
   },
   "remote": {
     "title": "Remote",
@@ -2705,6 +2768,154 @@
       "network": "Netzlaufwerk",
       "cdrom": "optisch",
       "ram": "RAM-Disk"
+    }
+  },
+  "patches": {
+    "classification": {
+      "security": {
+        "label": "Sicherheit",
+        "description": "Schließt eine bekannte Schwachstelle. Ein Fehlen ist ein Befund, keine Geschmacksfrage."
+      },
+      "critical": {
+        "label": "Kritisch",
+        "description": "Eine kritische Korrektur, die selbst kein Sicherheitspatch ist."
+      },
+      "driver": {
+        "label": "Treiber",
+        "description": "Ein Hardwaretreiber. Die einzige Update-Art, die zuverlässig Hardware unbrauchbar macht – daher nie automatisch freigegeben."
+      },
+      "feature": {
+        "label": "Funktionsupdate",
+        "description": "Ein Windows-Versionswechsel. Nie automatisch freigegeben – das ist eine Migration, kein Patch."
+      },
+      "other": {
+        "label": "Sonstige",
+        "description": "Rollups, Definitionsupdates und der Rest des Katalogs."
+      },
+      "unknown": {
+        "label": "Nicht klassifiziert",
+        "description": "Die Quelle macht keine Angabe. winget kennt gar keine Klassifizierung, daher landen die meisten Anwendungsupdates hier."
+      }
+    },
+    "source": {
+      "windows_update": {
+        "label": "Windows Update",
+        "description": "Betriebssystem- und Treiberupdates, gelesen aus dem Windows-Update-Dienst des Rechners selbst."
+      },
+      "winget": {
+        "label": "winget",
+        "description": "Anwendungsupdates aus dem winget-Paketmanager des Rechners."
+      }
+    },
+    "heading": "Patches",
+    "intro": "Was der Flotte fehlt, was zur Installation freigegeben ist und wann es laufen darf. Ein Update gilt erst dann als installiert, wenn der Rechner zurück ist und es nicht mehr anbietet.",
+    "views_nav": "Patch-Ansichten",
+    "tab_updates": "Verfügbar",
+    "tab_windows": "Wartungsfenster",
+    "tab_runs": "Läufe",
+    "no_updates": "Kein Rechner meldet ein verfügbares Update.",
+    "no_windows": "Noch kein Wartungsfenster. Ohne eines installiert nur ein Notlauf überhaupt etwas.",
+    "no_runs": "Noch kein Patch-Lauf.",
+    "request_failed": "Der Hub war nicht erreichbar.",
+    "approve": "Freigeben",
+    "decline": "Ablehnen",
+    "undecide": "Zurücknehmen",
+    "summary": {
+      "machines": "Rechner im Rückstand",
+      "updates": "Ausstehende Updates",
+      "security": "Sicherheitsupdates"
+    },
+    "col": {
+      "update": "Update",
+      "classification": "Klassifizierung",
+      "source": "Quelle",
+      "machines": "Rechner",
+      "decision": "Entscheidung",
+      "actions": "Aktionen",
+      "window": "Fenster",
+      "days": "Tage",
+      "time": "Zeit",
+      "scope": "Geltungsbereich",
+      "reboot": "Neustart",
+      "started": "Gestartet",
+      "by": "Von",
+      "progress": "Fortschritt",
+      "status": "Status"
+    },
+    "decision": {
+      "approved": "Freigegeben",
+      "declined": "Abgelehnt",
+      "undecided": "Offen"
+    },
+    "day": {
+      "mon": "Mo",
+      "tue": "Di",
+      "wed": "Mi",
+      "thu": "Do",
+      "fri": "Fr",
+      "sat": "Sa",
+      "sun": "So"
+    },
+    "reboot": {
+      "never": "Nie neu starten",
+      "if_required": "Neu starten, wenn nötig",
+      "always": "Immer neu starten"
+    },
+    "status": {
+      "scheduled": "Geplant",
+      "running": "Läuft",
+      "complete": "Abgeschlossen",
+      "cancelled": "Abgebrochen"
+    },
+    "window": {
+      "new": "Neues Fenster",
+      "new_title": "Neues Wartungsfenster",
+      "edit_title": "Wartungsfenster bearbeiten",
+      "name": "Name",
+      "name_placeholder": "Sonntagnacht",
+      "days": "Tage, an denen es öffnet",
+      "start": "Beginnt um",
+      "duration": "Dauer in Minuten",
+      "local_time_note": "Zeiten sind die Ortszeit des Hubs. Ein Fenster, das um 23:00 Uhr beginnt und vier Stunden läuft, ist am nächsten Morgen um 01:00 Uhr noch offen.",
+      "reboot_policy": "Neustart-Regel",
+      "scope": "Gilt für",
+      "scope_all": "Alle Rechner",
+      "scope_machines": "Bestimmte Rechner",
+      "scope_count": "{count} Rechner",
+      "machines_placeholder": "Ein Hostname pro Zeile",
+      "every_day": "Täglich",
+      "summary": "{start} für {minutes} Min.",
+      "disabled": "Deaktiviert",
+      "confirm_delete": "Wartungsfenster {name} löschen?"
+    },
+    "run": {
+      "new": "Patches ausführen",
+      "new_title": "Freigegebene Patches ausführen",
+      "note": "Notiz",
+      "machines": "Rechner",
+      "machines_placeholder": "Ein Hostname pro Zeile",
+      "pick_machines": "Nennen Sie mindestens einen Rechner.",
+      "emergency": "Notfall-Ausrollung",
+      "emergency_help": "Ignoriert jedes Wartungsfenster und installiert, sobald ein Rechner erreichbar ist. Diese Rechner können während der Arbeitszeit neu starten.",
+      "emergency_badge": "Notfall",
+      "confirm_emergency": "Jetzt auf {count} Rechner(n) installieren und jedes Wartungsfenster ignorieren? Sie können während der Arbeitszeit neu starten.",
+      "start": "Lauf starten",
+      "progress": "{done} von {total}",
+      "cancel": "Abbrechen",
+      "cancelled": "Abgebrochen. {recalled} Rechner wurden zurückgerufen; bereits neu startende blieben unberührt, weil die Patches auf ihnen sind.",
+      "retry": "Fehler wiederholen"
+    }
+  },
+  "channels": {
+    "channel": {
+      "stable": {
+        "label": "Stabil",
+        "description": "Der veröffentlichte Build. Alles läuft darauf, sofern es niemand umgestellt hat."
+      },
+      "beta": {
+        "label": "Beta",
+        "description": "Der nächste Build, hier zuerst veröffentlicht. Gedacht für eine Handvoll Rechner, die Sie beobachten können – das Verlassen von Beta macht ein bereits installiertes Update nicht rückgängig."
+      }
     }
   }
 }

@@ -86,6 +86,17 @@
             <span class="sidebar__link-label">{{ t('nav.packages') }}</span>
         </a>
         {% endif %}
+        {# Gated on VIEW for the same reason Rules is, and it matters more here: "is this
+           PC missing a security update" is inventory, not a privilege, and hiding the page
+           behind MANAGE_PATCHES would mean the people most likely to notice a problem are
+           the ones who cannot see it. Approving, scheduling and running additionally need
+           MANAGE_PATCHES, and the page hides those controls itself. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'patches.patches_page' else '' }}" data-nav-prefix="/patches" href="{{ url_for('patches.patches_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v6"/><path d="M12 15v6"/><path d="M5.6 5.6l4.2 4.2"/><path d="M14.2 14.2l4.2 4.2"/><circle cx="12" cy="12" r="3"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.patches') }}</span>
+        </a>
+        {% endif %}
         {# Gated on VIEW, which is what the page route itself requires: a standing
            instruction that acts on a PC is something anyone who can see that PC should be
            able to read. Writing one additionally needs MANAGE_RULES, and the page enforces

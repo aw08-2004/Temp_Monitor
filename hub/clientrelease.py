@@ -27,6 +27,8 @@ Kept free of Flask so it can be unit-tested in isolation.
 import json
 import os
 
+import channels
+
 # The fleet's release trust root, in its public half. Identical to the agent's
 # AgentConfig.UpdatePublicKeyHex -- deliberately ONE key for every artifact this project
 # ships, because a second signing key is a second private key to keep safe and a second
@@ -35,8 +37,12 @@ import os
 # Safe to have in the repository: it verifies signatures, it cannot make them.
 RELEASE_PUBLIC_KEY_HEX = "9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c"
 
-MANIFEST_FILENAME = "client.manifest.json"
-SIGNATURE_FILENAME = "client.manifest.json.sig"
+#: The stable channel's filenames. Kept as names because they are referenced by the release
+#: script and the docs; the per-channel answer is channels.client_manifest_filename, which
+#: manifest_paths() below goes through. These two must not change -- they are pinned `-text`
+#: in .gitattributes and every installed client already asks for them by path.
+MANIFEST_FILENAME = channels.client_manifest_filename(channels.STABLE)
+SIGNATURE_FILENAME = MANIFEST_FILENAME + ".sig"
 
 #: A `file` build is bytes this hub can hand over; a `link` build is somewhere else to go.
 #: iOS will only ever be the second kind -- Apple does not permit an app to be installed
@@ -56,9 +62,17 @@ class ManifestError(Exception):
     """The manifest is absent, malformed, or not signed by the release key."""
 
 
-def manifest_paths(code_dir):
-    return (os.path.join(code_dir, MANIFEST_FILENAME),
-            os.path.join(code_dir, SIGNATURE_FILENAME))
+def manifest_paths(code_dir, channel=None):
+    """Where this channel's manifest and its detached signature live.
+
+    `channel` is optional and defaults to stable, so every pre-#21 call site keeps its exact
+    behaviour. A beta hub serves `client.manifest.beta.json` from the same directory: the
+    hub's self-updater mirrors `hub/` wholesale, so a second manifest beside the first needs
+    no new plumbing to arrive -- which is the reason the manifest lives in `hub/` at all
+    (see the module docstring).
+    """
+    name = channels.client_manifest_filename(channel)
+    return (os.path.join(code_dir, name), os.path.join(code_dir, name + ".sig"))
 
 
 def verify_signature(manifest_bytes, signature_hex, public_key_hex=None):
@@ -160,7 +174,7 @@ def parse_manifest(manifest_bytes):
     }
 
 
-def load_manifest(code_dir, public_key_hex=None):
+def load_manifest(code_dir, public_key_hex=None, channel=None):
     """Read, verify and parse the manifest shipped beside the hub's code.
 
     Raises ManifestError for every failure, including "there isn't one yet" -- which is
@@ -168,7 +182,7 @@ def load_manifest(code_dir, public_key_hex=None):
     message on the page rather than as an empty list. An empty list would read as "no
     client exists", and the two need to be told apart.
     """
-    manifest_path, sig_path = manifest_paths(code_dir)
+    manifest_path, sig_path = manifest_paths(code_dir, channel)
     if not os.path.exists(manifest_path):
         raise ManifestError("No client release has been published for this hub yet.")
     if not os.path.exists(sig_path):

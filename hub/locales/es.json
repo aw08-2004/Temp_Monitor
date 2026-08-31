@@ -11,6 +11,7 @@
     "remote": "Remoto",
     "audit_log": "Registro de auditoría",
     "packages": "Paquetes",
+    "patches": "Parches",
     "backups": "Copias de seguridad",
     "settings": "Configuración",
     "permission_groups": "Grupos de permisos",
@@ -415,6 +416,10 @@
         "label": "Gestionar el firmware",
         "description": "Cambiar los ajustes de la BIOS y actualizar el firmware. Es la única acción sin vuelta atrás: una actualización de firmware fallida puede dejar un equipo inutilizable."
       },
+      "manage_patches": {
+        "label": "Gestionar los parches",
+        "description": "Aprobar actualizaciones, programar ventanas de mantenimiento y lanzar una ejecución de parches fuera de ellas. Para leer el inventario y el cumplimiento basta con «Ver»: esta capacidad decide qué se hace al respecto."
+      },
       "manage_settings": {
         "label": "Gestionar la configuración",
         "description": "Cambiar la configuración del hub y administrar los registros de los equipos (eliminar, fusionar, fijar un sensor, descartar alertas)."
@@ -447,6 +452,7 @@
       "remote": "Control remoto",
       "directory": "Active Directory",
       "firmware": "Actualizaciones de firmware",
+      "patches": "Parches",
       "signin": "Inicio de sesión",
       "wake": "Wake-on-LAN",
       "rules": "Reglas"
@@ -793,6 +799,42 @@
           "label": "Umbral de disco bajo del panel",
           "help": "Un volumen con menos de esta proporción libre cuenta como bajo en el panel. También es un filtro, no una alerta."
         }
+      },
+      "patches.auto_approve_classifications": {
+        "label": "Aprobar estas automáticamente",
+        "help": "Las actualizaciones de estas clasificaciones se aprueban en cuanto un equipo las notifica. Solo se ofrecen seguridad y crítica: un controlador es el tipo de actualización que estropea hardware con regularidad, y una actualización de características es un cambio de versión de Windows. Una actualización rechazada a mano nunca se vuelve a aprobar por esta vía."
+      },
+      "patches.scheduler_interval_seconds": {
+        "label": "Ejecutar el planificador de parches cada",
+        "help": "Con qué frecuencia el hub comprueba si se ha abierto una ventana de mantenimiento, envía las ejecuciones pendientes y recoge los intentos terminados."
+      },
+      "patches.confirm_timeout_seconds": {
+        "label": "Abandonar un equipo que se reinicia tras",
+        "help": "Cuánto puede permanecer un equipo preparado y reiniciando antes de que la ejecución deje de esperar. Una instalación solo se confirma cuando el equipo vuelve y ya no ofrece la actualización, así que alcanzar este límite se registra como una instalación que nadie pudo verificar, no como un fallo."
+      },
+      "patches.default_max_attempts": {
+        "label": "Intentos por equipo",
+        "help": "Cuántas veces reintenta una ejecución con un equipo antes de rendirse. Rellena el formulario; las ejecuciones ya creadas conservan el valor con el que se hicieron."
+      },
+      "patches.default_retry_backoff_seconds": {
+        "label": "Esperar antes de reintentar un equipo",
+        "help": "El primer retardo de reintento, que se duplica en cada intento posterior. Rellena el formulario; las ejecuciones ya creadas conservan el valor con el que se hicieron."
+      },
+      "patches.inventory_retention_days": {
+        "label": "Olvidar la lista de actualizaciones de un equipo tras",
+        "help": "Cuánto sobreviven las actualizaciones disponibles notificadas por un equipo sin volver a notificarse. De lo contrario, un equipo que deja de informar conservaría su última respuesta para siempre y sostendría una cifra de cumplimiento que hace meses que no es cierta."
+      },
+      "hub.update_channel": {
+        "label": "Canal de versiones de este hub",
+        "help": "De qué rama lee este hub su propia versión, y a cuál se actualiza cuando las actualizaciones automáticas están activas. El aviso de actualización sigue este canal en cualquier caso, así que se le informa de un hub más nuevo aunque este no vaya a instalarlo."
+      },
+      "hub.client_update_channel": {
+        "label": "Canal de versiones del cliente",
+        "help": "Qué versión del cliente de escritorio y móvil ofrece la página de descarga, y a cuál se actualiza un cliente instalado."
+      },
+      "fleet.default_agent_channel": {
+        "label": "Canal predeterminado del agente",
+        "help": "A qué versión del agente se actualizan los equipos salvo que se hayan fijado individualmente. Fije unos pocos equipos en beta para probar una versión antes de que llegue a la flota: de lo contrario, una versión del agente llega a todas partes en unos quince minutos."
       }
     },
     "choice": {
@@ -805,6 +847,22 @@
       "remote.consent_mode": {
         "unattended": "Desatendido: conectar de inmediato",
         "attended": "Atendido: preguntar primero a la persona conectada"
+      },
+      "patches.auto_approve_classifications": {
+        "security": "Seguridad",
+        "critical": "Crítica"
+      },
+      "hub.update_channel": {
+        "stable": "Estable",
+        "beta": "Beta"
+      },
+      "hub.client_update_channel": {
+        "stable": "Estable",
+        "beta": "Beta"
+      },
+      "fleet.default_agent_channel": {
+        "stable": "Estable",
+        "beta": "Beta"
       }
     },
     "error": {
@@ -1982,7 +2040,12 @@
       "files": "Archivos"
     },
     "os": "SO: {value}",
-    "os_build": " (compilación {build})"
+    "os_build": " (compilación {build})",
+    "channel": "Canal: {value}",
+    "channel_pinned": "Canal: {value} (fijado)",
+    "channel_pin": "Canal de versiones",
+    "channel_follow_fleet": "Seguir el valor de la flota",
+    "channel_ahead": "Ejecuta {running}, por delante de estable ({stable}). No volverá a actualizarse hasta que estable lo supere: salir de beta no deshace una actualización ya instalada."
   },
   "remote": {
     "title": "Remoto",
@@ -2705,6 +2768,154 @@
       "network": "unidad de red",
       "cdrom": "óptica",
       "ram": "disco RAM"
+    }
+  },
+  "patches": {
+    "classification": {
+      "security": {
+        "label": "Seguridad",
+        "description": "Corrige una vulnerabilidad conocida. Su ausencia es un hallazgo, no una preferencia."
+      },
+      "critical": {
+        "label": "Crítica",
+        "description": "Una corrección crítica que no es en sí un parche de seguridad."
+      },
+      "driver": {
+        "label": "Controlador",
+        "description": "Un controlador de hardware. El único tipo de actualización que estropea hardware con regularidad, por lo que nunca se aprueba automáticamente."
+      },
+      "feature": {
+        "label": "Actualización de características",
+        "description": "Un cambio de versión de Windows. Nunca se aprueba automáticamente: es una migración, no un parche."
+      },
+      "other": {
+        "label": "Otras",
+        "description": "Paquetes acumulativos, actualizaciones de definiciones y el resto del catálogo."
+      },
+      "unknown": {
+        "label": "Sin clasificar",
+        "description": "El origen no lo indica. winget no tiene noción de clasificación, por lo que la mayoría de las actualizaciones de aplicaciones acaban aquí."
+      }
+    },
+    "source": {
+      "windows_update": {
+        "label": "Windows Update",
+        "description": "Actualizaciones del sistema operativo y de controladores, leídas del propio servicio Windows Update del equipo."
+      },
+      "winget": {
+        "label": "winget",
+        "description": "Actualizaciones de aplicaciones, del gestor de paquetes winget del equipo."
+      }
+    },
+    "heading": "Parches",
+    "intro": "Lo que le falta a la flota, lo que está aprobado para instalarse y cuándo puede ejecutarse. Una actualización solo se registra como instalada cuando el equipo vuelve y deja de ofrecerla.",
+    "views_nav": "Vistas de parches",
+    "tab_updates": "Disponibles",
+    "tab_windows": "Ventanas de mantenimiento",
+    "tab_runs": "Ejecuciones",
+    "no_updates": "Ningún equipo notifica actualizaciones disponibles.",
+    "no_windows": "Aún no hay ventanas de mantenimiento. Sin ninguna, solo una ejecución de emergencia instala algo.",
+    "no_runs": "Aún no hay ejecuciones de parches.",
+    "request_failed": "No se pudo contactar con el hub.",
+    "approve": "Aprobar",
+    "decline": "Rechazar",
+    "undecide": "Deshacer",
+    "summary": {
+      "machines": "Equipos atrasados",
+      "updates": "Actualizaciones pendientes",
+      "security": "Actualizaciones de seguridad"
+    },
+    "col": {
+      "update": "Actualización",
+      "classification": "Clasificación",
+      "source": "Origen",
+      "machines": "Equipos",
+      "decision": "Decisión",
+      "actions": "Acciones",
+      "window": "Ventana",
+      "days": "Días",
+      "time": "Hora",
+      "scope": "Ámbito",
+      "reboot": "Reinicio",
+      "started": "Iniciada",
+      "by": "Por",
+      "progress": "Progreso",
+      "status": "Estado"
+    },
+    "decision": {
+      "approved": "Aprobada",
+      "declined": "Rechazada",
+      "undecided": "Sin decidir"
+    },
+    "day": {
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mié",
+      "thu": "Jue",
+      "fri": "Vie",
+      "sat": "Sáb",
+      "sun": "Dom"
+    },
+    "reboot": {
+      "never": "No reiniciar nunca",
+      "if_required": "Reiniciar si es necesario",
+      "always": "Reiniciar siempre"
+    },
+    "status": {
+      "scheduled": "Programada",
+      "running": "En curso",
+      "complete": "Completada",
+      "cancelled": "Cancelada"
+    },
+    "window": {
+      "new": "Nueva ventana",
+      "new_title": "Nueva ventana de mantenimiento",
+      "edit_title": "Editar ventana de mantenimiento",
+      "name": "Nombre",
+      "name_placeholder": "Domingo por la noche",
+      "days": "Días en que se abre",
+      "start": "Empieza a las",
+      "duration": "Duración en minutos",
+      "local_time_note": "Las horas son la hora local del propio hub. Una ventana que empieza a las 23:00 y dura cuatro horas sigue abierta a la 01:00 de la mañana siguiente.",
+      "reboot_policy": "Política de reinicio",
+      "scope": "Se aplica a",
+      "scope_all": "Todos los equipos",
+      "scope_machines": "Equipos indicados",
+      "scope_count": "{count} equipo(s)",
+      "machines_placeholder": "Un nombre de host por línea",
+      "every_day": "Todos los días",
+      "summary": "{start} durante {minutes} min",
+      "disabled": "Desactivada",
+      "confirm_delete": "¿Eliminar la ventana de mantenimiento {name}?"
+    },
+    "run": {
+      "new": "Ejecutar parches",
+      "new_title": "Ejecutar los parches aprobados",
+      "note": "Nota",
+      "machines": "Equipos",
+      "machines_placeholder": "Un nombre de host por línea",
+      "pick_machines": "Indique al menos un equipo.",
+      "emergency": "Envío de emergencia",
+      "emergency_help": "Ignora todas las ventanas de mantenimiento e instala en cuanto cada equipo esté accesible. Estos equipos pueden reiniciarse durante la jornada laboral.",
+      "emergency_badge": "Emergencia",
+      "confirm_emergency": "¿Instalar ahora en {count} equipo(s), ignorando toda ventana de mantenimiento? Pueden reiniciarse durante la jornada laboral.",
+      "start": "Iniciar ejecución",
+      "progress": "{done} de {total}",
+      "cancel": "Cancelar",
+      "cancelled": "Cancelada. Se retiraron {recalled} equipo(s); los que ya se estaban reiniciando se dejaron en paz, porque los parches ya están en ellos.",
+      "retry": "Reintentar los fallos"
+    }
+  },
+  "channels": {
+    "channel": {
+      "stable": {
+        "label": "Estable",
+        "description": "La versión publicada. Todo está aquí salvo que alguien lo haya cambiado."
+      },
+      "beta": {
+        "label": "Beta",
+        "description": "La próxima versión, publicada aquí primero. Pensada para unos pocos equipos que pueda vigilar: salir de beta no deshace una actualización ya instalada."
+      }
     }
   }
 }

@@ -33,7 +33,17 @@ param(
     [switch]$Push,
     [switch]$DryRun,
     [string]$SigningKey,           # default: ~/.temp_monitor_signing_key (sign_release.py's own default)
-    [string]$Repo = "aw08-2004/Temp_Monitor"
+    [string]$Repo = "aw08-2004/Temp_Monitor",
+    # Release channel (roadmap #21). "beta" writes agent.manifest.beta.json instead, tags the
+    # release agent-v<version>-beta, and marks it a prerelease. Only machines pinned to beta
+    # in the console read that manifest; everything else is untouched.
+    #
+    # ONE VERSION SEQUENCE, shared with stable. A beta is simply a number published here
+    # first, so promoting it is copying agent.manifest.beta.json over agent.manifest.json --
+    # every pilot machine is already at that version and does nothing, and the fleet updates
+    # to it. Do NOT invent a separate beta numbering: VERSIONING.md forbids suffixes and four
+    # comparators enforce it.
+    [ValidateSet("stable","beta")][string]$Channel = "stable"
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,9 +53,14 @@ $Csproj     = Join-Path $AgentDir "src\TempMonitorAgent\TempMonitorAgent.csproj"
 $ConfigCs   = Join-Path $AgentDir "src\TempMonitorAgent\AgentConfig.cs"
 $DistDir    = Join-Path $AgentDir "dist"
 $ExePath    = Join-Path $DistDir "TempMonitorAgent.exe"
-$ManifestPath = Join-Path $AgentDir "agent.manifest.json"
+$IsBeta       = ($Channel -eq "beta")
+# Must match hub/channels.py's _AGENT_MANIFEST and AgentConfig.BetaManifestUrl. Three copies
+# of this filename exist by necessity -- a PowerShell script, a Python module and a C#
+# constant cannot share one -- and tests/test_channels.py pins the other two.
+$ManifestPath = Join-Path $AgentDir $(if ($IsBeta) { "agent.manifest.beta.json" } else { "agent.manifest.json" })
 $SignScript = Join-Path $RepoRoot "sign_release.py"
-$Tag        = "agent-v$Version"
+# The tag differs so the two channels' releases and their assets never collide.
+$Tag        = $(if ($IsBeta) { "agent-v$Version-beta" } else { "agent-v$Version" })
 $AssetUrl   = "https://github.com/$Repo/releases/download/$Tag/TempMonitorAgent.exe"
 
 function Say($msg)  { Write-Host "  $msg" }
@@ -291,7 +306,11 @@ if ($DryRun) {
                 Set-Content -Path $tempNotes -Value $text -Encoding utf8
                 $notesPath = $tempNotes
             }
-            gh release create $Tag --repo $Repo --title "Agent v$Version" --notes-file $notesPath
+            # --prerelease on beta, so the GitHub releases list says which train a build is
+            # on without anybody decoding the tag. Nothing in the fleet reads this flag --
+            # the manifest filename is what decides who installs it -- it is for humans.
+            $preflag = @(); if ($IsBeta) { $preflag = @("--prerelease") }
+            gh release create $Tag --repo $Repo --title "Agent v$Version$(if ($IsBeta) { ' (beta)' })" --notes-file $notesPath @preflag
             if ($LASTEXITCODE -ne 0) { Die "gh release create failed." }
             Ok "Created release $Tag (notes from $notesPath)"
         } finally {
@@ -305,9 +324,12 @@ if ($DryRun) {
 # ----------------------------------------------------------------------
 Step "Signing manifest"
 if ($DryRun) {
-    Say "[dry-run] $py `"$SignScript`" --sign-agent --file `"$ExePath`" --agent-version $Version --agent-url $AssetUrl --key `"$keyPath`""
+    Say "[dry-run] $py `"$SignScript`" --sign-agent --file `"$ExePath`" --agent-version $Version --agent-url $AssetUrl --key `"$keyPath`" --manifest `"$ManifestPath`""
 } else {
-    & $py $SignScript --sign-agent --file $ExePath --agent-version $Version --agent-url $AssetUrl --key $keyPath
+    # --manifest picks the channel's output path. sign_release.py needed no change for
+    # roadmap #21 -- it already took the path, so beta is the same signer, the same key and
+    # the same bytes-exact discipline, writing one file over.
+    & $py $SignScript --sign-agent --file $ExePath --agent-version $Version --agent-url $AssetUrl --key $keyPath --manifest $ManifestPath
     if ($LASTEXITCODE -ne 0) { Die "sign_release.py --sign-agent failed." }
     Ok "Signed -> $ManifestPath (+ .sig)"
 }

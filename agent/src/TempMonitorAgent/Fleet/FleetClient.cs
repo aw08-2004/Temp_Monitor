@@ -175,6 +175,14 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // so a settled desktop sends this once.
             var network = TempMonitorAgent.Network.NetworkInventoryReporter.TakeIfChanged();
             if (network is not null) body["network"] = network;
+            // Available updates (roadmap #14). Change-only like its neighbours, with one
+            // difference that matters: the payload is an OBJECT wrapping the list, so that a
+            // machine with nothing left to install still sends something truthy. That report
+            // -- "I am offering no updates" -- is the only honest evidence an install worked,
+            // and it is what closes out a patch run on the hub. A bare array would be dropped
+            // by the `if (x is not null)` shape above the moment it went empty.
+            var patchInventory = TempMonitorAgent.Patch.PatchInventoryReporter.TakeIfChanged();
+            if (patchInventory is not null) body["patches"] = patchInventory;
             // The process list, and the ONE payload here that is not change-only: a process
             // list has changed by definition. What bounds it instead is demand -- there is a
             // sample waiting only while the hub has told us somebody is looking (see
@@ -192,6 +200,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
             ApplyLiveWatchFromHeartbeat(text);
+            ApplyChannelFromHeartbeat(text);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -230,6 +239,46 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e)
         {
             _log.LogWarning("Ignoring malformed hub config: {Msg}", e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Apply the hub's answer to "which release channel is this machine on?" (roadmap #21).
+    ///
+    /// <para>Its own method with its own try/catch, for the same reason the two watch flags
+    /// below have theirs: a malformed config block must not be able to stop the channel being
+    /// read, and vice versa. A machine that missed a channel change because an unrelated
+    /// payload failed to parse would keep updating from the wrong train indefinitely, and
+    /// nothing else would ever tell it.</para>
+    ///
+    /// <para>A NAME is read, never a url — see RuntimeConfig.Channel for why that distinction
+    /// is the whole of the security argument here. Anything unrecognised, and a hub too old to
+    /// send the field at all, normalises to stable.</para>
+    ///
+    /// <para>Persisted, unlike the watch flags: those are questions about right now, while a
+    /// channel is a standing decision, and a service restart that silently reverted a pilot
+    /// machine to stable for one heartbeat would make the ring look like it was flapping.
+    /// Written only when it actually CHANGED, so an unchanged channel does not rewrite
+    /// config.json on every heartbeat.</para>
+    /// </summary>
+    private void ApplyChannelFromHeartbeat(string body)
+    {
+        try
+        {
+            var sent = JsonNode.Parse(body)?["update_channel"]?.GetValue<string>();
+            var channel = TempMonitorAgent.State.Channels.Normalize(sent);
+            var current = RuntimeConfigStore.Current;
+            if (channel == TempMonitorAgent.State.Channels.Normalize(current.Channel)) return;
+
+            var applied = current with { Channel = channel };
+            RuntimeConfigStore.Set(applied);
+            _state.SaveRuntimeConfig(applied);
+            _log.LogInformation("Release channel is now {Channel}; updates will come from {Url}",
+                                channel, AgentConfig.ManifestUrlFor(channel));
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed channel from the hub: {Msg}", e.Message);
         }
     }
 

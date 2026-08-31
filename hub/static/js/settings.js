@@ -23,6 +23,7 @@ const panels = {
     // tab existed and showed settings-directory.js's status card, so the page looked
     // complete while Active Directory could not actually be configured from the console.
     directory: document.getElementById('tab-directory'),
+    patches: document.getElementById('tab-patches'),
     wake: document.getElementById('tab-wake'),
     rules: document.getElementById('tab-rules'),
 };

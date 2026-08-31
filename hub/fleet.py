@@ -90,6 +90,12 @@ SCHEDULED_COMMANDS = frozenset({
     # to a dead URL against a finished run.
     "backup_files",
     "restore_files",
+    # Patch installs (roadmap #14). Same reasoning again, plus one of its own: the params
+    # carry the run id AND the exact update ids resolved against that machine's inventory
+    # at dispatch. Replayed a week later they would name updates that machine has since
+    # installed, which Windows Update answers with a failure indistinguishable from a
+    # broken patch.
+    "install_patches",
 })
 
 # Remote view/control (roadmap #2). Like the session-control types these steer a live,
@@ -498,6 +504,17 @@ ACTION_LEVELS = {
     "device.revoke": LEVEL_SECURITY,
     "create_deployment": LEVEL_SECURITY,
     "retry_deployment": LEVEL_SECURITY,
+    # Patch runs (roadmap #14), at the same level as a deployment and for the same reason:
+    # both end with code running as SYSTEM on machines an operator picked. A patch run
+    # additionally RESTARTS those machines, and an emergency one does it outside every
+    # agreed maintenance window -- so the row that says who started it belongs where a
+    # security auditor is already looking, not in the operational stream. The `emergency`
+    # flag rides in details rather than splitting this into two actions: it is a property
+    # of the run, and an auditor filtering for "who rebooted the fleet on Tuesday" wants
+    # both kinds in one place.
+    "create_patch_run": LEVEL_SECURITY,
+    "retry_patch_run": LEVEL_SECURITY,
+    "machine.update_channel": LEVEL_SECURITY,
     "remote_session_start": LEVEL_SECURITY,
     "remote_session_end": LEVEL_SECURITY,
     "remote_turn_secret_set": LEVEL_SECURITY,
@@ -531,6 +548,9 @@ ACTION_LEVELS = {
     "machine.merge": LEVEL_NOTICE,
     "machine.delete": LEVEL_NOTICE,
     "machine.primary_sensor": LEVEL_NOTICE,
+    # Pinning a machine to a release channel (roadmap #21) is SECURITY, unlike the sensor pin
+    # above: it decides which signed build runs as SYSTEM on that PC, which is the same class
+    # of event as issue_command or create_deployment. Not in the notice block for that reason.
     "alert.dismiss": LEVEL_NOTICE,
     # The user directory is a profile list, not access -- permission groups grant that.
     "user.create": LEVEL_NOTICE,
@@ -541,6 +561,15 @@ ACTION_LEVELS = {
     "delete_package": LEVEL_NOTICE,
     "upload_package_file": LEVEL_NOTICE,
     "cancel_deployment": LEVEL_NOTICE,
+    # Cancelling and the approval/window edits are operational: none of them makes anything
+    # new run. An approval DECIDES what a later run may install, which is why it is recorded
+    # at all -- the run itself carries the security-level row.
+    "cancel_patch_run": LEVEL_NOTICE,
+    "set_patch_approval": LEVEL_NOTICE,
+    "clear_patch_approval": LEVEL_NOTICE,
+    "create_maintenance_window": LEVEL_NOTICE,
+    "update_maintenance_window": LEVEL_NOTICE,
+    "delete_maintenance_window": LEVEL_NOTICE,
     "backup_destination_create": LEVEL_NOTICE,
     "backup_destination_update": LEVEL_NOTICE,
     "backup_destination_delete": LEVEL_NOTICE,

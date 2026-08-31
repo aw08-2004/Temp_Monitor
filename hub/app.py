@@ -38,7 +38,9 @@ import backups
 import remote
 import directory
 import bios
+import channels
 import firmware
+import patches
 import wake
 import rules
 import scripts
@@ -60,6 +62,7 @@ from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
+from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
@@ -102,7 +105,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.91.0"
+HUB_VERSION = "1.93.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -984,10 +987,22 @@ def normalize_os(os_caption, os_build, ad_os):
 # instead. The wire field keeps its name: renaming it would break every agent
 # already in the field.
 # ================================
-AGENT_MANIFEST_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
-# The hub reads its own latest version straight out of app.py on main -- same source-of-truth
-# and raw-GitHub trust as the client version hints above. Used only by the opt-in self-updater.
-HUB_SOURCE_URL = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/hub/app.py"
+# Both agent channels are read, not just the one this fleet mostly uses: a hub with three
+# machines in a pilot ring still has to advertise the right version to each of them, and the
+# two reads cost one HTTPS GET each per 15 minutes. See channels.agent_manifest_url -- the
+# hub reads exactly the file the agent's own updater would install from, so /api/report can
+# never advertise a version that agent would then decline.
+AGENT_MANIFEST_URLS = {c: channels.agent_manifest_url(c) for c in channels.CHANNELS}
+# Kept as a name because the old constant is referenced in comments and tests as the stable
+# manifest; it is now simply the stable channel's entry.
+AGENT_MANIFEST_URL = AGENT_MANIFEST_URLS[channels.STABLE]
+# The hub reads its own latest version straight out of app.py on the ref its channel tracks --
+# same source-of-truth and raw-GitHub trust as the client version hints above. Used by the
+# sidebar update notice always, and by the opt-in self-updater when it is enabled. Resolved
+# per call rather than pinned at import, so changing the channel in Settings takes effect on
+# the next watcher tick instead of at the next restart.
+def hub_source_url():
+    return channels.hub_source_url(hub_update_channel())
 HUB_UPDATE_CHECK_INTERVAL = 15 * 60  # 15 minutes
 AGENT_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
 # First version of the C# agent. A client reporting >= this is on the agent train.
@@ -997,8 +1012,38 @@ AGENT_TRAIN_MIN_VERSION = "3.0.0"
 # train -- nothing is served from it, since companion.py no longer exists on main.
 COMPANION_FINAL_VERSION = "2.10.1"
 
-latest_agent_version = None
+#: Latest version per channel, filled in by the watcher. A dict rather than a scalar since
+#: roadmap #21 -- a hub with a pilot ring has to answer for both trains at once. None for a
+#: channel means "never successfully read", which is not the same as "nothing published" and
+#: is why callers omit the hint rather than guessing.
+latest_agent_version = {c: None for c in channels.CHANNELS}
 latest_version_lock = threading.Lock()
+
+def agent_channel_for(machine=None):
+    """The agent release channel a machine is on: its own pin, else the fleet default.
+
+    `machine` may be None (a caller with no machine in hand, or a pre-channel call site), in
+    which case this answers with the fleet default. Reads are cheap -- settings is cached and
+    the override is one indexed lookup -- and this is on the heartbeat path, so it stays a
+    function rather than something callers are expected to have resolved already.
+    """
+    default = settings.get(DB_PATH, "fleet.default_agent_channel")
+    if not machine:
+        return channels.normalize(default)
+    return channels.for_machine(DB_PATH, machine, default)
+
+def machine_channel_override(machine):
+    """A machine's pinned channel, or None when it follows the fleet."""
+    return channels.override_for(DB_PATH, machine)
+
+def set_machine_channel_override(machine, channel):
+    """Pin a machine to a channel, or pass None/"" to return it to the fleet default."""
+    return channels.set_override(DB_PATH, machine, channel,
+                                 to_timestamp_str(datetime.now()))
+
+def hub_update_channel():
+    """This hub's own channel -- which git ref it reads its version from and updates to."""
+    return channels.normalize(settings.get(DB_PATH, "hub.update_channel"))
 
 def version_tuple(v):
     """Tolerant version parse: reads the leading dotted-numeric prefix and ignores
@@ -1018,42 +1063,65 @@ def cmp_versions(a, b):
     tb += (0,) * (n - len(tb))
     return (ta > tb) - (ta < tb)
 
-def get_latest_agent_version():
-    with latest_version_lock:
-        return latest_agent_version
+def get_latest_agent_version(channel=None):
+    """The newest agent published on `channel`, or None if it has never been read.
 
-def get_advertised_version(reported_version):
+    Defaults to stable rather than to the fleet setting: callers that care about a specific
+    machine pass its channel, and a caller with nothing in hand is asking the general
+    question, which stable is the honest answer to.
+    """
+    with latest_version_lock:
+        return latest_agent_version.get(channels.normalize(channel))
+
+def get_advertised_version(reported_version, machine=None):
     """The version to echo back to a client currently running `reported_version`.
 
-    Agent-train clients (3.x) get the latest agent. Anything below that -- a
-    surviving 2.x companion, or a client too old to report a version at all --
+    Agent-train clients (3.x) get the latest agent ON THAT MACHINE'S CHANNEL. Anything below
+    that -- a surviving 2.x companion, or a client too old to report a version at all --
     deliberately gets nothing: companion.py is gone from main so there is no 2.x
     release left to serve, and handing one a 3.x number would make it try to
     install an agent build as if it were a Python script. Those machines have to
     be moved over with install.ps1 by hand.
 
+    `machine` is optional so the pre-channel call shape still works and answers for the
+    fleet default. Passing it is what makes a pilot machine's hint match what its own
+    updater will actually install -- advertising the stable version to a beta machine would
+    have it check, find something newer than we said, and install it anyway, which is merely
+    confusing rather than wrong.
+
     Returns None when there is nothing useful to say -- a pre-agent client, or a
     manifest we haven't read yet -- in which case /api/report omits latest_version
     entirely and the client falls back to its own poll."""
     if reported_version and cmp_versions(reported_version, AGENT_TRAIN_MIN_VERSION) >= 0:
-        return get_latest_agent_version()
+        return get_latest_agent_version(agent_channel_for(machine))
     return None
 
 def refresh_latest_agent_version():
-    """Read the agent's version straight out of the signed release manifest, so the
+    """Read each channel's version straight out of its signed release manifest, so the
     hub advertises exactly what the agent's own updater would install. We don't
     verify the signature here -- the agent does that before it installs anything,
-    and this number is only ever a hint to go check."""
-    global latest_agent_version
-    try:
-        resp = requests.get(AGENT_MANIFEST_URL, timeout=10)
-        resp.raise_for_status()
-        version = (resp.json() or {}).get("version")
-        if version:
-            with latest_version_lock:
-                latest_agent_version = str(version)
-    except Exception as e:
-        print(f"[agent-version] Could not refresh latest version: {e}")
+    and this number is only ever a hint to go check.
+
+    A channel whose manifest is missing is left as None rather than falling back to the
+    other one: a beta manifest that has never been published means "no beta build exists",
+    and answering with the stable version would tell a pilot machine it was up to date on a
+    train that has nothing on it."""
+    for channel, url in AGENT_MANIFEST_URLS.items():
+        try:
+            resp = requests.get(url, timeout=10)
+            # A channel with no manifest is a normal, permanent state -- most fleets never
+            # publish a beta at all -- so 404 is not an error and is not logged. Saying it
+            # every fifteen minutes forever would train operators to ignore this prefix,
+            # which is the one place a REAL fetch failure would show up.
+            if resp.status_code == 404:
+                continue
+            resp.raise_for_status()
+            version = (resp.json() or {}).get("version")
+            if version:
+                with latest_version_lock:
+                    latest_agent_version[channel] = str(version)
+        except Exception as e:
+            print(f"[agent-version] Could not refresh the {channel} version: {e}")
 
 def agent_version_watcher():
     while True:
@@ -1087,7 +1155,10 @@ def start_agent_version_watcher():
 # Ed25519 fleet-update trust root that gates agent binaries.
 # ================================
 # Source archive for the no-git path. codeload serves a branch zip directly.
-HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/heads/main"
+# Resolved per call, like hub_source_url above, so switching channel in Settings takes
+# effect on the next update rather than at the next restart (roadmap #21).
+def hub_archive_url():
+    return channels.hub_archive_url(hub_update_channel())
 # Within the repo (and so within that archive), all of the hub's code and assets live under
 # this one directory. The self-updater mirrors it wholesale into HUB_CODE_DIR -- there is
 # deliberately no per-file allowlist anymore. That list was decided by the *running* version,
@@ -1136,7 +1207,7 @@ def parse_hub_version(text):
 def fetch_remote_hub_version():
     """Latest HUB_VERSION on main, or None on any error (logged, never raises)."""
     try:
-        resp = requests.get(HUB_SOURCE_URL, timeout=10)
+        resp = requests.get(hub_source_url(), timeout=10)
         resp.raise_for_status()
         return parse_hub_version(resp.text)
     except Exception as e:
@@ -1170,19 +1241,23 @@ def _install_requirements(code_dir):
 
 
 def _perform_hub_update_git(worktree_root):
-    """Bring the checkout at worktree_root up to origin/main via fetch + hard reset. The
-    reset covers the whole tree, so the hub/ code dir comes along with it. Returns True only
-    if fetch AND reset succeeded -- the caller restarts only then. Discards local drift by
-    design (operator-confirmed)."""
-    ok, out = _run_git(["fetch", "origin", "main"], worktree_root)
+    """Bring the checkout at worktree_root up to this hub's channel ref via fetch + hard
+    reset. The reset covers the whole tree, so the hub/ code dir comes along with it. Returns
+    True only if fetch AND reset succeeded -- the caller restarts only then. Discards local
+    drift by design (operator-confirmed).
+
+    The ref is the channel's (roadmap #21), and it is read once here rather than per git call
+    so that a channel changed mid-update cannot fetch one ref and reset to another."""
+    ref = channels.hub_ref(hub_update_channel())
+    ok, out = _run_git(["fetch", "origin", ref], worktree_root)
     if not ok:
         print(f"[hub-update] git fetch failed, skipping: {out}")
         return False
-    ok, out = _run_git(["reset", "--hard", "origin/main"], worktree_root)
+    ok, out = _run_git(["reset", "--hard", f"origin/{ref}"], worktree_root)
     if not ok:
         print(f"[hub-update] git reset failed, skipping: {out}")
         return False
-    print(f"[hub-update] Updated working tree to origin/main: {out}")
+    print(f"[hub-update] Updated working tree to origin/{ref}: {out}")
     _install_requirements(os.path.join(worktree_root, HUB_ARCHIVE_SUBDIR))
     return True
 
@@ -1196,7 +1271,7 @@ def _stage_hub_archive(staging):
     leave a hub with half its files. The check is a sanity floor (the entrypoints exist),
     not the old per-file allowlist: the archive's hub/ is authoritative about the rest."""
     try:
-        resp = requests.get(HUB_ARCHIVE_URL, timeout=120)
+        resp = requests.get(hub_archive_url(), timeout=120)
         resp.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             zf.extractall(staging)
@@ -1255,7 +1330,8 @@ def _perform_hub_update_archive(code_dir):
                 else:
                     os.remove(victim)
 
-        print(f"[hub-update] Mirrored {HUB_ARCHIVE_SUBDIR}/ into {code_dir} from {HUB_ARCHIVE_URL}")
+        print(f"[hub-update] Mirrored {HUB_ARCHIVE_SUBDIR}/ into {code_dir} "
+              f"from {hub_archive_url()}")
         _install_requirements(code_dir)
         return True
     except Exception as e:
@@ -1811,6 +1887,12 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 app.register_blueprint(create_wake_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
 
+# Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
+# nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
+# catalogue comes from the machine's own Windows Update and winget, and the command carries
+# only update ids.
+app.register_blueprint(create_patches_blueprint(DB_PATH, login_required, access))
+
 # The machine Processes card: reading the live process list behind `view` (it is inventory,
 # like the sensor tree the same page already shows in full), and ending or restarting a
 # process behind `issue_commands` -- no new capability, because this is strictly less
@@ -2214,6 +2296,15 @@ def init_db():
         for _os_column in ("os_caption", "os_version", "os_build", "os_arch"):
             if _os_column not in existing_columns:
                 conn.execute(f"ALTER TABLE machine_info ADD COLUMN {_os_column} TEXT")
+        # Which agent release channel this machine follows, overriding
+        # fleet.default_agent_channel (roadmap #21). NULL -- the value every existing row
+        # reads back -- means "follow the fleet", so a pilot ring is a handful of non-NULL
+        # rows and turning the whole feature off is emptying this column.
+        #
+        # Here rather than in the settings table for the same reason primary_sensor_name is:
+        # a global key/value store stops being one the moment it holds per-machine rows.
+        if "update_channel" not in existing_columns:
+            conn.execute("ALTER TABLE machine_info ADD COLUMN update_channel TEXT")
 
 def write_readings_batch(records):
     if not records:
@@ -2615,6 +2706,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # a deploy aimed at the old name must follow it rather than stall forever on a
     # machine that no longer exists.
     packages.rename_machine(DB_PATH, dropped, survivor)
+    # And its patch inventory and run targets, for the same reason. Its patch OUTCOME
+    # history follows too rather than being dropped: those rows say a given update worked
+    # or did not on a given model, which is a fact about the update, not about the name the
+    # machine happened to have that week.
+    patches.rename_machine(DB_PATH, dropped, survivor)
     # And its backup configuration + run history, so a merged machine keeps backing up
     # under the surviving name instead of silently dropping off the schedule. Existing
     # archives stay under the old name's folder and key -- the envelope header records
@@ -2925,6 +3021,18 @@ def retention_pruner():
                 files.prune_transfers(DB_PATH, FILE_SPOOL_DIR)
             except Exception as e:
                 print(f"[retention] File-explorer prune failed: {e}")
+            # Available-update rows nothing has re-reported (roadmap #14). Genuinely a
+            # retention question rather than housekeeping: this table is one row per update
+            # per machine and nothing else prunes it, so a machine that stops reporting
+            # would keep its last answer forever and hold up a compliance figure that has
+            # not been true for months. Its own try, as above.
+            try:
+                dropped = patches.prune_inventory(
+                    DB_PATH, settings.get_int(DB_PATH, "patches.inventory_retention_days"))
+                if dropped:
+                    print(f"[retention] Dropped {dropped} stale patch inventory row(s).")
+            except Exception as e:
+                print(f"[retention] Patch-inventory prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 
@@ -3028,6 +3136,77 @@ def firmware_scheduler():
 def start_firmware_scheduler():
     threading.Thread(target=firmware_scheduler, daemon=True,
                      name="firmware_scheduler").start()
+
+
+def patch_machine_facts():
+    """{machine: {"model", "os_build"}} for the patch scheduler's item rows.
+
+    Denormalised onto `patch_run_items` when an attempt is made, because that row is the
+    outcome history a stability question is asked of later and the machine it describes may
+    have been re-imaged, renamed or deleted by then (see patches.py). Read here rather than
+    joined inside patches.py so that module keeps knowing nothing about where the machine
+    table lives.
+    """
+    with get_db_conn() as conn:
+        return {row["machine"]: {"model": row["model"], "os_build": row["os_build"]}
+                for row in conn.execute(
+                    "SELECT machine, model, os_build FROM machine_info")}
+
+
+def patch_scheduler():
+    """Advance patch runs: read finished attempts back, then dispatch what is due.
+
+    Its own thread for the reason firmware got one -- the schedulers disagree about time.
+    A deploy tick waits on a command result; a patch run waits on a maintenance window
+    opening and then on a machine coming back from a restart, which is a day's patience.
+
+    Dispatch is NOT limited to online machines, unlike firmware's. A patch run has retries
+    and a backoff, so a target at a dark PC costs one expired command and is due again the
+    moment it reappears -- which is the ordinary deployment discipline. Firmware needs the
+    online check because it has no retry and a failure there is one nobody dares re-run.
+
+    Errors are caught and logged, never allowed to kill the thread: a fleet that silently
+    stops patching is the failure this whole feature exists to prevent, and its only
+    symptom would be a compliance figure that stops moving.
+    """
+    while True:
+        interval = settings.get_int(DB_PATH, "patches.scheduler_interval_seconds")
+        try:
+            # Approve what policy already decided, before dispatch resolves the approved
+            # set. Doing it in this order means an update discovered on this heartbeat is
+            # installable in this same tick rather than the next one.
+            approved = patches.apply_auto_approvals(
+                DB_PATH,
+                settings.get_list(DB_PATH, "patches.auto_approve_classifications"))
+            if approved:
+                print(f"[patches] Auto-approved {approved} update(s).")
+            reconciled, dispatched = patches.tick(
+                DB_PATH,
+                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+                machine_facts=patch_machine_facts(),
+            )
+            if reconciled or dispatched:
+                print(f"[patches] Reconciled {reconciled}, dispatched {dispatched}.")
+        except Exception as e:
+            print(f"[patches] Scheduler pass failed: {e}")
+        # Switch on the PCs a window is waiting for (roadmap #10). Its own try block for
+        # the same reason the deploy scheduler's is: opting into auto-wake must never stop
+        # patch runs advancing, and a wake with no relay is a normal outcome here.
+        try:
+            online = {entry["machine"] for entry in backup_machine_roster()
+                      if entry["online"]}
+            woke = wake_pending_targets(patches.pending_target_machines(DB_PATH), online,
+                                        reason="patch window")
+            if woke:
+                print(f"[patches] Requested a wake for {woke} offline target(s).")
+        except Exception as e:
+            print(f"[patches] Target wake pass failed: {e}")
+        time.sleep(interval)
+
+
+def start_patch_scheduler():
+    threading.Thread(target=patch_scheduler, daemon=True,
+                     name="patch_scheduler").start()
 
 
 def wake_scheduler():
@@ -3550,6 +3729,7 @@ backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
+patches.init_patches_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
@@ -3582,6 +3762,7 @@ start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()
 start_firmware_scheduler()
+start_patch_scheduler()
 start_wake_scheduler()
 start_backup_scheduler()
 start_sweep_worker()
@@ -3730,7 +3911,11 @@ def report_temp():
             print(f"[dedup] Duplicate-serial resolution failed for {machine!r}: {e}")
 
     response_payload = {"status": "success"}
-    latest_version = get_advertised_version(reported_version)
+    # Per-machine, so a pilot-ring PC is told about the beta build and everything else is
+    # told about stable (roadmap #21). Getting this wrong is not dangerous -- the agent
+    # re-reads its own channel's manifest before installing anything -- but it would have the
+    # console advertise one version while the machine installs another.
+    latest_version = get_advertised_version(reported_version, machine)
     if latest_version:
         response_payload["latest_version"] = latest_version
     return jsonify(response_payload), 200
@@ -3819,7 +4004,8 @@ def _build_fleet_summary(top):
     """Compute one summary for the CURRENT caller's scope. Called under the cache lock."""
     with get_db_conn() as conn:
         db_rows = conn.execute(
-            "SELECT machine, companion_version, os_caption, os_build, ad_os, updated_at "
+            "SELECT machine, companion_version, os_caption, os_build, ad_os, updated_at, "
+            "       update_channel "
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     rows = [dict(row) for row in db_rows]
@@ -3830,7 +4016,8 @@ def _build_fleet_summary(top):
     for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
         if machine not in known:
             rows.append({"machine": machine, "companion_version": None, "os_caption": None,
-                         "os_build": None, "ad_os": None, "updated_at": None})
+                         "os_build": None, "ad_os": None, "updated_at": None,
+                         "update_channel": None})
             known.add(machine)
 
     # Narrow BEFORE enriching, exactly as get_machines does -- there is no reason to extract
@@ -3841,7 +4028,11 @@ def _build_fleet_summary(top):
     keep = access.machine_filter()
 
     enrolled = fleet.enrolled_machines(DB_PATH)
-    latest_agent = get_latest_agent_version()
+    # The fleet default's version, which is what "agents outdated" should be counted
+    # against: a pilot machine running ahead of stable is not outdated, and counting it as
+    # such would make the dashboard's one actionable number permanently wrong by the size of
+    # the ring. Machines pinned to another channel are excluded from the count below.
+    latest_agent = get_latest_agent_version(agent_channel_for())
     hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
     low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
 
@@ -3864,7 +4055,13 @@ def _build_fleet_summary(top):
         # Only machines on the agent train are compared: a 2.x companion has no agent
         # release to be behind, and counting it as outdated would name a number nobody can
         # act on. See get_advertised_version.
-        if version and latest_agent and cmp_versions(version, AGENT_TRAIN_MIN_VERSION) >= 0:
+        # ...and only machines on the fleet's own channel. A pilot-ring PC is measured
+        # against a different manifest, and it is normally AHEAD of stable rather than
+        # behind it -- counting it here would make the dashboard's one actionable number
+        # permanently wrong by the size of the ring (roadmap #21).
+        if (version and latest_agent
+                and not channels.is_override(row.get("update_channel"))
+                and cmp_versions(version, AGENT_TRAIN_MIN_VERSION) >= 0):
             if cmp_versions(latest_agent, version) > 0:
                 counts["agents_outdated"] += 1
 
@@ -4248,6 +4445,94 @@ def put_machine_primary_sensor(machine):
     return jsonify({"status": "saved", "primary_sensor_name": applied})
 
 
+@app.route('/api/machines/<machine>/channel', methods=['GET'])
+@login_required
+@access.require_machine(permissions.VIEW)
+def get_machine_channel(machine):
+    """Which channel this machine is on, and whether it is running ahead of stable.
+
+    Gated on VIEW while the PUT below needs MANAGE_SETTINGS, the same split the patches page
+    uses: which train a PC is on is inventory, and hiding it would mean the people most
+    likely to notice a machine that stopped updating are the ones who cannot see why.
+
+    `ahead_of_stable` is the whole reason this endpoint returns more than a name. A machine
+    moved off beta keeps its build and stops updating until stable catches up -- correct, and
+    indistinguishable from a broken agent unless something says so.
+    """
+    machine_name = str(machine).strip()
+    override = machine_channel_override(machine_name)
+    effective = agent_channel_for(machine_name)
+    stable_latest = get_latest_agent_version(channels.STABLE)
+    with get_db_conn() as conn:
+        row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
+                           (machine_name,)).fetchone()
+    running = (row["companion_version"] if row else None) or None
+    return jsonify({
+        "machine": machine_name,
+        "channel": override,
+        "effective_channel": effective,
+        "pinned": channels.is_override(override),
+        "channels": [
+            {"name": name,
+             "label": i18n.translate(f"{channels.CHANNEL_TEXT_KEY}.{name}.label"),
+             "description": i18n.translate(f"{channels.CHANNEL_TEXT_KEY}.{name}.description")}
+            for name in channels.CHANNELS
+        ],
+        "can_manage": access.can(permissions.MANAGE_SETTINGS),
+        "latest_version": get_latest_agent_version(effective),
+        "latest_stable_version": stable_latest,
+        "running_version": running,
+        "ahead_of_stable": bool(running and stable_latest
+                                and cmp_versions(running, stable_latest) > 0),
+    })
+
+
+@app.route('/api/machines/<machine>/channel', methods=['PUT'])
+@login_required
+@access.require_machine(permissions.MANAGE_SETTINGS)
+def put_machine_channel(machine):
+    """Pin this machine to a release channel, or clear the pin (null/empty) to follow the
+    fleet default (roadmap #21).
+
+    Audited at SECURITY level rather than notice, unlike the primary-sensor pin next door.
+    That is not caution for its own sake: this decides which signed build runs as SYSTEM on
+    that PC, which is the same class of event as issuing a command or creating a deployment.
+
+    Note what this does NOT do. Moving a machine back to stable does not roll anything back
+    -- every updater here installs only what is strictly newer, so the machine keeps the
+    build it has and simply stops updating until stable catches up. The response says which
+    channel it is on and whether it is currently ahead, so the console can tell an operator
+    that rather than leaving them to notice a PC that stopped updating.
+    """
+    machine_name = str(machine).strip()
+    # silent=True, never force=True -- same CSRF reasoning as fleet_web/settings_web.
+    data = request.get_json(silent=True) or {}
+    wanted = data.get("channel")
+    if wanted is not None and not isinstance(wanted, str):
+        return jsonify({"error": "channel must be a string or null"}), 400
+    if channels.is_override(wanted) and channels.normalize(wanted) != str(wanted).strip().lower():
+        # Refused rather than silently normalised: an operator who typed a channel this hub
+        # does not have should be told, not quietly put on stable.
+        return jsonify({"error": f"Unknown release channel: {wanted!r}."}), 400
+
+    applied = set_machine_channel_override(machine_name, wanted)
+    effective = agent_channel_for(machine_name)
+    fleet.audit(DB_PATH, permissions_web.current_actor(),
+                "machine.update_channel", machine_name,
+                {"to": applied or "inherit", "effective": effective},
+                level=fleet.LEVEL_SECURITY)
+    return jsonify({
+        "status": "saved",
+        "channel": applied,
+        "effective_channel": effective,
+        "pinned": channels.is_override(applied),
+        # What that channel currently offers, so the page can say "ahead of stable" without
+        # a second request. None when the manifest has never been read.
+        "latest_version": get_latest_agent_version(effective),
+        "latest_stable_version": get_latest_agent_version(channels.STABLE),
+    })
+
+
 @app.route('/api/machines/<machine>', methods=['DELETE'])
 @login_required
 @access.require_machine(permissions.MANAGE_SETTINGS)
@@ -4270,6 +4555,11 @@ def delete_machine(machine):
     # And drop its deployment targets, so a deploy isn't left stuck at 9/10 waiting on a
     # machine whose command rows fleet.delete_machine has just removed.
     packages.forget_machine(DB_PATH, machine_name)
+    # Drop its available-update rows and its patch-run targets, so a run isn't left stuck
+    # at 9/10. Its patch OUTCOME history deliberately SURVIVES, the way backup run history
+    # does: those rows carry the model and OS build an update succeeded or failed on, and
+    # a machine being decommissioned is not a reason to forget that a patch broke it.
+    patches.forget_machine(DB_PATH, machine_name)
     # Drop its backup configuration too. Run history and the file manifest deliberately
     # SURVIVE -- deleting a machine record does not mean its archives stopped existing,
     # and those are exactly what someone wants when the deletion turns out to be a mistake.

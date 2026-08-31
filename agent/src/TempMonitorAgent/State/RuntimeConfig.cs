@@ -46,6 +46,25 @@ public sealed record RuntimeConfig
     /// "never received any", which is what makes the first heartbeat fetch it.</summary>
     public string ConfigVersion { get; init; } = "";
 
+    /// <summary>
+    /// Which release channel this machine follows: <c>"stable"</c> or <c>"beta"</c>
+    /// (roadmap #21). A NAME, never a URL — and that distinction is the entire reason this
+    /// field is allowed to exist at all.
+    ///
+    /// <para>The type docs above forbid the hub from redirecting where the agent gets its
+    /// code. A channel name does not: <see cref="AgentConfig.UpdateManifestUrl"/> maps it
+    /// onto one of two COMPILED-IN urls, so the worst a compromised hub can do is move this
+    /// machine onto the other train — where the manifest is still signed by the same offline
+    /// release key, and the binary's sha256 is still checked against that signed value. It
+    /// cannot introduce a destination the agent did not already trust. Storing a url here
+    /// instead would trade that away, which is why <see cref="Apply"/> reads only this name
+    /// and why anything unrecognised falls back to stable.</para>
+    ///
+    /// <para>Persisted with the rest of the config so a service restart does not silently
+    /// drop a pilot machine back to stable for one heartbeat and then move it again.</para>
+    /// </summary>
+    public string Channel { get; init; } = Channels.Stable;
+
     public static RuntimeConfig Default { get; } = new();
 
     /// <summary>

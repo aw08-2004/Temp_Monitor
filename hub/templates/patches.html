@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.patches') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. Every table, the classification filter and the machine picker are built
+   by patches.js from GET /api/patches -- the classification and source vocabulary in
+   particular comes from the server rather than being duplicated here, so adding a kind to
+   patches.CLASSIFICATIONS is a single edit in Python plus its catalog entries.
+
+   The management controls are rendered by the JS behind `can_manage` from the same
+   response, NOT hidden with CSS: an operator holding only `view` should not receive an
+   Approve button they cannot use, and every endpoint re-checks the capability anyway.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('patches.heading') }}</h1>
+        <p class="stat-card__meta">
+            {{ t('patches.intro') }}
+        </p>
+    </div>
+    <div class="toolbar" id="patches-actions"></div>
+</div>
+
+{# The fleet card. Numbers only -- deliberately no "compliant %" figure: the hub knows how
+   many machines report available updates, and cannot know that a machine which has never
+   reported is fine. See patches.compliance_summary. #}
+<div class="stat-grid" id="patches-summary" style="margin-bottom: var(--space-5);"></div>
+
+{# Driven by the shared tabs.js (ARIA roles, roving tabindex, arrow keys, #hash
+   linkability, last-tab persistence), for the reason packages.html gives: rolling a
+   switcher by hand would lose all of that and be a second implementation to drift. #}
+<div class="tabs" role="tablist" aria-label="{{ t('patches.views_nav') }}" data-tabs-key="patches">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-updates"
+            aria-controls="updates-pane" aria-selected="true">{{ t('patches.tab_updates') }}</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-windows"
+            aria-controls="windows-pane" aria-selected="false" tabindex="-1">{{ t('patches.tab_windows') }}</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-runs"
+            aria-controls="runs-pane" aria-selected="false" tabindex="-1">{{ t('patches.tab_runs') }}</button>
+</div>
+
+<div class="tab-panel" id="updates-pane" role="tabpanel" aria-labelledby="tab-btn-updates"></div>
+<div class="tab-panel" id="windows-pane" role="tabpanel" aria-labelledby="tab-btn-windows" hidden></div>
+<div class="tab-panel" id="runs-pane" role="tabpanel" aria-labelledby="tab-btn-runs" hidden></div>
+
+<!-- ------------------------------------------------------ maintenance window editor -->
+<dialog class="modal" id="window-modal">
+    <form method="dialog" id="window-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="window-modal-title">{{ t('patches.window.new_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="win-name">{{ t('patches.window.name') }}</label>
+            <input class="input" id="win-name" maxlength="120" autocomplete="off"
+                   placeholder="{{ t('patches.window.name_placeholder') }}" style="width: 100%;">
+
+            <fieldset class="setting" style="border: 0; padding: 0; margin: var(--space-4) 0 0;">
+                <legend class="setting__label">{{ t('patches.window.days') }}</legend>
+                <div class="toolbar" id="win-days"></div>
+            </fieldset>
+
+            <div class="pkg-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-top: var(--space-4);">
+                <div>
+                    <label class="setting__label" for="win-start">{{ t('patches.window.start') }}</label>
+                    <input class="input" id="win-start" type="time" value="23:00" style="width: 100%;">
+                </div>
+                <div>
+                    <label class="setting__label" for="win-duration">{{ t('patches.window.duration') }}</label>
+                    <input class="input" id="win-duration" type="number" min="1" max="1440"
+                           value="240" style="width: 100%;">
+                </div>
+            </div>
+            {# Local time is the hub's, and the form says so rather than leaving an operator
+               to discover it from a run that started at the wrong hour. #}
+            <p class="setting__default" style="margin-top: var(--space-2);">{{ t('patches.window.local_time_note') }}</p>
+
+            <label class="setting__label" for="win-reboot" style="margin-top: var(--space-4);">{{ t('patches.window.reboot_policy') }}</label>
+            <select class="input" id="win-reboot" style="width: 100%;"></select>
+
+            <label class="setting__label" for="win-scope" style="margin-top: var(--space-4);">{{ t('patches.window.scope') }}</label>
+            <select class="input" id="win-scope" style="width: 100%;"></select>
+            <div id="win-machines" style="margin-top: var(--space-3);" hidden></div>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="win-cancel">{{ t('common.cancel') }}</button>
+            <button class="btn btn--primary" type="button" id="win-save">{{ t('common.save') }}</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- ------------------------------------------------------ run builder -->
+<dialog class="modal" id="run-modal">
+    <form method="dialog" id="run-form">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('patches.run.new_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="run-note">{{ t('patches.run.note') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+            <input class="input" id="run-note" maxlength="500" autocomplete="off" style="width: 100%;">
+
+            <label class="setting__label" for="run-machines" style="margin-top: var(--space-4);">{{ t('patches.run.machines') }}</label>
+            <div id="run-machines"></div>
+
+            {# The emergency switch is the one control on this page that reboots a fleet in
+               the middle of the afternoon, so it is rendered with its consequence beside it
+               rather than as a bare checkbox, and the confirmation names the machine count. #}
+            <label class="setting__label" style="margin-top: var(--space-4);">
+                <input type="checkbox" id="run-emergency"> {{ t('patches.run.emergency') }}
+            </label>
+            <p class="setting__default">{{ t('patches.run.emergency_help') }}</p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="run-cancel">{{ t('common.cancel') }}</button>
+            <button class="btn btn--primary" type="button" id="run-start">{{ t('patches.run.start') }}</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/patches.js') }}"></script>
+{% endblock %}

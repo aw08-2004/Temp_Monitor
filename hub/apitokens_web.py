@@ -33,6 +33,7 @@ import os
 from flask import Blueprint, jsonify, render_template, request, send_file
 
 import apitokens
+import channels
 import clientrelease
 import i18n
 import permissions
@@ -58,6 +59,17 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
     def _lifetime_days():
         return settings.get_int(db_path, "hub.device_token_lifetime_days") \
             or apitokens.DEFAULT_LIFETIME_DAYS
+
+    def _channel():
+        """Which client build this hub offers (roadmap #21).
+
+        Read per request rather than captured when the blueprint is built, so switching the
+        channel in Settings takes effect on the next page load instead of at the next hub
+        restart. A hub with no beta client published simply keeps serving stable's manifest
+        until one exists -- load_manifest reports "nothing published yet" for the channel it
+        was asked about, which is the honest answer rather than a silent fallback.
+        """
+        return channels.normalize(settings.get(db_path, "hub.client_update_channel"))
 
     def _grantable_names():
         """Which capabilities THIS operator could put on a device: what a device may ever
@@ -287,7 +299,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
         completely different situations, and an empty page would render them identically.
         """
         try:
-            return jsonify(clientrelease.load_manifest(code_dir)), 200
+            return jsonify(clientrelease.load_manifest(code_dir, channel=_channel())), 200
         except clientrelease.ManifestError as e:
             return refusals.refuse(e, 503)
 
@@ -301,7 +313,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
         out of date. It is served as the EXACT bytes on disk so the detached signature
         beside it still verifies -- jsonify would re-serialise them and break that.
         """
-        manifest_path, _ = clientrelease.manifest_paths(code_dir)
+        manifest_path, _ = clientrelease.manifest_paths(code_dir, _channel())
         if not os.path.exists(manifest_path):
             return jsonify({"error": "No client release has been published."}), 404
         return send_file(manifest_path, mimetype="application/json")
@@ -310,7 +322,7 @@ def create_apitokens_blueprint(db_path, login_required, access, code_dir=""):
     def raw_manifest_sig():
         """The detached signature for the above. Public for the same reason, and useless
         without the bytes it signs."""
-        _, sig_path = clientrelease.manifest_paths(code_dir)
+        _, sig_path = clientrelease.manifest_paths(code_dir, _channel())
         if not os.path.exists(sig_path):
             return jsonify({"error": "No client release has been published."}), 404
         return send_file(sig_path, mimetype="text/plain")

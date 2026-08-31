@@ -34,9 +34,11 @@ from flask import Blueprint, jsonify, request, session
 
 import backups
 import bios
+import channels
 import firmware
 import fleet
 import live
+import patches
 import permissions
 import permissions_web
 import processes
@@ -195,6 +197,35 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 wake.record_network(db_path, machine, data["network"])
             except Exception as e:
                 print(f"[wake] Could not record network inventory for {machine}: {e}")
+        # Available updates (roadmap #14). Change-only and never fatal like its neighbours,
+        # but tested with `is not None` rather than for truthiness, and that is not a style
+        # choice -- it is the whole feature.
+        #
+        # A machine with NOTHING available reports an empty list, and that report is the
+        # single most important one this endpoint receives: an update that stops being
+        # offered is the only honest evidence it installed. `if data.get("patches")` would
+        # discard exactly the payload that closes out a patch run, so a fully patched
+        # machine would sit REBOOTING until its confirm timeout and every successful run
+        # would eventually be recorded as a failure. The agent therefore sends an OBJECT
+        # ({"updates": [...]}), which stays truthy when the list inside it is empty, and
+        # this reads the key's presence rather than its contents.
+        if data.get("patches") is not None:
+            reported = data["patches"]
+            updates = reported.get("updates") if isinstance(reported, dict) else reported
+            try:
+                patches.ingest_inventory(db_path, machine, updates or [])
+            except Exception as e:
+                print(f"[patches] Could not record inventory for {machine}: {e}")
+            # ...and the same report is what CONFIRMS a patch run, immediately after the
+            # ingest above has replaced this machine's rows -- the order is load-bearing,
+            # because confirm reads exactly the absence that ingest just created. Separate
+            # try/except for the same reason as firmware's: a machine whose ingest failed
+            # may still be the one waiting to be closed out, and neither is worth a
+            # heartbeat.
+            try:
+                patches.confirm_from_inventory(db_path, machine)
+            except Exception as e:
+                print(f"[patches] Could not confirm a patch run for {machine}: {e}")
         # The process list (the machine's Processes card). The ONE payload here that is not
         # change-only, because a process list that has not changed is not a thing that
         # happens -- and unlike its neighbours it is not sent unless somebody is looking:
@@ -222,6 +253,21 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             payload["live_interval_seconds"] = live.FAST_INTERVAL_SECONDS
         except Exception as e:
             print(f"[live] Could not resolve the watch for {machine}: {e}")
+        # Which release channel this machine follows (roadmap #21). Answered on EVERY
+        # heartbeat, like the two flags above and for the same reason: this is how a machine
+        # learns it has been moved BACK to stable, which is a change nothing else would tell
+        # it about.
+        #
+        # A NAME, never a URL. The agent holds both manifest URLs compiled in and picks
+        # between them -- see channels.py's docstring and State/RuntimeConfig.cs, whose
+        # allow-list is what makes a hub unable to redirect where an agent gets its code.
+        # Sending a URL here would trade away the one control that still holds if this hub is
+        # compromised. Its own try/except, so a failure here cannot cost the watch flags.
+        try:
+            payload["update_channel"] = channels.for_machine(
+                db_path, machine, settings.get(db_path, "fleet.default_agent_channel"))
+        except Exception as e:
+            print(f"[channels] Could not resolve the channel for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])

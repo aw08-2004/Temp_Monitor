@@ -9,7 +9,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.34.0";
+    public const string Version = "3.36.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -276,9 +276,37 @@ public static class AgentConfig
     // updating with no way to push a fix. The old path works today and keeps working
     // after the rename via GitHub's redirect, so it is strictly the safer of the two.
     // Move it to the new path only in the release that follows the repo rename.
+    // BOTH channels' manifests are compiled in (roadmap #21), and the hub picks between them
+    // by NAME. That is what keeps the release trust root intact while still letting a few
+    // machines take a build early: the hub can move this machine onto the other train, but
+    // both destinations are signed by the same offline key and neither was chosen by the hub.
+    // A url from the hub would make the hub the trust root; a name cannot.
+    //
+    // Beta is the same branch with a different filename rather than a second branch, because
+    // the manifest is only ever read from `main` (see the note above) and a second live
+    // branch would multiply the ways a release can be published somewhere nothing reads.
+    public const string StableManifestUrl =
+        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json";
+    public const string BetaManifestUrl =
+        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.beta.json";
+
+    /// <summary>The manifest this machine's channel points at.
+    ///
+    /// The env override still wins, and still overrides BOTH channels: it exists so the
+    /// self-update path can be exercised against a local server, and a test server that only
+    /// answered for one channel would be a worse tool rather than a safer one.</summary>
     public static string UpdateManifestUrl =>
         Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL")
-        ?? "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json";
+        ?? ManifestUrlFor(State.RuntimeConfigStore.Current.Channel);
+
+    /// <summary>Channel name to compiled-in url. Public so a test can pin the mapping
+    /// without standing up a config store -- this is the one function in the agent where a
+    /// mistake would point a machine at the wrong train.</summary>
+    public static string ManifestUrlFor(string? channel) =>
+        State.Channels.Normalize(channel) == State.Channels.Beta
+            ? BetaManifestUrl
+            : StableManifestUrl;
+
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
 
     /// <summary>Honours FLEETHUB_NO_UPDATE, falling back to TEMP_MONITOR_NO_UPDATE.</summary>

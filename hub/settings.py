@@ -47,6 +47,7 @@ from collections import namedtuple
 # Only for LANGUAGE_CODES, so hub.default_language's choices cannot drift from the
 # catalogs actually shipped in locales/. i18n imports nothing from here, so there is no
 # cycle.
+import channels
 import i18n
 
 # ---------------------------------------------------------------- the registry
@@ -185,6 +186,22 @@ REGISTRY = (
     _s("hub.live_default_window_seconds", "hub", "int", 60, minimum=5, maximum=86400,
        unit="seconds"),
     _s("hub.auto_update", "hub", "bool", None),
+    # Release channels (roadmap #21). Three knobs, one per updater, and they are deliberately
+    # independent: a hub tracking beta while its fleet stays stable is the normal way to try a
+    # hub release, and the reverse (a pilot ring of agents against a stable hub) is the normal
+    # way to try an agent one.
+    #
+    # `hub.update_channel` selects a git REF rather than a manifest, because the hub has no
+    # manifest -- it reads HUB_VERSION out of app.py. Beta hubs track the `beta` branch. It
+    # only INSTALLS anything when hub.auto_update is on, but the sidebar update notice follows
+    # it either way: knowing a newer hub exists matters most precisely when this hub is not
+    # going to install it by itself.
+    _s("hub.update_channel", "hub", "enum", channels.DEFAULT, choices=list(channels.CHANNELS)),
+    # Which client build the Download page offers and updater.dart accepts. Lives in `hub`
+    # rather than a section of its own for the reason device_token_lifetime_days does: one
+    # knob is not a tab.
+    _s("hub.client_update_channel", "hub", "enum", channels.DEFAULT,
+       choices=list(channels.CHANNELS)),
     # Ships as AUTO, not "en". A concrete default here is indistinguishable from an admin
     # deliberately choosing English, which made i18n.resolve's Accept-Language step
     # unreachable on every untouched hub -- see the note on i18n.AUTO.
@@ -234,6 +251,18 @@ REGISTRY = (
        unit="seconds"),
     _s("fleet.command_ttl_seconds", "fleet", "int", 900, minimum=60, maximum=86400,
        unit="seconds"),
+
+    # The agent channel every machine follows unless it has been pinned to one (roadmap #21).
+    # A per-machine override lives in machine_info.update_channel, so a pilot ring is a
+    # handful of pinned rows against this default -- see channels.resolve.
+    #
+    # Deliberately NOT agent=True. This does not travel the agent_config channel: that payload
+    # is fleet-wide and content-hashed (see agent_config_version), so a per-machine value would
+    # give every machine its own hash and destroy the caching that keeps the 10-second
+    # heartbeat a two-field response. The channel rides as its own per-machine field in the
+    # heartbeat reply instead, beside processes_wanted.
+    _s("fleet.default_agent_channel", "fleet", "enum", channels.DEFAULT,
+       choices=list(channels.CHANNELS)),
 
     # Command PUSH: how long the hub may hold an agent's command request open so a command
     # issued in the meantime goes down it immediately, and how many it will hold at once.
@@ -356,6 +385,41 @@ REGISTRY = (
     _s("firmware.min_battery_percent", "firmware", "int", 30, minimum=0, maximum=100,
        unit="percent"),
 
+    # ---------------- Patch management (roadmap #14) ----------------
+    # `auto_approve_classifications` is the one knob here that changes what happens to a
+    # fleet without anybody clicking, so its choices are deliberately narrow: security and
+    # critical only, matching patches.AUTO_APPROVABLE. Drivers and feature updates are not
+    # offerable at all -- a driver is the class of update that reliably breaks hardware and
+    # a feature update is a Windows version migration, and neither is a thing to hand to a
+    # scheduler because somebody ticked a box once. It ships EMPTY: a fleet that starts
+    # auto-approving on upgrade day is not a default anybody chose.
+    #
+    # The two timeouts bound two different silences, the same way firmware's do and for the
+    # same reason. `confirm_timeout` is how long a machine may sit staged-and-restarting
+    # before the run gives up on it -- a day, because a PC switched off on Friday has not
+    # failed. The scheduler interval is slower than the deploy scheduler's 30s because a
+    # patch run waits on maintenance windows and reboots, not on a command result.
+    # Spelled out rather than imported from patches.AUTO_APPROVABLE: this module imports
+    # only i18n today, and pulling a feature module into the settings registry would invert
+    # the dependency for two strings. tests/test_patches.py asserts the two lists agree, so
+    # a classification added on one side and not the other fails a test rather than
+    # silently offering a knob that approves nothing.
+    _s("patches.auto_approve_classifications", "patches", "str_list", [],
+       choices=["security", "critical"]),
+    _s("patches.scheduler_interval_seconds", "patches", "int", 60, minimum=10,
+       maximum=3600, unit="seconds"),
+    _s("patches.confirm_timeout_seconds", "patches", "int", 24 * 3600, minimum=600,
+       maximum=7 * 86400, unit="seconds"),
+    _s("patches.default_max_attempts", "patches", "int", 3, minimum=1, maximum=10),
+    _s("patches.default_retry_backoff_seconds", "patches", "int", 900, minimum=60,
+       maximum=86400, unit="seconds"),
+    # How long a machine's reported available-update rows survive without being re-reported.
+    # Not a display preference: this table is one row per update per machine and nothing
+    # else prunes it, so a fleet that stops reporting would otherwise keep its last answer
+    # forever and show a compliance figure that has not been true for months.
+    _s("patches.inventory_retention_days", "patches", "int", 30, minimum=1, maximum=365,
+       unit="days"),
+
     # ---------------- Wake-on-LAN (roadmap #10) ----------------
     # The two timeouts bound two different silences, and they are far apart on purpose.
     # `request_ttl` is how long to keep LOOKING for an awake peer to relay through: a wake
@@ -420,7 +484,7 @@ REGISTRY = (
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "wake", "rules")
+            "directory", "firmware", "patches", "wake", "rules")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

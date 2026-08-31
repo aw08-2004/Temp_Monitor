@@ -2230,6 +2230,296 @@ transfer in flight — the panel says which stage it is at, not how far through.
 
 ---
 
+## PRD v2.0 triage   ·   2026-08-31
+
+Where items #14 and up came from. A *Product Requirements Document* v2.0 ("Advanced RMM
+Platform", dated 2026-08-28) was written against the RMM market rather than against this
+codebase, and the two disagree about what this product is. Its §3 specifies Kubernetes
+microservices, a multi-tenant control plane, a C++/Rust cross-platform daemon, gRPC, and
+Prometheus/Cortex over PostgreSQL; its §5 asks for 100,000 endpoints per cluster, a 99.99%
+SLA and SOC2 Type II at launch. FleetHub is one Flask app and a SQLite file behind a WinSW
+service, talking to a C# Windows service over an HTTPS heartbeat and a command queue. That
+is not a v2 of this; it is a different product.
+
+So the document was treated as an **idea source, not a specification**. What follows is
+what survived, and why the rest did not. The two decisions that framed the triage:
+
+- **Internal now, MSP later.** The audience is one helpdesk group, not managed-service
+  clients. Multi-tenancy, white-label reporting, per-client billing and the plugin
+  marketplace therefore drop out entirely. What is kept is the discipline of not
+  *foreclosing* tenancy: new tables carry their own owning key rather than assuming one
+  fleet, and no new code reads "the machine list" as a global.
+- **Statistics first, AI on top, and not one vendor's AI.** Every AI requirement in the PRD
+  is downstream of data this hub does not yet collect, which is why none of them is near
+  the front. When they arrive, correlation and scoring are ordinary statistics over stored
+  outcomes — explainable and testable — and any language layer above them sits behind a
+  **pluggable provider**, configured the way `authconfig.py` already makes OIDC pluggable
+  (validate / merge / to_env / redacted, plus a settings page). No provider is privileged
+  by the schema.
+
+| PRD item | Verdict |
+|---|---|
+| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
+| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
+| FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
+| FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
+| FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
+| FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
+| FR-07 Security | Encryption-key escrow → **#19**. Shadow-AI detection is cheap and lands there too: it is an inventory query, not a new channel. EDR integration is **deferred** — there is no EDR here to integrate with, and the requirement is an API shape rather than a feature. |
+| §5 NFRs | **Rejected as written.** 100k endpoints, 99.99% and SOC2 describe a hosted platform with a team behind it. The NFRs this product can actually be held to are the ones already implicit in the code: an agent that stays invisible, a heartbeat that degrades gracefully, and a hub that survives its own restart. |
+| §6 UI | Dark/light ships; mobile is **#11**, in flight. Keyboard-first is a **UX principle**, recorded here rather than tracked as a feature. |
+| §7 Integrations | **Rejected.** The outbound webhooks in `notify.py` already cover the real need. PSA sync, ITSM connectors and a plugin marketplace are all MSP-shaped. |
+| §9 KPIs | **Rejected.** "500+ community scripts on day one" and an eNPS target do not describe this. |
+
+One item below — **#15** — is not from the PRD at all.
+
+---
+
+## ✅ 14. Patch management (OS + third party)   ·   hub 1.92.0 + agent 3.35.0
+
+The largest real gap the triage found, and the one the console is most obviously missing:
+nothing here answers "is this fleet patched?". The insight that sizes it is that **patching
+is the package engine with a vendor-supplied catalog**. `packages.py` already has sources,
+sha256-pinned blobs, detection rules, multi-step recipes, a dispatch/reconcile loop,
+per-target state, cancel and retry-failures. None of that gets rebuilt; a patch run is a
+deployment whose contents came from Windows Update instead of from an operator.
+
+**Inventory is change-only on the heartbeat**, the way `BiosInventoryReporter` and
+`NicReader` already report. Two sources on the agent: the `WUApiLib` COM search interface
+for OS and driver updates, and `winget upgrade` for third-party. COM is preferred over
+`UsoClient` or the `PSWindowsUpdate` module because it returns structured results and needs
+nothing installed that is not already on the machine.
+
+**An install is confirmed by re-reading inventory after the machine comes back, never by an
+exit code.** This is the discipline `FirmwareFlasher` established and it is here for the
+same reason: a patch that reports success and did not apply is a failure that looks like a
+success, which is the direction that hurts. A run therefore stays in `rebooting` — for a
+day if need be — rather than being closed by the command result.
+
+**Approvals are fleet-wide per update; windows are per group.** Approving a KB is a
+statement about the patch, and it does not become a different patch on a different desk.
+*When* it may run is the thing that legitimately varies, so the maintenance window carries
+the scope. Auto-approval of security and critical classifications is a setting, not a
+default. **Emergency push** is a run that ignores every window, gated on a new
+`manage_patches` capability — its own toggle rather than a reuse of `deploy_packages`,
+because forcing a reboot outside an agreed window is a different thing to hand someone than
+pushing an installer inside one.
+
+Hub side is `patches.py` (`machine_patches`, `patch_approvals`, `maintenance_windows`,
+`patch_runs`, `patch_run_targets`, and a `tick()` registered beside `packages.tick`) plus
+`patches_web.py` and a Patches page. Agent side is `Patch/PatchInventoryReporter.cs` and
+`Patch/InstallPatchesExecutor.cs`.
+
+**Built so the AI half needs no schema change later.** `patch_run_targets` records machine
+model, OS build, outcome and time-to-recover from the start, so the PRD's "stability
+scoring" becomes a query over history rather than a migration. That is the whole of the AI
+preparation, and it is free.
+
+**Open parameters.** Retention for `machine_patches`, and whether a superseded update is
+deleted or tombstoned. Whether the reboot is agent-initiated inside the window or a separate
+verb.
+
+---
+
+## 📋 15. Cross-hub machine sharing
+
+Not from the PRD. A colleague running his own hub wants a second pair of eyes on his PC. He
+shares **that one machine** with another hub, granting only remote view; it appears in the
+borrower's machine list and does exactly that and nothing else. Widen the grant and it does
+more. The requirement that shapes the whole design is the negative one: the borrowing hub
+must never be able to repoint the agent — not its `HUB_URL`, not its
+`AGENT_ENROLLMENT_SECRET`.
+
+**That guarantee comes from removing the channel, not from adding a check.** An agent has
+exactly one home hub, and the borrowing hub never speaks to it: hub B calls an API on hub A,
+hub A validates the grant and queues the command on **its own** queue to **its own** agent.
+The agent is never told hub B exists. So there is no permission to get wrong and no request
+to filter — a fully compromised borrowing hub can still only ask hub A for actions inside
+the grant, and neither the hub URL nor the enrollment secret is an agent command verb in the
+first place. Both are install-time config on the machine, which is why `settings.py` refuses
+to hold secrets at all and `fleet.py` already says an agent must ignore anything that would
+redirect it.
+
+**A shared machine is never enrolled on the borrowing hub.** No row in its fleet or
+enrollment tables, excluded from its fleet-wide operations and its counts, and badged as
+borrowed everywhere it appears. It is somebody else's machine seen through a window, and the
+console should never let that blur.
+
+**`apitokens.py` is the pattern, one level up.** It already implements the hard part — *a
+token holds a SUBSET of its owner's capabilities, intersected LIVE* — along with a
+single-use expiring grant flow (`create_grant` → `redeem_grant` → `mint_token`),
+`normalize_capabilities` and revocation. A peer hub takes the device's place; the one
+addition is that a share is also scoped to a single machine. Pairing reuses that trio
+directly: hub A generates a one-time code and its URL, the operator pastes it into hub B,
+which redeems it for a long-lived peer token. Administrative capabilities are refused at
+share time, mirroring `DEVICE_FORBIDDEN_CAPABILITIES`.
+
+**Nothing rides along implicitly — the owner picks each capability.** In particular `view`
+does not travel with `remote_control`. A remote-view-only share shows a stub: hostname,
+online state, a Connect button, and no telemetry at all. `view` is its own toggle everywhere
+else in this product, and quietly bundling it here would make the smallest possible share
+bigger than "look at my screen", which is the exact case the feature exists for.
+
+**Expiry is optional per share**, because both shapes are real: a few hours for "come look at
+this", none for two hubs that habitually cooperate. Revocation is immediate and must **kill
+sessions in flight**, not merely refuse the next request. Every borrowed action is audited on
+both hubs; hub A's trail is the authoritative one and names the peer hub and the remote
+operator beside the action.
+
+**Open parameters.** Whether granted telemetry is mirrored into the borrowing hub or proxied
+live on each read. Whether one grant may cover several machines or strictly one. How a
+borrowed machine is keyed when its hostname collides with a local one. What the borrowing hub
+shows while hub A is unreachable.
+
+---
+
+## ✅ 21. Release channels — stable / beta   ·   hub 1.93.0 + agent 3.36.0
+
+Not from the PRD. Everything in this product updates from `main` and reaches everything at
+once: a signed agent manifest landing on main starts upgrading the whole fleet within about
+fifteen minutes. That is the right default and the wrong only option, because it means a
+release is tested for the first time on every endpoint simultaneously. A **beta** channel
+gives a handful of machines the build first — a fleet default plus a per-machine pin, so the
+pilot ring is a few rows rather than a second fleet.
+
+**The hub sends a channel NAME, never a URL, and that is the whole security argument.**
+`State/RuntimeConfig.cs` already forbade the hub from redirecting where an agent gets its
+code, and enforces it with an allow-list rather than a rule to remember. A name does not
+break that: the agent holds BOTH manifest URLs compiled in and the hub picks between them, so
+the worst a compromised hub can do is move a machine onto the other train — where the manifest
+is still signed by the same offline key and the binary's sha256 is still checked against that
+signed value. It cannot introduce a destination the agent did not already trust. A URL from
+the hub would have made the hub the trust root; this does not.
+
+**One increasing number sequence, shared by both channels**, because `VERSIONING.md` forbids
+suffixes and four comparators enforce it. Beta is not parallel numbering; it is where a number
+appears *first*. Two things follow, and they are what keep this feature small:
+
+- **Promotion is a file copy.** `agent.manifest.beta.json` over `agent.manifest.json`. Every
+  pilot machine is already at that version and does nothing; every stable machine updates to
+  it. Nothing is renumbered and no machine is asked to move backwards.
+- **Leaving beta does not roll anything back.** Every updater installs only what is strictly
+  newer, so a machine that took a beta keeps it and simply stops updating until stable catches
+  up — which, for a promoted beta, is immediately. Building a downgrade would have meant
+  defeating the guard that currently stops a replayed or rolled-back manifest being installed.
+  The console says "ahead of stable" instead, because a PC that quietly stops updating looks
+  broken and this is the one place an operator will be surprised.
+
+**The channel does NOT travel the `agent_config` channel**, and that is a deliberate
+departure. That payload is fleet-wide and content-hashed, so a per-machine value would give
+every machine its own hash and destroy the caching that keeps the 10-second heartbeat a
+two-field response. The channel rides as its own per-machine field in the heartbeat reply
+beside `processes_wanted`, with its own parser on the agent — the two must not be able to lose
+each other, for the reason the watch flags already document.
+
+**The hub's own channel selects a git REF rather than a manifest**, because the hub has no
+manifest: it reads `HUB_VERSION` out of `app.py`. Beta hubs track a `beta` branch. The client
+follows the agent's shape — a second signed manifest in `hub/`, which the hub's self-updater
+already mirrors wholesale.
+
+**`sign_release.py` needed no change.** It already took `--manifest`, so beta is the same
+signer, the same key and the same bytes-exact discipline writing one file over. `release.ps1`
+grew `-Channel`, which also tags the release `agent-v<version>-beta` and marks it a
+prerelease — for humans reading the releases list, since the filename is what actually decides
+who installs it. Both new manifest pairs are pinned `-text` in `.gitattributes` **before** the
+first beta is published, because a line-ending rewrite between signing and serving is
+indistinguishable from tampering.
+
+**Open parameters.** Whether an abandoned beta should expire — a machine left on one is the
+failure this design cannot see by itself. Whether the ring should become a rule rather than a
+column once it outgrows a handful. Whether `install.ps1` should take a channel, so a machine
+can be born into the ring.
+
+---
+
+## 📋 16. Event log mining
+
+Windows Event Log (Security, Application, System) ingested on the agent and correlated into
+alerts — the PRD's example, 4625 failed logons, is the right one. This is the first genuinely
+**high-volume** channel this product would carry, and that is the whole design problem: a
+SQLite hub cannot hold raw logs for a fleet, so filtering happens **on the machine**, against
+an operator-defined set of event IDs and levels, and only matches travel. Retention is decided
+before the first row is written, not after.
+
+Its real value is as an input to #17, which is why it comes first.
+
+**Open parameters.** Push on the heartbeat or a dedicated channel. Whether a rule can be
+written against an event directly, or only against a counter derived from one.
+
+---
+
+## 📋 17. Alert correlation and recommended fixes
+
+The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
+**one** bundle, not three alerts. The substrate is already here — `alerts.py` keeps episodes,
+`rules.py` keeps `rule_fires` — so this is grouping over data that exists, plus the two new
+inputs from #14 and #16 that make the grouping worth doing.
+
+**Correlation is deterministic before it is anything else**: same machine, overlapping episode
+windows, known causal pairs (a full disk, and the service that then failed to write). That is
+a rule set and a time window, it is testable, and it never invents a cause. Only the *wording*
+on top — a recommended fix, a suggested script — goes to a language model, behind a
+**pluggable provider** with no vendor privileged in the schema, off by default, and with the
+PRD's own mitigation kept: a suggested script is drafted into the existing script library for
+a human to run, never executed from the suggestion.
+
+Anomaly baselining (FR-02) lands here too, and for the same reason: a per-machine baseline is
+a statistic over the history table, not a model.
+
+**Open parameters.** How much reduction is worth claiming (the PRD's 75% is a marketing
+number, not a target). Whether a bundle is a first-class row or a view over alerts.
+
+---
+
+## 📋 18. Network discovery and shadow IT
+
+The half of FR-01 that #4 does not cover: an IP-range sweep from an agent already on that
+subnet — the same peer-relay trick #10 uses for Wake-on-LAN, since the hub is usually not on
+the network it is being asked about — plus an Intune/Azure device cross-reference, and a flag
+for anything on the wire that no hub knows about.
+
+Lower priority than it looks. On a fleet where enrollment is driven by MDM the answer is
+usually "nothing", and a discovery sweep is a scanner pointed at a colleague's network.
+
+**Open parameters.** Whether discovery is scheduled or on demand. What a discovered-but-not-
+managed device is allowed to become without someone approving it.
+
+---
+
+## 📋 19. Endpoint security odds and ends
+
+Three small things from FR-06 and FR-07 that share no code but are each about a day:
+
+- **BitLocker key escrow.** Auto-enable, and escrow the recovery key into the
+  master-key-wrapped secret store `backups.py` already provides and the BIOS setup password
+  already uses. The custody warning that applies to `BACKUP_MASTER_KEY` applies double here.
+- **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
+  inventory already collects, plus a policy list — no new channel, and worth being honest in
+  the UI that a policy list is not an enforcement.
+- **Remote session recording.** Video and keystroke capture for the audit trail, stored
+  outside the hub DB. The one with real cost, and the one with a real question attached:
+  recording a colleague's screen is a decision to take deliberately, not a default to leave
+  on.
+
+---
+
+## 📋 20. Self-healing watchdogs
+
+FR-04's watchdogs: a service stops, the agent restarts it inside two minutes, and only an
+escalation reaches a human. A thin layer over the rules engine rather than a new one — a rule
+already has a condition and an action, and `validate_actions` already refuses to let someone
+who may raise an alert also issue a command.
+
+What it adds is **local evaluation**: today a rule is evaluated hub-side on reported data,
+which is the wrong latency for "restart this within two minutes" and useless if the machine is
+briefly offline. A watchdog is a small rule the agent holds and runs itself.
+
+**Open parameters.** Flap protection — how many restarts in what window before it stops and
+escalates instead. Whether a locally held watchdog is authored separately, or is an ordinary
+rule marked for local evaluation.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
@@ -2317,6 +2607,38 @@ transfer in flight — the panel says which stage it is at, not how far through.
     retention thread that already prunes the process and live watches. **The agent half is
     pending a signed release**; until then the tab names the version it needs (3.33.0)
     instead of failing every click on a fleet that has not updated.
+14. ~~**#14 Patch management**~~ — done, hub 1.92.0 + agent 3.35.0. The first item off the
+    PRD v2.0 triage, and the largest real gap it found. Ordered first among the new items
+    because two of the others depend on it: #17 has little to correlate without patch
+    outcomes, and the PRD's stability scoring is a query over `patch_run_items` that only
+    exists once patch runs do. It had no prerequisite of its own — `packages.py` was already
+    the engine, and this is that engine pointed at a vendor catalogue. The one thing that
+    could not be reused is the completion model: an install is confirmed by the machine
+    coming back and no longer offering the update, which is `firmware.py`'s discipline rather
+    than the package scheduler's exit code. **The agent half needs a signed release** before
+    any of it reaches the fleet, and the hub must be deployed FIRST — a 3.35.0 agent talking
+    to a 1.91.0 hub simply has its patch inventory ignored, which is harmless, but the
+    reverse order leaves the console offering a feature no machine answers.
+15. **#15 Cross-hub machine sharing** — not from the PRD; asked for directly. Independent of
+    everything above, so its position is a priority call rather than a dependency. Its
+    prerequisite is #Foundation and #11's device tokens: a peer hub holds a SUBSET of a
+    capability set intersected live, which is only meaningful because permission groups
+    exist and `apitokens.py` already built exactly that mechanism for devices.
+16. **#16 Event log mining** — before #17, because it is one of the two inputs that make
+    correlation worth doing. Its own risk is volume rather than mechanism, and that risk is
+    settled by filtering on the machine instead of shipping raw logs to a SQLite hub.
+17. **#17 Alert correlation and recommended fixes** — after #14 and #16 by dependency, not by
+    preference. The deterministic half can be built the day both land; the language layer
+    above it is gated on a pluggable AI provider that does not exist yet, and that provider
+    is the one piece of new plumbing this item introduces.
+18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
+    MDM-driven fleet. Sequenced late for that reason rather than for difficulty.
+19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
+    forward on its own if a need appears. BitLocker escrow reuses the `backups.py` secret
+    store and is the smallest genuinely useful thing on this list.
+20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
+    engine to grow a second evaluation site (on the agent), and that is a bigger change to a
+    working feature than any of the above make.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
@@ -2326,9 +2648,17 @@ transfer in flight — the panel says which stage it is at, not how far through.
 > 1.63.0). #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0), which is an
 > extension of a done feature rather than a new board item.
 >
-> **#11 is the first item on this board that is not finished.** Its hub half is built and
-> tested (1.69.0) and its client passes its own tests, but no Windows binary has been
-> produced, so the app has never actually run. Everything else is done except the
+> **#14 through #20 came from the PRD v2.0 triage above; #14 is built and the rest are not.**
+> That
+> section is new as of 2026-08-31 and is the first time this board has grown by more than
+> one item at once; read it before the entries, because it records which PRD requirements
+> were rejected and why, and several of the loudest ones were. #15 is the exception on that
+> block — it is not from the PRD at all.
+>
+> **Of the items predating the triage, #11 is the one that is not finished.** Its hub half
+> is built and tested (1.69.0), its client passes its own tests, and the Windows binary has
+> since been built, signed and published as client 1.0.0 — what remains is that it has
+> never talked to a hub. Everything else predating the triage is done except the
 > opportunistic remainder of #3.
 >
 > What is otherwise outstanding is not a feature but a release — two of them now: the agent

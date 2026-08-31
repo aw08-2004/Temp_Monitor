@@ -159,6 +159,11 @@ try
     // either as the signed-in user on their own desktop or as SYSTEM with no desktop at all.
     // The operator names which; see OpenItemExecutor for why that is not a default.
     builder.Services.AddSingleton<ICommandExecutor, OpenItemExecutor>();
+    // Patch installs (roadmap #14). Note what this executor does NOT do: it never reports an
+    // update as installed. It stages what it can and asks for a restart; the hub decides the
+    // outcome later by observing that the machine has stopped offering the update. See
+    // InstallPatchesExecutor and hub/patches.py confirm_from_inventory.
+    builder.Services.AddSingleton<ICommandExecutor, TempMonitorAgent.Patch.InstallPatchesExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-update

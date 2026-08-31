@@ -73,6 +73,18 @@ MANAGE_BACKUPS = "manage_backups"
 # shipped, to everyone who already had that. READING the firmware inventory is deliberately
 # NOT gated here -- that is VIEW, like a machine's model or its disks.
 MANAGE_FIRMWARE = "manage_firmware"
+# Approving patches, scheduling maintenance windows, and pushing a run outside one. Its own
+# toggle rather than a reuse of DEPLOY_PACKAGES, because the two differ on the thing that
+# actually costs somebody their afternoon: a package install happens when an operator aims
+# it, while an approved patch reboots a machine on a schedule nobody is watching -- and an
+# emergency push does it immediately, in the middle of the working day. Folding it into
+# "can push an installer" would have handed that silently, on the day it shipped, to
+# everyone who already had that.
+#
+# READING patch inventory and compliance is deliberately NOT gated here -- that is VIEW,
+# like a machine's disks or its BIOS version. Knowing a PC is missing a security update is
+# not a privilege; deciding what happens about it is.
+MANAGE_PATCHES = "manage_patches"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -96,6 +108,7 @@ CAPABILITIES = (
     DEPLOY_PACKAGES,
     MANAGE_BACKUPS,
     MANAGE_FIRMWARE,
+    MANAGE_PATCHES,
     MANAGE_RULES,
     MANAGE_SETTINGS,
     MANAGE_USERS,

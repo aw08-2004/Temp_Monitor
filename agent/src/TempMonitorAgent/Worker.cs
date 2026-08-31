@@ -343,6 +343,10 @@ public sealed class Worker : BackgroundService
                 TempMonitorAgent.Remote.RemoteInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Bios.BiosInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Network.NetworkInventoryReporter.RefreshIfDue();
+                // Available updates (roadmap #14). The slowest scan on this loop by far --
+                // a Windows Update search contacts WSUS and winget refreshes its sources --
+                // which is exactly why it is here and not on the heartbeat path.
+                TempMonitorAgent.Patch.PatchInventoryReporter.RefreshIfDue();
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
 

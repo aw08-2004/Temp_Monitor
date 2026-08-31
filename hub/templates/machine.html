@@ -101,6 +101,17 @@
         <div class="card stat-card">
             <div class="stat-card__label">{{ t('machine.companion_version') }}</div>
             <div class="stat-card__value" id="stat-version">{{ t('machine.unknown') }}</div>
+            {# Release channel (roadmap #21). The picker is only rendered for an operator who
+               may change it -- machine.js builds it from /api/machines/<m>/channel's answer.
+               `stat-channel-note` is where "ahead of stable" lands: a machine that took a
+               beta and was moved back keeps its build and stops updating, and without saying
+               so here it simply looks like a PC that stopped updating. #}
+            <div class="stat-card__meta" id="stat-channel">{{ t('machine.channel', value=t('machine.unknown')) }}</div>
+            <div class="stat-card__meta" id="stat-channel-note" hidden></div>
+            <div id="channel-picker" hidden style="margin-top: var(--space-2);">
+                <label class="setting__label" for="channel-select">{{ t('machine.channel_pin') }}</label>
+                <select class="input" id="channel-select" style="width: 100%;"></select>
+            </div>
         </div>
         <div class="card stat-card identity-block">
             <div class="stat-card__label">{{ t('machine.identity') }}</div>
