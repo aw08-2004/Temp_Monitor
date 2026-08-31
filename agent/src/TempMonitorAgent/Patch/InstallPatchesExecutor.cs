@@ -78,12 +78,7 @@ public sealed class InstallPatchesExecutor(ILogger<InstallPatchesExecutor> log) 
             return CommandResult.Ok(string.Join(Environment.NewLine, lines));
         }
 
-        var shouldRestart = policy switch
-        {
-            "always" => true,
-            "never" => false,
-            _ => outcome.RebootRequired,
-        };
+        var shouldRestart = ShouldRestart(policy, outcome.RebootRequired);
 
         if (shouldRestart)
         {
@@ -117,6 +112,26 @@ public sealed class InstallPatchesExecutor(ILogger<InstallPatchesExecutor> log) 
 
         return CommandResult.Ok(string.Join(Environment.NewLine, lines));
     }
+
+    /// <summary>Whether to restart, given the window's policy and what the install reported.
+    ///
+    /// <para>Extracted so it can be tested: this is the decision that finishes an install, and
+    /// getting it wrong is silent in both directions. Deciding NOT to restart when one is owed
+    /// leaves updates staged forever and the hub waiting out its confirm timeout on a machine
+    /// that was never going to come back; deciding TO restart when none is needed reboots
+    /// somebody's PC for nothing.</para>
+    ///
+    /// <para>An unrecognised policy falls through to <c>if_required</c> rather than to always
+    /// or never, matching the hub's own default -- a garbled value must not silently turn a
+    /// fleet's restarts on or off.</para>
+    /// </summary>
+    internal static bool ShouldRestart(string? policy, bool rebootRequired) =>
+        policy?.Trim().ToLowerInvariant() switch
+        {
+            "always" => true,
+            "never" => false,
+            _ => rebootRequired,
+        };
 
     /// <summary>The `uids` array from the command params. Tolerant of a malformed entry for the
     /// same reason the hub's parse_report is: one bad element must not cost the other twelve.</summary>

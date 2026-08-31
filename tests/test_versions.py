@@ -567,12 +567,122 @@ def test_version_format_policy():
     check("README points at it", "VERSIONING.md" in read("README.md"))
 
 
+def test_channel_wiring():
+    """The app.py half of release channels (roadmap #21).
+
+    tests/test_channels.py covers channels.py's pure resolution thoroughly; none of it
+    proves app.py actually WIRED that resolution to anything. These are the three seams
+    where a mistake would be silent: a pilot machine advertised the wrong version, a pinned
+    machine dragging the dashboard's outdated count, and the endpoint that moves a machine
+    between trains.
+    """
+    print("\n-- channels: /api/report advertises per machine --")
+    set_agent_version("3.35.0", beta="3.36.0")
+    app.set_machine_channel_override("chan-beta-box", app.channels.BETA)
+    app.set_machine_channel_override("chan-stable-box", None)
+
+    # The failure this catches: get_advertised_version ignoring the machine and answering
+    # for the fleet, so a pilot machine is told about a version its own updater will not
+    # install -- or worse, is never told about the one it will.
+    check("a pinned beta machine is advertised the beta build",
+          app.get_advertised_version("3.34.0", "chan-beta-box") == "3.36.0")
+    check("an unpinned machine is advertised stable",
+          app.get_advertised_version("3.34.0", "chan-stable-box") == "3.35.0")
+    check("a machine nobody has heard of follows the fleet default",
+          app.get_advertised_version("3.34.0", "never-seen-box") == "3.35.0")
+    check("no machine at all still answers for the fleet",
+          app.get_advertised_version("3.34.0") == "3.35.0")
+    check("a pre-agent client is still served nothing, whatever its channel",
+          app.get_advertised_version("2.8.0", "chan-beta-box") is None)
+
+    client = app.app.test_client()
+    body = client.post("/api/report", json={
+        "machine": "chan-beta-box", "temp": 42.0, "companion_version": "3.34.0",
+    }).get_json()
+    check("the report endpoint carries the machine's own channel through",
+          body.get("latest_version") == "3.36.0")
+
+    print("\n-- channels: a pinned machine is not 'outdated' --")
+    # A pilot machine is measured against a different manifest and is normally AHEAD of
+    # stable. Counting it would make the dashboard's one actionable number permanently wrong
+    # by the size of the ring.
+    app.save_machine_info("chan-beta-box", None, None, None, companion_version="3.34.0")
+    app.save_machine_info("chan-stable-box", None, None, None, companion_version="3.34.0")
+
+    check("signed out -> the channel endpoint is not served",
+          client.get("/api/machines/chan-beta-box/channel").status_code != 200)
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": "tester@example.com"}
+
+    def outdated_count():
+        # Through the endpoint rather than _build_fleet_summary directly: the summary
+        # narrows rows to the caller's scope and so needs a request context, and going in
+        # the front door is what the dashboard actually does.
+        # The summary is cached per scope for a few seconds; clear it so the two reads
+        # below actually re-count rather than returning the same cached answer twice.
+        app._fleet_summary_cache.clear()
+        return client.get("/api/fleet/summary").get_json()["counts"]["agents_outdated"]
+
+    app.set_machine_channel_override("chan-beta-box", app.channels.BETA)
+    pinned = outdated_count()
+    app.set_machine_channel_override("chan-beta-box", None)
+    unpinned = outdated_count()
+    check("pinning a machine removes it from the outdated count", unpinned == pinned + 1)
+
+    print("\n-- channels: GET/PUT /api/machines/<machine>/channel --")
+
+    doc = client.get("/api/machines/chan-beta-box/channel").get_json()
+    check("an unpinned machine reads as inheriting", doc["pinned"] is False)
+    check("...on the fleet default", doc["effective_channel"] == app.channels.STABLE)
+    check("the vocabulary is served with labels, not keys",
+          [c["name"] for c in doc["channels"]] == list(app.channels.CHANNELS)
+          and doc["channels"][0]["label"] != app.channels.STABLE)
+
+    resp = client.put("/api/machines/chan-beta-box/channel",
+                      json={"channel": app.channels.BETA})
+    check("pinning a machine -> 200", resp.status_code == 200)
+    check("the pin took", resp.get_json()["effective_channel"] == app.channels.BETA)
+    check("...and reads back", client.get("/api/machines/chan-beta-box/channel")
+          .get_json()["pinned"] is True)
+    # An unknown channel is refused rather than silently normalised to stable: an operator
+    # who typed one this hub does not have should be told, not quietly moved.
+    check("an unknown channel is refused",
+          client.put("/api/machines/chan-beta-box/channel",
+                     json={"channel": "nightly"}).status_code == 400)
+    check("a non-string channel is refused",
+          client.put("/api/machines/chan-beta-box/channel",
+                     json={"channel": 7}).status_code == 400)
+    check("the bad writes did not disturb the pin",
+          client.get("/api/machines/chan-beta-box/channel").get_json()["pinned"] is True)
+
+    resp = client.put("/api/machines/chan-beta-box/channel", json={"channel": None})
+    check("clearing the pin -> 200", resp.status_code == 200)
+    check("...returns it to the fleet", resp.get_json()["pinned"] is False)
+
+    print("\n-- channels: ahead of stable is reported, not hidden --")
+    # The visible face of "leaving beta does not roll back". Without it, a machine that
+    # deliberately stopped updating is indistinguishable from a broken one.
+    app.save_machine_info("chan-ahead-box", None, None, None, companion_version="3.36.0")
+    doc = client.get("/api/machines/chan-ahead-box/channel").get_json()
+    check("a machine past stable is flagged ahead", doc["ahead_of_stable"] is True)
+    check("...and says what stable is on", doc["latest_stable_version"] == "3.35.0")
+    app.save_machine_info("chan-behind-box", None, None, None, companion_version="3.34.0")
+    check("a machine behind stable is not flagged ahead",
+          client.get("/api/machines/chan-behind-box/channel")
+          .get_json()["ahead_of_stable"] is False)
+
+    print("\n-- channels: the hub's own train picks a git ref --")
+    check("a stable hub reads main", "/main/hub/app.py" in app.hub_source_url())
+    check("...and archives main", app.hub_archive_url().endswith("/refs/heads/main"))
+
+
 if __name__ == "__main__":
     test_version_compare()
     test_pre_agent_clients_get_nothing()
     test_agent_train()
     test_unknown_train()
     test_report_endpoint()
+    test_channel_wiring()
     test_hub_self_update()
     test_hub_update_notice()
     test_hub_update_notice_hides()

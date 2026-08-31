@@ -236,6 +236,39 @@ Name    Id    Version    Available    Source
         Assert.False(WindowsUpdateApi.RebootBehaviour(null));
     }
 
+    // ---- the reboot decision -------------------------------------------------------------
+
+    [Fact]
+    public void If_required_follows_what_the_install_reported()
+    {
+        // The default policy, and the one that ties the exit-code fix below to an actual
+        // restart: a winget package that exited 3010 must end with a reboot scheduled, or the
+        // update stays staged and the hub waits out its confirm timeout on a machine that was
+        // never going to come back.
+        Assert.True(InstallPatchesExecutor.ShouldRestart("if_required", true));
+        Assert.False(InstallPatchesExecutor.ShouldRestart("if_required", false));
+    }
+
+    [Fact]
+    public void Always_and_never_override_what_the_install_reported()
+    {
+        Assert.True(InstallPatchesExecutor.ShouldRestart("always", false));
+        Assert.False(InstallPatchesExecutor.ShouldRestart("never", true));
+    }
+
+    [Fact]
+    public void An_unrecognised_policy_falls_back_to_if_required()
+    {
+        // Not to always, and not to never. A garbled policy must not silently turn a fleet's
+        // restarts on (rebooting PCs nobody asked to reboot) or off (updates that never
+        // finish), so it lands on the same answer the hub defaults to.
+        Assert.True(InstallPatchesExecutor.ShouldRestart("nonsense", true));
+        Assert.False(InstallPatchesExecutor.ShouldRestart("nonsense", false));
+        Assert.True(InstallPatchesExecutor.ShouldRestart(null, true));
+        Assert.False(InstallPatchesExecutor.ShouldRestart("", false));
+        Assert.True(InstallPatchesExecutor.ShouldRestart("  ALWAYS  ", false));
+    }
+
     // ---- winget exit codes and package ids ----------------------------------------------
 
     [Fact]
