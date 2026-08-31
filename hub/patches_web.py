@@ -123,6 +123,56 @@ def create_patches_blueprint(db_path, login_required, access):
                              if len(denied) > 1 else ".")), 403
         return names, None, 200
 
+    def _scoped_run(run_id):
+        """Check a whole run is within the caller's scope before acting on it.
+
+        Returns (run, error, status). ALL-OR-NOTHING, exactly like _scoped_targets and for
+        the sharper version of the same reason: cancel and retry act on every target at once,
+        so an operator who may reach nine of ten machines must not be able to cancel a run
+        that also touches the tenth. Without this, a `manage_patches` holder scoped to one
+        machine could enumerate run ids and then cancel a patch night -- or force a
+        reboot-retry -- on machines they cannot see anywhere else in the product.
+
+        Refused rather than narrowed, unlike the reads: there is no partial cancel here, and
+        silently applying a whole-run action to only part of it would be a worse answer than
+        saying no.
+        """
+        run = patches.get_run(db_path, run_id, with_targets=False)
+        if run is None:
+            return None, "That patch run no longer exists.", 404
+        denied = [m for m in patches.run_machines(db_path, run_id)
+                  if not access.in_scope(m)]
+        if denied:
+            return None, (f"This run also targets {denied[0]!r}"
+                          + (f" and {len(denied) - 1} other machine(s)"
+                             if len(denied) > 1 else "")
+                          + ", which you do not have access to."), 403
+        return run, None, 200
+
+    def _scoped_window_machines(scope_kind, machines):
+        """Check a maintenance window only reaches machines the caller can act on.
+
+        A window decides WHEN patches install and when machines restart, so an unscoped one
+        is a fleet-wide write. `all` is therefore refused for a scoped operator outright --
+        there is no honest way to narrow "every machine" to a subset and still call it the
+        same window -- and a named list is checked host by host.
+
+        Returns (error, status) or (None, 200).
+        """
+        if access.machine_filter() is None:
+            return None, 200          # unrestricted: every window is within reach
+        if scope_kind == patches.SCOPE_ALL:
+            return ("A window covering every machine can only be created by an operator "
+                    "whose access is not limited to specific machines. Name the machines "
+                    "instead."), 403
+        denied = [str(m or "").strip() for m in (machines or ())
+                  if str(m or "").strip() and not access.in_scope(str(m).strip())]
+        if denied:
+            return (f"You do not have access to {denied[0]!r}"
+                    + (f" and {len(denied) - 1} other machine(s)."
+                       if len(denied) > 1 else ".")), 403
+        return None, 200
+
     def _body():
         return request.get_json(silent=True) or {}
 
@@ -219,6 +269,10 @@ def create_patches_blueprint(db_path, login_required, access):
     @can_manage
     def create_window():
         data = _body()
+        error, status = _scoped_window_machines(
+            data.get("scope_kind") or patches.SCOPE_ALL, data.get("machines"))
+        if error:
+            return jsonify({"error": error}), status
         try:
             window_id = patches.create_window(
                 db_path, actor=_current_email(),
@@ -240,6 +294,18 @@ def create_patches_blueprint(db_path, login_required, access):
     @can_manage
     def update_window(window_id):
         data = _body()
+        existing = patches.get_window(db_path, window_id)
+        if existing is None:
+            return jsonify({"error": "That maintenance window no longer exists."}), 404
+        # Both ends are checked: the window as it will BE, and the window as it IS. Checking
+        # only the new values would let a scoped operator narrow somebody else's fleet-wide
+        # window down to their own machines -- an edit they could not have made from scratch.
+        for kind, hosts in ((data.get("scope_kind") or existing["scope_kind"],
+                             data.get("machines", existing["machines"])),
+                            (existing["scope_kind"], existing["machines"])):
+            error, status = _scoped_window_machines(kind, hosts)
+            if error:
+                return jsonify({"error": error}), status
         fields = {k: data[k] for k in
                   ("name", "days_mask", "start_minute", "duration_minutes",
                    "scope_kind", "machines", "reboot_policy") if k in data}
@@ -256,6 +322,14 @@ def create_patches_blueprint(db_path, login_required, access):
     @login_required
     @can_manage
     def delete_window(window_id):
+        existing = patches.get_window(db_path, window_id)
+        if existing is None:
+            return jsonify({"error": "That maintenance window no longer exists."}), 404
+        # Deleting a window changes when patches install for every machine it covers, so it
+        # needs the same reach as creating one. Checked BEFORE the delete, not after.
+        error, status = _scoped_window_machines(existing["scope_kind"], existing["machines"])
+        if error:
+            return jsonify({"error": error}), status
         if not patches.delete_window(db_path, window_id):
             return jsonify({"error": "That maintenance window no longer exists."}), 404
         fleet.audit(db_path, actor=_current_email(), action="delete_maintenance_window",
@@ -267,7 +341,12 @@ def create_patches_blueprint(db_path, login_required, access):
     @login_required
     @can_view
     def list_runs():
-        runs = patches.list_runs(db_path, limit=int(request.args.get("limit", 100)))
+        # Narrowed to runs touching a machine the caller could have acted on, matching what
+        # the module docstring promises and what get_run already does to its target rows.
+        # Unnarrowed this is the enumeration surface a scoped operator would use to find run
+        # ids for machines they cannot see.
+        runs = patches.list_runs(db_path, limit=int(request.args.get("limit", 100)),
+                                 machines=_read_scope())
         return jsonify({"runs": runs}), 200
 
     @bp.route("/api/patches/runs/<run_id>", methods=["GET"])
@@ -330,8 +409,9 @@ def create_patches_blueprint(db_path, login_required, access):
     @login_required
     @can_manage
     def cancel_run(run_id):
-        if patches.get_run(db_path, run_id, with_targets=False) is None:
-            return jsonify({"error": "That patch run no longer exists."}), 404
+        _, error, status = _scoped_run(run_id)
+        if error:
+            return jsonify({"error": error}), status
         recalled = patches.cancel_run(db_path, run_id, actor=_current_email())
         fleet.audit(db_path, actor=_current_email(), action="cancel_patch_run",
                     level=fleet.LEVEL_NOTICE,
@@ -346,8 +426,9 @@ def create_patches_blueprint(db_path, login_required, access):
     @login_required
     @can_manage
     def retry_run(run_id):
-        if patches.get_run(db_path, run_id, with_targets=False) is None:
-            return jsonify({"error": "That patch run no longer exists."}), 404
+        _, error, status = _scoped_run(run_id)
+        if error:
+            return jsonify({"error": error}), status
         rearmed = patches.retry_failures(db_path, run_id, actor=_current_email())
         fleet.audit(db_path, actor=_current_email(), action="retry_patch_run",
                     level=fleet.LEVEL_SECURITY,

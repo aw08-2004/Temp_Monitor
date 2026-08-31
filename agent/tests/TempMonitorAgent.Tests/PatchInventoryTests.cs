@@ -236,6 +236,81 @@ Name    Id    Version    Available    Source
         Assert.False(WindowsUpdateApi.RebootBehaviour(null));
     }
 
+    // ---- winget exit codes and package ids ----------------------------------------------
+
+    [Fact]
+    public void Reboot_required_is_a_successful_install()
+    {
+        // 3010 is ERROR_SUCCESS_REBOOT_REQUIRED and winget passes the wrapped installer's
+        // code through unchanged. Treating it as failure marks a package that installed
+        // perfectly as failed and spends a retry on a machine with nothing wrong with it --
+        // the same trap packages.DEFAULT_SUCCESS_EXIT_CODES documents on the hub side.
+        Assert.Contains(0, PatchInstaller.WingetSuccessCodes);
+        Assert.Contains(3010, PatchInstaller.WingetSuccessCodes);
+        Assert.Contains(1641, PatchInstaller.WingetSuccessCodes);
+        Assert.DoesNotContain(1, PatchInstaller.WingetSuccessCodes);
+    }
+
+    [Fact]
+    public void The_codes_that_mean_success_and_the_ones_that_owe_a_restart_are_not_the_same()
+    {
+        // "it worked" and "it needs a reboot to finish" are different facts, and the
+        // executor's if_required policy reads only the second. A winget-only batch whose
+        // reboot never propagated would sit half-applied with nothing scheduling the restart.
+        Assert.Contains(3010, PatchInstaller.WingetRebootCodes);
+        Assert.Contains(1641, PatchInstaller.WingetRebootCodes);
+        Assert.DoesNotContain(0, PatchInstaller.WingetRebootCodes);
+        Assert.True(PatchInstaller.WingetRebootCodes
+                        .IsSubsetOf(PatchInstaller.WingetSuccessCodes),
+                    "a code that owes a restart must also count as an install");
+    }
+
+    [Fact]
+    public void Real_package_ids_are_accepted()
+    {
+        Assert.True(WingetPackageId.IsSafe("Mozilla.Firefox"));
+        Assert.True(WingetPackageId.IsSafe("7zip.7zip"));
+        Assert.True(WingetPackageId.IsSafe("Notepad++.Notepad++"));
+        Assert.True(WingetPackageId.IsSafe("Microsoft.VCRedist.2015+.x64"));
+        Assert.True(WingetPackageId.IsSafe("Some-Vendor_Thing.1"));
+    }
+
+    [Fact]
+    public void Anything_that_could_reach_a_command_line_is_refused()
+    {
+        // This value is reflected text from an external tool and ends up in a command line,
+        // so the guard is an allow-list rather than an escape -- the bug class
+        // Files/OpenItemExecutor.cs names CVE-2024-27980 for. A literal-space test was the
+        // old check and was not enough: tab and quote are equally significant to
+        // CommandLineToArgvW.
+        Assert.False(WingetPackageId.IsSafe("Evil.Thing\" --uninstall \"x"));
+        Assert.False(WingetPackageId.IsSafe("Evil\tThing"));
+        Assert.False(WingetPackageId.IsSafe("Evil Thing"));
+        Assert.False(WingetPackageId.IsSafe(@"Evil\Thing"));
+        Assert.False(WingetPackageId.IsSafe("Evil&calc"));
+        Assert.False(WingetPackageId.IsSafe("Evil|calc"));
+        Assert.False(WingetPackageId.IsSafe(null));
+        Assert.False(WingetPackageId.IsSafe("   "));
+        Assert.False(WingetPackageId.IsSafe(new string('a', 201)));
+    }
+
+    [Fact]
+    public void The_parser_drops_a_row_whose_id_would_be_refused_downstream()
+    {
+        // The parser and the installer must agree about what an id is: one admitting what the
+        // other refuses would either lose real updates or put external text on a command line.
+        var hostile = """
+Name                           Id                            Version      Available    Source
+-----------------------------------------------------------------------------------------------
+Evil Thing                     Evil"Thing                    1.0          2.0          winget
+Mozilla Firefox                Mozilla.Firefox               140.0.4      141.0        winget
+""";
+        var rows = WingetUpgradeParser.Parse(hostile);
+        Assert.Single(rows);
+        Assert.Equal("Mozilla.Firefox", rows[0].NativeId);
+        Assert.All(rows, r => Assert.True(WingetPackageId.IsSafe(r.NativeId)));
+    }
+
     private sealed class FakeKbs(params string[] ids)
     {
         public int Count => ids.Length;

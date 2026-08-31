@@ -196,18 +196,22 @@ def main():
 
         # ------------------------------------------------------------ windows
         print("\n== Maintenance windows ==")
+        # Machine-scoped, because this operator is: a window covering `all` is a fleet-wide
+        # write and is refused for them further down. That is the gap this used to have.
         r = c.post("/api/patches/windows", json={
             "name": "Sunday night", "days_mask": 1 << 6, "start_minute": 23 * 60,
-            "duration_minutes": 240, "scope_kind": "all",
+            "duration_minutes": 240, "scope_kind": "machines",
+            "machines": ["HOSPITAL-1"],
             "reboot_policy": patches.REBOOT_IF_REQUIRED})
-        check("a manager may open a window", r.status_code == 201)
+        check("a manager may open a window over their own machines", r.status_code == 201)
         window_id = r.get_json()["window"]["id"]
         check("a zero-day window is refused", c.post("/api/patches/windows", json={
             "name": "Never", "days_mask": 0, "start_minute": 0, "duration_minutes": 60,
-            "scope_kind": "all"}).status_code == 400)
+            "scope_kind": "machines", "machines": ["HOSPITAL-1"]}).status_code == 400)
         check("a duplicate window name is refused", c.post("/api/patches/windows", json={
             "name": "sunday night", "days_mask": 1, "start_minute": 0,
-            "duration_minutes": 60, "scope_kind": "all"}).status_code == 400)
+            "duration_minutes": 60, "scope_kind": "machines",
+            "machines": ["HOSPITAL-1"]}).status_code == 400)
         check("a window can be edited",
               c.put(f"/api/patches/windows/{window_id}",
                     json={"duration_minutes": 120}).status_code == 200)
@@ -251,6 +255,88 @@ def main():
               c.get("/api/patches/runs").status_code == 200)
         check("reading an unknown run is a 404",
               c.get("/api/patches/runs/nope").status_code == 404)
+
+        # -------------------------------------------------- cross-scope writes
+        print("\n== A scoped operator cannot reach outside their scope ==")
+        # A run the scoped operator could never have created: it targets FINANCE-1, which is
+        # not in their group. They can discover it exists (see the narrowed list below) but
+        # must not be able to act on it.
+        CURRENT_USER = "root@x.com"
+        wide = c.post("/api/patches/runs",
+                      json={"machines": ["HOSPITAL-1", "FINANCE-1"]}).get_json()["run"]["id"]
+
+        CURRENT_USER = "hospital@x.com"
+        # The failure this catches: enumerate run ids fleet-wide, then cancel or force a
+        # reboot-retry on a machine you cannot see anywhere else in the product.
+        check("a scoped operator cannot cancel a run reaching outside their scope",
+              c.post(f"/api/patches/runs/{wide}/cancel").status_code == 403)
+        check("...nor retry it",
+              c.post(f"/api/patches/runs/{wide}/retry").status_code == 403)
+        check("the run really was left alone",
+              patches.get_run(db_path, wide)["status"] != patches.RUN_CANCELLED)
+        check("a run wholly inside their scope is still theirs to cancel",
+              c.post(f"/api/patches/runs/{run_id}/cancel").status_code == 200)
+        check("cancelling an unknown run is still a 404, not a 403",
+              c.post("/api/patches/runs/nope/cancel").status_code == 404)
+
+        # The list is the enumeration surface the above depends on, and the module docstring
+        # promises reads are narrowed.
+        listed = [r["id"] for r in c.get("/api/patches/runs").get_json()["runs"]]
+        check("a scoped operator's run list omits runs that miss their machines entirely",
+              all(patches.get_run(db_path, r)["targets"] for r in listed))
+        CURRENT_USER = "root@x.com"
+        finance_only = c.post("/api/patches/runs",
+                              json={"machines": ["FINANCE-1"]}).get_json()["run"]["id"]
+        CURRENT_USER = "hospital@x.com"
+        check("a run touching none of their machines is not listed at all",
+              finance_only not in
+              [r["id"] for r in c.get("/api/patches/runs").get_json()["runs"]])
+        check("a run touching one of their machines still is",
+              wide in [r["id"] for r in c.get("/api/patches/runs").get_json()["runs"]])
+
+        print("\n== Maintenance windows are a fleet-wide write ==")
+        # A window decides when patches install and when machines reboot. A scoped operator
+        # creating one that covers `all` would be reaching every machine in the estate.
+        check("a scoped operator cannot open a window covering every machine",
+              c.post("/api/patches/windows", json={
+                  "name": "Everything", "days_mask": 1, "start_minute": 60,
+                  "duration_minutes": 60, "scope_kind": "all"}).status_code == 403)
+        check("...nor one naming a machine outside their scope",
+              c.post("/api/patches/windows", json={
+                  "name": "Sneaky", "days_mask": 1, "start_minute": 60,
+                  "duration_minutes": 60, "scope_kind": "machines",
+                  "machines": ["HOSPITAL-1", "FINANCE-1"]}).status_code == 403)
+        mine = c.post("/api/patches/windows", json={
+            "name": "Mine", "days_mask": 1, "start_minute": 60, "duration_minutes": 60,
+            "scope_kind": "machines", "machines": ["HOSPITAL-1"]})
+        check("a window naming only their own machines is allowed", mine.status_code == 201)
+        mine_id = mine.get_json()["window"]["id"]
+        check("...and they may edit it",
+              c.put(f"/api/patches/windows/{mine_id}",
+                    json={"duration_minutes": 90}).status_code == 200)
+        check("but not widen it to the whole fleet",
+              c.put(f"/api/patches/windows/{mine_id}",
+                    json={"scope_kind": "all", "machines": []}).status_code == 403)
+
+        CURRENT_USER = "root@x.com"
+        fleet_window = c.post("/api/patches/windows", json={
+            "name": "Fleet wide", "days_mask": 1, "start_minute": 120,
+            "duration_minutes": 60, "scope_kind": "all"}).get_json()["window"]["id"]
+        CURRENT_USER = "hospital@x.com"
+        # The failure this catches: narrowing somebody else's fleet-wide window down to your
+        # own machines -- an edit you could not have made from scratch, which would silently
+        # stop every other machine patching.
+        check("a scoped operator cannot narrow a fleet-wide window to their own machines",
+              c.put(f"/api/patches/windows/{fleet_window}",
+                    json={"scope_kind": "machines",
+                          "machines": ["HOSPITAL-1"]}).status_code == 403)
+        check("...nor delete it",
+              c.delete(f"/api/patches/windows/{fleet_window}").status_code == 403)
+        check("the fleet-wide window survived",
+              patches.get_window(db_path, fleet_window) is not None)
+        CURRENT_USER = "root@x.com"
+        check("an unrestricted operator may still delete it",
+              c.delete(f"/api/patches/windows/{fleet_window}").status_code == 200)
 
         # ------------------------------------------------------------ CSRF shape
         print("\n== CSRF shape ==")

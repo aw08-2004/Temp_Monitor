@@ -1135,11 +1135,35 @@ def get_run(db_path, run_id, *, with_targets=True):
     return run
 
 
-def list_runs(db_path, limit=100, machine=None):
-    args, where = [], ""
+def run_machines(db_path, run_id):
+    """Every machine a run targets. What a scoped write has to be checked against."""
+    with get_conn(db_path) as conn:
+        return sorted(r["machine"] for r in conn.execute(
+            "SELECT machine FROM patch_run_targets WHERE run_id = ?", (run_id,)))
+
+
+def list_runs(db_path, limit=100, machine=None, machines=None):
+    """Runs, newest first.
+
+    `machine` narrows to one machine's runs. `machines` is the caller's machine SCOPE and
+    narrows to runs touching at least one of them -- None means unscoped, and an EMPTY
+    collection means a scope that matched nothing and must return nothing. Collapsing those
+    two is how a fleet-wide list gets shown to somebody entitled to none of it, which is the
+    same distinction list_fleet_patches preserves.
+    """
+    args, clauses = [], []
     if machine:
-        where = (" WHERE id IN (SELECT run_id FROM patch_run_targets WHERE machine = ?)")
+        clauses.append("id IN (SELECT run_id FROM patch_run_targets WHERE machine = ?)")
         args.append(_clean(machine, 63))
+    if machines is not None:
+        hosts = [_clean(m, 63) for m in machines if _clean(m, 63)]
+        if not hosts:
+            return []
+        clauses.append(
+            f"id IN (SELECT run_id FROM patch_run_targets "
+            f"WHERE machine IN ({','.join('?' * len(hosts))}))")
+        args.extend(hosts)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with get_conn(db_path) as conn:
         rows = conn.execute(
             f"SELECT * FROM patch_runs{where} ORDER BY created_at DESC LIMIT ?",

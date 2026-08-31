@@ -76,9 +76,12 @@ public static class WingetUpgradeParser
             var available = Slice(line, availableStart, line.Length);
 
             if (id.Length == 0 || name.Length == 0) continue;
-            // An id with a space in it is a mis-slice, not a package: winget package ids are
-            // dotted identifiers. Dropping is right — a half-parsed row is worse than none.
-            if (id.Contains(' ')) continue;
+            // An id that is not a dotted identifier is a mis-slice, not a package. Dropping is
+            // right — a half-parsed row is worse than none — and the check is the same
+            // allow-list the installer refuses on, so the two cannot disagree about what an id
+            // is. A literal-space test was not enough on its own: tab and quote are equally
+            // significant to CommandLineToArgvW, and this value ends up on a command line.
+            if (!WingetPackageId.IsSafe(id)) continue;
 
             // `available` carries the version being offered and is what makes this row an
             // upgrade at all. Its absence means the columns did not line up.

@@ -71,7 +71,13 @@ public static class PatchInstaller
         {
             ct.ThrowIfCancellationRequested();
             attempted.Add(update.Uid);
-            if (InstallWingetPackage(update, Say, ct)) anySucceeded = true;
+            var result = InstallWingetPackage(update, Say, ct);
+            anySucceeded |= result.Succeeded;
+            // A winget package can need a restart just as an OS update can -- msiexec
+            // returns 3010 through winget unchanged. Without this the executor's
+            // `if_required` policy never schedules a reboot for a winget-only batch, and the
+            // update sits half-applied with nothing left to finish it.
+            reboot |= result.RebootRequired;
         }
 
         return new Outcome(attempted, reboot, string.Join(Environment.NewLine, log),
@@ -178,21 +184,56 @@ public static class PatchInstaller
 
     // ------------------------------------------------------------------ winget
 
-    private static bool InstallWingetPackage(AvailableUpdate update, Action<string> say,
-                                             CancellationToken ct)
+    private sealed record WingetOutcome(bool Succeeded, bool RebootRequired);
+
+    /// <summary>Exit codes from `winget upgrade` that mean the package installed.
+    ///
+    /// winget passes the wrapped installer's code through unchanged, so this is the MSI
+    /// dialect: 0 is success and <b>3010 is ERROR_SUCCESS_REBOOT_REQUIRED</b> — "installed,
+    /// finishes on restart". Treating 3010 as failure marks a package that installed
+    /// perfectly as a failed update and spends a retry on a machine with nothing wrong with
+    /// it, which is the same trap packages.DEFAULT_SUCCESS_EXIT_CODES documents on the hub
+    /// side. 1641 is ERROR_SUCCESS_REBOOT_INITIATED — the installer is restarting the machine
+    /// itself — and is success for the same reason.</summary>
+    internal static readonly HashSet<int> WingetSuccessCodes = [0, 3010, 1641];
+
+    /// <summary>Exit codes that additionally mean a restart is owed. Kept separate from the
+    /// success set because "it worked" and "it needs a reboot to finish" are different facts
+    /// and the executor's reboot policy reads only the second.</summary>
+    internal static readonly HashSet<int> WingetRebootCodes = [3010, 1641];
+
+    private static WingetOutcome InstallWingetPackage(AvailableUpdate update,
+                                                      Action<string> say, CancellationToken ct)
     {
         var winget = WingetLocator.Find();
         if (winget is null)
         {
             say(WingetLocator.NotFoundMessage);
-            return false;
+            return new WingetOutcome(false, false);
+        }
+        // Refused rather than escaped. A winget package id is a dotted identifier; anything
+        // else reaching here is a mis-parse of winget's own table output or a hostile package
+        // source, and neither is worth running a command line for. This is the same class of
+        // bug Files/OpenItemExecutor.cs guards with Quoted/CmdQuoted (it cites CVE-2024-27980
+        // by name) -- the id is quoted below as well, but a value that cannot appear in a
+        // legitimate id should not be quoted into a command, it should be rejected.
+        if (!WingetPackageId.IsSafe(update.NativeId))
+        {
+            say($"Refusing to upgrade {update.Uid}: '{update.NativeId}' is not a usable "
+                + "winget package id.");
+            return new WingetOutcome(false, false);
         }
         var psi = new ProcessStartInfo(winget)
         {
             // --silent and --disable-interactivity for the same reason the scan uses them:
             // this runs as SYSTEM with no console, so a prompt is a hang. `--id ... --exact`
             // stops a package id being treated as a search term that matches two things.
-            Arguments = $"upgrade --id {update.NativeId} --exact --silent " +
+            // Quoted as well as validated. IsSafePackageId already excludes everything
+            // CommandLineToArgvW treats as significant, so the quotes cannot be escaped out
+            // of -- they are here because this codebase quotes values it interpolates into a
+            // command line (Files/OpenItemExecutor.cs), and diverging from that in a new file
+            // is how the convention stops being one.
+            Arguments = $"upgrade --id \"{update.NativeId}\" --exact --silent " +
                         "--disable-interactivity --accept-source-agreements " +
                         "--accept-package-agreements",
             RedirectStandardOutput = true,
@@ -206,7 +247,7 @@ public static class PatchInstaller
             if (process is null)
             {
                 say($"winget did not start for {update.NativeId}.");
-                return false;
+                return new WingetOutcome(false, false);
             }
             var output = process.StandardOutput.ReadToEnd();
             if (!process.WaitForExit((int)WingetTimeout.TotalMilliseconds))
@@ -214,20 +255,24 @@ public static class PatchInstaller
                 try { process.Kill(entireProcessTree: true); }
                 catch (InvalidOperationException) { }
                 say($"{update.NativeId} did not finish in time.");
-                return false;
+                return new WingetOutcome(false, false);
             }
-            var ok = process.ExitCode == 0;
-            say($"{update.NativeId} exited {process.ExitCode}.");
+            var code = process.ExitCode;
+            var ok = WingetSuccessCodes.Contains(code);
+            var reboot = WingetRebootCodes.Contains(code);
+            say($"{update.NativeId} exited {code}"
+                + (reboot ? " (installed; a restart is required)." : "."));
             if (!ok && output.Length > 0) say(Truncate(output, 500));
-            return ok;
+            return new WingetOutcome(ok, reboot);
         }
         catch (Exception e) when (e is IOException or InvalidOperationException
                                        or UnauthorizedAccessException)
         {
             say($"{update.NativeId} could not be upgraded: {e.Message}");
-            return false;
+            return new WingetOutcome(false, false);
         }
     }
+
 
     private static string Truncate(string text, int limit) =>
         text.Length <= limit ? text : text[..limit] + "...";
