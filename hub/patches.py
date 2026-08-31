@@ -673,6 +673,21 @@ def list_fleet_patches(db_path, machines=None):
     return out
 
 
+def window_machines(db_path):
+    """Every hostname named by any maintenance window.
+
+    The universe a window read has to be scoped against, and deliberately NOT
+    known_machines(): a window names hostnames an operator typed, which may include machines
+    that have never reported patch inventory (or never enrolled at all). Scoping windows
+    against the machines-with-patches list would hide a window covering a PC the caller can
+    perfectly well reach, just because it happens to be fully patched.
+    """
+    out = set()
+    for window in list_windows(db_path):
+        out.update(window["machines"])
+    return sorted(out)
+
+
 def known_machines(db_path):
     """Every machine that currently has an available-update row.
 
@@ -968,10 +983,47 @@ def get_window(db_path, window_id):
     return _window_row(row) if row else None
 
 
-def list_windows(db_path):
+def list_windows(db_path, machines=None):
+    """Every maintenance window, or only the parts of it a scope may see.
+
+    `machines` is the caller's machine scope. None means unscoped -- which is what the
+    SCHEDULER passes, and must keep passing: a window has to be evaluated against every
+    machine it covers regardless of who is looking. An EMPTY collection means a scope that
+    matched nothing and returns nothing, the same distinction list_fleet_patches and
+    list_runs preserve.
+
+    Scoping narrows in TWO ways, and the second is the one that is easy to miss:
+
+      * a machine-scoped window is hidden entirely unless it names at least one machine the
+        caller can reach, and
+      * the `machines` list inside the window it DOES see is narrowed to those machines.
+
+    Without the second, a window naming one of your PCs and twenty of somebody else's would
+    hand you those twenty hostnames -- which is exactly the leak this module's scoping exists
+    to prevent, just moved inside the row.
+
+    A window scoped to ALL machines stays visible to everyone: it governs the caller's own
+    machines' patching, and it names no hostnames, so there is nothing to leak. Editing or
+    deleting it is a different question, and one patches_web answers separately.
+    """
     with get_conn(db_path) as conn:
-        return [_window_row(r) for r in conn.execute(
+        rows = [_window_row(r) for r in conn.execute(
             "SELECT * FROM maintenance_windows ORDER BY name COLLATE NOCASE")]
+    if machines is None:
+        return rows
+    hosts = {_clean(m, 63).lower() for m in machines if _clean(m, 63)}
+    if not hosts:
+        return []
+    out = []
+    for window in rows:
+        if window["scope_kind"] == SCOPE_ALL:
+            out.append(window)
+            continue
+        visible = [m for m in window["machines"] if _clean(m, 63).lower() in hosts]
+        if not visible:
+            continue
+        out.append(dict(window, machines=visible))
+    return out
 
 
 def window_is_open(window, now=None):

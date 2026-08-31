@@ -53,9 +53,39 @@ Notepad++ (64-bit)             Notepad++.Notepad++           8.7.1        8.8.1 
     [Fact]
     public void Title_carries_both_versions_so_an_operator_can_see_the_jump()
     {
+        // Asserted EXACTLY, not with Contains. A Contains pair passed happily while the
+        // available-version slice was running to end-of-line and dragging the source column
+        // in with it, so every title read "... → 141.0        winget". Matching the whole
+        // string is what makes that visible.
         var rows = WingetUpgradeParser.Parse(RealOutput);
-        Assert.Contains("140.0.4", rows[0].Title);
-        Assert.Contains("141.0", rows[0].Title);
+        Assert.Equal("Mozilla Firefox 140.0.4 → 141.0", rows[0].Title);
+    }
+
+    [Fact]
+    public void The_available_version_stops_at_the_source_column()
+    {
+        // `Available` is not the last column -- `Source` follows it -- so a slice to
+        // end-of-line captures the source name too, on every winget-sourced row.
+        var rows = WingetUpgradeParser.Parse(RealOutput);
+        Assert.All(rows, r => Assert.DoesNotContain("winget", r.Title));
+        Assert.All(rows, r => Assert.DoesNotContain("  ", r.Title));
+    }
+
+    [Fact]
+    public void A_header_without_a_findable_source_column_still_stops_at_the_version()
+    {
+        // winget localises its headers and `Source` is not the untranslated anchor `Id` is,
+        // so the right-hand edge can genuinely be missing. Falling back to the whole
+        // remainder would reintroduce the defect for exactly those locales; the first token
+        // is the version, because a version number never contains a space.
+        var localised = """
+Name                           Id                            Version      Available    Quelle
+-------------------------------------------------------------------------------------------
+Mozilla Firefox                Mozilla.Firefox               140.0.4      141.0        winget
+""";
+        var rows = WingetUpgradeParser.Parse(localised);
+        Assert.Single(rows);
+        Assert.Equal("Mozilla Firefox 140.0.4 → 141.0", rows[0].Title);
     }
 
     [Fact]

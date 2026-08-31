@@ -280,6 +280,33 @@ def main():
               patches.window_covers(window, "pc1"))
         check("a scoped window does not cover another machine",
               not patches.window_covers(window, "PC2"))
+
+        # Reading windows is scoped, and the scheduler's read must NOT be.
+        patches.create_window(db_path, actor="op@x.com", name="Mixed scope",
+                              days_mask=1, start_minute=60, duration_minutes=60,
+                              scope_kind=patches.SCOPE_MACHINES,
+                              machines=["PC1", "PC2", "PC3"])
+        patches.create_window(db_path, actor="op@x.com", name="Everything",
+                              days_mask=1, start_minute=120, duration_minutes=60,
+                              scope_kind=patches.SCOPE_ALL)
+        check("an unscoped read is unchanged -- the scheduler depends on it",
+              len(patches.list_windows(db_path)) == 3)
+        scoped = {w["name"]: w for w in patches.list_windows(db_path, machines=["PC1"])}
+        check("a window naming a machine in scope is visible", "Mixed scope" in scoped)
+        # The leak inside the row: the window is theirs to see, but PC2 and PC3 are not.
+        check("...with the out-of-scope hostnames stripped",
+              scoped["Mixed scope"]["machines"] == ["PC1"])
+        check("an all-scope window stays visible and names nobody",
+              scoped["Everything"]["machines"] == [])
+        # "Sunday night" names PC1, so it is correctly visible above. PC2's scope is what
+        # shows the hiding: it reaches "Mixed scope" and nothing else machine-scoped.
+        pc2 = {w["name"] for w in patches.list_windows(db_path, machines=["PC2"])}
+        check("a window naming nothing in scope is hidden", "Sunday night" not in pc2)
+        check("...while one that does name it is not", "Mixed scope" in pc2)
+        check("an empty scope sees no windows at all",
+              patches.list_windows(db_path, machines=[]) == [])
+        check("window_machines names every host any window mentions",
+              patches.window_machines(db_path) == ["PC1", "PC2", "PC3"])
         check("an all-scope window covers anything",
               patches.window_covers(dict(window, scope_kind=patches.SCOPE_ALL), "PC9"))
 

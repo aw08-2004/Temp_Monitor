@@ -294,6 +294,45 @@ def main():
         check("a run touching one of their machines still is",
               wide in [r["id"] for r in c.get("/api/patches/runs").get_json()["runs"]])
 
+        print("\n== Reading windows is narrowed too ==")
+        CURRENT_USER = "root@x.com"
+        c.post("/api/patches/windows", json={
+            "name": "Hospital only", "days_mask": 1, "start_minute": 300,
+            "duration_minutes": 60, "scope_kind": "machines",
+            "machines": ["HOSPITAL-1"]})
+        c.post("/api/patches/windows", json={
+            "name": "Finance only", "days_mask": 1, "start_minute": 360,
+            "duration_minutes": 60, "scope_kind": "machines",
+            "machines": ["FINANCE-1"]})
+        c.post("/api/patches/windows", json={
+            "name": "Mixed", "days_mask": 1, "start_minute": 420,
+            "duration_minutes": 60, "scope_kind": "machines",
+            "machines": ["HOSPITAL-1", "FINANCE-1", "HR-1"]})
+        c.post("/api/patches/windows", json={
+            "name": "Whole fleet", "days_mask": 1, "start_minute": 480,
+            "duration_minutes": 60, "scope_kind": "all"})
+
+        CURRENT_USER = "hospital@x.com"
+        seen = {w["name"]: w for w in c.get("/api/patches/windows").get_json()["windows"]}
+        check("a window naming only their machine is visible", "Hospital only" in seen)
+        check("a window naming none of their machines is hidden", "Finance only" not in seen)
+        # The leak that is easy to miss: the window IS theirs to see, but the row would
+        # otherwise carry two hostnames they have no grant over.
+        check("a mixed window is visible", "Mixed" in seen)
+        check("...with the other machines' hostnames stripped out",
+              seen["Mixed"]["machines"] == ["HOSPITAL-1"])
+        # An all-scope window governs their machines' patching and names no hostnames, so
+        # there is nothing to leak and hiding it would misinform them about when they patch.
+        check("a fleet-wide window stays visible", "Whole fleet" in seen)
+        check("...and still names nobody", seen["Whole fleet"]["machines"] == [])
+
+        CURRENT_USER = "root@x.com"
+        allw = {w["name"]: w for w in c.get("/api/patches/windows").get_json()["windows"]}
+        check("an unrestricted operator sees every window", "Finance only" in allw)
+        check("...with every hostname intact",
+              allw["Mixed"]["machines"] == ["HOSPITAL-1", "FINANCE-1", "HR-1"])
+        CURRENT_USER = "hospital@x.com"
+
         print("\n== Maintenance windows are a fleet-wide write ==")
         # A window decides when patches install and when machines reboot. A scoped operator
         # creating one that covers `all` would be reaching every machine in the estate.

@@ -42,6 +42,11 @@ public static class WingetUpgradeParser
         var idStart = -1;
         var versionStart = -1;
         var availableStart = -1;
+        // The fifth column. `Available` is not the last one -- without bounding the slice by
+        // `Source`, every row's "available version" is the version plus the source name glued
+        // on ("141.0        winget"), because Trim only strips the edges. That is not an edge
+        // case: it is every winget-sourced row.
+        var sourceStart = -1;
         for (var i = 0; i < lines.Length; i++)
         {
             var probe = lines[i];
@@ -54,6 +59,7 @@ public static class WingetUpgradeParser
             idStart = id;
             versionStart = version;
             availableStart = available;
+            sourceStart = IndexOfColumn(probe, "Source");
             break;
         }
         if (headerIndex < 0) return results;
@@ -73,7 +79,14 @@ public static class WingetUpgradeParser
             var name = Slice(line, 0, idStart);
             var id = Slice(line, idStart, versionStart);
             var current = Slice(line, versionStart, availableStart);
-            var available = Slice(line, availableStart, line.Length);
+            // Bounded by `Source` where the header gave us one. Where it did not -- winget
+            // localises its headers, and `Source` is not the untranslated anchor `Id` is --
+            // fall back to the FIRST token rather than the whole remainder: a version number
+            // never contains a space, so the first token is the version and anything after it
+            // belongs to a column this parser did not locate.
+            var available = sourceStart > availableStart
+                ? Slice(line, availableStart, sourceStart)
+                : FirstToken(Slice(line, availableStart, line.Length));
 
             if (id.Length == 0 || name.Length == 0) continue;
             // An id that is not a dotted identifier is a mis-slice, not a package. Dropping is
@@ -122,6 +135,14 @@ public static class WingetUpgradeParser
             if (beforeOk && afterOk) return found;
             at = found + 1;
         }
+    }
+
+    /// <summary>The first whitespace-delimited token, for a column this parser could not find
+    /// the right-hand edge of. A version number never contains a space.</summary>
+    private static string FirstToken(string text)
+    {
+        var cut = text.IndexOfAny([' ', '\t']);
+        return cut < 0 ? text : text[..cut];
     }
 
     private static string Slice(string line, int start, int end)

@@ -123,6 +123,19 @@ def create_patches_blueprint(db_path, login_required, access):
                              if len(denied) > 1 else ".")), 403
         return names, None, 200
 
+    def _window_scope():
+        """The machine list a WINDOW read is narrowed against, or None if unrestricted.
+
+        Deliberately not _read_scope(): that one is built from machines with patch inventory,
+        which is the right universe for an update list and the wrong one here. A window names
+        hostnames somebody typed, and scoping against the patched-machines list would hide a
+        window covering a PC the caller can reach simply because that PC has nothing to
+        install.
+        """
+        if access.machine_filter() is None:
+            return None
+        return access.filter_machines(patches.window_machines(db_path))
+
     def _scoped_run(run_id):
         """Check a whole run is within the caller's scope before acting on it.
 
@@ -262,7 +275,13 @@ def create_patches_blueprint(db_path, login_required, access):
     @login_required
     @can_view
     def list_windows():
-        return jsonify({"windows": patches.list_windows(db_path)}), 200
+        # Narrowed, like every other read here. Unscoped this hands any `view` holder every
+        # window in the fleet -- including the hostnames named inside machine-scoped ones,
+        # which is the leak the module docstring rules out. The scheduler's own calls to
+        # list_windows stay unscoped, as they must: a window is evaluated against every
+        # machine it covers regardless of who is looking.
+        return jsonify({"windows": patches.list_windows(
+            db_path, machines=_window_scope())}), 200
 
     @bp.route("/api/patches/windows", methods=["POST"])
     @login_required
