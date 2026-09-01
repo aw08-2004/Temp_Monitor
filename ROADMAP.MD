@@ -2373,7 +2373,7 @@ shows while hub A is unreachable.
 
 ---
 
-## ✅ 21. Release channels — stable / beta   ·   hub 1.93.0 + agent 3.36.0
+## ✅ 21. Release channels — stable / beta   ·   hub 1.93.0 + agent 3.35.0
 
 Not from the PRD. Everything in this product updates from `main` and reaches everything at
 once: a signed agent manifest landing on main starts upgrading the whole fleet within about
@@ -2639,6 +2639,13 @@ rule marked for local evaluation.
 20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
     engine to grow a second evaluation site (on the agent), and that is a bigger change to a
     working feature than any of the above make.
+21. ~~**#21 Release channels**~~ — done, hub 1.93.0 + agent 3.35.0. Not from the PRD; asked
+    for directly, and built alongside #14 rather than after it because the two shipped in one
+    agent release. Its own prerequisite was nothing, but it makes every item above it safer to
+    land: an agent release currently reaches every endpoint within about fifteen minutes, and
+    this is what lets one go to three machines first. Note the numbering: #14 and #21 were
+    developed against hub 1.92.0 and 1.93.0 respectively but share **one** agent release,
+    because no build ever existed that carried patch management without channels.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
