@@ -351,6 +351,15 @@ def test_peer_cannot_reach_past_its_share(a_client, a_db, b_db, share_id):
     check("...saying nothing about what exists",
           r.get_json()["error"] == "No such share.")
 
+    # The id reaches the proxy already percent-decoded by Flask, so it is re-encoded on the
+    # way back out. Without that, a share id spelled with a '?' would reach the owning hub
+    # carrying a query string this hub never meant to send.
+    sign_in(B_CLIENT[0], "borrower@x.com")
+    r = B_CLIENT[0].get(
+        "/api/sharing/borrowed/nolink/abc%3Fafter_seq%3D99/machine")
+    check("an id carrying a query string cannot smuggle one into the peer request",
+          r.status_code == 404 and "?" not in str(r.get_json().get("error", "")))
+
     r = a_client.get("/api/agent/commands", headers=head)
     check("a peer token does not authenticate an AGENT endpoint",
           r.status_code in (401, 403))
@@ -534,6 +543,8 @@ def test_lapse_and_revocation(a_client, b_client, a_db, b_db, link_id, share_id)
 GROUPS = {}
 TOKENS = {}
 PEER_IDS = {}
+#: Hub B's client, so the peer-boundary tests can also poke the proxy from its side.
+B_CLIENT = []
 
 
 def main():
@@ -569,6 +580,7 @@ def main():
     b_app = build_borrower(b_db, b_log, a_client)
     DBS.extend([a_db, b_db])
     b_client = b_app.test_client()
+    B_CLIENT.append(b_client)
 
     test_the_page(a_client)
     test_peer_api_is_not_the_console(a_client, a_db)

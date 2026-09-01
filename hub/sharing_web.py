@@ -55,6 +55,7 @@ inside THIS organisation's systems, and a colleague who was lent a screen has no
 with them. A field added to the machine record later does not silently start travelling.
 """
 import functools
+from urllib.parse import quote
 
 import requests
 from flask import Blueprint, jsonify, render_template, request
@@ -758,7 +759,13 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
         if token is None:
             return 502, {"error": "This peer link has no readable token. Remove it and "
                                   "pair again."}
-        url = f"{link['base_url']}/api/peer/shares/{share_id}{path}"
+        # Quoted, not interpolated raw. `share_id` and the ids inside `path` arrive
+        # from this hub's own URL, where Flask has already percent-DECODED them -- so a
+        # request for a share id spelled `abc%3Fx=1` would otherwise reach the peer with
+        # a query string this hub never intended to send. The ids are hex in practice;
+        # a guard that only holds because of that is one that breaks quietly the day it
+        # stops being true.
+        url = f"{link['base_url']}/api/peer/shares/{quote(str(share_id), safe='')}{path}"
         status, answer = call_peer(method, url, token=token, payload=payload)
         if status >= 400:
             sharing.record_link_result(db_path, link_id, ok=False,
@@ -808,7 +815,7 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
         if not _enabled():
             return jsonify({"error": "Cross-hub sharing is switched off."}), 403
         status, answer = _borrowed_call(link_id, share_id, permissions.ISSUE_COMMANDS,
-                                        "GET", f"/commands/{command_id}")
+                                        "GET", f"/commands/{quote(str(command_id), safe='')}")
         return jsonify(answer), status
 
     # ---------------- Remote view/control on a borrowed machine ----------------
@@ -848,7 +855,7 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
         body = request.get_json(silent=True) or {}
         status, answer = _borrowed_call(
             link_id, share_id, permissions.REMOTE_CONTROL, "POST",
-            f"/remote/{session_id}/signal",
+            f"/remote/{quote(str(session_id), safe='')}/signal",
             payload={"kind": body.get("kind"), "payload": body.get("payload")})
         return jsonify(answer), status
 
@@ -865,7 +872,7 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
             return jsonify({"error": "after_seq must be an integer"}), 400
         status, answer = _borrowed_call(
             link_id, share_id, permissions.REMOTE_CONTROL, "GET",
-            f"/remote/{session_id}/poll?after_seq={after_seq}")
+            f"/remote/{quote(str(session_id), safe='')}/poll?after_seq={after_seq}")
         return jsonify(answer), status
 
     @bp.route("/api/sharing/borrowed/<link_id>/<share_id>/remote/<session_id>/stop",
@@ -876,7 +883,7 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
         if not _enabled():
             return jsonify({"error": "Cross-hub sharing is switched off."}), 403
         status, answer = _borrowed_call(link_id, share_id, permissions.REMOTE_CONTROL,
-                                        "POST", f"/remote/{session_id}/stop")
+                                        "POST", f"/remote/{quote(str(session_id), safe='')}/stop")
         return jsonify(answer), status
 
     # ================================
