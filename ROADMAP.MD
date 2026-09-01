@@ -25,15 +25,28 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 Done. Per-machine multi-panel dashboard (Komodo-style): CPU load, memory (with total RAM
 shown and used/total GB on hover), disk usage, disk read/write, network in/out, GPU
-temp/load, temperature. Backed by typed `readings` columns, a multi-metric history
-endpoint, and per-metric collection toggles in Settings.
+temp/load, fan speed, CPU/GPU package power, temperature. Backed by typed `readings`
+columns, a multi-metric history endpoint, and per-metric collection toggles in Settings.
+
+**Fan speed and package power (2026-08-03)** — `fan_rpm`, `cpu_power_w` and `gpu_power_w`
+are collected by `SensorReader.cs`, stored as their own `readings` columns, charted beside
+the rest and shown as live cards. Fans are paired with their control sensor so a panel
+reads RPM rather than a percentage of an unknown maximum, and power takes the largest
+package sensor rather than summing rails that overlap. Their toggles
+(`metrics.collect_fans`, `metrics.collect_power`) govern what enters HISTORY only — the
+live cards are unaffected, because a machine's current fan speed is state in the same
+sense its storage cards are.
 
 **Throughput panels auto-scale (hub 1.31.0)** — network in/out and disk read/write are
 stored in B/s and rendered through `formatRate()`, so each axis tick and tooltip picks its
 own KB/MB/GB. A fixed `B/s` axis made a 400 MB/s NVMe an unreadable nine-digit tick and an
-idle NIC a flat line on the floor. Disk I/O is **summed across every drive**, unlike
-network, which picks the single busiest adapter — LHM reports each disk once, with none of
-the NDIS filter mirrors that would double-count a NIC. Its own toggle
+idle NIC a flat line on the floor. **Network is charted in BITS as of hub 1.82.1** — the
+storage unit is unchanged, only the axis: a NIC is a 1 Gb/s card, the switch port is
+100 Mb/s and the ISP sells 500 Mb/s, so a panel labelled MB/s was the one reading an
+operator could not check against anything without dividing by eight. Disk keeps B/s, which
+is how a disk is sold and how every other tool quotes it. Disk I/O is **summed across every
+drive**, unlike network, which picks the single busiest adapter — LHM reports each disk
+once, with none of the NDIS filter mirrors that would double-count a NIC. Its own toggle
 (`metrics.collect_disk_io`), separate from `collect_disk`, so dropping the noisy per-second
 rates doesn't also stop recording "is C: filling up".
 
@@ -53,7 +66,8 @@ Mostly done:
 - `computer.primary_sensor_preference` — ordered CPU-temp sensor preference (+ per-machine
   override).
 - `metrics.collect_cpu_load` / `collect_memory` / `collect_gpu` / `collect_disk` /
-  `collect_disk_io` / `collect_network` — per-metric collection on/off toggles.
+  `collect_disk_io` / `collect_network` / `collect_fans` / `collect_power` — per-metric
+  collection on/off toggles.
 - `data.retention_days`, `data.prune_interval_seconds`, `data.ingest_max_backdate_days`,
   `data.command_output_retention_seconds` — retention knobs.
 
@@ -2167,12 +2181,12 @@ than silently applied.
 
 ---
 
-## ✅ 13. Remote file explorer (Tools → Files)   ·   hub 1.88.0 + agent 3.33.0
+## ✅ 13. Remote file explorer (Tools → Files)   ·   hub 1.88.0 + agent 3.33.0; **Open** hub 1.89.0 + agent 3.34.0; context menu hub 1.91.0
 
 Browsing a managed machine's disk, and moving files both ways. The Tools page grows a
-**Files** tab: the machine's volumes, then folders, with **Download**, **Upload**, **Copy**,
-**Cut/Paste**, **Rename**, **New folder** and **Delete**. It answers the two calls the
-console previously could not — "the report is on my desktop and I can't open it" and "put
+**Files** tab: the machine's volumes, then folders, with **Open**, **Download**, **Upload**,
+**Copy**, **Cut/Paste**, **Rename**, **New folder** and **Delete**. It answers the two calls
+the console previously could not — "the report is on my desktop and I can't open it" and "put
 this driver in C:\Temp for me" — which until now meant a SYSTEM shell, because a terminal
 moves text and not bytes.
 
@@ -2223,10 +2237,43 @@ a deletion cannot go to the person's Recycle Bin — it would land in SYSTEM's, 
 cannot reach it. The confirmation names every item and states there is no undo, which is a
 better answer than an undo only a disk editor could use.
 
+**Open (hub 1.89.0 + agent 3.34.0).** The tab could move bytes and nothing else; opening
+something meant typing a path into a SYSTEM shell, which starts the program in session 0
+where the person at the PC never sees its window. Open answers two questions and neither is
+defaulted. *Where*: here in the console, or on the machine. *As whom*, for the machine:
+`run_as=user` goes through the existing `UserSessionLauncher` — the signed-in person's token,
+profile and desktop — and `run_as=system` is this service's own hidden context, refused
+outright for a document. Neither answer is remembered between opens, because "as SYSTEM"
+chosen for an installer and silently reapplied to somebody's spreadsheet is the exact
+surprise the two modes exist to prevent. Non-executables go through `explorer.exe`, so the
+file opens in whatever is registered in the **user's** hive rather than in a guess made here.
+Opening *in the console* is the existing `fetch_file` transfer rendered rather than saved,
+and what it renders is an **allowlist, not a convenience**: a blob URL inherits the origin of
+the page that made it, so `html`/`htm`/`svg` are absent on purpose and anything unlisted keeps
+the Save link and says why. 10 MB ceiling, checked before the transfer starts. Gated on its
+own floor, `MIN_OPEN_AGENT`, rather than the panel's — a 3.33.x machine browses, copies and
+downloads perfectly well, and taking four working tools away to explain a fifth is the wrong
+trade mid-rollout.
+
+**The verbs moved to a right-click menu (hub 1.91.0, hub-only).** They lived in a toolbar
+above the list, which is the one place they are not: they act on rows. The location bar keeps
+Up, path, Go and Refresh — which act on the *view*. Selection follows Explorer's rule
+(right-click inside a selection keeps it, outside replaces it, empty space is about the
+folder), and inapplicable entries are greyed rather than omitted so the menu says the same
+thing on every row. **Open now means open it HERE**: nine opens in ten are somebody wanting
+to look at a log, and that was two radio buttons and an OK away while the default under the
+pointer was a process on somebody's desktop; starting something on the machine is its own
+entry one line down and keeps the account choice. Two consequences — the 3.34.0 floor now
+guards only the remote launch, so a machine mid-rollout can still be looked at; and with no
+toolbar there is no non-mouse path to Delete, so the rows carry a roving tabindex (arrows
+move, Enter opens, Space and the Menu key open the menu, Escape closes). Same shape as #12's
+process rows, and for the same reason.
+
 **Remaining gaps.** No drag-and-drop, no multi-file upload (one file per push), no folder
-upload, no in-console preview or edit, no search within a folder, and no progress bar for a
-transfer in flight — the panel says which stage it is at, not how far through. The
-2,000-entry listing cap is counted and admitted in the UI rather than silently applied.
+upload, no editing in the console (preview only, and only for the allowlisted types above),
+no search within a folder, and no progress bar for a transfer in flight — the panel says
+which stage it is at, not how far through. The 2,000-entry listing cap is counted and
+admitted in the UI rather than silently applied.
 
 ---
 
@@ -2310,14 +2357,23 @@ Hub side is `patches.py` (`machine_patches`, `patch_approvals`, `maintenance_win
 `patches_web.py` and a Patches page. Agent side is `Patch/PatchInventoryReporter.cs` and
 `Patch/InstallPatchesExecutor.cs`.
 
-**Built so the AI half needs no schema change later.** `patch_run_targets` records machine
-model, OS build, outcome and time-to-recover from the start, so the PRD's "stability
-scoring" becomes a query over history rather than a migration. That is the whole of the AI
-preparation, and it is free.
+**Built so the AI half needs no schema change later.** `patch_run_items` — the third table,
+one row per update actually attempted per machine — records the machine's model and OS build
+beside each outcome from the first release, so the PRD's "stability scoring" becomes a query
+over history rather than a migration. No scoring is implemented; the columns cost nothing and
+their absence would have cost a schema change.
 
-**Open parameters.** Retention for `machine_patches`, and whether a superseded update is
-deleted or tombstoned. Whether the reboot is agent-initiated inside the window or a separate
-verb.
+**All three open parameters were resolved in the build.** Retention is
+`patches.inventory_retention_days` (30 days), because `machine_patches` is one row per update
+per machine and nothing else prunes it — a fleet that stopped reporting would otherwise show
+a compliance figure that had not been true for months. Supersedence needed no tombstone: a
+run carries a **selection rule** rather than a snapshot, resolved against each machine's own
+inventory at dispatch, so a machine that was offline on Tuesday gets Wednesday's approved set
+instead of a stale list, and `patch_run_items` is the record of what was actually attempted.
+The reboot is agent-initiated inside the window under a per-window `reboot_policy`
+(`never` / `if_required` / `always`, defaulting to `if_required`) rather than a separate
+verb — never leaves a fleet permanently one restart short of being patched, always restarts
+machines that did not need it.
 
 ---
 
@@ -2631,7 +2687,8 @@ rule marked for local evaluation.
     — and moved the actions onto a right-click menu. **The agent half shipped in agent
     3.24.0**; the card still names the version it needs, so a machine that has not updated says so
     rather than waiting forever on a reply that will never come.
-13. ~~**#13 Remote file explorer**~~ — done, hub 1.88.0. Added for the same reason as #12
+13. ~~**#13 Remote file explorer**~~ — done, hub 1.88.0; **Open** at 1.89.0 (+ agent 3.34.0)
+    and the verbs moved onto a right-click menu at 1.91.0. Added for the same reason as #12
     and immediately after it: the other two helpdesk calls the console could not answer
     without a SYSTEM shell were "get that file off my desktop" and "put this one on it", and
     a shell cannot do the second at all. It reuses the command queue for browsing and the
@@ -2639,8 +2696,9 @@ rule marked for local evaluation.
     `UploadFileAsync` / `DownloadFileAsync`, since they now have a second caller) for the
     bytes. The one new piece is the spool directory the two hops meet in, pruned by the
     retention thread that already prunes the process and live watches. **The agent half is
-    shipped in agent 3.33.0**; the tab still names the version it needs, so a machine that
-    has not updated says so instead of failing every click.
+    shipped in agent 3.33.0**, and Open's in **agent 3.34.0** behind its own floor; the tab
+    still names the version it needs, so a machine that has not updated says so instead of
+    failing every click.
 14. ~~**#14 Patch management**~~ — done, hub 1.92.0 + agent 3.35.0. The first item off the
     PRD v2.0 triage, and the largest real gap it found. Ordered first among the new items
     because two of the others depend on it: #17 has little to correlate without patch
