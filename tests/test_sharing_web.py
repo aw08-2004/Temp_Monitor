@@ -365,6 +365,97 @@ def test_peer_cannot_reach_past_its_share(a_client, a_db, b_db, share_id):
           r.status_code == 404)
 
 
+def test_remote_across_hubs(a_client, b_client, a_db, b_db, link_id, share_id):
+    print("\n== Remote control, signalled through two hubs ==")
+    # remote_control was not in the original share -- the point of the feature is that it
+    # must be granted deliberately, so grant it deliberately here.
+    sign_in(a_client, "tech@x.com")
+    widened = a_client.put(f"/api/sharing/shares/{share_id}", json={
+        "capabilities": [permissions.VIEW, permissions.ISSUE_COMMANDS,
+                         permissions.REMOTE_CONTROL]})
+    check("the share can be widened to carry remote control", widened.status_code == 200)
+    sign_out(a_client)
+    set_setting("remote.enabled", True)
+
+    head = {"Authorization": f"Bearer {TOKENS['peer']}"}
+    sign_in(b_client, "borrower@x.com")
+    b_client.post(f"/api/sharing/links/{link_id}/refresh", json={})
+
+    started = b_client.post(f"/api/sharing/borrowed/{link_id}/{share_id}/remote",
+                            json={"codec": "h264"})
+    check("hub B can start a session on a borrowed machine", started.status_code == 201)
+    session_id = started.get_json().get("session_id")
+    check("...and is handed ICE servers for it",
+          "ice_servers" in (started.get_json() or {}))
+
+    sess = remote.get_session(a_db, session_id)
+    check("the session lives on HUB A", sess is not None)
+    check("...on hub A's own machine", sess and sess["machine"] == MACHINE)
+    check("...owned by the peer, not by a local operator",
+          sess and sess["issued_by"].startswith("peer:"))
+    queued = [c for c in fleet.list_commands(a_db, machine=MACHINE)
+              if c["type"] == "start_remote_session"]
+    check("...and the agent was told from hub A's own queue", len(queued) == 1)
+    check("...by the same peer identity", queued[0]["issued_by"] == sess["issued_by"])
+
+    print("\n== The relay carries signals both ways ==")
+    signalled = b_client.post(
+        f"/api/sharing/borrowed/{link_id}/{share_id}/remote/{session_id}/signal",
+        json={"kind": "answer", "payload": {"sdp": "v=0"}})
+    check("hub B's answer reaches hub A", signalled.status_code == 200)
+    agent_side = remote.get_signals(a_db, session_id, remote.SENDER_AGENT, 0)
+    check("...and is queued for the AGENT to collect",
+          any(s["kind"] == "answer" for s in agent_side.get("signals", [])))
+
+    remote.add_signal(a_db, session_id, remote.SENDER_AGENT, "offer", {"sdp": "v=0"})
+    polled = b_client.get(
+        f"/api/sharing/borrowed/{link_id}/{share_id}/remote/{session_id}/poll?after_seq=0")
+    check("the agent's offer comes back to hub B", polled.status_code == 200)
+    check("...through two hops, unchanged",
+          any(s["kind"] == "offer" for s in polled.get_json().get("signals", [])))
+
+    print("\n== A peer reaches only the sessions it started ==")
+    local_session = remote.create_session(a_db, MACHINE, "tech@x.com", "unattended")
+    r = a_client.get(f"/api/peer/shares/{share_id}/remote/{local_session}/poll",
+                     headers=head)
+    check("a LOCAL operator's session on the same machine is a plain miss",
+          r.status_code == 404)
+    r = a_client.post(f"/api/peer/shares/{share_id}/remote/{local_session}/stop",
+                      headers=head)
+    check("...and cannot be stopped by the peer either", r.status_code == 404)
+    check("...so it is still running",
+          remote.get_session(a_db, local_session)["status"] != remote.STATUS_ENDED)
+
+    print("\n== Virtual display is not on the peer plane at all ==")
+    r = a_client.post(f"/api/peer/shares/{share_id}/virtual-display", headers=head,
+                      json={"mode": "install"})
+    check("there is no peer route for installing a display driver",
+          r.status_code == 404)
+
+    stopped = b_client.post(
+        f"/api/sharing/borrowed/{link_id}/{share_id}/remote/{session_id}/stop", json={})
+    check("hub B can end its own session", stopped.status_code == 200)
+    check("...and hub A records it ended",
+          remote.get_session(a_db, session_id)["status"] == remote.STATUS_ENDED)
+    remote.end_session(a_db, local_session, "test cleanup", actor="test")
+
+    print("\n== Narrowing the share ends what it was carrying ==")
+    live_session = remote.create_session(a_db, MACHINE, f"peer:{PEER_IDS['peer']}",
+                                         "unattended")
+    sign_in(a_client, "tech@x.com")
+    narrowed = a_client.put(f"/api/sharing/shares/{share_id}", json={
+        "capabilities": [permissions.VIEW, permissions.ISSUE_COMMANDS]})
+    sign_out(a_client)
+    check("the share can be narrowed back", narrowed.status_code == 200)
+    check("...and the open screen closed with it, not at the next request",
+          remote.get_session(a_db, live_session)["status"] == remote.STATUS_ENDED)
+    r = a_client.post(f"/api/peer/shares/{share_id}/remote", headers=head, json={})
+    check("a new session on the narrowed share is refused", r.status_code == 403)
+    check("...naming the capability that is missing",
+          "remote_control" in r.get_json()["error"])
+    sign_in(b_client, "borrower@x.com")
+
+
 def test_lapse_and_revocation(a_client, b_client, a_db, b_db, link_id, share_id):
     print("\n== Demoting the operator who lent it suspends the share, out loud ==")
     permissions.update_group(a_db, GROUPS["techs"],
@@ -442,6 +533,7 @@ def test_lapse_and_revocation(a_client, b_client, a_db, b_db, link_id, share_id)
 
 GROUPS = {}
 TOKENS = {}
+PEER_IDS = {}
 
 
 def main():
@@ -489,9 +581,11 @@ def main():
     TOKENS["peer"] = backups.load_secret(
         b_log, backups.load_master_key(),
         sharing_web.secret_id_for(link_id))["token"]
+    PEER_IDS["peer"] = sharing.list_peers(a_db)[0]["peer_id"]
 
     test_borrowing(a_client, b_client, a_db, b_db, link_id, share_id)
     test_peer_cannot_reach_past_its_share(a_client, a_db, b_db, share_id)
+    test_remote_across_hubs(a_client, b_client, a_db, b_db, link_id, share_id)
     test_lapse_and_revocation(a_client, b_client, a_db, b_db, link_id, share_id)
 
     print(f"\n==== {PASS} passed, {FAIL} failed ====")

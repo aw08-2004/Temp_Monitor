@@ -57,7 +57,18 @@
        about a borrowed machine is stored here, so this is empty until something is
        selected and empty again the moment the owner hub stops answering. #}
     <div id="borrowed-detail" hidden></div>
+    {# Where a borrowed screen opens. The same viewer the Remote page and the machine page
+       use, cloned from the same partial and pointed at this hub's proxy instead of at its
+       own remote endpoints -- see `routes` in remote.js. One at a time here, unlike the
+       Remote page's tabs: a borrowed screen is the one-off "come and look at this", and a
+       workspace for several of somebody else's PCs is not what this feature is. #}
+    <div id="borrowed-screen" hidden></div>
 </div>
+
+{# Inert inside a <template> until a clone is taken -- no video element, no script. #}
+<template id="remote-viewer-template">
+    {% include "partials/_remote_viewer.html" %}
+</template>
 
 {# ---------------- Which hubs ---------------- #}
 {% if can_manage_peers %}
@@ -182,5 +193,8 @@
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+{# remote.js before sharing.js: sharing.js calls window.RemoteViewer.create to open a
+   borrowed screen, and the factory has to exist by then. #}
+<script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sharing.js') }}"></script>
 {% endblock %}

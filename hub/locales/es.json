@@ -2960,7 +2960,8 @@
       "open": "Abrir",
       "owned_by": "Propiedad de {hub}. Lectura en vivo: en este concentrador no se guarda nada sobre este equipo.",
       "empty": "Ningún otro concentrador presta un equipo a este.",
-      "empty_hint": "Pida un código de emparejamiento y añada su concentrador en «Concentradores emparejados»."
+      "empty_hint": "Pida un código de emparejamiento y añada su concentrador en «Concentradores emparejados».",
+      "connect": "Conectar"
     },
     "hubs": {
       "heading": "Concentradores emparejados",

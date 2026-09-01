@@ -101,6 +101,85 @@ def secret_id_for(link_id):
     return f"share-link:{link_id}"
 
 
+def peer_actor(peer, body=None):
+    """Who to record as having done this, from the owning hub's point of view.
+
+    Two names, and the format keeps them apart because they are not the same kind of fact.
+    The peer id is something this hub verified -- it authenticated that token. The
+    operator's address is a CLAIM by the far hub, which this hub cannot check and must not
+    launder into an identity: `peer:<id>/<claimed>` reads as borrowed, where a bare address
+    would read like a local operator's.
+
+    The peer ID and not its label, even though the label is what a human would rather read.
+    A label is a display name an admin can edit; this string is an IDENTITY, it goes into
+    `commands.issued_by` and `remote_sessions.issued_by`, and both of those are what scopes
+    a peer's read back to its own rows. An identity that changes when somebody renames a row
+    is not one. The label rides in the audit detail beside it, which is where a human is
+    looking anyway.
+
+    Module-level, like `peer_gate` and for the same reason -- see there.
+    """
+    claimed = permissions.normalize_email((body or {}).get("operator"))
+    stem = f"peer:{peer['peer_id']}"
+    return f"{stem}/{claimed}" if claimed else stem
+
+
+def peer_owns(row, peer):
+    """Is this row one the given peer created? Used to scope a peer's reads to its own work.
+
+    Matches the exact stem or the stem plus an operator, never a bare prefix: without the
+    separator, a peer id that happened to be another's prefix would match. Peer ids are
+    full-length hex so that cannot arise today, and a check that only works because of that
+    is one that breaks quietly if ids ever get shorter.
+    """
+    stem = f"peer:{peer['peer_id']}"
+    value = str((row or {}).get("issued_by") or "")
+    return value == stem or value.startswith(stem + "/")
+
+
+def peer_gate(db_path, access, capability=None):
+    """A decorator that authenticates a peer token, and optionally resolves one share.
+
+    Module-level rather than closed over `create_sharing_blueprint`, because `remote_web.py`
+    needs the same gate: a peer starting a remote session is authorised by sharing.py and
+    carried out by remote.py, and the ICE/TURN minting and stream-parameter validation that
+    a session start needs all live over there. Splitting the gate out is what lets those
+    routes sit beside the console and agent halves of the same feature instead of growing a
+    second copy of remote_web's closure here.
+
+    Without `capability`, the wrapped view is called as `view(peer, ...)`. With one, the
+    view's `<share_id>` is resolved first and it is called as `view(peer, share_state, ...)`.
+
+    The disabled case answers 403 with a reason while a bad token answers 401 with none.
+    That asymmetry is deliberate: "this hub does not do cross-hub sharing" is a
+    configuration fact its own operator already knows and the far operator needs to be told,
+    whereas which tokens are valid is not something an unauthenticated caller gets to learn
+    anything about.
+    """
+    def decorator(view):
+        @functools.wraps(view)
+        def wrapped(*args, **kwargs):
+            if not settings.get_bool(db_path, "sharing.enabled"):
+                return jsonify({"error": "Cross-hub sharing is switched off on this "
+                                         "hub."}), 403
+            peer = sharing.authenticate_peer(
+                db_path, request.headers.get("Authorization"))
+            if peer is None:
+                return jsonify({"error": "Not authorized."}), 401
+            if capability is None:
+                return view(peer, *args, **kwargs)
+            # Read fresh from the tables every request, so a revocation takes effect on the
+            # very next one with no cache to invalidate.
+            state, error = sharing.authorize_peer_action(
+                db_path, peer, kwargs.pop("share_id", None), capability,
+                superusers=access.superusers)
+            if error:
+                return jsonify({"error": error}), 403
+            return view(peer, state, *args, **kwargs)
+        return wrapped
+    return decorator
+
+
 def _default_peer_call(method, url, token=None, payload=None,
                        timeout=PEER_TIMEOUT_SECONDS):
     """One HTTP call to a peer hub. Returns (status, body-dict).
@@ -142,6 +221,7 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
     bp = Blueprint("sharing", __name__)
     can_view = access.require(permissions.VIEW)
     can_command = access.require(permissions.ISSUE_COMMANDS)
+    can_remote = access.require(permissions.REMOTE_CONTROL)
     manage_peers = access.require(permissions.MANAGE_PERMISSION_GROUPS)
     call_peer = peer_call or _default_peer_call
 
@@ -167,64 +247,13 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
     # ================================
     # PEER-FACING (this hub is the OWNER)
     # ================================
-    def peer_auth(view):
-        """Resolve the peer token, or refuse. No session is consulted anywhere in here.
-
-        The disabled case answers 403 with a reason while a bad token answers 401 with
-        none. That asymmetry is deliberate: "this hub does not do cross-hub sharing" is a
-        configuration fact its own operator already knows and the far operator needs to be
-        told, whereas which tokens are valid is not something an unauthenticated caller
-        gets to learn anything about.
-        """
-        @functools.wraps(view)
-        def wrapped(*args, **kwargs):
-            if not _enabled():
-                return jsonify({"error": "Cross-hub sharing is switched off on this "
-                                         "hub."}), 403
-            peer = sharing.authenticate_peer(
-                db_path, request.headers.get("Authorization"))
-            if peer is None:
-                return jsonify({"error": "Not authorized."}), 401
-            return view(peer, *args, **kwargs)
-        return wrapped
+    peer_auth = peer_gate(db_path, access)
 
     def peer_share(capability):
-        """Gate a peer route on one share carrying `capability`, right now.
-
-        Every peer route that touches a machine goes through here, and the decision is
-        `sharing.authorize_peer_action` -- read fresh from the tables each time, so a
-        revocation takes effect on the very next request with no cache to invalidate.
-        """
-        def decorator(view):
-            @functools.wraps(view)
-            def wrapped(peer, share_id, *args, **kwargs):
-                state, error = sharing.authorize_peer_action(
-                    db_path, peer, share_id, capability,
-                    superusers=access.superusers)
-                if error:
-                    return jsonify({"error": error}), 403
-                return view(peer, state, *args, **kwargs)
-            return peer_auth(wrapped)
-        return decorator
+        return peer_gate(db_path, access, capability)
 
     def _peer_actor(peer, body=None):
-        """Who to record as having done this, from the owning hub's point of view.
-
-        Two names, and the format keeps them apart because they are not the same kind of
-        fact. The peer id is something this hub verified -- it authenticated that token.
-        The operator's address is a CLAIM by the far hub, which this hub cannot check and
-        must not launder into an identity: `peer:<id>/<claimed>` reads as borrowed, where a
-        bare address would read like a local operator's.
-
-        The peer ID and not its label, even though the label is what a human would rather
-        read. A label is a display name an admin can edit; this string is an IDENTITY, it
-        is written into `commands.issued_by`, and `peer_command_status` scopes a peer's read
-        on it. An identity that changes when somebody renames a row is not one. The label
-        rides in the audit detail beside it, which is where a human is looking anyway.
-        """
-        claimed = permissions.normalize_email((body or {}).get("operator"))
-        stem = f"peer:{peer['peer_id']}"
-        return f"{stem}/{claimed}" if claimed else stem
+        return peer_actor(peer, body)
 
     def _peer_audit(peer, body, action, target, detail=None):
         payload = dict(detail or {})
@@ -780,6 +809,74 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
             return jsonify({"error": "Cross-hub sharing is switched off."}), 403
         status, answer = _borrowed_call(link_id, share_id, permissions.ISSUE_COMMANDS,
                                         "GET", f"/commands/{command_id}")
+        return jsonify(answer), status
+
+    # ---------------- Remote view/control on a borrowed machine ----------------
+    # Four thin proxies. The viewer in the browser speaks to THIS hub, this hub speaks to the
+    # owning hub, and the owning hub relays to its own agent -- so the signaling for a
+    # borrowed session takes two hops instead of one. That is affordable because signaling is
+    # a small burst at setup and then almost nothing: once ICE completes the media goes
+    # peer-to-peer or through a TURN relay and never touches either hub again.
+    #
+    # There is deliberately no virtual-display proxy: see remote_web.py's peer plane for why
+    # installing a display driver is not something a share hands over.
+    @bp.route("/api/sharing/borrowed/<link_id>/<share_id>/remote", methods=["POST"])
+    @login_required
+    @can_remote
+    def borrowed_remote_start(link_id, share_id):
+        if not _enabled():
+            return jsonify({"error": "Cross-hub sharing is switched off."}), 403
+        body = request.get_json(silent=True) or {}
+        payload = dict(body)
+        payload["operator"] = access.email()
+        status, answer = _borrowed_call(link_id, share_id, permissions.REMOTE_CONTROL,
+                                        "POST", "/remote", payload=payload)
+        if status < 400:
+            fleet.audit(db_path, actor=_actor(), action="share.borrowed_action",
+                        level=fleet.LEVEL_SECURITY, target=share_id,
+                        detail={"link_id": link_id, "type": "start_remote_session",
+                                "session_id": answer.get("session_id")})
+        return jsonify(answer), status
+
+    @bp.route("/api/sharing/borrowed/<link_id>/<share_id>/remote/<session_id>/signal",
+              methods=["POST"])
+    @login_required
+    @can_remote
+    def borrowed_remote_signal(link_id, share_id, session_id):
+        if not _enabled():
+            return jsonify({"error": "Cross-hub sharing is switched off."}), 403
+        body = request.get_json(silent=True) or {}
+        status, answer = _borrowed_call(
+            link_id, share_id, permissions.REMOTE_CONTROL, "POST",
+            f"/remote/{session_id}/signal",
+            payload={"kind": body.get("kind"), "payload": body.get("payload")})
+        return jsonify(answer), status
+
+    @bp.route("/api/sharing/borrowed/<link_id>/<share_id>/remote/<session_id>/poll",
+              methods=["GET"])
+    @login_required
+    @can_remote
+    def borrowed_remote_poll(link_id, share_id, session_id):
+        if not _enabled():
+            return jsonify({"error": "Cross-hub sharing is switched off."}), 403
+        try:
+            after_seq = int(request.args.get("after_seq", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "after_seq must be an integer"}), 400
+        status, answer = _borrowed_call(
+            link_id, share_id, permissions.REMOTE_CONTROL, "GET",
+            f"/remote/{session_id}/poll?after_seq={after_seq}")
+        return jsonify(answer), status
+
+    @bp.route("/api/sharing/borrowed/<link_id>/<share_id>/remote/<session_id>/stop",
+              methods=["POST"])
+    @login_required
+    @can_remote
+    def borrowed_remote_stop(link_id, share_id, session_id):
+        if not _enabled():
+            return jsonify({"error": "Cross-hub sharing is switched off."}), 403
+        status, answer = _borrowed_call(link_id, share_id, permissions.REMOTE_CONTROL,
+                                        "POST", f"/remote/{session_id}/stop")
         return jsonify(answer), status
 
     # ================================

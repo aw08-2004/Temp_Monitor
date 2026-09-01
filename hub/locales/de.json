@@ -2960,7 +2960,8 @@
       "open": "Öffnen",
       "owned_by": "Gehört {hub}. Live gelesen -- zu diesem Rechner wird auf diesem Hub nichts gespeichert.",
       "empty": "Kein anderer Hub verleiht diesem einen Rechner.",
-      "empty_hint": "Bitten Sie um einen Kopplungscode und fügen Sie den Hub unter „Gekoppelte Hubs“ hinzu."
+      "empty_hint": "Bitten Sie um einen Kopplungscode und fügen Sie den Hub unter „Gekoppelte Hubs“ hinzu.",
+      "connect": "Verbinden"
     },
     "hubs": {
       "heading": "Gekoppelte Hubs",

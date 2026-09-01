@@ -3076,7 +3076,8 @@
       "open": "Open",
       "owned_by": "Owned by {hub}. Read live -- nothing about this machine is stored on this hub.",
       "empty": "No other hub is lending this one a machine.",
-      "empty_hint": "Ask a colleague for a pairing code, then add their hub under Paired hubs."
+      "empty_hint": "Ask a colleague for a pairing code, then add their hub under Paired hubs.",
+      "connect": "Connect"
     },
     "hubs": {
       "heading": "Paired hubs",

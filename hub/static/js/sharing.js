@@ -356,6 +356,13 @@
                 buttons.push(button(t('sharing.borrowing.open'), 'btn',
                                     () => openBorrowed(machine)));
             }
+            // The case the whole feature exists for, and the reason `view` is a separate
+            // tick: a share can carry remote_control and nothing else, and then this is the
+            // only button on the row.
+            if (machine.capabilities.includes('remote_control')) {
+                buttons.push(button(t('sharing.borrowing.connect'), 'btn btn--primary',
+                                    () => openScreen(machine)));
+            }
             row.appendChild(actionCell(buttons));
             body.appendChild(row);
         });
@@ -416,6 +423,67 @@
         card.appendChild(grid);
         card.appendChild(el('p', 'stat-card__meta', t('sharing.detail.projection_note')));
         borrowedDetail.replaceChildren(card);
+    }
+
+    // ---------------- a borrowed screen ----------------
+    const screenHost = document.getElementById('borrowed-screen');
+    const viewerTemplate = document.getElementById('remote-viewer-template');
+    let openViewer = null;
+
+    function closeScreen() {
+        if (openViewer) {
+            openViewer.dispose();
+            openViewer = null;
+        }
+        if (screenHost) {
+            screenHost.replaceChildren();
+            screenHost.hidden = true;
+        }
+    }
+
+    function openScreen(machine) {
+        if (!screenHost || !viewerTemplate || !window.RemoteViewer) return;
+        closeScreen();
+
+        const base = `/api/sharing/borrowed/${encodeURIComponent(machine.link_id)}`
+            + `/${encodeURIComponent(machine.share_id)}/remote`;
+
+        const bar = el('div', 'toolbar');
+        bar.style.justifyContent = 'space-between';
+        bar.appendChild(el('span', 'stat-card__meta',
+            t('sharing.borrowing.owned_by', {
+                hub: machine.peer_label || t('sharing.unnamed_hub'),
+            })));
+        bar.appendChild(button(t('common.close'), 'btn', closeScreen));
+
+        const panel = el('div', 'remote-screen');
+        panel.append(viewerTemplate.content.cloneNode(true));
+        screenHost.replaceChildren(bar, panel);
+        screenHost.hidden = false;
+
+        // The same viewer as everywhere else, pointed through this hub's proxy. Nothing in
+        // the WebRTC exchange below names a hub, so the extra hop is invisible to both
+        // peers -- see the `routes` table in remote.js.
+        openViewer = window.RemoteViewer.create(
+            panel.querySelector('[data-remote-viewer]'), machine.hostname, {
+                autoStart: true,
+                borrowed: true,
+                routes: {
+                    start: () => base,
+                    signal: (id) => `${base}/${encodeURIComponent(id)}/signal`,
+                    poll: (id, seq) =>
+                        `${base}/${encodeURIComponent(id)}/poll?after_seq=${seq}`,
+                    stop: (id) => `${base}/${encodeURIComponent(id)}/stop`,
+                    // Null, not omitted: the defaults are LOCAL endpoints, and asking this
+                    // hub about a hostname that is not in its fleet is the wrong question
+                    // rather than a failing one. remote.js skips a null route.
+                    inventory: null,
+                    inventoryRefresh: null,
+                    virtualDisplay: null,
+                },
+            });
+        openViewer.setTitle(machine.hostname);
+        screenHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     async function loadBorrowed() {
