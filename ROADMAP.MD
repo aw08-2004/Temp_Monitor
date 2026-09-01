@@ -349,7 +349,8 @@ and an operator browses what landed and pushes any of it back — onto the same 
 replacement. `restore_backup.py` remains the hub-independent path and now opens machine
 archives too (`--list` / `--extract`).
 
-**Agent side (3.9.0) — needs a signed release before the fleet gains it.**
+**Agent side — shipped.** The file-backup executor reached the fleet in agent 3.9.0, and
+the restore half in 3.10.0.
 
 **Built:**
 
@@ -803,10 +804,10 @@ parameters were resolved as:
   surfaced on the machine page's Identity card and as an Inventory column, and searchable.
   An older agent that never reports it simply leaves the column null.
 
-**Agent halves pending a signed release**: the C# agent's `service_tag` reporting ships in
-source (3.11.0) but needs the usual build + `sign_release.py --sign-agent` + asset upload
-before the fleet gains it. Until then, machines show a blank Service Tag, which is exactly
-the older-agent fallback above. (companion.py 2.11.0 carried its half too; the script has
+**Agent halves shipped.** The C# agent's `service_tag` reporting was written against source
+3.11.0 and reached the fleet in **agent 3.13.0**; machines that predate it show a blank
+Service Tag, which is exactly the older-agent fallback above. (companion.py 2.11.0 carried
+its half too; the script has
 since been removed from the repo entirely.)
 
 <details>
@@ -932,7 +933,7 @@ be admin-only or self-service.
 
 ---
 
-## ✅ 2. Remote view & control   ·   hub 1.40.0 (+ agent, pending a signed release)
+## ✅ 2. Remote view & control   ·   hub 1.40.0 + agent 3.13.0
 
 Built. Live remote view **and control** of a managed PC over **true H.264/WebRTC** from v1.
 The user chose to go straight for the full pipeline (no throwaway spike) and to make **the hub
@@ -1265,8 +1266,8 @@ language with more forms needs a rule table, not just a catalog.
 
 Read and change firmware settings across the fleet, and execute the `update_bios` command
 type that had been accepted, queued and routed — and then stubbed — since the
-command-signing removal. Both halves are now built; the agent half ships in source and
-needs a signed release before the fleet gains it.
+command-signing removal. Both halves are built, and the agent half reached the fleet in
+**agent 3.20.1** — 3.20.0 itself was never published.
 
 The immediate motivator is #10 below: **Wake-on-LAN is a firmware setting before it is a
 network feature**, and turning it on by hand on every machine is exactly the errand this
@@ -1595,8 +1596,7 @@ Built. `wake.py` (model, flask-free) + `wake_web.py` (console API), a `machine_n
 fleet-wide wake on the Asset Inventory page, `wake.*` settings, and two new command types —
 `wake_machine` (issued to a *peer*) and `prepare_wake` (the precondition remedy). Agent
 half: `Network/NicReader.cs`, `NetworkInventoryReporter.cs`, `WakeMachineExecutor.cs`,
-`PrepareWakeExecutor.cs`. **The agent half needs a signed release** (build +
-`sign_release.py --sign-agent` + asset upload) before the fleet gains it.
+`PrepareWakeExecutor.cs`. **The agent half shipped in agent 3.21.0.**
 
 Delivered as specified below. **All four open parameters resolved:**
 
@@ -2076,7 +2076,7 @@ twice, in two places.
 
 ---
 
-## ✅ 12. Processes on the machine Overview   ·   hub 1.71.0 (+ agent, pending a signed release)
+## ✅ 12. Processes on the machine Overview   ·   hub 1.71.0 + agent 3.24.0
 
 A task manager for a machine you are not sitting at. The Overview tab grows a **Processes**
 card: every process grouped by name with its CPU, memory, owner and PID, expandable to the
@@ -2167,7 +2167,7 @@ than silently applied.
 
 ---
 
-## ✅ 13. Remote file explorer (Tools → Files)   ·   hub 1.88.0 (+ agent, pending a signed release)
+## ✅ 13. Remote file explorer (Tools → Files)   ·   hub 1.88.0 + agent 3.33.0
 
 Browsing a managed machine's disk, and moving files both ways. The Tools page grows a
 **Files** tab: the machine's volumes, then folders, with **Download**, **Upload**, **Copy**,
@@ -2523,15 +2523,15 @@ rule marked for local evaluation.
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
-2. ~~**#5 Deploy packages**~~ — done, hub 1.27.0 (pending an agent release)
+2. ~~**#5 Deploy packages**~~ — done, hub 1.27.0 + agent 3.9.0
 3. ~~**#1 Backups**~~ — done: hub DB (1.28.0), per-PC files (1.29.0 / agent 3.8.0),
-   console-driven restore (1.30.0 / agent 3.9.0). Both agent halves are pending a signed
-   agent release.
+   console-driven restore (1.30.0 / agent 3.9.0). Both agent halves shipped, the second
+   in agent 3.10.0.
 4. ~~**#8 Registered Users directory**~~ — done, hub 1.35.0 (prerequisite for #6's member picker)
 5. ~~**#6 Search & pickers across the console**~~ — done, hub 1.36.0 (+ agent 3.11.0 /
-   companion 2.11.0 for the new Service Tag; agent half pending a signed release)
+   companion 2.11.0 for the new Service Tag; agent half shipped in 3.13.0)
 6. ~~**#2 Remote view & control**~~ — done, hub 1.40.0 (built ahead of #4 at the user's
-   request; agent half pending a signed release; TURN server in `turn/`, installer-provisioned
+   request; agent half shipped in 3.13.0; TURN server in `turn/`, installer-provisioned
    and managed from Settings → Remote Control)
 7. ~~**#4 Active Directory**~~ — done: OIDC/Entra login (1.44.0), directory-group →
    permission-group mapping (1.49.0), on-prem LDAP computer sync + the `ad_ou`
@@ -2563,8 +2563,8 @@ rule marked for local evaluation.
    by name at both ends, one attempt per machine with no retry, and a flash confirmed by
    the **BIOS version the machine reports after its restart** rather than by the command
    result — so a staged image waits in `rebooting` for a day rather than being called
-   success by an exit code. **The agent half is pending a signed release** (build +
-   `sign_release.py --sign-agent` + asset upload).
+   success by an exit code. **The agent half shipped in agent 3.20.1** (3.20.0 was never
+   published).
 10. ~~**#10 Wake-on-LAN**~~ — done, hub 1.63.0 + agent 3.21.0. Both prerequisites were in
     place: #9's settings write turns the firmware-side enable on across a fleet, and the
     NIC inventory the hub did not collect is now a `machine_nics` table fed by a
@@ -2573,8 +2573,7 @@ rule marked for local evaluation.
     the hub's own broadcast kept only as a same-subnet fallback. All four open parameters
     resolved (see the entry above); the sharpest was confirming a wake against the moment
     the packet was sent rather than against online-ness, which fails in the direction of
-    looking like it worked. **The agent half is pending a signed release** (build +
-    `sign_release.py --sign-agent` + asset upload).
+    looking like it worked. **The agent half shipped in agent 3.21.0.**
 11. **#11 Desktop & mobile app** — hub half done, hub 1.69.0: device tokens at the one
     `login_required` seam, RFC 8252 loopback pairing, a Devices tab, and a Download Client
     page driven by a signed manifest. The Flutter client in `app/` analyzes clean and its
@@ -2593,10 +2592,9 @@ rule marked for local evaluation.
     queue carries the two verbs that change the machine. 1.71.0 added the one thing that
     could not be reused — a dedicated 2-second watch poll, because an agent has no inbound
     port and 10-second heartbeat notification was most of what made the first list feel slow
-    — and moved the actions onto a right-click menu. **The agent half is pending a signed
-    release** (build + `sign_release.py --sign-agent` + asset upload); until then the card
-    names the version it needs instead of waiting forever on a machine that will never
-    report.
+    — and moved the actions onto a right-click menu. **The agent half shipped in agent
+    3.24.0**; the card still names the version it needs, so a machine that has not updated says so
+    rather than waiting forever on a reply that will never come.
 13. ~~**#13 Remote file explorer**~~ — done, hub 1.88.0. Added for the same reason as #12
     and immediately after it: the other two helpdesk calls the console could not answer
     without a SYSTEM shell were "get that file off my desktop" and "put this one on it", and
@@ -2605,8 +2603,8 @@ rule marked for local evaluation.
     `UploadFileAsync` / `DownloadFileAsync`, since they now have a second caller) for the
     bytes. The one new piece is the spool directory the two hops meet in, pruned by the
     retention thread that already prunes the process and live watches. **The agent half is
-    pending a signed release**; until then the tab names the version it needs (3.33.0)
-    instead of failing every click on a fleet that has not updated.
+    shipped in agent 3.33.0**; the tab still names the version it needs, so a machine that
+    has not updated says so instead of failing every click.
 14. ~~**#14 Patch management**~~ — done, hub 1.92.0 + agent 3.35.0. The first item off the
     PRD v2.0 triage, and the largest real gap it found. Ordered first among the new items
     because two of the others depend on it: #17 has little to correlate without patch
@@ -2656,8 +2654,8 @@ rule marked for local evaluation.
 > 1.63.0). #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0), which is an
 > extension of a done feature rather than a new board item.
 >
-> **#14 through #20 came from the PRD v2.0 triage above; #14 is built and the rest are not.**
-> That
+> **#14 through #21 came from the PRD v2.0 triage above; #14 and #21 are built and shipped
+> (agent 3.35.0), and the rest are not.** That
 > section is new as of 2026-08-31 and is the first time this board has grown by more than
 > one item at once; read it before the entries, because it records which PRD requirements
 > were rejected and why, and several of the loudest ones were. #15 is the exception on that
@@ -2669,10 +2667,14 @@ rule marked for local evaluation.
 > never talked to a hub. Everything else predating the triage is done except the
 > opportunistic remainder of #3.
 >
-> What is otherwise outstanding is not a feature but a release — two of them now: the agent
-> halves of #1, #2, #5, #6, #9, #10 and #13 all ship in source and need a signed **agent**
-> release before the fleet gains any of them, and #11 needs a signed **client** release
-> before there is anything on the Download page.
+> **Nothing on this board is waiting on an agent release any more.** Every agent half that
+> this file once listed as pending has shipped: #5 and #1 in 3.9.0/3.10.0, #2 and #6 in
+> 3.13.0, #9 in 3.20.1, #10 in 3.21.0, #12 in 3.24.0, #13 in 3.33.0, and #14 with #21 in
+> 3.35.0. Those lines stayed stale for a long time because a released agent half changes
+> nothing an operator can see on this page — the entry it belongs to already read done — so
+> the versions above were each verified against the `agent-v<version>` tag rather than
+> against the "built at" number in the entry, which is a SOURCE version and in #9's case
+> names a release that was never published.
 
 Each item above has a decided approach; only small, implementation-level parameters
 remain (noted per feature) and are meant to be resolved while writing that feature's full
