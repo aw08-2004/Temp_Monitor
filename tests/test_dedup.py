@@ -32,6 +32,32 @@ import alerts
 import app
 import settings
 
+
+def _write_reading_synchronously(timestamp_str, timestamp_epoch, machine, temp,
+                                 sensors_json=None, metrics=None):
+    """Commit a report's reading inline instead of handing it to the async db_writer.
+
+    /api/report queues its reading and the writer thread batches for
+    DB_WRITE_FLUSH_SECONDS (0.5) before touching SQLite -- while the merge this module
+    tests fires inside the very same request. So a merge re-points the rows that are on
+    disk at that instant, and the queued one lands afterwards under the hostname the
+    merge just deleted. Whether "no readings left under the dropped name" holds then
+    comes down to whether the assert or the flush timer wins the race: fast box passes,
+    loaded box fails, same code either way.
+
+    Patching it out (rather than sleeping until the flush, which just makes the race
+    slower) also means no writer thread ever starts, so nothing in this module writes to
+    the DB off the test's own thread. This is app's own synchronous path -- the fallback
+    enqueue_reading itself takes when the queue is full -- not a reimplementation of it.
+    """
+    app.write_readings_batch([
+        (timestamp_str, timestamp_epoch, machine, float(temp), sensors_json)
+        + app._metric_values_tuple(metrics)
+    ])
+
+
+app.enqueue_reading = _write_reading_synchronously
+
 PASS = 0
 FAIL = 0
 
@@ -97,7 +123,8 @@ def readings_count(machine):
 
 
 def seed_readings(machine, n=3):
-    """Insert deterministic history rows (the async db_writer is too flaky to assert on)."""
+    """Insert history rows directly, at timestamps this test picks rather than the ones a
+    report would stamp -- see _write_reading_synchronously for the writer itself."""
     now = datetime.now()
     with app.get_db_conn() as conn:
         for i in range(n):
