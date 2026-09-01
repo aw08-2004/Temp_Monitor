@@ -91,8 +91,10 @@ questions); session handling and HTTP live in `sharing_web.py`.
 """
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
+import socket
 import time
 import uuid
 from urllib.parse import urlsplit, urlunsplit
@@ -352,6 +354,9 @@ def normalize_peer_url(url):
     A query string or fragment is refused rather than stripped: both mean the operator
     pasted something other than a hub address -- usually a whole console URL -- and silently
     keeping the part that parses is how a peer link ends up pointing somewhere surprising.
+
+    Addresses that cannot be a hub at all -- loopback, link-local, multicast -- are refused
+    by `_refuse_unroutable`; see there for what that does and does not claim.
     """
     raw = str(url or "").strip()
     if not raw:
@@ -376,8 +381,53 @@ def normalize_peer_url(url):
         parts.port
     except ValueError:
         raise SharingError("A peer hub address has an invalid port.")
+    _refuse_unroutable(parts.hostname)
 
     return urlunsplit(("https", parts.netloc, parts.path.rstrip("/"), "", ""))
+
+
+#: Address ranges a peer hub can never legitimately live in, and that an outbound request
+#: from a server should never be aimed at. Loopback is this hub talking to itself;
+#: link-local is where every cloud provider parks its instance-metadata service, which is
+#: the single most valuable target of a server-side request forgery and the reason this
+#: check exists at all. Multicast and the reserved blocks are not endpoints.
+#:
+#: RFC1918 is deliberately NOT here. Two hubs cooperating across one organisation's network
+#: is a real deployment of this feature, and refusing 10/8 would break it for a threat that
+#: the capability gate already covers -- only a `manage_permission_groups` holder can create
+#: a link, and that grant can already rewrite the permission model and run code as SYSTEM
+#: across the fleet. This blocks what has no legitimate use, and does not pretend to be a
+#: boundary against the operator who configures the hub.
+def _refuse_unroutable(host):
+    """Raise SharingError if `host` is, or resolves to, an address a peer hub cannot be.
+
+    Checked when the address is entered rather than on every request. Per-request
+    resolution would add a DNS round trip to each poll and STILL not close the gap it looks
+    like it closes: a name can resolve differently between the check and the connect, so
+    only pinning the resolved address at connect time would actually bind them. That is not
+    built, and this docstring says so rather than implying a guarantee -- the honest claim
+    is that an address which is obviously not a hub is refused, not that a determined
+    administrator cannot get around it.
+    """
+    candidates = []
+    try:
+        candidates.append(ipaddress.ip_address(host.strip("[]")))
+    except ValueError:
+        try:
+            # A name. Refused on what it resolves to now, best effort: a name that does not
+            # resolve at all is NOT refused here, because a peer hub that is merely down
+            # should still be addable.
+            for info in socket.getaddrinfo(host, None):
+                candidates.append(ipaddress.ip_address(info[4][0]))
+        except (socket.gaierror, ValueError, UnicodeError):
+            return
+
+    for address in candidates:
+        if (address.is_loopback or address.is_link_local or address.is_multicast
+                or address.is_reserved or address.is_unspecified):
+            raise SharingError(
+                f"{host!r} is not an address another hub can be reached at. A peer hub "
+                "must be a real, routable https address.")
 
 
 # ================================

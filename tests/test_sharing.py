@@ -165,6 +165,33 @@ def test_peer_url():
 
     check("the http refusal says why", "header" in _url_refusal("http://hub.example.com"))
 
+    # A peer hub can never be at one of these, and they are where a server-side request
+    # forgery would want to be aimed -- 169.254.169.254 is the cloud instance-metadata
+    # service. Refused when the address is entered.
+    unroutable = {
+        "https://127.0.0.1": "loopback is this hub talking to itself",
+        "https://localhost": "the same, by name",
+        "https://[::1]": "loopback v6",
+        "https://169.254.169.254": "the cloud metadata service",
+        "https://0.0.0.0": "unspecified",
+        "https://224.0.0.1": "multicast is not an endpoint",
+    }
+    for url, why in unroutable.items():
+        try:
+            sharing.normalize_peer_url(url)
+            check(f"refuses {url!r} ({why})", False)
+        except sharing.SharingError:
+            check(f"refuses {url!r} ({why})", True)
+
+    # RFC1918 stays allowed on purpose: two hubs cooperating across one organisation's
+    # network is a real deployment, and the capability gate is what covers the operator.
+    check("a private address is still a usable peer hub",
+          sharing.normalize_peer_url("https://10.4.1.9:8443")
+          == "https://10.4.1.9:8443")
+    check("a name that does not resolve is not refused for that alone",
+          sharing.normalize_peer_url("https://no-such-host.invalid")
+          == "https://no-such-host.invalid")
+
 
 def main():
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
