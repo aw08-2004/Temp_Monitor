@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.sharing') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. Every table is rendered by sharing.js from /api/sharing/*.
+
+   Three panes, and the order is the order of the questions an operator asks: what are we
+   lending, what have we been lent, and which hubs are we speaking to at all. The third is
+   gated on MANAGE_PERMISSION_GROUPS -- deciding that another organisation's console may
+   talk to this one is the grant perimeter -- while the first two need only VIEW, because
+   lending a machine you already administer is delegation rather than administration.
+
+   `can_manage_peers` comes from the route, and the tab is not rendered without it. That is
+   presentation only: every endpoint behind it is gated server-side regardless.
+#}
+<div class="tabs" role="tablist" aria-label="{{ t('sharing.views_nav') }}" data-tabs-key="sharing">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-lending"
+            aria-controls="lending-pane" aria-selected="true">{{ t('sharing.tab_lending') }}</button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-borrowing"
+            aria-controls="borrowing-pane" aria-selected="false" tabindex="-1">{{ t('sharing.tab_borrowing') }}</button>
+    {% if can_manage_peers %}
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-hubs"
+            aria-controls="hubs-pane" aria-selected="false" tabindex="-1">{{ t('sharing.tab_hubs') }}</button>
+    {% endif %}
+</div>
+
+{# ---------------- What we lend ---------------- #}
+<div class="tab-panel" id="lending-pane" role="tabpanel" aria-labelledby="tab-btn-lending">
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+        <div>
+            <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('sharing.lending.heading') }}</h1>
+            <p class="stat-card__meta">{{ t('sharing.lending.intro') }}</p>
+        </div>
+        <button class="btn btn--primary" type="button" id="new-share">{{ t('sharing.lending.add') }}</button>
+    </div>
+    {# Rendered hidden and revealed by sharing.js when the API reports the feature off. A
+       page that simply shows nothing would read as "we lend nothing", which is a different
+       fact from "this hub does not do cross-hub sharing". #}
+    <div class="banner banner--warn" id="sharing-disabled" hidden>{{ t('sharing.disabled') }}</div>
+    <div class="table-scroll"><div id="shares-host"></div></div>
+</div>
+
+{# ---------------- What we borrow ---------------- #}
+<div class="tab-panel" id="borrowing-pane" role="tabpanel" aria-labelledby="tab-btn-borrowing" hidden>
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+        <div>
+            <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('sharing.borrowing.heading') }}</h1>
+            <p class="stat-card__meta">{{ t('sharing.borrowing.intro') }}</p>
+        </div>
+        <button class="btn" type="button" id="refresh-borrowed">{{ t('sharing.borrowing.refresh') }}</button>
+    </div>
+    <div class="table-scroll"><div id="borrowed-host"></div></div>
+    {# The detail panel for one borrowed machine. Populated by a PROXIED read -- nothing
+       about a borrowed machine is stored here, so this is empty until something is
+       selected and empty again the moment the owner hub stops answering. #}
+    <div id="borrowed-detail" hidden></div>
+    {# Where a borrowed screen opens. The same viewer the Remote page and the machine page
+       use, cloned from the same partial and pointed at this hub's proxy instead of at its
+       own remote endpoints -- see `routes` in remote.js. One at a time here, unlike the
+       Remote page's tabs: a borrowed screen is the one-off "come and look at this", and a
+       workspace for several of somebody else's PCs is not what this feature is. #}
+    <div id="borrowed-screen" hidden></div>
+</div>
+
+{# Inert inside a <template> until a clone is taken -- no video element, no script. #}
+<template id="remote-viewer-template">
+    {% include "partials/_remote_viewer.html" %}
+</template>
+
+{# ---------------- Which hubs ---------------- #}
+{% if can_manage_peers %}
+<div class="tab-panel" id="hubs-pane" role="tabpanel" aria-labelledby="tab-btn-hubs" hidden>
+    <div style="margin-bottom: var(--space-5);">
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('sharing.hubs.heading') }}</h1>
+        <p class="stat-card__meta">{{ t('sharing.hubs.intro') }}</p>
+    </div>
+
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-3);">
+        <h2 class="section-title" style="font-size: var(--text-lg);">{{ t('sharing.hubs.peers_heading') }}</h2>
+        <button class="btn btn--primary" type="button" id="new-pairing">{{ t('sharing.hubs.new_pairing') }}</button>
+    </div>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-4);">{{ t('sharing.hubs.peers_intro') }}</p>
+    <div class="table-scroll"><div id="peers-host"></div></div>
+
+    <div class="toolbar" style="justify-content: space-between; margin: var(--space-6) 0 var(--space-3);">
+        <h2 class="section-title" style="font-size: var(--text-lg);">{{ t('sharing.hubs.links_heading') }}</h2>
+        <button class="btn btn--primary" type="button" id="new-link">{{ t('sharing.hubs.new_link') }}</button>
+    </div>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-4);">{{ t('sharing.hubs.links_intro') }}</p>
+    <div class="table-scroll"><div id="links-host"></div></div>
+</div>
+{% endif %}
+
+{# ---------------- Dialogs ---------------- #}
+<dialog class="modal" id="share-modal">
+    <form method="dialog" id="share-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="share-modal-title">{{ t('sharing.lending.add') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="share-peer">{{ t('sharing.field.peer') }}</label>
+            <select class="input" id="share-peer" style="width: 100%;"></select>
+
+            <label class="setting__label" for="share-machine" style="margin-top: var(--space-4);">{{ t('sharing.field.machine') }}</label>
+            <input class="input" id="share-machine" list="share-machine-options" maxlength="255"
+                   autocomplete="off" style="width: 100%;">
+            <datalist id="share-machine-options"></datalist>
+
+            <fieldset style="margin-top: var(--space-4); border: 0; padding: 0;">
+                <legend class="setting__label">{{ t('sharing.field.capabilities') }}</legend>
+                {# Nothing rides along implicitly: `view` does not travel with
+                   `remote_control`, so each is its own tick box and only remote_control is
+                   pre-ticked. A remote-view-only share is the case this feature exists for
+                   and it must be the easy one to make. #}
+                <p class="stat-card__meta">{{ t('sharing.field.capabilities_help') }}</p>
+                <div id="share-capabilities" class="chip-list" style="margin-top: var(--space-2);"></div>
+            </fieldset>
+
+            <label class="setting__label" for="share-expires" style="margin-top: var(--space-4);">
+                {{ t('sharing.field.expires') }} <span class="setting__default">{{ t('common.optional') }}</span>
+            </label>
+            <input class="input" id="share-expires" type="datetime-local" style="width: 100%;">
+            <p class="stat-card__meta">{{ t('sharing.field.expires_help') }}</p>
+
+            <p class="setting__error" id="share-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="share-cancel">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="share-save">{{ t('common.save') }}</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="modal" id="pairing-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('sharing.hubs.new_pairing') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="pairing-label">{{ t('sharing.field.peer_label') }}</label>
+            <input class="input" id="pairing-label" maxlength="64" autocomplete="off"
+                   placeholder="{{ t('sharing.field.peer_label_placeholder') }}" style="width: 100%;">
+            <p class="stat-card__meta">{{ t('sharing.field.peer_label_help') }}</p>
+
+            {# Shown once, and only once -- the hub keeps the hash. The copy affordance is
+               the whole point of the step: this string is read out or pasted into a chat
+               window, and re-typing it by hand is where a pairing goes wrong. #}
+            <div id="pairing-result" hidden style="margin-top: var(--space-4);">
+                <label class="setting__label" for="pairing-code">{{ t('sharing.field.code') }}</label>
+                <input class="input" id="pairing-code" readonly style="width: 100%; font-family: var(--font-mono);">
+                <p class="stat-card__meta" id="pairing-expiry"></p>
+            </div>
+            <p class="setting__error" id="pairing-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="pairing-close">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="pairing-create">{{ t('sharing.hubs.generate') }}</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="modal" id="link-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('sharing.hubs.new_link') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="link-url">{{ t('sharing.field.hub_url') }}</label>
+            <input class="input" id="link-url" maxlength="400" autocomplete="off"
+                   placeholder="https://their-hub.example.com" style="width: 100%;">
+            <p class="stat-card__meta">{{ t('sharing.field.hub_url_help') }}</p>
+
+            <label class="setting__label" for="link-code" style="margin-top: var(--space-4);">{{ t('sharing.field.code') }}</label>
+            <input class="input" id="link-code" maxlength="200" autocomplete="off"
+                   style="width: 100%; font-family: var(--font-mono);">
+
+            <label class="setting__label" for="link-label" style="margin-top: var(--space-4);">
+                {{ t('sharing.field.link_label') }} <span class="setting__default">{{ t('common.optional') }}</span>
+            </label>
+            <input class="input" id="link-label" maxlength="64" autocomplete="off" style="width: 100%;">
+
+            <p class="setting__error" id="link-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="link-cancel">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="link-save">{{ t('sharing.hubs.pair') }}</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+{# remote.js before sharing.js: sharing.js calls window.RemoteViewer.create to open a
+   borrowed screen, and the factory has to exist by then. #}
+<script src="{{ url_for('static', filename='js/remote.js') }}"></script>
+<script src="{{ url_for('static', filename='js/sharing.js') }}"></script>
+{% endblock %}

@@ -68,6 +68,32 @@
         const options = opts || {};
         const q = (name) => root.querySelector(`[data-remote="${name}"]`);
 
+        // Every hub URL this viewer touches, in one table, so a caller can point it
+        // somewhere else. `options.routes` is what makes a BORROWED machine viewable
+        // (roadmap #15): the same WebRTC dance, but signalled through this hub's proxy to
+        // the hub that owns the PC. Everything below is unchanged by that -- the browser is
+        // still the answerer, the agent is still the offerer, and neither knows there is an
+        // extra hop, because there is nothing in the signalling that names a hub.
+        //
+        // A borrowed viewer sets `inventory`, `inventoryRefresh` and `virtualDisplay` to
+        // NULL rather than omitting them, and the three callers below check before firing.
+        // Omitting would leave the defaults in place, which point at this hub's own remote
+        // endpoints for a hostname that is not in its fleet -- the wrong question rather
+        // than a failing one. There is no proxy for any of the three on purpose: the
+        // session list is hub A's to enumerate, and installing a display driver puts a
+        // publisher into somebody else's certificate store, which is not what a share is.
+        const routes = Object.assign({
+            start: () => `/api/remote/${encodeURIComponent(machine)}/start`,
+            signal: (id) => `/api/remote/session/${encodeURIComponent(id)}/signal`,
+            poll: (id, seq) =>
+                `/api/remote/session/${encodeURIComponent(id)}/poll?after_seq=${seq}`,
+            stop: (id) => `/api/remote/session/${encodeURIComponent(id)}/stop`,
+            inventory: () => `/api/remote/${encodeURIComponent(machine)}/inventory`,
+            inventoryRefresh: () =>
+                `/api/remote/${encodeURIComponent(machine)}/inventory/refresh`,
+            virtualDisplay: () => `/api/remote/${encodeURIComponent(machine)}/virtual-display`,
+        }, options.routes || {});
+
         const els = {
             title: q('title'),
             start: q('start'),
@@ -130,6 +156,16 @@
         function hint(text) { els.hint.textContent = text || ''; }
         function meta(text) { els.meta.textContent = text || ''; }
 
+        // A borrowed machine (roadmap #15) is shown the same viewer with two controls taken
+        // off it. Neither is a security boundary -- the owning hub has no proxy route for
+        // either, so both would simply fail -- but a button that always fails is worse than
+        // no button, and "install a display driver on a colleague's PC" is not a thing to
+        // offer and then refuse. The `vdd` panel starts hidden in the partial and is only
+        // revealed by renderDisplays, which a borrowed viewer never reaches.
+        if (options.borrowed) {
+            els.refreshSessions.hidden = true;
+        }
+
         // ---- Start-time settings ---------------------------------------------------------
         function startTimeControls() {
             return [els.session, els.codec, els.encoder, els.refreshSessions];
@@ -185,7 +221,7 @@
                     encoder: els.encoder.value,
                 }, liveSettings());
                 const res = await window.FleetApi.postJson(
-                    `/api/remote/${encodeURIComponent(machine)}/start`, body);
+                    routes.start(), body);
                 if (disposed) {   // the tab was closed while the start was in flight
                     stopSession(res.session_id);
                     return;
@@ -350,8 +386,7 @@
         function postSignal(kind, payload) {
             if (!sessionId) return Promise.resolve();
             return window.FleetApi.postJson(
-                `/api/remote/session/${encodeURIComponent(sessionId)}/signal`,
-                { kind, payload }
+                routes.signal(sessionId), { kind, payload }
             ).catch(() => { /* transient; the next tick retries the relevant state */ });
         }
 
@@ -365,7 +400,7 @@
             if (!running || !sessionId) return;
             try {
                 const res = await window.FleetApi.getJson(
-                    `/api/remote/session/${encodeURIComponent(sessionId)}/poll?after_seq=${afterSeq}`);
+                    routes.poll(sessionId, afterSeq));
                 afterSeq = res.next_seq;
                 for (const sig of res.signals || []) await handleSignal(sig);
                 if (res.status === 'ended' || res.status === 'expired') {
@@ -416,7 +451,7 @@
          *  closed. keepalive so it still goes out from a pagehide handler. */
         function stopSession(id, { keepalive = false } = {}) {
             if (!id) return Promise.resolve();
-            return fetch(`/api/remote/session/${encodeURIComponent(id)}/stop`, {
+            return fetch(routes.stop(id), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: '{}',
@@ -545,10 +580,15 @@
 
         // ---- Inventory: session picker + headless badge -----------------------------------
         async function loadInventory() {
+            // A route set to null means "this hub cannot answer that about this machine",
+            // which is the borrowed case: there is no proxy for the session list, and
+            // falling back to the LOCAL endpoint would ask this hub about a hostname that
+            // is not in its fleet. Skipping leaves the picker on "Auto", which is exactly
+            // what an agent too old to report its sessions already leaves it on.
+            if (!routes.inventory) return;
             let data;
             try {
-                data = await window.FleetApi.getJson(
-                    `/api/remote/${encodeURIComponent(machine)}/inventory`);
+                data = await window.FleetApi.getJson(routes.inventory());
             } catch (e) {
                 return;   // an agent too old to report leaves the picker on "Auto", which works
             }
@@ -610,11 +650,11 @@
         }
 
         async function refreshInventory() {
+            if (!routes.inventoryRefresh) return;
             els.refreshSessions.disabled = true;
             hint(t('machine.remote.refreshing'));
             try {
-                await window.FleetApi.postJson(
-                    `/api/remote/${encodeURIComponent(machine)}/inventory/refresh`, {});
+                await window.FleetApi.postJson(routes.inventoryRefresh(), {});
                 // The agent picks the command up on its next poll and answers on its next
                 // heartbeat, so give it a beat before reading back rather than showing stale
                 // data.
@@ -633,13 +673,14 @@
         }
 
         async function virtualDisplay(mode) {
+            if (!routes.virtualDisplay) return;
             const button = mode === 'install' ? els.vddInstall : els.vddUninstall;
             button.disabled = true;
             hint(mode === 'install' ? t('machine.remote.vdd_queuing_install')
                                     : t('machine.remote.vdd_queuing_remove'));
             try {
                 await window.FleetApi.postJson(
-                    `/api/remote/${encodeURIComponent(machine)}/virtual-display`,
+                    routes.virtualDisplay(),
                     { mode, monitors: 1, resolutions: [{ width: 1920, height: 1080, hz: 60 }] });
                 hint(t('machine.remote.vdd_queued'));
                 setTimeout(() => { if (!disposed) loadInventory(); }, 15000);

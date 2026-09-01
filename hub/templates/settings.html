@@ -39,6 +39,8 @@
                 aria-controls="tab-wake" aria-selected="false" tabindex="-1">{{ t('settings.section.wake') }}</button>
         <button class="tabs__tab" type="button" role="tab" id="tab-btn-rules"
                 aria-controls="tab-rules" aria-selected="false" tabindex="-1">{{ t('settings.section.rules') }}</button>
+        <button class="tabs__tab" type="button" role="tab" id="tab-btn-sharing"
+                aria-controls="tab-sharing" aria-selected="false" tabindex="-1">{{ t('settings.section.sharing') }}</button>
         {# Sign-in has no schema-rendered fields at all -- its settings live in .env, not
            the settings table, because they are credentials and the perimeter itself.
            settings-auth.js builds the whole panel. #}
@@ -56,6 +58,7 @@
         <div class="tab-panel" id="tab-patches" role="tabpanel" aria-labelledby="tab-btn-patches"></div>
         <div class="tab-panel" id="tab-wake" role="tabpanel" aria-labelledby="tab-btn-wake"></div>
         <div class="tab-panel" id="tab-rules" role="tabpanel" aria-labelledby="tab-btn-rules"></div>
+        <div class="tab-panel" id="tab-sharing" role="tabpanel" aria-labelledby="tab-btn-sharing"></div>
         <div class="tab-panel" id="tab-signin" role="tabpanel" aria-labelledby="tab-btn-signin"></div>
     </div>
 </div>

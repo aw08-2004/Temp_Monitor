@@ -480,11 +480,32 @@ REGISTRY = (
     # targeted PC -- so it gets its own switch and starts off.
     _s("rules.probes_allow_script", "rules", "bool", False),
     _s("rules.probes_per_tick", "rules", "int", 50, minimum=1, maximum=500),
+
+    # ---------------- Cross-hub sharing (roadmap #15) ----------------
+    # Off by default, and the switch is not decorative. A hub with no peer paired already
+    # accepts nothing -- there is no valid token to present -- so this is not the thing
+    # standing between the fleet and a stranger. What it is, is the answer to "does this
+    # hub talk to other hubs at all", which an operator should be able to say NO to once
+    # rather than by auditing that no peer has quietly been paired. It gates the peer-facing
+    # API and every outbound call, and deliberately NOT the console pages: an admin must
+    # still be able to see and revoke what exists after switching it off.
+    _s("sharing.enabled", "sharing", "bool", False),
+    # What this hub calls itself when it pairs with another. A claim by the far side, which
+    # is why the receiving hub stores it separately from its own label for the peer -- see
+    # sharing.share_peers. Blank is fine; the peer's own label is what its console shows.
+    _s("sharing.hub_label", "sharing", "str", ""),
+    # The outer bound on a PEER LINK, not on a share -- a share carries its own optional
+    # expiry. A year, because the case this exists for is two hubs that habitually
+    # cooperate; what it stops is a pairing everybody forgot about staying a live credential
+    # forever. Each peer COPIES the value in force when it was paired, so raising this never
+    # silently extends one somebody already agreed to a shorter lifetime for.
+    _s("sharing.peer_lifetime_days", "sharing", "int", 365, minimum=1, maximum=3650,
+       unit="days"),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "rules")
+            "directory", "firmware", "patches", "wake", "rules", "sharing")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

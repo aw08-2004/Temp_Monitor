@@ -29,6 +29,10 @@ import permissions_web
 import refusals
 import remote
 import settings
+# For the peer plane's gate only (roadmap #15). sharing_web does not import this module
+# at load time -- its one use of remote.py is a deferred import inside a function -- so this
+# direction is the one that stays acyclic.
+import sharing_web
 
 # The .env variable holding the TURN shared secret. Read from the environment (load_dotenv ran
 # at hub startup), never from the settings table -- secrets are structurally barred from there.
@@ -371,6 +375,131 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return jsonify({"error": "You do not have access to that machine."}), 403
         sessions = remote.list_sessions(db_path, machine, active_only=True)
         return jsonify(access.filter_rows(sessions)), 200
+
+    # ---------------- Peer hubs (roadmap #15) ----------------
+    # A third plane beside the console and the agent, and it lives here rather than in
+    # sharing_web.py because everything a session start needs -- the ICE list, the minted
+    # TURN credentials, the stream-parameter clamps -- is in this closure. What sharing.py
+    # owns is the AUTHORIZATION, and that arrives as `peer_gate`.
+    #
+    # Note what these routes do NOT do: they do not talk to the borrowing hub, and they do
+    # not tell the agent that one exists. A peer-started session is queued on this hub's own
+    # command queue to this hub's own agent, exactly like a console-started one, and the
+    # signaling that follows is relayed through this hub in both directions. That is the
+    # whole design -- see sharing.py's module docstring.
+    #
+    # Virtual display is deliberately absent from this plane. Installing it puts a
+    # third-party driver into the DriverStore and its publisher into the machine's
+    # certificate store, which is an expansion of what the machine trusts and is not
+    # something a share hands over. A borrowed headless machine has to be prepared by its
+    # own operator first.
+    peer_remote = sharing_web.peer_gate(db_path, access, permissions.REMOTE_CONTROL)
+
+    def peer_session(view):
+        """Resolve <session_id> to a session on this share's machine THAT THIS PEER STARTED.
+
+        The second half is the one that matters. Scoping only to the machine would let a
+        borrowing hub poll the signaling of a session a LOCAL operator has open on it --
+        that is somebody else's screen and, at setup time, somebody else's TURN credentials.
+        Unknown, not-yours and wrong-machine all answer 404 alike, matching `scoped_session`
+        above: distinguishing them would leak which session ids exist.
+        """
+        @functools.wraps(view)
+        def wrapped(peer, state, session_id, *args, **kwargs):
+            sess = remote.get_session(db_path, session_id)
+            if (sess is None
+                    or sess["machine"] != state["machine"]
+                    or not sharing_web.peer_owns(sess, peer)):
+                return jsonify({"error": "unknown session"}), 404
+            return view(peer, state, sess, *args, **kwargs)
+        return wrapped
+
+    @bp.route("/api/peer/shares/<share_id>/remote", methods=["POST"])
+    @peer_remote
+    def peer_start_session(peer, state):
+        """Start a session on a borrowed machine. The peer plane's copy of start_session.
+
+        The consent mode is THIS hub's setting, not a parameter: whether the person at the
+        desk is asked before their screen is shared is a policy of the fleet the machine
+        belongs to, and it would be exactly the wrong thing to let the borrowing hub choose.
+        """
+        if not settings.get_bool(db_path, "remote.enabled"):
+            return jsonify({"error": "Remote control is disabled on the owning hub."}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            stream = _stream_params(data)
+        except ValueError as e:
+            return refusals.refuse(e)
+
+        consent_mode = settings.get(db_path, "remote.consent_mode") or "unattended"
+        issued_by = sharing_web.peer_actor(peer, data)
+        session_id = remote.create_session(
+            db_path, state["machine"], issued_by, consent_mode,
+            ttl_seconds=settings.get_int(db_path, "remote.session_ttl_seconds"),
+        )
+        # request.remote_addr is the BORROWING HUB's address, not the operator's browser --
+        # the media never flows to that hub, so a LAN-vs-public choice made from it would be
+        # wrong. Passing None makes select_urls_for_peer offer the public set, which is the
+        # only one that can be right for a peer whose location this hub cannot know.
+        ice = _ice_servers(session_id, None)
+        try:
+            fleet.create_command(
+                db_path, machine=state["machine"], command_type="start_remote_session",
+                params={"session_id": session_id, "consent_mode": consent_mode,
+                        "ice_servers": ice, **stream},
+                issued_by=issued_by,
+                ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
+            )
+        except ValueError as e:
+            remote.end_session(db_path, session_id, "failed to queue start command",
+                               actor=issued_by)
+            return refusals.refuse(e)
+
+        fleet.audit(db_path, actor=issued_by, action="share.action",
+                    level=fleet.LEVEL_SECURITY, target=state["machine"],
+                    detail={"share_id": state["share_id"], "peer_id": peer["peer_id"],
+                            "peer_label": peer.get("label") or "",
+                            "type": "start_remote_session", "session_id": session_id,
+                            "claimed_operator": permissions.normalize_email(
+                                data.get("operator")) or None})
+        return jsonify({"session_id": session_id, "ice_servers": ice,
+                        "consent_mode": consent_mode, **stream}), 201
+
+    @bp.route("/api/peer/shares/<share_id>/remote/<session_id>/signal", methods=["POST"])
+    @peer_remote
+    @peer_session
+    def peer_signal(peer, state, sess):
+        data = request.get_json(silent=True) or {}
+        try:
+            seq = remote.add_signal(db_path, sess["id"], remote.SENDER_CONSOLE,
+                                    data.get("kind"), data.get("payload"))
+        except KeyError:
+            return jsonify({"error": "unknown session"}), 404
+        except PermissionError as e:
+            return refusals.refuse(e, 409)
+        except ValueError as e:
+            return refusals.refuse(e)
+        return jsonify({"seq": seq}), 200
+
+    @bp.route("/api/peer/shares/<share_id>/remote/<session_id>/poll", methods=["GET"])
+    @peer_remote
+    @peer_session
+    def peer_poll(peer, state, sess):
+        try:
+            after_seq = int(request.args.get("after_seq", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "after_seq must be an integer"}), 400
+        result = remote.get_signals(db_path, sess["id"], remote.SENDER_CONSOLE, after_seq)
+        result["status"] = remote.get_session(db_path, sess["id"])["status"]
+        return jsonify(result), 200
+
+    @bp.route("/api/peer/shares/<share_id>/remote/<session_id>/stop", methods=["POST"])
+    @peer_remote
+    @peer_session
+    def peer_stop(peer, state, sess):
+        remote.end_session(db_path, sess["id"], "peer operator stopped",
+                           actor=sharing_web.peer_actor(peer))
+        return jsonify({"status": "ended"}), 200
 
     # ---------------- Virtual display (remote_control + scope) ----------------
     # These exist to make a headless machine viewable at all, so they belong to the same

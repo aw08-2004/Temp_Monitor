@@ -50,6 +50,7 @@ import files
 import live
 import authconfig
 import apitokens
+import sharing
 import envfile
 import i18n
 import permissions_web
@@ -70,6 +71,7 @@ from rules_web import create_rules_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
+from sharing_web import create_sharing_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
 # telemetry DB) lives one level up in the install root. Keeping the two apart is what lets
@@ -105,7 +107,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.93.0"
+HUB_VERSION = "1.94.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1932,6 +1934,23 @@ app.register_blueprint(create_auth_blueprint(
 app.register_blueprint(create_apitokens_blueprint(
     DB_PATH, login_required, access, code_dir=HUB_CODE_DIR))
 
+# Cross-hub machine sharing (roadmap #15). The one blueprint in this hub whose caller can be
+# ANOTHER HUB: `/api/peer/...` is gated on a peer token and nothing else, while
+# `/api/sharing/...` is the ordinary session gate. LOG_DIR is handed in because the peer
+# token lives in the same master-key-wrapped secret file the backup destinations and the BIOS
+# setup password use -- it is a live credential to another fleet, so it does not go in a
+# table the console renders. No HUB_URL: nothing here hands anyone a URL back to this hub,
+# because the borrowing hub already knows the only address it ever uses.
+#
+# `machine_detail` and the roster are wrapped in lambdas for the reason every other blueprint
+# here wraps them: both are defined further down this file than blueprints are registered,
+# and the names only need to resolve when a request arrives.
+app.register_blueprint(create_sharing_blueprint(
+    DB_PATH, LOG_DIR, login_required, access,
+    machine_roster=lambda: backup_machine_roster(),
+    machine_detail=lambda machine: machine_detail(machine),
+))
+
 
 @app.route("/login")
 def login():
@@ -2737,6 +2756,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # both name a request the operator has already navigated away from, so there is nothing
     # to carry across even if we wanted to.
     files.forget_machine(DB_PATH, dropped, spool_dir=FILE_SPOOL_DIR)
+    # Anything lent to another hub follows the survivor (roadmap #15), for the same reason
+    # the permission groups above do: the survivor IS the merged-away box, and a share that
+    # stopped resolving would look to the borrowing hub like a machine that had simply gone
+    # quiet -- a revocation nobody made, discovered when a colleague could not connect.
+    sharing.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -3736,6 +3760,7 @@ files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
 terminal.init_pty_db(DB_PATH)
 apitokens.init_apitokens_db(DB_PATH)
+sharing.init_sharing_db(DB_PATH)
 scripts.init_scripts_db(DB_PATH)
 rules.init_rules_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
@@ -4256,6 +4281,21 @@ def get_machines():
 @access.require_machine(permissions.VIEW)
 def get_machine(machine):
     """Single machine's identity info + latest live temp/uptime, for its detail page."""
+    result = machine_detail(machine)
+    if result is None:
+        return jsonify({"error": "Unknown machine"}), 404
+    return jsonify(result)
+
+
+def machine_detail(machine):
+    """One machine as the detail page sees it, or None if the hub knows nothing about it.
+
+    Split out of the route above so a SECOND caller can have it without a session: a peer
+    hub reading a machine it has been lent (roadmap #15) needs exactly this payload, and
+    the alternative was a second serializer that would drift from this one the first time
+    a field was added. Authorization is the caller's job either way -- the route in front
+    of it does `require_machine(VIEW)`, and sharing_web.py does `authorize_peer_action`.
+    """
     machine_name = str(machine).strip()
     with get_db_conn() as conn:
         row = conn.execute(
@@ -4268,7 +4308,7 @@ def get_machine(machine):
     uptime_seconds = get_latest_uptime(machine_name)
     temp = get_latest_temp(machine_name)
     if row is None and uptime_seconds is None and temp is None:
-        return jsonify({"error": "Unknown machine"}), 404
+        return None
 
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
@@ -4294,7 +4334,7 @@ def get_machine(machine):
     # here ("which build is this one on?") wants the detail the bucket throws away.
     result['os'] = normalize_os(result.get('os_caption'), result.get('os_build'),
                                 result.get('ad_os'))
-    return jsonify(result)
+    return result
 
 
 def _recent_sensors_for(machine_name):
@@ -4588,6 +4628,11 @@ def delete_machine(machine):
     files.forget_machine(DB_PATH, machine_name, spool_dir=FILE_SPOOL_DIR)
     # ...and any live-chart watch on it, for the same reason.
     live.forget_machine(DB_PATH, machine_name)
+    # And every share of it (roadmap #15). Unlike the merge above there is no survivor to
+    # follow, so the shares are revoked: if the hostname is later reused by a different
+    # physical box, another hub must not silently inherit a window onto it -- the same
+    # stale-grant hazard permissions.forget_machine exists to close, one hub further out.
+    sharing.forget_machine(DB_PATH, machine_name)
     # Its BIOS setup password override lives in the secret file rather than the database, so
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.

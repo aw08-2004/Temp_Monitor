@@ -23,7 +23,8 @@
     "firmware": "Firmware",
     "download": "Client herunterladen",
     "rules": "Regeln",
-    "tools": "Werkzeuge"
+    "tools": "Werkzeuge",
+    "sharing": "Freigabe"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -455,7 +456,8 @@
       "patches": "Patches",
       "signin": "Anmeldung",
       "wake": "Wake-on-LAN",
-      "rules": "Regeln"
+      "rules": "Regeln",
+      "sharing": "Hub-übergreifende Freigabe"
     },
     "unit": {
       "celsius": "°C",
@@ -835,6 +837,19 @@
       "fleet.default_agent_channel": {
         "label": "Standard-Agent-Kanal",
         "help": "Auf welchen Agent-Build Rechner aktualisieren, sofern sie nicht einzeln festgelegt wurden. Legen Sie einige Rechner auf Beta fest, um eine Version vor der Flotte zu testen – sonst erreicht ein Agent-Release innerhalb von etwa fünfzehn Minuten alle Rechner."
+      },
+      "sharing.enabled": {
+        "label": "Rechner mit anderen Hubs teilen",
+        "help": "Erlaubt diesem Hub, Anfragen gekoppelter Hubs zu beantworten und selbst Anfragen an Hubs zu stellen, die einen Rechner freigegeben haben. Aus bedeutet: keine Richtung funktioniert, unabhängig von bestehenden Kopplungen -- Gekoppeltes bleibt sichtbar, damit Sie es widerrufen können."
+      },
+      "sharing.hub_label": {
+        "label": "Bezeichnung dieses Hubs",
+        "help": "Wird den Betreibern gekoppelter Hubs neben den Rechnern angezeigt, die Sie ihnen leihen. Bleibt das Feld leer, sehen sie nur die Bezeichnung, die sie selbst für diesen Hub vergeben haben.",
+        "placeholder": "IT Krankenhaus"
+      },
+      "sharing.peer_lifetime_days": {
+        "label": "Gültigkeit der Hub-Kopplung",
+        "help": "Wie lange die Zugangsdaten eines gekoppelten Hubs gültig bleiben; die Frist verlängert sich bei jeder Nutzung. Das begrenzt die Kopplung, nicht eine Freigabe -- eine Freigabe kann ein eigenes Ablaufdatum haben oder gar keines. Jede Kopplung behält die bei der Einrichtung geltende Dauer."
       }
     },
     "choice": {
@@ -2916,6 +2931,109 @@
         "label": "Beta",
         "description": "Der nächste Build, hier zuerst veröffentlicht. Gedacht für eine Handvoll Rechner, die Sie beobachten können – das Verlassen von Beta macht ein bereits installiertes Update nicht rückgängig."
       }
+    }
+  },
+  "sharing": {
+    "views_nav": "Freigabe-Ansichten",
+    "tab_lending": "Verliehene Rechner",
+    "tab_borrowing": "Uns geliehene Rechner",
+    "tab_hubs": "Gekoppelte Hubs",
+    "disabled": "Die hub-übergreifende Freigabe ist für diesen Hub abgeschaltet; derzeit funktioniert hier nichts, in keiner Richtung. Bestehende Freigaben und Verbindungen bleiben sichtbar, damit sie geprüft und widerrufen werden können. Einschalten unter Einstellungen → Hub-übergreifende Freigabe.",
+    "unnamed_hub": "Unbenannter Hub",
+    "no_expiry": "Kein Ablauf",
+    "nothing_granted": "Nichts gewährt",
+    "borrowed_badge": "Geliehen",
+    "revoke": "Freigabe beenden",
+    "confirm_revoke": "Freigabe von {machine} für {hub} beenden? Eine dort offene Sitzung wird sofort beendet.",
+    "lending": {
+      "heading": "Verliehene Rechner",
+      "intro": "Jede Zeile ist ein Rechner, an einen Hub verliehen, mit genau den angekreuzten Berechtigungen. Nichts kommt automatisch dazu: Ein Hub mit Fernsteuerung sieht die Telemetrie des Rechners nur, wenn auch das gewährt wurde.",
+      "add": "Rechner freigeben",
+      "edit": "Freigabe bearbeiten",
+      "empty": "Dieser Hub verleiht keine Rechner.",
+      "empty_hint": "Koppeln Sie zuerst mit dem Hub einer Kollegin oder eines Kollegen und geben Sie dann einen Rechner frei."
+    },
+    "borrowing": {
+      "heading": "Uns geliehene Rechner",
+      "intro": "Diese gehören einem anderen Hub und werden hier nie registriert. Alles Angezeigte wird live vom besitzenden Hub gelesen, und dieser entscheidet, was jede Aktion darf.",
+      "refresh": "Auf Änderungen prüfen",
+      "open": "Öffnen",
+      "owned_by": "Gehört {hub}. Live gelesen -- zu diesem Rechner wird auf diesem Hub nichts gespeichert.",
+      "empty": "Kein anderer Hub verleiht diesem einen Rechner.",
+      "empty_hint": "Bitten Sie um einen Kopplungscode und fügen Sie den Hub unter „Gekoppelte Hubs“ hinzu.",
+      "connect": "Verbinden"
+    },
+    "hubs": {
+      "heading": "Gekoppelte Hubs",
+      "intro": "Mit welchen anderen Konsolen diese Rechner austauscht. Die Kopplung entscheidet, ob zwei Hubs überhaupt miteinander sprechen; was tatsächlich übergeht, wird auf den beiden anderen Tabs pro Rechner entschieden.",
+      "peers_heading": "Hubs, an die wir verleihen",
+      "peers_intro": "Jeder davon besitzt Zugangsdaten für diesen Hub. Er erreicht nur die ihm freigegebenen Rechner, und nur im Rahmen der jeweiligen Freigabe.",
+      "new_pairing": "Hub einladen",
+      "generate": "Code erzeugen",
+      "unpair": "Kopplung lösen",
+      "confirm_unpair": "Kopplung mit {hub} lösen? Die Zugangsdaten werden sofort ungültig und alle freigegebenen Rechner ({count}) werden zurückgezogen.",
+      "calls_itself": "Nennt sich „{name}“",
+      "no_peers": "Es ist kein anderer Hub mit diesem gekoppelt.",
+      "no_peers_hint": "Laden Sie einen Hub ein, um einen einmaligen Code zu erhalten, und geben Sie ihn weiter.",
+      "links_heading": "Hubs, die uns verleihen",
+      "links_intro": "Ein Satz Zugangsdaten pro Hub, verschlüsselt mit dem Hauptschlüssel dieses Hubs statt in der Datenbank.",
+      "new_link": "Hub hinzufügen",
+      "pair": "Koppeln",
+      "remove": "Entfernen",
+      "confirm_remove": "{hub} entfernen? Damit werden Adresse, Zugangsdaten und die geliehenen Rechner vergessen. Die Kopplung auf der Gegenseite wird dadurch NICHT gelöst -- bitten Sie dort um einen Widerruf.",
+      "no_links": "Kein anderer Hub verleiht an diesen.",
+      "no_links_hint": "Bitten Sie darum, diesen Hub einzuladen, und fügen Sie den erhaltenen Code ein.",
+      "no_token": "Die Zugangsdaten sind nicht lesbar. Entfernen Sie den Hub und koppeln Sie erneut.",
+      "last_ok": "Zuletzt geantwortet {when}",
+      "last_error": "Letzter Fehler {when}: {error}"
+    },
+    "state": {
+      "live": "Aktiv",
+      "expired": "Abgelaufen",
+      "suspended": "Ausgesetzt",
+      "suspended_detail": "{operator} hat auf diesem Rechner {capabilities} nicht mehr; die Freigabe bewirkt nichts, bis das wieder der Fall ist.",
+      "online": "Online",
+      "offline": "Offline",
+      "unreachable": "Besitzender Hub nicht erreichbar",
+      "last_heard": "Zuletzt gehört {when}"
+    },
+    "col": {
+      "machine": "Rechner",
+      "peer": "Freigegeben für",
+      "owner_hub": "Gehört",
+      "hub": "Hub",
+      "address": "Adresse",
+      "capabilities": "Darf",
+      "expires": "Läuft ab",
+      "state": "Status",
+      "last_seen": "Zuletzt gesehen",
+      "machines_lent": "Verliehene Rechner",
+      "machines_borrowed": "Geliehene Rechner"
+    },
+    "field": {
+      "peer": "Freigeben für",
+      "machine": "Rechner",
+      "capabilities": "Was erlaubt ist",
+      "capabilities_help": "Kreuzen Sie jedes bewusst an. Nichts ergibt sich aus etwas anderem -- insbesondere umfasst Fernsteuerung nicht das Einsehen der Telemetrie.",
+      "expires": "Läuft ab",
+      "expires_help": "Leer lassen für eine Freigabe ohne Enddatum -- richtig für zwei Hubs, die regelmäßig zusammenarbeiten. Setzen Sie eines für „schau dir das mal an“.",
+      "peer_label": "Bezeichnung für diesen Hub",
+      "peer_label_placeholder": "Bobs Hub",
+      "peer_label_help": "Ihre eigene Notiz. Der andere Hub teilt zusätzlich mit, wie er sich selbst nennt; beides wird getrennt angezeigt.",
+      "code": "Kopplungscode",
+      "code_expiry": "{minutes} Minuten gültig und einmal verwendbar. Lesen Sie ihn vor oder fügen Sie ihn in eine Nachricht ein -- er wird nicht erneut angezeigt.",
+      "hub_url": "Adresse des anderen Hubs",
+      "hub_url_help": "Nur https, und nur die Adresse -- keine Seite aus deren Konsole. Die erzeugten Zugangsdaten werden bei jeder Abfrage dorthin gesendet.",
+      "link_label": "Bezeichnung für den Hub"
+    },
+    "detail": {
+      "model": "Modell",
+      "os": "Betriebssystem",
+      "status": "Status",
+      "temp": "CPU-Temperatur",
+      "uptime": "Laufzeit",
+      "days": "{days} Tage",
+      "projection_note": "Mehr sendet der besitzende Hub zu einem geliehenen Rechner nicht. Seriennummer, Inventarnummer und Verzeichniseintrag bleiben dort."
     }
   }
 }

@@ -502,6 +502,29 @@ ACTION_LEVELS = {
     "device.pair": LEVEL_SECURITY,
     "device.first_use": LEVEL_SECURITY,
     "device.revoke": LEVEL_SECURITY,
+    # Cross-hub sharing (roadmap #15). Every row here is security-level, including the two
+    # that look like bookkeeping: `share.pair_offer` is a code that becomes another hub's
+    # credential, and `share.link_add` is this hub deciding to send one somewhere. The
+    # split between `share.peer_paired` and `share.peer_first_use` is apitokens' split and
+    # exists for the same reason -- a pairing with no matching first use, or a first use
+    # nobody paired, is the signal that a code leaked in transit, and neither is visible if
+    # the two share one row.
+    #
+    # `share.create` / `.update` / `.revoke` are written by the OWNING hub and are the
+    # authoritative trail: they name the machine as target, with the peer in details. The
+    # link rows are written by the BORROWING hub about itself. A borrowed action appears in
+    # both trails, and hub A's is the one that decides what happened.
+    "share.pair_offer": LEVEL_SECURITY,
+    "share.peer_paired": LEVEL_SECURITY,
+    "share.peer_first_use": LEVEL_SECURITY,
+    "share.peer_revoke": LEVEL_SECURITY,
+    "share.create": LEVEL_SECURITY,
+    "share.update": LEVEL_SECURITY,
+    "share.revoke": LEVEL_SECURITY,
+    "share.action": LEVEL_SECURITY,
+    "share.link_add": LEVEL_SECURITY,
+    "share.link_remove": LEVEL_SECURITY,
+    "share.borrowed_action": LEVEL_SECURITY,
     "create_deployment": LEVEL_SECURITY,
     "retry_deployment": LEVEL_SECURITY,
     # Patch runs (roadmap #14), at the same level as a deployment and for the same reason:
@@ -545,6 +568,12 @@ ACTION_LEVELS = {
     # -- notice: an operator changed fleet state or configuration.
     # Changing modes only reconfigures an already-trusted driver; it grants nothing new.
     "virtual_display_mode": LEVEL_NOTICE,
+    # The BORROWING hub noticing that a peer's catalogue changed -- a machine appeared or
+    # stopped being lent. Notice rather than security, unlike the `share.*` rows above:
+    # this hub did not grant or revoke anything, it observed that somebody else did, and the
+    # authoritative security row is in the owning hub's trail. It exists so a machine
+    # vanishing from this console has a reason an operator can find.
+    "share.catalogue_change": LEVEL_NOTICE,
     "machine.merge": LEVEL_NOTICE,
     "machine.delete": LEVEL_NOTICE,
     "machine.primary_sensor": LEVEL_NOTICE,

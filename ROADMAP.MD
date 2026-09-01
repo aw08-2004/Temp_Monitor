@@ -2321,7 +2321,7 @@ verb.
 
 ---
 
-## 📋 15. Cross-hub machine sharing
+## ✅ 15. Cross-hub machine sharing   ·   hub 1.94.0
 
 Not from the PRD. A colleague running his own hub wants a second pair of eyes on his PC. He
 shares **that one machine** with another hub, granting only remote view; it appears in the
@@ -2366,10 +2366,46 @@ sessions in flight**, not merely refuse the next request. Every borrowed action 
 both hubs; hub A's trail is the authoritative one and names the peer hub and the remote
 operator beside the action.
 
-**Open parameters.** Whether granted telemetry is mirrored into the borrowing hub or proxied
-live on each read. Whether one grant may cover several machines or strictly one. How a
-borrowed machine is keyed when its hostname collides with a local one. What the borrowing hub
-shows while hub A is unreachable.
+**Built as specified above, hub 1.94.0**, in `sharing.py` (the model, Flask-free) +
+`sharing_web.py` (the peer API, the console API and the page) + a Sharing page, with the
+peer plane for remote control living in `remote_web.py` beside the console and agent ones —
+everything a session start needs (ICE, minted TURN credentials, stream clamps) is already in
+that closure, so what moved was the *gate*, not the mechanism. **No agent release is
+involved, and that is the design rather than a scheduling accident**: the agent is never told
+the borrowing hub exists.
+
+Four implementation-level decisions worth recording, none of which the spec above forced:
+
+- **Shareable capabilities are an ALLOW-LIST of three** — `view`, `issue_commands`,
+  `remote_control` — where `apitokens.py` uses a deny-list. A device belongs to one of your
+  own operators, so a capability added later is one they could already exercise; a peer hub is
+  a different organisation's console, so a capability added next year is *not* shareable until
+  somebody decides it is. The three are also the only ones that mean anything about ONE
+  MACHINE: approvals, windows, destinations, the package library, rules and the audit trail
+  are statements about hub A's own configuration, with no per-machine slice to hand over.
+  Sharing a machine is not a way into a hub.
+- **A lapsed share is refused BY NAME, not degraded quietly.** The live intersection is
+  against the *creator's* permissions, and a creator whose access came through a mapped
+  directory group has none once their session ends — so a politely-smaller grant would show a
+  borrowing operator a machine that had simply stopped working. It reports which capability
+  lapsed, and hub A's console shows the share as suspended.
+- **What a peer sees of a machine is a projection, not the asset record.** No serial, asset
+  tag or service tag, nothing from Active Directory. An allow-list, so a field added later
+  does not start travelling on its own.
+- **A peer reads back only its own rows** — its own commands, its own remote sessions —
+  keyed on an `issued_by` of `peer:<peer_id>/<claimed-operator>`. The peer id and not its
+  label, because a label is a display name an admin can edit and this is an identity.
+
+**All four open parameters resolved.** Telemetry is **proxied live, never mirrored**:
+revocation has to kill sessions in flight, and a mirrored copy of somebody else's fleet data
+would outlive the grant that justified it — `borrowed_machines` is a rendering cache and
+nothing else. **One share is strictly one machine**, because the row is the unit of grant,
+audit and revocation, and revoking one must not be a re-negotiation of the other. A borrowed
+machine is **keyed on its share id**, never on its hostname, so a collision with a local name
+is not a case that arises. And while hub A is unreachable the borrowing hub **keeps showing
+the machine, badged with when it was last heard from** — stale outranks online/offline in the
+UI, because it is a statement about a different thing — with every action refusing by naming
+the owner hub rather than failing generically.
 
 ---
 
@@ -2618,11 +2654,16 @@ rule marked for local evaluation.
     3.35.0 agent talking to an older hub simply has its patch inventory ignored, which is
     harmless, but the reverse leaves the console offering a feature no machine answers. That
     release carries #21 as well; see its entry for why the two share one.
-15. **#15 Cross-hub machine sharing** — not from the PRD; asked for directly. Independent of
-    everything above, so its position is a priority call rather than a dependency. Its
-    prerequisite is #Foundation and #11's device tokens: a peer hub holds a SUBSET of a
-    capability set intersected live, which is only meaningful because permission groups
-    exist and `apitokens.py` already built exactly that mechanism for devices.
+15. ~~**#15 Cross-hub machine sharing**~~ — done, hub 1.94.0. Not from the PRD; asked for
+    directly. Independent of everything above, so its position was a priority call rather
+    than a dependency. Its prerequisite was #Foundation and #11's device tokens: a peer hub
+    holds a SUBSET of a capability set intersected live, which is only meaningful because
+    permission groups exist and `apitokens.py` already built exactly that mechanism for
+    devices — and this is that mechanism one level up, with a peer hub in the device's place.
+    **The one item on this board with no agent half at all**, which is not a scheduling
+    accident but the security argument itself: the borrowing hub never speaks to an agent, so
+    there was nothing to add to one. That also makes it the first feature since #7 that is
+    fully live the moment the hub is deployed, with no fifteen-minute propagation to wait on.
 16. **#16 Event log mining** — before #17, because it is one of the two inputs that make
     correlation worth doing. Its own risk is volume rather than mechanism, and that risk is
     settled by filtering on the machine instead of shipping raw logs to a SQLite hub.
@@ -2654,8 +2695,9 @@ rule marked for local evaluation.
 > 1.63.0). #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0), which is an
 > extension of a done feature rather than a new board item.
 >
-> **#14 through #21 came from the PRD v2.0 triage above; #14 and #21 are built and shipped
-> (agent 3.35.0), and the rest are not.** That
+> **#14 through #21 came from the PRD v2.0 triage above; #14, #15 and #21 are built, and
+> #16 through #20 are not.** #14 and #21 shipped as agent 3.35.0; **#15 needed no agent
+> release** and is live with hub 1.94.0 alone. That
 > section is new as of 2026-08-31 and is the first time this board has grown by more than
 > one item at once; read it before the entries, because it records which PRD requirements
 > were rejected and why, and several of the loudest ones were. #15 is the exception on that
