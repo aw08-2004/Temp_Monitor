@@ -2615,10 +2615,11 @@ rule marked for local evaluation.
     the engine, and this is that engine pointed at a vendor catalogue. The one thing that
     could not be reused is the completion model: an install is confirmed by the machine
     coming back and no longer offering the update, which is `firmware.py`'s discipline rather
-    than the package scheduler's exit code. **The agent half needs a signed release** before
-    any of it reaches the fleet, and the hub must be deployed FIRST — a 3.35.0 agent talking
-    to a 1.91.0 hub simply has its patch inventory ignored, which is harmless, but the
-    reverse order leaves the console offering a feature no machine answers.
+    than the package scheduler's exit code. **Released as agent 3.35.0** (2026-09-01), after
+    hub 1.93.0 was deployed — that order matters, and it is the one that was followed: a
+    3.35.0 agent talking to an older hub simply has its patch inventory ignored, which is
+    harmless, but the reverse leaves the console offering a feature no machine answers. That
+    release carries #21 as well; see its entry for why the two share one.
 15. **#15 Cross-hub machine sharing** — not from the PRD; asked for directly. Independent of
     everything above, so its position is a priority call rather than a dependency. Its
     prerequisite is #Foundation and #11's device tokens: a peer hub holds a SUBSET of a
