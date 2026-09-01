@@ -167,6 +167,39 @@ def test_the_page(a_client):
     sign_out(a_client)
 
 
+def test_transport_failures_say_nothing_internal(b_client, b_db, link_id, share_id):
+    print("\n== A transport failure is an authored sentence, not a stack trace ==")
+    # The real outbound caller, not the test's stand-in. Port 1 on loopback refuses
+    # immediately -- no DNS, no waiting -- so this exercises the except branch for real.
+    status, answer = sharing_web._default_peer_call(
+        "GET", "https://127.0.0.1:1/api/peer/catalogue", token="tmh_x:y", timeout=2)
+    check("an unreachable peer is a 502", status == 502)
+    message = answer.get("error", "")
+    check("...with one of the four authored sentences",
+          message in ("The peer hub did not answer in time.",
+                      "The peer hub's certificate could not be verified.",
+                      "The peer hub could not be reached.",
+                      "The request to the peer hub failed."))
+    # The requests/urllib3 exception text embeds the full URL and the socket error. None of
+    # that belongs on a page a borrowing operator reads.
+    for leaked in ("127.0.0.1", "urllib3", "Max retries", "NewConnectionError", "/api/"):
+        check(f"...and no {leaked!r} in it", leaked not in message)
+
+    print("\n== A stored peer address is re-validated where the request is made ==")
+    with fleet.get_conn(b_db) as conn:
+        conn.execute("UPDATE share_links SET base_url = ? WHERE link_id = ?",
+                     ("http://evil.example.com", link_id))
+    sign_in(b_client, "borrower@x.com")
+    r = b_client.get(f"/api/sharing/borrowed/{link_id}/{share_id}/machine")
+    check("a link whose stored address no longer passes the rule is refused",
+          r.status_code == 502)
+    check("...naming the only fix there is",
+          "pair again" in r.get_json().get("error", ""))
+    with fleet.get_conn(b_db) as conn:
+        conn.execute("UPDATE share_links SET base_url = ? WHERE link_id = ?",
+                     (PASSTHROUGH_PREFIX, link_id))
+
+
 def test_peer_api_is_not_the_console(a_client, db_path):
     print("\n== The peer API is a different door, with a different key ==")
     r = a_client.get("/api/peer/catalogue")
@@ -597,6 +630,7 @@ def main():
 
     test_borrowing(a_client, b_client, a_db, b_db, link_id, share_id)
     test_peer_cannot_reach_past_its_share(a_client, a_db, b_db, share_id)
+    test_transport_failures_say_nothing_internal(b_client, b_db, link_id, share_id)
     test_remote_across_hubs(a_client, b_client, a_db, b_db, link_id, share_id)
     test_lapse_and_revocation(a_client, b_client, a_db, b_db, link_id, share_id)
 

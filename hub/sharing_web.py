@@ -199,7 +199,21 @@ def _default_peer_call(method, url, token=None, payload=None,
         response = requests.request(method, url, json=payload, headers=headers,
                                     timeout=timeout, allow_redirects=False)
     except requests.RequestException as exc:
-        return 502, {"error": f"The peer hub did not answer: {exc}"}
+        # The exception's own text does NOT go out, and this is the one place in the hub
+        # where that rule differs from `refusals.refuse`. There, the exception carries a
+        # sentence this codebase wrote; here it carries a third-party diagnostic that embeds
+        # the full request URL and the underlying socket/TLS error -- internal addresses,
+        # ports and resolver detail, on a page a borrowing operator can read. It is logged
+        # instead, and the four authored sentences below keep the distinction an operator
+        # actually acts on: nobody home, too slow, bad certificate, or something else.
+        print(f"[sharing] peer call failed: {type(exc).__name__}: {exc}")
+        if isinstance(exc, requests.Timeout):
+            return 502, {"error": "The peer hub did not answer in time."}
+        if isinstance(exc, requests.SSLError):
+            return 502, {"error": "The peer hub's certificate could not be verified."}
+        if isinstance(exc, requests.ConnectionError):
+            return 502, {"error": "The peer hub could not be reached."}
+        return 502, {"error": "The request to the peer hub failed."}
     if response.is_redirect:
         return 502, {"error": "The peer hub answered with a redirect, which is refused: a "
                               "peer token has exactly one destination."}
@@ -689,8 +703,13 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
             sharing.record_link_result(db_path, link["link_id"], ok=False, error=error)
             return error
 
-        status, answer = call_peer("GET", f"{link['base_url']}/api/peer/catalogue",
-                                   token=token)
+        base = _peer_base(link)
+        if base is None:
+            error = ("This link's address is no longer usable. Remove it and pair again.")
+            sharing.record_link_result(db_path, link["link_id"], ok=False, error=error)
+            return error
+
+        status, answer = call_peer("GET", f"{base}/api/peer/catalogue", token=token)
         if status != 200:
             error = answer.get("error") or f"The peer hub answered {status}."
             sharing.record_link_result(db_path, link["link_id"], ok=False, error=error)
@@ -737,6 +756,25 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
             row["peer_label"] = labels.get(row["link_id"], "")
         return jsonify({"machines": rows, "enabled": _enabled()}), 200
 
+    def _peer_base(link):
+        """The origin this hub will send `link`'s token to, re-validated HERE.
+
+        `sharing.normalize_peer_url` already ran when the link was created, so this is a
+        second application of the same rule at the point of use rather than a new one. It is
+        worth the microsecond because the value in between has been at rest in a database:
+        the https-only, no-credentials, no-query guarantee should hold where the request is
+        actually made, not only where the row was written. A row that no longer satisfies it
+        -- hand-edited, restored from an older backup, or corrupted -- stops being a request
+        this hub makes rather than one it makes to somewhere unintended.
+
+        Returns None if the stored address is no longer acceptable; callers turn that into a
+        refusal naming the fix, because the only cure is to remove the link and pair again.
+        """
+        try:
+            return sharing.normalize_peer_url((link or {}).get("base_url"))
+        except sharing.SharingError:
+            return None
+
     def _borrowed_call(link_id, share_id, capability, method, path, payload=None):
         """One proxied request to the hub that owns a borrowed machine.
 
@@ -759,13 +797,17 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
         if token is None:
             return 502, {"error": "This peer link has no readable token. Remove it and "
                                   "pair again."}
+        base = _peer_base(link)
+        if base is None:
+            return 502, {"error": "This peer link's address is no longer usable. Remove it "
+                                  "and pair again."}
         # Quoted, not interpolated raw. `share_id` and the ids inside `path` arrive
         # from this hub's own URL, where Flask has already percent-DECODED them -- so a
         # request for a share id spelled `abc%3Fx=1` would otherwise reach the peer with
         # a query string this hub never intended to send. The ids are hex in practice;
         # a guard that only holds because of that is one that breaks quietly the day it
         # stops being true.
-        url = f"{link['base_url']}/api/peer/shares/{quote(str(share_id), safe='')}{path}"
+        url = f"{base}/api/peer/shares/{quote(str(share_id), safe='')}{path}"
         status, answer = call_peer(method, url, token=token, payload=payload)
         if status >= 400:
             sharing.record_link_result(db_path, link_id, ok=False,
