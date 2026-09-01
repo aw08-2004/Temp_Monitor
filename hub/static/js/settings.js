@@ -26,6 +26,7 @@ const panels = {
     patches: document.getElementById('tab-patches'),
     wake: document.getElementById('tab-wake'),
     rules: document.getElementById('tab-rules'),
+    sharing: document.getElementById('tab-sharing'),
 };
 
 // NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`

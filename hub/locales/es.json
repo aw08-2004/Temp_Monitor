@@ -23,7 +23,8 @@
     "firmware": "Firmware",
     "download": "Descargar cliente",
     "rules": "Reglas",
-    "tools": "Herramientas"
+    "tools": "Herramientas",
+    "sharing": "Compartir"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -455,7 +456,8 @@
       "patches": "Parches",
       "signin": "Inicio de sesión",
       "wake": "Wake-on-LAN",
-      "rules": "Reglas"
+      "rules": "Reglas",
+      "sharing": "Uso compartido entre concentradores"
     },
     "unit": {
       "celsius": "°C",
@@ -835,6 +837,19 @@
       "fleet.default_agent_channel": {
         "label": "Canal predeterminado del agente",
         "help": "A qué versión del agente se actualizan los equipos salvo que se hayan fijado individualmente. Fije unos pocos equipos en beta para probar una versión antes de que llegue a la flota: de lo contrario, una versión del agente llega a todas partes en unos quince minutos."
+      },
+      "sharing.enabled": {
+        "label": "Compartir equipos con otros concentradores",
+        "help": "Permite que este concentrador responda a las peticiones de los concentradores emparejados y que haga peticiones a los que le han compartido un equipo. Desactivado significa que ninguna dirección funciona, aunque ya haya emparejamientos -- lo emparejado sigue visible para que pueda revocarlo."
+      },
+      "sharing.hub_label": {
+        "label": "Nombre de este concentrador",
+        "help": "Se muestra a los operadores de los concentradores que empareje, junto a los equipos que les preste. Si lo deja en blanco, solo verán la etiqueta que ellos mismos dieron a este concentrador.",
+        "placeholder": "TI del hospital"
+      },
+      "sharing.peer_lifetime_days": {
+        "label": "Vigencia del enlace entre concentradores",
+        "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición -- una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
       }
     },
     "choice": {
@@ -2916,6 +2931,108 @@
         "label": "Beta",
         "description": "La próxima versión, publicada aquí primero. Pensada para unos pocos equipos que pueda vigilar: salir de beta no deshace una actualización ya instalada."
       }
+    }
+  },
+  "sharing": {
+    "views_nav": "Vistas de uso compartido",
+    "tab_lending": "Equipos que prestamos",
+    "tab_borrowing": "Equipos que nos prestan",
+    "tab_hubs": "Concentradores emparejados",
+    "disabled": "El uso compartido entre concentradores está desactivado en este concentrador, así que ahora mismo no funciona nada aquí, en ninguna dirección. Las comparticiones y los enlaces existentes siguen a la vista para poder revisarlos y revocarlos. Actívelo en Configuración → Uso compartido entre concentradores.",
+    "unnamed_hub": "Concentrador sin nombre",
+    "no_expiry": "Sin caducidad",
+    "nothing_granted": "Nada concedido",
+    "borrowed_badge": "Prestado",
+    "revoke": "Dejar de compartir",
+    "confirm_revoke": "¿Dejar de compartir {machine} con {hub}? Cualquier sesión que tengan abierta en él terminará de inmediato.",
+    "lending": {
+      "heading": "Equipos que prestamos",
+      "intro": "Cada fila es un equipo, prestado a un concentrador, con exactamente los permisos marcados. Nada se añade solo: un concentrador con control remoto no ve la telemetría del equipo salvo que también se le haya concedido.",
+      "add": "Compartir un equipo",
+      "edit": "Editar compartición",
+      "empty": "Este concentrador no presta ningún equipo.",
+      "empty_hint": "Emparejélo primero con el concentrador de un compañero y luego comparta un equipo."
+    },
+    "borrowing": {
+      "heading": "Equipos que nos prestan",
+      "intro": "Pertenecen a otro concentrador y nunca se inscriben aquí. Todo lo que se muestra se lee en vivo del concentrador propietario, y es él quien decide qué puede hacer cada acción.",
+      "refresh": "Buscar cambios",
+      "open": "Abrir",
+      "owned_by": "Propiedad de {hub}. Lectura en vivo: en este concentrador no se guarda nada sobre este equipo.",
+      "empty": "Ningún otro concentrador presta un equipo a este.",
+      "empty_hint": "Pida un código de emparejamiento y añada su concentrador en «Concentradores emparejados»."
+    },
+    "hubs": {
+      "heading": "Concentradores emparejados",
+      "intro": "Con qué otras consolas intercambia equipos esta. El emparejamiento decide si dos concentradores pueden hablar; lo que realmente pasa se decide equipo a equipo en las otras dos pestañas.",
+      "peers_heading": "Concentradores a los que prestamos",
+      "peers_intro": "Cada uno guarda una credencial de este concentrador. Solo alcanza los equipos que se le han compartido, y solo para lo que cada compartición concede.",
+      "new_pairing": "Invitar a un concentrador",
+      "generate": "Generar código",
+      "unpair": "Desemparejar",
+      "confirm_unpair": "¿Desemparejar {hub}? Su credencial deja de servir de inmediato y se retiran todos los equipos compartidos con él ({count}).",
+      "calls_itself": "Se llama a sí mismo «{name}»",
+      "no_peers": "Ningún otro concentrador está emparejado con este.",
+      "no_peers_hint": "Invite a un concentrador para obtener un código de un solo uso y déselo a quien lo administre.",
+      "links_heading": "Concentradores que nos prestan",
+      "links_intro": "Una credencial por concentrador, cifrada con la clave maestra de este concentrador en lugar de guardarse en la base de datos.",
+      "new_link": "Añadir un concentrador",
+      "pair": "Emparejar",
+      "remove": "Quitar",
+      "confirm_remove": "¿Quitar {hub}? Se olvidan su dirección, su credencial y los equipos que prestaba. Esto NO desempareja este concentrador en su extremo: pídales que lo revoquen también allí.",
+      "no_links": "Ningún otro concentrador presta a este.",
+      "no_links_hint": "Pídales que inviten a este concentrador y pegue el código que le den.",
+      "no_token": "Su credencial no se puede leer. Quite el concentrador y emparejélo de nuevo.",
+      "last_ok": "Última respuesta {when}",
+      "last_error": "Último fallo {when}: {error}"
+    },
+    "state": {
+      "live": "Activa",
+      "expired": "Caducada",
+      "suspended": "Suspendida",
+      "suspended_detail": "{operator} ya no tiene {capabilities} sobre este equipo, así que la compartición no hace nada hasta que vuelva a tenerlo.",
+      "online": "En línea",
+      "offline": "Sin conexión",
+      "unreachable": "Concentrador propietario inalcanzable",
+      "last_heard": "Última noticia {when}"
+    },
+    "col": {
+      "machine": "Equipo",
+      "peer": "Compartido con",
+      "owner_hub": "Propiedad de",
+      "hub": "Concentrador",
+      "address": "Dirección",
+      "capabilities": "Puede",
+      "expires": "Caduca",
+      "state": "Estado",
+      "last_seen": "Visto por última vez",
+      "machines_lent": "Equipos prestados",
+      "machines_borrowed": "Equipos recibidos"
+    },
+    "field": {
+      "peer": "Compartir con",
+      "machine": "Equipo",
+      "capabilities": "Qué pueden hacer",
+      "capabilities_help": "Marque cada uno a propósito. Nada se deduce de otra cosa: en particular, el control remoto no incluye ver la telemetría del equipo.",
+      "expires": "Caduca",
+      "expires_help": "Déjelo en blanco para una compartición sin fecha de fin, que es lo correcto entre dos concentradores que colaboran a menudo. Póngale una para un «ven a ver esto».",
+      "peer_label": "Nombre para este concentrador",
+      "peer_label_placeholder": "Concentrador de Bob",
+      "peer_label_help": "Su propia nota. El otro concentrador también indica cómo se llama a sí mismo, y ambos se muestran por separado.",
+      "code": "Código de emparejamiento",
+      "code_expiry": "Válido {minutes} minutos y de un solo uso. Díctelo o péguelo en un mensaje: no se vuelve a mostrar.",
+      "hub_url": "Dirección de su concentrador",
+      "hub_url_help": "Solo https, y solo la dirección, no una página de su consola. La credencial que se cree se enviará ahí en cada comprobación.",
+      "link_label": "Nombre para ellos"
+    },
+    "detail": {
+      "model": "Modelo",
+      "os": "Sistema operativo",
+      "status": "Estado",
+      "temp": "Temperatura de CPU",
+      "uptime": "Tiempo encendido",
+      "days": "{days} días",
+      "projection_note": "Esto es todo lo que el concentrador propietario envía sobre un equipo prestado. Su número de serie, su etiqueta de inventario y su registro de directorio se quedan en su lado."
     }
   }
 }

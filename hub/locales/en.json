@@ -33,7 +33,8 @@
     "firmware": "Firmware",
     "download": "Download Client",
     "rules": "Rules",
-    "tools": "Tools"
+    "tools": "Tools",
+    "sharing": "Sharing"
   },
   "hub_update": {
     "_note": [
@@ -512,7 +513,8 @@
       "patches": "Patches",
       "signin": "Sign-in",
       "wake": "Wake-on-LAN",
-      "rules": "Rules"
+      "rules": "Rules",
+      "sharing": "Cross-hub Sharing"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -905,6 +907,19 @@
       "fleet.default_agent_channel": {
         "label": "Default agent channel",
         "help": "Which agent build machines update to unless they have been pinned individually. Pin a few machines to beta to try a release before it reaches the fleet — an agent release otherwise arrives everywhere within about fifteen minutes."
+      },
+      "sharing.enabled": {
+        "label": "Share machines with other hubs",
+        "help": "Lets this hub answer requests from hubs you have paired with, and make requests to hubs that have shared a machine with you. Off means neither direction works, whatever is already paired -- what is paired stays visible so you can revoke it."
+      },
+      "sharing.hub_label": {
+        "label": "What to call this hub",
+        "help": "Shown to the operators of hubs you pair with, beside the machines you lend them. Leave blank and they will see only the label they gave this hub themselves.",
+        "placeholder": "Hospital IT"
+      },
+      "sharing.peer_lifetime_days": {
+        "label": "Peer link lifetime",
+        "help": "How long a paired hub's credential stays valid, sliding each time it is used. This bounds the link, not a share -- a share can carry its own expiry, or none. Each peer keeps the lifetime in force when it was paired."
       }
     },
     "_choice": [
@@ -3032,6 +3047,108 @@
         "label": "Beta",
         "description": "The next build, released here first. Meant for a handful of machines you can watch — leaving beta does not undo an update that has already installed."
       }
+    }
+  },
+  "sharing": {
+    "views_nav": "Sharing views",
+    "tab_lending": "Machines we lend",
+    "tab_borrowing": "Machines lent to us",
+    "tab_hubs": "Paired hubs",
+    "disabled": "Cross-hub sharing is switched off for this hub, so nothing here is working in either direction. Existing shares and links stay listed so they can be reviewed and revoked. Turn it on under Settings → Cross-hub Sharing.",
+    "unnamed_hub": "Unnamed hub",
+    "no_expiry": "No expiry",
+    "nothing_granted": "Nothing granted",
+    "borrowed_badge": "Borrowed",
+    "revoke": "Stop sharing",
+    "confirm_revoke": "Stop sharing {machine} with {hub}? Any session they have open on it ends immediately.",
+    "lending": {
+      "heading": "Machines we lend",
+      "intro": "Each row is one machine, lent to one hub, carrying exactly the capabilities that were ticked. Nothing rides along: a hub that was given remote control cannot see the machine's telemetry unless it was given that too.",
+      "add": "Share a machine",
+      "edit": "Edit share",
+      "empty": "This hub is not lending any machines.",
+      "empty_hint": "Pair with a colleague's hub first, then share one machine with it."
+    },
+    "borrowing": {
+      "heading": "Machines lent to us",
+      "intro": "These belong to another hub and are never enrolled here. Everything shown is read live from the hub that owns them, and that hub decides what each action is allowed to do.",
+      "refresh": "Check for changes",
+      "open": "Open",
+      "owned_by": "Owned by {hub}. Read live -- nothing about this machine is stored on this hub.",
+      "empty": "No other hub is lending this one a machine.",
+      "empty_hint": "Ask a colleague for a pairing code, then add their hub under Paired hubs."
+    },
+    "hubs": {
+      "heading": "Paired hubs",
+      "intro": "Which other consoles this one exchanges machines with. Pairing decides that two hubs may speak at all; what actually crosses is decided one machine at a time on the other two tabs.",
+      "peers_heading": "Hubs we lend to",
+      "peers_intro": "Each of these holds a credential for this hub. It can reach only the machines shared with it, and only for what each share carries.",
+      "new_pairing": "Invite a hub",
+      "generate": "Generate code",
+      "unpair": "Unpair",
+      "confirm_unpair": "Unpair {hub}? Its credential stops working immediately and every machine shared with it ({count}) is un-shared.",
+      "calls_itself": "Calls itself “{name}”",
+      "no_peers": "No other hub has been paired with this one.",
+      "no_peers_hint": "Invite a hub to get a one-time code, then read it out to whoever runs it.",
+      "links_heading": "Hubs that lend to us",
+      "links_intro": "One credential per hub, kept encrypted with this hub's master key rather than in the database.",
+      "new_link": "Add a hub",
+      "pair": "Pair",
+      "remove": "Remove",
+      "confirm_remove": "Remove {hub}? This forgets its address, its credential and the machines it was lending. It does NOT unpair this hub at their end -- ask them to revoke it there as well.",
+      "no_links": "No other hub is lending to this one.",
+      "no_links_hint": "Ask them to invite this hub, then paste the code they give you.",
+      "no_token": "Its credential cannot be read. Remove this hub and pair again.",
+      "last_ok": "Last answered {when}",
+      "last_error": "Last failure {when}: {error}"
+    },
+    "state": {
+      "live": "Live",
+      "expired": "Expired",
+      "suspended": "Suspended",
+      "suspended_detail": "{operator} no longer has {capabilities} on this machine, so the share does nothing until they do again.",
+      "online": "Online",
+      "offline": "Offline",
+      "unreachable": "Owner hub unreachable",
+      "last_heard": "Last heard from {when}"
+    },
+    "col": {
+      "machine": "Machine",
+      "peer": "Shared with",
+      "owner_hub": "Owned by",
+      "hub": "Hub",
+      "address": "Address",
+      "capabilities": "Can do",
+      "expires": "Expires",
+      "state": "State",
+      "last_seen": "Last seen",
+      "machines_lent": "Machines lent",
+      "machines_borrowed": "Machines borrowed"
+    },
+    "field": {
+      "peer": "Share with",
+      "machine": "Machine",
+      "capabilities": "What they may do",
+      "capabilities_help": "Tick each one deliberately. Nothing is implied by anything else -- in particular, remote control does not include seeing the machine's telemetry.",
+      "expires": "Expires",
+      "expires_help": "Leave blank for a share with no end date, which is the right answer for two hubs that work together regularly. Set one for “come and look at this”.",
+      "peer_label": "What to call this hub",
+      "peer_label_placeholder": "Bob's hub",
+      "peer_label_help": "Your own note for it. The other hub also tells this one what it calls itself, and the two are shown separately.",
+      "code": "Pairing code",
+      "code_expiry": "Valid for {minutes} minutes, and can be used once. Read it out or paste it into a message -- it is not shown again.",
+      "hub_url": "Their hub's address",
+      "hub_url_help": "https only, and just the address -- not a page from their console. The credential this creates is sent here on every check.",
+      "link_label": "What to call them"
+    },
+    "detail": {
+      "model": "Model",
+      "os": "Operating system",
+      "status": "Status",
+      "temp": "CPU temperature",
+      "uptime": "Uptime",
+      "days": "{days} days",
+      "projection_note": "This is everything the owning hub sends about a borrowed machine. Its serial, asset tag and directory record stay on their side."
     }
   }
 }

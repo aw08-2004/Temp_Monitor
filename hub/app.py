@@ -71,6 +71,7 @@ from rules_web import create_rules_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
+from sharing_web import create_sharing_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
 # telemetry DB) lives one level up in the install root. Keeping the two apart is what lets
@@ -1932,6 +1933,23 @@ app.register_blueprint(create_auth_blueprint(
 # because the signed client manifest ships beside the code, like the agent's does.
 app.register_blueprint(create_apitokens_blueprint(
     DB_PATH, login_required, access, code_dir=HUB_CODE_DIR))
+
+# Cross-hub machine sharing (roadmap #15). The one blueprint in this hub whose caller can be
+# ANOTHER HUB: `/api/peer/...` is gated on a peer token and nothing else, while
+# `/api/sharing/...` is the ordinary session gate. LOG_DIR is handed in because the peer
+# token lives in the same master-key-wrapped secret file the backup destinations and the BIOS
+# setup password use -- it is a live credential to another fleet, so it does not go in a
+# table the console renders. No HUB_URL: nothing here hands anyone a URL back to this hub,
+# because the borrowing hub already knows the only address it ever uses.
+#
+# `machine_detail` and the roster are wrapped in lambdas for the reason every other blueprint
+# here wraps them: both are defined further down this file than blueprints are registered,
+# and the names only need to resolve when a request arrives.
+app.register_blueprint(create_sharing_blueprint(
+    DB_PATH, LOG_DIR, login_required, access,
+    machine_roster=lambda: backup_machine_roster(),
+    machine_detail=lambda machine: machine_detail(machine),
+))
 
 
 @app.route("/login")
