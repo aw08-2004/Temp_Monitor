@@ -29,7 +29,7 @@ Four canonical docs already exist. Go to them by question, not by default:
 
 ## Versioning — the rules that break production
 
-- **Bump `HUB_VERSION` (`hub/app.py:108`) on every push to `main` that touches `hub/`.** Do it
+- **Bump `HUB_VERSION` (`hub/app.py:110`) on every push to `main` that touches `hub/`.** Do it
   as part of the change, unasked; the comment two lines above it says the same thing. The hub
   compares `main`'s value against the running one, so a push without a bump never reaches a
   deployed hub. Docs-only and `tests/`-only pushes need no bump.
