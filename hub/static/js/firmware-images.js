@@ -40,12 +40,6 @@
     let flashPayload = null; // the image the flash dialog is aimed with
     let flashTargets = [];
 
-    function el(tag, className, text) {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined && text !== null) node.textContent = text;
-        return node;
-    }
 
     async function api(path, options) {
         const resp = await fetch(path, options);
@@ -55,9 +49,6 @@
         return payload;
     }
 
-    function fmtTime(epoch) {
-        return epoch ? new Date(epoch * 1000).toLocaleString() : '—';
-    }
 
     function fmtSize(bytes) {
         const mb = (Number(bytes) || 0) / (1024 * 1024);

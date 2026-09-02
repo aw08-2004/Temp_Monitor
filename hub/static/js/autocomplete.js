@@ -40,12 +40,6 @@
 (function () {
     let widgetSeq = 0;
 
-    function el(tag, className, text) {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined && text !== null) node.textContent = text;
-        return node;
-    }
 
     // Default option renderer: a bold label with an optional muted sublabel underneath.
     function defaultRenderItem(item) {

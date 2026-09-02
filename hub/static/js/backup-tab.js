@@ -80,12 +80,6 @@
         };
     }
 
-    function el(tag, className, text) {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined && text !== null) node.textContent = text;
-        return node;
-    }
 
     /**
      * A card that folds, and remembers being folded.
@@ -106,9 +100,6 @@
         return card;
     }
 
-    function fmtTime(epoch) {
-        return epoch ? new Date(epoch * 1000).toLocaleString() : '—';
-    }
 
     function fmtBytes(n) {
         if (!n && n !== 0) return '—';

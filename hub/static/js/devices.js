@@ -17,12 +17,6 @@
 
     let loaded = false;
 
-    function el(tag, className, text) {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined && text !== null) node.textContent = text;
-        return node;
-    }
 
     function when(epoch) {
         if (!epoch) return t('common.never');

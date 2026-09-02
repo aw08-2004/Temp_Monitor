@@ -68,16 +68,7 @@
         return payload;
     }
 
-    function el(tag, className, text) {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined && text !== null) node.textContent = text;
-        return node;
-    }
 
-    function fmtTime(epoch) {
-        return epoch ? new Date(epoch * 1000).toLocaleString() : '—';
-    }
 
     // A wire value shown to an operator needs a display name, and the map is spelled out --
     // one literal t() per value, so the key scan in tests/test_i18n.py can see them.
