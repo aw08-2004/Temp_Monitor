@@ -506,3 +506,22 @@ document.addEventListener('DOMContentLoaded', () => {
     initAlertBadge();
     initHubUpdate();
 });
+
+// ---- Tiny per-element builders shared by the pages ----
+//
+// These two were once copied into a dozen page scripts. They live here now; the per-page
+// copies were byte-identical and are deleted. Pages that need a different shape (the
+// settings pages' children-props variant, dashboard/patches' String() coercion) still
+// define their own in their IIFE scope, which shadows the global harmlessly.
+
+function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+}
+
+function fmtTime(epoch) {
+    if (!epoch) return '—';
+    return new Date(epoch * 1000).toLocaleString();
+}

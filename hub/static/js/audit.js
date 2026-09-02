@@ -52,12 +52,6 @@ async function api(path, options) {
     return body;
 }
 
-function el(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-}
 
 function formatEpoch(epoch) {
     return epoch ? new Date(epoch * 1000).toLocaleString() : '--';

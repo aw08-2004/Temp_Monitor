@@ -64,12 +64,6 @@ function json(method, payload) {
     return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
 }
 
-function el(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-}
 
 function fmtBytes(n) {
     if (!n && n !== 0) return '';
@@ -78,10 +72,6 @@ function fmtBytes(n) {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function fmtTime(epoch) {
-    if (!epoch) return '—';
-    return new Date(epoch * 1000).toLocaleString();
-}
 
 // datetime-local has no timezone, so it is read as local time — which is what the
 // operator meant when they typed it — and sent as a unix timestamp.

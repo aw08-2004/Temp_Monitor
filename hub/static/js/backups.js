@@ -59,12 +59,6 @@ function json(method, payload) {
     return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}) };
 }
 
-function el(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-}
 
 function fmtBytes(n) {
     if (!n && n !== 0) return '—';
@@ -74,10 +68,6 @@ function fmtBytes(n) {
     return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function fmtTime(epoch) {
-    if (!epoch) return '—';
-    return new Date(epoch * 1000).toLocaleString();
-}
 
 function fmtDuration(from, to) {
     if (!from || !to) return '—';
