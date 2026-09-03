@@ -121,10 +121,38 @@ void main() {
   });
 
   group('Alert', () {
-    test('tolerates either field name for the body', () {
-      expect(Alert.fromJson(const {'id': '1', 'detail': 'hot'}).message, 'hot');
+    // `detail` is an OBJECT and has been since the rules engine landed -- the hub json-
+    // encodes {rule_id, rule_name, text, count} into it. This test used to assert that a
+    // STRING detail was accepted as the body, which no hub has ever sent; it passed for as
+    // long as it did only because nothing else read the field. The silent failure now
+    // pinned is the one that matters: a raw Dart map rendered into the alerts list.
+    test('reads the rule sentence out of the detail object', () {
+      expect(
+          Alert.fromJson(const {
+            'id': '1',
+            'detail': {'rule_name': 'Disk low', 'text': 'C: is at 95%'},
+          }).message,
+          'C: is at 95%');
+      expect(
+          Alert.fromJson(const {
+            'id': '1',
+            'detail': {'rule_name': 'Disk low'},
+          }).message,
+          'Disk low');
+    });
+
+    test('message wins over the detail, and neither is fatal', () {
       expect(
           Alert.fromJson(const {'id': '1', 'message': 'hot'}).message, 'hot');
+      // A detail shape this app has never heard of, and a null one. Blank, not a map
+      // printed at an operator, and not an exception that empties the alerts list.
+      expect(
+          Alert.fromJson(const {
+            'id': '1',
+            'detail': {'count': 3},
+          }).message,
+          '');
+      expect(Alert.fromJson(const {'id': '1', 'detail': null}).message, '');
     });
   });
 }

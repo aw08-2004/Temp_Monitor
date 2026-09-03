@@ -1761,8 +1761,11 @@ comes online.
 
 ## 🚧 11. Desktop & mobile app   ·   hub 1.69.0   ·   client 1.1.0
 
-**The hub half is built (1.69.0), 1.0.0 is signed and published, and 1.1.0 is in the tree
-awaiting a release.**
+**The hub half is built (1.69.0), 1.0.0 is published on stable, and 1.1.0 is signed and
+published on the BETA channel** (roadmap #21) — one version sequence, so promoting it is
+copying `hub/client.manifest.beta.json` over the stable one, not renumbering anything.
+Beta first because of the paragraph below: the client has never been run against a live
+hub, and the operators who can say whether pairing works are the ones who opt in.
 It analyzes clean and its 48 tests pass. The Windows binary now exists, and the app has
 been **launched**: the window opens, every plugin DLL resolves, and `local_notifier`
 registers the Start Menu shortcut that gives an unsigned non-MSIX build the application
