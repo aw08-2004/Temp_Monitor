@@ -121,7 +121,37 @@ public sealed class SelfUpdater
             var oldPath = currentPath + ".old";
             try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { /* ignore */ }
             File.Move(currentPath, oldPath);            // rename running exe (allowed on Windows)
-            File.Move(stagedPath, currentPath);         // put the new binary in place
+            try
+            {
+                File.Move(stagedPath, currentPath);     // put the new binary in place
+            }
+            catch (Exception move)
+            {
+                // **The gap between those two moves is the only place this method can leave a
+                // machine with no agent binary at all**, and it used to be unguarded: the
+                // second move throws (a scanner holding the staged file, a full disk, an
+                // interrupted cross-volume copy), the outer catch logs it, and the exe is
+                // simply gone. The running process survives -- it is already in memory -- so
+                // nothing looks wrong until the next SCM start, which is a reboot or the next
+                // update, and by then the agent that would have carried a fix is the thing
+                // that is missing. Recovery is a desk visit, per machine.
+                //
+                // So put the original back and fail the update. A machine that did not update
+                // is still reachable and will try again; a machine with no exe is not.
+                _log.LogWarning(move, "[update] could not move the new binary into place -- restoring the previous one");
+                try
+                {
+                    File.Move(oldPath, currentPath);
+                }
+                catch (Exception restore)
+                {
+                    // Both moves failing is the one outcome nothing here can repair, so say
+                    // exactly what a human has to do rather than logging a stack trace.
+                    _log.LogError(restore, "[update] RESTORE FAILED -- rename {Old} back to {Cur} by hand; this service cannot start until you do", oldPath, currentPath);
+                }
+                try { File.Delete(stagedPath); } catch { /* ignore */ }
+                return false;
+            }
 
             // 8. Record the attempt and request an SCM-driven restart.
             _state.SaveRestartState(new RestartState
