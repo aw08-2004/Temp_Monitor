@@ -252,9 +252,16 @@ public sealed class DellBiosWriter : IBiosVendorWriter
         }
         catch (BiosInterfaceMissingException)
         {
-            // No stock provider on this machine. Command | Monitor may still be there, and if
-            // it is not either, ITS missing-namespace message is the one worth showing -- so
-            // this is not caught again.
+            // No stock provider on this machine. Command | Monitor may still be there; if it
+            // is not either, its own exception carries out of here and BiosWriter.Write turns
+            // it into this attribute's failure message.
+            //
+            // That message therefore names only the fallback, where the READER names both
+            // (see DellBiosSource.Read). The asymmetry is deliberate and not worth removing:
+            // a write reaches here having been aimed at a machine whose settings the console
+            // just listed, so "no Dell interface at all" is not the situation being explained
+            // -- the reader is where that question is answered, and answering it twice in two
+            // voices is how the two halves drift apart.
             return WriteLegacy(name, value, password, invoke);
         }
     }

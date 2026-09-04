@@ -310,6 +310,11 @@ public class BiosReaderTests
         // a fault someone should look at.
         var neither = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()));
         Assert.Equal(BiosSupport.Unsupported, neither.Support);
+        // Both are named. Re-raising whichever exception was caught first would send whoever
+        // read it after one of the two providers, on no evidence that it is the one this
+        // machine wants -- a coin toss with a namespace name on it.
+        Assert.Contains(@"root\dcim\sysman\biosattributes", neither.Error);
+        Assert.Contains(@"nor root\dcim\sysman", neither.Error);
 
         var empty = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()
         {

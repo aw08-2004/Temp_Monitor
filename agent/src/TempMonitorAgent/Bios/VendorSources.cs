@@ -150,21 +150,28 @@ public sealed class DellBiosSource : IBiosVendorSource
         // out would file every Command | Monitor machine under "no manageable BIOS" -- the
         // permanent, quiet state nobody investigates.
         BiosVendorResult? modern = null, legacy = null;
-        BiosInterfaceMissingException? absent = null;
 
         try { modern = ReadAttributes(query); }
-        catch (BiosInterfaceMissingException e) { absent = e; }
+        catch (BiosInterfaceMissingException) { }
         if (modern is { Settings.Count: > 0 }) return modern;
 
         try { legacy = ReadLegacy(query); }
-        catch (BiosInterfaceMissingException e) { absent ??= e; }
+        catch (BiosInterfaceMissingException) { }
         if (legacy is { Settings.Count: > 0 }) return legacy;
 
         // Neither produced an attribute, and which silence this was decides the outcome -- a
         // distinction BiosReader draws by exception. BOTH namespaces absent means there is no
         // Dell firmware interface here at all (unsupported). One present that enumerated
         // nothing is a fault (error), and an empty result is how this method says so.
-        if (modern is null && legacy is null) throw absent!;
+        //
+        // Both are NAMED rather than one of them being picked. Neither is the more truthful
+        // answer -- "biosattributes is not present" is half of why this machine is
+        // unsupported, and a reader who went looking for that one namespace would install a
+        // provider this machine may already be unable to use. Re-raising whichever exception
+        // happened to be caught first is a coin toss dressed up as a reason.
+        if (modern is null && legacy is null)
+            throw new BiosInterfaceMissingException(
+                $"neither {AttributesNamespace} nor {LegacyNamespace} is present");
         return modern ?? legacy!;
     }
 
