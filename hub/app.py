@@ -107,7 +107,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.95.0"
+HUB_VERSION = "1.95.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1228,18 +1228,66 @@ def _run_git(args, cwd):
     except Exception as e:
         return False, str(e)
 
-def _install_requirements(code_dir):
-    """Best-effort dependency install after an update: a release that adds a dependency
-    shouldn't crash-loop the restart, so failure here is logged and tolerated. `code_dir`
-    is the hub code directory -- requirements.txt lives beside the modules, under hub/."""
+def _requirements_text(code_dir):
+    """The dependency list as it currently reads on disk, or "" if there is none.
+
+    Snapshotted either side of an update so the caller can tell a release that ADDED a
+    dependency from one that did not -- see _install_requirements for why that distinction
+    is what decides whether a failed pip is fatal."""
     try:
-        subprocess.run(
+        with open(os.path.join(code_dir, "requirements.txt"), "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _install_requirements(code_dir):
+    """Install the updated dependency list. **Returns whether pip actually succeeded** --
+    the caller decides what that is worth, and the answer depends on the release.
+
+    This used to swallow the result entirely, and that is the crash-loop: a release that
+    adds a dependency, on a hub whose pip cannot reach an index, installs nothing, restarts
+    anyway, fails the import at module scope, and is restarted by the supervisor forever --
+    with no rollback, because the old tree is already gone. Unlike the agent there is no
+    MaxChainRestarts here to stop it.
+
+    Rejected: treating ANY pip failure as fatal. A hub with no route to an index would then
+    stop taking updates entirely, including the many releases that add no dependency at all
+    -- trading a rare crash-loop for a fleet that silently stops being patched. So the
+    callers compare _requirements_text() before and after and only refuse to restart when
+    the list actually changed under a failed install.
+
+    `code_dir` is the hub code directory -- requirements.txt lives beside the modules,
+    under hub/."""
+    try:
+        proc = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r",
              os.path.join(code_dir, "requirements.txt"), "--quiet"],
             cwd=code_dir, capture_output=True, text=True, timeout=300,
         )
+        if proc.returncode != 0:
+            print(f"[hub-update] pip install after update returned "
+                  f"{proc.returncode}: {(proc.stderr or proc.stdout or '').strip()[:500]}")
+            return False
+        return True
     except Exception as e:
-        print(f"[hub-update] pip install after update failed (continuing): {e}")
+        print(f"[hub-update] pip install after update failed: {e}")
+        return False
+
+
+def _dependencies_are_satisfied(code_dir, before):
+    """Whether it is safe to restart into `code_dir` after running pip.
+
+    True when pip succeeded, and also when it failed but the dependency list did not move
+    -- nothing new was needed, so the old environment still satisfies the new code."""
+    if _install_requirements(code_dir):
+        return True
+    if _requirements_text(code_dir) == before:
+        print("[hub-update] pip failed but requirements.txt is unchanged -- continuing.")
+        return True
+    print("[hub-update] requirements.txt changed and pip failed -- refusing to restart "
+          "into code whose dependencies are not installed.")
+    return False
 
 
 def _perform_hub_update_git(worktree_root):
@@ -1251,6 +1299,9 @@ def _perform_hub_update_git(worktree_root):
     The ref is the channel's (roadmap #21), and it is read once here rather than per git call
     so that a channel changed mid-update cannot fetch one ref and reset to another."""
     ref = channels.hub_ref(hub_update_channel())
+    code_dir = os.path.join(worktree_root, HUB_ARCHIVE_SUBDIR)
+    # Snapshotted BEFORE the reset, while the tree is still the running version's.
+    requirements_before = _requirements_text(code_dir)
     ok, out = _run_git(["fetch", "origin", ref], worktree_root)
     if not ok:
         print(f"[hub-update] git fetch failed, skipping: {out}")
@@ -1260,20 +1311,24 @@ def _perform_hub_update_git(worktree_root):
         print(f"[hub-update] git reset failed, skipping: {out}")
         return False
     print(f"[hub-update] Updated working tree to origin/{ref}: {out}")
-    _install_requirements(os.path.join(worktree_root, HUB_ARCHIVE_SUBDIR))
-    return True
+    return _dependencies_are_satisfied(code_dir, requirements_before)
 
 
-def _stage_hub_archive(staging):
+def _stage_hub_archive(staging, archive_url):
     """Download and unpack the branch archive into `staging`, returning the path to the
     archive's hub/ directory, or None on any failure (logged, never raises).
+
+    `archive_url` is passed in rather than resolved here, for the reason
+    _perform_hub_update_git reads its ref once: hub_archive_url() re-reads the channel
+    setting on every call, so resolving it inside the download AND again in the log line
+    let an operator switching channel mid-update fetch one train and report the other.
 
     Everything lands in staging and is sanity-checked BEFORE the caller touches the live
     install -- a truncated download or a moved layout upstream must fail the update, not
     leave a hub with half its files. The check is a sanity floor (the entrypoints exist),
     not the old per-file allowlist: the archive's hub/ is authoritative about the rest."""
     try:
-        resp = requests.get(hub_archive_url(), timeout=120)
+        resp = requests.get(archive_url, timeout=120)
         resp.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             zf.extractall(staging)
@@ -1304,8 +1359,11 @@ def _perform_hub_update_archive(code_dir):
     can't linger and shadow. Operator state (.env, logs/, the service wrapper) lives one
     level up in STATE_ROOT and is never in code_dir, so the mirror can't touch it."""
     staging = tempfile.mkdtemp(prefix="hub-update-")
+    # Resolved once, here, and used for both the download and the log line below.
+    archive_url = hub_archive_url()
+    requirements_before = _requirements_text(code_dir)
     try:
-        src_hub = _stage_hub_archive(staging)
+        src_hub = _stage_hub_archive(staging, archive_url)
         if src_hub is None:
             return False
 
@@ -1333,9 +1391,8 @@ def _perform_hub_update_archive(code_dir):
                     os.remove(victim)
 
         print(f"[hub-update] Mirrored {HUB_ARCHIVE_SUBDIR}/ into {code_dir} "
-              f"from {hub_archive_url()}")
-        _install_requirements(code_dir)
-        return True
+              f"from {archive_url}")
+        return _dependencies_are_satisfied(code_dir, requirements_before)
     except Exception as e:
         # A failure part-way through the mirror leaves the tree inconsistent, so say so
         # loudly -- but still don't restart, since restarting is what would turn a broken
@@ -1346,16 +1403,57 @@ def _perform_hub_update_archive(code_dir):
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _tree_version_is_newer(code_dir):
+    """Whether the app.py now ON DISK declares a version newer than the running one.
+
+    The last gate before a restart, and the only one that reads what will actually be
+    imported next boot rather than what a strategy reported. Two real failures land here:
+
+      * **The version and the code come from different places.** hub_update_available()
+        reads HUB_VERSION from raw.githubusercontent.com; the archive strategy downloads
+        from codeload. Two caches, two commits possible -- so main can advertise a version
+        the zip does not yet carry, and without this the hub restarts onto the same code,
+        says nothing, and repeats every fifteen minutes.
+      * **A mirror that half-succeeded.** A truncated or partly-written app.py parses as
+        None here, which is not newer, so the hub keeps running the version it has instead
+        of restarting into a tree it cannot import.
+
+    Refusing to restart is always the safe answer: the update is retried on the next tick.
+    """
+    try:
+        with open(os.path.join(code_dir, "app.py"), "r", encoding="utf-8") as fh:
+            found = parse_hub_version(fh.read())
+    except OSError as e:
+        print(f"[hub-update] could not re-read app.py after updating: {e}")
+        return False
+    if not found:
+        print("[hub-update] updated app.py carries no parseable HUB_VERSION -- not restarting.")
+        return False
+    if cmp_versions(found, HUB_VERSION) <= 0:
+        print(f"[hub-update] updated tree is {found}, running {HUB_VERSION} -- "
+              "not restarting; will retry on the next check.")
+        return False
+    return True
+
+
 def perform_hub_update(code_dir):
     """Update the hub in place. Returns True only if the caller should now restart.
 
     Prefers git when the install is a checkout: a developer running from a clone should not
     have their working tree overwritten by an archive. The .git that decides this lives at
-    the worktree root, one level up from the code dir (the hub/ subdirectory)."""
+    the worktree root, one level up from the code dir (the hub/ subdirectory).
+
+    The strategy reporting success is not on its own a reason to restart -- see
+    _tree_version_is_newer, which is asked here so that BOTH callers (the watcher and the
+    operator-triggered worker) get the check without either having to remember it."""
     worktree_root = os.path.dirname(os.path.abspath(code_dir))
     if os.path.isdir(os.path.join(worktree_root, ".git")):
-        return _perform_hub_update_git(worktree_root)
-    return _perform_hub_update_archive(code_dir)
+        applied = _perform_hub_update_git(worktree_root)
+    else:
+        applied = _perform_hub_update_archive(code_dir)
+    if not applied:
+        return False
+    return _tree_version_is_newer(code_dir)
 
 def restart_hub():
     """Exit non-zero so the supervisor treats it as a failure and relaunches waitress with

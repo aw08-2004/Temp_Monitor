@@ -121,7 +121,45 @@ public sealed class SelfUpdater
             var oldPath = currentPath + ".old";
             try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { /* ignore */ }
             File.Move(currentPath, oldPath);            // rename running exe (allowed on Windows)
-            File.Move(stagedPath, currentPath);         // put the new binary in place
+            try
+            {
+                File.Move(stagedPath, currentPath);     // put the new binary in place
+            }
+            catch (Exception move)
+            {
+                // **The gap between those two moves is the only place this method can leave a
+                // machine with no agent binary at all**, and it used to be unguarded: the
+                // second move throws (a scanner holding the staged file, a full disk, an
+                // interrupted cross-volume copy), the outer catch logs it, and the exe is
+                // simply gone. The running process survives -- it is already in memory -- so
+                // nothing looks wrong until the next SCM start, which is a reboot or the next
+                // update, and by then the agent that would have carried a fix is the thing
+                // that is missing. Recovery is a desk visit, per machine.
+                //
+                // So put the original back and fail the update. A machine that did not update
+                // is still reachable and will try again; a machine with no exe is not.
+                _log.LogWarning(move, "[update] could not move the new binary into place -- restoring the previous one");
+                try
+                {
+                    // **overwrite, because the failure this restores from can leave a PARTIAL
+                    // file behind.** Within one volume File.Move is a rename and fails having
+                    // created nothing, but across volumes it degrades to copy-then-delete, so
+                    // a full disk or an interrupted copy -- two of the three cases named above
+                    // -- can leave a half-written exe at currentPath. The two-argument overload
+                    // refuses an existing destination, so the restore would then throw for a
+                    // reason that has nothing to do with the original failure, and the operator
+                    // following the message below by hand would hit the same refusal.
+                    File.Move(oldPath, currentPath, overwrite: true);
+                }
+                catch (Exception restore)
+                {
+                    // Both moves failing is the one outcome nothing here can repair, so say
+                    // exactly what a human has to do rather than logging a stack trace.
+                    _log.LogError(restore, "[update] RESTORE FAILED -- rename {Old} over {Cur} by hand (replacing it if it exists); this service cannot start until you do", oldPath, currentPath);
+                }
+                try { File.Delete(stagedPath); } catch { /* ignore */ }
+                return false;
+            }
 
             // 8. Record the attempt and request an SCM-driven restart.
             _state.SaveRestartState(new RestartState

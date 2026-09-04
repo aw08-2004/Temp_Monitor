@@ -215,13 +215,14 @@ def test_hub_self_update():
         _sp.run(["git", "clone", origin, work], capture_output=True, text=True, check=True)
         # origin advances; the hub's checkout must fast-follow via reset --hard.
         with open(os.path.join(origin, "hub", "app.py"), "w") as f:
-            f.write('HUB_VERSION = "2.0.0"\n')
+            f.write('HUB_VERSION = "999.0.0"\n')
         _git(origin, "commit", "-am", "v2")
         ok = app.perform_hub_update(os.path.join(work, "hub"))
         with open(os.path.join(work, "hub", "app.py")) as f:
             pulled = f.read()
         check("perform_hub_update returned True", ok is True)
-        check("checkout advanced to origin/main (2.0.0)", app.parse_hub_version(pulled) == "2.0.0")
+        check("checkout advanced to origin/main (999.0.0)",
+              app.parse_hub_version(pulled) == "999.0.0")
     except Exception as e:
         check(f"perform_hub_update dry run (unexpected error: {e})", False)
 
@@ -230,7 +231,11 @@ def test_hub_self_update():
     # branch archive instead. Serve a synthetic zip rather than hitting the network.
     import io as _io, zipfile as _zf
 
-    def _make_archive(version="2.0.0", omit=()):
+    # 999.0.0 rather than 2.0.0: perform_hub_update now refuses to report success unless the
+    # tree it just wrote is newer than the RUNNING HUB_VERSION, so a fixture version has to
+    # stay above whatever this hub is at -- and "2.0.0" would have started failing silently
+    # the day the hub crossed it.
+    def _make_archive(version="999.0.0", omit=()):
         # The archive lays the hub's code + assets under a hub/ subdir of the single
         # <repo>-<branch>/ root -- there is no allowlist anymore, so this is just a small
         # representative set (the entrypoints the sanity floor checks, plus mirrored dirs).
@@ -276,13 +281,13 @@ def test_hub_self_update():
             f.write("dbcontents")
 
         app.requests.get = lambda *a, **k: _Resp(_make_archive())
-        app._install_requirements = lambda d: None
+        app._install_requirements = lambda d: True
         ok = app.perform_hub_update(code_dir)
         with open(os.path.join(code_dir, "app.py")) as f:
             pulled = f.read()
 
         check("archive update returned True", ok is True)
-        check("app.py advanced to 2.0.0", app.parse_hub_version(pulled) == "2.0.0")
+        check("app.py advanced to 999.0.0", app.parse_hub_version(pulled) == "999.0.0")
         check("stale template removed by dir mirror",
               not os.path.exists(os.path.join(code_dir, "templates", "gone.html")))
         check("stale top-level module pruned",
@@ -310,23 +315,128 @@ def test_hub_self_update():
         # which strategy runs. A developer's checkout must never be overwritten by the archive.
         orig_git_fn, orig_archive_fn = app._perform_hub_update_git, app._perform_hub_update_archive
         try:
-            app._perform_hub_update_git = lambda root: "git"
-            app._perform_hub_update_archive = lambda d: "archive"
+            # Record which one ran rather than returning a sentinel through
+            # perform_hub_update: it reports a plain bool now, because the strategy's own
+            # answer is no longer the last word (the version gate below it is).
+            routed = []
+            app._perform_hub_update_git = lambda root: routed.append("git") or True
+            app._perform_hub_update_archive = lambda d: routed.append("archive") or True
             clone_root = tempfile.mkdtemp(prefix="hub-dispatch-clone-")
             os.makedirs(os.path.join(clone_root, ".git"))
             clone_code = os.path.join(clone_root, "hub")
             os.makedirs(clone_code)
             sparse_code = os.path.join(tempfile.mkdtemp(prefix="hub-dispatch-sparse-"), "hub")
             os.makedirs(sparse_code)
-            check("code dir under a .git worktree routes to git",
-                  app.perform_hub_update(clone_code) == "git")
-            check("code dir with no .git parent routes to archive",
-                  app.perform_hub_update(sparse_code) == "archive")
+            # Both strategies are stubbed here, but perform_hub_update still re-reads the
+            # tree afterwards -- so each dispatch target needs an app.py that clears the gate,
+            # or this test would be asserting the gate rather than the dispatch.
+            for _d in (clone_code, sparse_code):
+                with open(os.path.join(_d, "app.py"), "w") as f:
+                    f.write('HUB_VERSION = "999.0.0"\n')
+            app.perform_hub_update(clone_code)
+            check("code dir under a .git worktree routes to git", routed == ["git"])
+            routed.clear()
+            app.perform_hub_update(sparse_code)
+            check("code dir with no .git parent routes to archive", routed == ["archive"])
         finally:
             app._perform_hub_update_git = orig_git_fn
             app._perform_hub_update_archive = orig_archive_fn
     except Exception as e:
         check(f"archive update dry run (unexpected error: {e})", False)
+    finally:
+        app.requests.get = orig_get
+        app._install_requirements = orig_install
+
+
+def test_hub_update_restart_gates():
+    """The two things checked between "the files were replaced" and "restart into them".
+
+    THE SILENT FAILURE THIS FILE EXISTS FOR is a hub that restarts into code it cannot
+    run. There is no MaxChainRestarts on this side and no rollback -- the old tree is gone
+    by then -- so a hub that exits into a broken import is restarted by its supervisor
+    forever, and the console it serves is the only way anyone would have noticed. Both
+    gates below refuse the restart instead, which costs one deferred update.
+    """
+    print("\n-- hub self-update: a failed pip only blocks a release that ADDED a dependency --")
+    orig_install = app._install_requirements
+    try:
+        code_dir = tempfile.mkdtemp(prefix="hub-deps-")
+        with open(os.path.join(code_dir, "requirements.txt"), "w") as f:
+            f.write("flask\n")
+
+        app._install_requirements = lambda d: True
+        check("pip succeeded -> restart allowed",
+              app._dependencies_are_satisfied(code_dir, "anything at all") is True)
+
+        # The air-gapped hub: pip can never reach an index, but this release needs nothing
+        # new, so the environment it is already running in still satisfies the new code.
+        # Treating every pip failure as fatal would strand deployments like this on an old
+        # build forever -- see _install_requirements for why that was rejected.
+        app._install_requirements = lambda d: False
+        check("pip failed but requirements unchanged -> restart allowed",
+              app._dependencies_are_satisfied(code_dir, "flask\n") is True)
+        check("pip failed and requirements changed -> restart refused",
+              app._dependencies_are_satisfied(code_dir, "flask\nldap3\n") is False)
+
+        # A release that ADDS the file where there was none is the same case: the list moved.
+        bare = tempfile.mkdtemp(prefix="hub-deps-bare-")
+        check("no requirements.txt either side -> restart allowed",
+              app._dependencies_are_satisfied(bare, "") is True)
+    finally:
+        app._install_requirements = orig_install
+
+    print("\n-- hub self-update: the tree on disk must really be newer --")
+    tree = tempfile.mkdtemp(prefix="hub-treever-")
+    check("missing app.py -> refused",
+          app._tree_version_is_newer(tree) is False)
+
+    def _write(body):
+        with open(os.path.join(tree, "app.py"), "w") as f:
+            f.write(body)
+
+    _write('HUB_VERSION = "999.0.0"\n')
+    check("newer app.py -> allowed", app._tree_version_is_newer(tree) is True)
+
+    # The version comes from raw.githubusercontent and the code from codeload -- two caches,
+    # so main can advertise a build the archive does not carry yet. Restarting onto it would
+    # loop every fifteen minutes saying nothing.
+    _write(f'HUB_VERSION = "{app.HUB_VERSION}"\n')
+    check("same version (stale archive) -> refused", app._tree_version_is_newer(tree) is False)
+    _write('HUB_VERSION = "0.0.1"\n')
+    check("older version -> refused", app._tree_version_is_newer(tree) is False)
+    # A truncated mirror parses as None, which is not a version and must not be read as one.
+    _write('HUB_VERSION = "1.9')
+    check("unparseable app.py -> refused", app._tree_version_is_newer(tree) is False)
+
+    print("\n-- hub self-update: a stale archive does not trigger a restart --")
+    # End to end: the files ARE replaced (the archive was well-formed and complete), but it
+    # carries a version no newer than the running one, so perform_hub_update reports False
+    # and the caller never exits.
+    import io as _io, zipfile as _zf
+
+    class _Resp:
+        def __init__(self, content): self.content = content
+        def raise_for_status(self): pass
+
+    def _archive(version):
+        buf = _io.BytesIO()
+        with _zf.ZipFile(buf, "w") as z:
+            z.writestr("Temp_Monitor-main/hub/app.py", f'HUB_VERSION = "{version}"\n')
+            z.writestr("Temp_Monitor-main/hub/wsgi.py", "")
+            z.writestr("Temp_Monitor-main/hub/requirements.txt", "")
+        return buf.getvalue()
+
+    orig_get, orig_install = app.requests.get, app._install_requirements
+    try:
+        stale_root = tempfile.mkdtemp(prefix="hub-stale-")
+        stale_code = os.path.join(stale_root, "hub")
+        os.makedirs(stale_code)
+        with open(os.path.join(stale_code, "app.py"), "w") as f:
+            f.write('HUB_VERSION = "0.9.0"\n')
+        app.requests.get = lambda *a, **k: _Resp(_archive(app.HUB_VERSION))
+        app._install_requirements = lambda d: True
+        check("archive no newer than the running hub -> no restart",
+              app.perform_hub_update(stale_code) is False)
     finally:
         app.requests.get = orig_get
         app._install_requirements = orig_install
@@ -684,6 +794,7 @@ if __name__ == "__main__":
     test_report_endpoint()
     test_channel_wiring()
     test_hub_self_update()
+    test_hub_update_restart_gates()
     test_hub_update_notice()
     test_hub_update_notice_hides()
     test_version_format_policy()
