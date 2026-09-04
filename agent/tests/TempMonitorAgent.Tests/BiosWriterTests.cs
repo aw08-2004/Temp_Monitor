@@ -193,14 +193,23 @@ public class BiosWriterTests
     public void A_Dell_with_neither_interface_reports_the_fallback_s_own_absence()
     {
         // The fallback is entered on a missing namespace and its exception is NOT caught
-        // again: a machine with neither provider must say so, and the message an operator
-        // reads should name the interface that was tried last rather than the one that was
-        // tried first and is equally absent.
+        // again, so what reaches the operator is the message from the interface tried LAST.
+        // (The reader names both instead -- see DellBiosSource.Read for why the two halves
+        // answer this differently on purpose.)
         var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
             (ns, cls, method, args) =>
                 throw new BiosInterfaceMissingException($"{ns} is not present"));
         Assert.False(results[0].Ok);
-        Assert.Contains(@"root\dcim\sysman", results[0].Error);
+
+        // Asserted by EQUALITY, and with the stock namespace named as the thing that must be
+        // absent from it. `Contains(@"root\dcim\sysman", ...)` -- the obvious spelling, and
+        // what this test shipped with -- proves nothing at all here:
+        // root\dcim\sysman\biosattributes has root\dcim\sysman as a PREFIX, so that assertion
+        // passes whichever of the two messages arrives, including the first-tried one this
+        // test exists to rule out. A substring check between two names where one contains the
+        // other is not a check.
+        Assert.Equal(@"root\dcim\sysman is not present", results[0].Error);
+        Assert.DoesNotContain("biosattributes", results[0].Error);
     }
 
     [Fact]

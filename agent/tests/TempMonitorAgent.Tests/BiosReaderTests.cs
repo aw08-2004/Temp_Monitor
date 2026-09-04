@@ -313,8 +313,13 @@ public class BiosReaderTests
         // Both are named. Re-raising whichever exception was caught first would send whoever
         // read it after one of the two providers, on no evidence that it is the one this
         // machine wants -- a coin toss with a namespace name on it.
-        Assert.Contains(@"root\dcim\sysman\biosattributes", neither.Error);
-        Assert.Contains(@"nor root\dcim\sysman", neither.Error);
+        //
+        // By EQUALITY, because these two names cannot be told apart by substring: one is a
+        // prefix of the other, so `Contains(@"root\dcim\sysman", ...)` matches a message that
+        // names only biosattributes, and `Contains(@"nor root\dcim\sysman", ...)` matches one
+        // that names it twice. Either would pass over exactly the regression this guards.
+        Assert.Equal(@"neither root\dcim\sysman\biosattributes nor root\dcim\sysman is present",
+                     neither.Error);
 
         var empty = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()
         {
