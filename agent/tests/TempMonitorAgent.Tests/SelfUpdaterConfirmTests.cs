@@ -72,10 +72,10 @@ public sealed class SelfUpdaterConfirmTests
     [Fact]
     public void ConfirmingWithoutHavingBootedOntoAnUpdateChangesNothing()
     {
-        // The ordinary case: no update is pending, and the telemetry loop calls this on
-        // every single report. It must not touch state it was never told about -- a guard
-        // left by an update that has NOT yet booted onto its target is not this build's to
-        // clear.
+        // The ordinary case: no update is pending, and BOTH the telemetry and heartbeat
+        // loops call this on every tick. It must not touch state it was never told about --
+        // a guard left by an update that has NOT yet booted onto its target is not this
+        // build's to clear.
         var state = FreshState();
         state.SaveRestartState(new RestartState { Target = "999.0.0", Count = 2 });
 
@@ -92,8 +92,11 @@ public sealed class SelfUpdaterConfirmTests
     [Fact]
     public void ConfirmingIsIdempotentAndCheapAfterTheFirstCall()
     {
-        // Called on every report for the life of the process, so calling it again after it
-        // has done its work must be a no-op rather than a second attempt at the files.
+        // Called by two loops for the life of the process -- see ConfirmRunningBuild on why
+        // confirmation has two independent sources -- so the second and every later call
+        // must be a no-op rather than another attempt at the files. This is the same
+        // property the interlocked claim gives when the two loops race on separate threads;
+        // asserted here sequentially, which is what a unit test can honestly pin.
         var state = FreshState();
         state.SaveRestartState(new RestartState { Target = AgentConfig.Version, Count = 1 });
 

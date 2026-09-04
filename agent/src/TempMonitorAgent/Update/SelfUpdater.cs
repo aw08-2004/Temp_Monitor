@@ -25,12 +25,12 @@ public sealed class SelfUpdater
     private readonly AgentState _state;
     private readonly HttpClient _http;
 
-    /// <summary>Whether an applied update is still waiting to be confirmed by this build
-    /// doing real work. Written once on the boot thread by <see cref="ReconcileAfterBoot"/>
-    /// and cleared by <see cref="ConfirmRunningBuild"/>, whose only caller is the telemetry
-    /// loop -- so there is one writer after startup and this needs no lock, only the
-    /// visibility that volatile gives it across the loops' thread-pool threads.</summary>
-    private volatile bool _awaitingConfirmation;
+    /// <summary>1 while an applied update is still waiting to be confirmed by this build
+    /// doing real work. Set on the boot thread by <see cref="ReconcileAfterBoot"/> and
+    /// CLAIMED, not merely read, by <see cref="ConfirmRunningBuild"/>: two independent
+    /// loops call that method now, on their own thread-pool threads, so the interlocked
+    /// exchange is what makes the retirement happen exactly once rather than twice.</summary>
+    private int _awaitingConfirmation;
 
     public SelfUpdater(ILogger<SelfUpdater> log, AgentState state)
     {
@@ -63,7 +63,7 @@ public sealed class SelfUpdater
         if (rs is null) return;
         if (VersionUtil.Compare(AgentConfig.Version, rs.Target) >= 0)
         {
-            _awaitingConfirmation = true;
+            Volatile.Write(ref _awaitingConfirmation, 1);
             _log.LogInformation(
                 "Update to {Target} booted (now {Version}); holding the previous binary until this build reaches the hub",
                 rs.Target, AgentConfig.Version);
@@ -73,21 +73,27 @@ public sealed class SelfUpdater
         // retrying the same broken target forever.
     }
 
-    /// <summary>Called once the updated build has completed a round trip to the hub, which
-    /// is the first evidence it can do its job rather than merely start. Clears the restart
-    /// guard and drops the previous binary.
+    /// <summary>Called once the updated build has completed a round trip the hub accepted,
+    /// which is the first evidence it can do its job rather than merely start. Clears the
+    /// restart guard and drops the previous binary.
     ///
-    /// Cheap to call on every report: after the first one it is a single field read. The
-    /// telemetry loop is the only caller, and a successful report is the right proof
-    /// because it is the thing the agent exists to do -- an agent that boots but cannot
-    /// report is indistinguishable, from the console, from one that is switched off.</summary>
+    /// **Two loops call this, and that is deliberate.** Confirmation must not be coupled to
+    /// any one subsystem working: gating it on the telemetry report alone tied "the update
+    /// worked" to "the CPU sensor also works", so a machine with no PawnIO driver -- a VM, a
+    /// hardened build -- never reached the call and kept its previous binary forever while
+    /// being perfectly healthy. The heartbeat has the opposite blind spot, since it needs
+    /// enrollment and /api/report does not. Either one landing is proof, so both call it and
+    /// whichever arrives first wins; the interlocked claim above is what makes the second
+    /// call free.
+    ///
+    /// Cheap enough for both cadences: one interlocked read per five-to-ten seconds, and
+    /// nothing at all after the first success.</summary>
     public void ConfirmRunningBuild()
     {
-        if (!_awaitingConfirmation) return;
-        _awaitingConfirmation = false;
+        if (Interlocked.Exchange(ref _awaitingConfirmation, 0) == 0) return;
         _state.ClearRestartState();
         TryDeleteOldBinary();
-        _log.LogInformation("Update to {Version} confirmed by a successful hub report", AgentConfig.Version);
+        _log.LogInformation("Update to {Version} confirmed -- the hub accepted this build", AgentConfig.Version);
     }
 
     /// <summary>Check for and apply an update. Returns true if an update was applied

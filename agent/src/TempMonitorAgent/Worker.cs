@@ -165,10 +165,11 @@ public sealed class Worker : BackgroundService
                     if (includeSensors) lastSensor = now;
                     if (includeUptime) lastUptime = now;
 
-                    // A report the HUB ACCEPTED is the first thing that proves an updated
-                    // build works rather than merely starts, so it is what retires the
-                    // previous binary -- see SelfUpdater.ConfirmRunningBuild. A no-op field
-                    // read once the current build has been confirmed.
+                    // A report the HUB ACCEPTED is one of the two things that prove an
+                    // updated build works rather than merely starts, so it retires the
+                    // previous binary -- see SelfUpdater.ConfirmRunningBuild. The heartbeat
+                    // loop carries the other, because this branch only runs when the CPU
+                    // sensor produced a reading and an update's fate must not hang on that.
                     //
                     // **Gated on the result, not on reaching this line.** ReportAsync
                     // swallows connectivity failures and returns Sent:false rather than
@@ -216,8 +217,13 @@ public sealed class Worker : BackgroundService
         {
             try
             {
-                if (await EnsureEnrolledAsync(ct))
-                    await _fleet.HeartbeatAsync(ct);
+                // HeartbeatAsync is true ONLY on a 2xx -- not enrolled, a non-2xx and a
+                // connectivity failure all come back false -- so it is the second proof that
+                // this build reached the hub, and the one that does not depend on the CPU
+                // sensor the way the telemetry path does. See SelfUpdater.ConfirmRunningBuild
+                // for why confirmation has two independent sources rather than one.
+                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct))
+                    _updater.ConfirmRunningBuild();
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Heartbeat tick failed"); }
