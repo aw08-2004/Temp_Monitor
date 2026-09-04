@@ -107,7 +107,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.95.1"
+HUB_VERSION = "1.96.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1352,13 +1352,127 @@ def _stage_hub_archive(staging, archive_url):
     return src_hub
 
 
+def _protected_state_inside(code_dir):
+    """Operator data that a directory swap would carry off with the old code, if any.
+
+    The guard this replaces compared `code_dir` to STATE_ROOT for EQUALITY, which was
+    already too narrow -- a HUB_LOG_DIR pointing anywhere under hub/ had its database
+    pruned by the mirror, silently. Swapping the directory makes that total rather than
+    partial, so the question becomes containment and is asked about every path this hub
+    keeps state in.
+
+    Returns a list of human-readable descriptions, empty when the code dir holds only code.
+    """
+    here = os.path.abspath(code_dir)
+    prefix = here + os.sep
+    found = []
+    for label, path in (("HUB_STATE_DIR", STATE_ROOT), ("HUB_LOG_DIR", LOG_DIR),
+                        ("the file spool", FILE_SPOOL_DIR), (".env", ENV_PATH)):
+        target = os.path.abspath(path)
+        if target == here or target.startswith(prefix):
+            found.append(f"{label} at {target}")
+    return found
+
+
+def _swap_dirs(code_dir, incoming, previous):
+    """Put `incoming` where `code_dir` is, keeping the old tree at `previous`.
+
+    Two renames on one volume, which is the whole point: between them the code dir is
+    missing for microseconds instead of being half-written for seconds. If the second
+    rename fails the first is undone, so the live hub survives a swap that could not
+    finish.
+
+    **The chdir is not optional on Windows.** Under the WinSW service the process's working
+    directory IS the code dir, and Windows refuses to rename a directory any process is
+    sitting in. Moving out is safe here because every path this hub reads at runtime was
+    made absolute precisely so it would not depend on cwd (see LOG_DIR), and we move back
+    the moment the swap is done -- but it is a process-global change, so it is done only
+    when the cwd is actually in the way, which also keeps it out of the test suite's hair.
+    """
+    parent = os.path.dirname(code_dir)
+    try:
+        cwd = os.path.abspath(os.getcwd())
+    except OSError:
+        cwd = None
+    move_back = cwd is not None and (cwd == code_dir or cwd.startswith(code_dir + os.sep))
+    if move_back:
+        os.chdir(parent)
+    try:
+        if os.path.isdir(previous):
+            shutil.rmtree(previous, ignore_errors=True)
+        os.rename(code_dir, previous)
+        try:
+            os.rename(incoming, code_dir)
+        except Exception:
+            # The one window where the hub has no code directory at all. Put the old tree
+            # back before re-raising, so the failure costs a deferred update rather than
+            # the install.
+            try:
+                os.rename(previous, code_dir)
+            except Exception as restore:
+                # Both renames failing is the only outcome nothing here can repair, and it
+                # leaves an install with no code directory. Say exactly what to do rather
+                # than letting it read as one more failed update in the log.
+                print(f"[hub-update] RESTORE FAILED ({restore}) -- rename {previous} back "
+                      f"to {code_dir} by hand; this hub cannot start until you do")
+            raise
+    finally:
+        if move_back and os.path.isdir(code_dir):
+            os.chdir(code_dir)
+
+
 def _perform_hub_update_archive(code_dir):
-    """Mirror the archive's hub/ directory into the live code dir. Used when there's no git
-    checkout to reset (the layout install.ps1 produces). Files are overwritten in place and
-    subdirectories are mirrored; entries the archive dropped are pruned, so a deleted module
-    can't linger and shadow. Operator state (.env, logs/, the service wrapper) lives one
-    level up in STATE_ROOT and is never in code_dir, so the mirror can't touch it."""
-    staging = tempfile.mkdtemp(prefix="hub-update-")
+    """Replace the live code dir with the archive's hub/, by **building the new tree beside
+    it and renaming**. Used when there is no git checkout to reset (what install.ps1 lays
+    down).
+
+    This used to copy file-by-file into the LIVE directory -- rmtree each subdirectory, copy
+    the archive's version back, then prune what upstream had dropped. Two things were wrong
+    with that, and both are the same thing: for the seconds it ran, the hub was serving
+    requests out of a tree that was neither the old version nor the new one, so any lazy
+    import landing in that window (directory.py reaches for ldap3 inside its connect path)
+    could load from a directory that had just been emptied. And a failure part-way through
+    left exactly that state permanently, with no way back -- the function said so in a
+    comment and carried on.
+
+    Building the tree off to the side fixes both. The expensive part happens where nothing
+    reads it, the dependency install and the version check both run against the STAGED tree
+    so a bad release never disturbs a working hub, and the cutover is two renames. What the
+    old prune did falls out for free: the new directory contains exactly the archive, so a
+    module deleted upstream cannot linger and shadow.
+
+    **The old tree is kept at <code_dir>.prev, and that is the point.** The hub has no
+    MaxChainRestarts and cannot roll itself back -- by the time anyone knows the new build
+    is broken, the process is in a supervisor restart loop and is not running any code of
+    ours. One directory rename by hand is now the whole recovery. Doing it automatically
+    needs something outside the hub to notice and act, which is a supervisor change rather
+    than a code change, and is deliberately not attempted here.
+    """
+    code_dir = os.path.abspath(code_dir)
+    # Refused rather than worked around: a hub whose database lives inside its code
+    # directory would have that database swapped away, and the honest answer is to say so
+    # loudly. Rejected: falling back to the old in-place mirror for these installs, which
+    # would keep a second code path alive to serve a configuration that the mirror was
+    # already quietly destroying data for.
+    blocked = _protected_state_inside(code_dir)
+    if blocked:
+        print("[hub-update] refusing to update: operator state lives inside the code "
+              f"directory ({'; '.join(blocked)}). Point it outside {code_dir} -- the update "
+              "would otherwise move it aside with the old code.")
+        return False
+
+    parent = os.path.dirname(code_dir)
+    incoming = code_dir + ".new"
+    previous = code_dir + ".prev"
+    # Staged on the SAME volume as the code dir, not in the system temp dir: the cutover is
+    # a rename, and a rename across volumes is a copy wearing a rename's name. Guarded
+    # rather than left to raise, because "the install root is not writable" is a
+    # configuration answer and deserves to read as one.
+    try:
+        staging = tempfile.mkdtemp(prefix=".hub-update-", dir=parent)
+    except OSError as e:
+        print(f"[hub-update] cannot stage an update beside the code dir in {parent}: {e}")
+        return False
     # Resolved once, here, and used for both the download and the log line below.
     archive_url = hub_archive_url()
     requirements_before = _requirements_text(code_dir)
@@ -1367,40 +1481,30 @@ def _perform_hub_update_archive(code_dir):
         if src_hub is None:
             return False
 
-        wanted = set(os.listdir(src_hub))
-        for name in wanted:
-            src = os.path.join(src_hub, name)
-            dst = os.path.join(code_dir, name)
-            if os.path.isdir(src):
-                if os.path.isdir(dst):
-                    shutil.rmtree(dst)
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
+        if os.path.isdir(incoming):
+            shutil.rmtree(incoming, ignore_errors=True)
+        shutil.move(src_hub, incoming)
 
-        # Prune what upstream removed. Guarded to a dedicated code dir that is NOT the state
-        # root, so a misconfigured flat install can never have its .env/logs/db pruned.
-        if os.path.abspath(code_dir) != os.path.abspath(STATE_ROOT):
-            for name in os.listdir(code_dir):
-                if name in wanted or name == "__pycache__":
-                    continue
-                victim = os.path.join(code_dir, name)
-                if os.path.isdir(victim):
-                    shutil.rmtree(victim, ignore_errors=True)
-                else:
-                    os.remove(victim)
+        # Both gates run against the staged tree, BEFORE the live one is touched. A stale
+        # archive or a release whose dependencies will not install now costs nothing at all
+        # -- previously it cost a mirrored tree and, for the dependencies, a restart.
+        if not _tree_version_is_newer(incoming):
+            return False
+        if not _dependencies_are_satisfied(incoming, requirements_before):
+            return False
 
-        print(f"[hub-update] Mirrored {HUB_ARCHIVE_SUBDIR}/ into {code_dir} "
-              f"from {archive_url}")
-        return _dependencies_are_satisfied(code_dir, requirements_before)
+        _swap_dirs(code_dir, incoming, previous)
+        print(f"[hub-update] Swapped in {HUB_ARCHIVE_SUBDIR}/ at {code_dir} "
+              f"from {archive_url}; previous tree kept at {previous}")
+        return True
     except Exception as e:
-        # A failure part-way through the mirror leaves the tree inconsistent, so say so
-        # loudly -- but still don't restart, since restarting is what would turn a broken
-        # tree into a crash-loop.
-        print(f"[hub-update] update failed while mirroring {HUB_ARCHIVE_SUBDIR}/ ({e}); hub left as-is")
+        # _swap_dirs leaves the live tree in place on a failed cutover, and everything
+        # before it happens off to the side, so "as-is" is now the truth rather than a hope.
+        print(f"[hub-update] update failed ({e}); hub left as-is")
         return False
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(incoming, ignore_errors=True)
 
 
 def _tree_version_is_newer(code_dir):

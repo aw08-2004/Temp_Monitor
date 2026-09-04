@@ -165,6 +165,12 @@ public sealed class Worker : BackgroundService
                     if (includeSensors) lastSensor = now;
                     if (includeUptime) lastUptime = now;
 
+                    // A completed report is the first thing that proves an updated build
+                    // WORKS rather than merely starts, so it is what retires the previous
+                    // binary -- see SelfUpdater.ConfirmRunningBuild. A no-op field read
+                    // once the current build has been confirmed.
+                    _updater.ConfirmRunningBuild();
+
                     if (result.LatestVersion is { Length: > 0 } lv &&
                         VersionUtil.Compare(lv, AgentConfig.Version) > 0)
                     {
