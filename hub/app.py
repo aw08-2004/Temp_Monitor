@@ -33,6 +33,8 @@ import settings
 import terminal
 import permissions
 import users
+import invites
+import invites_web
 import packages
 import backups
 import remote
@@ -58,6 +60,7 @@ from fleet_web import create_fleet_blueprint
 from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
 from users_web import create_users_blueprint
+from invites_web import create_invites_blueprint
 from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
@@ -107,7 +110,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.94.1"
+HUB_VERSION = "1.95.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1836,6 +1839,14 @@ app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, acc
 # Registered-users directory (roadmap #8). Gated by manage_users, kept separate from
 # permission-group administration so a profile edit isn't the same trust as a grant.
 app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
+# Invite links (roadmap #22). Gated by manage_permission_groups, because an invite hands
+# out capabilities -- it is group administration reached by a different door. HUB_URL is
+# needed because the link is assembled server-side: an admin reaching the console over an
+# internal hostname would otherwise copy a link that works only from inside, and would have
+# no way to tell. This blueprint also owns the hub's ONLY unauthenticated console route,
+# GET /invite/<code> -- see invites_web.py for what that page is and is not allowed to say.
+app.register_blueprint(create_invites_blueprint(
+    DB_PATH, login_required, access, hub_url=HUB_URL))
 # The Audit Log tab -- the read path over the trail every other blueprint writes to.
 # view_audit_log is the perimeter; view_security_audit widens which LEVELS come back, and
 # that widening is applied in SQL, never in the page (see audit_web.py).
@@ -1988,10 +1999,42 @@ def _complete_login(user_info, provider):
     claimed_groups = permissions.directory_groups_from_claims(user_info)
     directory_groups = access.mapped_directory_groups(claimed_groups)
 
+    # An invite link this browser arrived through (roadmap #22). Popped unconditionally,
+    # on every path, so a code that could not be redeemed does not sit in the session and
+    # silently apply to some later sign-in by somebody else on the same machine.
+    #
+    # Redemption runs BEFORE the gate below because it is what opens the gate: it adds the
+    # address to the invite's permission groups, so login_allowed then passes on the
+    # strength of a real group membership rather than on a second, invite-shaped exception
+    # to the authorization model. It runs for an ALREADY authorized operator too -- being
+    # handed an invite is how an existing operator gets an extra group -- and invites.redeem
+    # is idempotent per address, so a second sign-in through the same link does not consume
+    # a second seat.
+    pending_invite = session.pop(invites_web.SESSION_KEY, None)
+    invite_refusal = None
+    if pending_invite:
+        try:
+            redeemed = invites.redeem(DB_PATH, pending_invite, email)
+            print(f"[invites] {email} redeemed {redeemed['label']!r} "
+                  f"-> {', '.join(redeemed['groups']) or 'no surviving group'}")
+        except invites.InviteError as e:
+            invite_refusal = str(e)
+        except Exception as e:
+            # A redemption that blew up must not become a 500 on the login callback: the
+            # account may well be authorized already, and turning "the invite failed" into
+            # "sign-in is broken" would take out everyone who happened to click a link.
+            print(f"[invites] redemption failed for {email}: {e}")
+            invite_refusal = "This invite link could not be redeemed."
+
     # Break-glass superuser, a member of a permission group by email, or a member of a
     # mapped directory group. A valid account that is none of those is refused outright
     # rather than admitted to an empty dashboard -- see Access.login_allowed for why.
     if not access.login_allowed(email, directory_groups):
+        # An invite that refused is why this person is being turned away, and its reason is
+        # the actionable one -- "this link has expired" sends them back to whoever sent it,
+        # where "not authorized" sends them to an admin who finds nothing wrong.
+        if invite_refusal:
+            return f"Access denied: {invite_refusal}", 403
         # An issuer that withheld the group list because the user is in too many of them
         # produces a refusal identical to "this user is in no mapped group", and only one
         # of those is a configuration error. Say which, or an admin debugs a correct
@@ -3748,6 +3791,7 @@ alerts.init_alerts_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
 permissions.init_permissions_db(DB_PATH)
 users.init_users_db(DB_PATH)
+invites.init_invites_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)

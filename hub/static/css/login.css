@@ -84,3 +84,40 @@ body.login-body {
 .login-providers .google-btn {
     justify-content: center;
 }
+
+/* ---------------------------------------------------------------- invite landing page
+   The invite page (roadmap #22) shares this stylesheet rather than getting one of its own:
+   it is the same card, seen by the same signed-out visitor, and a second stylesheet would
+   be a second place for the sign-in card's look to drift. */
+
+/* A refused invite -- expired, spent, revoked, mistyped. Given weight rather than shown as
+   muted body text: it is the whole content of the page in that case, and an invitee who
+   skims past it goes looking for a login button that deliberately is not there. */
+.login-error {
+    color: var(--danger, #f87171);
+    font-weight: 500;
+}
+
+.invite-meta {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-3) !important;
+}
+
+.invite-groups {
+    list-style: none;
+    margin: 0 0 var(--space-6);
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    justify-content: center;
+}
+
+.invite-groups li {
+    background: var(--control-bg, #232a33);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--text-sm);
+}

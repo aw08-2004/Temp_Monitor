@@ -43,6 +43,9 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
 4. **SYSTEM Context:** Commands run as SYSTEM; access to this capability is intentionally powerful and scoped to trusted admins
 5. **Machine Scope:** Operators can be limited to specific machines via Permission Groups
 6. **Signed Updates:** Binary replacements verified before execution
+7. **Bounded Invites:** An invite link grants only Permission Groups, never more than
+   its creator holds, and is bounded by a seat count, an expiry and optional pinned
+   addresses (see "Invite links" below)
 
 ## Device tokens (the native client)
 
@@ -73,6 +76,40 @@ signing was removed, so the controls around it are stated here rather than left 
 - **Client downloads are signed.** The console's Download Client page renders only a
   manifest whose Ed25519 signature verifies against the same release key that signs the
   agent, and publishes each build's SHA-256.
+
+## Invite links
+
+An operator can hand somebody a **link** that grants the Permission Groups it names, rather
+than adding their address by hand (roadmap #22). A link that confers console access is a
+bearer credential in the same sense a device token is, so the same rule applies — the
+controls are stated here rather than left implicit:
+
+- **An invite grants Permission Groups, never capabilities of its own.** Redeeming one adds
+  the address to those groups, exactly as an admin typing it in would. There is no second
+  authorization layer, and therefore no special case for revoking somebody who arrived by
+  link: they are an ordinary group member.
+- **An invite can never grant break-glass.** `ALLOWED_EMAILS` remains env-only; nothing in
+  this feature writes to it.
+- **An invite can never grant more than its creator holds**, in capabilities or in machine
+  scope, unless its creator is a break-glass superuser. A scoped admin cannot mint themselves
+  a link into a fleet-wide group.
+- **Seats are bounded and claimed atomically.** `max_uses` is how many distinct people the
+  link admits (1 = single-use); the claim is one conditional UPDATE, so two people racing the
+  last seat cannot both be admitted. Redemption is idempotent per address.
+- **Expiry defaults to 7 days.** "Never" exists and must be chosen deliberately.
+- **A link may be pinned to specific addresses**, checked before any seat is claimed.
+- **Only the link's SHA-256 is stored.** There is no "reveal": the hub cannot show a link
+  again after it is created, and the page says so.
+- **Creation, redemption, revocation and deletion are audited at security level** — these
+  rows are the answer to "how did this person get access".
+- **Creating an invite requires `manage_permission_groups`,** not `manage_users`: an invite
+  hands out capabilities, so it is group administration.
+- **`GET /invite/<code>` is the hub's only unauthenticated route**, and it has to be — it is
+  read by somebody who cannot sign in yet. It renders the invite's label, sender and the
+  *names* of the groups it grants, and nothing else: no capabilities, no machine scope, no
+  seat count, no other redeemers. Previewing it consumes nothing. The code travels the
+  sign-in round trip in the signed session cookie, never as a query parameter, so it does not
+  reach referrer headers or proxy logs.
 
 ## For Antivirus Teams
 

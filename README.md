@@ -449,6 +449,32 @@ gets the union of every group they're in. Scope is either an explicit machine li
 > every capability over every machine, and the hub refuses to start with it empty.
 > Keep it to the smallest possible set of accounts and put everyone else in a group.
 
+### Inviting someone with a link
+
+**Permission Groups → Invite Links** (`manage_permission_groups`) creates a link that grants
+the groups you choose to whoever signs in through it. It is the same grant as typing their
+address into a group — a redeemer becomes an ordinary group member — but you do not have to
+know the address first, and the person gets told.
+
+Each link carries its own bounds:
+
+| | |
+|---|---|
+| **Grants** | one or more existing permission groups, or a new group you define in the form (which is created for real, and is editable on this page like any other) |
+| **Number of uses** | how many *different* people the link admits. 1 is a single-use invite; the same person signing in twice does not spend a second use |
+| **Expires after** | 1, 7 or 30 days, or never. 7 days is the default; choose "never" only if you will revoke the link by hand |
+| **Restrict to these addresses** | optional. Blank means anyone holding the link, up to the number of uses |
+
+The link is shown **once**, when you create it — the hub stores only its hash and cannot show
+it again. An invite can never grant more than you hold yourself, and never grants break-glass.
+**Revoke** kills a link while keeping the record of who joined through it; **Delete** removes
+both, and neither takes anyone's access away — that is done by removing them from the
+permission group, the same as for anyone else.
+
+Someone opening the link sees the invite's label, who sent it, and the names of the groups it
+grants, then signs in through your ordinary provider. Every create, redemption, revoke and
+delete is in the audit log at security level.
+
 ### Granting a group by directory group
 
 A permission group can also name **directory groups** — Entra security groups, AD

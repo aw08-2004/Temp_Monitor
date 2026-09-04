@@ -2615,6 +2615,83 @@ rule marked for local evaluation.
 
 ---
 
+## ✅ 22. Invite links   ·   hub 1.95.0
+
+Not from the PRD. Until this, nobody could be *invited*. An operator got access one of three
+ways, all of them out of band: an admin hand-edited `ALLOWED_EMAILS` in `.env` and restarted
+the hub, an admin typed their address into a permission group's member list, or somebody
+upstream put them in a mapped directory group. In every case the admin had to know the
+address before they could grant anything, and the person was never told. An invite link is
+the missing door: an admin decides what the redeemer gets, hands over a URL, and the person
+signs in through it.
+
+**What an invite stores is a list of permission group ids, and nothing else.** The obvious
+design — let the invite carry its own capabilities and machine scope — was rejected, because
+#8 is explicit that this hub has one authorization model and a second one is the thing to
+avoid. An admin who wants a bespoke grant gets a real permission group created for them at
+invite time (`invites_web` does that, before the invite, and deletes it again if the invite
+is refused). The payoff is that there is no special case anywhere for "somebody who arrived
+by link": revocation, machine scope, the permissions cache and the audit trail all work
+because a redeemer is an ordinary group member. Membership is written through
+`permissions.update_group` rather than with SQL against `permission_group_members`, for the
+same reason — a direct INSERT would grant access the running hub could not see until
+something else happened to invalidate the cache.
+
+**An invite link is a bearer credential, and console access here is code execution as SYSTEM
+on the fleet.** Four bounds, all of them in the model rather than the UI:
+
+- **Seats.** `max_uses` bounds how many DISTINCT people the link admits; 1 is single-use.
+  The claim is one conditional `UPDATE ... WHERE used_count < max_uses`, so two people racing
+  the last seat cannot both win — the same discipline `apitokens.redeem_grant` uses, and for
+  the same reason. Redemption is idempotent per address, so somebody bouncing off the login
+  page five times does not spend a five-seat invite.
+- **Expiry, optional but defaulted to 7 days.** `expires_at IS NULL` means never and has to
+  be chosen deliberately. A link with no expiry and no seat cap was rejected outright: it is a
+  standing door for as long as it exists in a mailbox or a chat log.
+- **Optional pinned addresses**, checked *before* the seat claim, so a link that reached the
+  wrong inbox costs the invite nothing.
+- **A creator ceiling.** An invite can never grant more than the admin creating it already
+  holds, in capabilities or in machine scope. Without it, an operator with
+  `manage_permission_groups` scoped to five machines could mint themselves a link into a
+  fleet-wide group — privilege escalation with an audit trail reading as an invitation.
+
+Only the hash of the code is stored, so the row is not worth stealing and the link is shown
+exactly once. **An invite can never grant break-glass**: `ALLOWED_EMAILS` stays env-only and
+nothing here writes to it.
+
+**Gated on `manage_permission_groups`, not `manage_users`.** An invite hands out
+capabilities, so it is group administration reached by a different door; `manage_users` is
+documented — in the README, and in `users.py`'s own docstring — as a profile directory that
+grants nothing, and gating invites on it would have turned the weakest admin capability into
+the strongest one.
+
+**`GET /invite/<code>` is the hub's only unauthenticated console route**, and has to be: it
+is seen by somebody who by definition cannot sign in yet. Two rules keep it from being a
+reconnaissance surface. It renders only what `invites.preview` returns — the label, who sent
+it, and the names of the groups it grants; never the capabilities, the machine scope, the
+seat count or the other redeemers (a test pins that key set, so "just add the seat count,
+it's useful" fails rather than ships). And the code goes into the SESSION rather than through
+the OAuth round trip as a query parameter, which would have put a credential in every
+referrer header, proxy log and history entry between the hub and the identity provider.
+`_complete_login` pops it, redeems it before the allow-list gate — redemption is what opens
+that gate — and pops it on every path, so a code that could not be redeemed cannot linger and
+apply to a later sign-in by somebody else on the same machine.
+
+**Preview consumes nothing.** A preview that claimed a seat would spend the invite on the
+mail client that fetched the link to render a thumbnail, and the first real person to click
+would be refused by an invite that had never met anyone.
+
+**Deleting an invite is not an access change**, exactly as deleting a user profile is not
+(#8). The redeemers are permission group members now; that is where access is removed. Revoke
+is the default action in the UI because the redemption rows answer "how did this person get
+access", and deleting the invite would take the answer with it.
+
+**Open parameters.** Whether a redemption should notify the admin who created the invite —
+today the audit trail is the only signal. Whether an invite should be able to name a
+directory group instead of an email, for the tenant that would rather not maintain either.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
@@ -2747,6 +2824,12 @@ rule marked for local evaluation.
     this is what lets one go to three machines first. Note the numbering: #14 and #21 were
     developed against hub 1.92.0 and 1.93.0 respectively but share **one** agent release,
     because no build ever existed that carried patch management without channels.
+22. ~~**#22 Invite links**~~ — done, hub 1.95.0, no agent release. Not from the PRD; asked
+    for directly. Its prerequisite was #Foundation and nothing else: an invite grants a
+    permission group, so the whole feature is a bounded, self-service way to do what an
+    admin already did by typing an address into one. It is the first console route that is
+    reachable without a session, which is why its entry above spends more words on what that
+    page may not say than on what it does.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
