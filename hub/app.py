@@ -1361,15 +1361,24 @@ def _protected_state_inside(code_dir):
     partial, so the question becomes containment and is asked about every path this hub
     keeps state in.
 
+    Compared through os.path.normcase, which is what makes this correct on the platform the
+    hub actually runs on: Windows paths are case-insensitive, so a plain == would let a
+    HUB_LOG_DIR differing from the code dir only in case walk straight past a guard whose
+    entire job is to prevent a database being swapped away. normcase is the identity on
+    POSIX, so a dev checkout keeps case-sensitive semantics, which is also correct there.
+
     Returns a list of human-readable descriptions, empty when the code dir holds only code.
     """
-    here = os.path.abspath(code_dir)
+    here = os.path.normcase(os.path.abspath(code_dir))
     prefix = here + os.sep
     found = []
     for label, path in (("HUB_STATE_DIR", STATE_ROOT), ("HUB_LOG_DIR", LOG_DIR),
                         ("the file spool", FILE_SPOOL_DIR), (".env", ENV_PATH)):
         target = os.path.abspath(path)
-        if target == here or target.startswith(prefix):
+        cased = os.path.normcase(target)
+        if cased == here or cased.startswith(prefix):
+            # Reported in its original case -- the operator has to recognise the path they
+            # configured, not the one the comparison happened to need.
             found.append(f"{label} at {target}")
     return found
 
@@ -1391,10 +1400,14 @@ def _swap_dirs(code_dir, incoming, previous):
     """
     parent = os.path.dirname(code_dir)
     try:
-        cwd = os.path.abspath(os.getcwd())
+        cwd = os.path.normcase(os.path.abspath(os.getcwd()))
     except OSError:
         cwd = None
-    move_back = cwd is not None and (cwd == code_dir or cwd.startswith(code_dir + os.sep))
+    # normcase for the same reason as _protected_state_inside: on Windows the cwd can name
+    # this directory in a different case, and failing to notice it would mean skipping the
+    # chdir and hitting the sharing violation the chdir exists to avoid.
+    here = os.path.normcase(os.path.abspath(code_dir))
+    move_back = cwd is not None and (cwd == here or cwd.startswith(here + os.sep))
     if move_back:
         os.chdir(parent)
     try:
