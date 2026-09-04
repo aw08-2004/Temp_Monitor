@@ -165,11 +165,23 @@ public sealed class Worker : BackgroundService
                     if (includeSensors) lastSensor = now;
                     if (includeUptime) lastUptime = now;
 
-                    // A completed report is the first thing that proves an updated build
-                    // WORKS rather than merely starts, so it is what retires the previous
-                    // binary -- see SelfUpdater.ConfirmRunningBuild. A no-op field read
-                    // once the current build has been confirmed.
-                    _updater.ConfirmRunningBuild();
+                    // A report the HUB ACCEPTED is the first thing that proves an updated
+                    // build works rather than merely starts, so it is what retires the
+                    // previous binary -- see SelfUpdater.ConfirmRunningBuild. A no-op field
+                    // read once the current build has been confirmed.
+                    //
+                    // **Gated on the result, not on reaching this line.** ReportAsync
+                    // swallows connectivity failures and returns Sent:false rather than
+                    // throwing (see TelemetryReporter), so a machine that boots the new
+                    // build into a dead network still gets here on its first tick -- and
+                    // confirming there would delete the rollback binary in precisely the
+                    // situation the binary is kept for. A non-2xx is not proof either: the
+                    // hub answered, but it did not take the report, and ticks are five
+                    // seconds apart so waiting for a real one costs nothing.
+                    if (result is { Sent: true, StatusCode: >= 200 and < 300 })
+                    {
+                        _updater.ConfirmRunningBuild();
+                    }
 
                     if (result.LatestVersion is { Length: > 0 } lv &&
                         VersionUtil.Compare(lv, AgentConfig.Version) > 0)

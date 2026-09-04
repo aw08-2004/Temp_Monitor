@@ -1498,9 +1498,16 @@ def _perform_hub_update_archive(code_dir):
               f"from {archive_url}; previous tree kept at {previous}")
         return True
     except Exception as e:
-        # _swap_dirs leaves the live tree in place on a failed cutover, and everything
-        # before it happens off to the side, so "as-is" is now the truth rather than a hope.
-        print(f"[hub-update] update failed ({e}); hub left as-is")
+        # "Left as-is" is the truth for every failure except one, and it is checked rather
+        # than assumed: _swap_dirs' double-failure branch has already printed what to rename
+        # by hand, and following that with a reassurance would be false in the single case
+        # where somebody is reading these lines during an outage.
+        if os.path.isdir(code_dir):
+            print(f"[hub-update] update failed ({e}); hub left as-is")
+        else:
+            print(f"[hub-update] update failed ({e}) AND the code directory is missing "
+                  "-- see the RESTORE FAILED line above; this hub cannot start until that "
+                  "rename is done by hand")
         return False
     finally:
         shutil.rmtree(staging, ignore_errors=True)
