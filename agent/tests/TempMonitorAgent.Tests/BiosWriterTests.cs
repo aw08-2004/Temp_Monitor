@@ -47,6 +47,20 @@ public class BiosWriterTests
         return map;
     }
 
+    /// <summary>A Dell with no stock-image provider: the biosattributes namespace is absent, so
+    /// the writer must fall through to Command | Monitor. Written as a wrapper rather than a
+    /// flag so that the ONLY thing sending a call down the legacy path is the exception the
+    /// real adapter raises for a namespace that is not there.</summary>
+    private static BiosWriter.WmiInvoke WithoutStockProvider(
+        List<Call> log, Dictionary<string, Dictionary<string, object?>>? results = null)
+    {
+        var inner = Fake(log, results);
+        return (ns, cls, method, args) =>
+            ns.Contains("biosattributes", StringComparison.OrdinalIgnoreCase)
+                ? throw new BiosInterfaceMissingException($"{ns} is not present")
+                : inner(ns, cls, method, args);
+    }
+
     // ------------------------------------------------------------------ dispatch
 
     [Fact]
@@ -71,11 +85,56 @@ public class BiosWriterTests
     // ------------------------------------------------------------------ Dell
 
     [Fact]
-    public void Dell_sends_parallel_arrays_not_scalars()
+    public void Dell_writes_through_the_stock_image_provider_first()
+    {
+        // Mirrors DellBiosSource: BIOSAttributeInterface is what a stock Dell business image
+        // has, and aiming only at Command | Monitor's DCIM_BIOSService left every un-managed
+        // Dell answering "DCIM_BIOSService has no instance" to a write whose settings the
+        // console had just listed back from the other namespace.
+        var log = new List<Call>();
+        var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
+                                       Fake(log, Ok("SetAttribute")));
+
+        Assert.True(results[0].Ok);
+        var call = Assert.Single(log);
+        Assert.Equal(@"root\dcim\sysman\biosattributes", call.Namespace);
+        Assert.Equal("BIOSAttributeInterface", call.Class);
+        Assert.Equal("SetAttribute", call.Method);
+        // Scalars here, where Command | Monitor wants parallel arrays.
+        Assert.Equal("WakeOnLan", call.Args["AttributeName"]);
+        Assert.Equal("LanOnly", call.Args["AttributeValue"]);
+    }
+
+    [Fact]
+    public void Dell_says_NONE_rather_than_an_empty_password_when_there_is_none()
+    {
+        // SecType is the provider's own ValueMap: 0 NONE, 1 PlainText. Sending 1 with no bytes
+        // claims a supplied, empty password -- which fails as an authentication error rather
+        // than as a missing one, and is the same trap the Command | Monitor branch documents
+        // about an empty AuthorizationToken.
+        var log = new List<Call>();
+        BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
+                         Fake(log, Ok("SetAttribute")));
+        Assert.Equal(0u, log[0].Args["SecType"]);
+        Assert.Empty(Assert.IsType<byte[]>(log[0].Args["SecHandle"]));
+        Assert.Equal(0u, log[0].Args["SecHndCount"]);
+
+        log.Clear();
+        BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], "pw",
+                         Fake(log, Ok("SetAttribute")));
+        Assert.Equal(1u, log[0].Args["SecType"]);
+        // The password's BYTES, and a count that matches them -- the provider reads
+        // SecHandle to SecHndCount, so a stale count truncates or overruns the password.
+        Assert.Equal("pw"u8.ToArray(), Assert.IsType<byte[]>(log[0].Args["SecHandle"]));
+        Assert.Equal(2u, log[0].Args["SecHndCount"]);
+    }
+
+    [Fact]
+    public void Dell_falls_back_to_Command_Monitor_with_parallel_arrays_not_scalars()
     {
         var log = new List<Call>();
         var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
-                                       Fake(log, Ok("SetBIOSAttributes")));
+                                       WithoutStockProvider(log, Ok("SetBIOSAttributes")));
 
         Assert.True(results[0].Ok);
         var call = Assert.Single(log);
@@ -93,14 +152,14 @@ public class BiosWriterTests
     {
         var log = new List<Call>();
         BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
-                         Fake(log, Ok("SetBIOSAttributes")));
+                         WithoutStockProvider(log, Ok("SetBIOSAttributes")));
         // Not an empty string: some Dell models read "" as a SUPPLIED password and fail
         // authentication, turning "no password needed" into a refusal.
         Assert.False(log[0].Args.ContainsKey("AuthorizationToken"));
 
         log.Clear();
         BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], "pw",
-                         Fake(log, Ok("SetBIOSAttributes")));
+                         WithoutStockProvider(log, Ok("SetBIOSAttributes")));
         Assert.Equal("pw", log[0].Args["AuthorizationToken"]);
     }
 
@@ -111,7 +170,9 @@ public class BiosWriterTests
         var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
             Fake(log, new Dictionary<string, Dictionary<string, object?>>
             {
-                ["SetBIOSAttributes"] = new() { ["ReturnValue"] = (uint)5 },
+                // `Status` on the stock provider, `SetResult`/`ReturnValue` on Command |
+                // Monitor -- one more property name the two do not share.
+                ["SetAttribute"] = new() { ["Status"] = 5 },
             }));
         Assert.False(results[0].Ok);
         // Verbatim rather than mapped to prose: the meanings differ per vendor, per model and
@@ -125,6 +186,38 @@ public class BiosWriterTests
         // The whole point of the write half is not claiming a change we cannot see. A silent
         // interface is the one case where assuming success would be most tempting.
         var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null, Fake([]));
+        Assert.False(results[0].Ok);
+    }
+
+    [Fact]
+    public void A_Dell_with_neither_interface_reports_the_fallback_s_own_absence()
+    {
+        // The fallback is entered on a missing namespace and its exception is NOT caught
+        // again: a machine with neither provider must say so, and the message an operator
+        // reads should name the interface that was tried last rather than the one that was
+        // tried first and is equally absent.
+        var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
+            (ns, cls, method, args) =>
+                throw new BiosInterfaceMissingException($"{ns} is not present"));
+        Assert.False(results[0].Ok);
+        Assert.Contains(@"root\dcim\sysman", results[0].Error);
+    }
+
+    [Fact]
+    public void A_write_is_never_retried_on_a_failure_that_is_not_a_missing_namespace()
+    {
+        // The fallback exists for "this namespace is not here", which is raised before
+        // anything is invoked. Retrying on any other error could apply a firmware change
+        // TWICE -- once through each interface -- on a fault that happened after the write
+        // had already landed.
+        var calls = 0;
+        var results = BiosWriter.Write("Dell Inc.", [("WakeOnLan", "LanOnly")], null,
+            (ns, cls, method, args) =>
+            {
+                calls++;
+                throw new InvalidOperationException("the firmware is busy");
+            });
+        Assert.Equal(1, calls);
         Assert.False(results[0].Ok);
     }
 

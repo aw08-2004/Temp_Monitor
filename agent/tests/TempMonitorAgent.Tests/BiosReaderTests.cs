@@ -40,6 +40,23 @@ public class BiosReaderTests
             return Array.Empty<IReadOnlyDictionary<string, object?>>();
         };
 
+    /// <summary>A WmiQuery over a NAMESPACE -> class -> rows table. A namespace missing from
+    /// the table throws BiosInterfaceMissingException, exactly as the real adapter does for one
+    /// that is not present on the machine. <see cref="Fake"/> above cannot express that: it
+    /// answers every namespace alike, which was fine while each vendor had one -- and is
+    /// precisely the assumption that let Dell's second interface go unnoticed.</summary>
+    private static WmiQuery FakeNamespaces(
+        Dictionary<string, Dictionary<string, List<IReadOnlyDictionary<string, object?>>>> byNamespace)
+        => (ns, wql) =>
+        {
+            if (!byNamespace.TryGetValue(ns, out var classes))
+                throw new BiosInterfaceMissingException($"{ns} is not present");
+            foreach (var kv in classes)
+                if (wql.Contains(kv.Key, StringComparison.OrdinalIgnoreCase))
+                    return kv.Value;
+            return Array.Empty<IReadOnlyDictionary<string, object?>>();
+        };
+
     // ------------------------------------------------------------------ dispatch
 
     [Fact]
@@ -192,6 +209,137 @@ public class BiosReaderTests
         }));
         Assert.Single(report.Items);
         Assert.Equal("Real", report.Items[0].Name);
+    }
+
+    [Fact]
+    public void Dell_reads_the_stock_image_provider_before_Command_Monitor()
+    {
+        // THE REGRESSION. root\dcim\sysman is present on a Dell that has never had Command |
+        // Monitor -- it connects, and only its DCIM_BIOS* classes are missing. A reader that
+        // tested the namespace and stopped therefore called that machine "supported", found
+        // nothing in three queries, and reported
+        // `error: the firmware interface returned no settings` -- on hardware whose whole
+        // attribute list was readable one namespace over. Every un-managed Dell in the fleet
+        // showed that, permanently, and the message named the wrong namespace.
+        var report = BiosReader.Read("Dell Inc.", "1.39.0", FakeNamespaces(new()
+        {
+            // The Command | Monitor shell, present and empty -- the trap.
+            [@"root\dcim\sysman"] = new(),
+            [@"root\dcim\sysman\biosattributes"] = new()
+            {
+                ["EnumerationAttribute"] = new()
+                {
+                    // Not one property name in common with DCIM_BIOSEnumeration:
+                    // PossibleValue (singular), ReadOnly (a uint), DisplayName.
+                    Row(("AttributeName", "WakeOnLan"), ("CurrentValue", "LanWlan"),
+                        ("PossibleValue", new string[] { "Disabled", "LanOnly", "LanWlan" }),
+                        ("ReadOnly", 0u), ("DisplayName", "Wake on LAN")),
+                    Row(("AttributeName", "SecureBoot"), ("CurrentValue", "Enabled"),
+                        ("PossibleValue", new string[] { "Enabled", "Disabled" }),
+                        ("ReadOnly", 1u)),
+                },
+                ["StringAttribute"] = new()
+                {
+                    Row(("AttributeName", "Asset"), ("CurrentValue", "FIN-0042"),
+                        ("ReadOnly", 0u)),
+                },
+                ["IntegerAttribute"] = new()
+                {
+                    Row(("AttributeName", "AutoOnHr"), ("CurrentValue", 7u), ("ReadOnly", 0u)),
+                },
+            },
+            [@"root\dcim\sysman\wmisecurity"] = new()
+            {
+                ["PasswordObject"] = new()
+                {
+                    Row(("NameId", "Admin"), ("IsPasswordSet", 0u)),
+                    Row(("NameId", "System"), ("IsPasswordSet", 1u)),
+                },
+            },
+        }));
+
+        Assert.Equal(BiosSupport.Supported, report.Support);
+        Assert.Equal(4, report.Items.Count);
+
+        var wol = report.Items.Single(s => s.Name == "WakeOnLan");
+        Assert.Equal("LanWlan", wol.Value);
+        Assert.Equal(3, wol.PossibleValues.Count);
+        Assert.False(wol.ReadOnly);
+        Assert.Equal("Wake on LAN", wol.DisplayName);
+        // ReadOnly is a uint here where Command | Monitor sends a bool. Both must read.
+        Assert.True(report.Items.Single(s => s.Name == "SecureBoot").ReadOnly);
+        Assert.Equal(BiosSettingKind.Integer, report.Items.Single(s => s.Name == "AutoOnHr").Kind);
+
+        // The password lives in a THIRD namespace on this provider, and any one being set
+        // blocks a write.
+        Assert.True(report.PasswordSet);
+
+        // The interface REPORTED is the one that answered, not the vendor's default. An
+        // operator chasing a firmware fault is sent to the namespace that was actually read.
+        Assert.Equal(@"root\dcim\sysman\biosattributes", report.Interface);
+    }
+
+    [Fact]
+    public void A_Dell_with_only_Command_Monitor_still_reads_through_the_fallback()
+    {
+        // The other half of the same fix: preferring the stock provider must not drop the
+        // fleets that have DCM and nothing else. The namespace it prefers is absent here.
+        var report = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()
+        {
+            [@"root\dcim\sysman"] = new()
+            {
+                ["DCIM_BIOSEnumeration"] = new()
+                {
+                    Row(("AttributeName", "WakeOnLan"), ("CurrentValue", "LanOnly"),
+                        ("PossibleValues", new string[] { "Disabled", "LanOnly" }),
+                        ("IsReadOnly", false)),
+                },
+            },
+        }));
+
+        Assert.Equal(BiosSupport.Supported, report.Support);
+        Assert.Equal("WakeOnLan", report.Items.Single().Name);
+        Assert.Equal(@"root\dcim\sysman", report.Interface);
+    }
+
+    [Fact]
+    public void A_Dell_with_neither_interface_is_unsupported_but_one_that_is_empty_is_an_error()
+    {
+        // The distinction the whole feature turns on, now that Dell has two namespaces: it is
+        // unsupported only when NEITHER is there. One present and enumerating nothing is still
+        // a fault someone should look at.
+        var neither = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()));
+        Assert.Equal(BiosSupport.Unsupported, neither.Support);
+
+        var empty = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()
+        {
+            [@"root\dcim\sysman\biosattributes"] = new(),
+        }));
+        Assert.Equal(BiosSupport.Error, empty.Support);
+        Assert.Contains("no settings", empty.Error);
+        // ...and it names the namespace that failed to answer, not the one never consulted.
+        Assert.Equal(@"root\dcim\sysman\biosattributes", empty.Interface);
+    }
+
+    [Fact]
+    public void A_missing_security_namespace_costs_the_password_state_not_the_settings()
+    {
+        // The password lives in a namespace of its own on this provider, so it can be absent
+        // while the attributes are perfectly readable. Null, not false: "there is no password"
+        // and "we could not find out" lead to different advice the moment a write is refused.
+        var report = BiosReader.Read("Dell Inc.", "", FakeNamespaces(new()
+        {
+            [@"root\dcim\sysman\biosattributes"] = new()
+            {
+                ["EnumerationAttribute"] = new()
+                {
+                    Row(("AttributeName", "WakeOnLan"), ("CurrentValue", "LanOnly")),
+                },
+            },
+        }));
+        Assert.Equal(BiosSupport.Supported, report.Support);
+        Assert.Single(report.Items);
+        Assert.Null(report.PasswordSet);
     }
 
     // ------------------------------------------------------------------ HP
