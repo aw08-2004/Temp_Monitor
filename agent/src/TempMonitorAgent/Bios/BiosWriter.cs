@@ -5,7 +5,7 @@ namespace TempMonitorAgent.Bios;
 /// <summary>
 /// Changes this machine's firmware settings, whoever made it (roadmap #9) -- the write half of
 /// <see cref="BiosReader"/>, and dispatched exactly the same way: on the manufacturer, then on
-/// the namespace being there.
+/// an interface answering -- which on Dell means two namespaces, not one. See DellBiosWriter.
 ///
 /// **There is no cross-vendor write API either, and the three disagree more than they do on
 /// reads.** Dell takes parallel name/value ARRAYS in one call; HP takes one name/value pair per
@@ -208,19 +208,98 @@ internal static class WriteResult
     }
 }
 
-/// <summary>Dell, via <c>DCIM_BIOSService.SetBIOSAttributes</c> in <c>root\dcim\sysman</c>.
-/// Takes PARALLEL arrays, which is why every argument below is a one-element array rather than
-/// a scalar -- passing a bare string here fails with a type error, not a nice message. The
-/// setup password goes in <c>AuthorizationToken</c> as plain text.</summary>
+/// <summary>
+/// Dell -- and the same two interfaces the reader has to know about (see DellBiosSource).
+/// <c>BIOSAttributeInterface.SetAttribute</c> in <c>root\dcim\sysman\biosattributes</c> is the
+/// one on a stock business image and is tried first; Dell Command | Monitor's
+/// <c>DCIM_BIOSService.SetBIOSAttributes</c> in <c>root\dcim\sysman</c> is the fallback. Aiming
+/// only at the second is what left every un-managed Dell answering
+/// "DCIM_BIOSService has no instance" to a write whose settings the console had just listed.
+///
+/// **The two disagree about the password, and about the shape of everything else.** Command |
+/// Monitor takes parallel one-element ARRAYS and a plain-string <c>AuthorizationToken</c>; the
+/// stock provider takes scalars, the password's BYTES in <c>SecHandle</c>, their count in
+/// <c>SecHndCount</c>, and a <c>SecType</c> naming which form that is -- 0 NONE, 1 PlainText,
+/// from the provider's own ValueMap. Sending SecType 1 with no bytes claims a supplied, empty
+/// password, which is a different thing from "no password" and fails as an authentication
+/// error rather than as a missing one.
+///
+/// **Only a missing NAMESPACE falls back.** That exception is raised before anything is
+/// invoked, so retrying on the other interface cannot write twice. Every other failure --
+/// including a refusal from a provider that is present -- is the answer, and is reported as
+/// one: a broad catch-and-retry here would apply a firmware change twice on any error that
+/// happened after the write landed.
+/// </summary>
 public sealed class DellBiosWriter : IBiosVendorWriter
 {
-    private const string Ns = @"root\dcim\sysman";
+    private const string AttributesNs = DellBiosSource.AttributesNamespace;
+    private const string LegacyNs = DellBiosSource.LegacyNamespace;
+
+    /// <summary>SecType, from the provider's ValueMap: no password supplied.</summary>
+    private const uint SecTypeNone = 0;
+    /// <summary>SecType: the bytes in SecHandle are the password, as plain text.</summary>
+    private const uint SecTypePlainText = 1;
 
     public bool Matches(string manufacturer) =>
         manufacturer.Contains("dell", StringComparison.OrdinalIgnoreCase);
 
     public string? WriteOne(string name, string value, string? password,
                             BiosWriter.WmiInvoke invoke)
+    {
+        try
+        {
+            return WriteAttribute(name, value, password, invoke);
+        }
+        catch (BiosInterfaceMissingException)
+        {
+            // No stock provider on this machine. Command | Monitor may still be there; if it
+            // is not either, its own exception carries out of here and BiosWriter.Write turns
+            // it into this attribute's failure message.
+            //
+            // That message therefore names only the fallback, where the READER names both
+            // (see DellBiosSource.Read). The asymmetry is deliberate and not worth removing:
+            // a write reaches here having been aimed at a machine whose settings the console
+            // just listed, so "no Dell interface at all" is not the situation being explained
+            // -- the reader is where that question is answered, and answering it twice in two
+            // voices is how the two halves drift apart.
+            return WriteLegacy(name, value, password, invoke);
+        }
+    }
+
+    /// <summary>The stock-image provider. Status is a signed code with a documented map
+    /// (0 Success, 1 Failed, 2 Invalid Parameter, 3 Access Denied, 4 Not Supported,
+    /// 5 Memory Error, 6 Protocol Error) and is reported as the number, on the same reasoning
+    /// as WriteResult.FromNumeric: the meanings shift per model and per firmware revision, and
+    /// a wrong friendly message is worse than a code an operator can search for.</summary>
+    private static string? WriteAttribute(string name, string value, string? password,
+                                          BiosWriter.WmiInvoke invoke)
+    {
+        // UTF-8 because that is what Dell's own sample for this provider encodes with. The
+        // bytes never leave this call, so the only thing the encoding has to match is the
+        // firmware's -- and an ASCII password, which is all these accept, is the same either
+        // way.
+        var handle = string.IsNullOrEmpty(password)
+            ? Array.Empty<byte>()
+            : System.Text.Encoding.UTF8.GetBytes(password);
+
+        var result = invoke(AttributesNs, "BIOSAttributeInterface", "SetAttribute",
+            new Dictionary<string, object?>
+            {
+                ["AttributeName"] = name,
+                ["AttributeValue"] = value,
+                ["SecHandle"] = handle,
+                ["SecHndCount"] = (uint)handle.Length,
+                ["SecType"] = handle.Length == 0 ? SecTypeNone : SecTypePlainText,
+            });
+        return WriteResult.FromNumeric(result, "Status", "ReturnValue");
+    }
+
+    /// <summary>Dell Command | Monitor. Takes PARALLEL arrays, which is why every argument is a
+    /// one-element array rather than a scalar -- a bare string here fails with a type error,
+    /// not a nice message. The setup password goes in <c>AuthorizationToken</c> as plain
+    /// text.</summary>
+    private static string? WriteLegacy(string name, string value, string? password,
+                                       BiosWriter.WmiInvoke invoke)
     {
         var args = new Dictionary<string, object?>
         {
@@ -232,7 +311,7 @@ public sealed class DellBiosWriter : IBiosVendorWriter
         // password needed" into an authentication failure.
         if (!string.IsNullOrEmpty(password)) args["AuthorizationToken"] = password;
 
-        var result = invoke(Ns, "DCIM_BIOSService", "SetBIOSAttributes", args);
+        var result = invoke(LegacyNs, "DCIM_BIOSService", "SetBIOSAttributes", args);
         return WriteResult.FromNumeric(result, "SetResult", "ReturnValue");
     }
 }

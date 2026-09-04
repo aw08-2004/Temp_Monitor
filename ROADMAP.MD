@@ -1379,6 +1379,29 @@ in the fleet shows a red error forever.
   adapter itself**: whether the property names above match what real firmware emits, and
   whether a missing vendor namespace really surfaces as `InvalidNamespace`. Expect the same
   shape of first-contact finding the LDAP and TURN work produced.
+
+  **The first-contact finding arrived, and it was Dell.** On a stock Dell business machine
+  `root\dcim\sysman` is present and its `DCIM_BIOS*` classes are not — those are Dell
+  Command | Monitor's, and Command | Monitor was never installed. The settings live one
+  namespace over, in `root\dcim\sysman\biosattributes`
+  (`EnumerationAttribute` / `StringAttribute` / `IntegerAttribute`), with the password state
+  in a third, `root\dcim\sysman\wmisecurity` (`PasswordObject.IsPasswordSet`), and not one
+  property name shared with the DCIM_* classes — `PossibleValue` not `PossibleValues`,
+  `ReadOnly` (a uint) not `IsReadOnly`, `DisplayName` not `AttributeDisplayName`. So every
+  un-managed Dell in the fleet reported `error: the firmware interface returned no settings`,
+  naming a namespace it had connected and an interface that was never there. **Testing a
+  namespace is not testing an interface** — that assumption is the bug, and it was invisible
+  because the namespace shell outlives the provider that fills it. `DellBiosSource` and
+  `DellBiosWriter` now try the stock-image provider first and fall back to Command | Monitor,
+  which is still correct on the fleets that have it; a Dell is `unsupported` only when
+  **neither** answers, and `BiosVendorResult.Interface` reports which one did so the console
+  names the namespace that was actually read. Rejected: aliasing the two vocabularies into one
+  `Row.Str(row, "PossibleValue", "PossibleValues")` lookup — it reads whichever the machine
+  happens to have, so the day one provider gains the other's property under a different
+  meaning it reports the wrong value with nothing to show it changed. Write-side fallback is
+  deliberately narrow: only a *missing namespace* retries the other interface, because that
+  exception is raised before anything is invoked and any broader catch could apply a firmware
+  change twice.
 - **✅ `set_bios_settings` — built (hub 1.60.0 + agent 3.20.0).** A `bios_changes` table and
   the write half of `bios.py`/`bios_web.py`, an editable Firmware tab, a new
   `manage_firmware` capability, and `agent/src/TempMonitorAgent/Bios/BiosWriter.cs` +

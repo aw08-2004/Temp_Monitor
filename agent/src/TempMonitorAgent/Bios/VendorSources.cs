@@ -8,7 +8,11 @@ public delegate IEnumerable<IReadOnlyDictionary<string, object?>> WmiQuery(
     string namespacePath, string wql);
 
 /// <summary>What one vendor source read.</summary>
-public sealed record BiosVendorResult(IReadOnlyList<BiosSetting> Settings, bool? PasswordSet);
+/// <param name="Interface">The namespace that actually answered, for the vendor that has more
+/// than one. Empty means "the source's own <see cref="IBiosVendorSource.Namespace"/>", which is
+/// still the whole truth on two of the three -- so no source is forced to repeat itself.</param>
+public sealed record BiosVendorResult(IReadOnlyList<BiosSetting> Settings, bool? PasswordSet,
+                                      string Interface = "");
 
 /// <summary>
 /// One vendor's way of exposing firmware settings. There is no cross-vendor BIOS API, and
@@ -89,23 +93,148 @@ internal static class Row
     }
 }
 
-/// <summary>Dell, via <c>root\dcim\sysman</c>: the namespace Dell Command | Monitor installs
-/// and that ships on a stock Dell business image. Attributes are split across three classes by
-/// type, which is why the kinds below are assigned per class rather than guessed from the
-/// value.</summary>
+/// <summary>
+/// Dell -- and the one vendor with TWO firmware interfaces in the field.
+///
+/// **<c>root\dcim\sysman\biosattributes</c> is tried first, Command | Monitor's DCIM_BIOS*
+/// classes in <c>root\dcim\sysman</c> second.** The DCIM_* classes exist only where somebody
+/// installed Dell Command | Monitor. The `biosattributes` provider ships with the Dell client
+/// firmware driver on a stock business image, which is the deployment story this whole file
+/// rests on -- so it is the one that answers on most of a fleet, and it wins where both are
+/// present.
+///
+/// **The namespace shell outlives the provider, and that is what made reading only the DCIM_*
+/// classes a SILENT failure.** <c>root\dcim\sysman</c> is present on a Dell that has never had
+/// Command | Monitor -- it connects, and only its classes are missing. BiosReader's
+/// missing-namespace test therefore read that as "this vendor's stack is installed" while all
+/// three queries came back empty, and every such Dell reported
+/// `error: the firmware interface returned no settings`: a real interface, a real attribute
+/// list, and an error message pointing at neither. Testing a namespace is not testing an
+/// interface, which is why both are tried below rather than one being chosen.
+///
+/// Nothing is aliased between the two. Every property name differs -- `PossibleValue` not
+/// `PossibleValues`, `ReadOnly` not `IsReadOnly`, `DisplayName` not `AttributeDisplayName` --
+/// and handing both spellings to one `Row.Str` call was rejected: it reads whichever the
+/// machine happens to have, so the day one provider gains the other's property under a
+/// different meaning, the wrong value is reported with nothing to show it changed.
+/// </summary>
 public sealed class DellBiosSource : IBiosVendorSource
 {
+    /// <summary>The BIOS attribute provider on a stock Dell business image.</summary>
+    internal const string AttributesNamespace = @"root\dcim\sysman\biosattributes";
+
+    /// <summary>Where that same provider keeps the setup-password state -- a THIRD namespace,
+    /// not a class inside the one above.</summary>
+    internal const string SecurityNamespace = @"root\dcim\sysman\wmisecurity";
+
+    /// <summary>Dell Command | Monitor's namespace. Still in the field on older managed
+    /// fleets, so it is a fallback rather than a deletion.</summary>
+    internal const string LegacyNamespace = @"root\dcim\sysman";
+
     public string Vendor => "Dell";
-    public string Namespace => @"root\dcim\sysman";
+
+    /// <summary>Named for the interface a Dell is expected to have, not for the one that
+    /// answered: which of the two did is reported per read, in
+    /// <see cref="BiosVendorResult.Interface"/>. This value is what an operator sees when
+    /// NEITHER answered, and the one they would have to go and install is the useful thing to
+    /// put in front of them.</summary>
+    public string Namespace => AttributesNamespace;
 
     public bool Matches(string manufacturer) =>
         manufacturer.Contains("dell", StringComparison.OrdinalIgnoreCase);
 
     public BiosVendorResult Read(WmiQuery query)
     {
+        // A missing namespace is CAUGHT here rather than left to propagate, because a Dell is
+        // only unsupported when neither interface exists. Letting the first one's exception
+        // out would file every Command | Monitor machine under "no manageable BIOS" -- the
+        // permanent, quiet state nobody investigates.
+        BiosVendorResult? modern = null, legacy = null;
+
+        try { modern = ReadAttributes(query); }
+        catch (BiosInterfaceMissingException) { }
+        if (modern is { Settings.Count: > 0 }) return modern;
+
+        try { legacy = ReadLegacy(query); }
+        catch (BiosInterfaceMissingException) { }
+        if (legacy is { Settings.Count: > 0 }) return legacy;
+
+        // Neither produced an attribute, and which silence this was decides the outcome -- a
+        // distinction BiosReader draws by exception. BOTH namespaces absent means there is no
+        // Dell firmware interface here at all (unsupported). One present that enumerated
+        // nothing is a fault (error), and an empty result is how this method says so.
+        //
+        // Both are NAMED rather than one of them being picked. Neither is the more truthful
+        // answer -- "biosattributes is not present" is half of why this machine is
+        // unsupported, and a reader who went looking for that one namespace would install a
+        // provider this machine may already be unable to use. Re-raising whichever exception
+        // happened to be caught first is a coin toss dressed up as a reason.
+        if (modern is null && legacy is null)
+            throw new BiosInterfaceMissingException(
+                $"neither {AttributesNamespace} nor {LegacyNamespace} is present");
+        return modern ?? legacy!;
+    }
+
+    /// <summary>The stock-image provider: three classes by type, like Command | Monitor's, and
+    /// not one property name in common with them.</summary>
+    private static BiosVendorResult ReadAttributes(WmiQuery query)
+    {
         var settings = new List<BiosSetting>();
 
-        foreach (var row in query(Namespace, "SELECT * FROM DCIM_BIOSEnumeration"))
+        foreach (var row in query(AttributesNamespace, "SELECT * FROM EnumerationAttribute"))
+            AddAttribute(settings, row, BiosSettingKind.Enum, Row.List(row, "PossibleValue"));
+
+        foreach (var row in query(AttributesNamespace, "SELECT * FROM StringAttribute"))
+            AddAttribute(settings, row, BiosSettingKind.String, Array.Empty<string>());
+
+        foreach (var row in query(AttributesNamespace, "SELECT * FROM IntegerAttribute"))
+            AddAttribute(settings, row, BiosSettingKind.Integer, Array.Empty<string>());
+
+        return new BiosVendorResult(settings, ReadPasswordState(query), AttributesNamespace);
+    }
+
+    private static void AddAttribute(List<BiosSetting> into,
+                                     IReadOnlyDictionary<string, object?> row,
+                                     BiosSettingKind kind, IReadOnlyList<string> possible)
+    {
+        var name = Row.Str(row, "AttributeName");
+        if (name.Length == 0) return;
+        into.Add(new BiosSetting(name, Row.Str(row, "CurrentValue"), kind, possible,
+                                 // A uint with a 0/1 ValueMap here, a bool on Command |
+                                 // Monitor. Row.Flag reads both, which is why it exists.
+                                 Row.Flag(row, "ReadOnly"),
+                                 Row.Str(row, "DisplayName")));
+    }
+
+    /// <summary>Is any BIOS password set? Its own try/catch, because the security namespace is
+    /// separate from the attribute one and can be absent on its own -- and an attribute list is
+    /// worth reporting from a machine that cannot tell us about its passwords. Null is the
+    /// honest answer for "we could not ask"; see BiosReport.PasswordSet.</summary>
+    private static bool? ReadPasswordState(WmiQuery query)
+    {
+        try
+        {
+            bool? password = null;
+            // One instance per password (admin, system, HDD) and ANY of them blocks a write,
+            // so what the console needs is whether one is set, not which.
+            foreach (var row in query(SecurityNamespace, "SELECT * FROM PasswordObject"))
+                password = (password ?? false) || Row.Flag(row, "IsPasswordSet");
+            return password;
+        }
+        catch (BiosInterfaceMissingException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Dell Command | Monitor. Unchanged from when it was the only interface this
+    /// reader knew about -- it is still correct on a machine that has DCM, and was only ever
+    /// wrong as the sole answer.</summary>
+    private static BiosVendorResult ReadLegacy(WmiQuery query)
+    {
+        var settings = new List<BiosSetting>();
+
+        foreach (var row in query(LegacyNamespace, "SELECT * FROM DCIM_BIOSEnumeration"))
         {
             var name = Row.Str(row, "AttributeName");
             if (name.Length == 0) continue;
@@ -118,7 +247,7 @@ public sealed class DellBiosSource : IBiosVendorSource
                 Row.Str(row, "AttributeDisplayName")));
         }
 
-        foreach (var row in query(Namespace, "SELECT * FROM DCIM_BIOSString"))
+        foreach (var row in query(LegacyNamespace, "SELECT * FROM DCIM_BIOSString"))
         {
             var name = Row.Str(row, "AttributeName");
             if (name.Length == 0) continue;
@@ -128,7 +257,7 @@ public sealed class DellBiosSource : IBiosVendorSource
                                          Row.Str(row, "AttributeDisplayName")));
         }
 
-        foreach (var row in query(Namespace, "SELECT * FROM DCIM_BIOSInteger"))
+        foreach (var row in query(LegacyNamespace, "SELECT * FROM DCIM_BIOSInteger"))
         {
             var name = Row.Str(row, "AttributeName");
             if (name.Length == 0) continue;
@@ -142,12 +271,12 @@ public sealed class DellBiosSource : IBiosVendorSource
         // not which of them. A missing class leaves it null rather than false -- see
         // BiosReport.PasswordSet.
         bool? password = null;
-        foreach (var row in query(Namespace, "SELECT * FROM DCIM_BIOSPassword"))
+        foreach (var row in query(LegacyNamespace, "SELECT * FROM DCIM_BIOSPassword"))
         {
             password = (password ?? false) || Row.Flag(row, "IsSet");
         }
 
-        return new BiosVendorResult(settings, password);
+        return new BiosVendorResult(settings, password, LegacyNamespace);
     }
 }
 
