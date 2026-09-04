@@ -2826,9 +2826,14 @@
     "intro": "Lo que le falta a la flota, lo que está aprobado para instalarse y cuándo puede ejecutarse. Una actualización solo se registra como instalada cuando el equipo vuelve y deja de ofrecerla.",
     "views_nav": "Vistas de parches",
     "tab_updates": "Disponibles",
+    "tab_approved": "Aprobadas",
+    "tab_declined": "Rechazadas",
     "tab_windows": "Ventanas de mantenimiento",
     "tab_runs": "Ejecuciones",
     "no_updates": "Ningún equipo notifica actualizaciones disponibles.",
+    "none_undecided": "Todas las actualizaciones notificadas ya tienen decisión. No queda nada pendiente.",
+    "none_approved": "Ninguna actualización que la flota notifique ahora está aprobada.",
+    "none_declined": "Ninguna actualización que la flota notifique ahora está rechazada.",
     "no_windows": "Aún no hay ventanas de mantenimiento. Sin ninguna, solo una ejecución de emergencia instala algo.",
     "no_runs": "Aún no hay ejecuciones de parches.",
     "request_failed": "No se pudo contactar con el hub.",
@@ -2845,7 +2850,6 @@
       "classification": "Clasificación",
       "source": "Origen",
       "machines": "Equipos",
-      "decision": "Decisión",
       "actions": "Acciones",
       "window": "Ventana",
       "days": "Días",
@@ -2856,11 +2860,6 @@
       "by": "Por",
       "progress": "Progreso",
       "status": "Estado"
-    },
-    "decision": {
-      "approved": "Aprobada",
-      "declined": "Rechazada",
-      "undecided": "Sin decidir"
     },
     "day": {
       "mon": "Lun",
