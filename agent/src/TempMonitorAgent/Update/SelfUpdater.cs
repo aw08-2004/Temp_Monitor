@@ -141,13 +141,21 @@ public sealed class SelfUpdater
                 _log.LogWarning(move, "[update] could not move the new binary into place -- restoring the previous one");
                 try
                 {
-                    File.Move(oldPath, currentPath);
+                    // **overwrite, because the failure this restores from can leave a PARTIAL
+                    // file behind.** Within one volume File.Move is a rename and fails having
+                    // created nothing, but across volumes it degrades to copy-then-delete, so
+                    // a full disk or an interrupted copy -- two of the three cases named above
+                    // -- can leave a half-written exe at currentPath. The two-argument overload
+                    // refuses an existing destination, so the restore would then throw for a
+                    // reason that has nothing to do with the original failure, and the operator
+                    // following the message below by hand would hit the same refusal.
+                    File.Move(oldPath, currentPath, overwrite: true);
                 }
                 catch (Exception restore)
                 {
                     // Both moves failing is the one outcome nothing here can repair, so say
                     // exactly what a human has to do rather than logging a stack trace.
-                    _log.LogError(restore, "[update] RESTORE FAILED -- rename {Old} back to {Cur} by hand; this service cannot start until you do", oldPath, currentPath);
+                    _log.LogError(restore, "[update] RESTORE FAILED -- rename {Old} over {Cur} by hand (replacing it if it exists); this service cannot start until you do", oldPath, currentPath);
                 }
                 try { File.Delete(stagedPath); } catch { /* ignore */ }
                 return false;
