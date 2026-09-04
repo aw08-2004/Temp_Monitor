@@ -226,7 +226,7 @@ def test_hub_self_update():
     except Exception as e:
         check(f"perform_hub_update dry run (unexpected error: {e})", False)
 
-    print("\n-- hub self-update: archive path replaces files in a non-clone install --")
+    print("\n-- hub self-update: archive path swaps in a new tree in a non-clone install --")
     # The installer no longer clones, so most hubs have no .git and update from the
     # branch archive instead. Serve a synthetic zip rather than hitting the network.
     import io as _io, zipfile as _zf
@@ -260,9 +260,10 @@ def test_hub_self_update():
     orig_get = app.requests.get
     orig_install = app._install_requirements
     try:
-        # Happy path: the archive's hub/ is mirrored into the code dir -- files replaced,
-        # a stale file inside a mirrored dir removed, a stale top-level module pruned -- while
-        # operator state one level up in the install root is left untouched.
+        # Happy path: the archive's hub/ is built beside the code dir and renamed into
+        # place, so the new tree contains exactly the archive -- a stale template and a stale
+        # top-level module are both simply absent -- while operator state one level up in the
+        # install root is left untouched and the old tree is kept as a rollback target.
         state_root = tempfile.mkdtemp(prefix="hub-archive-state-")
         code_dir = os.path.join(state_root, "hub")
         os.makedirs(code_dir)
@@ -288,16 +289,29 @@ def test_hub_self_update():
 
         check("archive update returned True", ok is True)
         check("app.py advanced to 999.0.0", app.parse_hub_version(pulled) == "999.0.0")
-        check("stale template removed by dir mirror",
+        check("stale template gone with the old tree",
               not os.path.exists(os.path.join(code_dir, "templates", "gone.html")))
-        check("stale top-level module pruned",
+        check("stale top-level module gone with the old tree",
               not os.path.exists(os.path.join(code_dir, "gone.py")))
         check(".env in install root preserved", os.path.exists(os.path.join(state_root, ".env")))
         check("logs/ in install root preserved",
               open(os.path.join(state_root, "logs", "temp_v2.db")).read() == "dbcontents")
 
+        # The rollback target is the reason the swap is worth doing: the hub cannot roll
+        # itself back, so what it leaves behind for a human to rename is the recovery.
+        prev = code_dir + ".prev"
+        check("old tree kept as a rollback target", os.path.isdir(prev))
+        with open(os.path.join(prev, "app.py")) as f:
+            check("...holding the version that was running", app.parse_hub_version(f.read()) == "1.0.0")
+        check("...including the file upstream deleted",
+              os.path.exists(os.path.join(prev, "gone.py")))
+        check("the staged tree is cleaned up", not os.path.exists(code_dir + ".new"))
+        check("no staging dir left in the install root",
+              not [d for d in os.listdir(state_root) if d.startswith(".hub-update-")])
+
         # Fail-closed: an archive whose hub/ is missing an entrypoint must not be applied,
-        # or the hub loses a module and crash-loops on restart.
+        # or the hub loses a module and crash-loops on restart. Nothing is touched at all
+        # now -- the refusal happens before the live tree is in the picture.
         state2 = tempfile.mkdtemp(prefix="hub-archive-bad-")
         code2 = os.path.join(state2, "hub")
         os.makedirs(code2)
@@ -310,6 +324,8 @@ def test_hub_self_update():
         check("incomplete archive refused", ok_bad is False)
         check("live tree untouched after refusal",
               app.parse_hub_version(untouched) == "1.0.0")
+        check("no rollback tree created by a refusal",
+              not os.path.exists(code2 + ".prev"))
 
         # Dispatch: a .git at the worktree root (the parent of the code dir) alone decides
         # which strategy runs. A developer's checkout must never be overwritten by the archive.
@@ -346,6 +362,101 @@ def test_hub_self_update():
     finally:
         app.requests.get = orig_get
         app._install_requirements = orig_install
+
+
+def test_hub_update_archive_swap():
+    """The cutover itself: what it refuses, and what it leaves behind when it fails.
+
+    THE SILENT FAILURE THIS COVERS is a hub serving requests out of a directory that is
+    neither the old version nor the new one. The mirror this replaces spent seconds in that
+    state and left it there permanently if it died half way; a rename spends microseconds
+    and puts the old tree back if the second one fails. The other half is the guard: the
+    mirror's own predecessor only refused when the code dir WAS the state root, so a
+    HUB_LOG_DIR pointing under hub/ had its database deleted without a word.
+    """
+    print("\n-- hub self-update: state inside the code dir blocks the swap --")
+    root = tempfile.mkdtemp(prefix="hub-guard-")
+    code_dir = os.path.join(root, "hub")
+    os.makedirs(code_dir)
+    check("a code dir holding only code is clear",
+          app._protected_state_inside(code_dir) == [])
+
+    # `said` is the wording the operator is given, which is the useful half of the refusal:
+    # it has to name the setting to move, not just report that something is in the way.
+    for attr, said, path in (
+            ("LOG_DIR", "HUB_LOG_DIR", os.path.join(code_dir, "logs")),
+            ("FILE_SPOOL_DIR", "the file spool", os.path.join(code_dir, "logs", "filespool")),
+            ("ENV_PATH", ".env", os.path.join(code_dir, ".env")),
+            # The flat install the old equality check was written for: code and state in
+            # one directory. Still refused, now by the same rule as the rest.
+            ("STATE_ROOT", "HUB_STATE_DIR", code_dir)):
+        saved = getattr(app, attr)
+        try:
+            setattr(app, attr, path)
+            found = app._protected_state_inside(code_dir)
+            check(f"{attr} inside the code dir is refused, naming {said}",
+                  len(found) == 1 and found[0].startswith(said + " at "))
+        finally:
+            setattr(app, attr, saved)
+
+    # ...and the refusal reaches the caller, rather than being noticed only in a log.
+    saved = app.LOG_DIR
+    orig_get = app.requests.get
+    try:
+        app.LOG_DIR = os.path.join(code_dir, "logs")
+        app.requests.get = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not download when the guard has already refused"))
+        check("a guarded install does not even fetch the archive",
+              app._perform_hub_update_archive(code_dir) is False)
+    finally:
+        app.LOG_DIR = saved
+        app.requests.get = orig_get
+
+    print("\n-- hub self-update: a failed cutover puts the live tree back --")
+    # The one window where the code dir does not exist. If the second rename fails the
+    # first must be undone, or the install is gone rather than merely un-updated.
+    root2 = tempfile.mkdtemp(prefix="hub-swap-")
+    live = os.path.join(root2, "hub")
+    os.makedirs(live)
+    with open(os.path.join(live, "app.py"), "w") as f:
+        f.write('HUB_VERSION = "1.0.0"\n')
+    incoming = live + ".new"
+    os.makedirs(incoming)
+    with open(os.path.join(incoming, "app.py"), "w") as f:
+        f.write('HUB_VERSION = "999.0.0"\n')
+
+    orig_rename = os.rename
+    calls = []
+
+    def _rename_failing_second(src, dst):
+        calls.append((src, dst))
+        # First call moves the live tree aside; the second is the one that fails.
+        if len(calls) == 2:
+            raise OSError("simulated: the new tree could not be moved into place")
+        return orig_rename(src, dst)
+
+    try:
+        os.rename = _rename_failing_second
+        raised = False
+        try:
+            app._swap_dirs(live, incoming, live + ".prev")
+        except OSError:
+            raised = True
+        check("a failed cutover raises rather than reporting success", raised)
+    finally:
+        os.rename = orig_rename
+    check("the live code dir still exists", os.path.isdir(live))
+    with open(os.path.join(live, "app.py")) as f:
+        check("...still holding the running version", app.parse_hub_version(f.read()) == "1.0.0")
+    check("no half-swapped rollback tree left behind", not os.path.exists(live + ".prev"))
+
+    print("\n-- hub self-update: a successful cutover is two renames --")
+    app._swap_dirs(live, incoming, live + ".prev")
+    with open(os.path.join(live, "app.py")) as f:
+        check("the new tree is live", app.parse_hub_version(f.read()) == "999.0.0")
+    with open(os.path.join(live + ".prev", "app.py")) as f:
+        check("the old tree is the rollback target",
+              app.parse_hub_version(f.read()) == "1.0.0")
 
 
 def test_hub_update_restart_gates():
@@ -794,6 +905,7 @@ if __name__ == "__main__":
     test_report_endpoint()
     test_channel_wiring()
     test_hub_self_update()
+    test_hub_update_archive_swap()
     test_hub_update_restart_gates()
     test_hub_update_notice()
     test_hub_update_notice_hides()

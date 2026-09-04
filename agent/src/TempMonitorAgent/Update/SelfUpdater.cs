@@ -11,12 +11,26 @@ namespace TempMonitorAgent.Update;
 /// verifies its hash against the SIGNED value, then swaps it in by renaming the
 /// running exe aside (allowed on Windows) and requesting an SCM restart via a
 /// distinct exit code. A restart-count guard stops a bad update from looping.
+///
+/// **That guard stops the same target being downloaded again; it is not a rollback.**
+/// Nothing here re-launches the previous binary, because a build too broken to start is
+/// also too broken to decide anything -- that decision belongs to whatever is still
+/// running at that point, the SCM or the installer. What this class does promise is that
+/// the previous binary is still sitting beside the new one, as `.old`, until the new one
+/// has reached the hub at least once (ReconcileAfterBoot / ConfirmRunningBuild).
 /// </summary>
 public sealed class SelfUpdater
 {
     private readonly ILogger<SelfUpdater> _log;
     private readonly AgentState _state;
     private readonly HttpClient _http;
+
+    /// <summary>1 while an applied update is still waiting to be confirmed by this build
+    /// doing real work. Set on the boot thread by <see cref="ReconcileAfterBoot"/> and
+    /// CLAIMED, not merely read, by <see cref="ConfirmRunningBuild"/>: two independent
+    /// loops call that method now, on their own thread-pool threads, so the interlocked
+    /// exchange is what makes the retirement happen exactly once rather than twice.</summary>
+    private int _awaitingConfirmation;
 
     public SelfUpdater(ILogger<SelfUpdater> log, AgentState state)
     {
@@ -25,18 +39,61 @@ public sealed class SelfUpdater
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
 
-    /// <summary>On boot, if we successfully reached a version >= the pending target,
-    /// clear the restart guard and delete the old binary.</summary>
+    /// <summary>On boot, notice that we came back on the version an update was aiming for --
+    /// and then **do nothing about it until the build has actually worked**.
+    ///
+    /// This used to clear the restart guard and delete the .old binary right here, which
+    /// treated "the process started" as "the update succeeded". Those are not the same
+    /// claim, and the gap between them is where the fleet's worst outcome lives: a build
+    /// that starts, deletes its own predecessor, and only then turns out to be unable to
+    /// reach the hub is a machine that cannot be reached, fixed, or told anything -- on
+    /// every machine at once, because they all take the same manifest. Deleting the one
+    /// artifact that could undo it was the last thing to do at the first moment it was
+    /// safe to do it.
+    ///
+    /// So .old now survives boot and is cleared by ConfirmRunningBuild instead. Note what
+    /// this does NOT add: nothing here starts the old binary again. Rolling back needs
+    /// something that is still running when this process cannot start, which means the SCM
+    /// or the installer, not the agent -- see the class summary. What this buys is that the
+    /// artifact is still on disk when a human goes looking for it, for the whole window in
+    /// which it matters.</summary>
     public void ReconcileAfterBoot()
     {
         var rs = _state.LoadRestartState();
         if (rs is null) return;
         if (VersionUtil.Compare(AgentConfig.Version, rs.Target) >= 0)
         {
-            _state.ClearRestartState();
-            TryDeleteOldBinary();
-            _log.LogInformation("Update to {Target} confirmed (now {Version})", rs.Target, AgentConfig.Version);
+            Volatile.Write(ref _awaitingConfirmation, 1);
+            _log.LogInformation(
+                "Update to {Target} booted (now {Version}); holding the previous binary until this build reaches the hub",
+                rs.Target, AgentConfig.Version);
         }
+        // Older than the target means the swap did not take and the SCM started the old
+        // binary. Leave the state alone: its Count is what stops CheckAndApplyAsync
+        // retrying the same broken target forever.
+    }
+
+    /// <summary>Called once the updated build has completed a round trip the hub accepted,
+    /// which is the first evidence it can do its job rather than merely start. Clears the
+    /// restart guard and drops the previous binary.
+    ///
+    /// **Two loops call this, and that is deliberate.** Confirmation must not be coupled to
+    /// any one subsystem working: gating it on the telemetry report alone tied "the update
+    /// worked" to "the CPU sensor also works", so a machine with no PawnIO driver -- a VM, a
+    /// hardened build -- never reached the call and kept its previous binary forever while
+    /// being perfectly healthy. The heartbeat has the opposite blind spot, since it needs
+    /// enrollment and /api/report does not. Either one landing is proof, so both call it and
+    /// whichever arrives first wins; the interlocked claim above is what makes the second
+    /// call free.
+    ///
+    /// Cheap enough for both cadences: one interlocked read per five-to-ten seconds, and
+    /// nothing at all after the first success.</summary>
+    public void ConfirmRunningBuild()
+    {
+        if (Interlocked.Exchange(ref _awaitingConfirmation, 0) == 0) return;
+        _state.ClearRestartState();
+        TryDeleteOldBinary();
+        _log.LogInformation("Update to {Version} confirmed -- the hub accepted this build", AgentConfig.Version);
     }
 
     /// <summary>Check for and apply an update. Returns true if an update was applied
@@ -119,6 +176,11 @@ public sealed class SelfUpdater
                 return false;
             }
             var oldPath = currentPath + ".old";
+            // A second update landing before the first was confirmed overwrites the rollback
+            // target with the unconfirmed build. Accepted rather than guarded: refusing to
+            // update while awaiting confirmation would strand exactly the machine that most
+            // needs the next release -- one that boots but cannot reach the hub, and so can
+            // never confirm anything.
             try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { /* ignore */ }
             File.Move(currentPath, oldPath);            // rename running exe (allowed on Windows)
             try
