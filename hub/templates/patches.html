@@ -31,10 +31,28 @@
 
 {# Driven by the shared tabs.js (ARIA roles, roving tabindex, arrow keys, #hash
    linkability, last-tab persistence), for the reason packages.html gives: rolling a
-   switcher by hand would lose all of that and be a second implementation to drift. #}
+   switcher by hand would lose all of that and be a second implementation to drift.
+
+   Three panes over ONE list, not three lists: an update's decision is the only thing
+   that decides which pane it lands in, so Available holds exactly what nobody has ruled
+   on yet and the other two are the record of what was ruled. Splitting them is what makes
+   the first tab a work queue -- before this, a fleet with two hundred reported updates
+   showed all two hundred forever and the eight still waiting for an operator were
+   indistinguishable from the rest.
+
+   The count beside each label is rendered even when it is zero: "Available 0" is the
+   answer somebody opened this page to get, and a badge that disappears when empty reads
+   as a page that failed to load. #}
 <div class="tabs" role="tablist" aria-label="{{ t('patches.views_nav') }}" data-tabs-key="patches">
     <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-updates"
-            aria-controls="updates-pane" aria-selected="true">{{ t('patches.tab_updates') }}</button>
+            aria-controls="updates-pane" aria-selected="true">{{ t('patches.tab_updates') }}
+        <span class="badge" id="count-updates"></span></button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-approved"
+            aria-controls="approved-pane" aria-selected="false" tabindex="-1">{{ t('patches.tab_approved') }}
+        <span class="badge" id="count-approved"></span></button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-declined"
+            aria-controls="declined-pane" aria-selected="false" tabindex="-1">{{ t('patches.tab_declined') }}
+        <span class="badge" id="count-declined"></span></button>
     <button class="tabs__tab" type="button" role="tab" id="tab-btn-windows"
             aria-controls="windows-pane" aria-selected="false" tabindex="-1">{{ t('patches.tab_windows') }}</button>
     <button class="tabs__tab" type="button" role="tab" id="tab-btn-runs"
@@ -42,6 +60,8 @@
 </div>
 
 <div class="tab-panel" id="updates-pane" role="tabpanel" aria-labelledby="tab-btn-updates"></div>
+<div class="tab-panel" id="approved-pane" role="tabpanel" aria-labelledby="tab-btn-approved" hidden></div>
+<div class="tab-panel" id="declined-pane" role="tabpanel" aria-labelledby="tab-btn-declined" hidden></div>
 <div class="tab-panel" id="windows-pane" role="tabpanel" aria-labelledby="tab-btn-windows" hidden></div>
 <div class="tab-panel" id="runs-pane" role="tabpanel" aria-labelledby="tab-btn-runs" hidden></div>
 

@@ -2826,9 +2826,14 @@
     "intro": "Was der Flotte fehlt, was zur Installation freigegeben ist und wann es laufen darf. Ein Update gilt erst dann als installiert, wenn der Rechner zurück ist und es nicht mehr anbietet.",
     "views_nav": "Patch-Ansichten",
     "tab_updates": "Verfügbar",
+    "tab_approved": "Freigegeben",
+    "tab_declined": "Abgelehnt",
     "tab_windows": "Wartungsfenster",
     "tab_runs": "Läufe",
     "no_updates": "Kein Rechner meldet ein verfügbares Update.",
+    "none_undecided": "Über jedes gemeldete Update wurde entschieden. Es wartet nichts auf Sie.",
+    "none_approved": "Kein derzeit gemeldetes Update ist freigegeben.",
+    "none_declined": "Kein derzeit gemeldetes Update ist abgelehnt.",
     "no_windows": "Noch kein Wartungsfenster. Ohne eines installiert nur ein Notlauf überhaupt etwas.",
     "no_runs": "Noch kein Patch-Lauf.",
     "request_failed": "Der Hub war nicht erreichbar.",
@@ -2845,7 +2850,6 @@
       "classification": "Klassifizierung",
       "source": "Quelle",
       "machines": "Rechner",
-      "decision": "Entscheidung",
       "actions": "Aktionen",
       "window": "Fenster",
       "days": "Tage",
@@ -2856,11 +2860,6 @@
       "by": "Von",
       "progress": "Fortschritt",
       "status": "Status"
-    },
-    "decision": {
-      "approved": "Freigegeben",
-      "declined": "Abgelehnt",
-      "undecided": "Offen"
     },
     "day": {
       "mon": "Mo",

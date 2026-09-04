@@ -2942,9 +2942,14 @@
     "intro": "What the fleet is missing, what is approved to install, and when it may run. An update is only ever recorded as installed once the machine comes back and stops offering it.",
     "views_nav": "Patch views",
     "tab_updates": "Available",
+    "tab_approved": "Approved",
+    "tab_declined": "Declined",
     "tab_windows": "Maintenance windows",
     "tab_runs": "Runs",
     "no_updates": "No machine is reporting an available update.",
+    "none_undecided": "Every reported update has been decided. Nothing is waiting for you.",
+    "none_approved": "No update the fleet is currently reporting has been approved.",
+    "none_declined": "No update the fleet is currently reporting has been declined.",
     "no_windows": "No maintenance window yet. Without one, only an emergency run installs anything.",
     "no_runs": "No patch run yet.",
     "request_failed": "The hub could not be reached.",
@@ -2961,7 +2966,6 @@
       "classification": "Classification",
       "source": "Source",
       "machines": "Machines",
-      "decision": "Decision",
       "actions": "Actions",
       "window": "Window",
       "days": "Days",
@@ -2972,11 +2976,6 @@
       "by": "By",
       "progress": "Progress",
       "status": "Status"
-    },
-    "decision": {
-      "approved": "Approved",
-      "declined": "Declined",
-      "undecided": "Undecided"
     },
     "day": {
       "mon": "Mon",
