@@ -71,7 +71,9 @@ Options:
                      It is not shown anywhere in the console. Without it the agent reports
                      telemetry but takes no commands.
                      NOTE: an argument is visible in `ps` while this runs. Prefer
-                     --secret-file, or the FLEETHUB_ENROLLMENT_SECRET environment variable.
+                     --secret-file, or pass it in the environment -- either
+                     FLEETHUB_ENROLLMENT_SECRET or AGENT_ENROLLMENT_SECRET is read, so
+                     whichever name you already have exported will work.
   --secret-file PATH Read the secret from a file instead (not visible in the process list).
   --hub URL          Override the compiled-in hub base URL.
   --agent-url URL    Download the binary from here instead of asking the GitHub releases API.
@@ -268,7 +270,22 @@ main() {
         [ -f "$SECRET_FILE" ] || die "no such file: $SECRET_FILE"
         SECRET="$(cat "$SECRET_FILE")"
     fi
-    [ -n "$SECRET" ] || SECRET="${FLEETHUB_ENROLLMENT_SECRET:-}"
+    # BOTH names are accepted, and that is the fix for a trap rather than laziness.
+    #
+    # The agent's own runtime variable is AGENT_ENROLLMENT_SECRET -- same name the hub's .env
+    # uses, same name the Windows agent honours -- so somebody who has read the agent docs will
+    # reach for that one here. Accepting only FLEETHUB_ENROLLMENT_SECRET meant
+    # `sudo AGENT_ENROLLMENT_SECRET=... bash` fell through to "no secret supplied" and produced
+    # a machine that installs cleanly, reports telemetry, and silently takes no commands. There
+    # is no error to notice, because passing an environment variable this installer does not
+    # read is indistinguishable from passing none.
+    #
+    # Rejected: keeping one name and documenting the difference. A doc note does not help the
+    # person who never reads it, and the two variables mean the same thing to the only audience
+    # that types either.
+    if [ -z "$SECRET" ]; then
+        SECRET="${FLEETHUB_ENROLLMENT_SECRET:-${AGENT_ENROLLMENT_SECRET:-}}"
+    fi
 
     echo "Installing the FleetHub Linux agent..."
 
@@ -303,7 +320,10 @@ visible in \`ps\` while this ran. Use --secret-file or FLEETHUB_ENROLLMENT_SECRE
     elif [ -f "$CONF_DIR/agent.secret" ]; then
         say "secret  -> keeping the existing $CONF_DIR/agent.secret"
     else
-        warn "no secret supplied: the agent will report telemetry but take no commands"
+        # Recorded, and repeated at the very end -- see the summary below for why once is not
+        # enough.
+        TELEMETRY_ONLY=1
+        warn "no secret supplied: this machine will take no commands"
     fi
 
     # The hub override goes in the unit's EnvironmentFile rather than the unit itself, so
@@ -326,6 +346,20 @@ visible in \`ps\` while this ran. Use --secret-file or FLEETHUB_ENROLLMENT_SECRE
     if systemctl is-active --quiet "$SERVICE"; then
         echo "The agent is running. Follow it with:"
         echo "  journalctl -u $SERVICE -f"
+        # Said AGAIN, last, because the earlier warning scrolls past behind the unit install
+        # and systemd's own output -- and the state it describes is one an operator can easily
+        # not notice for weeks. A telemetry-only machine looks completely healthy in the
+        # console: it is online, it charts, it reports its inventory. It simply never runs
+        # anything anyone asks it to, and the first sign is a command that sits there.
+        if [ "${TELEMETRY_ONLY:-0}" -eq 1 ]; then
+            echo
+            echo "  !! TELEMETRY ONLY -- this machine will NOT accept commands."
+            echo "     It had no enrollment secret, so it never enrolled. It will still appear"
+            echo "     online in the console, which is what makes this easy to miss."
+            echo "     Fix it with:"
+            echo "       printf '%s' 'THE-SECRET' > $CONF_DIR/agent.secret"
+            echo "       chmod 600 $CONF_DIR/agent.secret && systemctl restart $SERVICE"
+        fi
     else
         echo "The agent was installed but is not running:" >&2
         journalctl -u "$SERVICE" -n 30 --no-pager >&2 || true

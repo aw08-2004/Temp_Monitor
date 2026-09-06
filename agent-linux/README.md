@@ -151,16 +151,23 @@ Note that both halves of a pipeline start regardless, so if the fetch fails you 
 
 `--secret` is the hub's **`AGENT_ENROLLMENT_SECRET`** — one shared value for the whole fleet,
 from the hub's `.env`, printed once by `install.ps1` when the hub was set up. It is not shown
-anywhere in the console. Without it the agent reports telemetry but takes no commands, and says
-so in its log.
+anywhere in the console. Without it the machine installs cleanly, comes up online, charts and
+reports its inventory — and never accepts a command. That state is easy to miss, so the
+installer names it again as the last thing it prints.
 
 An argument is visible in `ps` while the installer runs, so for anything but a one-off prefer:
 
 ```bash
-curl -fsSL .../install.sh | sudo FLEETHUB_ENROLLMENT_SECRET='THE-SECRET' bash
+curl -fsSL .../install.sh | sudo AGENT_ENROLLMENT_SECRET='THE-SECRET' bash
 # or
 curl -fsSL .../install.sh | sudo bash -s -- --secret-file /root/.fleethub-secret
 ```
+
+The installer reads **either** `AGENT_ENROLLMENT_SECRET` (the name the hub's `.env`, the Windows
+agent and this agent's own runtime all use) or `FLEETHUB_ENROLLMENT_SECRET`. Both work, so
+whichever one you already have exported is the right one — passing an env var the installer did
+not read would otherwise be indistinguishable from passing none, and would leave a machine that
+installs cleanly and silently takes no commands.
 
 Other options: `--hub URL` to override the compiled-in hub, `--agent-url URL` for an internal
 mirror (or when a lot of machines behind one NAT would hit GitHub's 60/hour unauthenticated API
