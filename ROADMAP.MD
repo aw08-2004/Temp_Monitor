@@ -2722,8 +2722,12 @@ Full detail in `agent-linux/README.md`.
 Installed the same way Windows machines are — `curl -fsSL .../agent-linux/install/install.sh |
 sudo bash -s -- --secret '…'` — and `install.sh` resolves its binary exactly as `install.ps1`
 does, from the newest GitHub release matching a tag prefix (`linux-agent-v*`, asset
-`fleethub-agent`). **No such release exists yet**, so today the installer stops with a message
-saying so and `--binary` is the working path.
+`fleethub-agent`), with one deliberate divergence: it asks for `per_page=100` rather than
+reading the default first page. `install.ps1` gets away with the default because `agent-v*` is
+the FREQUENT release and is always near the top; the newest `linux-agent-v*` sinks instead, and
+past a page boundary the installer would report "no published release" for one that exists.
+`linux-agent-v0.1.0` is published; `--binary` still installs a local build with no release at
+all.
 
 **No hub change was required**, and that is the design rather than a coincidence. The agent
 speaks the existing wire protocol exactly — `/api/report`, `/api/agent/enroll`, heartbeat, the

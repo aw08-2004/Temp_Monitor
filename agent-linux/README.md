@@ -180,10 +180,10 @@ anything, downloads before it stops the running agent, verifies the download is 
 binary rather than a proxy's error page, and confirms `systemctl is-active` afterwards rather
 than trusting `enable --now`'s exit code.
 
-### It needs a release to exist first
+### Releases
 
-**There is no `linux-agent-v*` release yet**, so the one-liner above will stop with a message
-saying so. Until one is cut, install from a local build:
+`linux-agent-v0.1.0` is published, so the one-liner above resolves. Installing without any
+release at all — a local build, or an air-gapped machine — stays supported:
 
 ```bash
 dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
@@ -191,14 +191,19 @@ scp dist/fleethub-agent user@target:/tmp/
 ssh user@target 'curl -fsSL .../install.sh | sudo bash -s -- --binary /tmp/fleethub-agent --secret "..."'
 ```
 
-To cut the release the installer expects — note the tag prefix and the asset name are what
-`install.sh` matches on, so both must be exact:
+To cut the next one — the tag prefix and the asset name are what `install.sh` matches on, so
+both must be exact:
 
 ```bash
 dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
-gh release create linux-agent-v0.1.0 dist/fleethub-agent \
-  --title "Linux agent v0.1.0" --notes "First cut. Unsigned, untested on real hardware."
+gh release create linux-agent-v0.2.0 dist/fleethub-agent \
+  --title "Linux agent v0.2.0" --notes "..."
 ```
+
+The installer reads the releases list with `per_page=100` rather than the default 30. This repo
+already carries 50+ releases and Windows agent releases are frequent while Linux ones will be
+rare, so the newest `linux-agent-v*` sinks down the list — past a page boundary it would be
+reported as "no published release" for a release that plainly exists.
 
 Unlike the Windows agent there is **no signed manifest and no self-update**, so this release is
 only ever read by `install.sh` over HTTPS — the trust root is GitHub plus TLS, not the fleet's

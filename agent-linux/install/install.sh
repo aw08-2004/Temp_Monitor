@@ -177,7 +177,20 @@ resolve_agent_url() {
     # because jq is not installed by default on a server image and this is the one place the
     # installer would otherwise need a package manager before it can do anything.
     local api json url
-    api="https://api.github.com/repos/$REPO/releases"
+    # per_page=100, not the default 30.
+    #
+    # install.ps1 reads the first page unpaginated and gets away with it, because the releases
+    # it looks for -- agent-v* -- are the FREQUENT ones and are therefore always near the top.
+    # That parity does not carry to this side. Linux releases will be rare while Windows agent
+    # releases keep coming, so the newest linux-agent-v* sinks down the list over time, and on
+    # the day it falls past the page boundary this installer reports "no published release" for
+    # a release that plainly exists. A wrong answer, not a failure to answer -- the operator
+    # would go looking at the release rather than at the pagination.
+    #
+    # 100 is the API's maximum for one request. It is a horizon, not a fix; following the Link
+    # header would be the real one, and is not worth the shell it would take until this repo is
+    # anywhere near a hundred releases behind a Linux build.
+    api="https://api.github.com/repos/$REPO/releases?per_page=100"
     json="$(http_get_stdout "$api" || true)"
     [ -n "$json" ] || die "could not reach the GitHub releases API. Use --agent-url, or --binary \
 with a locally built file."
@@ -188,8 +201,8 @@ with a locally built file."
         | head -1 || true)"
 
     [ -n "$url" ] || die "no published '${RELEASE_TAG_PREFIX}*' release with a '${ASSET_NAME}' asset. \
-The Linux agent has not been released yet -- see agent-linux/README.md for how to cut one, or \
-build locally and pass --binary."
+Either none has been published, or the newest one has sunk past the first 100 releases -- see \
+agent-linux/README.md. Build locally and pass --binary, or name the asset with --agent-url."
 
     printf '%s' "$url"
 }
