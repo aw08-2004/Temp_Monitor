@@ -1,0 +1,68 @@
+# FleetHub Linux agent.
+#
+# The counterpart of the Windows agent's service registration, and it makes the same two
+# promises: the agent starts at boot without anyone signed in, and it comes back if it dies.
+#
+# WHY ROOT. The Windows agent runs as LocalSystem. This runs as root for a narrower but
+# equally concrete set of reasons, each of which is a feature that stops working without it:
+#
+#   * /sys/class/dmi/id/product_serial is 0400 root-only. That serial is how the hub collapses
+#     duplicate machines, so an unprivileged agent renames a machine into a permanent duplicate
+#     (see RenameExecutor).
+#   * restart, shutdown and rename are root operations by definition.
+#   * run_script exists to let an operator fix a machine, which mostly means package management
+#     and service control.
+#
+# A capabilities-only user was considered and rejected: the set needed would be broad enough
+# (CAP_DAC_READ_SEARCH for DMI, plus whatever an arbitrary operator script needs) that it would
+# be root with extra steps and a false sense of containment. The containment that matters is at
+# the hub, where ALLOWED_EMAILS plus permission groups decide who may send a command at all.
+
+[Unit]
+Description=FleetHub Linux agent
+Documentation=https://github.com/aw08-2004/Temp_Monitor/blob/main/agent-linux/README.md
+# Ordered after the network is genuinely configured, not merely after the target has been
+# reached. The agent survives a hub it cannot reach (it buffers and retries), so this is about
+# starting quietly rather than about correctness.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+# The agent calls AddSystemd(), so it tells systemd when the host has actually started rather
+# than when the process was forked. A unit ordered after this one then starts against an agent
+# that has read its configuration.
+NotifyAccess=main
+ExecStart=/opt/fleethub/agent/fleethub-agent
+User=root
+
+# The enrollment secret can arrive either way. The file is optional (the leading '-') because a
+# machine can run telemetry-only without one, which is a real state the agent handles and says
+# so in its log rather than a failure to start.
+EnvironmentFile=-/etc/fleethub/agent.env
+
+# Always come back, and keep coming back. This is the Linux half of the Windows installer's
+# `sc failure ... restart`, and it matters for the same reason: a fleet agent that stays down
+# after one bad night is a machine nobody can reach, and nobody notices until they need it.
+Restart=always
+RestartSec=10
+# ...but not in a tight loop forever if something is genuinely broken. StartLimitIntervalSec=0
+# disables the rate limiter entirely, deliberately: a limiter that gives up permanently turns a
+# transient fault (a full disk at boot, a clock too far off for TLS) into a machine that is
+# gone from the console until someone visits it in person.
+StartLimitIntervalSec=0
+
+# Where agent.json lives. StateDirectory= makes systemd create and own it, which means the
+# agent's own StateDirectory.Ensure is a belt-and-braces re-check rather than the only thing
+# standing between the enrollment token and a 0755 directory.
+StateDirectory=fleethub/agent
+StateDirectoryMode=0700
+
+# Deliberately NOT hardened further. ProtectSystem, PrivateDevices, ProtectKernelTunables and
+# friends are the obvious next lines, and every one of them would break the agent's actual job:
+# it reads /sys and /proc, and run_script exists precisely so an operator can change the system.
+# Sandboxing a remote-administration agent away from the system it administers is theatre.
+# What bounds this agent is the hub's authorization, not the unit file.
+
+[Install]
+WantedBy=multi-user.target

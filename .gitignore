@@ -13,5 +13,8 @@ flutter_sdk
 agent/**/bin/
 agent/**/obj/
 agent/dist/
+agent-linux/**/bin/
+agent-linux/**/obj/
+agent-linux/dist/
 # Agent Zero project metadata
 .a0proj/
