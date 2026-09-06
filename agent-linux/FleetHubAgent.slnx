@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FleetHubAgent/FleetHubAgent.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FleetHubAgent.Tests/FleetHubAgent.Tests.csproj" />
+  </Folder>
+</Solution>

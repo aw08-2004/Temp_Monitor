@@ -15,7 +15,7 @@ Four canonical docs already exist. Go to them by question, not by default:
 | Question | File |
 |---|---|
 | What a feature does, or how to operate it | `README.md` — grep it, don't read it |
-| Is this planned or shipped, and what was rejected | `ROADMAP.MD` — features `#1`–`#21` |
+| Is this planned or shipped, and what was rejected | `ROADMAP.MD` — features `#1`–`#22` |
 | Anything about a version number | `VERSIONING.md` — 120 lines, read it whole |
 | Auth, capabilities, threat model | `SECURITY.MD` |
 
@@ -150,7 +150,7 @@ The most distinctive thing about this codebase, and what a generic model gets wr
 
 ## Roadmap upkeep
 
-`ROADMAP.MD` is the live board — features `#1`–`#21` marked ✅ done / 🚧 partial / 📋 planned.
+`ROADMAP.MD` is the live board — features `#1`–`#22` marked ✅ done / 🚧 partial / 📋 planned.
 Update an entry when a feature's status actually changes, and record the decision and the
 alternatives you rejected there. Code comments cite these numbers, so a stale board makes them
 lie.
