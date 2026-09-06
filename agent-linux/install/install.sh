@@ -102,8 +102,21 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Bootstrapping curl with apt-get was rejected: an installer whose first act is to install a
 # package on a NAS is doing more than it was asked to, and the tool it wants is already there
 # under a different name.
+#
+# --binary together with --unit downloads nothing, so a machine with neither client is still
+# installable; the guard fires only when something is actually about to be fetched.
+
+# The guard lives INSIDE the two helpers, not at their call sites.
+#
+# It was at the call sites first, and --agent-url slipped past it: that path short-circuits
+# resolve_agent_url before its need_http, so a machine with neither client died with a generic
+# "download failed" instead of the message this whole section exists to print. Asking every
+# caller to remember a precondition is how that happens, and the next download path added would
+# have had the same coin flip. Here it cannot be missed, and the file's claim that no download
+# runs unchecked is true by construction rather than by review.
 
 http_get_stdout() {
+    need_http
     local url="$1"
     if have curl; then curl -fsSL -H 'User-Agent: FleetHub-Installer' "$url" 2>/dev/null
     else wget -qO- --header='User-Agent: FleetHub-Installer' "$url" 2>/dev/null
@@ -111,6 +124,7 @@ http_get_stdout() {
 }
 
 http_get_file() {
+    need_http
     local url="$1" dest="$2"
     if have curl; then curl -fsSL --retry 3 -o "$dest" "$url"
     else wget -q --tries=3 -O "$dest" "$url"
@@ -156,7 +170,6 @@ and install it with --binary."
 resolve_agent_url() {
     [ -n "$AGENT_URL" ] && { printf '%s' "$AGENT_URL"; return; }
 
-    need_http
     # Same shape as install.ps1's Get-LatestAgentAssetUrl: newest release whose tag carries the
     # agent prefix, then the asset matched by exact name. Parsed with grep rather than jq
     # because jq is not installed by default on a server image and this is the one place the
@@ -205,7 +218,6 @@ fetch_unit() {
         say "unit    <- $UNIT_SRC (local)"
         return
     fi
-    need_http
     http_get_file "$UNIT_URL" "$dest" || die "could not fetch the unit file: $UNIT_URL"
     grep -q '^\[Service\]' "$dest" || die "fetched unit file looks wrong: $UNIT_URL"
     say "unit    <- $UNIT_URL"
