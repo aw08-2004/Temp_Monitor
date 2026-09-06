@@ -57,6 +57,14 @@ FleetHub Linux agent installer
   curl -fsSL https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
+  # Debian minimal, OpenMediaVault and other images without curl:
+  wget -qO- https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh \
+    | sudo bash -s -- --secret 'THE-SECRET'
+
+  # If your account is not in sudoers (common on appliance distros), become root first:
+  su -
+  wget -qO- <same url> | bash -s -- --secret 'THE-SECRET'
+
 Options:
   --secret VALUE     The hub's AGENT_ENROLLMENT_SECRET: one shared value for the whole fleet,
                      from the hub's .env (install.ps1 prints it once when the hub is set up).
@@ -78,11 +86,52 @@ USAGE
 }
 
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but not installed"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------- http
+#
+# curl OR wget, whichever the machine has.
+#
+# **Do not collapse this back to curl.** Requiring curl was the first thing this installer got
+# wrong in the field: Debian's own minimal images -- and appliance distros built on them, like
+# OpenMediaVault -- ship wget and not curl. The failure is `curl: not found` from the FIRST half
+# of the pipeline, before a single line of this script has run, so the installer cannot even
+# report it. The person then sees a sudo password prompt from the second half of the pipe (both
+# sides of a pipeline start regardless) and reasonably concludes the install ran.
+#
+# Bootstrapping curl with apt-get was rejected: an installer whose first act is to install a
+# package on a NAS is doing more than it was asked to, and the tool it wants is already there
+# under a different name.
+
+http_get_stdout() {
+    local url="$1"
+    if have curl; then curl -fsSL -H 'User-Agent: FleetHub-Installer' "$url" 2>/dev/null
+    else wget -qO- --header='User-Agent: FleetHub-Installer' "$url" 2>/dev/null
+    fi
+}
+
+http_get_file() {
+    local url="$1" dest="$2"
+    if have curl; then curl -fsSL --retry 3 -o "$dest" "$url"
+    else wget -q --tries=3 -O "$dest" "$url"
+    fi
+}
+
+need_http() {
+    have curl || have wget || die "neither curl nor wget is installed. Install one first:
+    apt-get update && apt-get install -y curl        # Debian / Ubuntu / OpenMediaVault
+    dnf install -y curl                              # Fedora / RHEL
+  ...or build the agent yourself and install it with --binary, which needs neither."
+}
 
 # ---------------------------------------------------------------- preflight
 
 check_platform() {
-    [ "$(id -u)" -eq 0 ] || die "run this as root (pipe to \`sudo bash\`): it writes to /opt, /etc and systemd"
+    # `sudo` is named first because that is what most people will reach for, but an account
+    # that is not in sudoers is common on appliance distros (OpenMediaVault manages its users
+    # and does not make them admins), so `su -` is spelled out rather than assumed.
+    [ "$(id -u)" -eq 0 ] || die "run this as root: it writes to /opt, /etc and systemd.
+  Either pipe to \`sudo bash\`, or become root first with \`su -\` and drop the sudo."
     need systemctl
     need install
 
@@ -107,14 +156,14 @@ and install it with --binary."
 resolve_agent_url() {
     [ -n "$AGENT_URL" ] && { printf '%s' "$AGENT_URL"; return; }
 
-    need curl
+    need_http
     # Same shape as install.ps1's Get-LatestAgentAssetUrl: newest release whose tag carries the
     # agent prefix, then the asset matched by exact name. Parsed with grep rather than jq
     # because jq is not installed by default on a server image and this is the one place the
     # installer would otherwise need a package manager before it can do anything.
     local api json url
     api="https://api.github.com/repos/$REPO/releases"
-    json="$(curl -fsSL -H 'User-Agent: FleetHub-Installer' "$api" 2>/dev/null || true)"
+    json="$(http_get_stdout "$api" || true)"
     [ -n "$json" ] || die "could not reach the GitHub releases API. Use --agent-url, or --binary \
 with a locally built file."
 
@@ -140,7 +189,7 @@ fetch_binary() {
     fi
     url="$(resolve_agent_url)"
     say "binary  <- $url"
-    curl -fsSL --retry 3 -o "$dest" "$url" || die "download failed: $url"
+    http_get_file "$url" "$dest" || die "download failed: $url"
     # A proxy or a 404 page saved as the binary is the classic silent failure here: the file
     # exists, the installer says success, and systemd reports "Exec format error" much later.
     [ -s "$dest" ] || die "downloaded file is empty: $url"
@@ -156,8 +205,8 @@ fetch_unit() {
         say "unit    <- $UNIT_SRC (local)"
         return
     fi
-    need curl
-    curl -fsSL --retry 3 -o "$dest" "$UNIT_URL" || die "could not fetch the unit file: $UNIT_URL"
+    need_http
+    http_get_file "$UNIT_URL" "$dest" || die "could not fetch the unit file: $UNIT_URL"
     grep -q '^\[Service\]' "$dest" || die "fetched unit file looks wrong: $UNIT_URL"
     say "unit    <- $UNIT_URL"
 }
