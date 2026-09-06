@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.invites') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. The invite table, the group picker and the custom-group capability
+   checkboxes are all rendered by invites.js from the API -- the capability vocabulary in
+   particular comes from GET /api/permissions/capabilities, the same endpoint the
+   Permission Groups editor reads, so a new capability reaches both pages with one edit.
+
+   This page shares permissions.css rather than getting a stylesheet of its own: it is the
+   same table, the same chips and the same modal, and it is administered by the same person
+   holding the same capability.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('invites.heading') }}</h1>
+        <p class="stat-card__meta">
+            {{ t('invites.intro') }}
+        </p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-invite">{{ t('invites.new') }}</button>
+</div>
+
+<div class="card" id="invites-note" style="margin-bottom: var(--space-5);">
+    <p class="stat-card__meta">{{ t('invites.warning') }}</p>
+</div>
+
+<div id="invites-host"></div>
+
+<dialog class="modal" id="invite-modal">
+    <form method="dialog" id="invite-form">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('invites.editor.title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="invite-label">{{ t('invites.editor.label') }}</label>
+            <input class="input" id="invite-label" maxlength="80" autocomplete="off"
+                   placeholder="{{ t('invites.editor.label_placeholder') }}" style="width: 100%;">
+
+            <h3 class="perm-subhead">{{ t('invites.editor.grants') }}</h3>
+            {# The two halves of the answer to "what does this link give someone". Radio,
+               not both at once: an invite that both attached a group and built one would be
+               two grants an admin has to hold in their head at the moment they are least
+               able to check them. #}
+            <div class="perm-scope-modes">
+                <label class="checkbox"><input type="radio" name="grant-mode" value="existing" checked> {{ t('invites.editor.mode_existing') }}</label>
+                <label class="checkbox"><input type="radio" name="grant-mode" value="new"> {{ t('invites.editor.mode_new') }}</label>
+            </div>
+
+            <div id="existing-picker">
+                <div class="chip-list" id="group-chips"></div>
+                <div class="chip-add">
+                    <input class="input" id="group-input"
+                           placeholder="{{ t('invites.editor.group_placeholder') }}" autocomplete="off">
+                    <button class="btn" type="button" id="group-add">{{ t('invites.editor.add') }}</button>
+                </div>
+            </div>
+
+            <div id="new-group-editor" hidden>
+                <p class="setting__help">{{ t('invites.editor.new_group_help') }}</p>
+                <label class="setting__label" for="new-group-name" style="margin-top: var(--space-3);">{{ t('invites.editor.new_group_name') }}</label>
+                <input class="input" id="new-group-name" maxlength="80" autocomplete="off"
+                       placeholder="{{ t('invites.editor.new_group_name_placeholder') }}" style="width: 100%;">
+
+                <h3 class="perm-subhead">{{ t('permissions.editor.capabilities') }}</h3>
+                <div id="capability-list"></div>
+
+                <h3 class="perm-subhead">{{ t('permissions.editor.machines') }}</h3>
+                <div class="perm-scope-modes">
+                    <label class="checkbox"><input type="radio" name="scope-mode" value="list" checked> {{ t('permissions.editor.scope_list') }}</label>
+                    <label class="checkbox"><input type="radio" name="scope-mode" value="all"> {{ t('permissions.editor.scope_all') }}</label>
+                </div>
+                <div id="machine-picker">
+                    <div class="chip-list" id="machine-chips"></div>
+                    <div class="chip-add">
+                        <input class="input" id="machine-input"
+                               placeholder="{{ t('permissions.editor.machine_placeholder') }}" autocomplete="off">
+                        <button class="btn" type="button" id="machine-add">{{ t('permissions.editor.add') }}</button>
+                    </div>
+                </div>
+            </div>
+
+            <h3 class="perm-subhead">{{ t('invites.editor.limits') }}</h3>
+            <label class="setting__label" for="invite-uses">{{ t('invites.editor.max_uses') }}</label>
+            <input class="input" id="invite-uses" type="number" min="1" max="100" value="1" style="width: 8rem;">
+            <p class="setting__help">{{ t('invites.editor.max_uses_help') }}</p>
+
+            <label class="setting__label" for="invite-expiry" style="margin-top: var(--space-4);">{{ t('invites.editor.expiry') }}</label>
+            <select class="input" id="invite-expiry" style="width: 14rem;">
+                <option value="1">{{ t('invites.editor.expiry_1') }}</option>
+                <option value="7" selected>{{ t('invites.editor.expiry_7') }}</option>
+                <option value="30">{{ t('invites.editor.expiry_30') }}</option>
+                <option value="never">{{ t('invites.editor.expiry_never') }}</option>
+            </select>
+            <p class="setting__help">{{ t('invites.editor.expiry_help') }}</p>
+
+            <h3 class="perm-subhead">{{ t('invites.editor.pinned') }} <span class="setting__default">{{ t('common.optional') }}</span></h3>
+            <p class="setting__help">{{ t('invites.editor.pinned_help') }}</p>
+            <div class="chip-list" id="pinned-chips"></div>
+            <div class="chip-add">
+                <input class="input" id="pinned-input" type="email"
+                       placeholder="{{ t('invites.editor.pinned_placeholder') }}" autocomplete="off">
+                <button class="btn" type="button" id="pinned-add">{{ t('invites.editor.add') }}</button>
+            </div>
+
+            <p class="setting__error" id="invite-error"></p>
+        </div>
+        <div class="modal__foot">
+            <span class="autosave" id="invite-status"></span>
+            <button class="btn" type="button" id="invite-cancel">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="invite-save">{{ t('invites.editor.create') }}</button>
+        </div>
+    </form>
+</dialog>
+
+{# The link is shown exactly once, in its own dialog, because that is the truth: only the
+   hash is stored and no later read can produce it again. A copy button plus the text
+   selected on open, so the common case is one click. #}
+<dialog class="modal" id="link-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('invites.link.title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <p class="setting__help">{{ t('invites.link.once') }}</p>
+            <input class="input" id="link-value" readonly style="width: 100%; margin-top: var(--space-3);">
+        </div>
+        <div class="modal__foot">
+            <span class="autosave" id="link-status"></span>
+            <button class="btn btn--primary" type="button" id="link-copy">{{ t('invites.link.copy') }}</button>
+            <button class="btn" type="button" id="link-close">{{ t('common.close') }}</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+{# autocomplete.js comes from base.html #}
+<script src="{{ url_for('static', filename='js/invites.js') }}"></script>
+{% endblock %}

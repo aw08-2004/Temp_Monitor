@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('invite.title') }} - FleetHub</title>
+<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+{# Standalone rather than {% extends "base.html" %}, exactly like login.html: base.html
+   renders the sidebar and the signed-in user's chrome, and this page is seen by somebody
+   who by definition has no session yet. #}
+<meta name="robots" content="noindex, nofollow">
+<script>
+(function () {
+    try {
+        var saved = localStorage.getItem('tempmonitor:theme');
+        var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) { /* localStorage unavailable, default dark stays */ }
+})();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
+</head>
+<body class="login-body">
+    <div class="login-card">
+        <div class="login-card__brand">
+            <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
+            <h1>FleetHub</h1>
+        </div>
+
+        {% if error %}
+        {# A refused invite still renders a page rather than a bare 404: the invitee has to
+           know whether to ask for a new link or to have mistyped this one. Nothing about
+           the hub beyond this sentence appears here. #}
+        <p class="login-error">{{ error }}</p>
+        {% else %}
+        <p>{{ t('invite.heading', label=invite.label) }}</p>
+        <p class="invite-meta">{{ t('invite.from', email=invite.invited_by) }}</p>
+
+        {% if invite.group_names %}
+        {# Group NAMES only. The capability list and the machine scope are deliberately not
+           shown to somebody who is not signed in -- see invites_web.py. #}
+        <p class="invite-meta">{{ t('invite.grants') }}</p>
+        <ul class="invite-groups">
+            {% for name in invite.group_names %}
+            <li>{{ name }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+
+        <div class="login-providers">
+            {# Straight to /login rather than repeating the provider buttons. Which issuers
+               this hub offers is decided in exactly one place, and the invite code is
+               already in the session by the time this link is clicked -- it rides the
+               sign-in round trip in the signed cookie, never in a URL. #}
+            <a class="google-btn" href="{{ url_for('login') }}">{{ t('invite.accept') }}</a>
+        </div>
+        <p class="invite-meta">{{ t('invite.accept_hint') }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>

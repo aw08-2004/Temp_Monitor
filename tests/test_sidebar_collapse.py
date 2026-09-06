@@ -50,6 +50,7 @@ def _register_sidebar_stubs(app):
                      "remote_page", "settings_page", "permissions_page", "logout"):
         app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
     for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),
+                           ("invites", "invites_page"),
                            ("users", "users_page"), ("audit", "audit_page"),
                            ("bios", "firmware_page"), ("rules", "rules_page"),
                            ("patches", "patches_page"),

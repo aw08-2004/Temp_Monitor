@@ -129,6 +129,12 @@
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9.5 12l1.8 1.8L15 10"/></svg>
             <span class="sidebar__link-label">{{ t('nav.permission_groups') }}</span>
         </a>
+        {# Directly beneath Permission Groups, and gated on the same capability: an invite
+           hands out a group, so it is the same trust reached by a different door. #}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'invites.invites_page' else '' }}" data-nav-prefix="/invites" href="{{ url_for('invites.invites_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 7l10 6 10-6"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.invites') }}</span>
+        </a>
         {% endif %}
         {% if cap.MANAGE_USERS in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'users.users_page' else '' }}" data-nav-prefix="/users" href="{{ url_for('users.users_page') }}">
