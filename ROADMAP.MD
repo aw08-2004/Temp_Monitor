@@ -2798,11 +2798,28 @@ Neither is urgent enough to justify a hub push on this branch.
 
 1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0). The hub endpoint and
    sequencing exist; `onOutput` is already threaded through the executors.
-2. **Signed self-update.** The Ed25519 manifest verification ports one-to-one, but it needs its
-   own manifest, its own channel and a `release.sh` moving the two-file version pair. Until
-   then an upgrade is `install/install.sh` run again, and the trust root for a download is
-   GitHub plus TLS rather than the fleet's offline key — which is the reason to keep this to a
-   pilot machine. **Do not point this agent at the Windows manifest.**
+2. ~~**Signed self-update.**~~ Done — `agent-linux/agent.manifest.json` + `.sig`, verified
+   against the **same offline Ed25519 key as the Windows fleet**. One release trust root, two
+   manifests; `sign_release.py --manifest` signs this one with no change to that script. The
+   hub is deliberately not in the trust path, so a compromised hub still cannot put a binary on
+   a Linux machine. Three things worth keeping written down:
+
+   - **The check is weekly and only weekly.** The Windows agent is also nudged by `/api/report`
+     answering with `latest_version`; a 0.x reporter is told nothing, by the same design that
+     keeps it off the Windows manifest. A Linux fleet converges over a week, not fifteen
+     minutes.
+   - **Staging lives beside the binary, not under the state root.** `File.Move` is an atomic
+     `rename(2)` within one filesystem and a copy across two, and `/opt` and `/var` are
+     separate mounts on real installs — staging where the Windows agent stages would silently
+     turn the swap into a copy a full disk can interrupt half-written. This is the single most
+     likely thing to be "tidied" into the wrong place later.
+   - **The execute bit has to be set on the download.** A download is 0644, Windows has no
+     equivalent line, and without it systemd reports "Permission denied" for a binary that is
+     present, verified and correct.
+
+   No beta channel yet. The Windows agent picks between two manifests by a NAME the hub
+   supplies, which is what keeps the hub out of the trust root; building that before there is a
+   second Linux build to put on it would be machinery with nothing to carry.
 3. **Patch inventory** (`apt`/`dnf`) — #14's Linux half.
 4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
    Windows one.

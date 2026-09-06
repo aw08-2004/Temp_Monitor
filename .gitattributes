@@ -15,6 +15,15 @@ hub/client.manifest.json -text
 hub/client.manifest.json.sig -text
 hub/client.manifest.beta.json -text
 hub/client.manifest.beta.json.sig -text
+# The Linux agent's pair (roadmap #22), signed with the same offline key and pinned for exactly
+# the same reason -- and pinned BEFORE the first one is published, because the failure only
+# shows up after signing: a manifest whose line endings were rewritten between signing and
+# serving is byte-for-byte indistinguishable from a tampered one, so every Linux machine would
+# refuse every update with nothing in any log but a debug line. The risk here is higher than on
+# the Windows pair: these files are authored on a Windows workstation whose git has
+# core.autocrlf on, which is precisely the setting this overrides.
+agent-linux/agent.manifest.json -text
+agent-linux/agent.manifest.json.sig -text
 
 # The Linux agent's shell script and systemd unit must reach a Linux box with LF endings.
 # A .sh checked out with CRLF fails as `bad interpreter: /usr/bin/env bash^M`, which reads

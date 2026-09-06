@@ -38,6 +38,13 @@
          /var/log would be one more thing to keep from filling a disk. The output template
          matches the Windows agent's so a line reads the same in either place. -->
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <!-- Ed25519 for self-update manifest verification. .NET still has no Ed25519 in
+         System.Security.Cryptography, and this is the same package and the same version the
+         Windows agent uses, which matters more than usual here: both agents verify manifests
+         signed by one offline key, so they must agree byte for byte on what a valid signature
+         is. Two implementations that disagreed would mean a release that installs on one fleet
+         and is silently refused by the other. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using FleetHubAgent.Fleet;
 using FleetHubAgent.State;
 using FleetHubAgent.Telemetry;
+using FleetHubAgent.Update;
 
 namespace FleetHubAgent;
 
@@ -37,6 +38,7 @@ public sealed class Worker : BackgroundService
     private readonly TelemetryReporter _reporter;
     private readonly FleetClient _fleet;
     private readonly CommandDispatcher _dispatcher;
+    private readonly SelfUpdater _updater;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -60,7 +62,8 @@ public sealed class Worker : BackgroundService
 
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
-        TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher)
+        TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
+        SelfUpdater updater)
     {
         _log = log;
         _state = state;
@@ -68,6 +71,7 @@ public sealed class Worker : BackgroundService
         _reporter = reporter;
         _fleet = fleet;
         _dispatcher = dispatcher;
+        _updater = updater;
         _enrollmentSecret = ReadEnrollmentSecret(log);
     }
 
@@ -78,6 +82,14 @@ public sealed class Worker : BackgroundService
         _log.LogInformation("FleetHub Linux agent v{Version} - machine: {Machine} - hub: {Hub}",
             AgentConfig.Version, AgentConfig.MachineName, AgentConfig.HubBase);
 
+        // The boot-time update check stays in FRONT of the loops. Applying an update exits the
+        // process, and there is no point starting three loops only to tear them down again --
+        // and more importantly, a machine that has been off for a month should come back on the
+        // current build before it starts reporting, not a week later when the weekly timer
+        // first fires.
+        _updater.ReconcileAfterBoot();
+        if (await _updater.CheckAndApplyAsync(stoppingToken)) { Restart(); return; }
+
         // Task.Run, not a bare call: each loop must get its own thread-pool context so a
         // synchronous stretch inside one (a hwmon walk across a dozen chips, a DriveInfo stat
         // against a hung NFS mount) runs on that loop's thread and nowhere near the others.
@@ -86,6 +98,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => TelemetryLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => HeartbeatLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait on
@@ -112,7 +125,7 @@ public sealed class Worker : BackgroundService
                 var snapshot = _sensors.Read();
                 if (snapshot.CpuTemp is double temp)
                 {
-                    await _reporter.ReportAsync(
+                    var result = await _reporter.ReportAsync(
                         temp,
                         includeSensors ? snapshot.Sensors : null,
                         includeUptime ? UptimeSeconds() : null,
@@ -120,6 +133,10 @@ public sealed class Worker : BackgroundService
 
                     if (includeSensors) lastSensor = now;
                     if (includeUptime) lastUptime = now;
+
+                    // Proof that an updated build can do its job, not merely start -- see
+                    // SelfUpdater.ConfirmRunningBuild. Free after the first success.
+                    if (result.Sent) _updater.ConfirmRunningBuild();
                 }
                 else if (!_noTempLogged)
                 {
@@ -173,8 +190,12 @@ public sealed class Worker : BackgroundService
         {
             try
             {
-                if (await EnsureEnrolledAsync(ct))
-                    await _fleet.HeartbeatAsync(ct);
+                // The heartbeat confirms an update too, and must: a machine with no thermal
+                // sensor never reports at all (see the telemetry loop), so gating confirmation
+                // on /api/report alone would leave every VM holding its previous binary
+                // forever while being perfectly healthy.
+                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct))
+                    _updater.ConfirmRunningBuild();
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Heartbeat tick failed"); }
@@ -276,6 +297,41 @@ public sealed class Worker : BackgroundService
         {
             _running.TryRemove(cmd.Id, out _);
         }
+    }
+
+    // ------------------------------------------------------------------ updates
+
+    /// <summary>The weekly signed-update check.
+    ///
+    /// Its own loop for the same reason every other one is: a 30-second manifest fetch against
+    /// a slow GitHub must not sit in front of a command poll. It sleeps FIRST, because the boot
+    /// path above has already checked -- starting with another check would make a service that
+    /// restarts often (a machine being worked on) hammer the manifest.</summary>
+    private async Task UpdateLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            if (!await DelayAsync(AgentConfig.UpdateIntervalSeconds, ct)) break;
+            try
+            {
+                if (await _updater.CheckAndApplyAsync(ct)) { Restart(); return; }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { _log.LogWarning(e, "Update check failed"); }
+        }
+    }
+
+    /// <summary>Leave, so systemd brings us back on the swapped binary.
+    ///
+    /// Environment.Exit rather than stopping the host gracefully: the binary this process is
+    /// running has already been renamed aside, and every loop still running is doing work
+    /// attributable to a version that is no longer installed. The unit is Restart=always with
+    /// RestartSec=10, so the machine is back within ten seconds.</summary>
+    private void Restart()
+    {
+        _log.LogInformation("Exiting {Code} to restart onto the updated binary",
+            AgentConfig.RestartExitCode);
+        Environment.Exit(AgentConfig.RestartExitCode);
     }
 
     // ------------------------------------------------------------------ enrollment

@@ -7,6 +7,7 @@ using FleetHubAgent.Fleet;
 using FleetHubAgent.Fleet.Executors;
 using FleetHubAgent.State;
 using FleetHubAgent.Telemetry;
+using FleetHubAgent.Update;
 
 // Composition root, and nothing else -- the same rule the hub's app.py follows.
 //
@@ -55,6 +56,10 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+
+    // Signed self-update. The trust root is an Ed25519 key held offline, not the hub -- see
+    // SelfUpdater and AgentConfig.UpdatePublicKeyHex.
+    builder.Services.AddSingleton<SelfUpdater>();
 
     builder.Services.AddHostedService<Worker>();
 

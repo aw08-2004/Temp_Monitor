@@ -22,7 +22,7 @@ namespace FleetHubAgent.State;
 /// agent that will not run reports nothing at all, which is worse than one running with
 /// permissions someone has to be told about.
 /// </summary>
-internal static class StateDirectory
+public static class StateDirectory
 {
     // rwx------ : only the user the service runs as (root) may even list the directory.
     private const UnixFileMode DirMode =
@@ -34,7 +34,7 @@ internal static class StateDirectory
 
     /// <summary>Create the directory if absent and force its mode either way. Returns a note
     /// for the log when something could not be applied, or null when all was well.</summary>
-    internal static string? Ensure(string path)
+    public static string? Ensure(string path)
     {
         try
         {
@@ -52,6 +52,15 @@ internal static class StateDirectory
                    "The enrollment token in it may be readable by other local users.";
         }
     }
+
+    /// <summary>Create a directory readable only by root, or force an existing one down to it.
+    ///
+    /// Used for the self-update staging directory, which is not state and does not live under
+    /// the state root (see SelfUpdater.StagingDir) but needs exactly the same protection for a
+    /// sharper reason: every path through it ends at "systemd runs these bytes as root", so a
+    /// directory another local user could write into is a privilege-escalation primitive
+    /// rather than a cache.</summary>
+    public static void EnsurePrivateDir(string path) => Ensure(path);
 
     /// <summary>Force 0600 on a state file. Called after every write, not just the first --
     /// see the class note.</summary>

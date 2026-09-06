@@ -30,6 +30,28 @@ public sealed class AgentIdentity
     public string BearerValue => $"{AgentId}:{Token}";
 }
 
+/// <summary>Self-update loop guard (restart_state.json): how many times we have chained a
+/// restart toward a given target version, so a bad update cannot loop forever.
+///
+/// Persisted rather than held in memory for the obvious reason -- the process it is guarding
+/// against is one that exits -- and counted per TARGET rather than globally, so a genuinely
+/// bad build burns its three attempts without spending the budget of the release that fixes
+/// it.</summary>
+public sealed class RestartState
+{
+    [JsonPropertyName("target")] public string Target { get; set; } = "";
+    [JsonPropertyName("count")] public int Count { get; set; }
+}
+
+/// <summary>The signed self-update manifest (agent.manifest.json). Deserialized only AFTER its
+/// signature has been verified over the raw bytes -- see SelfUpdater.</summary>
+public sealed class UpdateManifest
+{
+    [JsonPropertyName("version")] public string Version { get; set; } = "";
+    [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+    [JsonPropertyName("url")] public string Url { get; set; } = "";
+}
+
 /// <summary>A command as delivered by GET /api/agent/commands.</summary>
 public sealed class FleetCommand
 {

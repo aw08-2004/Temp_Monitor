@@ -130,12 +130,71 @@ public static class AgentConfig
 
     public const int OfflineBufferMax = 1000;
 
+    /// <summary>How often to check for a signed update. Weekly, matching the Windows agent.
+    ///
+    /// The Windows agent also gets an out-of-band nudge: /api/report answers it with
+    /// `latest_version`, and it checks immediately on seeing a number ahead of its own. This
+    /// agent gets no such hint and must not -- it reports a 0.x version, so the hub
+    /// deliberately tells it nothing (see Version). A weekly poll is therefore the ONLY thing
+    /// that moves a Linux machine onto a new build, which is worth knowing when timing a
+    /// release: the fleet converges over a week, not over fifteen minutes.</summary>
+    public const int UpdateIntervalSeconds = 7 * 24 * 60 * 60;
+
+    /// <summary>How many times an update may chain-restart toward one target before the agent
+    /// stops trying it. Three, as on Windows. This is what stops a build that starts, updates,
+    /// crashes and starts again from burning a machine in a loop.</summary>
+    public const int MaxChainRestarts = 3;
+
+    /// <summary>Exit code used when leaving to come back on a freshly swapped binary.
+    ///
+    /// Nothing keys on the value: the unit is Restart=always, so any exit brings the agent
+    /// back. It is distinct so the journal distinguishes a deliberate update restart from a
+    /// crash -- systemd logs the code, and "exited with status 17" beside the updater's own
+    /// line is the difference between reading that as planned or as a fault.</summary>
+    public const int RestartExitCode = 17;
+
     /// <summary>Bound concurrent command execution so a queued pile of scripts cannot
     /// exhaust the box.</summary>
     public const int MaxConcurrentCommands = 4;
 
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;
+
+    // --- Update trust root -------------------------------------------------
+
+    /// <summary>Ed25519 public key that verifies the signed self-update manifest.
+    ///
+    /// **The same key the Windows fleet uses**, and that is the point rather than a shortcut:
+    /// it is the release trust root for this whole product, held offline, and a second key
+    /// would be a second thing to protect and a second way for a fleet to end up trusting
+    /// something nobody meant it to. One key, two manifests -- see sign_release.py, whose
+    /// --manifest flag is what lets it sign this one with no change to it.</summary>
+    public const string UpdatePublicKeyHex =
+        "9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c";
+
+    /// <summary>The signed manifest, and its detached signature, read from `main`.
+    ///
+    /// Read from the BRANCH rather than from a release, exactly as the Windows agent does, and
+    /// for the same reason: this is the one URL that must keep working for a fleet to be
+    /// reachable at all, so it points at something that cannot be retagged, deleted or
+    /// unpublished. The binary it names does live in a release; the manifest that authorises
+    /// that binary does not.
+    ///
+    /// There is no beta channel here yet. The Windows agent picks between two manifests by a
+    /// NAME the hub supplies, which keeps the hub out of the trust root; adding that before
+    /// there is a second Linux build to put on it would be machinery with nothing to carry.
+    ///
+    /// Overridable via env (mirroring HubBase) so the update path can be exercised against a
+    /// local server instead of raw.githubusercontent.com.</summary>
+    public static string UpdateManifestUrl =>
+        Env("UPDATE_MANIFEST_URL")
+        ?? "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/agent.manifest.json";
+
+    public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
+
+    /// <summary>Honours FLEETHUB_NO_UPDATE=1, for a machine that must stay on a known build
+    /// while something is being diagnosed on it.</summary>
+    public static bool UpdatesDisabled => Env("NO_UPDATE") == "1";
 
     // --- State paths -------------------------------------------------------
     // /var/lib/fleethub/agent, not /etc and not /opt: this is variable state the agent
@@ -162,6 +221,11 @@ public static class AgentConfig
     internal const string StateDirOverrideVar = "FLEETHUB_STATE_DIR_FOR_TESTS";
 
     public static string AgentIdentityPath => Path.Combine(StateDir, "agent.json");
+
+    /// <summary>The self-update restart guard. State, so it lives with agent.json under
+    /// /var/lib -- unlike the update STAGING directory, which must sit beside the executable
+    /// for the swap to be atomic. See SelfUpdater.StagingDir.</summary>
+    public static string RestartStatePath => Path.Combine(StateDir, "restart_state.json");
 
     /// <summary>Where the installer drops the shared enrollment secret, when it is not
     /// supplied through the unit's EnvironmentFile instead.

@@ -60,8 +60,51 @@ on.
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script` |
 
-Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's
-six exist: in a serial loop the slowest step sets the latency of every other one.
+Four concurrent loops — telemetry, heartbeat, commands, updates — for the reason the Windows
+agent's six exist: in a serial loop the slowest step sets the latency of every other one.
+
+## Self-update
+
+Signed, and verified against an **Ed25519 key held offline — the same key the Windows fleet
+uses.** One release trust root for the product, two manifests. The hub is deliberately not part
+of it: a compromised hub, or anyone able to answer for `raw.githubusercontent.com`, still cannot
+put a binary on a Linux machine.
+
+The sequence is the Windows agent's, in the order that matters:
+
+1. Fetch `agent-linux/agent.manifest.json` and its detached `.sig` from **`main`** — a branch,
+   not a release, because this is the one URL that must keep working for a fleet to be
+   reachable, and a branch cannot be retagged or unpublished.
+2. Verify the signature over the raw bytes **before parsing them**. Parsing first would mean
+   deserializing attacker-controlled JSON to decide whether to trust it.
+3. Only if strictly newer — never equal. A republished version number must do nothing.
+4. Download, check sha256 against the **signed** value, write, then **re-read from disk and
+   hash again**, because what gets installed is the file, not the bytes just checked.
+5. `chmod 0700`, rename the running binary to `.old`, rename the new one into place, exit 17.
+   systemd (`Restart=always`) brings it back within ten seconds.
+6. The `.old` binary **survives the reboot** and is deleted only once the new build has reached
+   the hub — a report or a heartbeat the hub accepted. "It started" is not "it works", and the
+   gap between them is where a fleet-wide brick lives.
+
+Bounded by a per-target restart guard (`restart_state.json`, three attempts), so a bad build
+burns its own budget without spending the budget of the release that fixes it. `FLEETHUB_NO_UPDATE=1`
+pins a machine to its current build.
+
+**The check is weekly, and only weekly.** The Windows agent also gets nudged by `/api/report`
+answering with `latest_version`; this agent reports a 0.x version, so the hub deliberately tells
+it nothing (see the version table above). A Linux fleet therefore converges over a week, not
+over fifteen minutes — worth knowing when timing a release.
+
+Two Linux-specific traps the Windows code has no equivalent for, both of which brick a machine
+if the port is done blindly:
+
+- **Staging shares a filesystem with the binary** (`/opt/fleethub/agent/.update`, not the state
+  root). `File.Move` is an atomic `rename(2)` within one filesystem and a *copy* across two —
+  and `/opt` and `/var` are separate mounts on plenty of real installs. A copy interrupted by a
+  full disk leaves a partial binary where the agent used to be.
+- **The execute bit must be set.** A download is `0644`. Windows has no such concept, so the
+  Windows updater has no equivalent line; omit it and systemd reports "Permission denied" for a
+  binary that is present, correct and verified.
 
 ## What it does not do
 
@@ -71,15 +114,11 @@ above). In rough order of what would be worth doing next:
 1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0) — the endpoint and the
    sequencing already exist on the hub; `onOutput` is threaded through the executors ready for
    it.
-2. **Signed self-update.** The Windows agent's Ed25519 manifest verification ports one-to-one,
-   but it needs its own manifest, its own channel and a `release.sh` that moves the two-file
-   version pair. Until that exists, an upgrade is `install/install.sh` run again. **Do not point
-   this agent at the Windows manifest.**
-3. **Patch inventory** (`apt`/`dnf` — roadmap #14's Linux half).
-4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
+2. **Patch inventory** (`apt`/`dnf` — roadmap #14's Linux half).
+3. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
    one.
-5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
-6. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
+4. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
+5. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
 Two things need a **hub** change and are recorded in `ROADMAP.MD` #22 rather than worked around
 here:
@@ -205,10 +244,23 @@ already carries 50+ releases and Windows agent releases are frequent while Linux
 rare, so the newest `linux-agent-v*` sinks down the list — past a page boundary it would be
 reported as "no published release" for a release that plainly exists.
 
-Unlike the Windows agent there is **no signed manifest and no self-update**, so this release is
-only ever read by `install.sh` over HTTPS — the trust root is GitHub plus TLS, not the fleet's
-Ed25519 key. That is the main reason not to widen this beyond a pilot machine yet; see
-*What it does not do* above.
+Then sign the manifest so deployed agents pick it up. `sign_release.py` already takes a
+`--manifest` path, so it signs this one with no change to it — same offline key as the Windows
+agent:
+
+```bash
+python sign_release.py --sign-agent   --file agent-linux/dist/fleethub-agent   --manifest agent-linux/agent.manifest.json   --agent-version 0.2.0   --agent-url https://github.com/aw08-2004/Temp_Monitor/releases/download/linux-agent-v0.2.0/fleethub-agent
+```
+
+Commit `agent-linux/agent.manifest.json` **and** its `.sig` to `main` — the agent reads them
+from the branch. `.gitattributes` pins both with `-text`; never let a tool rewrite their line
+endings, because a signature covers exact bytes and a rewritten file is indistinguishable from
+a tampered one. The fleet would then refuse every update with nothing in any log but a debug
+line.
+
+Note the ordering that follows from all this: **upload the release asset before committing the
+manifest.** The manifest names a URL, and an agent that reads it in between gets a verified
+manifest pointing at a 404.
 
 ## Running as root
 

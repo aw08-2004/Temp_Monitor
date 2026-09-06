@@ -27,6 +27,23 @@ Documentation=https://github.com/aw08-2004/Temp_Monitor/blob/main/agent-linux/RE
 After=network-online.target
 Wants=network-online.target
 
+# Never give up on this unit, however often it restarts.
+#
+# **This belongs in [Unit], not [Service].** systemd moved StartLimitIntervalSec and
+# StartLimitBurst here in v230; left in [Service] they are parsed as an unknown key, logged as a
+# warning nobody reads, and SILENTLY IGNORED -- so the unit keeps the default limiter while the
+# comment beside it claims otherwise. That is exactly the kind of protection that is discovered
+# to be absent on the day it was needed.
+#
+# 0 disables the limiter. A limiter that gives up permanently turns a transient fault -- a full
+# disk at boot, a clock too far off for TLS -- into a machine that is gone from the console
+# until somebody visits it in person. It matters more now that the agent restarts ITSELF to
+# apply an update: what bounds a bad update is the restart-count guard in the agent's own state
+# (see SelfUpdater and MaxChainRestarts), which stops retrying one target after three attempts
+# while leaving the service running. That is a real bound, held by something that can tell the
+# difference between a bad build and a bad night; systemd's start limiter cannot.
+StartLimitIntervalSec=0
+
 [Service]
 Type=notify
 # The agent calls AddSystemd(), so it tells systemd when the host has actually started rather
@@ -44,13 +61,13 @@ EnvironmentFile=-/etc/fleethub/agent.env
 # Always come back, and keep coming back. This is the Linux half of the Windows installer's
 # `sc failure ... restart`, and it matters for the same reason: a fleet agent that stays down
 # after one bad night is a machine nobody can reach, and nobody notices until they need it.
+#
+# It is also how a self-update completes: the agent swaps its own binary and exits 17, and this
+# is what brings it back on the new one. Nothing keys on the code -- `always` restarts whatever
+# the exit status -- but the journal shows it, which is what distinguishes a planned update
+# restart from a crash. See SelfUpdater.
 Restart=always
 RestartSec=10
-# ...but not in a tight loop forever if something is genuinely broken. StartLimitIntervalSec=0
-# disables the rate limiter entirely, deliberately: a limiter that gives up permanently turns a
-# transient fault (a full disk at boot, a clock too far off for TLS) into a machine that is
-# gone from the console until someone visits it in person.
-StartLimitIntervalSec=0
 
 # Where agent.json lives. StateDirectory= makes systemd create and own it, which means the
 # agent's own StateDirectory.Ensure is a belt-and-braces re-check rather than the only thing

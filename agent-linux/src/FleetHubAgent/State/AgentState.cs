@@ -41,6 +41,36 @@ public sealed class AgentState
         StateDirectory.RestrictFile(AgentConfig.AgentIdentityPath);
     }
 
+    // --- Self-update restart guard -----------------------------------------
+
+    public RestartState? LoadRestartState()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.RestartStatePath))
+                return JsonSerializer.Deserialize<RestartState>(
+                    File.ReadAllText(AgentConfig.RestartStatePath));
+        }
+        catch { /* a corrupt guard reads as no guard; see the class note */ }
+        return null;
+    }
+
+    public void SaveRestartState(RestartState state)
+    {
+        EnsureStateDir();
+        AtomicWrite(AgentConfig.RestartStatePath, JsonSerializer.Serialize(state, JsonOpts));
+    }
+
+    public void ClearRestartState()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.RestartStatePath))
+                File.Delete(AgentConfig.RestartStatePath);
+        }
+        catch { /* ignore -- a stale guard costs one skipped update, not correctness */ }
+    }
+
     /// <summary>Write via a temp file and rename.
     ///
     /// **The identity file is the one thing on this machine that cannot be regenerated.** The
