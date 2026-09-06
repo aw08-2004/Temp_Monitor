@@ -34,8 +34,10 @@ Usage: sudo ./agent-install.sh --binary PATH [--secret SECRET] [--hub URL]
 
   --binary PATH   The published fleethub-agent executable. Build it with:
                     dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
-  --secret VALUE  One-time enrollment secret from the hub (Settings -> Fleet). Without it the
-                  agent still reports telemetry but cannot receive commands.
+  --secret VALUE  The hub's AGENT_ENROLLMENT_SECRET -- the same value for every machine in the
+                  fleet. It lives in the hub's .env (install.ps1 prints it once, when the hub
+                  is installed); it is NOT shown anywhere in the console. Without it the agent
+                  still reports telemetry but cannot receive commands, and says so in its log.
   --hub URL       Override the compiled-in hub base URL. For testing against a local hub.
 USAGE
 }

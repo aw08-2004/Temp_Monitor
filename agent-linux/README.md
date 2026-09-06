@@ -56,7 +56,7 @@ on.
 |---|---|
 | **Telemetry** | CPU temperature, CPU load and clock, memory, per-volume disk usage — from `/sys/class/hwmon`, `/sys/class/thermal`, `/proc/stat`, `/proc/cpuinfo`, `/proc/meminfo`. Flattened into the sensor shape the hub's `extract_diagnostics` already reads, so the machine page populates with no hub change |
 | **Identity** | DMI (`/sys/class/dmi/id`) for serial, model, manufacturer, asset tag; `/etc/os-release` for the OS caption; kernel release as `os_build` |
-| **Enrollment** | One-time secret from `/etc/fleethub/agent.secret` (0600, permissions *checked*) or `$AGENT_ENROLLMENT_SECRET` |
+| **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from `/etc/fleethub/agent.secret` (0600, permissions *checked*, not assumed) or the env var of the same name |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script` |
 
