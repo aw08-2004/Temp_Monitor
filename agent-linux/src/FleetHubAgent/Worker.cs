@@ -315,7 +315,7 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    /// <summary>The one-time enrollment secret: the environment first, then the file.
+    /// <summary>The shared enrollment secret: the environment first, then the file.
     ///
     /// The env var comes first to match the Windows agent's order, and because it is what a
     /// systemd EnvironmentFile= or a container's `-e` supplies -- an explicitly injected value

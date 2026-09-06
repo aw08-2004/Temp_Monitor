@@ -56,7 +56,7 @@ on.
 |---|---|
 | **Telemetry** | CPU temperature, CPU load and clock, memory, per-volume disk usage — from `/sys/class/hwmon`, `/sys/class/thermal`, `/proc/stat`, `/proc/cpuinfo`, `/proc/meminfo`. Flattened into the sensor shape the hub's `extract_diagnostics` already reads, so the machine page populates with no hub change |
 | **Identity** | DMI (`/sys/class/dmi/id`) for serial, model, manufacturer, asset tag; `/etc/os-release` for the OS caption; kernel release as `os_build` |
-| **Enrollment** | One-time secret from `/etc/fleethub/agent.secret` (0600, permissions *checked*) or `$AGENT_ENROLLMENT_SECRET` |
+| **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from `/etc/fleethub/agent.secret` (0600, permissions *checked*, not assumed) or the env var of the same name |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script` |
 
@@ -73,7 +73,7 @@ above). In rough order of what would be worth doing next:
    it.
 2. **Signed self-update.** The Windows agent's Ed25519 manifest verification ports one-to-one,
    but it needs its own manifest, its own channel and a `release.sh` that moves the two-file
-   version pair. Until that exists, an upgrade is `agent-install.sh` run again. **Do not point
+   version pair. Until that exists, an upgrade is `install/install.sh` run again. **Do not point
    this agent at the Windows manifest.**
 3. **Patch inventory** (`apt`/`dnf` — roadmap #14's Linux half).
 4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
@@ -102,7 +102,7 @@ src/FleetHubAgent/        the agent
   State/                  agent.json, and keeping it root-only
 tests/FleetHubAgent.Tests/  xunit; everything under test is pure
 packaging/                the systemd unit
-install/agent-install.sh  copy binary, drop unit, write secret
+install/install.sh        the web installer (curl | sudo bash)
 ```
 
 Class-suffix conventions carry over from `agent/`: `*Executor.cs` implements `ICommandExecutor`
@@ -120,15 +120,95 @@ The publish cross-compiles from Windows; the RID is pinned in the csproj so a ba
 publish` produces the real artifact (~72 MB, self-contained, single file). The test project
 clears that RID so tests run on the workstation.
 
-Install on a target machine:
-
-```bash
-sudo ./agent-install.sh --binary ./fleethub-agent --secret 'xxxx'
-journalctl -u fleethub-agent -f
-```
-
 The agent logs to stdout only — systemd journals, rotates and expires it. The Windows agent's
 rolling file log exists because Windows has nowhere to put a service's stdout.
+
+## Installing
+
+The Linux counterpart of `irm .../install.ps1 | iex`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
+```
+
+`curl` or `wget`, whichever the box has — Debian's minimal images and appliance distros built
+on them (OpenMediaVault, for one) ship `wget` and no `curl`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
+```
+
+If the account is not in sudoers — also common on appliance distros, which manage their own
+users and do not make them admins — become root first and drop the `sudo`:
+
+```bash
+su -
+wget -qO- <same url> | bash -s -- --secret 'THE-SECRET'
+```
+
+Note that both halves of a pipeline start regardless, so if the fetch fails you still get a
+`sudo` password prompt from the right-hand side. That prompt is not evidence the install ran.
+
+`--secret` is the hub's **`AGENT_ENROLLMENT_SECRET`** — one shared value for the whole fleet,
+from the hub's `.env`, printed once by `install.ps1` when the hub was set up. It is not shown
+anywhere in the console. Without it the machine installs cleanly, comes up online, charts and
+reports its inventory — and never accepts a command. That state is easy to miss, so the
+installer names it again as the last thing it prints.
+
+An argument is visible in `ps` while the installer runs, so for anything but a one-off prefer:
+
+```bash
+curl -fsSL .../install.sh | sudo AGENT_ENROLLMENT_SECRET='THE-SECRET' bash
+# or
+curl -fsSL .../install.sh | sudo bash -s -- --secret-file /root/.fleethub-secret
+```
+
+The installer reads **either** `AGENT_ENROLLMENT_SECRET` (the name the hub's `.env`, the Windows
+agent and this agent's own runtime all use) or `FLEETHUB_ENROLLMENT_SECRET`. Both work, so
+whichever one you already have exported is the right one — passing an env var the installer did
+not read would otherwise be indistinguishable from passing none, and would leave a machine that
+installs cleanly and silently takes no commands.
+
+Other options: `--hub URL` to override the compiled-in hub, `--agent-url URL` for an internal
+mirror (or when a lot of machines behind one NAT would hit GitHub's 60/hour unauthenticated API
+limit), `--binary PATH` to install a locally built file with no download at all, `--unit PATH`
+for a local checkout's unit file, and `--uninstall`.
+
+It resolves the binary exactly as `install.ps1` does — newest GitHub release tagged
+`linux-agent-v*`, asset named `fleethub-agent` — checks the architecture before it stops
+anything, downloads before it stops the running agent, verifies the download is really an ELF
+binary rather than a proxy's error page, and confirms `systemctl is-active` afterwards rather
+than trusting `enable --now`'s exit code.
+
+### Releases
+
+`linux-agent-v0.1.0` is published, so the one-liner above resolves. Installing without any
+release at all — a local build, or an air-gapped machine — stays supported:
+
+```bash
+dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
+scp dist/fleethub-agent user@target:/tmp/
+ssh user@target 'curl -fsSL .../install.sh | sudo bash -s -- --binary /tmp/fleethub-agent --secret "..."'
+```
+
+To cut the next one — the tag prefix and the asset name are what `install.sh` matches on, so
+both must be exact:
+
+```bash
+dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
+gh release create linux-agent-v0.2.0 dist/fleethub-agent \
+  --title "Linux agent v0.2.0" --notes "..."
+```
+
+The installer reads the releases list with `per_page=100` rather than the default 30. This repo
+already carries 50+ releases and Windows agent releases are frequent while Linux ones will be
+rare, so the newest `linux-agent-v*` sinks down the list — past a page boundary it would be
+reported as "no published release" for a release that plainly exists.
+
+Unlike the Windows agent there is **no signed manifest and no self-update**, so this release is
+only ever read by `install.sh` over HTTPS — the trust root is GitHub plus TLS, not the fleet's
+Ed25519 key. That is the main reason not to widen this beyond a pilot machine yet; see
+*What it does not do* above.
 
 ## Running as root
 

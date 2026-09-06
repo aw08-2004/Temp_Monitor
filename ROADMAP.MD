@@ -2719,6 +2719,16 @@ A Linux counterpart to the Windows agent, in `agent-linux/`. Started 2026-09-05 
 telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`.
 Full detail in `agent-linux/README.md`.
 
+Installed the same way Windows machines are — `curl -fsSL .../agent-linux/install/install.sh |
+sudo bash -s -- --secret '…'` — and `install.sh` resolves its binary exactly as `install.ps1`
+does, from the newest GitHub release matching a tag prefix (`linux-agent-v*`, asset
+`fleethub-agent`), with one deliberate divergence: it asks for `per_page=100` rather than
+reading the default first page. `install.ps1` gets away with the default because `agent-v*` is
+the FREQUENT release and is always near the top; the newest `linux-agent-v*` sinks instead, and
+past a page boundary the installer would report "no published release" for one that exists.
+`linux-agent-v0.1.0` is published; `--binary` still installs a local build with no release at
+all.
+
 **No hub change was required**, and that is the design rather than a coincidence. The agent
 speaks the existing wire protocol exactly — `/api/report`, `/api/agent/enroll`, heartbeat, the
 command channel — and emits the sensor identifiers `extract_diagnostics` already reads
@@ -2790,8 +2800,9 @@ Neither is urgent enough to justify a hub push on this branch.
    sequencing exist; `onOutput` is already threaded through the executors.
 2. **Signed self-update.** The Ed25519 manifest verification ports one-to-one, but it needs its
    own manifest, its own channel and a `release.sh` moving the two-file version pair. Until
-   then an upgrade is `agent-install.sh` run again. **Do not point this agent at the Windows
-   manifest.**
+   then an upgrade is `install/install.sh` run again, and the trust root for a download is
+   GitHub plus TLS rather than the fleet's offline key — which is the reason to keep this to a
+   pilot machine. **Do not point this agent at the Windows manifest.**
 3. **Patch inventory** (`apt`/`dnf`) — #14's Linux half.
 4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
    Windows one.
