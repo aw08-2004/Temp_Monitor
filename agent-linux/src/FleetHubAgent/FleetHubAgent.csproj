@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FleetHubAgent</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <OutputType>Exe</OutputType>
+    <AssemblyName>fleethub-agent</AssemblyName>
+
+    <!-- Release/publish defaults mirror the Windows agent's: self-contained single-file so
+         a managed box needs no .NET runtime installed. linux-x64 only for now, because every
+         Linux machine in this fleet is x64 and shipping an arm64 build we cannot test on real
+         hardware would be a release nobody has run. Override on the CLI (-r linux-arm64) once
+         there is a box to try it on. -->
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Keep in sync with AgentConfig.Version. Same two-file pair as the Windows agent, and it
+         will get the same treatment: a release script that moves both, never a hand edit.
+         0.x is deliberate and load-bearing; the reasoning is on AgentConfig.Version, and
+         VersionGateTests is what enforces it. -->
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
+    <!-- Type=notify plus systemd's own lifecycle; the counterpart of AddWindowsService. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.6" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
+    <!-- Console only, unlike the Windows agent's rolling file sink. Windows has nowhere to put
+         a service's stdout, so that agent had to grow its own log file and its own rotation;
+         systemd already journals stdout, rotates it and expires it, and a second copy under
+         /var/log would be one more thing to keep from filling a disk. The output template
+         matches the Windows agent's so a line reads the same in either place. -->
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FleetHubAgent.Tests" />
+  </ItemGroup>
+
+</Project>

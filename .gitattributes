@@ -15,3 +15,12 @@ hub/client.manifest.json -text
 hub/client.manifest.json.sig -text
 hub/client.manifest.beta.json -text
 hub/client.manifest.beta.json.sig -text
+
+# The Linux agent's shell script and systemd unit must reach a Linux box with LF endings.
+# A .sh checked out with CRLF fails as `bad interpreter: /usr/bin/env bash^M`, which reads
+# like a missing interpreter rather than a line-ending problem; a unit file with CRLF is
+# accepted by systemd and then silently carries the ^M into every value it parses.
+# Pinned rather than left to core.autocrlf, because the machine that checks this repo out
+# to build a release is a Windows workstation.
+agent-linux/**/*.sh text eol=lf
+agent-linux/packaging/*.service text eol=lf

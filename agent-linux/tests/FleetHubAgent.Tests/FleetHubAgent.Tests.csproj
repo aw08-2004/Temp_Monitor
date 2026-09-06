@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+
+    <!-- The agent project pins RuntimeIdentifier=linux-x64 so a plain `dotnet publish` is the
+         real artifact. These tests must run on whatever the developer is sitting at, which in
+         this shop is Windows, so the RID is cleared HERE rather than removed there: the
+         publish default is the thing that must not drift, and a test run is not a publish.
+         Everything under test is deliberately pure. No test touches /proc, /sys or a Unix
+         file mode, because a test that needed those would only ever run on the target. -->
+    <RuntimeIdentifier></RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+
+    <!-- CA1416 fires on every call into the agent, because the agent assembly declares itself
+         linux-only (see src/FleetHubAgent/AssemblyInfo.cs) and a test assembly does not. That
+         is the arrangement we want, not a problem to fix: the attribute is there so a
+         Unix-only API called from PRODUCTION code is a build error, and this project exists
+         precisely to call that code from a Windows workstation.
+         Suppressed here and nowhere else, so the analyzer keeps its teeth where they matter. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FleetHubAgent\FleetHubAgent.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

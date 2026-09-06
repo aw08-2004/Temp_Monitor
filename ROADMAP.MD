@@ -2638,6 +2638,105 @@ rule marked for local evaluation.
 
 ---
 
+## 🚧 22. Linux agent   ·   `agent-linux/`, unreleased (0.1.0)
+
+A Linux counterpart to the Windows agent, in `agent-linux/`. Started 2026-09-05 on
+`feat/linux-agent`; **nothing is released and nothing in the field runs it**. It reports
+telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`.
+Full detail in `agent-linux/README.md`.
+
+**No hub change was required**, and that is the design rather than a coincidence. The agent
+speaks the existing wire protocol exactly — `/api/report`, `/api/agent/enroll`, heartbeat, the
+command channel — and emits the sensor identifiers `extract_diagnostics` already reads
+(`/cpu/0`, `/ram`, `/volume/...`), so a Linux machine's overview page populates against today's
+hub.
+
+### The version number does the gating
+
+`AgentConfig.Version` is `0.1.0` and must stay below the hub's `AGENT_TRAIN_MIN_VERSION`
+(`3.0.0`). Three things follow, all of them wanted:
+
+- `get_advertised_version()` returns nothing, so the hub never advertises the **Windows**
+  agent's signed manifest to a Linux box. That binary is `win-x64`; a Linux agent that took the
+  hint would download it and have nothing to do with it.
+- Every `MIN_*_AGENT` gate in `hub/static/js` reads `0.1.0` as too old, so the console does not
+  offer a Linux machine the terminal, process list or file browser it cannot answer. The
+  compatibility API those constants form does the right thing here for free.
+- `agents_outdated` skips sub-3.0 machines, so a Linux fleet is not permanently counted as
+  behind a release train it is not on.
+
+Enforced by `VersionGateTests`, not just written down: "bring the version in line with the other
+components" is a plausible change that would break all three at once and silently.
+
+**Rejected:** starting at 3.35.0 to match the Windows agent. Every gate above would then pass
+on a lie.
+
+### Rejected alternatives
+
+- **A Python daemon** (the hub is Python) or **a fresh Go binary.** The hard part of an agent is
+  the protocol, not the platform code: enrollment identity that must survive a restart or the
+  fleet gains a duplicate, an offline buffer that backfills without lying about timestamps,
+  poll holding that must stay inside the 90-second offline window. All of it is written,
+  reasoned about and deployed. C# reuses the reasoning, and `dotnet publish` gives the same
+  self-contained single-file deployment shape as the Windows agent.
+- **Extracting a shared `TempMonitorAgent.Core` first.** That means moving files of an agent
+  installed on every managed Windows PC that self-updates from a signed manifest. The blast
+  radius is a fleet that silently stops updating. The wire shapes are duplicated for now; the
+  hub's field names keep the copies honest, and a shared core is earned once this has a release
+  train of its own.
+- **Hardening the systemd unit** (`ProtectSystem`, `PrivateDevices`, …). Every one of those
+  breaks the agent's actual job — it reads `/sys` and `/proc`, and `run_script` exists so an
+  operator can change the system. Sandboxing a remote-administration agent away from the system
+  it administers is theatre. What bounds it is the hub's authorization.
+- **A capabilities-only service user instead of root.** The set needed (`CAP_DAC_READ_SEARCH`
+  for the DMI serial, plus whatever an arbitrary operator script needs) is root with extra steps
+  and a false sense of containment. The DMI serial is not optional: `/sys/class/dmi/id/product_serial`
+  is `0400`, and that serial is how `resolve_serial_group` collapses the duplicate a `rename`
+  creates.
+
+### Two hub-side gaps, deliberately not worked around in the agent
+
+1. **`run_script`'s `shell` enum is `("powershell", "cmd")`** — Windows-shaped, because until
+   now every machine that could receive one was Windows. The agent runs the script under
+   `bash`/`sh` regardless and says so in the first line of the result. Refusing would make
+   `run_script` permanently unusable on Linux, since the console offers no third choice; running
+   it silently would let an operator believe PowerShell ran. **Fix:** add `bash`/`sh` to the
+   enum in `hub/fleet.py`.
+2. **`_OS_MATCHES` misses some distros.** It buckets `ubuntu`/`debian`/`rhel`/`centos`/`fedora`/
+   `suse`/`alma`/`rocky` and the bare word `linux`, which covers most `PRETTY_NAME`s including
+   "Arch Linux" and "Linux Mint" — but not "Pop!_OS 22.04 LTS", which buckets as `unknown`. The
+   agent reports the caption honestly rather than smuggling the word "Linux" into a string the
+   machine never said. **Fix:** widen `_OS_MATCHES`, or bucket on `/etc/os-release`'s `ID_LIKE`.
+
+Neither is urgent enough to justify a hub push on this branch.
+
+### Next, in order
+
+1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0). The hub endpoint and
+   sequencing exist; `onOutput` is already threaded through the executors.
+2. **Signed self-update.** The Ed25519 manifest verification ports one-to-one, but it needs its
+   own manifest, its own channel and a `release.sh` moving the two-file version pair. Until
+   then an upgrade is `agent-install.sh` run again. **Do not point this agent at the Windows
+   manifest.**
+3. **Patch inventory** (`apt`/`dnf`) — #14's Linux half.
+4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
+   Windows one.
+5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
+6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
+
+**Known limitation.** The volume walk uses `DriveInfo.GetDrives()`, which `statfs()`es every
+mount point — so a hung NFS or CIFS mount blocks it before the filesystem-type filter can
+reject it, and the telemetry loop stalls. Only that loop: heartbeat and commands are separate,
+so the machine stays online and answerable and merely stops reporting readings. The fix is to
+parse `/proc/mounts` and `statfs` only the survivors on a bounded thread.
+
+**Open parameter.** Whether the Linux agent eventually joins the 3.x version line (and with it
+the feature gates and the shared manifest machinery), or keeps a line of its own forever. It
+cannot join until it implements what those gates promise, so the question is not live yet —
+but the answer decides whether `release.sh` is a sibling of `release.ps1` or a fourth thing.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
