@@ -163,10 +163,18 @@ public static class AgentConfig
 
     public static string AgentIdentityPath => Path.Combine(StateDir, "agent.json");
 
-    /// <summary>Where the installer drops the one-time enrollment secret, when it is not
-    /// supplied through the unit's EnvironmentFile instead. 0600 root:root -- it is a
-    /// credential, and a world-readable one would let any local user enroll a machine of
-    /// their choosing into this fleet. See Worker.ReadEnrollmentSecret.</summary>
+    /// <summary>Where the installer drops the shared enrollment secret, when it is not
+    /// supplied through the unit's EnvironmentFile instead.
+    ///
+    /// **This is the hub's AGENT_ENROLLMENT_SECRET, the same value on every machine in the
+    /// fleet** -- not a per-machine credential, and not consumed by being used. What IS minted
+    /// per machine, and returned exactly once, is the token enroll hands back (see
+    /// fleet.enroll_agent). So a leak of this file is a leak of the fleet's enrollment
+    /// credential rather than of one box's identity.
+    ///
+    /// 0600 root:root for that reason: a world-readable copy would let any local user enroll a
+    /// machine of their choosing into this fleet. See Worker.ReadEnrollmentSecret, which
+    /// refuses to read it rather than quietly accepting the wrong mode.</summary>
     public static string EnrollmentSecretPath => "/etc/fleethub/agent.secret";
 
     /// <summary>The env var the systemd unit's EnvironmentFile can carry the secret in,

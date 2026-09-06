@@ -54,7 +54,7 @@ public sealed class FleetClient : IDisposable
 
     public bool IsEnrolled => _identity.IsEnrolled;
 
-    /// <summary>Enroll if we have not already, using the one-time secret the installer left
+    /// <summary>Enroll if we have not already, using the shared secret the installer left
     /// behind. Returns whether the agent now has an identity.
     ///
     /// The caller serialises this -- see Worker's enroll gate. Enrolling twice would mint a
