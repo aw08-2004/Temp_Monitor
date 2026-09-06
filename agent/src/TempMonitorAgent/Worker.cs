@@ -165,6 +165,25 @@ public sealed class Worker : BackgroundService
                     if (includeSensors) lastSensor = now;
                     if (includeUptime) lastUptime = now;
 
+                    // A report the HUB ACCEPTED is one of the two things that prove an
+                    // updated build works rather than merely starts, so it retires the
+                    // previous binary -- see SelfUpdater.ConfirmRunningBuild. The heartbeat
+                    // loop carries the other, because this branch only runs when the CPU
+                    // sensor produced a reading and an update's fate must not hang on that.
+                    //
+                    // **Gated on the result, not on reaching this line.** ReportAsync
+                    // swallows connectivity failures and returns Sent:false rather than
+                    // throwing (see TelemetryReporter), so a machine that boots the new
+                    // build into a dead network still gets here on its first tick -- and
+                    // confirming there would delete the rollback binary in precisely the
+                    // situation the binary is kept for. A non-2xx is not proof either: the
+                    // hub answered, but it did not take the report, and ticks are five
+                    // seconds apart so waiting for a real one costs nothing.
+                    if (result is { Sent: true, StatusCode: >= 200 and < 300 })
+                    {
+                        _updater.ConfirmRunningBuild();
+                    }
+
                     if (result.LatestVersion is { Length: > 0 } lv &&
                         VersionUtil.Compare(lv, AgentConfig.Version) > 0)
                     {
@@ -198,8 +217,13 @@ public sealed class Worker : BackgroundService
         {
             try
             {
-                if (await EnsureEnrolledAsync(ct))
-                    await _fleet.HeartbeatAsync(ct);
+                // HeartbeatAsync is true ONLY on a 2xx -- not enrolled, a non-2xx and a
+                // connectivity failure all come back false -- so it is the second proof that
+                // this build reached the hub, and the one that does not depend on the CPU
+                // sensor the way the telemetry path does. See SelfUpdater.ConfirmRunningBuild
+                // for why confirmation has two independent sources rather than one.
+                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct))
+                    _updater.ConfirmRunningBuild();
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Heartbeat tick failed"); }

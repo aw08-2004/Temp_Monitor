@@ -21,6 +21,8 @@
     const t = window.t;
 
     const updatesPane = document.getElementById('updates-pane');
+    const approvedPane = document.getElementById('approved-pane');
+    const declinedPane = document.getElementById('declined-pane');
     const windowsPane = document.getElementById('windows-pane');
     const runsPane = document.getElementById('runs-pane');
     const actions = document.getElementById('patches-actions');
@@ -97,11 +99,26 @@
 
     // ------------------------------------------------------------------ updates
 
-    function decisionLabel(decision) {
-        if (decision === 'approved') return t('patches.decision.approved');
-        if (decision === 'declined') return t('patches.decision.declined');
-        return t('patches.decision.undecided');
-    }
+    // The three panes, in tab order, and the ONLY thing that sorts a row into one of them
+    // is the decision the server sent: '' when nobody has ruled on it, then the two values
+    // of patches.APPROVAL_DECISIONS. Absence is a state here exactly as it is in the
+    // patch_approvals schema -- see patches.py -- so undecided is the empty string and not
+    // a third stored word.
+    //
+    // No Decision column in any of them: the tab a row is sitting in IS its decision, and
+    // a column whose every cell reads "Approved" is noise in the one place an operator is
+    // scanning titles. `emptyKey` is the message for a pane that is empty while the fleet
+    // is reporting something; a fleet reporting nothing at all gets patches.no_updates in
+    // all three, because "no update is waiting for you" would be a true sentence hiding
+    // the more useful fact that no machine has reported yet.
+    const GROUPS = [
+        { decision: '', pane: updatesPane, count: 'count-updates',
+          emptyKey: 'patches.none_undecided' },
+        { decision: 'approved', pane: approvedPane, count: 'count-approved',
+          emptyKey: 'patches.none_approved' },
+        { decision: 'declined', pane: declinedPane, count: 'count-declined',
+          emptyKey: 'patches.none_declined' },
+    ];
 
     async function decide(uid, decision, title) {
         try {
@@ -112,21 +129,22 @@
         }
     }
 
-    function renderUpdates() {
-        if (!updates.length) {
-            empty(updatesPane, t('patches.no_updates'));
+    function renderGroup(group, rows) {
+        document.getElementById(group.count).textContent = rows.length;
+        if (!rows.length) {
+            empty(group.pane, updates.length ? t(group.emptyKey) : t('patches.no_updates'));
             return;
         }
         const table = el('table', 'table');
         const head = el('tr');
         [t('patches.col.update'), t('patches.col.classification'), t('patches.col.source'),
-         t('patches.col.machines'), t('patches.col.decision')]
+         t('patches.col.machines')]
             .forEach((label) => head.append(el('th', null, label)));
         if (canManage) head.append(el('th', null, t('patches.col.actions')));
         table.append(el('thead').appendChild(head).parentNode);
 
         const body = el('tbody');
-        for (const row of updates) {
+        for (const row of rows) {
             const tr = el('tr');
             const title = el('td');
             title.append(el('div', null, row.title));
@@ -135,19 +153,28 @@
             tr.append(el('td', null, labelFor(vocab.classifications, row.classification)));
             tr.append(el('td', null, labelFor(vocab.sources, row.source)));
             tr.append(el('td', null, row.machines));
-            tr.append(el('td', null, decisionLabel(row.decision)));
             if (canManage) {
                 const cell = el('td');
-                const approve = el('button', 'btn', t('patches.approve'));
-                approve.type = 'button';
-                approve.addEventListener(
-                    'click', () => decide(row.uid, 'approved', row.title));
-                const decline = el('button', 'btn', t('patches.decline'));
-                decline.type = 'button';
-                decline.addEventListener(
-                    'click', () => decide(row.uid, 'declined', row.title));
-                cell.append(approve, decline);
+                // Only the buttons that would change something. Approve on a row already
+                // in the Approved pane is a no-op that still costs a POST and an audit
+                // entry, and offering it invites the reading that it does something more.
+                if (row.decision !== 'approved') {
+                    const approve = el('button', 'btn', t('patches.approve'));
+                    approve.type = 'button';
+                    approve.addEventListener(
+                        'click', () => decide(row.uid, 'approved', row.title));
+                    cell.append(approve);
+                }
+                if (row.decision !== 'declined') {
+                    const decline = el('button', 'btn', t('patches.decline'));
+                    decline.type = 'button';
+                    decline.addEventListener(
+                        'click', () => decide(row.uid, 'declined', row.title));
+                    cell.append(decline);
+                }
                 if (row.decision) {
+                    // Back to Available -- the only way out of a decided pane that is not
+                    // itself a decision.
                     const clear = el('button', 'btn', t('patches.undecide'));
                     clear.type = 'button';
                     clear.addEventListener('click', () => decide(row.uid, '', row.title));
@@ -158,7 +185,18 @@
             body.append(tr);
         }
         table.append(body);
-        updatesPane.replaceChildren(table);
+        group.pane.replaceChildren(table);
+    }
+
+    // All three panes are rendered from the one /api/patches response, rather than each
+    // fetching on `tab:shown` the way Windows and Runs do: the rows are already in hand,
+    // the partition is a filter, and deciding an update has to move it between two panes
+    // at once -- one of which is not the one being looked at.
+    function renderUpdates() {
+        for (const group of GROUPS) {
+            renderGroup(group,
+                        updates.filter((row) => (row.decision || '') === group.decision));
+        }
     }
 
     // ------------------------------------------------------------------ windows
@@ -461,7 +499,14 @@
         try {
             doc = await api('/api/patches');
         } catch (e) {
-            empty(updatesPane, e.message);
+            // Into every pane, not just the first: a reader sitting on Approved when the
+            // hub goes away must not be left looking at a list that is no longer true --
+            // and the tab counts go with it, because a count beside an error is a number
+            // nothing on the page can still vouch for.
+            for (const group of GROUPS) {
+                document.getElementById(group.count).textContent = '';
+                empty(group.pane, e.message);
+            }
             return;
         }
         vocab = doc.vocabulary;

@@ -158,6 +158,12 @@ for the release process. Updates are Ed25519-verified fail-closed (see
 [Signing releases](#signing-releases) below): an unsigned or tampered manifest is
 refused, not applied.
 
+The binary it replaces is kept beside it as `TempMonitorAgent.exe.old` until the new one
+has **reached the hub at least once** — starting is not the same claim as working, and a
+build that cannot report is one you cannot reach to fix. Nothing re-launches it
+automatically (a build too broken to start is also too broken to decide that), but for the
+window in which it matters the previous binary is still on disk to be renamed back.
+
 The hub nudges this along: `/api/report` echoes back the newest agent version it has
 read from the manifest, so an agent goes and checks as soon as it sees a number ahead
 of its own instead of waiting for its own weekly poll. Clients below 3.0.0 are
@@ -172,9 +178,18 @@ The hub can keep itself current too, but it's **off by default** — set
 touches itself). The `hub.auto_update` setting overrides the `.env` value when set,
 so it can also be flipped from the Settings tab. The hub checks
 `HUB_VERSION` on `main` every 15 minutes either way — the *check* is unconditional, only
-the *installing* is opt-in. When enabled and `main` is ahead it updates itself, best-effort re-installs
+the *installing* is opt-in. When enabled and `main` is ahead it updates itself, re-installs
 `requirements.txt`, then exits non-zero so the `FleetHub - Hub` Windows Service
 auto-restarts waitress on the new code (WinSW `onfailure`, ~5 s downtime).
+
+Two checks stand between "the files were replaced" and that restart, because the hub has
+no restart-count guard and cannot roll itself back once it has exited. It re-reads the
+`HUB_VERSION` in the tree it just wrote and refuses to restart unless it is genuinely
+newer — the version is read from `raw.githubusercontent.com` and the code comes from
+`codeload`, so the two can disagree for a few minutes after a push. And a failed
+`pip install` blocks the restart **only when `requirements.txt` actually changed**: a hub
+with no route to an index still takes the many releases that add no dependency, rather
+than stalling on all of them.
 
 **When self-update is off**, that same check feeds a notice at the bottom of the left
 sidebar: *"Hub vX.Y.Z is available"*, with an **Update now** button that applies the
@@ -188,12 +203,18 @@ of the way entirely while `hub.auto_update` is on.
 How it updates depends on the layout, decided by whether a `.git` directory is present:
 
 - **Files-only install** (what the installer now produces): downloads the branch
-  archive and mirrors the whole `hub/` directory over the installed one — a whole-dir
-  mirror, not a hand-maintained file allowlist, because an allowlist that missed a new
-  module once left the hub crash-looping. The archive is staged and checked for
-  completeness first, so a truncated download leaves the hub untouched rather than
-  half-updated. `.env`, `logs/` and the service wrapper live one level up in
-  `STATE_ROOT`, outside the mirrored directory, so they are structurally out of reach.
+  archive, builds the new `hub/` **beside** the installed one, and renames it into place —
+  a whole directory at a time, not a hand-maintained file allowlist, because an allowlist
+  that missed a new module once left the hub crash-looping. Everything slow happens off to
+  the side and the cutover is two renames, so the hub is never seen serving out of a tree
+  that is half one version and half the other; a download that turns out to be truncated,
+  stale or uninstallable costs nothing at all. The tree it replaces is kept as
+  **`hub.prev`** next to `hub/` — the hub cannot roll itself back, so if a release will not
+  start, renaming that directory back is the recovery. One is kept, replaced each update.
+  `.env`, `logs/` and the service wrapper live one level up in `STATE_ROOT`, outside the
+  swapped directory, so they are structurally out of reach — and if `HUB_STATE_DIR` or
+  `HUB_LOG_DIR` has been pointed *inside* the code directory, the update refuses to run and
+  says so rather than moving your database aside with the old code.
 - **Git clone** (dev checkouts, and hubs deployed before the change): `git fetch` +
   `git reset --hard origin/main`, mirroring `main` exactly — **local changes on the
   hub box are discarded**. Requires `git` on `PATH`.
@@ -317,7 +338,7 @@ range, pages through history, and expands any entry to its recorded detail.
 Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
 rotated log files also live under `logs/`. The code lives in `hub/`; `.env` and
 `logs/` sit one level up in the install root (`STATE_ROOT`), so a self-update that
-mirrors the code directory can never touch operator state. Run it via
+replaces the code directory can never touch operator state. Run it via
 `hub/wsgi.py` (`wsgi:application` under waitress), or directly with:
 
 ```powershell

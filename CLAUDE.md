@@ -140,6 +140,13 @@ The most distinctive thing about this codebase, and what a generic model gets wr
   the winget parse eating the source column"*.
 - **Don't create new top-level `.md` files** for summaries, notes or plans. Findings go in the
   reply; durable decisions go in `ROADMAP.MD`.
+- **No AI attribution anywhere in the repo or its releases.** No "Generated with Claude Code",
+  no `Co-Authored-By: Claude`, no `Claude-Session:` trailer, no link back to a chat session --
+  not in commit messages, pull request titles or bodies, PR comments, release notes, tags, or
+  source files. The reason is not modesty: these artifacts are read by the helpdesk group and
+  quoted into change tickets, and a session URL nobody outside this machine can open is noise
+  that outlives the change. Default tooling appends this footer on its own, so strip it before
+  committing or opening a PR rather than trusting the default.
 
 ## Roadmap upkeep
 
@@ -158,4 +165,5 @@ lie.
 [ ] New machine route?      -> access.require_machine(), not just access.require()
 [ ] Feature status changed? -> ROADMAP.MD
 [ ] Commit message says WHY
+[ ] Commit / PR / release notes -> no AI attribution or session link
 ```

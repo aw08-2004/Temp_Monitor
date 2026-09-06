@@ -5,11 +5,19 @@ namespace TempMonitorAgent.Bios;
 /// <summary>
 /// Reads this machine's firmware settings, whoever made it (roadmap #9).
 ///
-/// **Dispatch on the manufacturer, then on the namespace being there.** The manufacturer
-/// string picks a vendor source; the source's namespace existing is what decides between
-/// "supported" and "unsupported". Both steps are needed: a Dell with Command | Monitor never
-/// installed looks like a Dell and answers like a whitebox, and reporting an error for it
-/// would be wrong -- there is nothing broken, the interface simply is not there.
+/// **Dispatch on the manufacturer, then on the source finding an interface.** The manufacturer
+/// string picks a vendor source; whether that source can reach an interface at all is what
+/// decides between "supported" and "unsupported". Both steps are needed: a Dell with Command |
+/// Monitor never installed looks like a Dell and answers like a whitebox, and reporting an
+/// error for it would be wrong -- there is nothing broken, the interface simply is not there.
+///
+/// **The interface, not the namespace, is what a source tests.** A vendor namespace can be
+/// present with none of the classes behind it -- Dell's <c>root\dcim\sysman</c> is, on every
+/// machine without Command | Monitor -- so a source that connected a namespace and stopped
+/// reported an error on hardware whose settings were readable from a second namespace it never
+/// tried. See DellBiosSource; the missing-interface signal a source raises is
+/// <see cref="BiosInterfaceMissingException"/>, and it means "I found nothing to ask", not
+/// "one namespace was absent".
 ///
 /// **Unsupported is a first-class outcome**, not a failure. VMs, whiteboxes and consumer
 /// boards report it once and then stay quiet; the console renders it as a neutral, permanent
@@ -63,16 +71,22 @@ public static class BiosReader
             return BiosReport.Failed(source.Vendor, source.Namespace, Describe(e), biosVersion);
         }
 
+        // Which namespace ANSWERED, not which one this vendor is expected to use. Dell has two
+        // interfaces in the field and the answer came from exactly one of them, so a report
+        // naming the source's default would tell an operator chasing a fault about a namespace
+        // that was never consulted. A source with one interface says nothing and gets its own.
+        var iface = result.Interface.Length > 0 ? result.Interface : source.Namespace;
+
         if (result.Settings.Count == 0)
         {
             // A namespace that exists and enumerates nothing has not told us this machine is
             // unmanageable -- it has failed to answer. Saying "unsupported" here would hide a
             // permission problem or a broken WMI repository behind a state nobody investigates.
-            return BiosReport.Failed(source.Vendor, source.Namespace,
+            return BiosReport.Failed(source.Vendor, iface,
                                      "the firmware interface returned no settings", biosVersion);
         }
 
-        return new BiosReport(BiosSupport.Supported, source.Vendor, source.Namespace,
+        return new BiosReport(BiosSupport.Supported, source.Vendor, iface,
                               biosVersion, result.PasswordSet, "", result.Settings);
     }
 
