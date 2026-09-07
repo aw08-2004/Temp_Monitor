@@ -9,6 +9,14 @@ flutter_sdk
 .temp_monitor_signing_key
 *.temp_monitor_signing_key
 
+# Android release signing keystore -- MUST never be committed, and MUST never be lost.
+# Losing it means no installed agent can be updated in place, and every device's SSAID
+# changes, so the whole Android fleet re-appears as new machines. Keep it with
+# BACKUP_MASTER_KEY. See agent-android/README.md.
+*.keystore
+*.jks
+agent-android/signing.props
+
 # .NET agent build artifacts
 agent/**/bin/
 agent/**/obj/
@@ -16,5 +24,8 @@ agent/dist/
 agent-linux/**/bin/
 agent-linux/**/obj/
 agent-linux/dist/
+agent-android/**/bin/
+agent-android/**/obj/
+agent-android/dist/
 # Agent Zero project metadata
 .a0proj/

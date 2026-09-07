@@ -2822,6 +2822,162 @@ but the answer decides whether `release.sh` is a sibling of `release.ps1` or a f
 
 ---
 
+## 🚧 23. Android agent   ·   `agent-android/`, unreleased (0.1.0)
+
+An Android counterpart to the Windows agent, in `agent-android/`. Started 2026-09-06 on
+`feat/android-agent`; **nothing is released and no fleet runs it**, but it has now been
+validated on real hardware: a Samsung Galaxy A15 on Android 16 enrolled, reported telemetry
+the hub accepted, and answered a command. Release-signed with the fleet's own Android
+keystore; the protocol half has 93 tests. Full detail in `agent-android/README.md`.
+
+**No hub change was required**, same as #22 and for the same reason: the agent speaks the
+existing wire protocol exactly and emits the sensor identifiers `extract_diagnostics` already
+reads (`/cpu/0`, `/ram`, `/volume/...`), so an Android device's overview page populates against
+today's hub. The version gate below is what keeps it that way.
+
+**This is not #11's Android build.** That is the *operator's* client — the console in a pocket,
+scoped in detail under #11 phase 2 and still gated on the Windows client having talked to a real
+hub. This is a *managed endpoint*: a phone or tablet that appears in Inventory next to the PCs.
+The two share a platform and nothing else.
+
+### The version number does the gating
+
+`AgentConfig.Version` is `0.1.0` and must stay below `AGENT_TRAIN_MIN_VERSION` (`3.0.0`), which
+buys the same three things it buys for the Linux agent — no Windows manifest advertised, every
+`MIN_*_AGENT` gate reading it as too old, and no place in the `agents_outdated` tally.
+
+The middle one matters more here than on Linux. There, the console withholding a terminal or a
+file browser hides something merely *unimplemented*. Here it hides something **impossible**:
+Android has no shell for an app to run a script in, no API to reboot, and no way to see another
+app's processes. There is no future version of this agent that could answer those, so the gate
+is not a staging mechanism, it is permanent.
+
+This is the **fifth** version line in the repo, and the first with **three** files to keep in
+step: `AgentConfig.Version`, the Core csproj's `<Version>`, and the Android csproj's
+`<ApplicationDisplayVersion>`, which is what a phone's own app-info screen shows.
+`VersionGateTests` holds all three, and deliberately leaves `<ApplicationVersion>` out — that is
+the integer Android sorts upgrades by, a build counter with no relationship to a dotted version.
+
+### Two projects, not one
+
+`FleetHubAgent.Core` (plain `net10.0`) holds the protocol, the loops, machine naming, the
+dispatcher and `rename`; `FleetHubAgent.Android` (`net10.0-android`) holds the foreground
+service, the readers and the setup screen.
+
+**Forced, not chosen.** A `net10.0-android` project cannot be referenced by an xunit project on
+a Windows workstation — it needs the workload to restore and a device to run a test on. Had the
+protocol lived in the app project, testing it would have required hardware, which in practice
+means it would have had no tests. As split, the dangerous half has 88 tests that run with
+nothing installed but the .NET SDK.
+
+This is **not** the shared core `agent-linux/README.md` rejects; that rejection is about
+refactoring `agent/`, which is deployed on every managed PC and self-updates from a signed
+manifest. Nothing here touches it, and the wire shapes are still duplicated rather than shared.
+
+### What Android costs, honestly
+
+- **Temperature is usually the BATTERY's.** `/sys/class/thermal` is SELinux-blocked on most
+  modern devices and `HardwarePropertiesManager` is system-only, so the reader tries the thermal
+  zones and falls back to battery temperature. That is a real measurement — a phone in a hot
+  van, a tablet in a sealed enclosure, a failing cell — but it is not a CPU temperature, so the
+  sensor is labelled `Battery` and the agent logs which source it charted.
+- **`serial_number` is the SSAID, not a serial.** `Build.getSerial()` needs a signature-level
+  permission, so no normal build reads a hardware serial on any device since Android 10. The
+  SSAID is unique per device *per app-signing key* — which makes the Android keystore **fleet
+  state**, alongside `BACKUP_MASTER_KEY` and the Ed25519 key: re-signing the APK makes every
+  device in the fleet look like a new machine at once.
+- **`rename` changes what the device reports, not a hostname**, and refuses outright on a device
+  with no usable SSAID rather than renaming into a duplicate the hub can never merge.
+- **The default machine name cannot be `Build.MODEL`.** It is a marketing name shared by every
+  unit of a model, and thirty tablets reporting `Pixel Tablet` would collapse into **one**
+  machine overwriting itself, not thirty confusingly-named ones. The derived name carries eight
+  characters of the stable id for that reason, and `MachineNamingTests` is what keeps it there.
+- **A foreground service with a permanent notification is the only way to keep running.**
+  WorkManager's floor is fifteen minutes and JobScheduler's is longer under Doze; both would put
+  a device far outside the hub's 90-second online window.
+
+### Needs a hub change
+
+`_OS_MATCHES` has no `android` bucket, so every Android device counts as `unknown` on the
+Dashboard. The agent reports `Android 15` honestly rather than smuggling "Linux" into the
+caption — which would be defensible for an Android kernel, and would file phones in with the
+servers while showing an operator a string the device never said. Adding the bucket is one line
+and one `OS_BUCKETS` entry; it is listed here rather than done because it also wants a console
+label and belongs with #22's `PRETTY_NAME` gap.
+
+### Rejected alternatives
+
+- **Kotlin, the idiomatic choice.** It would rewrite enrollment, the offline buffer and the poll
+  hold — the most dangerous code in the fleet — in a language nobody here maintains, for an agent
+  that does less than either existing one. The protocol is the hard part; the platform code is
+  not.
+- **Matching the Windows agent's version so the fleet "looks consistent."** Every gate above
+  would pass on a lie, and the console would offer a phone a ConPTY terminal.
+- **`dataSync` as the foreground service type**, which is the closer description of the work.
+  Since Android 15 it is capped at six hours in any 24, after which the system stops the service
+  and the machine drops out of the console every night. `specialUse` where it exists (API 34+),
+  `dataSync` below it, where the cap does not exist either.
+- **Emulating `restart` by any available means.** There isn't one, and a command that appeared to
+  work and did nothing would be worse than the refusal.
+
+### Not done
+
+**What the first real device settled**, on a Galaxy A15 / Android 16: battery temperature reads
+and is the ONLY temperature available (all 26 thermal zones are denied even to `adb shell`,
+not merely to an app); the foreground service runs as `specialUse`, the API-34+ branch; the
+enrollment identity and machine name survive a reinstall signed with the same key; and the
+SSAID really is per-signing-key -- the app's differs from the shell's, which is the concrete
+proof that the keystore is fleet state.
+
+**Still unverified: everything time-dependent.** Whether the service survives an OEM power
+manager overnight, whether the boot receiver fires on Samsung's skin, and every command
+except `rename`.
+
+**Two design errors the device found, which review had not.** The notification status line
+could not distinguish "reporting fine, waiting for its secret" from "cannot reach the hub" --
+the exact question during a fresh install, and it now reports the link and the enrollment as
+the separate facts they are. And `FleetClient` logged the missing-secret warning on every
+30-second retry forever, which on a ring-buffered logcat steadily evicts everything else the
+agent said.
+
+`show_message` is the obvious next command (the one place a phone beats a PC), and FCM against
+the `push_*` columns already on `api_tokens` is what would let the command loop stop holding a
+request every 25 seconds.
+
+### Scheduled commands reach an Android device regardless of the version gates
+
+**The assumption that `MIN_*_AGENT` keeps unsupported commands away from this agent was
+wrong, and the first phone disproved it within a minute of enrolling.** Those gates are
+console-side JavaScript: they stop an operator being OFFERED a button. Nothing runs them for
+a command the hub's scheduler or rules engine dispatches, because those target a machine set
+rather than a button. `fleet.py`'s `SCHEDULED_COMMANDS` -- `backup_files`, `restore_files`,
+`install_patches`, `deploy_package` -- arrive anyway. The pilot device was inside a
+fleet-wide backup profile and was sent `backup_files` immediately.
+
+Agent side, those types now answer "cannot be run on Android" with the reason and the action,
+rather than "not implemented", which would send an operator looking for a version that will
+never exist. **The real fix is hub side and is not done**: scope backup profiles, patch
+schedules and rules so they stop targeting machines that cannot answer. Left alone, a
+scheduled job shows a failure against every Android machine on every run, which is how a
+console teaches its operators to ignore red.
+
+**Three things cost real time getting the first build out, recorded so they cost nobody else.**
+The build machine's Oracle JDK 24 cannot be parsed by .NET Android 36 — the symptom is
+`XA0034` followed by a `NullReferenceException` in `ResolveAndroidTooling`, which reads like a
+broken SDK rather than a too-new JDK; `-t:InstallAndroidDependencies` provisions a usable
+OpenJDK 17 alongside the SDK. `--` is illegal inside an XML comment, which this repo's house
+style puts there by reflex and which bit the csproj, the manifest and `strings.xml` in turn.
+And `<restriction android:title|description>` must be an `@string` reference, not a literal
+(`APT2259`), which is the only reason `Resources/values/strings.xml` exists — it is not a
+precedent for moving the agent's own English out of the code.
+
+**Open parameter.** Whether an Android device belongs in the same Inventory list as the PCs at
+all, or wants a view of its own. It reports the same shape and costs nothing to leave where it
+is; the question becomes live the first time somebody sorts the fleet by CPU temperature and
+finds a tablet's battery at the top.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0

@@ -1,0 +1,67 @@
+<Project>
+
+  <!--
+    Copy this file to `signing.props` (which is gitignored) on the machine that cuts Android
+    releases, and fill in the two paths and the password.
+
+    It holds a credential, so treat it exactly like the hub's .env: it is real on one machine
+    and absent everywhere else. Absent, the csproj's conditional import does nothing and the
+    build falls back to the Android SDK's debug keystore, which is what keeps `dotnet build`
+    working for anyone who only wants to compile.
+
+    ## Making the keystore
+
+    There is no certificate authority in this story. An Android release key is self-signed and
+    free, unlike the Windows code-signing certificate roadmap #11 is waiting on:
+
+      keytool -genkeypair -v -keystore fleethub-agent.keystore -storetype PKCS12 ^
+              -alias fleethub -keyalg RSA -keysize 4096 -validity 10000
+
+    `-validity 10000` is about 27 years. An expired key cannot sign an update, and there is no
+    renewal path that keeps the same identity, so err long.
+
+    PKCS12 keeps ONE password for the store and the key, which is why both properties below
+    take the same value. (JKS allowed them to differ; it is legacy and keytool warns about it.)
+
+    ## Why this file is fleet state, not build configuration
+
+    Losing this keystore costs two separate things, and neither is recoverable:
+
+      * No installed agent can be updated in place. Android refuses an APK signed with a
+        different key, so every device would need an uninstall by hand.
+      * Every device's SSAID changes. This agent reports the SSAID as serial_number (see
+        agent-android/README.md), and it is derived per app-signing key -- so the entire
+        Android fleet would re-appear in the console as new machines at once, and the hub's
+        duplicate-serial merge could not put them back together.
+
+    So it belongs wherever BACKUP_MASTER_KEY is kept, and it is carried across a server
+    migration before anything else.
+
+    ## Passwords without a password on disk
+
+    Both password properties accept an `env:` prefix, which reads an environment variable at
+    build time instead:
+
+      <AndroidSigningStorePass>env:FLEETHUB_KEYSTORE_PASS</AndroidSigningStorePass>
+
+    Prefer that on any machine where this file would otherwise be the only plaintext copy.
+  -->
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <AndroidKeyStore>true</AndroidKeyStore>
+
+    <!-- An absolute path. This file is imported from a csproj two directories down, so a
+         relative one would resolve against the wrong place depending on how MSBuild was
+         invoked. -->
+    <AndroidSigningKeyStore>C:\path\to\fleethub-agent.keystore</AndroidSigningKeyStore>
+
+    <!-- The -alias given to keytool above. -->
+    <AndroidSigningKeyAlias>fleethub</AndroidSigningKeyAlias>
+
+    <!-- The same value twice: PKCS12 has one password. Use env:NAME to read it from the
+         environment instead of storing it here. -->
+    <AndroidSigningStorePass>your-keystore-password</AndroidSigningStorePass>
+    <AndroidSigningKeyPass>your-keystore-password</AndroidSigningKeyPass>
+  </PropertyGroup>
+
+</Project>

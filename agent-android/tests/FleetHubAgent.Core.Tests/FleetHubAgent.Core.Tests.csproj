@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+
+    <!-- No RuntimeIdentifier to clear and no CA1416 to suppress, unlike the Linux agent's test
+         project. Both of those exist there because the agent assembly is platform-pinned; the
+         whole point of FleetHubAgent.Core is that it is not, so this is an ordinary net10.0
+         test project referencing an ordinary net10.0 library.
+
+         The Android half (src/FleetHubAgent.Android) is deliberately NOT referenced here and
+         must not be: it needs the Android workload to restore and a device or emulator to run
+         a test on, so referencing it would turn `dotnet test` from something anyone in this
+         shop can run into something only a machine with the SDK can. What that costs is
+         stated plainly in agent-android/README.md rather than hidden. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FleetHubAgent.Core\FleetHubAgent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
