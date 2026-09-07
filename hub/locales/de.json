@@ -509,6 +509,10 @@
       "manage_rules": {
         "label": "Regeln verwalten",
         "description": "Regeln erstellen und bearbeiten: Bedingungen über Maschinendaten und was bei Zutreffen geschieht. Eine Regel, die Befehle an PCs sendet, benötigt zusätzlich Befehle erteilen."
+      },
+      "locate_device": {
+        "label": "Gerät orten",
+        "description": "Ein Gerät auf Anfrage nach seinem Standort fragen. Bewusst eine eigene Berechtigung und kein Teil von „Befehle erteilen“: einen PC neu starten zu dürfen darf nicht stillschweigend bedeuten, den Aufenthaltsort einer Person ermitteln zu dürfen. Zum Lesen der zuletzt bekannten Position genügen „Ansehen“ und der Rechner im Geltungsbereich. Jede Anfrage wird mit dem Namen der Bedienperson im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung, die denselben Namen nennt."
       }
     }
   },
@@ -531,7 +535,8 @@
       "wake": "Wake-on-LAN",
       "rules": "Regeln",
       "sharing": "Hub-übergreifende Freigabe",
-      "provisioning": "Provisionierung"
+      "provisioning": "Provisionierung",
+      "location": "Standort"
     },
     "unit": {
       "celsius": "°C",
@@ -937,6 +942,18 @@
         "leave_system_apps_enabled": {
           "label": "Geräteeigene Apps aktiviert lassen",
           "help": "Aktiviert behält ein provisioniertes Gerät Kamera, Telefon und Einstellungen. Deaktiviert wird es zum Einzweckgerät: die Provisionierung deaktiviert jede System-App, die dieser Agent nicht ausdrücklich aktiviert hat."
+        }
+      },
+      "location": {
+        "default_timeout_seconds": {
+          "label": "Suchdauer auf dem Gerät",
+          "help": "Wie lange ein Gerät nach einer frischen Position sucht, bevor es stattdessen die zuletzt bekannte meldet. Eine Satellitenortung aus dem Kaltstart dauert im Freien Dutzende Sekunden und gelingt in Gebäuden gar nicht, deshalb hört das Gerät hier auf, statt jemanden vor einem sich drehenden Rad warten zu lassen."
+        }
+      },
+      "data": {
+        "location_retention_days": {
+          "label": "Standortverlauf aufbewahren für",
+          "help": "Wie lange erfasste Positionen aufbewahrt werden, bevor sie gelöscht werden. Das ist eine Datenschutz- und keine Speicherplatzeinstellung -- die Tabelle ist winzig --, also ist sie zum Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seinen Standortverlauf unabhängig davon sofort."
         }
       }
     },

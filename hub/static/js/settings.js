@@ -26,6 +26,7 @@ const panels = {
     patches: document.getElementById('tab-patches'),
     wake: document.getElementById('tab-wake'),
     provisioning: document.getElementById('tab-provisioning'),
+    location: document.getElementById('tab-location'),
     rules: document.getElementById('tab-rules'),
     sharing: document.getElementById('tab-sharing'),
 };

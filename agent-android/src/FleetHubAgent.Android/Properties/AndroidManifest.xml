@@ -25,6 +25,41 @@
        preferred one would crash the service on every device below API 34. -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  <!-- Required from Android 14 to start the service with the `location` type, which the agent
+       does for the length of ONE locate and then stops doing. See below. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+  <!-- **On-demand location (roadmap #23 phase B).** An earlier version of this file argued
+       against these two, and the argument is worth keeping rather than quietly deleting:
+       "the console has no map and the fleet has no use for one. A fleet agent that asks for
+       location is an agent nobody installs."
+
+       What changed is every clause of it. There is now a console that can show a fix and a map
+       to show it on; collection is ON DEMAND ONLY, so nothing is sampled in the background and
+       there is no record of where a device has been except a record of when somebody asked;
+       asking needs its own `locate_device` capability, which is deliberately NOT the one that
+       grants a reboot button, so "may restart a PC" does not silently mean "may find out where
+       an employee is"; every request is in the hub's audit trail with the operator's name; and
+       the device posts a notification naming that same operator, every time, including when it
+       has no position to give.
+
+       What did NOT change is the part the old comment was really about: nobody is tracked. If
+       that stops being true, this comment is what should be rewritten first.
+
+       COARSE is requested alongside FINE because a device where somebody granted only
+       approximate location should still be findable to the nearest block, which for a lost
+       phone is most of the value. The result carries the provider and the accuracy radius, so
+       the console never implies more precision than there was.
+
+       **ACCESS_BACKGROUND_LOCATION is deliberately NOT requested**, and that absence is what
+       the FOREGROUND_SERVICE_LOCATION permission above is for. Android 10+ blocks location
+       while an app is not visible unless it holds background location (a standing grant to
+       watch where a device goes), or is running a foreground service started with the
+       `location` type. The agent takes the second route, promoting its service for the length
+       of one request and demoting immediately after, so a phone in a pocket can be found
+       without the agent holding a permanent right to follow it. -->
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
   <!-- Android 13+ will not show the service's notification without this being granted at
        runtime. The service still RUNS without it, so this is not fatal; what is lost is the
@@ -40,8 +75,12 @@
                                 READ_PRIVILEGED_PHONE_STATE, which is signature-level and
                                 available only to system apps, so a normal build cannot read
                                 one at any permission level. See AndroidSystemInfo.
-         ACCESS_FINE_LOCATION   the console has no map and the fleet has no use for one. A
-                                fleet agent that asks for location is an agent nobody installs.
+         ACCESS_BACKGROUND_LOCATION
+                                the agent locates a device on demand, never in the background.
+                                It reaches location with the screen off by promoting its
+                                foreground service for the length of one request instead.
+                                See the block above. This one is a standing grant to follow a
+                                device, and is a different feature with a different argument.
          QUERY_ALL_PACKAGES     an inventory of installed apps is a Play policy problem and
                                 answers a question nothing in the console asks yet.
          REQUEST_IGNORE_BATTERY_OPTIMIZATIONS

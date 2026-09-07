@@ -47,6 +47,43 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    its creator holds, and is bounded by a seat count, an expiry and optional pinned
    addresses (see "Invite links" below)
 
+## Personal data inventory
+
+Most of what FleetHub stores is about a machine: its temperature, its disks, its BIOS
+settings, which updates it is missing. One thing it stores is about a **person**, and it is
+inventoried separately here so that nobody has to infer it from a feature list.
+
+| What | From whom | Why | Where | How long | Who can see it |
+|---|---|---|---|---|---|
+| **Device position** — latitude, longitude, accuracy radius, provider, and when the fix was taken | Managed Android devices, **only when an operator asks**. Never sampled, never periodic, never in the background | Finding a lost or stolen device, and confirming where a company device is before securing it | `machine_locations` in the hub's SQLite database | `data.location_retention_days`, default **30 days**, then deleted by the retention pruner. Deleting a machine erases its history immediately | Reading: `view` **plus** the machine being in the operator's scope. Asking for a new fix: the separate `locate_device` capability |
+
+Four properties of that row are deliberate and worth stating plainly:
+
+- **Collection is on demand only.** There is no background location, no periodic sample and no
+  travel history. The only history that exists is a history of *when somebody asked*, which is
+  a different and much smaller thing.
+- **Asking has its own capability.** `locate_device` is not part of `issue_commands`, which
+  every other command-issuing feature reuses. Being able to reboot a PC does not imply being
+  able to find out where an employee is. The hub refuses a hand-rolled `locate_device` through
+  its generic command endpoint, and refuses to save one as a favorite, so the capability cannot
+  be routed around.
+- **The person holding the device is told.** The agent posts a notification naming the operator
+  who asked, every time — including when it has no position to give, so that a failed request
+  cannot be used as a quiet way to check whether a phone is switched on.
+- **Every request is in the audit trail** with the operator's address, the device, and the time.
+
+**FleetHub cannot give your workforce notice on your behalf.** Whether locating a
+company-owned device is lawful where you operate, what you must tell the people carrying those
+devices, and what basis you rely on are decisions for the deploying organisation. The product
+provides the controls — a separate capability, machine scope, short retention, an audit trail
+and an on-device disclosure — and no more than that.
+
+**Not collected**, and each absence is a decision rather than a gap: no background or periodic
+location, no app-usage history, no browsing history, no message or call content, no contacts,
+no photographs, no keystrokes, and no microphone or camera access of any kind. Screen sharing
+(roadmap #2) exists on Windows and requires a system prompt the person at the machine accepts
+for every session.
+
 ## Device tokens (the native client)
 
 The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather

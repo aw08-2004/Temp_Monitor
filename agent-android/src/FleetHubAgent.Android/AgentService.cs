@@ -44,9 +44,14 @@ namespace FleetHubAgent.Android;
 /// expensive is built once in OnCreate and the loops are started at most once, guarded by
 /// <see cref="_loops"/>.
 /// </summary>
-// Both foreground types are declared and the service picks one at runtime -- see
+// All three foreground types are declared and the service picks from them at runtime -- see
 // StartInForeground below. Android refuses a type the manifest does not carry, so declaring
 // only the preferred one would crash the service on every device below API 34.
+//
+// `location` is declared but is NOT part of the steady state: the service adds it for the
+// length of one locate and drops it again (BeginLocationSession). Declaring it here is what
+// makes that promotion legal at all; using it permanently would put a location indicator on
+// the device forever, for a capability exercised a few times a year.
 //
 // Two things are deliberately absent. `stopWithTask` is not set because its default is already
 // false: swiping the app off the recents screen must not stop the agent, and on a device
@@ -56,7 +61,9 @@ namespace FleetHubAgent.Android;
 // helpdesk, never listed. Adding one would be paperwork for a reviewer who will never see it.
 [Service(
     Exported = false,
-    ForegroundServiceType = ForegroundService.TypeSpecialUse | ForegroundService.TypeDataSync)]
+    ForegroundServiceType = ForegroundService.TypeSpecialUse
+                            | ForegroundService.TypeDataSync
+                            | ForegroundService.TypeLocation)]
 public sealed class AgentService : Service
 {
     private const int NotificationId = 1;
@@ -87,6 +94,10 @@ public sealed class AgentService : Service
 
         _loggerFactory = LoggerFactory.Create(b => b.AddProvider(new LogcatLoggerProvider(LogLevel.Information)));
         _log = _loggerFactory.CreateLogger<AgentService>();
+        // Published so a locate can promote this service's foreground type -- see
+        // BeginLocationSession. Set before Compose so a composition failure still leaves a
+        // reachable service rather than a null nobody can explain.
+        _running = this;
 
         try
         {
@@ -128,14 +139,21 @@ public sealed class AgentService : Service
         _sensors = new AndroidSensorReader(this, _loggerFactory.CreateLogger("Sensors"));
         _reporter = new TelemetryReporter(
             _loggerFactory.CreateLogger<TelemetryReporter>(), identity, _names);
-        // The executors, which are the whole of what this agent can be TOLD to do today. One
+        // The executors, which are the whole of what this agent can be TOLD to do today. Two
         // out of the hub's ~thirty command types, and the gap is a platform limit rather than a
         // backlog: see CommandDispatcher, which distinguishes the commands Android forbids from
-        // the ones simply not written yet, and AgentConfig.Version for why the console never
-        // offers either.
+        // the ones simply not written yet. The hub is told this exact set on every heartbeat
+        // (AgentCapabilities), which is what stops it queueing the other twenty-eight.
         var executors = new ICommandExecutor[]
         {
             new RenameExecutor(_loggerFactory.CreateLogger<RenameExecutor>(), _names, identity),
+            // Roadmap #23 phase B. Everything about what a fix MEANS is in Core, where it is
+            // testable on a workstation; the two Android objects only answer "here is a
+            // position, or here is why not" and "tell the person who asked".
+            new LocateDeviceExecutor(
+                _loggerFactory.CreateLogger<LocateDeviceExecutor>(),
+                new AndroidLocationReader(this, _loggerFactory.CreateLogger("Location")),
+                new LocationNotifier(this, _loggerFactory.CreateLogger("LocationNotice"))),
         };
 
         var dispatcher = new CommandDispatcher(
@@ -152,7 +170,7 @@ public sealed class AgentService : Service
         // device is unmanaged for as long as the service happened to stay up. That is the lab
         // path, and the one where a stale answer is hardest to explain.
         _fleet = new FleetClient(_loggerFactory.CreateLogger<FleetClient>(), state, _names,
-            () => AgentCapabilities.For(dispatcher, DeviceOwner.Features(this)));
+            () => AgentCapabilities.For(dispatcher, ReportedFeatures()));
 
         // Take the device-owner powers this agent holds, if it holds any. A no-op on a device
         // that was sideloaded rather than provisioned, which is every device today -- see
@@ -163,6 +181,22 @@ public sealed class AgentService : Service
             _loggerFactory.CreateLogger<AgentLoops>(), _sensors, new AndroidUptimeSource(),
             _reporter, _fleet, dispatcher, _names,
             new AndroidEnrollmentSecretSource(this, state));
+    }
+
+    /// <summary>The non-command abilities this device reports (hub/capabilities.py's FEATURE_*).
+    ///
+    /// `locate` is reported unconditionally, not only when the location permission happens to
+    /// be granted: the feature is "this agent implements locating", and whether a fix is
+    /// possible right now is the locate's own answer. Reporting it conditionally would make the
+    /// console's Locate button appear and vanish as somebody toggles a system setting, which
+    /// reads as a broken console rather than as a device state -- and the honest answer, "the
+    /// location permission has not been granted on this device", is one the operator can only
+    /// see by asking.</summary>
+    private List<string> ReportedFeatures()
+    {
+        var features = new List<string> { AgentCapabilities.FeatureLocate };
+        features.AddRange(DeviceOwner.Features(this));
+        return features;
     }
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
@@ -191,6 +225,9 @@ public sealed class AgentService : Service
     public override void OnDestroy()
     {
         _log?.LogInformation("Agent service stopping");
+        // Cleared first: a locate racing this must find no service rather than one that is
+        // half torn down and would throw from startForeground.
+        if (ReferenceEquals(_running, this)) _running = null;
         try { _cts?.Cancel(); } catch { }
 
         // Disposed, but NOT waited on. onDestroy has a few seconds before the system kills the
@@ -218,16 +255,87 @@ public sealed class AgentService : Service
     /// on every one of them, and the only ways out were a suppression or this. The Linux agent's
     /// AssemblyInfo makes the same argument from the other end: the analyzer is only worth
     /// having if its warnings are real, so the code moves rather than the warning.</summary>
-    private void StartInForeground()
+    private void StartInForeground() => StartInForeground(withLocation: false);
+
+    private void StartInForeground(bool withLocation)
     {
         var notification = BuildNotification();
 
+        // The location type is ADDED to the base type rather than replacing it: a foreground
+        // service declares everything it is doing, and this one is still reporting telemetry
+        // while it takes a fix.
         if (OperatingSystem.IsAndroidVersionAtLeast(34))
-            StartForeground(NotificationId, notification, ForegroundService.TypeSpecialUse);
+            StartForeground(NotificationId, notification,
+                ForegroundService.TypeSpecialUse
+                | (withLocation ? ForegroundService.TypeLocation : 0));
         else if (OperatingSystem.IsAndroidVersionAtLeast(29))
-            StartForeground(NotificationId, notification, ForegroundService.TypeDataSync);
+            StartForeground(NotificationId, notification,
+                ForegroundService.TypeDataSync
+                | (withLocation ? ForegroundService.TypeLocation : 0));
         else
             StartForeground(NotificationId, notification);
+    }
+
+    // ================================================================ location promotion
+    //
+    // **Android 10 blocks location while an app is not visible**, unless it holds
+    // ACCESS_BACKGROUND_LOCATION -- a standing grant to watch where a device goes, with a
+    // prominent-disclosure obligation attached -- or it is running a foreground service started
+    // with the `location` type. A managed phone is in somebody's pocket with the screen off,
+    // which is precisely the blocked case, so without one of the two "find this device" answers
+    // nothing at all on exactly the devices it exists for.
+    //
+    // This takes the second route, for the length of ONE request: the service adds the location
+    // type, the fix is taken, and the type goes away again. That is a narrower thing to hold
+    // than a permanent background-location grant, and it is visible -- the system shows a
+    // location indicator while it is in effect. Roadmap #23 records background location as
+    // deliberately still out of scope.
+
+    /// <summary>The running service, so a locate can reach it. Set in OnCreate and cleared in
+    /// OnDestroy; null when no service is up, which the caller treats as "no promotion" rather
+    /// than as an error.</summary>
+    private static AgentService? _running;
+
+    /// <summary>Promote the foreground service to include the location type for the length of
+    /// one request. Dispose the result to demote. Null means the promotion did not happen --
+    /// the attempt goes ahead anyway, because on a device whose screen is on it works
+    /// regardless, and half an answer beats none.
+    ///
+    /// **The caller must already have checked the runtime permission.** From Android 14,
+    /// startForeground with the location type while lacking it throws SecurityException, which
+    /// would take down the whole agent for the crime of being asked where it is on a device
+    /// where somebody said no. See AndroidLocationReader, which checks first.</summary>
+    internal static IDisposable? BeginLocationSession()
+    {
+        var service = _running;
+        if (service is null || !OperatingSystem.IsAndroidVersionAtLeast(29)) return null;
+        try
+        {
+            service.StartInForeground(withLocation: true);
+            return new LocationSession(service);
+        }
+        catch (Exception e)
+        {
+            service._log?.LogWarning("Could not promote the service for location: {Msg}",
+                e.Message);
+            return null;
+        }
+    }
+
+    private sealed class LocationSession(AgentService service) : IDisposable
+    {
+        public void Dispose()
+        {
+            try { service.StartInForeground(withLocation: false); }
+            catch (Exception e)
+            {
+                // Left promoted. Not fatal and not silent: the system keeps showing a location
+                // indicator, which is a support call rather than a leak, and the next service
+                // start clears it.
+                service._log?.LogWarning("Could not demote the service after locating: {Msg}",
+                    e.Message);
+            }
+        }
     }
 
     private void CreateNotificationChannel()

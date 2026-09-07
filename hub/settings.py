@@ -223,6 +223,14 @@ REGISTRY = (
        unit="days"),
     _s("data.command_output_retention_seconds", "data", "int", 86400, minimum=3600,
        maximum=2592000, unit="seconds"),
+    # **The one retention knob here that is a privacy control rather than a disk-space one.**
+    # Readings and command output are pruned because those tables grow; location fixes are
+    # pruned because a record of where a person was three months ago should not exist by
+    # default. Thirty days matches data.retention_days by coincidence rather than by
+    # derivation, and this one is meant to be turned DOWN -- see location.py and SECURITY.MD's
+    # personal-data inventory.
+    _s("data.location_retention_days", "data", "int", 30, minimum=1, maximum=365,
+       unit="days"),
 
     # ---------------- History metrics: which sensors are recorded to history ----------------
     # One on/off toggle per chartable metric on the per-machine History dashboard. Off means
@@ -473,6 +481,15 @@ REGISTRY = (
     # one, hence a knob defaulted to the case an operator will actually be doing.
     _s("provisioning.leave_system_apps_enabled", "provisioning", "bool", True),
 
+    # ---------------- Location: asking a device where it is (roadmap #23) ----------------
+    # How long the DEVICE spends looking, sent as the command's only parameter. A satellite
+    # fix from cold takes tens of seconds outdoors and never arrives indoors, so this is the
+    # point at which the device gives up and answers with its last known position instead of
+    # leaving an operator watching a spinner. Which provider to ask is deliberately NOT
+    # settable: the device is the only thing that knows what it actually has.
+    _s("location.default_timeout_seconds", "location", "int", 45, minimum=5, maximum=300,
+       unit="seconds"),
+
     # ---------------- Rules: conditions over machine data, and what they do ----------------
     # A rule is "condition + who it applies to + what happens". These knobs are the fuses
     # around the last third of that, because a rule engine that can issue commands is a
@@ -530,7 +547,8 @@ REGISTRY = (
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "provisioning", "rules", "sharing")
+            "directory", "firmware", "patches", "wake", "provisioning", "location",
+            "rules", "sharing")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

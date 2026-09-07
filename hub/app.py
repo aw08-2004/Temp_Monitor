@@ -45,6 +45,7 @@ import firmware
 import patches
 import wake
 import capabilities
+import location
 import provisioning
 import rules
 import scripts
@@ -72,6 +73,7 @@ from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
 from capabilities_web import create_capabilities_blueprint
 from provisioning_web import create_provisioning_blueprint
+from location_web import create_location_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -114,7 +116,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.99.0"
+HUB_VERSION = "1.100.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2052,6 +2054,16 @@ def _on_command_result(command_id, machine, success, result, output=None):
     if rules.handle_probe_result(DB_PATH, command_id, success=success, result=result,
                                  output=output) is not None:
         return None
+    # Location fixes arrive the same way again (roadmap #23). Its own try/except, unlike the
+    # two beside it: this is the endpoint EVERY agent in the fleet posts every result to, so a
+    # malformed position from one phone must not turn into a 500 that makes another machine's
+    # command look like it failed. A dropped fix costs one locate; a 500 here costs a result.
+    try:
+        if location.handle_result(DB_PATH, command_id, success=success, result=result,
+                                  output=output) is not None:
+            return None
+    except Exception as e:
+        print(f"[location] Could not record a fix for {machine}: {e}")
     return rules.handle_message_result(
         DB_PATH, command_id,
         status=fleet.STATUS_DONE if success else fleet.STATUS_FAILED,
@@ -2152,6 +2164,14 @@ app.register_blueprint(create_capabilities_blueprint(DB_PATH, login_required, ac
 app.register_blueprint(create_provisioning_blueprint(
     DB_PATH, login_required, access,
     hub_url=HUB_URL, enrollment_secret=AGENT_ENROLLMENT_SECRET))
+
+# On-demand device location (roadmap #23 phase B). Reading a last known position is `view` +
+# machine scope, like any other thing a machine reports about itself; ASKING is its own
+# `locate_device` capability rather than the `issue_commands` that wake, the Processes card and
+# the file explorer all reuse. Those act on a machine and this one acts on a person -- "may
+# reboot a PC" must not silently mean "may find out where an employee is". fleet_web.py refuses
+# a hand-rolled locate through the generic command endpoint for the same reason.
+app.register_blueprint(create_location_blueprint(DB_PATH, login_required, access))
 
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
@@ -3047,6 +3067,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # both rows describe one physical machine, and the survivor is the one still reporting.
     # Not merged: a union of two command lists would claim an ability neither agent reported.
     capabilities.rename_machine(DB_PATH, dropped, survivor)
+    # Location history MERGES rather than picking a winner, unlike the capability report above:
+    # a merge folds two records of one physical device together, and "where was this phone on
+    # Tuesday" is the same question afterwards.
+    location.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -3322,6 +3346,27 @@ def retention_pruner():
                 prune_command_output_once()
             except Exception as e:
                 print(f"[retention] Command-output prune failed: {e}")
+            # Location fixes (roadmap #23). Its own try, like its neighbours, and the one
+            # prune here that is a PRIVACY control rather than a disk-space one: the table is
+            # tiny and would never need pruning for size. What expires is the record of where
+            # somebody was, which is why the default is short and why this failing is worth a
+            # line in the log rather than being silently skipped.
+            try:
+                cutoff = int(time.time()) - (
+                    settings.get_int(DB_PATH, "data.location_retention_days") * 86400)
+                dropped = location.prune(DB_PATH, cutoff)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} location fix(es).")
+            except Exception as e:
+                print(f"[retention] Location prune failed: {e}")
+            # ...and file a "no answer" row for any locate whose command expired or failed
+            # without one. Separate try, and not really retention -- but this is the only tick
+            # that runs for a feature with no scheduler of its own, and without it a locate
+            # aimed at a switched-off phone sits in the console as "waiting" forever.
+            try:
+                location.sweep_unanswered(DB_PATH)
+            except Exception as e:
+                print(f"[retention] Location sweep failed: {e}")
             # Lapsed process watches. Not a retention question -- is_watched already tests
             # the expiry, so a stale row is never believed -- just housekeeping, so that a
             # table which gains a row per machine anyone ever opened the card on does not
@@ -4057,6 +4102,7 @@ firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
+location.init_location_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -4933,6 +4979,11 @@ def delete_machine(machine):
     # a different box reusing this hostname would silently have commands REFUSED that it can
     # run perfectly well, with a message naming a platform it is not.
     capabilities.forget_machine(DB_PATH, machine_name)
+    # And every position it ever reported (roadmap #23). No exception here, unlike patch
+    # outcomes and backup manifests: those survive because they are facts about an update or an
+    # archive, while where a device WAS is a fact about a person, and keeping it after the
+    # device is gone is pure liability.
+    location.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

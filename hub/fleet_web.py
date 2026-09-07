@@ -617,6 +617,17 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # (name, pid) pairing that protects against PID reuse and refuses the critical
         # Windows processes whose termination is a bugcheck rather than a closed program.
         # Accepting a hand-rolled copy here would make both of those guards optional.
+        # **The one refusal here that is about a CAPABILITY rather than about params.** Every
+        # other entry in this list is refused because a hand-rolled copy would carry a session
+        # id or an expired snapshot; `locate_device` carries nothing at all. It is refused
+        # because this endpoint's gate is `issue_commands`, and asking a device where it is
+        # needs `locate_device` -- a separate capability precisely so that "may reboot a PC"
+        # does not silently mean "may find out where an employee is". Accepting one here would
+        # route around that gate for the whole helpdesk. See location_web.py.
+        if data.get("type") in fleet.LOCATION_COMMANDS:
+            return jsonify({"error": "Devices are located from the machine's own page, which "
+                                     "checks the 'locate_device' permission and notifies the "
+                                     "device."}), 400
         if data.get("type") in fleet.PROCESS_COMMANDS:
             return jsonify({"error": "Processes are ended and restarted from the machine's "
                                      "Processes card, not the command channel."}), 400

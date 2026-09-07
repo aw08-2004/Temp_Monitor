@@ -72,7 +72,7 @@ on, and it survived contact with Android intact.
 | **Identity** | `Build.MODEL` / `MANUFACTURER` for model and vendor, `Build.VERSION.RELEASE` for the OS caption, `Build.DISPLAY` as `os_build`, the primary ABI as `os_arch`, and the SSAID as `serial_number` — see below |
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or typed once on the setup screen |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
-| **Commands** | `rename` |
+| **Commands** | `rename`, `locate_device` |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
@@ -212,6 +212,50 @@ The Dashboard's `_OS_MATCHES` gained an `android` bucket in the same release, or
 `linux` -- an Android device really is running a Linux kernel, and a caption mentioning both
 must not file phones in with the servers.
 
+## Locating a device
+
+`locate_device` asks the device where it is, once, when an operator presses a button. Nothing
+polls and there is no background collection.
+
+**"I could not tell you where I am" is a SUCCESS.** A device indoors, with location switched
+off, or with the permission never granted has answered the question truthfully. Reported as a
+failure it would be indistinguishable in the console from a network problem or a crashed agent,
+and an operator hunting a lost phone would spend their time on the agent. A `Fail` from this
+executor means one thing only: it could not run.
+
+**The device tells the person holding it who asked** -- a notification naming the operator, on
+its own channel at Default importance rather than the silent one the foreground service uses,
+posted BEFORE the fix is taken and whether or not one is found. A notification only on success
+would make a failed locate the quiet way to check whether somebody's phone is switched on. It is
+also never awaited: a device where the notification permission was refused must still answer, or
+refusing the notification would become a way to refuse being found.
+
+**Framework `LocationManager`, not `FusedLocationProviderClient`.** The fused provider is
+better indoors and would be the first Google dependency in this repo: a large transitive binding
+graph plus a hard requirement that Play Services is present and current, which fails on
+de-Googled builds and on exactly the cheap tablets a fleet buys by the dozen.
+
+**Both providers are asked at once and the best answer within the budget wins.** Taking the
+first fix would always take the network one -- about a second, with a radius of several hundred
+metres -- while GPS takes tens of seconds and lands inside ten. A fix at 25 m or better ends the
+wait early; otherwise the budget runs out and whatever was collected is the answer. A last known
+position is returned rather than nothing, flagged `stale` and carrying the time it was actually
+taken.
+
+**Background access comes from the foreground service, not from a background permission.**
+Android 10+ blocks location while an app is not visible unless it holds
+`ACCESS_BACKGROUND_LOCATION` -- a standing grant to follow a device -- or is running a
+foreground service started with the `location` type. The agent promotes its service to include
+that type for the length of one request and demotes immediately after. The permission is
+checked BEFORE the promotion: from Android 14, starting a foreground service with the location
+type while lacking it throws, which would take down the whole agent for the crime of being
+asked where it is on a device where somebody said no.
+
+Everything about what a fix MEANS -- the time budget and its bounds, what counts as a fix, the
+wire shape, what to say when there is not one -- is in `FleetHubAgent.Core`, where it has 15
+tests that run on a workstation. The two Android classes only answer "here is a position, or
+here is why not" and "tell the person who asked".
+
 ## Fully managed (device owner)
 
 The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
@@ -256,14 +300,14 @@ src/FleetHubAgent.Core/       the protocol -- plain net10.0, tested on the works
   AgentLoops.cs               the three loops
   MachineNaming.cs            the derived name, and why it cannot be the model alone
   MachineNameProvider.cs      the current name, and persist-before-adopt
-  Fleet/                      hub client, dispatcher, capability report, rename
+  Fleet/                      hub client, dispatcher, capability report, rename, locate
   State/                      the identity store, behind an interface
   Telemetry/                  the report builder, the sensor contracts, identity cleaning
 src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   AgentService.cs             the foreground service, and the composition root
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
-  Platform/                   SharedPreferences, Build fields, sensors, managed config, logcat
+  Platform/                   SharedPreferences, Build fields, sensors, location, managed config, logcat
   Policy/                     the device-admin component and the provisioning activities
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push

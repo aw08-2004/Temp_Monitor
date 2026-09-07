@@ -3186,6 +3186,91 @@ whose contents matter until it has been run once on a scratch device.**
 
 ---
 
+## 🚧 On-demand device location · hub 1.100.0 · `location.py` / `location_web.py`
+
+Phase B of #23. An operator asks a device where it is; the device answers, tells the person
+holding it who asked, and the hub files the answer. **Built and tested end to end in software;
+not yet exercised on hardware.**
+
+**On demand only, and that is the design rather than a first step.** Nothing polls. The only
+history that exists is a history of when somebody asked, which is a different and much smaller
+thing than a travel history.
+
+### The capability is the whole feature
+
+`locate_device` is its own capability, and **not** a reuse of `ISSUE_COMMANDS`. That breaks the
+house precedent deliberately: wake, the Processes card and the file explorer all reuse it, each
+on the argument that the action is less dangerous than the SYSTEM shell that gate already
+grants. The argument holds because all three act on a **machine**. This one acts on a **person**
+— "may reboot a PC" must not silently mean "may find out where an employee is", and folding it
+in would have handed location, on the day it shipped, to the whole helpdesk.
+
+**A capability is only real if there is no other door**, and there were two:
+
+- `POST /api/fleet/commands`, gated on `ISSUE_COMMANDS`, now refuses `locate_device`. It is the
+  only entry in that refusal list justified by a *capability* rather than by params that would
+  be stale on replay.
+- A saved **favorite** is replayed through that same endpoint, so `locate_device` is
+  unfavoritable for the same reason.
+
+Both refusals are invisible from outside — a hub with either hole behaves identically until
+somebody notices a technician has been locating phones — so both are asserted in
+`tests/test_location_web.py`.
+
+### Decisions
+
+- **Three outcomes, kept apart**: `located`, `unavailable` (the device answered and had no fix,
+  with the reason it gave) and `no_answer` (the command failed or expired). They send an
+  operator to three different places, and collapsing any pair is the tidy-looking change that
+  costs an afternoon. "No fix" is a **success** at the agent, on the same reasoning as
+  `ShowMessageExecutor`'s `no_session`: a failure is indistinguishable from a network problem.
+- **No request lifecycle of its own**, unlike `wake.py`. A wake needs one because delivery is a
+  relay through a third machine and success is confirmed by the target's later check-in; a
+  locate is one command to one device with one answer, so the command queue already models
+  every state it has. The retention tick sweeps locates that expired unanswered, because this
+  is a feature with no scheduler of its own.
+- **`stale` is carried end to end** and the console must show it. A last-known position two
+  hours old rendered as current is somebody driving to where a phone used to be.
+- **The disclosure fires before the fix is taken, and whether or not one is found.** A
+  notification only on success would make a failed locate the quiet way to check whether
+  somebody's phone is switched on.
+- **Retention is a privacy control**, not a disk-space one: the table is tiny and would never
+  need pruning for size. `data.location_retention_days` defaults to 30 and is meant to be turned
+  down. `forget_machine` erases a device's history immediately — unlike patch outcomes and
+  backup manifests, which survive deletion because they are facts about an update or an archive.
+
+### Rejected alternatives
+
+- **`FusedLocationProviderClient`.** Better indoors, and the first Google dependency in a repo
+  that vendors nothing from Google: a large transitive binding graph plus a hard requirement
+  that Play Services is present and current, which fails on de-Googled builds and on exactly the
+  cheap tablets a fleet buys by the dozen.
+- **`ACCESS_BACKGROUND_LOCATION`.** Still out of scope. The agent reaches location with the
+  screen off by promoting its foreground service to include the `location` type for the length
+  of one request and demoting immediately after — a narrower thing to hold than a standing grant
+  to follow a device, and one the system shows an indicator for.
+- **Taking the first fix that arrives.** That is always the network one: about a second, with a
+  radius of several hundred metres, while GPS takes tens of seconds and lands inside ten. For
+  "find this device" a kilometre-wide circle is often not an answer, so both providers are asked
+  and the most accurate within the budget wins.
+- **Letting the hub name the provider.** The device is the only thing that knows what it has.
+  The command's only param is a time budget; the answer carries the provider and accuracy.
+
+`SECURITY.MD` gained a **personal-data inventory** in this phase — what is collected, from whom,
+why, where, for how long and who can see it — plus the explicit note that FleetHub cannot supply
+workforce notice on a deploying organisation's behalf.
+
+### Not done
+
+No console UI yet: that is phase C (a fold on the machine page and a fleet map over
+`GET /api/location/fleet`). Today this is an API, a capability and storage, with 56 model tests
+and 41 route tests. **Nothing here has been run against a real device**, so the parts that can
+only fail on hardware are untested: whether the foreground-service promotion is accepted, what
+the OEM's location settings actually report, and how long a cold fix really takes on the pilot
+phone.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0

@@ -85,6 +85,20 @@ MANAGE_FIRMWARE = "manage_firmware"
 # like a machine's disks or its BIOS version. Knowing a PC is missing a security update is
 # not a privilege; deciding what happens about it is.
 MANAGE_PATCHES = "manage_patches"
+# Asking a device where it is (roadmap #23). **The one command-issuing feature in this product
+# that does NOT reuse ISSUE_COMMANDS**, and the departure is deliberate rather than an
+# oversight: wake, the Processes card and the file explorer all reuse it on the argument that
+# each is less dangerous than the SYSTEM shell that gate already grants. That argument works
+# because all three act on a MACHINE. This one acts on a person.
+#
+# "May reboot a PC" must not silently imply "may find out where an employee is." Folding this
+# into ISSUE_COMMANDS would have handed it, on the day it shipped, to everyone who already had
+# a reboot button -- which is the whole helpdesk.
+#
+# READING a device's last known position is deliberately NOT gated here: that is VIEW plus
+# machine scope, like every other thing a machine reports about itself. Knowing where a device
+# was when somebody last asked is not the privilege; making a device answer is.
+LOCATE_DEVICE = "locate_device"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -109,6 +123,7 @@ CAPABILITIES = (
     MANAGE_BACKUPS,
     MANAGE_FIRMWARE,
     MANAGE_PATCHES,
+    LOCATE_DEVICE,
     MANAGE_RULES,
     MANAGE_SETTINGS,
     MANAGE_USERS,

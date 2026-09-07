@@ -568,6 +568,10 @@
       "manage_rules": {
         "label": "Manage rules",
         "description": "Create and edit rules: conditions over machine data, and what happens when they match. A rule that sends commands to PCs also needs Issue commands."
+      },
+      "locate_device": {
+        "label": "Locate a device",
+        "description": "Ask a device where it is, on demand. Its own capability rather than part of 'Issue commands', deliberately: being able to reboot a PC must not silently mean being able to find out where an employee is. Reading a device's last known position only needs 'View' plus the machine being in scope. Every request is recorded in the audit trail with the operator's name, and the device shows a notification naming them too."
       }
     }
   },
@@ -590,7 +594,8 @@
       "wake": "Wake-on-LAN",
       "rules": "Rules",
       "sharing": "Cross-hub Sharing",
-      "provisioning": "Provisioning"
+      "provisioning": "Provisioning",
+      "location": "Location"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1009,6 +1014,18 @@
         "leave_system_apps_enabled": {
           "label": "Leave the device's own apps enabled",
           "help": "On, a provisioned device keeps its camera, dialer and settings. Off makes it a single-purpose kiosk: provisioning disables every system app this agent has not explicitly enabled."
+        }
+      },
+      "location": {
+        "default_timeout_seconds": {
+          "label": "Time a device spends looking",
+          "help": "How long a device tries for a fresh position before answering with its last known one instead. A satellite fix from cold takes tens of seconds outdoors and never arrives indoors, so this is the point at which the device stops rather than leaving somebody watching a spinner."
+        }
+      },
+      "data": {
+        "location_retention_days": {
+          "label": "Keep location history for",
+          "help": "How long recorded positions are kept before being deleted. This is a privacy control rather than a disk-space one -- the table is tiny -- so it is meant to be turned down. Deleting a machine erases its location history immediately, regardless of this."
         }
       }
     },

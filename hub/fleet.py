@@ -237,6 +237,27 @@ PROBE_COMMANDS = frozenset({
     "collect_probe",
 })
 
+# Asking a device where it is (roadmap #23).
+#
+# **The only command type in this catalog gated on something other than ISSUE_COMMANDS**, and
+# the only one refused outright by /api/fleet/commands for a reason that is not about its
+# params. Every other refusal there is because a hand-rolled copy would carry a session id or a
+# snapshot that has expired. This one is refused because the generic endpoint's gate is
+# ISSUE_COMMANDS, and accepting a `locate_device` through it would hand location to everyone
+# holding a reboot button -- silently, and past the capability that exists to stop exactly
+# that. See permissions.LOCATE_DEVICE and location_web.py.
+#
+# NOT favoritable, for the same reason: a favorite is replayed through that endpoint.
+#
+# Its only param is a time budget (`timeout_seconds`, from location.default_timeout_seconds).
+# WHICH provider to ask is deliberately not in it: the device is the only thing that knows what
+# it actually has, and a hub that named a provider would be choosing on behalf of forty models
+# it has never seen. The answer carries the provider that produced the fix and the accuracy it
+# claims, so nothing has to be assumed at this end.
+LOCATION_COMMANDS = frozenset({
+    "locate_device",
+})
+
 # The remote file explorer (see files.py) -- browsing a machine's disk, moving files on it,
 # and moving bytes between it and the operator's browser.
 #
@@ -270,7 +291,7 @@ ALL_COMMANDS = frozenset({
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
-      | FILE_COMMANDS)
+      | FILE_COMMANDS | LOCATION_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS
@@ -1756,6 +1777,15 @@ def _validate_favorite(name, command_type, params):
         # listing the operator is looking at, and that is where they belong.
         raise ValueError(f"{command_type!r} commands name paths on one machine's disk and "
                          f"cannot be saved as a favorite; use the Files tool instead")
+    if command_type in LOCATION_COMMANDS:
+        # The only entry in this list refused for a REASON THAT IS NOT ABOUT ITS PARAMS -- it
+        # has none. A favorite is replayed through /api/fleet/commands, which is gated on
+        # ISSUE_COMMANDS, so a saveable locate would be a way around the capability that
+        # exists to keep "may reboot a PC" from meaning "may find out where an employee is".
+        # See permissions.LOCATE_DEVICE.
+        raise ValueError(f"{command_type!r} is gated on the 'locate_device' capability and "
+                         f"cannot be saved as a favorite; locate a device from its own page "
+                         f"instead")
     if params is None:
         params = {}
     if not isinstance(params, dict):

@@ -1421,6 +1421,50 @@ an agent. Machine pages carry `platform`, `features` and `supported_commands` al
 > **Status:** built — hub 1.98.0. Only the Android agent reports capabilities today; the
 > Windows and Linux agents send nothing and are treated as unknown by design.
 
+## Locating a device
+
+Asking a managed Android device where it is, on demand.
+
+**On demand only, and that is the design rather than a first step.** Nothing polls. A position
+exists in the hub because an operator pressed a button and the device answered; there is no
+background collection and no travel history, only a history of *when somebody asked*.
+
+**Asking has its own capability — `locate_device` — and it is deliberately not
+`issue_commands`.** Wake, the Processes card and the file explorer all reuse that one on the
+argument that each is less dangerous than the SYSTEM shell it already grants, which holds
+because all three act on a machine. This one acts on a person: *being able to reboot a PC must
+not silently mean being able to find out where an employee is*. The hub refuses a hand-rolled
+`locate_device` through the generic command endpoint and refuses to save one as a favorite, so
+the capability cannot be routed around. **Reading** a last known position is `view` + machine
+scope, like any other thing a machine reports.
+
+**The device says who asked.** The agent posts a notification naming the operator, every time,
+*including when it has no position to give* — otherwise a failed request would be a quiet way
+to check whether somebody's phone is switched on. The audit trail records the same name.
+
+**Three outcomes, kept apart**, because they send you to three different places: a position; the
+device answered and had no fix (location switched off, nothing within the time budget, the
+permission never granted — the reason comes back with it); and the device never answered at all
+(switched off, out of coverage). A stale answer is labelled `stale` and carries the time the fix
+was actually taken — a last-known position shown as current is somebody driving to where a phone
+used to be.
+
+**Framework `LocationManager`, not Google Play Services.** The fused provider is better
+indoors, and would be the first Google dependency in a repo that vendors nothing from Google —
+failing outright on de-Googled builds and on the cheap tablets a fleet buys. Both providers are
+asked at once and the most accurate answer within the budget wins, so a network fix does not
+beat a GPS one just by arriving first.
+
+**Settings**: `location.default_timeout_seconds` (45) is how long the device spends looking;
+`data.location_retention_days` (30) is how long positions are kept. The second is a privacy
+control rather than a disk-space one — see the personal-data inventory in `SECURITY.MD`.
+
+**Endpoints**: `GET|POST /api/location/machines/<machine>`, `GET /api/location/fleet`.
+
+> **Status:** built — hub 1.100.0 / Android agent source. The console UI (a fold on the machine
+> page and a fleet map) is the next phase; today this is an API, a capability and storage.
+> **Not yet exercised on hardware.**
+
 ## Android device provisioning
 
 Enrolling an Android device as a **fully managed device** (device owner), so the agent can be

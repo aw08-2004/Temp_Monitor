@@ -509,6 +509,10 @@
       "manage_rules": {
         "label": "Gestionar reglas",
         "description": "Crear y editar reglas: condiciones sobre los datos de los equipos y qué ocurre cuando se cumplen. Una regla que envía comandos a los PC necesita además Emitir comandos."
+      },
+      "locate_device": {
+        "label": "Localizar un dispositivo",
+        "description": "Preguntar a un dispositivo dónde está, a petición. Es una capacidad propia y no parte de «Emitir comandos», deliberadamente: poder reiniciar un PC no debe significar en silencio poder averiguar dónde está una persona. Para leer la última posición conocida basta «Ver» y que la máquina esté en el ámbito. Cada petición queda registrada en la auditoría con el nombre del operador, y el dispositivo muestra una notificación que también lo nombra."
       }
     }
   },
@@ -531,7 +535,8 @@
       "wake": "Wake-on-LAN",
       "rules": "Reglas",
       "sharing": "Uso compartido entre concentradores",
-      "provisioning": "Aprovisionamiento"
+      "provisioning": "Aprovisionamiento",
+      "location": "Ubicación"
     },
     "unit": {
       "celsius": "°C",
@@ -937,6 +942,18 @@
         "leave_system_apps_enabled": {
           "label": "Dejar activadas las apps propias del dispositivo",
           "help": "Activado, un dispositivo aprovisionado conserva su cámara, su teléfono y sus ajustes. Desactivado lo convierte en un dispositivo de un solo uso: el aprovisionamiento desactiva toda app del sistema que este agente no haya habilitado explícitamente."
+        }
+      },
+      "location": {
+        "default_timeout_seconds": {
+          "label": "Tiempo que el dispositivo dedica a buscar",
+          "help": "Cuánto intenta un dispositivo obtener una posición nueva antes de responder con la última conocida. Una fijación por satélite en frío tarda decenas de segundos al aire libre y no llega nunca en interiores, así que este es el punto en el que el dispositivo se detiene en lugar de dejar a alguien mirando un indicador de carga."
+        }
+      },
+      "data": {
+        "location_retention_days": {
+          "label": "Conservar el historial de ubicación",
+          "help": "Cuánto tiempo se conservan las posiciones registradas antes de borrarse. Es un control de privacidad y no de espacio en disco -- la tabla es diminuta --, así que está pensado para bajarlo. Borrar una máquina elimina su historial de ubicación de inmediato, independientemente de esto."
         }
       }
     },
