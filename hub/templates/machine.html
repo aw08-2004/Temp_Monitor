@@ -3,21 +3,16 @@
 {% block extra_head %}
 {# xterm, permissions and backups left with the panels that used them; see tools.html. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
-{# Version-pinned with subresource integrity: an unversioned CDN URL resolves to whatever
-   the package publishes next, which would be a silent code-push into a console that can
-   run commands fleet-wide. Bumping a version means recomputing its integrity hash. #}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
-        integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
-        crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
-        integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
-        crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"
-        integrity="sha384-dwwI6ICEN/0ZQlS5owhUa/6ZzvwUPmjH45bFVCAcjgjTulbHJvlE+TGU3g1k0N3R"
-        crossorigin="anonymous"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"
-        integrity="sha384-ijk2QwnixVP19l5ENflXHY2/BMo9ANUiTqH6MiVk6i7wp68I6wjNQFOcyayHgClg"
-        crossorigin="anonymous"></script>
+{# Served from our own origin, pinned by what is checked in rather than by a URL -- see
+   static/vendor/README.md for the versions and their checksums. These were CDN-loaded with
+   subresource integrity until the whole set was vendored; SRI is how you make a THIRD
+   party's copy trustworthy, and on a same-origin file it protects nothing while adding a
+   failure the old setup did not have (a stale hash after a version bump disables the script
+   silently, in the browser, with nothing in the hub's logs). #}
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-plugin-zoom.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
 {% endblock %}
 {% block content %}
 {# data-can-issue-commands decides only whether the Processes card DRAWS its End task /

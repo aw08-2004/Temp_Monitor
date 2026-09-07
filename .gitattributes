@@ -24,3 +24,14 @@ hub/client.manifest.beta.json.sig -text
 # to build a release is a Windows workstation.
 agent-linux/**/*.sh text eol=lf
 agent-linux/packaging/*.service text eol=lf
+
+# Vendored browser dependencies are recorded by SHA-256 in hub/static/vendor/README.md, and a
+# checksum is only the record of what is served if the bytes on disk are the bytes that were
+# downloaded. core.autocrlf is true on the workstation that checks this repo out, and git
+# classifies minified JS as text -- so without these pins every checksum in that table would
+# drift on the next checkout, and `sha256sum ... # must match the table above` would fail for
+# a file nobody had touched. Same reasoning as the signed manifests above, one layer down:
+# there the bytes carry a signature, here they carry a published hash.
+hub/static/vendor/*.js -text
+hub/static/vendor/*.css -text
+hub/static/vendor/fonts/** -text

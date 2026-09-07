@@ -2978,6 +2978,42 @@ finds a tablet's battery at the top.
 
 ---
 
+## ✅ Vendored browser dependencies   ·   hub 1.97.0
+
+`hub/static/vendor/README.md` opens by saying the hub's pages "must work on an isolated LAN
+with no internet egress". **That was true of exactly one tab.** Terminal loaded xterm.js from
+`static/vendor/`; everything else reached out at page load — Chart.js, its date adapter and
+its zoom plugin from jsDelivr, socket.io from cdnjs, and the Inter webfont from Google Fonts
+on **every** page, including `login.html` and `invite.html`, which carry their own `<head>`
+rather than extending `base.html` and so kept their own copy of the link.
+
+So an air-gapped hub rendered unstyled and chart-less, and the failure looks cosmetic rather
+than broken — it reads as "the console is ugly here", not "a dependency is unreachable". All
+seven files are now checked in with pinned versions and SHA-256s in that README, next to the
+`curl` block that reproduces them.
+
+**`integrity` and `crossorigin` were dropped with the move, deliberately.** Subresource
+integrity is how you make a *third party's* copy trustworthy. On a file served from our own
+origin it protects nothing that serving it ourselves has not already protected, and it adds a
+failure the old setup did not have: a stale hash after a version bump disables the script
+silently, in the browser, with nothing in the hub's logs.
+
+**Rejected: keeping the CDN and relying on SRI.** SRI protects integrity, not availability,
+and the claim in that README is about availability.
+
+Two pins are load-bearing rather than merely current. **socket.io stays at 4.7.2** because it
+must match the Socket.IO protocol the server's Flask-SocketIO speaks — upgrade the two
+together or not at all. **Inter is the variable font**, one file covering 100–900, replacing
+the five static weights the Google URL requested; `--font-sans` in `tokens.css` gained a real
+fallback chain at the same time, because the old one reached bare `sans-serif` on Windows and
+a woff2 that fails to load must land on Segoe UI rather than Times.
+
+This also builds the muscle the Android map needs: adding Leaflet is now the same three steps
+(download pinned, record the checksum, reference from `static/`) rather than a new argument
+about whether the frontend may have a dependency at all.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0
