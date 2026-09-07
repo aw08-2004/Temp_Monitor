@@ -30,6 +30,35 @@ public sealed class RemotePeer : IDisposable
     private int _localCandidates;
     private int _remoteCandidates;
 
+    /// <summary>Set once the peer has first reached <c>connected</c> -- i.e. once DTLS has
+    /// completed and the SRTP context exists. **Frames encoded before that point cannot be sent
+    /// at all**: SIPSorcery rejects every one with "SendRtpPacket cannot be called on a secure
+    /// session before calling SetSecurityContext", and it warns once per rejected packet.
+    ///
+    /// Capture starts as soon as the offer is posted, so at 25fps a session that spends its full
+    /// ICE timeout failing to connect logs several hundred of those warnings -- which is not a
+    /// cosmetic problem. remote-helper.log is the documented first stop for diagnosing a session
+    /// that will not connect, and the handful of lines that say WHY (the ICE candidates, the
+    /// Allocate error responses, which relay answered) end up buried under them. A real field log
+    /// from 2026-09-07 was 280 of 318 lines this one warning, and the four lines that identified
+    /// a rejected TURN credential were almost missed.
+    ///
+    /// Dropping the frames here is NOT a behaviour change: SIPSorcery was already discarding
+    /// them, just loudly. It is safe to discard because the encoder guarantees an IDR at least
+    /// every two seconds (see <see cref="H264Encoder"/>), so a viewer whose media starts
+    /// mid-GOP recovers on its own -- the same recovery the pipeline already relies on.
+    ///
+    /// A latch rather than a live <c>connectionState == connected</c> test, deliberately: ICE can
+    /// dip through <c>disconnected</c> and recover, and the SRTP context survives that. Gating on
+    /// the live state would stop sending at exactly the moment the stream is trying to come
+    /// back.</summary>
+    private volatile bool _mediaReady;
+
+    /// <summary>Frames discarded before <see cref="_mediaReady"/> latched, reported once on
+    /// connect. The count is the diagnostic the per-packet warnings were carrying -- how long the
+    /// stream spent waiting on DTLS -- kept without the flood.</summary>
+    private int _framesBeforeReady;
+
     /// <summary>Fires for each local ICE candidate; the payload is ready to POST as a signal.</summary>
     public event Action<object>? OnLocalIceCandidate;
     public event Action<RTCPeerConnectionState>? OnConnectionStateChange;
@@ -92,6 +121,13 @@ public sealed class RemotePeer : IDisposable
         _pc.onconnectionstatechange += state =>
         {
             _log($"peer connection state: {state}");
+            if (state == RTCPeerConnectionState.connected && !_mediaReady)
+            {
+                _mediaReady = true;
+                var dropped = Interlocked.Exchange(ref _framesBeforeReady, 0);
+                if (dropped > 0)
+                    _log($"discarded {dropped} encoded frame(s) captured before DTLS completed");
+            }
             if (state == RTCPeerConnectionState.failed)
                 _log($"ICE never found a working path: {_localCandidates} local / " +
                      $"{_remoteCandidates} remote candidate(s) were on the table. If neither side " +
@@ -192,6 +228,9 @@ public sealed class RemotePeer : IDisposable
     public void SendFrame(byte[] encoded, uint durationRtpUnits)
     {
         if (encoded.Length == 0) return;
+        // Before DTLS completes there is no SRTP context, so this frame cannot go anywhere --
+        // see _mediaReady for why we drop it here rather than letting SIPSorcery warn about it.
+        if (!_mediaReady) { Interlocked.Increment(ref _framesBeforeReady); return; }
         _pc.SendVideo(durationRtpUnits, encoded);
     }
 
