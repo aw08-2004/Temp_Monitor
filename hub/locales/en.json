@@ -35,7 +35,8 @@
     "download": "Download Client",
     "rules": "Rules",
     "tools": "Tools",
-    "sharing": "Sharing"
+    "sharing": "Sharing",
+    "provisioning": "Device provisioning"
   },
   "hub_update": {
     "_note": [
@@ -588,7 +589,8 @@
       "signin": "Sign-in",
       "wake": "Wake-on-LAN",
       "rules": "Rules",
-      "sharing": "Cross-hub Sharing"
+      "sharing": "Cross-hub Sharing",
+      "provisioning": "Provisioning"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -994,6 +996,20 @@
       "sharing.peer_lifetime_days": {
         "label": "Peer link lifetime",
         "help": "How long a paired hub's credential stays valid, sliding each time it is used. This bounds the link, not a share -- a share can carry its own expiry, or none. Each peer keeps the lifetime in force when it was paired."
+      },
+      "provisioning": {
+        "apk_url": {
+          "label": "Agent APK URL",
+          "help": "Where a factory-reset device downloads the Android agent from during setup. It must be an https URL reachable from wherever devices are provisioned, because the device has no configuration of its own yet."
+        },
+        "signature_checksum": {
+          "label": "APK signature checksum",
+          "help": "The signing certificate's SHA-256 as URL-safe base64: 43 characters, no padding. The setup wizard refuses an APK whose signature does not match. This changes only when the Android signing key does."
+        },
+        "leave_system_apps_enabled": {
+          "label": "Leave the device's own apps enabled",
+          "help": "On, a provisioned device keeps its camera, dialer and settings. Off makes it a single-purpose kiosk: provisioning disables every system app this agent has not explicitly enabled."
+        }
       }
     },
     "_choice": [
@@ -3223,6 +3239,48 @@
       "uptime": "Uptime",
       "days": "{days} days",
       "projection_note": "This is everything the owning hub sends about a borrowed machine. Its serial, asset tag and directory record stay on their side."
+    }
+  },
+  "provisioning": {
+    "heading": "Android device provisioning",
+    "intro": "Scan this code at a factory-reset Android device to enrol it as a fully managed device. One scan installs the agent, hands it device ownership, points it at this hub and enrols it.",
+    "warning": "Provisioning requires a factory reset. Everything on the device is erased, and device ownership cannot be granted afterwards or moved to another app. Only scan this at a device that has already been reset and whose contents you no longer need.",
+    "qr": {
+      "heading": "Provisioning code",
+      "loading": "Building the payload...",
+      "alt": "Android provisioning QR code",
+      "copy": "Copy payload",
+      "copied": "Copied.",
+      "copy_failed": "The browser refused clipboard access.",
+      "print": "Print",
+      "secret_note": "The code carries this fleet's enrollment secret, so one scan both provisions and enrols the device. Treat a photograph of it the way you would treat the secret itself.",
+      "unreachable": "The hub did not answer.",
+      "failed": "The provisioning payload could not be built.",
+      "too_large": "The payload is too large to fit in a QR code. Shorten the APK download URL."
+    },
+    "unconfigured": {
+      "help": "Fill these in under Settings, in the Provisioning section. The converter below turns the digest apksigner prints into the form the code needs."
+    },
+    "payload": {
+      "field": "Field",
+      "value": "Value",
+      "component": "DEVICE_ADMIN_COMPONENT_NAME"
+    },
+    "checksum": {
+      "heading": "Signature checksum converter",
+      "help": "apksigner verify --print-certs prints the signing certificate's SHA-256 in hex. The provisioning code needs the same bytes as URL-safe base64. Pasting the hex produces a value that looks right and fails on a device that has already been wiped.",
+      "input_label": "SHA-256 digest (hex)",
+      "placeholder": "b39a161053ea...",
+      "convert": "Convert",
+      "failed": "That could not be converted."
+    },
+    "steps": {
+      "heading": "Provisioning a device",
+      "reset": "Factory reset the device, or start with one out of the box.",
+      "tap": "At the welcome screen, tap the same spot six times to open the QR scanner.",
+      "wifi": "Join a network when asked. This code deliberately carries no Wi-Fi credentials.",
+      "scan": "Scan the code above. The device downloads and installs the agent itself.",
+      "verify": "When setup finishes, the FleetHub Agent screen should read “Fully managed (device owner)” and the machine should appear in Inventory."
     }
   }
 }

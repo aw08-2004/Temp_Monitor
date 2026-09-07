@@ -45,6 +45,7 @@ import firmware
 import patches
 import wake
 import capabilities
+import provisioning
 import rules
 import scripts
 import notify
@@ -70,6 +71,7 @@ from bios_web import create_bios_blueprint
 from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
 from capabilities_web import create_capabilities_blueprint
+from provisioning_web import create_provisioning_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -112,7 +114,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.98.0"
+HUB_VERSION = "1.99.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2136,6 +2138,20 @@ app.register_blueprint(create_wake_blueprint(
 # capability is reported by the machine on its heartbeat, and an operator override would be a
 # way to tell the hub that a phone can run a script.
 app.register_blueprint(create_capabilities_blueprint(DB_PATH, login_required, access))
+
+# The Android device-owner provisioning QR (roadmap #23 phase A). Gated on `manage_settings`
+# throughout: the payload carries the fleet's shared enrollment secret, so this endpoint is a
+# way to read AGENT_ENROLLMENT_SECRET out of the hub and belongs with the capability that can
+# already read the rest of the configuration.
+#
+# HUB_URL is passed for the same reason packages and BIOS images need it -- a provisioned
+# device gets exactly one chance to be pointed at the right hub, and a Host header is not the
+# hub's address. The enrollment secret rides along so ONE scan both provisions and enrols;
+# without it a device comes up managed, reporting telemetry, and silently accepting no
+# commands, which is the state the Android agent's own setup screen exists to make visible.
+app.register_blueprint(create_provisioning_blueprint(
+    DB_PATH, login_required, access,
+    hub_url=HUB_URL, enrollment_secret=AGENT_ENROLLMENT_SECRET))
 
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the

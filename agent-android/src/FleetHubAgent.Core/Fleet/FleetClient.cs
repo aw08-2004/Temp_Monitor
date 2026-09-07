@@ -40,16 +40,22 @@ public sealed class FleetClient : IDisposable
     /// to sit on until it has something is not that.</summary>
     private readonly HttpClient _commandHttp;
 
-    /// <summary>What this device tells the hub it can do, sent on every heartbeat. Optional so
-    /// a caller that has no dispatcher to derive it from still gets a working client -- the hub
-    /// reads a missing block as "has not said" and gates nothing, which is exactly the state
-    /// every Windows agent in the field is in.</summary>
-    private readonly AgentCapabilities? _capabilities;
+    /// <summary>What this device tells the hub it can do, sent on every heartbeat.
+    ///
+    /// A FUNCTION rather than a value because part of the answer can change while the process
+    /// runs: device ownership can be granted to a live agent (`adb shell dpm set-device-owner`),
+    /// and a report captured once at startup would go on claiming the device is unmanaged for
+    /// as long as the service happened to stay up.
+    ///
+    /// Optional, so a caller with no dispatcher to derive it from still gets a working client:
+    /// the hub reads a missing block as "has not said" and gates nothing, which is exactly the
+    /// state every Windows agent in the field is in.</summary>
+    private readonly Func<AgentCapabilities>? _capabilities;
 
     private AgentIdentity _identity;
 
     public FleetClient(ILogger<FleetClient> log, AgentState state, MachineNameProvider names,
-        AgentCapabilities? capabilities = null)
+        Func<AgentCapabilities>? capabilities = null)
     {
         _log = log;
         _state = state;
@@ -168,7 +174,15 @@ public sealed class FleetClient : IDisposable
             // currently ignore; ignoring it is honest, since nothing here reads a
             // preferred-sensor list yet.
             var body = new JsonObject { ["config_version"] = "" };
-            if (_capabilities is not null) body["capabilities"] = _capabilities.ToJson();
+            // Never let building the report cost a heartbeat: it reads platform state, and a
+            // device whose policy service is unavailable must still read as ONLINE in the
+            // console. A dropped block leaves the machine ungated, which is the same state
+            // every Windows agent in the field is in.
+            if (_capabilities is not null)
+            {
+                try { body["capabilities"] = _capabilities().ToJson(); }
+                catch (Exception e) { _log.LogDebug("Capability report skipped: {Msg}", e.Message); }
+            }
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);

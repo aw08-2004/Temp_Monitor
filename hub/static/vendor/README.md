@@ -19,6 +19,8 @@ the checksums below stay the record of what is actually being served.
 | `chartjs-adapter-date-fns.bundle.min.js`  | `chartjs-adapter-date-fns`  | 3.0.0   | `ea7ab30d26c38dcf1f2d26bb43e73a94537b58f1906f55e1a546dd09321b5615` |
 | `chartjs-plugin-zoom.min.js`              | `chartjs-plugin-zoom`       | 2.2.0   | `e4a088e5bab93be6ee47c939eeb9ebaa80e0b39156d4bdfd1af9c844be81b6c4` |
 | `socket.io.min.js`                        | `socket.io-client`          | 4.7.2   | `83df4abc7eec941f1d29ae254e80bac0bb82d398fbe2e8ee4ea2a7efc8e704f1` |
+| `qrcode.js`                               | `qrcode-generator`          | 2.0.4   | `79ec86f82856005b1c887905cfccfcfbec3821ca61c7fd5a952faa5f778f791c` |
+| `qrcode_UTF8.js`                          | `qrcode-generator`          | 2.0.4   | `e522d64003b332e29271fdce4993ed3ae2934c8947f41654bd324ddcfa2de301` |
 | `fonts/inter-latin-wght-normal.woff2`     | `@fontsource-variable/inter`| 5.3.0   | `3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62` |
 | `fonts/inter-latin-ext-wght-normal.woff2` | `@fontsource-variable/inter`| 5.3.0   | `34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956` |
 
@@ -37,12 +39,14 @@ curl -L -o chart.umd.min.js   https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/c
 curl -L -o chartjs-adapter-date-fns.bundle.min.js https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js
 curl -L -o chartjs-plugin-zoom.min.js             https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js
 curl -L -o socket.io.min.js   https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js
+curl -L -o qrcode.js          https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode.js
+curl -L -o qrcode_UTF8.js     https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode_UTF8.js
 curl -L -o fonts/inter-latin-wght-normal.woff2     https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/files/inter-latin-wght-normal.woff2
 curl -L -o fonts/inter-latin-ext-wght-normal.woff2 https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/files/inter-latin-ext-wght-normal.woff2
 curl -L -o fonts/LICENSE      https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/LICENSE
 sha256sum xterm.js xterm.css xterm-addon-fit.js chart.umd.min.js \
           chartjs-adapter-date-fns.bundle.min.js chartjs-plugin-zoom.min.js \
-          socket.io.min.js fonts/*.woff2   # must match the table above
+          socket.io.min.js qrcode.js qrcode_UTF8.js fonts/*.woff2   # must match the table above
 ```
 
 ## Why xterm.js
@@ -80,3 +84,32 @@ and the claim at the top of this file is about availability.
 source and one refresh idiom. Version 4.7.2 is not arbitrary: it must stay compatible with
 the Socket.IO protocol the server's Flask-SocketIO speaks, so this is a pin to match, not a
 number to keep current. Upgrade the two together or not at all.
+
+## Why qrcode-generator
+
+Device Owner provisioning (roadmap #23) starts by scanning a QR at a factory-reset device's
+setup wizard, so the console has to draw one. A QR encoder is not a thing to hand-roll:
+Reed-Solomon error correction, the eight mask patterns and the format/version information
+blocks are a specification to implement, not an algorithm to improvise, and the failure mode
+of getting one subtly wrong is a code that scans on the phone in your hand and not on the one
+at the desk.
+
+**`qrcode.js` is checked in UNMINIFIED**, unlike its neighbours, and that is deliberate rather
+than an oversight: the package publishes no minified build, and for 56 KB on one page that
+only `manage_settings` holders open, a file somebody can actually read is worth more than the
+bytes. It also carries its own MIT licence header, which is why there is no separate licence
+file for it here.
+
+`qrcode_UTF8.js` (800 bytes) replaces the default byte encoder with a UTF-8 one. The
+provisioning payload is ASCII today, so it changes nothing -- it is here so that an operator
+who one day pastes a non-ASCII character into an APK URL gets a QR that encodes it correctly
+rather than one that silently encodes something else.
+
+**Rejected: `qrious`**, which is the better-known library and renders straight to a canvas. It
+is GPL-3.0, and nothing else in this repo is copyleft.
+
+**The console does not use the library's own `createSvgTag`/`createImgTag` renderers.**
+`provisioning.js` reads `isDark(row, col)` and paints a canvas itself: about fifteen lines,
+no `innerHTML` anywhere near a payload that contains operator-supplied text, and no `data:`
+URI. Same instinct as the rest of the frontend, and see hub/provisioning.py for what is in
+that payload.

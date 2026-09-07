@@ -448,6 +448,31 @@ REGISTRY = (
     # a deploy.
     _s("wake.auto_wake_targets", "wake", "bool", False),
 
+    # ------------- Provisioning: the Android device-owner QR (roadmap #23) -------------
+    # Two facts the hub cannot work out for itself, and one behaviour knob. Together they
+    # become a QR code that a technician scans at a factory-reset device's setup wizard --
+    # see provisioning.py, which refuses to build a partial one, because a payload missing a
+    # field still SCANS and then fails minutes later on a device that has already been wiped.
+    #
+    # `apk_url` is where the setup wizard downloads the agent from, over whatever network the
+    # device has been put on, before it has any configuration of its own. `signature_checksum`
+    # is what makes that download safe: the wizard refuses an APK whose signing certificate
+    # does not match. It is FLEET STATE in the same sense the Android keystore is -- the same
+    # key that decides what every device reports as its serial number -- so it changes only
+    # when the signing key does, and a fleet with two of them is a fleet with two identities.
+    #
+    # Deliberately NOT settings: the admin component name, which is a constant on both sides
+    # (a setting could drift from the APK, and the drift is only discovered on a device that
+    # has already been reset), and any Wi-Fi credential -- see provisioning.py for why a PSK
+    # has no honest home here.
+    _s("provisioning.apk_url", "provisioning", "str", ""),
+    _s("provisioning.signature_checksum", "provisioning", "str", ""),
+    # False turns the device into a kiosk: provisioning DISABLES every system app the device
+    # owner has not explicitly enabled, which on a phone somebody carries means no camera, no
+    # dialer and no settings. Correct for a single-purpose device and wrong for every other
+    # one, hence a knob defaulted to the case an operator will actually be doing.
+    _s("provisioning.leave_system_apps_enabled", "provisioning", "bool", True),
+
     # ---------------- Rules: conditions over machine data, and what they do ----------------
     # A rule is "condition + who it applies to + what happens". These knobs are the fuses
     # around the last third of that, because a rule engine that can issue commands is a
@@ -505,7 +530,7 @@ REGISTRY = (
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "rules", "sharing")
+            "directory", "firmware", "patches", "wake", "provisioning", "rules", "sharing")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

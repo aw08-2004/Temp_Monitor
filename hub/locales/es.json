@@ -25,7 +25,8 @@
     "download": "Descargar cliente",
     "rules": "Reglas",
     "tools": "Herramientas",
-    "sharing": "Compartir"
+    "sharing": "Compartir",
+    "provisioning": "Aprovisionamiento de dispositivos"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -529,7 +530,8 @@
       "signin": "Inicio de sesión",
       "wake": "Wake-on-LAN",
       "rules": "Reglas",
-      "sharing": "Uso compartido entre concentradores"
+      "sharing": "Uso compartido entre concentradores",
+      "provisioning": "Aprovisionamiento"
     },
     "unit": {
       "celsius": "°C",
@@ -922,6 +924,20 @@
       "sharing.peer_lifetime_days": {
         "label": "Vigencia del enlace entre concentradores",
         "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición -- una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
+      },
+      "provisioning": {
+        "apk_url": {
+          "label": "URL del APK del agente",
+          "help": "De dónde descarga el agente de Android un dispositivo recién restablecido durante la configuración. Debe ser una URL https accesible desde donde se aprovisionan los dispositivos, porque el dispositivo todavía no tiene configuración propia."
+        },
+        "signature_checksum": {
+          "label": "Suma de comprobación de la firma del APK",
+          "help": "El SHA-256 del certificado de firma en base64 seguro para URL: 43 caracteres, sin relleno. El asistente de configuración rechaza un APK cuya firma no coincida. Solo cambia cuando cambia la clave de firma de Android."
+        },
+        "leave_system_apps_enabled": {
+          "label": "Dejar activadas las apps propias del dispositivo",
+          "help": "Activado, un dispositivo aprovisionado conserva su cámara, su teléfono y sus ajustes. Desactivado lo convierte en un dispositivo de un solo uso: el aprovisionamiento desactiva toda app del sistema que este agente no haya habilitado explícitamente."
+        }
       }
     },
     "choice": {
@@ -3105,6 +3121,48 @@
       "uptime": "Tiempo encendido",
       "days": "{days} días",
       "projection_note": "Esto es todo lo que el concentrador propietario envía sobre un equipo prestado. Su número de serie, su etiqueta de inventario y su registro de directorio se quedan en su lado."
+    }
+  },
+  "provisioning": {
+    "heading": "Aprovisionamiento de dispositivos Android",
+    "intro": "Escanee este código en un dispositivo Android restablecido de fábrica para inscribirlo como dispositivo totalmente gestionado. Un escaneo instala el agente, le entrega la propiedad del dispositivo, lo apunta a este hub y lo inscribe.",
+    "warning": "El aprovisionamiento exige un restablecimiento de fábrica. Todo lo que hay en el dispositivo se borra, y la propiedad del dispositivo no puede concederse después ni trasladarse a otra app. Escanee esto únicamente en un dispositivo ya restablecido cuyo contenido ya no necesite.",
+    "qr": {
+      "heading": "Código de aprovisionamiento",
+      "loading": "Construyendo los datos...",
+      "alt": "Código QR de aprovisionamiento de Android",
+      "copy": "Copiar los datos",
+      "copied": "Copiado.",
+      "copy_failed": "El navegador denegó el acceso al portapapeles.",
+      "print": "Imprimir",
+      "secret_note": "El código lleva el secreto de inscripción de esta flota, de modo que un escaneo aprovisiona e inscribe el dispositivo. Trate una fotografía suya como trataría el propio secreto.",
+      "unreachable": "El hub no respondió.",
+      "failed": "No se pudieron construir los datos de aprovisionamiento.",
+      "too_large": "Los datos no caben en un código QR. Acorte la URL de descarga del APK."
+    },
+    "unconfigured": {
+      "help": "Rellene esto en Ajustes, en la sección Aprovisionamiento. El conversor de abajo transforma el resumen que imprime apksigner en la forma que el código necesita."
+    },
+    "payload": {
+      "field": "Campo",
+      "value": "Valor",
+      "component": "DEVICE_ADMIN_COMPONENT_NAME"
+    },
+    "checksum": {
+      "heading": "Conversor de la suma de comprobación de la firma",
+      "help": "apksigner verify --print-certs imprime el SHA-256 del certificado de firma en hexadecimal. El código de aprovisionamiento necesita los mismos bytes en base64 seguro para URL. Pegar el hexadecimal produce un valor que parece correcto y falla en un dispositivo que ya ha sido borrado.",
+      "input_label": "Resumen SHA-256 (hexadecimal)",
+      "placeholder": "b39a161053ea...",
+      "convert": "Convertir",
+      "failed": "No se pudo convertir."
+    },
+    "steps": {
+      "heading": "Aprovisionar un dispositivo",
+      "reset": "Restablezca el dispositivo de fábrica, o empiece con uno recién sacado de la caja.",
+      "tap": "En la pantalla de bienvenida, toque seis veces el mismo punto para abrir el lector de QR.",
+      "wifi": "Conéctese a una red cuando se le pida. Este código no lleva credenciales de wifi, deliberadamente.",
+      "scan": "Escanee el código de arriba. El dispositivo descarga e instala el agente por su cuenta.",
+      "verify": "Al terminar la configuración, la pantalla del agente FleetHub debería decir “Fully managed (device owner)” y la máquina debería aparecer en el Inventario."
     }
   }
 }

@@ -55,7 +55,8 @@ def _register_sidebar_stubs(app):
                            ("bios", "firmware_page"), ("rules", "rules_page"),
                            ("patches", "patches_page"),
                            ("apitokens", "download_page"),
-                           ("sharing", "sharing_page")):
+                           ("sharing", "sharing_page"),
+                           ("provisioning", "provisioning_page")):
         bp = Blueprint(name, __name__)
         bp.add_url_rule(f"/_stub/{name}", endpoint, lambda: "", methods=["GET"])
         app.register_blueprint(bp)

@@ -3102,6 +3102,90 @@ what an agent is genuinely too old for instead of computing it from a version, a
 
 ---
 
+## 🚧 Android device-owner provisioning · hub 1.99.0 · `provisioning.py` / `provisioning_web.py`
+
+Phase A of #23. The hub draws a QR; a technician scans it at a factory-reset Android device's
+setup wizard; the device downloads the agent, verifies its signature, installs it, hands it
+device ownership, points it at this hub and enrols it. **Built, and deliberately not yet
+validated on hardware** — see *Not done* below.
+
+**Everything about this feature is shaped by one fact: a device owner is a one-way door.** It
+can only be taken before any account exists on the device, there is no API to grant it later,
+and there is no supported way to move it to another app. So the failure mode of a wrong field
+is never "the QR did not work" — it is "the QR did not work, and the device has already been
+factory reset". A payload missing a field still encodes, still scans, and fails several minutes
+later with everything on that device gone.
+
+Hence the two decisions that shape the module:
+
+- **`build_payload` is all-or-nothing.** An unconfigured hub answers 409 with the field that is
+  missing and the command that produces it. There is no preview-with-placeholders mode, because
+  a placeholder payload scans.
+- **The admin component name is a constant on both sides, not a setting.** The agent pins its
+  receiver's class name explicitly (`FleetDeviceAdminReceiver.ComponentClassName`) rather than
+  letting .NET Android generate the usual `crc64…` mangled name, whose hash can change between
+  builds. A printed QR naming a component no build carries is a wipe with no way back, and a
+  setting would let the two drift — discovered only on a device already reset.
+
+**One scan provisions AND enrols.** The hub URL and the fleet's enrollment secret ride in
+`PROVISIONING_ADMIN_EXTRAS_BUNDLE`, which the agent already reads as managed configuration.
+Without them a device comes up managed, reporting telemetry, and silently accepting no commands
+— exactly the state the agent's setup screen was rewritten to make visible. That is also why the
+gate is **`manage_settings`**: the endpoint hands out `AGENT_ENROLLMENT_SECRET`, so it belongs
+with the capability that can already read the hub's configuration, not with `issue_commands`,
+which is what somebody reaches for by reflex. Every fetch is audited at security level with the
+secret redacted out of the row — a copy there would put the fleet's shared secret in front of
+everyone holding `view_audit_log`.
+
+**Four device-owner powers are declared, one is taken.** `device_admin.xml` declares
+`force-lock`, `limit-password`, `reset-password` and `wipe-data` now, before any of them is
+used, because a device owner cannot be re-prompted: a policy discovered missing at phase H may
+cost a factory reset to add, and these devices are wiped by hand, one at a time. The only power
+actually taken today is `setUserControlDisabledPackages`, which stops a person force-stopping
+the agent from the app info screen. **It is not a fix for the OEM power-manager problem** —
+those killers run inside the system and do not go through that path.
+
+**The degradation contract.** Everything that needs device ownership asks `DeviceOwner.IsManaged`
+first and returns "this device is not fully managed" rather than throwing. Without it a
+sideloaded build answers a lock or a suspend with a SecurityException that an executor turns
+into "executor error: …", which reads in the console exactly like broken hardware.
+
+### Rejected alternatives
+
+- **Wi-Fi credentials in the QR**, which the phase plan called for. There is no secret-typed
+  setting, `settings` is rendered into a form and partly shipped to agents, and the only secret
+  store is the master-key-wrapped file the BIOS password uses. A QR shown on a console screen —
+  and often printed and taped to a bench — should also not be a photographable network
+  credential. The setup wizard asks for Wi-Fi itself, once. **Open parameter**: if this changes,
+  the PSK goes in the secret file, never in `settings`.
+- **Making the admin component a setting**, for the drift reason above.
+- **Allowing an `http://` APK URL** for a lab, the way `AgentConfig.Configure` does for a hub
+  URL. That one is typed by somebody who owns the machine; this one is fetched by a device with
+  no configuration of its own and installed as the fleet's device owner. The signature checksum
+  makes a tampered download fail rather than take over, so plain HTTP is not fatal — it is a
+  downgrade with no upside, and a hub that allowed it would allow it forever.
+- **`qrious` for the encoder** (GPL-3.0; nothing else here is copyleft), and the encoder's own
+  `createSvgTag`/`createImgTag` helpers — `provisioning.js` paints a canvas from `isDark()`
+  instead, which keeps `innerHTML` away from a payload containing an operator-supplied URL.
+
+### Not done
+
+**The flow has never been run.** The only Android device available is a personal phone with
+data on it, and provisioning requires a factory reset — so the one step this phase's plan put
+first ("validate the entire QR payload on a scratch device before writing any policy code")
+is the step that could not be taken. What *is* verified: the three provisioning components
+(`FleetDeviceAdminReceiver`, `GetProvisioningModeActivity`, `PolicyComplianceActivity`) are
+present in the built manifest with the right actions, `BIND_DEVICE_ADMIN`, `exported`, the
+`DEFAULT` category and the `android.app.device_admin` metadata; the payload and its refusals
+have 46 tests; the routes and their gating have 32.
+
+`ACTION_GET_PROVISIONING_MODE` and `ACTION_ADMIN_POLICY_COMPLIANCE` are both mandatory from
+API 29 and a DPC missing either does not provision at all — which is exactly the class of
+mistake that costs a second wipe to find. **Do not scan a code from this page at a device
+whose contents matter until it has been run once on a scratch device.**
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0

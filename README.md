@@ -1421,6 +1421,57 @@ an agent. Machine pages carry `platform`, `features` and `supported_commands` al
 > **Status:** built — hub 1.98.0. Only the Android agent reports capabilities today; the
 > Windows and Linux agents send nothing and are treated as unknown by design.
 
+## Android device provisioning
+
+Enrolling an Android device as a **fully managed device** (device owner), so the agent can be
+located, locked and policed rather than merely installed. Settings → Provisioning holds the two
+fields; the **Device provisioning** page draws the QR.
+
+**A device owner is taken once, at a factory-reset device's setup wizard, and never again.** It
+cannot be granted after an account exists on the device, there is no API to add it later, and
+there is no supported way to move it to a different app. That is what makes every field in this
+payload consequential: a wrong component name or a wrong checksum is not "the QR did not work",
+it is "the QR did not work and the device has already been wiped".
+
+So the hub **refuses to build a partial payload**. A payload missing a field still encodes,
+still scans, and still fails several minutes later on a device you cannot get back. An
+unconfigured hub answers the page with what is missing and how to produce it.
+
+**What you need**, once per fleet:
+
+- **Agent APK URL** — where a factory-reset device downloads the agent from during setup. Must
+  be `https` and reachable from wherever devices are provisioned.
+- **APK signature checksum** — the signing certificate's SHA-256 as URL-safe base64.
+  `apksigner verify --print-certs <apk>` prints it in **hex**; the page has a converter, because
+  pasting the hex produces a 64-character string in the right alphabet that saves without
+  complaint and fails on a wiped device. This is fleet state in the same sense the Android
+  keystore is — it changes only when the signing key does.
+
+**One scan does everything.** The code carries the hub URL and the fleet's enrollment secret in
+the provisioning extras bundle, so a device comes up managed, pointed at this hub, and enrolled.
+Without the secret it would come up managed, reporting telemetry, and silently accepting no
+commands. **Treat a photograph of the code the way you would treat the enrollment secret**, and
+note that every fetch is recorded in the audit trail at security level — with the secret itself
+redacted out of the row.
+
+**No Wi-Fi credentials are in the code, deliberately.** The extras can carry an SSID and PSK;
+the hub has nowhere honest to keep a PSK (settings are rendered into a form and partly shipped
+to agents), and a QR displayed on a screen or taped to a bench should not be a network
+credential. The setup wizard asks for Wi-Fi itself.
+
+**Gating**: `manage_settings` throughout — page, payload and converter. Not `issue_commands`,
+which is the capability somebody reaches for by reflex: this endpoint hands out a credential,
+so it belongs with the capability that can already read the rest of the hub's configuration.
+There is no write surface; the two fields are edited through Settings like everything else.
+
+**Endpoints**: `GET /provisioning` (the page), `GET /api/provisioning/qr`,
+`POST /api/provisioning/checksum`.
+
+> **Status:** built — hub 1.99.0 / Android agent source. **Not yet validated on hardware**: the
+> only Android device available carries personal data, and provisioning it would erase that.
+> The agent's three provisioning components are verified present in the built manifest with the
+> right actions, permission and metadata; the flow itself has not been run.
+
 ## Signing releases
 
 One artifact in this repo is Ed25519-signed so a compromised hub or repo commit

@@ -28,4 +28,11 @@
   <string name="restriction_asset_tag_title">Asset tag</string>
   <string name="restriction_asset_tag_description">This device\'s number in your own asset register. Android has no asset tag of its own, so this is the only honest source for the console\'s Asset Tag column.</string>
 
+
+  <!-- What Settings -> Device admin apps shows for FleetDeviceAdminReceiver. android:description
+       on a receiver is a reference-typed attribute, so a literal there is the same APT2259
+       failure the restriction strings above ran into. -->
+  <string name="device_admin_label">FleetHub device management</string>
+  <string name="device_admin_description">Lets your organisation\'s helpdesk locate, lock and manage this device through the FleetHub console.</string>
+
 </resources>

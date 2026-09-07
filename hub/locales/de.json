@@ -25,7 +25,8 @@
     "download": "Client herunterladen",
     "rules": "Regeln",
     "tools": "Werkzeuge",
-    "sharing": "Freigabe"
+    "sharing": "Freigabe",
+    "provisioning": "Geräte-Provisionierung"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -529,7 +530,8 @@
       "signin": "Anmeldung",
       "wake": "Wake-on-LAN",
       "rules": "Regeln",
-      "sharing": "Hub-übergreifende Freigabe"
+      "sharing": "Hub-übergreifende Freigabe",
+      "provisioning": "Provisionierung"
     },
     "unit": {
       "celsius": "°C",
@@ -922,6 +924,20 @@
       "sharing.peer_lifetime_days": {
         "label": "Gültigkeit der Hub-Kopplung",
         "help": "Wie lange die Zugangsdaten eines gekoppelten Hubs gültig bleiben; die Frist verlängert sich bei jeder Nutzung. Das begrenzt die Kopplung, nicht eine Freigabe -- eine Freigabe kann ein eigenes Ablaufdatum haben oder gar keines. Jede Kopplung behält die bei der Einrichtung geltende Dauer."
+      },
+      "provisioning": {
+        "apk_url": {
+          "label": "APK-URL des Agents",
+          "help": "Von wo ein zurückgesetztes Gerät den Android-Agent während der Einrichtung herunterlädt. Muss eine https-URL sein, die von dort erreichbar ist, wo Geräte provisioniert werden, denn das Gerät hat noch keine eigene Konfiguration."
+        },
+        "signature_checksum": {
+          "label": "APK-Signaturprüfsumme",
+          "help": "Der SHA-256 des Signaturzertifikats als URL-sicheres Base64: 43 Zeichen, ohne Auffüllung. Der Einrichtungsassistent lehnt eine APK ab, deren Signatur nicht passt. Ändert sich nur, wenn der Android-Signaturschlüssel sich ändert."
+        },
+        "leave_system_apps_enabled": {
+          "label": "Geräteeigene Apps aktiviert lassen",
+          "help": "Aktiviert behält ein provisioniertes Gerät Kamera, Telefon und Einstellungen. Deaktiviert wird es zum Einzweckgerät: die Provisionierung deaktiviert jede System-App, die dieser Agent nicht ausdrücklich aktiviert hat."
+        }
       }
     },
     "choice": {
@@ -3105,6 +3121,48 @@
       "uptime": "Laufzeit",
       "days": "{days} Tage",
       "projection_note": "Mehr sendet der besitzende Hub zu einem geliehenen Rechner nicht. Seriennummer, Inventarnummer und Verzeichniseintrag bleiben dort."
+    }
+  },
+  "provisioning": {
+    "heading": "Provisionierung von Android-Geräten",
+    "intro": "Diesen Code an einem zurückgesetzten Android-Gerät scannen, um es als vollständig verwaltetes Gerät aufzunehmen. Ein Scan installiert den Agent, übergibt ihm die Geräteinhaberschaft, richtet ihn auf diesen Hub aus und meldet ihn an.",
+    "warning": "Die Provisionierung setzt das Gerät zurück. Alles darauf wird gelöscht, und die Geräteinhaberschaft lässt sich später weder vergeben noch auf eine andere App übertragen. Scannen Sie dies nur an einem bereits zurückgesetzten Gerät, dessen Inhalt Sie nicht mehr brauchen.",
+    "qr": {
+      "heading": "Provisionierungscode",
+      "loading": "Nutzdaten werden erstellt ...",
+      "alt": "QR-Code zur Android-Provisionierung",
+      "copy": "Nutzdaten kopieren",
+      "copied": "Kopiert.",
+      "copy_failed": "Der Browser hat den Zugriff auf die Zwischenablage abgelehnt.",
+      "print": "Drucken",
+      "secret_note": "Der Code enthält das Anmeldegeheimnis dieser Flotte, damit ein Scan das Gerät provisioniert und anmeldet. Behandeln Sie ein Foto davon wie das Geheimnis selbst.",
+      "unreachable": "Der Hub hat nicht geantwortet.",
+      "failed": "Die Provisionierungsnutzdaten konnten nicht erstellt werden.",
+      "too_large": "Die Nutzdaten passen in keinen QR-Code. Kürzen Sie die APK-Download-URL."
+    },
+    "unconfigured": {
+      "help": "Tragen Sie dies in den Einstellungen im Abschnitt Provisionierung ein. Der Umrechner unten wandelt den von apksigner ausgegebenen Digest in die benötigte Form um."
+    },
+    "payload": {
+      "field": "Feld",
+      "value": "Wert",
+      "component": "DEVICE_ADMIN_COMPONENT_NAME"
+    },
+    "checksum": {
+      "heading": "Umrechner für die Signaturprüfsumme",
+      "help": "apksigner verify --print-certs gibt den SHA-256 des Signaturzertifikats hexadezimal aus. Der Provisionierungscode braucht dieselben Bytes als URL-sicheres Base64. Das Einfügen der Hex-Form ergibt einen Wert, der richtig aussieht und an einem bereits gelöschten Gerät scheitert.",
+      "input_label": "SHA-256-Digest (hexadezimal)",
+      "placeholder": "b39a161053ea...",
+      "convert": "Umrechnen",
+      "failed": "Das konnte nicht umgerechnet werden."
+    },
+    "steps": {
+      "heading": "Ein Gerät provisionieren",
+      "reset": "Das Gerät auf Werkseinstellungen zurücksetzen, oder ein fabrikneues verwenden.",
+      "tap": "Im Willkommensbildschirm sechsmal auf dieselbe Stelle tippen, um den QR-Scanner zu öffnen.",
+      "wifi": "Auf Nachfrage ein Netzwerk verbinden. Dieser Code enthält bewusst keine WLAN-Zugangsdaten.",
+      "scan": "Den Code oben scannen. Das Gerät lädt den Agent selbst herunter und installiert ihn.",
+      "verify": "Nach der Einrichtung sollte der Bildschirm des FleetHub-Agents „Fully managed (device owner)“ zeigen und der Rechner im Bestand erscheinen."
     }
   }
 }

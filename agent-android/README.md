@@ -212,6 +212,42 @@ The Dashboard's `_OS_MATCHES` gained an `android` bucket in the same release, or
 `linux` -- an Android device really is running a Linux kernel, and a caption mentioning both
 must not file phones in with the servers.
 
+## Fully managed (device owner)
+
+The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
+what makes the rest of roadmap #23 possible: an ordinary Android app cannot locate a device
+silently, suspend another app, or lock a screen. The hub draws the code (see
+`hub/provisioning.py`); nothing in this app can start the flow.
+
+Three components exist for it, and all three are mandatory from API 29. A DPC missing any of
+them does not provision at all -- and by the time that is discovered the device has already
+been factory reset, so the cost of the mistake is a second wipe:
+
+| Component | Why |
+|---|---|
+| `FleetDeviceAdminReceiver` | The admin component the QR names. Its class name is **pinned explicitly** rather than left to .NET Android's generated `crc64...` name, whose hash can change between builds -- a printed QR naming a component no build carries is a wipe with no way back |
+| `GetProvisioningModeActivity` | Answers the setup wizard's "what kind of management?" with fully-managed-device. Refuses a wizard offering only a work profile, with the reason in logcat |
+| `PolicyComplianceActivity` | The DPC's chance to apply policy and say it is satisfied. Returns `Result.Ok` no matter what: a throw here strands the device in the setup wizard, and the only way out of that is another factory reset |
+
+**The degradation contract.** Everything that needs device ownership calls
+`DeviceOwner.IsManaged` first and degrades to "this device is not fully managed" rather than
+throwing. Without it, a sideloaded build answers a lock or a suspend with a SecurityException
+that the dispatcher turns into "executor error: ...", which in the console reads exactly like
+broken hardware.
+
+**One power is taken today**, `setUserControlDisabledPackages`, which stops a person
+force-stopping the agent from the app info screen. It is **not** a fix for the OEM
+power-manager problem: those killers run inside the system and do not go through that path.
+`device_admin.xml` declares three more (`force-lock`, `limit-password`, `reset-password`) plus
+`wipe-data` before any is used, because a device owner cannot be re-prompted -- a policy
+discovered missing later may cost another factory reset to add.
+
+**The provisioning QR is fleet state, alongside the keystore.** It carries the fleet's shared
+enrollment secret so that one scan both provisions and enrols; a photograph of it is that
+secret. It is also bound to the signing key by the signature checksum in it, so re-signing the
+APK invalidates every printed copy -- the same key whose SSAID is what every device reports as
+its serial number.
+
 ## Layout
 
 ```
@@ -228,8 +264,10 @@ src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
   Platform/                   SharedPreferences, Build fields, sensors, managed config, logcat
+  Policy/                     the device-admin component and the provisioning activities
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push
+  Resources/xml/device_admin.xml       the policies the admin component declares
 tests/FleetHubAgent.Core.Tests/  xunit; everything under test is pure
 ```
 

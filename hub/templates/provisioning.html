@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.provisioning') }} - FleetHub{% endblock %}
+{% block content %}
+{#
+   Structure only. The QR itself, the payload table and the checksum converter are all drawn
+   by provisioning.js from /api/provisioning/*.
+
+   Two states, and the page has to render BOTH honestly: configured (a scannable code) and not
+   yet configured (what is missing, and how to produce it). The second is the state every hub
+   starts in, and it is not an error -- it is the setup instructions, so it is a panel rather
+   than a banner.
+#}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('provisioning.heading') }}</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('provisioning.intro') }}</p>
+
+{# The warning is above the code, not below it, and it is not dismissible. Everything on this
+   page is harmless until somebody points a camera at a device, and at that moment it is the
+   most destructive thing in the console: scanning it at a device that is not already factory
+   reset does nothing, but the wizard that CAN read it is only reachable from a device that
+   has been. An operator who has not been told that will find out by wiping a phone. #}
+<div class="banner banner--warn" style="margin-bottom: var(--space-5);">
+    {{ t('provisioning.warning') }}
+</div>
+
+<div class="card" style="margin-bottom: var(--space-5);">
+    <h2 class="section-title" style="font-size: var(--text-md);">{{ t('provisioning.qr.heading') }}</h2>
+
+    {# Shown while the payload is being fetched, replaced by one of the two panes below. #}
+    <p class="stat-card__meta" id="qr-loading">{{ t('provisioning.qr.loading') }}</p>
+
+    {# Not configured yet: the reason from the API, then what to do about it. #}
+    <div id="qr-unconfigured" hidden>
+        <p class="banner banner--warn" id="qr-reason"></p>
+        <p class="stat-card__meta">{{ t('provisioning.unconfigured.help') }}</p>
+    </div>
+
+    {# Configured. The canvas is painted by provisioning.js from the vendored encoder rather
+       than by an <img> or an SVG string -- see static/vendor/README.md for why. #}
+    <div id="qr-ready" hidden>
+        <div style="display: flex; gap: var(--space-6); flex-wrap: wrap; align-items: flex-start;">
+            {# White ground and a quiet zone, ALWAYS, in both themes. A QR inverted for dark
+               mode is not a styling preference: most scanners will not read light-on-dark, and
+               the failure looks like a broken camera rather than a page that chose wrong. #}
+            <div style="background: #fff; padding: var(--space-4); border-radius: var(--radius-md);">
+                <canvas id="qr-canvas" role="img" aria-label="{{ t('provisioning.qr.alt') }}"></canvas>
+            </div>
+            <div style="flex: 1; min-width: 280px;">
+                <div class="table-scroll"><div id="payload-host"></div></div>
+                <p class="stat-card__meta" style="margin-top: var(--space-3);">{{ t('provisioning.qr.secret_note') }}</p>
+                <div class="toolbar" style="margin-top: var(--space-3);">
+                    <button class="btn" type="button" id="copy-payload">{{ t('provisioning.qr.copy') }}</button>
+                    <button class="btn" type="button" id="print-qr">{{ t('provisioning.qr.print') }}</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# The converter. A route for two lines of arithmetic, because pasting apksigner's hex digest
+   into the checksum field produces a string that looks right, saves without complaint, and
+   fails on a device that has already been wiped. See provisioning.py. #}
+<div class="card" style="margin-bottom: var(--space-5);">
+    <h2 class="section-title" style="font-size: var(--text-md);">{{ t('provisioning.checksum.heading') }}</h2>
+    <p class="stat-card__meta">{{ t('provisioning.checksum.help') }}</p>
+    <div class="toolbar" style="margin-top: var(--space-3); align-items: flex-end; gap: var(--space-3);">
+        <div style="flex: 1; min-width: 320px;">
+            <label class="stat-card__meta" for="digest-input">{{ t('provisioning.checksum.input_label') }}</label>
+            <input class="input" type="text" id="digest-input" spellcheck="false"
+                   autocomplete="off" style="width: 100%;"
+                   placeholder="{{ t('provisioning.checksum.placeholder') }}">
+        </div>
+        <button class="btn" type="button" id="convert-digest">{{ t('provisioning.checksum.convert') }}</button>
+    </div>
+    <p class="stat-card__meta" id="digest-result" style="margin-top: var(--space-3); font-family: var(--font-mono);"></p>
+</div>
+
+<div class="card">
+    <h2 class="section-title" style="font-size: var(--text-md);">{{ t('provisioning.steps.heading') }}</h2>
+    <ol class="stat-card__meta" style="padding-left: var(--space-5); line-height: 1.8;">
+        <li>{{ t('provisioning.steps.reset') }}</li>
+        <li>{{ t('provisioning.steps.tap') }}</li>
+        <li>{{ t('provisioning.steps.wifi') }}</li>
+        <li>{{ t('provisioning.steps.scan') }}</li>
+        <li>{{ t('provisioning.steps.verify') }}</li>
+    </ol>
+</div>
+{% endblock %}
+{% block page_scripts %}
+{# The encoder, then the UTF-8 byte function it overrides, then the page. Order is
+   load-bearing: qrcode_UTF8.js assigns to the global qrcode.js defines. #}
+<script src="{{ url_for('static', filename='vendor/qrcode.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/qrcode_UTF8.js') }}"></script>
+<script src="{{ url_for('static', filename='js/provisioning.js') }}"></script>
+{% endblock %}

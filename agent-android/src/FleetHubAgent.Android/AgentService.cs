@@ -9,6 +9,7 @@ using FleetHubAgent.Fleet.Executors;
 using FleetHubAgent.State;
 using FleetHubAgent.Telemetry;
 using FleetHubAgent.Android.Platform;
+using FleetHubAgent.Android.Policy;
 
 namespace FleetHubAgent.Android;
 
@@ -143,10 +144,20 @@ public sealed class AgentService : Service
         // The dispatcher is built BEFORE the client on purpose: the capability report the
         // heartbeat carries is derived from the executor set above rather than written out
         // again, so the hub cannot be told this agent runs something it has no executor for --
-        // or, worse, go on refusing something it has just been given one for. See
-        // AgentCapabilities. No features are reported yet; nothing here implements one.
+        // or, worse, go on refusing something it has just been given one for.
+        //
+        // Passed as a FUNCTION rather than a value because one of its parts is not fixed at
+        // startup: `adb shell dpm set-device-owner` can grant device ownership to a process
+        // that is already running, and a report captured in Compose would then claim the
+        // device is unmanaged for as long as the service happened to stay up. That is the lab
+        // path, and the one where a stale answer is hardest to explain.
         _fleet = new FleetClient(_loggerFactory.CreateLogger<FleetClient>(), state, _names,
-            AgentCapabilities.For(dispatcher));
+            () => AgentCapabilities.For(dispatcher, DeviceOwner.Features(this)));
+
+        // Take the device-owner powers this agent holds, if it holds any. A no-op on a device
+        // that was sideloaded rather than provisioned, which is every device today -- see
+        // DeviceOwner for the degradation contract the rest of the policy work is built on.
+        DeviceOwner.ApplyBaseline(this, _loggerFactory.CreateLogger("DeviceOwner"));
 
         _agent = new AgentLoops(
             _loggerFactory.CreateLogger<AgentLoops>(), _sensors, new AndroidUptimeSource(),
