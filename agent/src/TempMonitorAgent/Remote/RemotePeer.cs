@@ -63,7 +63,15 @@ public sealed class RemotePeer : IDisposable
     /// which narrows a failed session to connectivity alone. Zero says the opposite -- that
     /// nothing was ever encoded -- and that is a different bug in a different subsystem, one the
     /// candidate counts on the failure line cannot distinguish on their own. Never zeroed, only
-    /// read, so neither report can mislead the other.</summary>
+    /// read, so neither report can contradict the other.
+    ///
+    /// The figure is best-effort and may undercount: the ready-check and the increment in
+    /// <see cref="SendFrame"/> are not atomic with the latch, so a frame in flight across that
+    /// window can be counted after the value has been read and logged. **Deliberately not
+    /// synchronised.** Closing it means a lock or a CAS on the per-frame send path -- 25 times a
+    /// second, for the life of every session -- to make a diagnostic exact to the frame. The
+    /// distinction this number is read for is zero versus non-zero, which the race cannot flip:
+    /// it can only lose frames that were counted while at least one other already had been.</summary>
     private int _framesBeforeReady;
 
     /// <summary>Fires for each local ICE candidate; the payload is ready to POST as a signal.</summary>
