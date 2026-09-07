@@ -54,9 +54,16 @@ public sealed class RemotePeer : IDisposable
     /// back.</summary>
     private volatile bool _mediaReady;
 
-    /// <summary>Frames discarded before <see cref="_mediaReady"/> latched, reported once on
-    /// connect. The count is the diagnostic the per-packet warnings were carrying -- how long the
-    /// stream spent waiting on DTLS -- kept without the flood.</summary>
+    /// <summary>Frames discarded before <see cref="_mediaReady"/> latched. The count is the
+    /// diagnostic the per-packet warnings were carrying -- how long the stream spent waiting on
+    /// DTLS -- kept without the flood.
+    ///
+    /// Reported on connect, and on a failure that happened before media ever started -- where it
+    /// is worth more, not less: **a non-zero count proves capture and encode ran the whole time**,
+    /// which narrows a failed session to connectivity alone. Zero says the opposite -- that
+    /// nothing was ever encoded -- and that is a different bug in a different subsystem, one the
+    /// candidate counts on the failure line cannot distinguish on their own. Never zeroed, only
+    /// read, so neither report can mislead the other.</summary>
     private int _framesBeforeReady;
 
     /// <summary>Fires for each local ICE candidate; the payload is ready to POST as a signal.</summary>
@@ -124,14 +131,28 @@ public sealed class RemotePeer : IDisposable
             if (state == RTCPeerConnectionState.connected && !_mediaReady)
             {
                 _mediaReady = true;
-                var dropped = Interlocked.Exchange(ref _framesBeforeReady, 0);
+                var dropped = Volatile.Read(ref _framesBeforeReady);
                 if (dropped > 0)
                     _log($"discarded {dropped} encoded frame(s) captured before DTLS completed");
             }
             if (state == RTCPeerConnectionState.failed)
+            {
                 _log($"ICE never found a working path: {_localCandidates} local / " +
                      $"{_remoteCandidates} remote candidate(s) were on the table. If neither side " +
                      "produced a 'relay' candidate, the TURN server was unreachable from there.");
+                // Only when media never started. A session that connected and failed later dropped
+                // nothing on this path, and reporting a count of zero there would read as "capture
+                // produced nothing" -- the opposite of what happened.
+                if (!_mediaReady)
+                {
+                    var unsent = Volatile.Read(ref _framesBeforeReady);
+                    _log(unsent > 0
+                        ? $"{unsent} encoded frame(s) were discarded waiting on DTLS: capture and " +
+                          "encode ran throughout, so only the network path was missing."
+                        : "Nothing was encoded before the failure, so capture produced no frames " +
+                          "at all -- look there as well as at ICE.");
+                }
+            }
             OnConnectionStateChange?.Invoke(state);
         };
     }
