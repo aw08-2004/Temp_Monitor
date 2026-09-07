@@ -73,6 +73,7 @@ on, and it survived contact with Android intact.
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or typed once on the setup screen |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
 | **Commands** | `rename` |
+| **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
 exist: in a serial loop the slowest step sets the latency of every other one.
@@ -178,18 +179,38 @@ The first phone to enroll was inside a fleet-wide backup profile and had `backup
 to it within a minute. It answered, correctly, that it could not run it.
 
 So those types are in `CommandDispatcher`'s impossible table with a reason and, where there is
-one, the action to take. **The real fix is on the hub**: scope the backup profile, patch schedule
-or rule so it stops targeting machines that cannot answer. Left alone, a scheduled job shows a
-failure against every Android machine on every run, which is how a console teaches its operators
-to ignore red.
+one, the action to take. That message is now the fallback rather than the mechanism: **the hub
+fix shipped in 1.98.0.**
 
-**Needs a hub change**, recorded in `ROADMAP.MD` #23 rather than worked around here:
+### The capability report is what actually stops them
 
-- `_OS_MATCHES` has no `android` bucket, so every Android device counts in the Dashboard's
-  `unknown` bucket. The agent reports `Android 15` honestly rather than smuggling the word
-  "Linux" into the caption — which would be technically defensible for an Android kernel, and
-  would file phones in with the servers while putting a string in front of an operator that the
-  device never said. Adding the bucket is a one-line hub change.
+The heartbeat carries a `capabilities` block -- `{"platform": "android", "commands": [...],
+"features": [...]}` -- and the hub refuses any command type a machine's list leaves out. The
+four schedulers filter their targets against it first, so a phone in a nightly backup profile is
+no longer aimed at rather than collecting a failed run every night.
+
+Two things about it matter on this side:
+
+- **The command list is derived from `CommandDispatcher.Implemented`, never written out.** A
+  hand-kept copy drifts the first time an executor is added, and it drifts the way that hurts:
+  the hub goes on refusing a command this agent has just learned to run, and the only symptom is
+  a console button that stays grey.
+- **It is sent on every heartbeat, not change-only.** A hundred bytes every ten seconds buys a
+  report that is self-healing: the hub writes only when the content differs, so a hub restored
+  from a database backup re-learns the fleet without anybody reinstalling an app. An agent
+  holding its own "already sent" flag would stay silent instead.
+
+`AgentCapabilities` also names the feature slugs the later phases will report (`locate`,
+`app_policy`, `time_policy`, `device_owner`) so each is added in one place rather than as a
+string the hub has never heard of and silently ignores. None is reported today.
+
+This is also what lets `AgentConfig.Version` stay at `0.1.0` permanently: the version identifies
+a release train, capabilities describe a feature set, and the console no longer has to infer the
+second from the first.
+
+The Dashboard's `_OS_MATCHES` gained an `android` bucket in the same release, ordered before
+`linux` -- an Android device really is running a Linux kernel, and a caption mentioning both
+must not file phones in with the servers.
 
 ## Layout
 
@@ -199,7 +220,7 @@ src/FleetHubAgent.Core/       the protocol -- plain net10.0, tested on the works
   AgentLoops.cs               the three loops
   MachineNaming.cs            the derived name, and why it cannot be the model alone
   MachineNameProvider.cs      the current name, and persist-before-adopt
-  Fleet/                      hub client, dispatcher, rename
+  Fleet/                      hub client, dispatcher, capability report, rename
   State/                      the identity store, behind an interface
   Telemetry/                  the report builder, the sensor contracts, identity cleaning
 src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload

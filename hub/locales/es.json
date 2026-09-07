@@ -85,6 +85,7 @@
         "windows_10": "Windows 10",
         "windows_server": "Windows Server",
         "linux": "Linux",
+        "android": "Android",
         "unknown": "Desconocido"
       }
     },

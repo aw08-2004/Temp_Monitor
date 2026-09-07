@@ -2896,14 +2896,15 @@ manifest. Nothing here touches it, and the wire shapes are still duplicated rath
   WorkManager's floor is fifteen minutes and JobScheduler's is longer under Doze; both would put
   a device far outside the hub's 90-second online window.
 
-### Needs a hub change
+### The hub change it needed — done in 1.98.0
 
-`_OS_MATCHES` has no `android` bucket, so every Android device counts as `unknown` on the
-Dashboard. The agent reports `Android 15` honestly rather than smuggling "Linux" into the
+`_OS_MATCHES` had no `android` bucket, so every Android device counted as `unknown` on the
+Dashboard. The agent reports `Android 16` honestly rather than smuggling "Linux" into the
 caption — which would be defensible for an Android kernel, and would file phones in with the
-servers while showing an operator a string the device never said. Adding the bucket is one line
-and one `OS_BUCKETS` entry; it is listed here rather than done because it also wants a console
-label and belongs with #22's `PRETTY_NAME` gap.
+servers while showing an operator a string the device never said. The bucket is now there,
+ordered **before** `linux` because an Android device really is running a Linux kernel and a
+caption mentioning both must not land with the servers. #22's `PRETTY_NAME` gap is unrelated
+after all and stays open on its own.
 
 ### Rejected alternatives
 
@@ -2956,10 +2957,8 @@ fleet-wide backup profile and was sent `backup_files` immediately.
 
 Agent side, those types now answer "cannot be run on Android" with the reason and the action,
 rather than "not implemented", which would send an operator looking for a version that will
-never exist. **The real fix is hub side and is not done**: scope backup profiles, patch
-schedules and rules so they stop targeting machines that cannot answer. Left alone, a
-scheduled job shows a failure against every Android machine on every run, which is how a
-console teaches its operators to ignore red.
+never exist. **The hub-side fix shipped in 1.98.0** — see *Machine capabilities* below, which
+is the entry that closes this and the `_OS_MATCHES` gap above.
 
 **Three things cost real time getting the first build out, recorded so they cost nobody else.**
 The build machine's Oracle JDK 24 cannot be parsed by .NET Android 36 — the symptom is
@@ -3011,6 +3010,95 @@ a woff2 that fails to load must land on Segoe UI rather than Times.
 This also builds the muscle the Android map needs: adding Leaflet is now the same three steps
 (download pinned, record the checksum, reference from `static/`) rather than a new argument
 about whether the frontend may have a dependency at all.
+
+---
+
+## ✅ Machine capabilities   ·   hub 1.98.0   ·   `capabilities.py` / `capabilities_web.py`
+
+Machines now tell the hub what they can do, and the hub stops queueing work they cannot
+perform. This closes the two open hub items under #23 and is the foundation every later
+Android phase sits on.
+
+**A version number cannot say "never".** Every gate in the console is a `MIN_*_AGENT` constant
+hardcoding the agent minor a feature arrived in — a compatibility API, and a good one while
+every managed machine is a Windows PC on one release train, because there "newer" really does
+mean "can do more". It cannot express *"this device can be renamed but will never run a
+script"*, which on Android is a fact about the platform rather than a position in a backlog.
+That is also what lets the Android agent's `AgentConfig.Version` stay at `0.1.0` permanently:
+the version identifies a release train, capabilities describe a feature set, and conflating
+them is what would otherwise force a bump past the `3.0.0` floor `VersionGateTests` protects.
+
+**And for scheduled work, none of those gates run at all.** They are console-side JavaScript
+deciding which buttons to draw. Nothing evaluates them for a command the backup scheduler, the
+patch scheduler, the deployment scheduler or the rules engine dispatches, because those target
+a machine *set* rather than a button. The pilot phone was inside a fleet-wide backup profile
+and was queued `backup_files` within a minute of enrolling (#23).
+
+**The absent-report rule is the load-bearing one.** A machine that has reported no capabilities
+is **unknown**, never **incapable**. Every Windows agent in the field reports nothing here and
+must keep working unchanged, so absence permits everything and only an explicit report can
+refuse anything. Inverting it would stop every command on every machine in the fleet on the
+morning this shipped, with nothing logging an error anywhere — the console would look fine. It
+lives in one function (`_missing_reads_as_capable`) so a later caller cannot re-decide it, and
+is asserted from four directions in `tests/test_capabilities.py`.
+
+**Enforcement is in the funnel, and filtering is in the schedulers — both, on purpose.**
+`fleet.create_command` refuses a type the target has said it cannot run, because it is the one
+function every command in the system passes through and the schedulers are precisely the
+callers that already forgot four times over. But reaching that refusal is too late for a
+scheduler that has already minted a run row and a one-shot upload URL, so `backups`, `packages`,
+`patches` and `rules` filter their targets first — the backstop makes the guarantee real, the
+filter is what stops a phone collecting a failed backup every night for the rest of its life.
+Each retires its target with a real reason rather than an error: `TARGET_FAILED` in patches and
+not `nothing_to_do`, because "already up to date" is a claim about a machine's patch state and
+would be a lie.
+
+**Two lists, because they travel on different channels.** `commands` are command types, checked
+by `create_command`; `features` (`locate`, `app_policy`, `time_policy`, `device_owner`) are
+things that arrive on the heartbeat's policy block instead, and the console has to decide
+whether to render a map fold *before* anyone issues anything. They also default oppositely, and
+that asymmetry is deliberate: an unreported command list permits everything (the fleet is full
+of agents that will never report one), while an unreported feature is `false` (a feature exists
+only on an agent new enough to report it), so defaulting the other way would put a Locate
+button on every Windows PC in the fleet.
+
+**The agent derives its command list from its own dispatcher**, never from a hand-kept copy. A
+second list drifts the first time an executor is added, and it drifts the way that hurts: the
+hub goes on refusing a command the agent has just learned to run, and the only symptom is a
+button that stays grey.
+
+**Reported on every heartbeat, not change-only** — the one block here that is. It is a hundred
+bytes and never changes in normal operation, and the hub writes only when the content differs.
+Keeping the "have I sent this" state on the *hub* is what makes a device re-report itself after
+a hub restores its database from a backup; an agent holding that flag would stay silent, and
+the machine would be silently ungated until somebody reinstalled it. `reported_at` therefore
+means "when this capability set first appeared", not "when we last heard from this machine" —
+liveness already has an answer, and a second, subtly different one is how a page ends up
+showing two disagreeing "last seen" values.
+
+### Rejected alternatives
+
+- **Inferring the platform from `os_caption`.** `normalize_os` is a deliberately fuzzy
+  *display* bucketer over a string a remote machine chose. An enforcement decision must not
+  hang off a substring of that. The `android` OS bucket added alongside this is for the
+  Dashboard tally and nothing else.
+- **Extending `MIN_*_AGENT` with a per-platform table.** It would put the same
+  version-means-ability assumption behind a bigger lookup, still in JavaScript, still invisible
+  to every scheduler.
+- **Letting an operator override a capability in the console.** There is no write surface here
+  at all: a capability is something a machine reports about itself, and an override would be a
+  way to tell the hub that a phone can run a script.
+- **Storing an unreported list as `[]`.** The NULL/empty distinction *is* the absent-report
+  rule, which is why the columns are nullable and why a test asserts the stored shape directly
+  — a migration adding `DEFAULT '[]'` would pass every behavioural test on a fresh row and
+  silence the entire existing fleet.
+
+### Open parameter
+
+Whether the Windows and Linux agents should report capabilities too. Nothing needs it — they
+are unknown, which permits everything, which is correct — but it would let the console hide
+what an agent is genuinely too old for instead of computing it from a version, and retire the
+`MIN_*_AGENT` constants one at a time. That is a Windows-agent release, so it waits.
 
 ---
 

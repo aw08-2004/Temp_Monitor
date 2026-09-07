@@ -46,6 +46,13 @@ import time
 from collections import namedtuple
 import uuid
 
+# The only hub module this one imports, and it points one way on purpose: capabilities.py is
+# storage over sqlite3 with no idea that commands exist, so there is nothing to cycle back.
+# It is imported HERE, in the model half, rather than being checked by each caller, because
+# create_command is the single funnel every command in the system goes through -- and the
+# schedulers are exactly the callers that already forgot (see its docstring, and roadmap #23).
+import capabilities
+
 # ================================
 # COMMAND TAXONOMY
 # ================================
@@ -650,7 +657,17 @@ def get_conn(db_path):
 
 def init_fleet_db(db_path):
     """Create the fleet tables if absent. Idempotent -- safe to call next to
-    app.init_db() on every hub start."""
+    app.init_db() on every hub start.
+
+    It also creates the capability table, which belongs to another module and is created
+    again from app.py. That is deliberate rather than sloppy: `create_command` reads it on
+    every call now (roadmap #23), so a database with a command queue and no capability table
+    is a database where queueing a command raises `no such table` -- and the failure would
+    appear in whichever scheduler ran first, naming a module the reader has no reason to
+    connect to it. A table this function guarantees cannot be missed by a caller that
+    initialises the fleet and nothing else.
+    """
+    capabilities.init_capabilities_db(db_path)
     with get_conn(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute(
@@ -1147,6 +1164,17 @@ def delete_machine(db_path, machine):
 AUDIT_PARAMS_MAX_CHARS = 4096
 
 
+class UnsupportedCommand(ValueError):
+    """A command the target machine has told us it cannot run (roadmap #23).
+
+    A ValueError subclass rather than a new base, deliberately: every caller that already
+    handles `create_command` refusing a bad type -- wake.py's dispatch, rules' probe loop,
+    refusals.refuse in the web layer -- keeps working unchanged and reports a sentence that
+    happens to be a much better one. Its own type so a scheduler that wants to retire a
+    target with "this machine cannot answer" can tell that apart from a genuine bug.
+    """
+
+
 def create_command(db_path, machine, command_type, params, issued_by,
                    ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS):
     """Queue a command for a machine. Returns its id.
@@ -1155,12 +1183,31 @@ def create_command(db_path, machine, command_type, params, issued_by,
     session gate (see fleet_web.create_fleet_blueprint / app.login_required).
     Every call is audited with the full params, because that record is the only
     thing standing behind "who ran this script?".
+
+    **And it refuses a command the machine has said it cannot run.** That check is here, in
+    the funnel, and not in each caller -- because the callers are the problem. The console's
+    MIN_*_AGENT gates are JavaScript that decides which BUTTONS to render, and nothing
+    evaluates them for the backup scheduler, the patch scheduler, the deployment scheduler or
+    the rules engine, all of which target a machine set instead. The first Android device to
+    enroll was inside a fleet-wide backup profile and had `backup_files` queued to it within a
+    minute (roadmap #23). Those four now consult capabilities themselves before queueing --
+    backups filters its candidate list, packages and patches retire the target with a real
+    reason, rules records a skip -- because reaching this raise is already too late for a
+    scheduler that has minted a run row first. This is what makes the guarantee hold for the
+    fifth one somebody adds without reading this paragraph.
+
+    It costs one indexed lookup per command and cannot refuse anything for a machine that has
+    not reported -- which is every Windows agent in the field. See capabilities.py's
+    absent-report rule; the asymmetry is the whole reason this is safe to put in the funnel.
     """
     machine = str(machine or "").strip()
     if not machine:
         raise ValueError("machine is required")
     if command_type not in ALL_COMMANDS:
         raise ValueError(f"unknown command type: {command_type!r}")
+    refusal = capabilities.refusal_for(db_path, machine, command_type)
+    if refusal:
+        raise UnsupportedCommand(refusal)
     if params is None:
         params = {}
     if not isinstance(params, dict):

@@ -44,6 +44,7 @@ import channels
 import firmware
 import patches
 import wake
+import capabilities
 import rules
 import scripts
 import notify
@@ -68,6 +69,7 @@ from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
+from capabilities_web import create_capabilities_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -110,7 +112,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.97.0"
+HUB_VERSION = "1.98.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -907,14 +909,19 @@ def derive_machine_status(updated_at):
 #: The buckets a fleet is counted in. Deliberately coarse: the Dashboard's question is
 #: "what are we still running", and a breakdown by build number answers a different one
 #: (that lives on the machine page, where the exact caption and build are shown as-is).
-OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "unknown")
+OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "android", "unknown")
 
 #: Substrings that put a caption in a bucket, checked in order. Server is first because a
-#: Server caption also contains "Windows".
+#: Server caption also contains "Windows"; android is before linux because an Android device
+#: IS running a Linux kernel and a caption that mentioned both would otherwise be filed with
+#: the servers. Without this entry every phone counted as `unknown` -- the agent reports
+#: "Android 16" honestly rather than smuggling "Linux" into the caption, which would have
+#: shown an operator a string the device never said (roadmap #23).
 _OS_MATCHES = (
     ("windows_server", ("windows server", "server 20")),
     ("windows_11", ("windows 11",)),
     ("windows_10", ("windows 10",)),
+    ("android", ("android",)),
     ("linux", ("linux", "ubuntu", "debian", "red hat", "rhel", "centos", "fedora",
                "suse", "alma", "rocky")),
 )
@@ -2122,6 +2129,14 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 app.register_blueprint(create_wake_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
 
+# What each machine can actually do (roadmap #23). Read-only and gated on `view` + machine
+# scope, because a machine's abilities are inventory in the same sense its disks are -- and
+# because this is what the console reads to decide which tabs to render at all, so a narrower
+# gate would leave an operator on a page it could not decide about. Nothing writes here: a
+# capability is reported by the machine on its heartbeat, and an operator override would be a
+# way to tell the hub that a phone can run a script.
+app.register_blueprint(create_capabilities_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -3012,6 +3027,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Capabilities follow too, and the survivor's own row wins a collision (roadmap #23) --
+    # both rows describe one physical machine, and the survivor is the one still reporting.
+    # Not merged: a union of two command lists would claim an ability neither agent reported.
+    capabilities.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -4021,6 +4040,7 @@ bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
+capabilities.init_capabilities_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -4600,6 +4620,16 @@ def machine_detail(machine):
     # here ("which build is this one on?") wants the detail the bucket throws away.
     result['os'] = normalize_os(result.get('os_caption'), result.get('os_build'),
                                 result.get('ad_os'))
+    # What this machine says it can do (roadmap #23), carried on the page's own payload so
+    # deciding which tabs to render costs no second request. Deliberately NOT derived from
+    # `os` above: normalize_os is a fuzzy DISPLAY bucketer over a caption a remote machine
+    # chose, and an enforcement decision must not hang off a substring of that. A machine
+    # that has reported nothing comes back `platform: ""` with null lists, which the console
+    # must read as "we have not been told" -- see capabilities.py's absent-report rule.
+    reported = capabilities.get_capabilities(DB_PATH, machine_name)
+    result['platform'] = reported['platform']
+    result['features'] = reported['features']
+    result['supported_commands'] = reported['commands']
     return result
 
 
@@ -4882,6 +4912,11 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And what it reported it could do (roadmap #23). Unlike most of the rows above this one
+    # is an ENFORCEMENT input, so leaving it behind is worse than leaving stale display data:
+    # a different box reusing this hostname would silently have commands REFUSED that it can
+    # run perfectly well, with a message naming a platform it is not.
+    capabilities.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

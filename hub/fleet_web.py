@@ -34,6 +34,7 @@ from flask import Blueprint, jsonify, request, session
 
 import backups
 import bios
+import capabilities
 import channels
 import firmware
 import fleet
@@ -134,8 +135,11 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         The agent sends the config_version it currently holds and the hub replies with
         config only when that differs, so the steady-state heartbeat stays two fields.
 
-        It may also send `profiles`, `remote`, `bios` and `network` -- the slow local
-        inventories, each on its own change-only cadence, none of them ever fatal -- and
+        It may also send `capabilities` -- what this machine can actually do (roadmap #23),
+        the one block sent on every heartbeat rather than change-only, because the hub does
+        the comparing so the agent can stay stateless -- plus `profiles`, `remote`, `bios`
+        and `network`, the slow local inventories, each on its own change-only cadence and
+        none of them ever fatal -- and
         `processes`, which is neither slow nor change-only but is only sent at all while an
         operator has that machine's Processes card open (see the `processes_wanted` reply).
 
@@ -153,6 +157,22 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         if data.get("config_version") != current_version:
             payload["config"] = settings.agent_config(db_path)
             payload["config_version"] = current_version
+        # What this machine can actually do (roadmap #23). First among the inventory blocks
+        # because it is the one that decides what the others are allowed to mean: it is the
+        # input fleet.create_command refuses on, so a machine that cannot run `backup_files`
+        # stops being queued one from the moment this lands rather than from the moment
+        # somebody looks.
+        #
+        # Sent on EVERY heartbeat rather than change-only, unlike its neighbours, and
+        # capabilities.record_capabilities only writes when the content differs -- see its
+        # docstring for why the comparison belongs to the hub. Never fatal, like everything
+        # else here; a dropped report leaves the machine ungated, which is exactly the state
+        # every Windows agent in the field is already in.
+        if data.get("capabilities"):
+            try:
+                capabilities.record_capabilities(db_path, machine, data["capabilities"])
+            except Exception as e:
+                print(f"[capabilities] Could not record capabilities for {machine}: {e}")
         if data.get("profiles"):
             try:
                 backups.record_profiles(db_path, machine, data["profiles"])

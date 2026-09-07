@@ -1381,6 +1381,46 @@ existing `POST /api/agent/heartbeat` under a `network` key.
 > adapter, and whether `powercfg /deviceenablewake` matches on the description this reader
 > reports. Everything else is covered by tests against literal payloads.
 
+## Machine capabilities
+
+What each managed machine can actually do, reported by the machine rather than inferred from
+its agent version — so the hub stops queueing work a device can never perform.
+
+**Why a version number was not enough.** The console decides which buttons to draw from
+`MIN_*_AGENT` constants that hardcode the agent minor a feature arrived in. That works while
+every machine is a Windows PC on one release train, because "newer" really does mean "can do
+more". It cannot express *"this device can be renamed but will never run a script"*, which on
+an Android device is a fact about the platform, not a backlog position.
+
+**And those gates are JavaScript, so scheduled work never sees them.** They stop an operator
+being *offered* a button. Nothing evaluates them for a command the backup, patch or deployment
+scheduler — or the rules engine — dispatches, because those target a machine *set*. The first
+Android device to enroll was inside a fleet-wide backup profile and was queued `backup_files`
+within a minute.
+
+**The absent-report rule.** A machine that has reported nothing is *unknown*, never
+*incapable*. Every Windows agent in the field reports nothing here and keeps working exactly as
+before; only an explicit report can refuse anything.
+
+**Where it is enforced.** `fleet.create_command` — the one function every command in the system
+passes through — refuses a type the target has said it cannot run, with a reason naming the
+machine, the command and the platform. The four schedulers additionally filter their targets
+first, so a phone in a nightly backup profile is never aimed at rather than collecting a failed
+run every night.
+
+**Gating**: reading is `view` + machine scope, like a model or a disk layout. There is no write
+surface: a capability is something a machine reports about itself, and an operator override
+would be a way to tell the hub that a phone can run a script.
+
+**Endpoints** (console-facing): `GET /api/capabilities/machines/<machine>`,
+`GET /api/capabilities/platforms`. The report arrives on the existing
+`POST /api/agent/heartbeat` under a `capabilities` key — on every heartbeat rather than
+change-only, so a hub restored from a backup re-learns the fleet without anybody reinstalling
+an agent. Machine pages carry `platform`, `features` and `supported_commands` already.
+
+> **Status:** built — hub 1.98.0. Only the Android agent reports capabilities today; the
+> Windows and Linux agents send nothing and are treated as unknown by design.
+
 ## Signing releases
 
 One artifact in this repo is Ed25519-signed so a compromised hub or repo commit

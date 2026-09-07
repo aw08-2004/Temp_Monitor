@@ -43,6 +43,7 @@
             case 'windows_10': return t('dashboard.os.bucket.windows_10');
             case 'windows_server': return t('dashboard.os.bucket.windows_server');
             case 'linux': return t('dashboard.os.bucket.linux');
+            case 'android': return t('dashboard.os.bucket.android');
             default: return t('dashboard.os.bucket.unknown');
         }
     }

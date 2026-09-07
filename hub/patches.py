@@ -73,6 +73,7 @@ import sqlite3
 import time
 import uuid
 
+import capabilities
 import fleet
 
 # ================================
@@ -1430,6 +1431,19 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
     for target in ready:
         run = get_run(db_path, target["run_id"], with_targets=False)
         if run is None:
+            continue
+        unsupported = capabilities.refusal_for(db_path, target["machine"], COMMAND_TYPE)
+        if unsupported:
+            # This machine has told us it cannot install patches at all (roadmap #23) --
+            # Android updates itself from its system updater, and no app may patch another.
+            # FAILED rather than NOTHING_TO_DO, and the distinction matters on the run's
+            # summary: "nothing to do" means this machine was already up to date, which is a
+            # claim about its patch state and would be a lie here. Checked before resolving,
+            # so a device that cannot be patched never spends an attempt or an inventory
+            # read, and before create_command, whose refusal would raise out of this loop
+            # and cost every remaining target its pass.
+            _finish_target(db_path, target["run_id"], target["machine"], TARGET_FAILED,
+                           error=unsupported, now=now)
             continue
         updates = resolve_selection(db_path, run, target["machine"])
         if not updates:

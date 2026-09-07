@@ -127,8 +127,6 @@ public sealed class AgentService : Service
         _sensors = new AndroidSensorReader(this, _loggerFactory.CreateLogger("Sensors"));
         _reporter = new TelemetryReporter(
             _loggerFactory.CreateLogger<TelemetryReporter>(), identity, _names);
-        _fleet = new FleetClient(_loggerFactory.CreateLogger<FleetClient>(), state, _names);
-
         // The executors, which are the whole of what this agent can be TOLD to do today. One
         // out of the hub's ~thirty command types, and the gap is a platform limit rather than a
         // backlog: see CommandDispatcher, which distinguishes the commands Android forbids from
@@ -141,6 +139,14 @@ public sealed class AgentService : Service
 
         var dispatcher = new CommandDispatcher(
             _loggerFactory.CreateLogger<CommandDispatcher>(), executors);
+
+        // The dispatcher is built BEFORE the client on purpose: the capability report the
+        // heartbeat carries is derived from the executor set above rather than written out
+        // again, so the hub cannot be told this agent runs something it has no executor for --
+        // or, worse, go on refusing something it has just been given one for. See
+        // AgentCapabilities. No features are reported yet; nothing here implements one.
+        _fleet = new FleetClient(_loggerFactory.CreateLogger<FleetClient>(), state, _names,
+            AgentCapabilities.For(dispatcher));
 
         _agent = new AgentLoops(
             _loggerFactory.CreateLogger<AgentLoops>(), _sensors, new AndroidUptimeSource(),

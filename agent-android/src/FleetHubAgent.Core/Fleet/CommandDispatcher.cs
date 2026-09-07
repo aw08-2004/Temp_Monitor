@@ -107,6 +107,15 @@ public sealed class CommandDispatcher
         _executors = executors.ToDictionary(e => e.Type, StringComparer.Ordinal);
     }
 
+    /// <summary>The command types this agent will actually route.
+    ///
+    /// Exposed so <see cref="AgentCapabilities"/> can DERIVE the hub's copy of this list rather
+    /// than repeating it. A hand-kept second list drifts the first time an executor is added,
+    /// and it drifts the wrong way: the hub goes on refusing a command this agent has just
+    /// learned to run, and the only symptom is a console button that stays grey.
+    /// </summary>
+    public IReadOnlyCollection<string> Implemented => _executors.Keys;
+
     public async Task<CommandResult> ExecuteAsync(
         FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
