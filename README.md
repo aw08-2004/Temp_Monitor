@@ -1421,6 +1421,57 @@ an agent. Machine pages carry `platform`, `features` and `supported_commands` al
 > **Status:** built — hub 1.98.0. Only the Android agent reports capabilities today; the
 > Windows and Linux agents send nothing and are treated as unknown by design.
 
+## Blocking apps
+
+Deciding which apps a managed device may run, on the **Device policy** page.
+
+**Two kinds.** A **blocklist** names apps to suspend and leaves everything else alone. An
+**allowlist** names the only apps that may run; everything else installed is suspended. A device
+can be covered by several: blocklists union, and allowlists **intersect** -- each says "only
+these", so two of them applying leaves what both permit. A union would let a second allowlist
+quietly widen the first.
+
+**Suspended, not hidden.** The icon stays where it was, greyed, and the system itself says
+"paused by your organisation" when somebody taps it. Hiding makes an app silently vanish, which
+reads as "uninstalled" -- and what follows is a ticket, or somebody factory-resetting a phone to
+get their app back.
+
+**Nothing can suspend the launcher, the settings app, the dialer, the emergency app or the agent
+itself.** The agent enforces that list independently of the hub, so a hub that is compromised,
+misconfigured or simply newer cannot brick a device. The console holds a copy so it never offers
+you a policy it already knows will be partly refused, and names anything it drops rather than
+removing it silently.
+
+**Saving is gated on previewing.** The preview answers "which packages, on which devices, and
+how many are actually installed" before anything is stored, and it answers *per device* rather
+than as a fleet total -- "14 apps" reads as small; "14 apps on this phone, including the camera"
+does not. Any edit invalidates it.
+
+**The dead-man switch.** A device that stops hearing from this hub lifts every restriction on
+its own after `policy.max_age_seconds` (7 days). That is deliberate and one-way: the hub can
+make a device *more* restricted only while it can reach it, and a phone whose hub is
+decommissioned, misconfigured or behind a firewall must not become one somebody has to factory
+reset. The clock is measured from the hub's last *confirmation*, so a policy re-affirmed every
+ten seconds never expires.
+
+**Compliance is three views, not two**: what the policy asks for, what the device says it did,
+and what its own inventory shows. The interesting failures are where they disagree --
+`setPackagesSuspended` returns the packages it could **not** suspend, and a policy reported as
+applied while three of its targets are still running is worse than no policy.
+
+**Gating**: writing is `manage_device_policy`, a capability of its own -- a policy is not a
+setting but a standing instruction that changes what somebody's device does, applied without
+anybody present. Reading a policy is `view`; reading a machine's compliance is `view` + machine
+scope. Every write is audited at security level.
+
+**Endpoints**: `GET /policy` (the page), `GET|POST /api/policy/apps`,
+`GET|PUT|DELETE /api/policy/apps/<id>`, `POST /api/policy/preview`,
+`GET /api/policy/machines/<machine>`. The document reaches devices on the existing
+`POST /api/agent/heartbeat`, sent only when its version differs from the one the device reports.
+
+> **Status:** built -- hub 1.103.0 / Android agent source. **Not yet exercised on hardware** --
+> see the hardware-validation table in `ROADMAP.MD`.
+
 ## App inventory
 
 What a managed Android device says is installed, on the machine page under **Installed apps**.

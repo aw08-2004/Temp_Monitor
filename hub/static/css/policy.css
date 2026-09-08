@@ -1,0 +1,53 @@
+/* The Device policy page (roadmap #23 phase D).
+
+   Only the two pickers: everything else on that page is the console's existing card, table
+   and toolbar rules. Its own file rather than an addition to map.css, which is loaded on the
+   machine page and the map and nowhere else -- a stylesheet that has to be loaded by a page
+   it says nothing about is how the next person concludes the two are related.
+*/
+
+/* ---------------------------------------------------------------- the policy pickers
+   Shared by the machine and package lists on the Device policy page. A scrolling column of
+   checkbox rows rather than a multi-select: a <select multiple> of four hundred packages is
+   unusable with a keyboard, loses its selection on every re-filter, and cannot show a label
+   beside a package name -- which here is the whole point, because nobody recognises
+   com.zhiliaoapp.musically and everybody recognises TikTok. */
+.policy-picker {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    background: var(--control-bg);
+}
+
+.policy-picker__row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+}
+
+.policy-picker__row:hover {
+    background: var(--card);
+}
+
+/* A disabled row is a protected package: shown so it can be found, dimmed so it reads as
+   unavailable rather than as unchecked. */
+.policy-picker__row:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.policy-picker__label {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.policy-picker__meta {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    word-break: break-all;
+}

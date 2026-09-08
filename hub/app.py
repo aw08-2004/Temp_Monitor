@@ -46,6 +46,7 @@ import patches
 import wake
 import apps
 import capabilities
+import policy
 import location
 import provisioning
 import rules
@@ -76,6 +77,7 @@ from capabilities_web import create_capabilities_blueprint
 from provisioning_web import create_provisioning_blueprint
 from location_web import create_location_blueprint
 from apps_web import create_apps_blueprint
+from policy_web import create_policy_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -118,7 +120,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.102.0"
+HUB_VERSION = "1.103.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2181,6 +2183,13 @@ app.register_blueprint(create_location_blueprint(DB_PATH, login_required, access
 # a separate thing an operator authors and lands in its own pair.
 app.register_blueprint(create_apps_blueprint(DB_PATH, login_required, access))
 
+# Which apps a managed device may run (roadmap #23 phase D). Reading a policy and reading how a
+# device complies with one is `view` (+ machine scope for anything naming a machine); WRITING is
+# `manage_device_policy`, a capability of its own rather than a reuse of `manage_settings` -- a
+# policy is not a setting but a standing instruction that changes what somebody's device will
+# do, applied without anybody present. Same argument `manage_rules` already makes for itself.
+app.register_blueprint(create_policy_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -3082,6 +3091,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # The app inventory follows, and the survivor's own wins a collision: both rows describe
     # one physical device, and a union would claim apps that were uninstalled before the merge.
     apps.rename_machine(DB_PATH, dropped, survivor)
+    # Policy targets follow the survivor: it IS the merged-away device, and a policy that
+    # stopped covering it would silently un-block apps somebody deliberately blocked.
+    policy.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -4115,6 +4127,7 @@ wake.init_wake_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
+policy.init_policy_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -5000,6 +5013,10 @@ def delete_machine(machine):
     # list of somebody's apps is a fact about them rather than about an update or an
     # archive, so it has no claim to survive the machine the way patch history does.
     apps.forget_machine(DB_PATH, machine_name)
+    # And drop it from every app policy that named it. A stale target is worse here than
+    # elsewhere: a reused hostname would silently inherit a policy nobody aimed at it, and
+    # the symptom is apps that will not open on a machine whose page shows no reason why.
+    policy.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

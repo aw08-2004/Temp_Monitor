@@ -74,6 +74,7 @@ on, and it survived contact with Android intact.
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
 | **Commands** | `rename`, `locate_device` |
 | **App inventory** | Every installed package, with its label, version, and whether the framework says it is enabled or suspended. Change-only, on its own loop |
+| **App policy** | Suspends the packages the hub says to, un-suspends what it suspended before, and reports the ones it could not. Lifts everything on its own if the hub goes silent |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
@@ -289,6 +290,48 @@ applied policy visible. `QUERY_ALL_PACKAGES` is not requested and is not needed:
 is exempt from Android 11's package-visibility restriction, and on an unmanaged device a short
 list is the honest answer.
 
+## Enforcing an app policy
+
+The hub sends a flat list of packages to suspend; nothing here is a rule engine. Precedence,
+overlap and allowlist arithmetic all happen in `hub/policy.py`, where they can be previewed
+before anything reaches a phone.
+
+**`setPackagesSuspended`, not `setApplicationHidden`.** Suspension leaves the icon where it
+was, greyed, and the system itself shows "paused by your organisation" when somebody taps it.
+Hiding makes an app silently vanish, which reads as "uninstalled" -- and what follows is a
+helpdesk ticket, or somebody factory-resetting a phone to get their app back. A person whose
+device has been restricted should be able to see that it has been.
+
+**The never-suspend list here is the authoritative one.** hub/policy.py holds a copy so the
+console never offers a policy it already knows will be partly refused, but that copy is advice
+and this one is enforcement: it cannot be edited from the hub, so a hub that is compromised,
+misconfigured, or simply newer than this agent cannot brick a device. It protects the launcher
+under every vendor's package name, settings, the dialer, emergency, the system UI, the package
+installer -- and this agent, which is the one failure with no route back, because the channel
+that would carry "stop" is the thing that got suspended.
+
+**The dead-man switch is the reason the policy is persisted.** A device that has not had its
+policy confirmed for `max_age_seconds` lifts every restriction on its own. The hub can make a
+device MORE restricted only while it can reach it; a phone whose hub was decommissioned,
+misconfigured, or put behind a firewall must not be a device somebody has to factory reset. The
+clock runs from the hub's last CONFIRMATION, not from first receipt -- otherwise a policy
+re-affirmed every ten seconds for a week would expire -- and it survives a process kill, or a
+device whose hub went silent a month ago would enforce forever, one kill at a time.
+
+**An empty document is an instruction; an unparseable one is not.** Empty means "lift
+everything", which is what the hub sends when a machine stops being covered. Unparseable means
+the hub said something this agent does not understand, and the safe answer to that is to keep
+enforcing what is already applied.
+
+**Applying rides the inventory loop, never the heartbeat.** Suspending forty packages is a
+binder call each on some builds, and the heartbeat is the call that decides whether the machine
+reads online. That loop is also what ticks the dead-man switch, which has to run whether or not
+the hub is reachable -- and when the switch matters, it is not.
+
+**The agent un-suspends only what IT suspended.** A device may have been suspended by another
+DPC in its past, or by a vendor tool; lifting those would be this agent quietly taking ownership
+of decisions nobody asked it to make.
+
 ## Fully managed (device owner)
 
 The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
@@ -341,7 +384,7 @@ src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
   Platform/                   SharedPreferences, Build fields, sensors, location, apps, managed config, logcat
-  Policy/                     the device-admin component and the provisioning activities
+  Policy/                     the device-admin component, the provisioning activities, app suspension
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push
   Resources/xml/device_admin.xml       the policies the admin component declares

@@ -37,7 +37,8 @@
     "tools": "Tools",
     "sharing": "Sharing",
     "provisioning": "Device provisioning",
-    "map": "Map"
+    "map": "Map",
+    "policy": "Device policy"
   },
   "hub_update": {
     "_note": [
@@ -573,6 +574,10 @@
       "locate_device": {
         "label": "Locate a device",
         "description": "Ask a device where it is, on demand. Its own capability rather than part of 'Issue commands', deliberately: being able to reboot a PC must not silently mean being able to find out where an employee is. Reading a device's last known position only needs 'View' plus the machine being in scope. Every request is recorded in the audit trail with the operator's name, and the device shows a notification naming them too."
+      },
+      "manage_device_policy": {
+        "label": "Manage device policy",
+        "description": "Write app policy for managed devices: which apps may or may not run, and on which machines. Its own capability rather than part of 'Manage settings', because a policy is not a setting -- it is a standing instruction that changes what somebody's device will do, applied without anybody present. Reading a policy, and reading how a device is complying with one, only needs 'View' plus the machine being in scope."
       }
     }
   },
@@ -597,7 +602,8 @@
       "sharing": "Cross-hub Sharing",
       "provisioning": "Provisioning",
       "location": "Location",
-      "map": "Map"
+      "map": "Map",
+      "policy": "Policy"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1042,6 +1048,12 @@
         "default_zoom": {
           "label": "Zoom on a single device",
           "help": "How far in the map goes when it is showing one device. 16 is about a city block: close enough to see which building, wide enough that a fix with a 200 m accuracy circle still fits."
+        }
+      },
+      "policy": {
+        "max_age_seconds": {
+          "label": "Lift restrictions after",
+          "help": "How long a device keeps enforcing its app policy after it stops hearing from this hub. Past this, the device lifts every restriction on its own. This is a release valve rather than a timeout: a phone whose hub is gone must not be a device somebody has to factory reset in order to use."
         }
       }
     },
@@ -3390,5 +3402,60 @@
       "disabled": "Disabled"
     },
     "system": "system"
+  },
+  "policy": {
+    "heading": "Device policy",
+    "intro": "Which apps a managed device may run. Policies are written here and applied by each device on its next check-in.",
+    "deadman": "A device that stops hearing from this hub lifts every restriction on its own after the period set in Settings. That is deliberate: a device whose hub is unreachable must not become one somebody has to factory reset.",
+    "new": "New policy",
+    "none": "No policy has been written yet.",
+    "off": "(off)",
+    "edit": "Edit",
+    "delete": "Delete",
+    "confirm_delete": "Delete the policy “{name}”? Devices it covers will have its restrictions lifted on their next check-in.",
+    "column": {
+      "name": "Policy",
+      "mode": "Kind",
+      "packages": "Apps",
+      "targets": "Applies to"
+    },
+    "targets": {
+      "fleet": "Every device",
+      "machines": "{count} device(s)",
+      "hidden": "(+{count} you cannot see)"
+    },
+    "name": "Policy name",
+    "mode_label": "Kind",
+    "mode": {
+      "block": "Blocklist",
+      "allow": "Allowlist",
+      "block_help": "The apps chosen below are suspended. Everything else is left alone.",
+      "allow_help": "Only the apps chosen below may run. Everything else installed on the device is suspended, apart from apps that can never be suspended."
+    },
+    "enabled": "Enabled",
+    "section_targets": "Which devices",
+    "section_packages": "Which apps",
+    "fleet_wide": "Every device in the fleet",
+    "filter_machines": "Filter devices",
+    "filter_packages": "Filter apps",
+    "show_system": "Include system apps",
+    "package_count": "{chosen} chosen, {shown} shown",
+    "on_machines": "on {count}",
+    "protected": "cannot be blocked",
+    "no_packages": "No device has reported an app inventory yet, so there is nothing to choose from.",
+    "no_package_match": "No app matches that filter.",
+    "preview_button": "Preview",
+    "save": "Save",
+    "cancel": "Cancel",
+    "failed": "That could not be saved.",
+    "unreachable": "The hub did not answer.",
+    "preview": {
+      "summary": "Would affect {machines} of {total} device(s).",
+      "hidden": "{count} targeted device(s) are outside what you can see.",
+      "nothing": "No device would be affected. None of them has the chosen apps installed.",
+      "dropped": "These apps can never be suspended and were left out: {packages}",
+      "machine": "Device",
+      "would_suspend": "Would suspend"
+    }
   }
 }

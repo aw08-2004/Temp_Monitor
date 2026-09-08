@@ -72,6 +72,15 @@ public sealed class AgentState(IStateStore store)
     public bool SaveEnrollmentSecret(string secret) =>
         _store.Set(StateKeys.EnrollmentSecret, secret);
 
+    /// <summary>The stored app policy document, or null. See StateKeys.DevicePolicy.</summary>
+    public string? LoadDevicePolicy() => _store.Get(StateKeys.DevicePolicy);
+
+    /// <summary>Store the app policy document. A failed write is not fatal -- the policy is
+    /// applied from memory either way; what is lost is the staleness clock surviving a
+    /// restart.</summary>
+    public bool SaveDevicePolicy(string document) =>
+        _store.Set(StateKeys.DevicePolicy, document);
+
     public string? LoadHubBaseOverride()
     {
         var hub = _store.Get(StateKeys.HubBaseOverride);

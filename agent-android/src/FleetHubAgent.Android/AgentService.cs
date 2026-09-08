@@ -177,17 +177,28 @@ public sealed class AgentService : Service
         // DeviceOwner for the degradation contract the rest of the policy work is built on.
         DeviceOwner.ApplyBaseline(this, _loggerFactory.CreateLogger("DeviceOwner"));
 
-        // What is installed, on its own slow loop -- see AgentLoops.InventoryLoopAsync for why
-        // this cannot ride the heartbeat. One source today; the policy phase adds its use.
+        // The app policy this device enforces, and the report of what it managed to enforce.
+        // Restored before the loops start so a process kill resumes the staleness clock where
+        // it left off rather than restarting it -- see PolicyCoordinator on why that matters
+        // more than resuming the enforcement itself.
+        var policy = new PolicyCoordinator(
+            _loggerFactory.CreateLogger<PolicyCoordinator>(), state,
+            new AndroidPolicyEnforcer(this, _loggerFactory.CreateLogger("AppPolicy")));
+        policy.Restore();
+
+        // The slow local reads, on their own loop -- see AgentLoops.InventoryLoopAsync for why
+        // none of this can ride the heartbeat. The coordinator is a source too: what the device
+        // did with its policy is exactly the shape of every other change-only block.
         var inventory = new IInventorySource[]
         {
             new AppInventoryReader(this, _loggerFactory.CreateLogger("AppInventory")),
+            policy,
         };
 
         _agent = new AgentLoops(
             _loggerFactory.CreateLogger<AgentLoops>(), _sensors, new AndroidUptimeSource(),
             _reporter, _fleet, dispatcher, _names,
-            new AndroidEnrollmentSecretSource(this, state), inventory);
+            new AndroidEnrollmentSecretSource(this, state), inventory, policy);
     }
 
     /// <summary>The non-command abilities this device reports (hub/capabilities.py's FEATURE_*).

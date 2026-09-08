@@ -38,7 +38,8 @@ public sealed class AgentLoops(
     CommandDispatcher dispatcher,
     MachineNameProvider names,
     IEnrollmentSecretSource secrets,
-    IReadOnlyList<IInventorySource>? inventory = null)
+    IReadOnlyList<IInventorySource>? inventory = null,
+    PolicyCoordinator? policy = null)
 {
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -150,7 +151,20 @@ public sealed class AgentLoops(
                     // back 2xx marks them delivered, so a network blip costs a retry rather
                     // than a report. See InventoryReporter.
                     var blocks = PendingInventory();
-                    if (await fleet.HeartbeatAsync(blocks, ct)) AcknowledgeInventory(blocks);
+                    var reply = await fleet.HeartbeatAsync(
+                        blocks, policy?.CurrentVersion ?? "", ct);
+                    if (reply is not null)
+                    {
+                        AcknowledgeInventory(blocks);
+                        // A document only arrives when the hub's version differs from the one
+                        // just reported; anything else is the hub confirming what is held,
+                        // which refreshes the dead-man clock. Both matter: see PolicyCoordinator.
+                        if (reply.DevicePolicy is not null)
+                            policy?.Accept(reply.DevicePolicy, reply.DevicePolicyVersion,
+                                           DateTimeOffset.UtcNow);
+                        else
+                            policy?.Reaffirm(DateTimeOffset.UtcNow);
+                    }
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -177,12 +191,22 @@ public sealed class AgentLoops(
     /// </summary>
     private async Task InventoryLoopAsync(CancellationToken ct)
     {
-        if (inventory is null || inventory.Count == 0) return;
+        // The policy coordinator is itself an inventory source, so a build with a policy and
+        // nothing else still runs this loop -- which is what the dead-man switch needs.
+        if ((inventory is null || inventory.Count == 0) && policy is null) return;
 
         while (!ct.IsCancellationRequested)
         {
             var now = DateTimeOffset.UtcNow;
-            foreach (var source in inventory)
+            // Applying the policy rides this loop rather than the heartbeat: suspending forty
+            // packages is a binder call each on some builds, and the heartbeat is the call
+            // that decides whether the machine reads online. It also gives the dead-man switch
+            // a tick of its own, which has to run whether or not the hub is reachable -- and
+            // when that switch matters, it is not.
+            try { policy?.Tick(now); }
+            catch (Exception e) { log.LogWarning(e, "Applying the app policy failed"); }
+
+            foreach (var source in inventory ?? [])
             {
                 if (ct.IsCancellationRequested) break;
                 if (!_reporters.TryGetValue(source.Key, out var reporter)) continue;

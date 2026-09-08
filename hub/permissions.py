@@ -99,6 +99,17 @@ MANAGE_PATCHES = "manage_patches"
 # machine scope, like every other thing a machine reports about itself. Knowing where a device
 # was when somebody last asked is not the privilege; making a device answer is.
 LOCATE_DEVICE = "locate_device"
+# Writing app and time policy for managed devices (roadmap #23). Its own capability rather than
+# a reuse of MANAGE_SETTINGS, on the same argument MANAGE_RULES already makes for itself: a
+# policy is not a setting. A setting is a threshold somebody tunes; a policy is a standing
+# instruction that changes what a person's device will do, applied without anybody present, and
+# it is the first thing in this product that can make a device less useful to the person
+# holding it.
+#
+# READING a policy, and reading how a device is complying with one, is deliberately NOT gated
+# here -- that is VIEW plus machine scope. Knowing that an app is blocked on a device you
+# already administer is not a privilege; deciding that it should be is.
+MANAGE_DEVICE_POLICY = "manage_device_policy"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -124,6 +135,7 @@ CAPABILITIES = (
     MANAGE_FIRMWARE,
     MANAGE_PATCHES,
     LOCATE_DEVICE,
+    MANAGE_DEVICE_POLICY,
     MANAGE_RULES,
     MANAGE_SETTINGS,
     MANAGE_USERS,

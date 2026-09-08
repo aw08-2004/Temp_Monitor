@@ -167,10 +167,11 @@ public sealed class FleetClient : IDisposable
     /// heartbeat is the one message that repeats forever, so the report is self-healing. It
     /// costs a hundred bytes every ten seconds; the hub writes only when the content differs.
     /// </summary>
-    public async Task<bool> HeartbeatAsync(
-        IReadOnlyDictionary<string, JsonObject>? inventory, CancellationToken ct)
+    public async Task<HeartbeatReply?> HeartbeatAsync(
+        IReadOnlyDictionary<string, JsonObject>? inventory, string policyVersion,
+        CancellationToken ct)
     {
-        if (!_identity.IsEnrolled) return false;
+        if (!_identity.IsEnrolled) return null;
         try
         {
             using var req = Authorized(HttpMethod.Post, AgentConfig.HeartbeatUrl);
@@ -178,7 +179,14 @@ public sealed class FleetClient : IDisposable
             // freshly enrolled Windows agent sends too. The hub answers with a config block we
             // currently ignore; ignoring it is honest, since nothing here reads a
             // preferred-sensor list yet.
-            var body = new JsonObject { ["config_version"] = "" };
+            var body = new JsonObject
+            {
+                ["config_version"] = "",
+                // The app policy this device currently holds (roadmap #23 phase D). The hub
+                // answers with a document only when its own version differs, so a steady-state
+                // heartbeat carries this string and gets nothing back.
+                ["policy_version"] = policyVersion ?? "",
+            };
             // Never let building the report cost a heartbeat: it reads platform state, and a
             // device whose policy service is unavailable must still read as ONLINE in the
             // console. A dropped block leaves the machine ungated, which is the same state
@@ -201,12 +209,34 @@ public sealed class FleetClient : IDisposable
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
-            return resp.IsSuccessStatusCode;
+            if (!resp.IsSuccessStatusCode) return null;
+
+            // The reply is READ now, where it used to be discarded. Only the policy block is
+            // taken: `config`, the watch flags and the update channel all back features this
+            // agent does not implement, and parsing them to ignore them would be dead code
+            // holding a bearer token.
+            //
+            // A body that will not parse is a SUCCESSFUL heartbeat with no policy in it, not a
+            // failed one -- the machine is online either way, and the alternative would make a
+            // hub with a slightly different reply shape take every device offline.
+            try
+            {
+                var text = await resp.Content.ReadAsStringAsync(ct);
+                var json = JsonNode.Parse(text) as JsonObject;
+                return new HeartbeatReply(
+                    json?["device_policy"],
+                    json?["device_policy_version"]?.GetValue<string>());
+            }
+            catch (Exception e)
+            {
+                _log.LogDebug("Heartbeat reply could not be read: {Msg}", e.Message);
+                return HeartbeatReply.Empty;
+            }
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Heartbeat failed: {Msg}", e.Message);
-            return false;
+            return null;
         }
     }
 

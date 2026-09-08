@@ -87,7 +87,7 @@
                                 from ordinary apps behind this permission; a DPC is exempt, and
                                 getInstalledPackages returns everything for one. Requesting it
                                 would buy an inventory on unmanaged devices at the cost of a
-                                broad, Play-policy-flagged permission on every device -- and
+                                broad, Play-policy-flagged permission on every device, and
                                 the unmanaged case is exactly the one where a partial list is
                                 the honest answer. See AppInventoryReader.
          REQUEST_IGNORE_BATTERY_OPTIMIZATIONS

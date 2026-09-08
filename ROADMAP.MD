@@ -3395,6 +3395,81 @@ device — see the hardware-validation table below.
 
 ---
 
+## 🚧 App policy · hub 1.103.0 · `policy.py` / `policy_web.py`
+
+Phase D.3 and D.4 of #23: deciding which apps a managed device may run, and making a device
+actually do it. **The first thing in this product that can make a device less useful to the
+person holding it**, which is what shapes every decision below.
+
+**Its own pair rather than more of `apps.py`, and that split is the important one.** `apps.py`
+holds what the DEVICE says is installed — reported, replaced wholesale, never written by an
+operator. `policy.py` holds what an OPERATOR says is allowed. Keeping them apart is what makes
+compliance answerable: the console compares one against the other, and a module owning both
+would be one edit away from writing the device's own report from the policy meant to change it.
+
+**Resolved to a flat list per device; the device is never given a rule engine.** Precedence,
+overlap and mode all happen in the hub where they can be previewed. Blocklists union;
+allowlists **intersect**, because each says "only these" and a union would let a second one
+quietly widen the first.
+
+### The four things that keep a phone usable
+
+- **The never-suspend set**, enforced by the agent independently of the hub. The launcher, the
+  settings app, the dialer, the emergency app, the system UI, the package installer — and the
+  agent itself, which is the one failure with no route back, because the channel that would
+  carry "stop" is the thing that got suspended. The hub holds a copy so the console never
+  offers a policy it knows will be partly refused, but that copy is *advice* and the agent's is
+  *enforcement*: a hub that is compromised, misconfigured or simply newer cannot brick a device.
+- **The dead-man switch.** A device that stops hearing from its hub lifts everything after
+  `policy.max_age_seconds` (7 days), on its own. Deliberately one-way: the hub can make a device
+  more restricted only while it can reach it. Measured from the last *confirmation* rather than
+  first receipt — anchoring on receipt would expire a policy the hub has been re-affirming every
+  ten seconds for a week. Persisted, so a process kill resumes the clock instead of restarting
+  it, which would otherwise mean a device whose hub went silent a month ago enforcing forever,
+  one kill at a time.
+- **An empty document is sent, never silence.** "No policy applies" resolves to `blocked: []`.
+  Sending nothing would leave a device enforcing what it had, with the console showing no policy
+  and nothing to explain the app that will not open. That is the release valve for the whole
+  feature, and it is asserted through the real endpoint in both directions.
+- **An allowlist with no inventory yields nothing, not everything.** Backwards, that suspends
+  every app on a device the hub has not finished learning about — which is exactly the
+  freshly-enrolled one.
+
+### Other decisions
+
+- **`setPackagesSuspended`, not `setApplicationHidden`.** Suspension leaves the icon in place,
+  greyed, with the system's own "paused by your organisation". Hiding makes an app vanish, which
+  reads as uninstalled and ends in a ticket or a factory reset. Hiding stays available for a
+  future kiosk mode; it is not the default.
+- **The refused list is plumbed all the way back.** `setPackagesSuspended` returns what it could
+  not suspend, and a policy reported as applied while three targets are still running is a
+  compliance answer that is confidently wrong. Compliance is therefore three views — intent, the
+  device's claim, and its own inventory — because the interesting failures are where they
+  disagree.
+- **Saving is gated on previewing**, and any edit invalidates the preview. Friction on purpose.
+  The preview answers per device rather than as a fleet total: "14 apps" reads as small, "14 apps
+  on this phone, including the camera" does not.
+- **`MANAGE_DEVICE_POLICY` is a new capability**, on the argument `MANAGE_RULES` already makes:
+  a policy is not a setting but a standing instruction applied with nobody present.
+- **The agent un-suspends only what IT suspended.** A device may have been suspended by another
+  DPC in its past or by a vendor tool; lifting those would be this agent quietly taking
+  ownership of decisions nobody asked it to make.
+
+### Also in this phase
+
+`AndroidResourceXmlTests` — every XML file in the Android project is parsed by the Core test
+run. XML forbids `--` inside a comment and this repo's house style puts double hyphens in prose
+by reflex; that single mistake had cost **six** Android builds by the time it was written, each
+one ninety seconds to discover a typo, reported as an MSBuild stack trace naming a generated
+copy. The same check now runs in 200 ms with no SDK, no workload and no device.
+
+### Not done
+
+`setApplicationHidden` as an explicit kiosk mode, and time-based restrictions (phase E), which
+ride the same `device_policy` channel. Nothing here has been run against a real device.
+
+---
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
@@ -3408,6 +3483,7 @@ This is that list, so nothing is quietly skipped:
 | **B** | Locate returns a fix inside 60 s; the notification naming the operator appears on the phone; an `audit_log` row records it; the foreground-service promotion is accepted (API 34 throws if it is not); a locate with location switched off comes back `unavailable` with a readable reason, not a failure |
 | **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |
 | **D** | The Installed apps fold populates; the count is plausible for the device (150-400); `system` is set on the right ones; the list survives an app being installed and uninstalled; **on an unmanaged device** the list is short, which is the expected answer without `QUERY_ALL_PACKAGES` and not a bug |
+| **D policy** | Apply a blocklist to one test app and confirm the system's "paused by your organisation" dialog; confirm the console shows it as enforced from the device's OWN inventory; confirm a package that cannot be suspended comes back in `failed`; **delete the policy and confirm the app comes back** (the empty-document release valve); confirm the dead-man switch by setting a short `policy.max_age_seconds` and taking the device off the network |
 
 Two things are blocked rather than merely pending: **A needs a device that can be wiped**, and
 everything needs the pilot phone to re-authorise USB debugging, which it dropped.

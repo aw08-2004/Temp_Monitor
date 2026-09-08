@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.policy') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/policy.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. policy.js builds the list, the editor and the preview from
+   /api/policy/apps, /api/apps/packages and /api/machines.
+
+   The preview is the reason this page has three sections rather than two. An app policy is
+   the first thing in this product that can make a device less useful to the person holding
+   it, and the gap between "block TikTok" and "block fourteen apps on ninety phones" is
+   exactly where somebody notices they picked the wrong list. So saving is deliberately not
+   the next thing after choosing -- previewing is.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-3);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('policy.heading') }}</h1>
+        <p class="stat-card__meta">{{ t('policy.intro') }}</p>
+    </div>
+    <button class="btn btn--primary" type="button" id="policy-new" hidden>{{ t('policy.new') }}</button>
+</div>
+
+{# Not dismissible, and above the list rather than inside the editor. The dead-man switch is
+   the one thing about this feature somebody has to know before they write their first policy:
+   a device that stops hearing from this hub lifts everything on its own, which is a safety
+   property and not a bug to report. #}
+<p class="banner" style="margin-bottom: var(--space-5);">{{ t('policy.deadman') }}</p>
+
+<div class="table-scroll" id="policy-list"></div>
+
+{# ---------------- The editor ---------------- #}
+<div class="card" id="policy-editor" hidden style="margin-top: var(--space-5);">
+    <div class="toolbar" style="margin-bottom: var(--space-4);">
+        <input class="input" id="policy-name" type="text" placeholder="{{ t('policy.name') }}"
+               aria-label="{{ t('policy.name') }}" style="min-width: 260px;">
+        <label for="policy-mode" class="stat-card__meta">{{ t('policy.mode_label') }}</label>
+        <select class="select" id="policy-mode">
+            <option value="block">{{ t('policy.mode.block') }}</option>
+            <option value="allow">{{ t('policy.mode.allow') }}</option>
+        </select>
+        <label class="stat-card__meta">
+            <input id="policy-enabled" class="checkbox" type="checkbox" checked> {{ t('policy.enabled') }}
+        </label>
+    </div>
+    {# Changes meaning entirely with the mode, so the explanation is rendered by the script
+       rather than written twice here: a blocklist names what may NOT run, an allowlist names
+       the only things that may. #}
+    <p class="stat-card__meta" id="policy-mode-help" style="margin-bottom: var(--space-4);"></p>
+
+    <h2 class="section-title" style="font-size: var(--text-md);">{{ t('policy.section_targets') }}</h2>
+    <label class="stat-card__meta">
+        <input id="policy-fleet" class="checkbox" type="checkbox"> {{ t('policy.fleet_wide') }}
+    </label>
+    <div id="policy-machines-wrap" style="margin-top: var(--space-3);">
+        <label for="policy-machine-filter" class="sr-only">{{ t('policy.filter_machines') }}</label>
+        <input type="search" id="policy-machine-filter" class="input"
+               placeholder="{{ t('policy.filter_machines') }}" style="max-width: 320px;">
+        <div id="policy-machines" class="policy-picker"></div>
+    </div>
+
+    <h2 class="section-title" style="font-size: var(--text-md); margin-top: var(--space-5);">{{ t('policy.section_packages') }}</h2>
+    <div class="toolbar" style="margin-bottom: var(--space-3);">
+        <label for="policy-package-filter" class="sr-only">{{ t('policy.filter_packages') }}</label>
+        <input type="search" id="policy-package-filter" class="input"
+               placeholder="{{ t('policy.filter_packages') }}" style="max-width: 320px;">
+        {# Off by default for the same reason the machine page's app list hides them: a phone
+           reports several hundred packages and perhaps thirty are things somebody installed. #}
+        <input id="policy-package-system" class="checkbox" type="checkbox">
+        <label for="policy-package-system">{{ t('policy.show_system') }}</label>
+        <span class="stat-card__meta" id="policy-package-count"></span>
+    </div>
+    <div id="policy-packages" class="policy-picker"></div>
+
+    <div class="toolbar" style="margin-top: var(--space-5); gap: var(--space-3);">
+        <button class="btn" type="button" id="policy-preview">{{ t('policy.preview_button') }}</button>
+        <button class="btn btn--primary" type="button" id="policy-save" disabled>{{ t('policy.save') }}</button>
+        <button class="btn btn--ghost" type="button" id="policy-cancel">{{ t('policy.cancel') }}</button>
+        <span class="stat-card__meta" id="policy-error"></span>
+    </div>
+
+    {# Saving is disabled until this has been rendered at least once for the current draft.
+       Deliberately: see the note at the top of the file. #}
+    <div id="policy-preview-out" style="margin-top: var(--space-4);"></div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/policy.js') }}"></script>
+{% endblock %}

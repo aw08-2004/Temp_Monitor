@@ -510,6 +510,22 @@ REGISTRY = (
     # which building, wide enough that a fix with a 200 m accuracy circle still fits on screen.
     _s("map.default_zoom", "map", "int", 16, minimum=1, maximum=19),
 
+    # ---------------- Policy: the dead-man switch (roadmap #23) ----------------
+    # How long a device goes on enforcing its app policy after it stops hearing from this hub.
+    # Past this, the agent lifts EVERY restriction on its own.
+    #
+    # **This is a release valve, and it is deliberately one-way.** The hub can make a device
+    # more restricted only while it can reach it; a phone whose hub is gone -- decommissioned,
+    # misconfigured, on the wrong side of a firewall -- must not be a device somebody has to
+    # factory reset to use. Seven days is long enough that a fortnight's holiday with the phone
+    # switched off does not lift a curfew, and short enough that a genuinely orphaned device
+    # frees itself before anybody has to.
+    #
+    # Sent to the device inside the policy document rather than as agent config, because it is
+    # a property of the policy being enforced rather than of the agent enforcing it.
+    _s("policy.max_age_seconds", "policy", "int", 604800, minimum=3600, maximum=7776000,
+       unit="seconds"),
+
     # ---------------- Rules: conditions over machine data, and what they do ----------------
     # A rule is "condition + who it applies to + what happens". These knobs are the fuses
     # around the last third of that, because a rule engine that can issue commands is a
@@ -568,7 +584,7 @@ REGISTRY = (
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
             "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
-            "rules", "sharing")
+            "policy", "rules", "sharing")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

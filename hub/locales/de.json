@@ -27,7 +27,8 @@
     "tools": "Werkzeuge",
     "sharing": "Freigabe",
     "provisioning": "Geräte-Provisionierung",
-    "map": "Karte"
+    "map": "Karte",
+    "policy": "Geräterichtlinie"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -514,6 +515,10 @@
       "locate_device": {
         "label": "Gerät orten",
         "description": "Ein Gerät auf Anfrage nach seinem Standort fragen. Bewusst eine eigene Berechtigung und kein Teil von „Befehle erteilen“: einen PC neu starten zu dürfen darf nicht stillschweigend bedeuten, den Aufenthaltsort einer Person ermitteln zu dürfen. Zum Lesen der zuletzt bekannten Position genügen „Ansehen“ und der Rechner im Geltungsbereich. Jede Anfrage wird mit dem Namen der Bedienperson im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung, die denselben Namen nennt."
+      },
+      "manage_device_policy": {
+        "label": "Geräterichtlinien verwalten",
+        "description": "App-Richtlinien für verwaltete Geräte schreiben: welche Apps laufen dürfen und welche nicht, und auf welchen Rechnern. Eine eigene Berechtigung und kein Teil von „Einstellungen verwalten“, denn eine Richtlinie ist keine Einstellung -- sie ist eine dauerhafte Anweisung, die ohne Anwesende verändert, was das Gerät einer Person tut. Zum Lesen einer Richtlinie und des Erfüllungsstands genügen „Ansehen“ und der Rechner im Geltungsbereich."
       }
     }
   },
@@ -538,7 +543,8 @@
       "sharing": "Hub-übergreifende Freigabe",
       "provisioning": "Provisionierung",
       "location": "Standort",
-      "map": "Karte"
+      "map": "Karte",
+      "policy": "Richtlinie"
     },
     "unit": {
       "celsius": "°C",
@@ -970,6 +976,12 @@
         "default_zoom": {
           "label": "Zoom bei einem einzelnen Gerät",
           "help": "Wie weit die Karte heranzoomt, wenn sie ein einzelnes Gerät zeigt. 16 entspricht etwa einem Häuserblock: nah genug, um das Gebäude zu erkennen, weit genug, dass ein Genauigkeitskreis von 200 m noch hineinpasst."
+        }
+      },
+      "policy": {
+        "max_age_seconds": {
+          "label": "Einschränkungen aufheben nach",
+          "help": "Wie lange ein Gerät seine App-Richtlinie weiter durchsetzt, nachdem es nichts mehr von diesem Hub gehört hat. Danach hebt das Gerät alle Einschränkungen von selbst auf. Das ist ein Sicherheitsventil und keine Zeitüberschreitung: ein Telefon, dessen Hub verschwunden ist, darf kein Gerät sein, das jemand zurücksetzen muss."
         }
       }
     },
@@ -3272,5 +3284,60 @@
       "disabled": "Deaktiviert"
     },
     "system": "System"
+  },
+  "policy": {
+    "heading": "Geräterichtlinie",
+    "intro": "Welche Apps ein verwaltetes Gerät ausführen darf. Richtlinien werden hier geschrieben und von jedem Gerät bei der nächsten Meldung angewendet.",
+    "deadman": "Ein Gerät, das nichts mehr von diesem Hub hört, hebt nach der in den Einstellungen gesetzten Frist alle Einschränkungen von selbst auf. Das ist beabsichtigt: ein Gerät, dessen Hub nicht erreichbar ist, darf nicht zu einem werden, das man zurücksetzen muss.",
+    "new": "Neue Richtlinie",
+    "none": "Es wurde noch keine Richtlinie geschrieben.",
+    "off": "(aus)",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "confirm_delete": "Die Richtlinie „{name}“ löschen? Bei den erfassten Geräten werden ihre Einschränkungen bei der nächsten Meldung aufgehoben.",
+    "column": {
+      "name": "Richtlinie",
+      "mode": "Art",
+      "packages": "Apps",
+      "targets": "Gilt für"
+    },
+    "targets": {
+      "fleet": "Alle Geräte",
+      "machines": "{count} Gerät(e)",
+      "hidden": "(+{count} für Sie nicht sichtbar)"
+    },
+    "name": "Name der Richtlinie",
+    "mode_label": "Art",
+    "mode": {
+      "block": "Sperrliste",
+      "allow": "Erlaubnisliste",
+      "block_help": "Die unten gewählten Apps werden pausiert. Alles andere bleibt unberührt.",
+      "allow_help": "Nur die unten gewählten Apps dürfen laufen. Alles andere Installierte wird pausiert, außer Apps, die nie pausiert werden können."
+    },
+    "enabled": "Aktiv",
+    "section_targets": "Welche Geräte",
+    "section_packages": "Welche Apps",
+    "fleet_wide": "Alle Geräte der Flotte",
+    "filter_machines": "Geräte filtern",
+    "filter_packages": "Apps filtern",
+    "show_system": "System-Apps einschließen",
+    "package_count": "{chosen} gewählt, {shown} angezeigt",
+    "on_machines": "auf {count}",
+    "protected": "kann nicht gesperrt werden",
+    "no_packages": "Noch kein Gerät hat eine App-Inventur gemeldet, es gibt also nichts zur Auswahl.",
+    "no_package_match": "Keine App passt zu diesem Filter.",
+    "preview_button": "Vorschau",
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "failed": "Das konnte nicht gespeichert werden.",
+    "unreachable": "Der Hub hat nicht geantwortet.",
+    "preview": {
+      "summary": "Würde {machines} von {total} Gerät(en) betreffen.",
+      "hidden": "{count} betroffene Gerät(e) liegen außerhalb Ihres Sichtbereichs.",
+      "nothing": "Kein Gerät wäre betroffen. Auf keinem sind die gewählten Apps installiert.",
+      "dropped": "Diese Apps können nie pausiert werden und wurden ausgelassen: {packages}",
+      "machine": "Gerät",
+      "would_suspend": "Würde pausieren"
+    }
   }
 }

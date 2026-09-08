@@ -58,6 +58,25 @@ public readonly record struct CommandPollResult(List<FleetCommand> Commands, boo
 }
 
 /// <summary>Result of executing a command, reported back to the hub.</summary>
+/// <summary>What the hub said back on a heartbeat.
+///
+/// Deliberately narrow: only the app-policy block is read. `config`, the process/live watch
+/// flags and the update channel all back features this agent does not implement, and a field
+/// parsed only to be ignored is dead code holding a bearer token.
+///
+/// A non-null reply means the heartbeat SUCCEEDED, which is what acknowledges the inventory
+/// blocks that rode with it. Null means it did not.</summary>
+/// <param name="DevicePolicy">The `device_policy` document, or null when the hub had nothing
+/// new to say -- which is the steady state, since it only answers when its version differs
+/// from the one the agent reported holding.</param>
+/// <param name="DevicePolicyVersion">The version of that document.</param>
+public sealed record HeartbeatReply(JsonNode? DevicePolicy, string? DevicePolicyVersion)
+{
+    /// <summary>A heartbeat that landed but whose body could not be read. Distinct from null,
+    /// which is a heartbeat that did not land at all.</summary>
+    public static readonly HeartbeatReply Empty = new(null, null);
+}
+
 public readonly record struct CommandResult(bool Success, string? Output)
 {
     public static CommandResult Ok(string? output = null) => new(true, output);

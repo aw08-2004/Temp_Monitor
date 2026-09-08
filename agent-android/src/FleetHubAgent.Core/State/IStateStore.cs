@@ -54,6 +54,14 @@ public static class StateKeys
     /// changing the hub takes effect rather than losing to a stale local copy.</summary>
     public const string HubBaseOverride = "hub_base";
 
+    /// <summary>The device's app policy, as the JSON of DevicePolicy (roadmap #23 phase D).
+    ///
+    /// Persisted for one reason and it is not "to avoid re-applying": the dead-man switch is
+    /// measured from when the hub last confirmed the policy, so an agent that forgot it on
+    /// every restart would restart that clock too -- and a device whose hub went silent a
+    /// month ago would go on enforcing forever, one process kill at a time.</summary>
+    public const string DevicePolicy = "device_policy";
+
     /// <summary>The shared enrollment secret. **This is the hub's AGENT_ENROLLMENT_SECRET,
     /// the same value on every machine in the fleet** -- not a per-device credential. What IS
     /// minted per device, and returned exactly once, is the token enroll hands back.</summary>

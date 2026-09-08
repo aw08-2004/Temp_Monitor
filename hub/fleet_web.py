@@ -43,6 +43,7 @@ import live
 import patches
 import permissions
 import permissions_web
+import policy
 import processes
 import refusals
 import remote
@@ -190,6 +191,16 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 apps.record_inventory(db_path, machine, data["apps"])
             except Exception as e:
                 print(f"[apps] Could not record the app inventory for {machine}: {e}")
+        # What the device says it did with its app policy (roadmap #23 phase D). Sent after
+        # an application attempt rather than on a cadence, and never fatal like everything
+        # else here. `failed` is the field this exists for: setPackagesSuspended returns the
+        # packages it could NOT suspend, and a policy reported as applied while three of its
+        # targets are still running is worse than no policy at all.
+        if data.get("policy_state"):
+            try:
+                policy.record_state(db_path, machine, data["policy_state"])
+            except Exception as e:
+                print(f"[policy] Could not record the policy state for {machine}: {e}")
         # Logon sessions + display outputs, on the same change-only cadence and with the same
         # never-fatal handling: this feeds the remote session picker and the headless badge,
         # and neither is worth failing a heartbeat over.
@@ -300,6 +311,34 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 db_path, machine, settings.get(db_path, "fleet.default_agent_channel"))
         except Exception as e:
             print(f"[channels] Could not resolve the channel for {machine}: {e}")
+        # The device's app policy (roadmap #23 phase D), resolved to a flat list of packages
+        # to suspend. Sent only when the version the agent holds differs from the current
+        # one -- the same shape `config` above uses, and for the same reason: this is a
+        # ten-second heartbeat and re-sending an unchanged document would be most of it.
+        #
+        # **An EMPTY document is still sent**, and that is the release valve. Removing a
+        # machine from a policy has to be able to un-block its apps, so "no policy applies"
+        # is a document saying `blocked: []` rather than an absent block -- which the agent
+        # would read as "the hub had nothing to say" and go on enforcing what it had.
+        #
+        # `max_age_seconds` rides inside the document rather than as agent config because it
+        # is a property of the policy being enforced: it is how long the device keeps
+        # enforcing THIS after it stops hearing from us, and past it the agent lifts
+        # everything on its own. See policy.py and hub/settings.py's policy.* section.
+        #
+        # Its own try/except, like every block here: a policy that cannot be resolved must
+        # not cost the machine its heartbeat, and the device simply keeps what it has until
+        # the next one -- bounded by that same dead-man switch.
+        try:
+            document = policy.resolve_for(db_path, machine, apps.list_apps(db_path, machine))
+            if data.get("policy_version") != document["version"]:
+                payload["device_policy"] = {
+                    "blocked": document["blocked"],
+                    "max_age_seconds": settings.get_int(db_path, "policy.max_age_seconds"),
+                }
+                payload["device_policy_version"] = document["version"]
+        except Exception as e:
+            print(f"[policy] Could not resolve the policy for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])
