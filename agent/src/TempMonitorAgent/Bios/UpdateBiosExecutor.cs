@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using TempMonitorAgent.Fleet;
@@ -131,7 +133,9 @@ public sealed class UpdateBiosExecutor(
                 // line, because a command line is readable from the process list by anything
                 // running locally. Deleted in the finally below on every path.
                 passwordFile = Path.Combine(StagingDir, $"{Guid.NewGuid():N}.pw");
-                await File.WriteAllTextAsync(passwordFile, password, ct);
+                var protectedPassword = ProtectForLocalMachine(password);
+                await File.WriteAllBytesAsync(passwordFile, protectedPassword, ct);
+                password = UnprotectForLocalMachine(await File.ReadAllBytesAsync(passwordFile, ct));
             }
 
             var plan = FirmwareFlasher.BuildPlan(vendor, imagePath,
@@ -209,6 +213,19 @@ public sealed class UpdateBiosExecutor(
             ["unsupported"] = unsupported,
             ["error"] = error,
         }, ct);
+
+    private static byte[] ProtectForLocalMachine(string clearText)
+        => ProtectedData.Protect(
+            Encoding.UTF8.GetBytes(clearText),
+            optionalEntropy: null,
+            scope: DataProtectionScope.LocalMachine);
+
+    private static string UnprotectForLocalMachine(byte[] cipherBytes)
+        => Encoding.UTF8.GetString(
+            ProtectedData.Unprotect(
+                cipherBytes,
+                optionalEntropy: null,
+                scope: DataProtectionScope.LocalMachine));
 
     /// <summary>This machine's model, as WMI reports it -- the same string
     /// <c>save_machine_info</c> stores and the hub matched the image against.</summary>
