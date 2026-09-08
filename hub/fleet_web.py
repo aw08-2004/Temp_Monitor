@@ -32,6 +32,7 @@ import functools
 
 from flask import Blueprint, jsonify, request, session
 
+import apps
 import backups
 import bios
 import capabilities
@@ -178,6 +179,17 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 backups.record_profiles(db_path, machine, data["profiles"])
             except Exception as e:
                 print(f"[backup] Could not record profiles for {machine}: {e}")
+        # What is installed on the device (roadmap #23 phase D). Change-only and never fatal
+        # like its neighbours, and tested with `is not None` for the same reason `patches` is:
+        # the agent sends an OBJECT ({"apps": [...]}) so that a device reporting an EMPTY list
+        # stays truthy along the whole path. That transition is a real report -- a device that
+        # has had everything uninstalled -- and a truthiness check anywhere would be the one
+        # thing that could never arrive.
+        if data.get("apps") is not None:
+            try:
+                apps.record_inventory(db_path, machine, data["apps"])
+            except Exception as e:
+                print(f"[apps] Could not record the app inventory for {machine}: {e}")
         # Logon sessions + display outputs, on the same change-only cadence and with the same
         # never-fatal handling: this feeds the remote session picker and the headless badge,
         # and neither is worth failing a heartbeat over.

@@ -44,6 +44,7 @@ import channels
 import firmware
 import patches
 import wake
+import apps
 import capabilities
 import location
 import provisioning
@@ -74,6 +75,7 @@ from wake_web import create_wake_blueprint
 from capabilities_web import create_capabilities_blueprint
 from provisioning_web import create_provisioning_blueprint
 from location_web import create_location_blueprint
+from apps_web import create_apps_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -116,7 +118,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.101.0"
+HUB_VERSION = "1.102.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2173,6 +2175,12 @@ app.register_blueprint(create_provisioning_blueprint(
 # a hand-rolled locate through the generic command endpoint for the same reason.
 app.register_blueprint(create_location_blueprint(DB_PATH, login_required, access))
 
+# What is installed on a managed device (roadmap #23 phase D). Read-only and gated on `view` +
+# machine scope: an app list is inventory in the sense a disk layout is, and an operator who can
+# see the machine can see what it runs. The write half -- deciding which apps are allowed -- is
+# a separate thing an operator authors and lands in its own pair.
+app.register_blueprint(create_apps_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -3071,6 +3079,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # a merge folds two records of one physical device together, and "where was this phone on
     # Tuesday" is the same question afterwards.
     location.rename_machine(DB_PATH, dropped, survivor)
+    # The app inventory follows, and the survivor's own wins a collision: both rows describe
+    # one physical device, and a union would claim apps that were uninstalled before the merge.
+    apps.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -4103,6 +4114,7 @@ patches.init_patches_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
+apps.init_apps_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -4984,6 +4996,10 @@ def delete_machine(machine):
     # archive, while where a device WAS is a fact about a person, and keeping it after the
     # device is gone is pure liability.
     location.forget_machine(DB_PATH, machine_name)
+    # And what it had installed (roadmap #23). Same argument as location, one step out: a
+    # list of somebody's apps is a fact about them rather than about an update or an
+    # archive, so it has no claim to survive the machine the way patch history does.
+    apps.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

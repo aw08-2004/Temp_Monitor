@@ -177,10 +177,17 @@ public sealed class AgentService : Service
         // DeviceOwner for the degradation contract the rest of the policy work is built on.
         DeviceOwner.ApplyBaseline(this, _loggerFactory.CreateLogger("DeviceOwner"));
 
+        // What is installed, on its own slow loop -- see AgentLoops.InventoryLoopAsync for why
+        // this cannot ride the heartbeat. One source today; the policy phase adds its use.
+        var inventory = new IInventorySource[]
+        {
+            new AppInventoryReader(this, _loggerFactory.CreateLogger("AppInventory")),
+        };
+
         _agent = new AgentLoops(
             _loggerFactory.CreateLogger<AgentLoops>(), _sensors, new AndroidUptimeSource(),
             _reporter, _fleet, dispatcher, _names,
-            new AndroidEnrollmentSecretSource(this, state));
+            new AndroidEnrollmentSecretSource(this, state), inventory);
     }
 
     /// <summary>The non-command abilities this device reports (hub/capabilities.py's FEATURE_*).

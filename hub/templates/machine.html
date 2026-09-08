@@ -187,6 +187,35 @@
         <div class="table-scroll" id="location-history"></div>
     </details>
 
+    {# What this device says is INSTALLED (roadmap #23 phase D). Distinct from the Processes
+       card below, which is what is running right now: this is inventory, it changes when
+       somebody installs something, and nothing polls it.
+
+       Rendered `hidden` and revealed by machine-apps.js only for a device that has actually
+       reported an inventory -- every Windows PC has not, and a permanently empty card on
+       several hundred machine pages is worse than no card.
+
+       Closed by default and fetched on page load anyway: the fetch is what decides whether the
+       card exists at all, so it cannot wait for a click on something invisible. Opening it
+       afterwards costs nothing. #}
+    <details class="card sensor-browser fold" data-fold-key="machine:overview:apps" id="card-apps" hidden>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.apps.title') }}</span>
+            <span class="stat-card__meta" id="apps-count"></span>
+        </summary>
+        <div class="toolbar" style="margin: var(--space-3) 0;">
+            <label for="apps-filter" class="sr-only">{{ t('apps.filter') }}</label>
+            <input type="search" id="apps-filter" class="input" placeholder="{{ t('apps.filter') }}"
+                   aria-label="{{ t('apps.filter') }}">
+            {# Off by default: a phone reports several hundred packages and perhaps thirty are
+               things somebody installed. The other three hundred bury them. #}
+            <input id="apps-system" class="checkbox" type="checkbox">
+            <label for="apps-system">{{ t('apps.show_system') }}</label>
+            <span id="apps-status" class="stat-card__meta"></span>
+        </div>
+        <div class="table-scroll" id="apps-body"></div>
+    </details>
+
     {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
        Collapsed by default and only polled while open, exactly like the sensor browser
        below, and here the argument is stronger than "it is a lot of rows": the machine does
@@ -364,5 +393,6 @@
    never hears about it. #}
 <script src="{{ url_for('static', filename='js/location-map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-location.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

@@ -73,6 +73,7 @@ on, and it survived contact with Android intact.
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or typed once on the setup screen |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
 | **Commands** | `rename`, `locate_device` |
+| **App inventory** | Every installed package, with its label, version, and whether the framework says it is enabled or suspended. Change-only, on its own loop |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
@@ -256,6 +257,38 @@ wire shape, what to say when there is not one -- is in `FleetHubAgent.Core`, whe
 tests that run on a workstation. The two Android classes only answer "here is a position, or
 here is why not" and "tell the person who asked".
 
+## The inventory loop
+
+A fourth loop, beside telemetry, heartbeat and commands, for the slow local things. Today it
+carries one source: what is installed.
+
+**It cannot ride the heartbeat.** Enumerating every package walks the whole device, and the
+heartbeat is the call that decides whether a machine reads online -- the hub's window is ninety
+seconds, so a multi-second read in front of it would flicker a healthy device offline for the
+crime of having a lot of apps.
+
+`InventoryReporter` is the change-only machinery, written once in Core rather than copied per
+source the way the Windows agent's five reporters are. Three properties are load-bearing:
+
+- **A block is not "sent" until the heartbeat comes back 2xx.** The Windows original records the
+  hash as it hands the payload over, so a heartbeat that fails a moment later leaves the agent
+  convinced the hub has it -- and since the next scan finds the same content, the block is never
+  re-sent until it changes again. One blip, one lost report, and a console showing a stale list
+  with nothing saying so.
+- **The payload is an object wrapping the list, never the list.** A device that has had
+  everything uninstalled must be able to report that, and the hub tests these keys with
+  `is not None` so an empty list inside an object survives where a bare `[]` would be dropped by
+  any truthiness check on the way.
+- **A failed READ offers nothing and does not advance the interval.** "I could not look" and "I
+  looked and there is nothing" are different reports; the hub would believe the second and wipe
+  a good inventory.
+
+`AppInventoryReader` reports system apps too, flagged, and reads `enabled`/`suspended` back from
+the framework rather than assuming them from any policy -- which is what will make a partially
+applied policy visible. `QUERY_ALL_PACKAGES` is not requested and is not needed: a device owner
+is exempt from Android 11's package-visibility restriction, and on an unmanaged device a short
+list is the honest answer.
+
 ## Fully managed (device owner)
 
 The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
@@ -300,14 +333,14 @@ src/FleetHubAgent.Core/       the protocol -- plain net10.0, tested on the works
   AgentLoops.cs               the three loops
   MachineNaming.cs            the derived name, and why it cannot be the model alone
   MachineNameProvider.cs      the current name, and persist-before-adopt
-  Fleet/                      hub client, dispatcher, capability report, rename, locate
+  Fleet/                      hub client, dispatcher, capability report, inventory, rename, locate
   State/                      the identity store, behind an interface
   Telemetry/                  the report builder, the sensor contracts, identity cleaning
 src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   AgentService.cs             the foreground service, and the composition root
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
-  Platform/                   SharedPreferences, Build fields, sensors, location, managed config, logcat
+  Platform/                   SharedPreferences, Build fields, sensors, location, apps, managed config, logcat
   Policy/                     the device-admin component and the provisioning activities
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push

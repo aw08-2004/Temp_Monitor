@@ -2298,6 +2298,9 @@
     "location": {
       "title": "Location",
       "disclosure": "Asking is recorded in the audit trail, and the device shows a notification naming the operator who asked."
+    },
+    "apps": {
+      "title": "Installed apps"
     }
   },
   "remote": {
@@ -3367,5 +3370,25 @@
       "no_match": "No device matches that filter.",
       "unreachable": "The hub did not answer."
     }
+  },
+  "apps": {
+    "filter": "Filter apps",
+    "show_system": "Include system apps",
+    "count": "{shown} of {total}",
+    "reported": "Reported {when}",
+    "none": "This device reported no apps.",
+    "no_match": "No app matches that filter.",
+    "column": {
+      "name": "App",
+      "package": "Package",
+      "version": "Version",
+      "state": "State"
+    },
+    "state": {
+      "installed": "Installed",
+      "suspended": "Suspended",
+      "disabled": "Disabled"
+    },
+    "system": "system"
   }
 }

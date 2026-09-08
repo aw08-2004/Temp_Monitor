@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.Fleet;
 using FleetHubAgent.Telemetry;
@@ -11,6 +12,7 @@ namespace FleetHubAgent;
 ///   * telemetry -- read the sensors and report them
 ///   * heartbeat -- liveness; the call that decides whether the machine reads online
 ///   * commands  -- poll, claim, and dispatch fleet commands
+///   * inventory -- read the slow local things (installed apps) and leave a payload behind
 ///
 /// **Why they are separate**, which is a lesson the Windows agent learned the hard way and
 /// every port inherits rather than repeats: in a serial loop the slowest step sets the latency
@@ -35,7 +37,8 @@ public sealed class AgentLoops(
     FleetClient fleet,
     CommandDispatcher dispatcher,
     MachineNameProvider names,
-    IEnrollmentSecretSource secrets)
+    IEnrollmentSecretSource secrets,
+    IReadOnlyList<IInventorySource>? inventory = null)
 {
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -68,6 +71,7 @@ public sealed class AgentLoops(
             Task.Run(() => TelemetryLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => HeartbeatLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => InventoryLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait on
@@ -141,13 +145,102 @@ public sealed class AgentLoops(
             try
             {
                 if (await EnsureEnrolledAsync(ct))
-                    await fleet.HeartbeatAsync(ct);
+                {
+                    // The blocks are attached but not consumed: only a heartbeat that comes
+                    // back 2xx marks them delivered, so a network blip costs a retry rather
+                    // than a report. See InventoryReporter.
+                    var blocks = PendingInventory();
+                    if (await fleet.HeartbeatAsync(blocks, ct)) AcknowledgeInventory(blocks);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { log.LogWarning(e, "Heartbeat tick failed"); }
 
             if (!await DelayAsync(AgentConfig.HeartbeatSeconds, ct)) break;
         }
+    }
+
+    // ------------------------------------------------------------------ inventory
+
+    /// <summary>Read the slow local things and leave payloads behind for the heartbeat.
+    ///
+    /// **A loop of its own for the same reason the other three are separate**, and here the
+    /// argument is at its sharpest: enumerating every installed package walks the whole device.
+    /// Doing that on the heartbeat path would put a multi-second read in front of the call that
+    /// decides whether the machine reads online, and the hub's window is ninety seconds -- so a
+    /// slow device would flicker offline for the crime of having a lot of apps.
+    ///
+    /// The loop ticks far more often than any source needs re-reading; each source is asked
+    /// whether it is due. That is what lets one source refresh every fifteen minutes and
+    /// another every six hours without a timer each, and what makes Invalidate() take effect
+    /// within a tick rather than at the end of an interval.
+    /// </summary>
+    private async Task InventoryLoopAsync(CancellationToken ct)
+    {
+        if (inventory is null || inventory.Count == 0) return;
+
+        while (!ct.IsCancellationRequested)
+        {
+            var now = DateTimeOffset.UtcNow;
+            foreach (var source in inventory)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (!_reporters.TryGetValue(source.Key, out var reporter)) continue;
+                if (!reporter.IsDue(now)) continue;
+                try
+                {
+                    // A source that throws is a bug in the source; one that returns null has
+                    // simply failed to look. Both are non-fatal here and neither advances the
+                    // interval, so a transient failure is retried on the next tick.
+                    reporter.Offer(source.Read(), now);
+                }
+                catch (Exception e)
+                {
+                    log.LogWarning(e, "Inventory source {Key} threw", source.Key);
+                }
+            }
+
+            if (!await DelayAsync(AgentConfig.InventoryTickSeconds, ct)) break;
+        }
+    }
+
+    /// <summary>The change-only reporter behind each source, keyed by heartbeat block name.
+    /// Built once from the sources rather than by the composition root, so a source cannot be
+    /// registered without one and a reporter cannot exist for a source nobody reads.</summary>
+    private readonly Dictionary<string, InventoryReporter> _reporters =
+        (inventory ?? []).ToDictionary(
+            s => s.Key, s => new InventoryReporter(s.Key, s.RefreshInterval), StringComparer.Ordinal);
+
+    /// <summary>Every pending inventory block, for the heartbeat to attach. Empty in the steady
+    /// state, which is the point: this is change-only traffic.
+    ///
+    /// Nothing is consumed by looking -- see <see cref="AcknowledgeInventory"/>. A heartbeat
+    /// that fails carries the same blocks again next time rather than losing them.</summary>
+    private Dictionary<string, JsonObject> PendingInventory()
+    {
+        var blocks = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var (key, reporter) in _reporters)
+        {
+            if (reporter.Pending() is { } payload) blocks[key] = payload;
+        }
+        return blocks;
+    }
+
+    /// <summary>The heartbeat carrying these blocks succeeded.</summary>
+    private void AcknowledgeInventory(Dictionary<string, JsonObject> blocks)
+    {
+        foreach (var (key, payload) in blocks)
+        {
+            if (_reporters.TryGetValue(key, out var reporter)) reporter.MarkSent(payload);
+        }
+    }
+
+    /// <summary>Force one block to be re-read and re-sent. Called after something that changes
+    /// what an inventory would say -- applying an app policy, for instance -- so the console
+    /// does not show yesterday's list beside today's policy for the rest of the interval.</summary>
+    public void InvalidateInventory(string key)
+    {
+        if (_reporters.TryGetValue(key, out var reporter)) reporter.Invalidate();
     }
 
     // ------------------------------------------------------------------ commands

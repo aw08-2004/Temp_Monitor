@@ -153,6 +153,16 @@ public static class AgentConfig
     /// <summary>Keep polling fast for a short window after anything arrives: an operator
     /// doing something is rarely doing one thing.</summary>
     public const int CommandBurstSeconds = 20;
+
+    /// <summary>How often the inventory loop asks each source whether it is DUE. Not how often
+    /// anything is read: a source states its own refresh interval, in minutes or hours, and
+    /// this tick is only the resolution at which those are noticed.
+    ///
+    /// Sixty seconds because that is also how quickly an Invalidate() takes effect. After an
+    /// app policy is applied, the console must not show yesterday's installed list beside
+    /// today's policy for the rest of a fifteen-minute interval -- and a minute of staleness on
+    /// a list of installed apps is not something anybody notices.</summary>
+    public const int InventoryTickSeconds = 60;
     public const int CommandPollFastSeconds = 1;
 
     public const int OfflineBufferMax = 1000;

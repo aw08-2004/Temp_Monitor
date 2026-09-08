@@ -157,13 +157,18 @@ public sealed class FleetClient : IDisposable
     /// refreshes the hub's last_seen, and the console calls a machine offline after 90 seconds
     /// without one.
     ///
+    /// **The change-only inventory blocks ride here too**, attached by the caller. They are
+    /// only marked delivered when this returns true -- see AgentLoops and InventoryReporter for
+    /// why "handed to the HTTP client" is not the same as "the hub has it".
+    ///
     /// **The capability block rides here rather than on enrollment**, which is the obvious
     /// alternative and the wrong one: enrollment happens once, and a hub that lost its database
     /// (or a device whose agent gained an executor in an update) would never be told again. A
     /// heartbeat is the one message that repeats forever, so the report is self-healing. It
     /// costs a hundred bytes every ten seconds; the hub writes only when the content differs.
     /// </summary>
-    public async Task<bool> HeartbeatAsync(CancellationToken ct)
+    public async Task<bool> HeartbeatAsync(
+        IReadOnlyDictionary<string, JsonObject>? inventory, CancellationToken ct)
     {
         if (!_identity.IsEnrolled) return false;
         try
@@ -182,6 +187,16 @@ public sealed class FleetClient : IDisposable
             {
                 try { body["capabilities"] = _capabilities().ToJson(); }
                 catch (Exception e) { _log.LogDebug("Capability report skipped: {Msg}", e.Message); }
+            }
+
+            // Change-only inventory blocks, each under the key hub/fleet_web.py ingests it by.
+            // Deep-cloned rather than attached directly: JsonObject nodes have a single parent,
+            // so adding the caller's object here would detach it from whatever holds it and a
+            // retry after a failed heartbeat would send an empty block. The payloads are a few
+            // hundred nodes; the clone is not worth reasoning about.
+            foreach (var (key, payload) in inventory ?? new Dictionary<string, JsonObject>())
+            {
+                body[key] = payload.DeepClone();
             }
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 

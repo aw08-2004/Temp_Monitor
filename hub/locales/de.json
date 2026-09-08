@@ -2185,6 +2185,9 @@
     "location": {
       "title": "Standort",
       "disclosure": "Jede Anfrage wird im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung mit dem Namen der anfragenden Bedienperson."
+    },
+    "apps": {
+      "title": "Installierte Apps"
     }
   },
   "remote": {
@@ -3249,5 +3252,25 @@
       "no_match": "Kein Gerät passt zu diesem Filter.",
       "unreachable": "Der Hub hat nicht geantwortet."
     }
+  },
+  "apps": {
+    "filter": "Apps filtern",
+    "show_system": "System-Apps einschließen",
+    "count": "{shown} von {total}",
+    "reported": "Gemeldet {when}",
+    "none": "Dieses Gerät hat keine Apps gemeldet.",
+    "no_match": "Keine App passt zu diesem Filter.",
+    "column": {
+      "name": "App",
+      "package": "Paket",
+      "version": "Version",
+      "state": "Zustand"
+    },
+    "state": {
+      "installed": "Installiert",
+      "suspended": "Pausiert",
+      "disabled": "Deaktiviert"
+    },
+    "system": "System"
   }
 }

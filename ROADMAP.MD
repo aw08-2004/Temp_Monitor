@@ -3329,6 +3329,72 @@ card is absent rather than permanently dead on several hundred machine pages.
 
 ---
 
+## 🚧 App inventory · hub 1.102.0 · `apps.py` / `apps_web.py`
+
+Phase D.1 and D.2 of #23: the change-only inventory pipeline the Android agent has never had,
+and the first thing carried on it — what is installed on the device.
+
+**The inventory is what makes an app policy writable by a human.** Blocking an app means naming
+a package, and nobody knows package names. Without a list to pick from, the policy editor of
+D.3 would be a text box that punishes a typo with silence: a package that is not on the device
+is simply not suspended, and nothing anywhere says so.
+
+### D.1 — the pipeline
+
+Ported from the Windows agent's five `*Reporter` classes, but written **once** rather than
+copied, because it is a pattern with three separate ways to be quietly wrong:
+
+- **A block is not "sent" until a heartbeat has actually succeeded.** This is one step stricter
+  than the Windows original, deliberately. There, `TakeIfChanged` records the hash as it hands
+  the payload over — so a heartbeat that fails a second later leaves the agent convinced the hub
+  has it, and because the next scan finds the same content the block is never re-sent until it
+  changes again. One network blip costs a report, and the symptom is a stale inventory with
+  nothing anywhere saying so. Here the payload stays pending until the heartbeat returns 2xx.
+- **The payload is an OBJECT wrapping the list, and "became empty" is a change like any other.**
+  A device that has had everything uninstalled has to be able to say so, and any truthiness
+  check between the agent and the table makes that the one report that can never arrive. The
+  hub tests the key with `is not None`. That is `PatchInventoryReporter`'s lesson, inherited
+  rather than re-learned.
+- **Reading happens on its own loop.** Enumerating every package walks the whole device, and the
+  hub's offline window is 90 seconds — a multi-second read in front of the heartbeat would
+  flicker a healthy device offline for the crime of having a lot of apps. `AgentLoops` gains a
+  fourth loop; each source states its own refresh interval and the loop only asks who is due.
+
+### D.2 — the inventory
+
+`AppInventoryReader` reports every package including system ones, with a `system` flag, plus
+`enabled` and `suspended` **read back from the framework**. The last two are the point:
+`setPackagesSuspended` returns the packages it could NOT suspend, and a policy reported as
+applied while three of its targets are still running is worse than no policy. The console will
+compare intent against this table, so this table is never written from intent.
+
+**`QUERY_ALL_PACKAGES` is still not requested**, and the manifest's note saying so is rewritten
+rather than deleted: the console does ask this question now, but a device owner is exempt from
+Android 11's package-visibility restriction. Requesting it would buy an inventory on *unmanaged*
+devices at the cost of a broad, Play-policy-flagged permission on every device — and the
+unmanaged case is exactly the one where a partial list is the honest answer.
+
+### Rejected alternatives
+
+- **User-installed apps only.** Shorter and much less useful: the apps a helpdesk is asked to
+  restrict most often — the browser, the store, the camera — ship with the device. The console
+  hides system apps by default instead, with a checkbox, which is a display decision rather than
+  a collection one.
+- **Storing what a policy asked for and calling it the state.** That is the failure the whole
+  `suspended`/`enabled` pair exists to prevent.
+- **Believing a malformed report.** The app set is replaced on every report so an uninstalled
+  app disappears, which means a payload whose `apps` is not a list would empty a good inventory
+  in one heartbeat. An empty LIST is honoured; an absent or non-list one is ignored. Exactly
+  `wake.record_network`'s reasoning, which had the same shape and the same hazard.
+
+### Not done
+
+Blocking is the next phase (D.3/D.4): a policy model, a `device_policy` heartbeat block, the
+agent-side never-suspend list and the dead-man switch. Nothing here has been run against a real
+device — see the hardware-validation table below.
+
+---
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
@@ -3341,6 +3407,7 @@ This is that list, so nothing is quietly skipped:
 | **A** | *Only on a scratch device.* Factory reset, provision by QR, confirm `isDeviceOwnerApp()`, and that the agent survives a force-stop attempt. **The pilot phone carries personal data and must not be used** |
 | **B** | Locate returns a fix inside 60 s; the notification naming the operator appears on the phone; an `audit_log` row records it; the foreground-service promotion is accepted (API 34 throws if it is not); a locate with location switched off comes back `unavailable` with a readable reason, not a failure |
 | **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |
+| **D** | The Installed apps fold populates; the count is plausible for the device (150-400); `system` is set on the right ones; the list survives an app being installed and uninstalled; **on an unmanaged device** the list is short, which is the expected answer without `QUERY_ALL_PACKAGES` and not a bug |
 
 Two things are blocked rather than merely pending: **A needs a device that can be wiped**, and
 everything needs the pilot phone to re-authorise USB debugging, which it dropped.

@@ -2185,6 +2185,9 @@
     "location": {
       "title": "Ubicación",
       "disclosure": "Cada petición queda registrada en la auditoría, y el dispositivo muestra una notificación con el nombre del operador que la hizo."
+    },
+    "apps": {
+      "title": "Aplicaciones instaladas"
     }
   },
   "remote": {
@@ -3249,5 +3252,25 @@
       "no_match": "Ningún dispositivo coincide con ese filtro.",
       "unreachable": "El hub no respondió."
     }
+  },
+  "apps": {
+    "filter": "Filtrar aplicaciones",
+    "show_system": "Incluir apps del sistema",
+    "count": "{shown} de {total}",
+    "reported": "Reportado {when}",
+    "none": "Este dispositivo no reportó ninguna aplicación.",
+    "no_match": "Ninguna aplicación coincide con ese filtro.",
+    "column": {
+      "name": "Aplicación",
+      "package": "Paquete",
+      "version": "Versión",
+      "state": "Estado"
+    },
+    "state": {
+      "installed": "Instalada",
+      "suspended": "En pausa",
+      "disabled": "Desactivada"
+    },
+    "system": "sistema"
   }
 }

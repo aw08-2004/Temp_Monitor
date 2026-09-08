@@ -1421,6 +1421,40 @@ an agent. Machine pages carry `platform`, `features` and `supported_commands` al
 > **Status:** built — hub 1.98.0. Only the Android agent reports capabilities today; the
 > Windows and Linux agents send nothing and are treated as unknown by design.
 
+## App inventory
+
+What a managed Android device says is installed, on the machine page under **Installed apps**.
+
+**It exists so that app policy can be written by a human.** Blocking an app means naming a
+package, and a package name is not something an operator knows: `com.google.android.youtube` is
+guessable, `com.zhiliaoapp.musically` is TikTok. Without a list to pick from, a policy editor is
+a text box that punishes typos with silence -- a package that does not exist on the device is
+simply not blocked, and nothing says so.
+
+**System apps are hidden by default and findable on demand.** A phone reports 150-400 packages
+and perhaps thirty are things somebody installed. Showing all of them first buries the thirty
+that answer the question; showing only the thirty hides the browser, the store and the camera,
+which are exactly the ones a helpdesk gets asked about.
+
+**`Suspended` and `Disabled` are what the DEVICE says, not what a policy asked for.** That is
+the whole reason those states are stored: a policy applied to fourteen apps that took on eleven
+must be visible, and a table written from intent could never show it.
+
+**`QUERY_ALL_PACKAGES` is not requested.** Android 11 hid the full package list behind that
+permission; a device owner is exempt, so a fully managed device reports everything without it.
+An unmanaged device reports a partial list, which reads honestly as a device that is not fully
+managed.
+
+**Gating**: `view` + machine scope, like a disk layout. Read-only -- there is no way to tell the
+hub a device has an app it does not have.
+
+**Endpoints**: `GET /api/apps/machines/<machine>`, `GET /api/apps/packages`,
+`GET /api/apps/packages/<package>/machines`. The inventory arrives on the existing
+`POST /api/agent/heartbeat` under an `apps` key, change-only.
+
+> **Status:** built -- hub 1.102.0 / Android agent source. Blocking apps is the next phase; this
+> is the list it will be written against. **Not yet exercised on hardware.**
+
 ## Locating a device
 
 Asking a managed Android device where it is, on demand.
