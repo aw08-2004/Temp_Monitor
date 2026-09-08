@@ -21,6 +21,8 @@ the checksums below stay the record of what is actually being served.
 | `socket.io.min.js`                        | `socket.io-client`          | 4.7.2   | `83df4abc7eec941f1d29ae254e80bac0bb82d398fbe2e8ee4ea2a7efc8e704f1` |
 | `qrcode.js`                               | `qrcode-generator`          | 2.0.4   | `79ec86f82856005b1c887905cfccfcfbec3821ca61c7fd5a952faa5f778f791c` |
 | `qrcode_UTF8.js`                          | `qrcode-generator`          | 2.0.4   | `e522d64003b332e29271fdce4993ed3ae2934c8947f41654bd324ddcfa2de301` |
+| `leaflet.js`                              | `leaflet`                   | 1.9.4   | `db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a` |
+| `leaflet.css`                             | `leaflet`                   | 1.9.4   | `a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6` |
 | `fonts/inter-latin-wght-normal.woff2`     | `@fontsource-variable/inter`| 5.3.0   | `3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62` |
 | `fonts/inter-latin-ext-wght-normal.woff2` | `@fontsource-variable/inter`| 5.3.0   | `34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956` |
 
@@ -41,12 +43,15 @@ curl -L -o chartjs-plugin-zoom.min.js             https://cdn.jsdelivr.net/npm/c
 curl -L -o socket.io.min.js   https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js
 curl -L -o qrcode.js          https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode.js
 curl -L -o qrcode_UTF8.js     https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode_UTF8.js
+curl -L -o leaflet.js         https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js
+curl -L -o leaflet.css        https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css
 curl -L -o fonts/inter-latin-wght-normal.woff2     https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/files/inter-latin-wght-normal.woff2
 curl -L -o fonts/inter-latin-ext-wght-normal.woff2 https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/files/inter-latin-ext-wght-normal.woff2
 curl -L -o fonts/LICENSE      https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/LICENSE
 sha256sum xterm.js xterm.css xterm-addon-fit.js chart.umd.min.js \
           chartjs-adapter-date-fns.bundle.min.js chartjs-plugin-zoom.min.js \
-          socket.io.min.js qrcode.js qrcode_UTF8.js fonts/*.woff2   # must match the table above
+          socket.io.min.js qrcode.js qrcode_UTF8.js \
+          leaflet.js leaflet.css fonts/*.woff2   # must match the table above
 ```
 
 ## Why xterm.js
@@ -113,3 +118,29 @@ is GPL-3.0, and nothing else in this repo is copyleft.
 no `innerHTML` anywhere near a payload that contains operator-supplied text, and no `data:`
 URI. Same instinct as the rest of the frontend, and see hub/provisioning.py for what is in
 that payload.
+
+## Why Leaflet, and why no `images/` directory
+
+The device map (roadmap #23 phase C) needs pan, zoom, tile loading and coordinate projection.
+Leaflet is 148 KB, has no dependencies, and is BSD-2-Clause. The alternative worth naming is
+not another library but "draw it ourselves": a static image with dots positioned by an
+equirectangular approximation works until somebody needs to zoom, and then it is a mapping
+library with none of the corner cases handled.
+
+**Leaflet's marker images are deliberately NOT vendored, and their absence is not an
+oversight.** `leaflet.css` references `images/marker-icon.png` and `images/layers.png`, and
+both rules are unreachable here: the first is the path-guessing heuristic behind
+`L.Icon.Default`, the second belongs to the layers control. `location-map.js` uses
+`L.circleMarker` and `L.circle` and adds no layers control, so neither image is ever requested.
+Circle markers are also the better fit: the accuracy radius is drawn as a real circle in metres
+beside the point, which is the honest way to show a fix that might be a kilometre wide, and a
+pin cannot express that at all.
+
+If a future page does need default markers, vendor the three PNGs into `vendor/images/` and
+this comment stops being true -- do not simply let the CSS 404.
+
+**The map tiles are the one deliberate exception to the isolated-LAN claim at the top of this
+file.** They are content rather than code, they are fetched only by an operator's browser and
+only on a page showing a map, and `map.tile_url` exists precisely so a site with no egress can
+point at its own tile server. Blank that setting and the map renders with no tile layer at all
+and says so, rather than showing grey squares.

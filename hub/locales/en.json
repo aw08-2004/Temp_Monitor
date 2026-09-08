@@ -36,7 +36,8 @@
     "rules": "Rules",
     "tools": "Tools",
     "sharing": "Sharing",
-    "provisioning": "Device provisioning"
+    "provisioning": "Device provisioning",
+    "map": "Map"
   },
   "hub_update": {
     "_note": [
@@ -595,7 +596,8 @@
       "rules": "Rules",
       "sharing": "Cross-hub Sharing",
       "provisioning": "Provisioning",
-      "location": "Location"
+      "location": "Location",
+      "map": "Map"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1026,6 +1028,20 @@
         "location_retention_days": {
           "label": "Keep location history for",
           "help": "How long recorded positions are kept before being deleted. This is a privacy control rather than a disk-space one -- the table is tiny -- so it is meant to be turned down. Deleting a machine erases its location history immediately, regardless of this."
+        }
+      },
+      "map": {
+        "tile_url": {
+          "label": "Map tile URL",
+          "help": "Where the console loads map imagery from, as an {z}/{x}/{y} template. This is the one thing the console fetches from a third party at page load; point it at your own tile server, or leave it blank to draw devices on an empty background with their coordinates."
+        },
+        "tile_attribution": {
+          "label": "Tile attribution",
+          "help": "The credit shown in the map's corner. It must match whatever the tile URL points at -- OpenStreetMap's tile policy requires their credit, and showing it next to somebody else's tiles would be a false statement rather than a cosmetic mistake."
+        },
+        "default_zoom": {
+          "label": "Zoom on a single device",
+          "help": "How far in the map goes when it is showing one device. 16 is about a city block: close enough to see which building, wide enough that a fix with a 200 m accuracy circle still fits."
         }
       }
     },
@@ -2278,7 +2294,11 @@
     "channel_pinned": "Channel: {value} (pinned)",
     "channel_pin": "Release channel",
     "channel_follow_fleet": "Follow the fleet default",
-    "channel_ahead": "Running {running}, ahead of stable ({stable}). It will not update again until stable passes it — moving off beta does not undo an installed update."
+    "channel_ahead": "Running {running}, ahead of stable ({stable}). It will not update again until stable passes it — moving off beta does not undo an installed update.",
+    "location": {
+      "title": "Location",
+      "disclosure": "Asking is recorded in the audit trail, and the device shows a notification naming the operator who asked."
+    }
   },
   "remote": {
     "title": "Remote",
@@ -3298,6 +3318,54 @@
       "wifi": "Join a network when asked. This code deliberately carries no Wi-Fi credentials.",
       "scan": "Scan the code above. The device downloads and installs the agent itself.",
       "verify": "When setup finishes, the FleetHub Agent screen should read “Fully managed (device owner)” and the machine should appear in Inventory."
+    }
+  },
+  "location": {
+    "locate_now": "Locate now",
+    "locating": "Locating...",
+    "failed": "The request could not be sent.",
+    "status": {
+      "fixed": "Located {when}",
+      "last_known": "Last known position, from {when}",
+      "waiting": "Waiting for the device to answer...",
+      "never": "This device has never been located."
+    },
+    "history": {
+      "when": "Asked",
+      "outcome": "Outcome",
+      "who": "Asked by"
+    },
+    "outcome": {
+      "located": "Located",
+      "located_stale": "Last known position",
+      "unavailable": "No position available",
+      "no_answer": "The device did not answer"
+    },
+    "popup": {
+      "fixed": "Located {age}",
+      "last_known": "Last known position, {age}",
+      "accuracy": "Accurate to about {metres} m",
+      "provider": "Source: {provider}",
+      "open": "Open this device"
+    },
+    "age": {
+      "moments": "moments ago",
+      "minutes": "{count} min ago",
+      "hours": "{count} h ago",
+      "days": "{count} days ago"
+    },
+    "list": {
+      "fixed": "Located {when}",
+      "last_known": "Last known, {when}"
+    },
+    "map": {
+      "heading": "Device map",
+      "intro": "Where each device was the last time somebody asked. Nothing here is live, and no device is tracked -- a point exists because an operator requested it.",
+      "filter": "Filter devices",
+      "count": "{count} shown",
+      "none": "No device you can see has ever been located.",
+      "no_match": "No device matches that filter.",
+      "unreachable": "The hub did not answer."
     }
   }
 }

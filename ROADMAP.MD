@@ -3271,6 +3271,82 @@ phone.
 
 ---
 
+## 🚧 The device map · hub 1.101.0 · `map.html`, `location-map.js`
+
+Phase C of #23, and the first phase an operator can see. Two views over the data phase B
+already stores: a **Location fold** on the machine page (last known fix, a Locate button, and
+the history of who asked) and a **fleet map** at `/map` showing every device in scope that has a
+known position.
+
+**A last-known-position map, and the page says so.** Nothing is live. Each point is where a
+device was the last time somebody asked, which for most devices is never. A map that looked
+live would be read as live, so the age of every fix is on screen, stale fixes are drawn in a
+different colour, and the page's own intro line says no device is tracked.
+
+**The map never claims more precision than the fix had.** The accuracy radius is drawn as a
+real circle in metres beside the point — a fix that might be a kilometre wide looks a kilometre
+wide — and a radius the device did not state is not drawn at all rather than assumed. The
+coordinates are always shown in full, because they are what somebody pastes into their phone
+before walking out of the door.
+
+**The fold is hidden, not disabled, on a device that cannot locate.** Every Windows PC reports
+no `locate` feature, and F.1's asymmetry makes that a "no" rather than an "unknown" — so the
+card is absent rather than permanently dead on several hundred machine pages.
+
+### Decisions
+
+- **`L.circleMarker`, and therefore no `vendor/images/`.** Leaflet's default marker pulls three
+  PNGs through a path-guessing heuristic in its CSS. Circle markers need none of that and are
+  the better fit anyway: the accuracy circle is the honest thing to show, and a pin cannot
+  express it. `static/vendor/README.md` records the absence so a 404 is never mistaken for a
+  missing file.
+- **Tiles are the one deliberate exception to the isolated-LAN claim.** They are content rather
+  than code, requested only by an operator's browser and only on a page showing a map, and
+  `map.tile_url` exists so an air-gapped site can point at its own server. Blank it and the map
+  draws points on a hatched empty ground and says so — a supported configuration, not a broken
+  one.
+- **The tile config is served with the fixes, not from `/api/settings`.** That is a gate
+  decision: settings needs `manage_settings`, a map needs `view`, and an operator who may see
+  where a device is must be able to see it on something.
+- **`invalidateSize()` on the fold's `toggle`, deferred a frame.** Leaflet measures its
+  container once, at construction: one built inside a closed `<details>` is zero pixels tall
+  forever. The deferral is not superstition — `toggle` fires while the browser is still laying
+  the newly-open content out, so a synchronous measure reads the size it had a frame ago, which
+  is exactly the zero this call exists to correct. The same defect `machine.js` already handles
+  for Chart.js.
+
+### Rejected alternatives
+
+- **Drawing it ourselves.** A static image with dots positioned by an equirectangular
+  approximation works until somebody needs to zoom, and then it is a mapping library with none
+  of the corner cases handled.
+- **`qrious`-style convenience libraries for the map** — specifically **`qrious`'s neighbour
+  `leaflet-providers`** and any other add-on. One vendored file is a dependency; a stack of them
+  is a build step waiting to be asked for.
+- **A live-refreshing map.** There is nothing to refresh: a position only changes when somebody
+  asks for one. A refresh loop would either show the same fix forever or imply the console was
+  watching.
+
+---
+
+## 📋 Hardware validation still owed (roadmap #23)
+
+**Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
+tested in software on the understanding that one hardware pass covers all of it at the end.
+This is that list, so nothing is quietly skipped:
+
+| Phase | What has to be seen on a device |
+|---|---|
+| **F.1** | The phone's heartbeat carries a `capabilities` block; the machine page shows `platform: android`; a fleet-wide `backup_files` is **not** queued at it |
+| **A** | *Only on a scratch device.* Factory reset, provision by QR, confirm `isDeviceOwnerApp()`, and that the agent survives a force-stop attempt. **The pilot phone carries personal data and must not be used** |
+| **B** | Locate returns a fix inside 60 s; the notification naming the operator appears on the phone; an `audit_log` row records it; the foreground-service promotion is accepted (API 34 throws if it is not); a locate with location switched off comes back `unavailable` with a readable reason, not a failure |
+| **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |
+
+Two things are blocked rather than merely pending: **A needs a device that can be wiped**, and
+everything needs the pilot phone to re-authorise USB debugging, which it dropped.
+
+---
+
 ## Build order
 
 1. ~~**Permission Groups** (foundation)~~ — done, hub 1.26.0

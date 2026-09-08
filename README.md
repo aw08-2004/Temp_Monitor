@@ -1459,11 +1459,34 @@ beat a GPS one just by arriving first.
 `data.location_retention_days` (30) is how long positions are kept. The second is a privacy
 control rather than a disk-space one — see the personal-data inventory in `SECURITY.MD`.
 
-**Endpoints**: `GET|POST /api/location/machines/<machine>`, `GET /api/location/fleet`.
+### Seeing it
 
-> **Status:** built — hub 1.100.0 / Android agent source. The console UI (a fold on the machine
-> page and a fleet map) is the next phase; today this is an API, a capability and storage.
-> **Not yet exercised on hardware.**
+Two views over the same data. A **Location fold** on the machine page carries the last known
+fix, a Locate button, and the history of who asked and what came back. The **Map** page
+(`/map`, in the sidebar under Inventory) plots every device in scope that has a known position,
+with a filter and a list beside it.
+
+**The map never claims more precision than the fix had.** The accuracy radius is drawn as a
+real circle in metres, so a fix that might be a kilometre wide looks a kilometre wide; a radius
+the device did not state is not drawn at all rather than assumed. Stale fixes are a different
+colour and say how old they are. The coordinates are always shown in full — they are what you
+paste into a phone before walking out of the door to find something.
+
+**The fold does not appear on a device that cannot locate**, which today is every Windows PC.
+Hidden rather than greyed: a permanently dead card on several hundred machine pages is worse
+than no card.
+
+**Map tiles are the one thing the console fetches from a third party at page load** — a
+deliberate exception to the "works on an isolated LAN" claim in
+`hub/static/vendor/README.md`. Tiles are content rather than code, and `map.tile_url` exists so
+you can point at your own tile server. Blank it and the map draws devices on an empty
+background with their coordinates and says so, rather than showing grey squares.
+
+**Endpoints**: `GET|POST /api/location/machines/<machine>`, `GET /api/location/fleet`,
+`GET /map`.
+
+> **Status:** built — hub 1.101.0 / Android agent source. **Not yet exercised on hardware** —
+> see the hardware-validation table in `ROADMAP.MD`.
 
 ## Android device provisioning
 

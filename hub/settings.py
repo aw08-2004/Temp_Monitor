@@ -490,6 +490,26 @@ REGISTRY = (
     _s("location.default_timeout_seconds", "location", "int", 45, minimum=5, maximum=300,
        unit="seconds"),
 
+    # ---------------- Map: where the console gets its tiles (roadmap #23) ----------------
+    # **The one thing in the console that is fetched from a third party at page load**, and
+    # the deliberate exception to hub/static/vendor/README.md's isolated-LAN claim. Tiles are
+    # content rather than code, they are requested only by an operator's browser and only on a
+    # page showing a map, and this setting exists so a site with no egress can point at its own
+    # tile server. Blank it and the map draws no tile layer at all and says so, rather than
+    # rendering a field of grey squares that reads as a broken page.
+    #
+    # The attribution is a setting rather than a constant because it must match whatever the
+    # tile URL points at: OpenStreetMap's tile policy requires their credit, and a self-hosted
+    # server usually requires a different one. Hardcoding OSM's text next to somebody else's
+    # tiles would be a false statement rather than a cosmetic mistake.
+    _s("map.tile_url", "map", "str",
+       "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+    _s("map.tile_attribution", "map", "str",
+       "(c) OpenStreetMap contributors"),
+    # How far in the map zooms on a single device. 16 is a city block: close enough to see
+    # which building, wide enough that a fix with a 200 m accuracy circle still fits on screen.
+    _s("map.default_zoom", "map", "int", 16, minimum=1, maximum=19),
+
     # ---------------- Rules: conditions over machine data, and what they do ----------------
     # A rule is "condition + who it applies to + what happens". These knobs are the fuses
     # around the last third of that, because a rule engine that can issue commands is a
@@ -547,7 +567,7 @@ REGISTRY = (
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "provisioning", "location",
+            "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
             "rules", "sharing")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder

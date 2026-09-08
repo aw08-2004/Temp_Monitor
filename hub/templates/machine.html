@@ -3,6 +3,12 @@
 {% block extra_head %}
 {# xterm, permissions and backups left with the panels that used them; see tools.html. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+{# The map, for the Location fold. Loaded on every machine page even though the fold is hidden
+   on most of them: 163 KB from our own origin, cached after the first page, against the
+   alternative of injecting a stylesheet and a script at runtime from JavaScript -- which is a
+   loading order to get wrong for a card that is one <details> among nine. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/map.css') }}">
 {# Served from our own origin, pinned by what is checked in rather than by a URL -- see
    static/vendor/README.md for the versions and their checksums. These were CDN-loaded with
    subresource integrity until the whole set was vendored; SRI is how you make a THIRD
@@ -13,6 +19,7 @@
 <script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js') }}"></script>
 <script src="{{ url_for('static', filename='vendor/chartjs-plugin-zoom.min.js') }}"></script>
 <script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
 {% endblock %}
 {% block content %}
 {# data-can-issue-commands decides only whether the Processes card DRAWS its End task /
@@ -149,6 +156,35 @@
         </summary>
         <div class="fan-grid" id="fan-grid"></div>
         <div id="fan-empty" class="stat-card__meta">{{ t('machine.no_fans') }}</div>
+    </details>
+
+    {# Where this device was when somebody last asked (roadmap #23 phase B/C).
+
+       Rendered `hidden` and revealed by machine-location.js only for a device that reports the
+       `locate` feature -- which today is Android only. Hidden rather than disabled: every
+       Windows PC in the fleet would otherwise carry a permanently dead card, and a greyed-out
+       button that can never work is worse than no button.
+
+       Closed by default, unlike Storage and Cooling. Those show data the machine is reporting
+       anyway; this one costs a request the moment it opens, and on most machine pages the
+       answer is "nobody has ever asked". #}
+    <details class="card fold" data-fold-key="machine:overview:location" id="card-location" hidden>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.location.title') }}</span>
+        </summary>
+        <div class="toolbar" style="justify-content: space-between; margin: var(--space-3) 0;">
+            <div>
+                <div id="location-status" class="stat-card__meta"></div>
+                <div id="location-detail" class="stat-card__meta map-popup__coords"></div>
+            </div>
+            {# Rendered hidden and revealed only for an operator holding `locate_device`. The
+               endpoint re-decides, so a console that got this wrong would be offering a 403
+               rather than a way past one. #}
+            <button class="btn btn--primary" type="button" id="locate-now" hidden>{{ t('location.locate_now') }}</button>
+        </div>
+        <div id="location-map" class="map" hidden></div>
+        <p class="stat-card__meta" style="margin-top: var(--space-3);">{{ t('machine.location.disclosure') }}</p>
+        <div class="table-scroll" id="location-history"></div>
     </details>
 
     {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
@@ -323,5 +359,10 @@
 <script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/processes.js') }}"></script>
+{# Before collapse.js, like every other module that hangs off a fold's `toggle`: collapse.js
+   restores a section by setting `open`, and a listener registered after that has already run
+   never hears about it. #}
+<script src="{{ url_for('static', filename='js/location-map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-location.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

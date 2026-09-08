@@ -1,0 +1,115 @@
+/* The device map (roadmap #23 phase C): the fleet page's two-pane layout, and the shared
+   map container the machine page's Location fold reuses.
+
+   Leaflet ships its own stylesheet and this file deliberately overrides almost none of it.
+   What is here is the container sizing Leaflet cannot know (it measures whatever box it is
+   given) and the two things that would otherwise look wrong in the dark theme. */
+
+/* A map with no explicit height is zero pixels tall, because Leaflet fills its container and
+   the container has nothing to fill. This is the single most common way a Leaflet map "does
+   not appear", and it is a CSS problem rather than a JavaScript one -- see location-map.js's
+   invalidate() for the other one. */
+.map {
+    height: 420px;
+    width: 100%;
+    border-radius: var(--radius-md);
+    /* Painted rather than transparent so a map whose tiles have not loaded (or whose tile
+       source is deliberately blank) reads as an empty map rather than as a hole in the page. */
+    background: var(--control-bg);
+    border: 1px solid var(--card-border);
+}
+
+/* No tile source configured -- see hub/settings.py's map.tile_url. Hatched rather than left
+   flat, so it is visibly "no backdrop" instead of "tiles still loading". Points still plot on
+   it and their popups still carry coordinates. */
+.map--tileless {
+    background-image:
+        repeating-linear-gradient(45deg,
+            var(--card-border) 0, var(--card-border) 1px,
+            transparent 1px, transparent 12px);
+}
+
+.fleet-map {
+    display: grid;
+    grid-template-columns: minmax(240px, 320px) 1fr;
+    gap: var(--space-4);
+    align-items: start;
+}
+
+/* One column on a narrow screen, with the LIST first. On a phone the map is the part that is
+   hardest to use and the list is the part that answers the question, so the order flips
+   rather than the map simply shrinking. */
+@media (max-width: 900px) {
+    .fleet-map {
+        grid-template-columns: 1fr;
+    }
+    .fleet-map__canvas {
+        order: 2;
+    }
+    .fleet-map__side {
+        order: 1;
+    }
+}
+
+.fleet-map__list {
+    margin-top: var(--space-3);
+    max-height: 380px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.fleet-map__row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: inherit;
+}
+
+.fleet-map__row:hover {
+    border-color: var(--accent);
+}
+
+.fleet-map__row:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.fleet-map__name {
+    font-weight: 600;
+    /* A machine name is arbitrary remote text and can be long. Broken rather than allowed to
+       widen the column, which on a grid would push the map off screen. */
+    word-break: break-all;
+}
+
+/* Coordinates are read aloud, typed into another device, and compared by eye against a second
+   fix. All three want fixed pitch. */
+.map-popup__coords {
+    font-family: var(--font-mono);
+}
+
+.map-popup .btn {
+    margin-top: var(--space-2);
+}
+
+/* Leaflet's popup and controls are white cards with dark text, which is correct on a street
+   map in either theme -- so they are left alone. The one thing worth forcing is the popup's
+   own text colour, because .stat-card__meta inside it inherits --muted, which in the dark
+   theme is a light grey on Leaflet's white background. */
+.leaflet-popup-content .stat-card__meta {
+    color: #4b5563;
+}
+
+.leaflet-popup-content strong {
+    color: #111827;
+}

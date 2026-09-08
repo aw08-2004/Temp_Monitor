@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.map') }} - FleetHub{% endblock %}
+{% block extra_head %}
+{# Served from our own origin and pinned by what is checked in -- see static/vendor/README.md
+   for the version and its checksum, and for why Leaflet's marker images are deliberately not
+   vendored alongside it. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/map.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. fleet-map.js fetches /api/location/fleet and builds both the map and the
+   list beside it.
+
+   The list is not a fallback for a narrow screen, though it works as one. It is what an
+   operator reads when the tile server is unreachable, and it is what carries the coordinates
+   somebody pastes into their phone before walking out of the door to find a device.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-3);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('location.map.heading') }}</h1>
+        {# Says plainly that this is not live. A map that looked live would be read as live,
+           and every point here is where a device was the last time somebody ASKED. #}
+        <p class="stat-card__meta">{{ t('location.map.intro') }}</p>
+    </div>
+    <span class="stat-card__meta" id="fleet-map-count"></span>
+</div>
+
+<div class="fleet-map">
+    <div class="fleet-map__side">
+        <label for="fleet-map-filter" class="sr-only">{{ t('location.map.filter') }}</label>
+        <input type="search" id="fleet-map-filter" class="input"
+               placeholder="{{ t('location.map.filter') }}"
+               aria-label="{{ t('location.map.filter') }}">
+        <div id="fleet-map-list" class="fleet-map__list"></div>
+    </div>
+    <div class="fleet-map__canvas">
+        <div id="fleet-map" class="map" role="region" aria-label="{{ t('location.map.heading') }}"></div>
+        {# Rendered hidden and revealed by fleet-map.js, which also decides WHICH empty state
+           this is: nothing matched the filter, nothing in scope has ever been located, or the
+           hub did not answer. Three different problems with three different answers. #}
+        <p class="banner" id="fleet-map-empty" hidden></p>
+    </div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/location-map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-map.js') }}"></script>
+{% endblock %}

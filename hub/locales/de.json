@@ -26,7 +26,8 @@
     "rules": "Regeln",
     "tools": "Werkzeuge",
     "sharing": "Freigabe",
-    "provisioning": "Geräte-Provisionierung"
+    "provisioning": "Geräte-Provisionierung",
+    "map": "Karte"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -536,7 +537,8 @@
       "rules": "Regeln",
       "sharing": "Hub-übergreifende Freigabe",
       "provisioning": "Provisionierung",
-      "location": "Standort"
+      "location": "Standort",
+      "map": "Karte"
     },
     "unit": {
       "celsius": "°C",
@@ -954,6 +956,20 @@
         "location_retention_days": {
           "label": "Standortverlauf aufbewahren für",
           "help": "Wie lange erfasste Positionen aufbewahrt werden, bevor sie gelöscht werden. Das ist eine Datenschutz- und keine Speicherplatzeinstellung -- die Tabelle ist winzig --, also ist sie zum Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seinen Standortverlauf unabhängig davon sofort."
+        }
+      },
+      "map": {
+        "tile_url": {
+          "label": "URL der Kartenkacheln",
+          "help": "Woher die Konsole das Kartenmaterial lädt, als {z}/{x}/{y}-Vorlage. Das ist das Einzige, was die Konsole beim Laden einer Seite von Dritten abruft; richten Sie es auf Ihren eigenen Kachelserver, oder lassen Sie es leer, um Geräte auf leerem Grund mit ihren Koordinaten darzustellen."
+        },
+        "tile_attribution": {
+          "label": "Kachel-Quellenangabe",
+          "help": "Der Hinweis in der Ecke der Karte. Er muss zu dem passen, worauf die Kachel-URL zeigt: OpenStreetMaps Kachelrichtlinie verlangt ihre Nennung, und sie neben fremden Kacheln zu zeigen wäre eine Falschaussage und kein Schönheitsfehler."
+        },
+        "default_zoom": {
+          "label": "Zoom bei einem einzelnen Gerät",
+          "help": "Wie weit die Karte heranzoomt, wenn sie ein einzelnes Gerät zeigt. 16 entspricht etwa einem Häuserblock: nah genug, um das Gebäude zu erkennen, weit genug, dass ein Genauigkeitskreis von 200 m noch hineinpasst."
         }
       }
     },
@@ -2165,7 +2181,11 @@
     "channel_pinned": "Kanal: {value} (festgelegt)",
     "channel_pin": "Release-Kanal",
     "channel_follow_fleet": "Flotten-Standard folgen",
-    "channel_ahead": "Läuft mit {running} und ist damit der stabilen Version ({stable}) voraus. Es wird erst wieder aktualisiert, wenn Stabil daran vorbeizieht — der Wechsel weg von Beta macht ein installiertes Update nicht rückgängig."
+    "channel_ahead": "Läuft mit {running} und ist damit der stabilen Version ({stable}) voraus. Es wird erst wieder aktualisiert, wenn Stabil daran vorbeizieht — der Wechsel weg von Beta macht ein installiertes Update nicht rückgängig.",
+    "location": {
+      "title": "Standort",
+      "disclosure": "Jede Anfrage wird im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung mit dem Namen der anfragenden Bedienperson."
+    }
   },
   "remote": {
     "title": "Remote",
@@ -3180,6 +3200,54 @@
       "wifi": "Auf Nachfrage ein Netzwerk verbinden. Dieser Code enthält bewusst keine WLAN-Zugangsdaten.",
       "scan": "Den Code oben scannen. Das Gerät lädt den Agent selbst herunter und installiert ihn.",
       "verify": "Nach der Einrichtung sollte der Bildschirm des FleetHub-Agents „Fully managed (device owner)“ zeigen und der Rechner im Bestand erscheinen."
+    }
+  },
+  "location": {
+    "locate_now": "Jetzt orten",
+    "locating": "Wird geortet ...",
+    "failed": "Die Anfrage konnte nicht gesendet werden.",
+    "status": {
+      "fixed": "Geortet {when}",
+      "last_known": "Zuletzt bekannte Position, von {when}",
+      "waiting": "Warte auf die Antwort des Geräts ...",
+      "never": "Dieses Gerät wurde noch nie geortet."
+    },
+    "history": {
+      "when": "Angefragt",
+      "outcome": "Ergebnis",
+      "who": "Angefragt von"
+    },
+    "outcome": {
+      "located": "Geortet",
+      "located_stale": "Zuletzt bekannte Position",
+      "unavailable": "Keine Position verfügbar",
+      "no_answer": "Das Gerät hat nicht geantwortet"
+    },
+    "popup": {
+      "fixed": "Geortet {age}",
+      "last_known": "Zuletzt bekannte Position, {age}",
+      "accuracy": "Genau auf etwa {metres} m",
+      "provider": "Quelle: {provider}",
+      "open": "Dieses Gerät öffnen"
+    },
+    "age": {
+      "moments": "gerade eben",
+      "minutes": "vor {count} Min.",
+      "hours": "vor {count} Std.",
+      "days": "vor {count} Tagen"
+    },
+    "list": {
+      "fixed": "Geortet {when}",
+      "last_known": "Zuletzt bekannt, {when}"
+    },
+    "map": {
+      "heading": "Gerätekarte",
+      "intro": "Wo sich jedes Gerät befand, als zuletzt jemand gefragt hat. Nichts davon ist live, und kein Gerät wird verfolgt -- ein Punkt existiert, weil eine Bedienperson ihn angefordert hat.",
+      "filter": "Geräte filtern",
+      "count": "{count} angezeigt",
+      "none": "Kein für Sie sichtbares Gerät wurde je geortet.",
+      "no_match": "Kein Gerät passt zu diesem Filter.",
+      "unreachable": "Der Hub hat nicht geantwortet."
     }
   }
 }

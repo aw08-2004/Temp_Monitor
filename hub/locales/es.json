@@ -26,7 +26,8 @@
     "rules": "Reglas",
     "tools": "Herramientas",
     "sharing": "Compartir",
-    "provisioning": "Aprovisionamiento de dispositivos"
+    "provisioning": "Aprovisionamiento de dispositivos",
+    "map": "Mapa"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -536,7 +537,8 @@
       "rules": "Reglas",
       "sharing": "Uso compartido entre concentradores",
       "provisioning": "Aprovisionamiento",
-      "location": "Ubicación"
+      "location": "Ubicación",
+      "map": "Mapa"
     },
     "unit": {
       "celsius": "°C",
@@ -954,6 +956,20 @@
         "location_retention_days": {
           "label": "Conservar el historial de ubicación",
           "help": "Cuánto tiempo se conservan las posiciones registradas antes de borrarse. Es un control de privacidad y no de espacio en disco -- la tabla es diminuta --, así que está pensado para bajarlo. Borrar una máquina elimina su historial de ubicación de inmediato, independientemente de esto."
+        }
+      },
+      "map": {
+        "tile_url": {
+          "label": "URL de las teselas del mapa",
+          "help": "De dónde carga la consola las imágenes del mapa, como plantilla {z}/{x}/{y}. Es lo único que la consola solicita a un tercero al cargar una página; apúntelo a su propio servidor de teselas, o déjelo en blanco para dibujar los dispositivos sobre un fondo vacío con sus coordenadas."
+        },
+        "tile_attribution": {
+          "label": "Atribución de las teselas",
+          "help": "El crédito que se muestra en la esquina del mapa. Debe corresponder con lo que apunta la URL de teselas: la política de OpenStreetMap exige su crédito, y mostrarlo junto a teselas ajenas sería una afirmación falsa y no un descuido estético."
+        },
+        "default_zoom": {
+          "label": "Zoom sobre un solo dispositivo",
+          "help": "Cuánto se acerca el mapa cuando muestra un solo dispositivo. 16 es aproximadamente una manzana: lo bastante cerca para ver de qué edificio se trata, y lo bastante amplio para que quepa un círculo de precisión de 200 m."
         }
       }
     },
@@ -2165,7 +2181,11 @@
     "channel_pinned": "Canal: {value} (fijado)",
     "channel_pin": "Canal de versiones",
     "channel_follow_fleet": "Seguir el valor de la flota",
-    "channel_ahead": "Ejecuta {running}, por delante de estable ({stable}). No volverá a actualizarse hasta que estable lo supere: salir de beta no deshace una actualización ya instalada."
+    "channel_ahead": "Ejecuta {running}, por delante de estable ({stable}). No volverá a actualizarse hasta que estable lo supere: salir de beta no deshace una actualización ya instalada.",
+    "location": {
+      "title": "Ubicación",
+      "disclosure": "Cada petición queda registrada en la auditoría, y el dispositivo muestra una notificación con el nombre del operador que la hizo."
+    }
   },
   "remote": {
     "title": "Remoto",
@@ -3180,6 +3200,54 @@
       "wifi": "Conéctese a una red cuando se le pida. Este código no lleva credenciales de wifi, deliberadamente.",
       "scan": "Escanee el código de arriba. El dispositivo descarga e instala el agente por su cuenta.",
       "verify": "Al terminar la configuración, la pantalla del agente FleetHub debería decir “Fully managed (device owner)” y la máquina debería aparecer en el Inventario."
+    }
+  },
+  "location": {
+    "locate_now": "Localizar ahora",
+    "locating": "Localizando...",
+    "failed": "No se pudo enviar la petición.",
+    "status": {
+      "fixed": "Localizado {when}",
+      "last_known": "Última posición conocida, de {when}",
+      "waiting": "Esperando la respuesta del dispositivo...",
+      "never": "Este dispositivo nunca se ha localizado."
+    },
+    "history": {
+      "when": "Petición",
+      "outcome": "Resultado",
+      "who": "Pedido por"
+    },
+    "outcome": {
+      "located": "Localizado",
+      "located_stale": "Última posición conocida",
+      "unavailable": "Sin posición disponible",
+      "no_answer": "El dispositivo no respondió"
+    },
+    "popup": {
+      "fixed": "Localizado {age}",
+      "last_known": "Última posición conocida, {age}",
+      "accuracy": "Precisión de unos {metres} m",
+      "provider": "Fuente: {provider}",
+      "open": "Abrir este dispositivo"
+    },
+    "age": {
+      "moments": "hace un momento",
+      "minutes": "hace {count} min",
+      "hours": "hace {count} h",
+      "days": "hace {count} días"
+    },
+    "list": {
+      "fixed": "Localizado {when}",
+      "last_known": "Última posición, {when}"
+    },
+    "map": {
+      "heading": "Mapa de dispositivos",
+      "intro": "Dónde estaba cada dispositivo la última vez que alguien lo pidió. Nada de esto es en vivo, y ningún dispositivo es rastreado: un punto existe porque un operador lo solicitó.",
+      "filter": "Filtrar dispositivos",
+      "count": "{count} mostrados",
+      "none": "Ningún dispositivo que pueda ver se ha localizado nunca.",
+      "no_match": "Ningún dispositivo coincide con ese filtro.",
+      "unreachable": "El hub no respondió."
     }
   }
 }

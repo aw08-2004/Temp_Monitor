@@ -30,7 +30,7 @@ located; the trail can always answer who asked.
 The CSRF note from fleet_web.py applies verbatim: bodies are read with
 request.get_json(silent=True), which requires Content-Type: application/json.
 """
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, render_template, request
 
 import capabilities
 import fleet
@@ -47,6 +47,23 @@ def create_location_blueprint(db_path, login_required, access):
     and one source of truth per gate."""
     bp = Blueprint("location", __name__)
     can_view = access.require(permissions.VIEW)
+
+    def _map_config():
+        """Where the console gets its tiles.
+
+        Served with the fixes rather than read from /api/settings, and that is a gate decision
+        rather than a saving: the settings API needs `manage_settings`, while a map needs only
+        `view`. An operator who may see where a device is must be able to see it ON something.
+
+        Blank `tile_url` is a supported configuration, not a broken one -- a site with no
+        internet egress sets it deliberately, and the map then draws points on an empty ground
+        and says so. See hub/settings.py's map.* section.
+        """
+        return {
+            "tile_url": settings.get(db_path, "map.tile_url"),
+            "attribution": settings.get(db_path, "map.tile_attribution"),
+            "zoom": settings.get_int(db_path, "map.default_zoom"),
+        }
 
     def _payload(machine):
         """Everything the machine page's Location fold renders, in one answer."""
@@ -67,7 +84,18 @@ def create_location_blueprint(db_path, login_required, access):
             # enough to report it can have.
             "supported": capabilities.supports(db_path, machine,
                                                capabilities.FEATURE_LOCATE),
+            "map": _map_config(),
         }
+
+    # ---------------- Pages ----------------
+    @bp.route("/map", methods=["GET"])
+    @login_required
+    @can_view
+    def fleet_map_page():
+        """The fleet map. Gated identically to the data behind it, so a reader never gets a
+        page whose only content is a 403 -- and scoped the same way, so two operators looking
+        at the same URL see different devices on it."""
+        return render_template("map.html")
 
     # ---------------- Read ----------------
     @bp.route("/api/location/machines/<machine>", methods=["GET"])
@@ -89,7 +117,7 @@ def create_location_blueprint(db_path, login_required, access):
         slowest thing in the console.
         """
         rows = location.latest_fixes(db_path)
-        return jsonify({"fixes": access.filter_rows(rows)}), 200
+        return jsonify({"fixes": access.filter_rows(rows), "map": _map_config()}), 200
 
     # ---------------- Ask ----------------
     @bp.route("/api/location/machines/<machine>", methods=["POST"])

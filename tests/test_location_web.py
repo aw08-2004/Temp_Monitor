@@ -27,16 +27,18 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "hub"))
 import capabilities
 import fleet
+import i18n
 import location
 import permissions
 import settings
 from fleet_web import create_fleet_blueprint
 from location_web import create_location_blueprint
 from permissions_web import create_access
-from flask import Flask, session as flask_session
+from flask import Blueprint, Flask, session as flask_session
 
 PASS = 0
 FAIL = 0
@@ -62,6 +64,25 @@ def fake_login_required(view):
     return wrapped
 
 
+def _register_sidebar_stubs(app):
+    """base.html includes the shared sidebar, which url_for()s every other page, and the
+    permission gate's own denial renders denied.html through the same base. Without these
+    both the allowed page and the refused one raise a BuildError, so the gate under test would
+    read as a 500 either way. Same helper as test_mobile_nav.py."""
+    for endpoint in ("index", "inventory_page", "alerts_page", "tools_page",
+                     "remote_page", "settings_page", "permissions_page", "logout"):
+        app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
+    for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),
+                           ("invites", "invites_page"), ("users", "users_page"),
+                           ("audit", "audit_page"), ("bios", "firmware_page"),
+                           ("rules", "rules_page"), ("patches", "patches_page"),
+                           ("apitokens", "download_page"), ("sharing", "sharing_page"),
+                           ("provisioning", "provisioning_page")):
+        bp = Blueprint(name, __name__)
+        bp.add_url_rule(f"/_stub/{name}", endpoint, lambda: "", methods=["GET"])
+        app.register_blueprint(bp)
+
+
 def fix(**overrides):
     payload = {"lat": LAT, "lon": LON, "accuracy_m": 12.5, "provider": "gps",
                "fixed_at": 1_900_000_000, "stale": False}
@@ -80,8 +101,11 @@ def main():
         settings.init_settings_db(db_path)
         settings.invalidate()
 
-        app = Flask(__name__)
+        app = Flask(__name__,
+                    template_folder=os.path.join(ROOT, "hub", "templates"),
+                    static_folder=os.path.join(ROOT, "hub", "static"))
         app.secret_key = "test"
+        _register_sidebar_stubs(app)
         access = create_access(db_path, {"super@x.com"})
         # A technician with the fleet-wide command button and NOT the locate capability. This
         # group is the whole point of the file: it is what the helpdesk actually holds.
@@ -111,6 +135,19 @@ def main():
         @app.before_request
         def _seed_session():
             flask_session["user"] = {"email": CURRENT_USER}
+
+        # Mirrors app.py's inject_nav_context, so base.html and denied.html render. Every
+        # capability is granted to the SIDEBAR because nav rendering is not under test here;
+        # the gate on the route reads the real groups above.
+        @app.context_processor
+        def _nav_context():
+            context = {"cap": permissions, "hub_version": "test",
+                       "user_capabilities": set(permissions.CAPABILITIES),
+                       "open_alert_count": 0, "is_superuser": True,
+                       "latest_agent_version": "8.8.8"}
+            context.update(i18n.template_context("en"))
+            return context
+
         c = app.test_client()
 
         print("== The capability is real, and there is no other door ==")
@@ -238,6 +275,40 @@ def main():
         CURRENT_USER = "nobody@x.com"
         check("someone with no capability sees nothing at all",
               c.get("/api/location/fleet").status_code == 403)
+        CURRENT_USER = "super@x.com"
+
+        print("\n== The map's tile source travels with the fixes ==")
+        # Served here rather than read from /api/settings, and that is a GATE decision: the
+        # settings API needs manage_settings, while a map needs only view. An operator who may
+        # see where a device is has to be able to see it on something.
+        config = c.get("/api/location/fleet").get_json()["map"]
+        check("the fleet payload carries the tile configuration",
+              config["tile_url"].startswith("https://")
+              and config["attribution"] and config["zoom"] == 16)
+        check("...and so does a machine's own payload",
+              c.get("/api/location/machines/PHONE-1").get_json()["map"] == config)
+        settings.set_many(db_path, {"map.tile_url": "", "map.tile_attribution": ""},
+                          updated_by="admin@x.com")
+        settings.invalidate()
+        # Blank is a supported configuration, not a broken one: an air-gapped site sets it
+        # deliberately and the map then draws points on an empty ground and says so. A default
+        # substituted here would silently send that site's browsers to OpenStreetMap.
+        check("a blank tile URL survives to the browser rather than being defaulted back",
+              c.get("/api/location/fleet").get_json()["map"]["tile_url"] == "")
+        settings.set_many(db_path,
+                          {"map.tile_url": "https://tiles.example.com/{z}/{x}/{y}.png"},
+                          updated_by="admin@x.com")
+        settings.invalidate()
+        check("...and a self-hosted one reaches it verbatim",
+              c.get("/api/location/fleet").get_json()["map"]["tile_url"]
+              == "https://tiles.example.com/{z}/{x}/{y}.png")
+
+        print("\n== The map page ==")
+        CURRENT_USER = "finder@x.com"
+        check("an operator with view can open it",
+              c.get("/map").status_code == 200)
+        CURRENT_USER = "nobody@x.com"
+        check("...and one with no capability cannot", c.get("/map").status_code == 403)
         CURRENT_USER = "super@x.com"
 
         print("\n== There is no way to write a position ==")

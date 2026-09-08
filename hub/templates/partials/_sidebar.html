@@ -33,6 +33,18 @@
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg>
             <span class="sidebar__link-label">{{ t('nav.inventory') }}</span>
         </a>
+        {# Beneath Inventory: the map is the same fleet asked a different question, and it is
+           scoped identically -- two operators on this URL see different devices.
+
+           Gated on `view` explicitly, unlike the three links above it, and matching the rule
+           this file states further down: a link that 403s is worse than no link. Dashboard,
+           Inventory and Alerts predate that rule and are left alone. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'location.fleet_map_page' else '' }}" data-nav-prefix="/map" href="{{ url_for('location.fleet_map_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 20l-5.4 1.8a1 1 0 0 1-1.3-1V5.6a1 1 0 0 1 .7-1L9 3z"/><path d="M9 3l6 2.2"/><path d="M15 5.2l5.4-1.8a1 1 0 0 1 1.3 1v14.6a1 1 0 0 1-.7 1L15 21z"/><path d="M9 3v17"/><path d="M15 5v16"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.map') }}</span>
+        </a>
+        {% endif %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'alerts_page' else '' }}" data-nav-prefix="/alerts" href="{{ url_for('alerts_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a6 6 0 0 0-6 6c0 4-2 5-2 7h16c0-2-2-3-2-7a6 6 0 0 0-6-6z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
             <span class="sidebar__link-label">{{ t('nav.alerts') }}</span>
