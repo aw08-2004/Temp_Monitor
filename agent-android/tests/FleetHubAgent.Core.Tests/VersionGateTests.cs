@@ -37,9 +37,10 @@ public class VersionGateTests
             Compare(AgentConfig.Version, AgentTrainMinVersion) < 0,
             $"AgentConfig.Version is {AgentConfig.Version}, at or above the hub's " +
             $"AGENT_TRAIN_MIN_VERSION ({AgentTrainMinVersion}). Read the note on " +
-            "AgentConfig.Version before changing this: the hub would start advertising the " +
-            "Windows agent's build to Android devices, and the console would offer them " +
-            "features no Android app can implement.");
+            "AgentConfig.Version before changing this. The hub no longer needs it -- it " +
+            "picks a manifest by the platform a machine reports -- but the console's " +
+            "MIN_*_AGENT gates still read a version number, and this one is what keeps " +
+            "them from offering a phone a terminal it cannot provide.");
     }
 
     [Fact]

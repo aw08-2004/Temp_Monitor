@@ -29,6 +29,12 @@ os.chdir(_TMPDIR)
 # gated on manage_settings, and ALLOWED_EMAILS membership is the break-glass grant that
 # hands a session every capability. Set before importing app, which reads it at import time.
 os.environ["ALLOWED_EMAILS"] = "tester@example.com"
+# Importing app starts the agent-manifest watcher, which fetches every manifest from
+# GitHub and writes what it finds over whatever set_agent_version() seeded. That is a
+# race no assertion here can win -- it made "what is stable on" pass or fail depending
+# on how fast GitHub answered -- so this module reads no versions from the network at
+# all. See app.HUB_SKIP_REMOTE_CHECKS.
+os.environ["HUB_SKIP_REMOTE_CHECKS"] = "1"
 
 import app
 
@@ -46,14 +52,24 @@ def check(name, cond):
         print(f"  [XX] {name}")
 
 
-def set_agent_version(agent, beta=None):
-    """Seed the per-channel version cache.
+def set_agent_version(agent, beta=None, linux=None, android=None):
+    """Seed the per-(platform, channel) version cache.
 
-    A dict since roadmap #21 -- the hub answers for both trains at once. `beta` defaults to
-    None ("nothing published on beta"), which is the state of almost every real fleet and the
-    one every assertion below assumes.
+    A dict since roadmap #21 -- the hub answers for both channels at once -- and keyed by
+    platform as well since #22, because a Linux box and a Windows PC are on different trains
+    whose numbers are not comparable. `beta` defaults to None ("nothing published on beta"),
+    which is the state of almost every real fleet and the one every assertion below assumes;
+    `linux` and `android` default to None for the same reason.
     """
-    app.latest_agent_version = {app.channels.STABLE: agent, app.channels.BETA: beta}
+    stable, beta_channel = app.channels.STABLE, app.channels.BETA
+    windows = app.capabilities.PLATFORM_WINDOWS
+    app.latest_agent_version = {
+        (windows, stable): agent, (windows, beta_channel): beta,
+        (app.capabilities.PLATFORM_LINUX, stable): linux,
+        (app.capabilities.PLATFORM_LINUX, beta_channel): None,
+        (app.capabilities.PLATFORM_ANDROID, stable): android,
+        (app.capabilities.PLATFORM_ANDROID, beta_channel): None,
+    }
 
 
 def test_version_compare():
@@ -96,6 +112,71 @@ def test_agent_train():
     set_agent_version("3.4.0")
     check("3.0.1 -> 3.4.0", app.get_advertised_version("3.0.1") == "3.4.0")
     check("2.8.0 still -> None", app.get_advertised_version("2.8.0") is None)
+
+
+def test_per_platform_trains():
+    """Roadmap #22: each agent is measured against its own train.
+
+    **The silent failure here is a Linux box being told to install a win-x64 executable.**
+    `companion_version` is one field shared by every agent, and the hub used to read it as
+    though it could only ever mean the Windows agent -- so the Linux and Android agents were
+    pinned below AGENT_TRAIN_MIN_VERSION purely to opt out, which is why neither could have a
+    version number of its own. Nothing about that arrangement announced itself: the number was
+    simply wrong, and the day somebody wrote a self-updater it would have been wrong on every
+    Linux machine at once.
+    """
+    print("\n-- each platform is advertised its own train --")
+    app.capabilities.init_capabilities_db(app.DB_PATH)
+    for machine, platform in (("PC-01", "windows"), ("BOX-01", "linux"), ("PHONE-1", "android")):
+        app.capabilities.record_capabilities(
+            app.DB_PATH, machine, {"platform": platform, "commands": [], "features": []})
+    set_agent_version("3.35.1", linux="0.4.0", android="0.2.0")
+
+    check("a Linux box is offered the LINUX version",
+          app.get_advertised_version("0.1.0", "BOX-01") == "0.4.0")
+    check("...and never the Windows one, which it could not execute",
+          app.get_advertised_version("0.1.0", "BOX-01") != "3.35.1")
+    check("a phone is offered the ANDROID version",
+          app.get_advertised_version("0.1.0", "PHONE-1") == "0.2.0")
+    check("a Windows PC is unaffected",
+          app.get_advertised_version("3.30.0", "PC-01") == "3.35.1")
+
+    # The floor is a fact about the Windows train's history -- 3.x agent, 2.x companion --
+    # and it must not be applied to a train that never had a companion.
+    print("\n-- the 3.0.0 floor applies to the Windows train only --")
+    check("a 0.1.0 Linux agent is served, floor notwithstanding",
+          app.get_advertised_version("0.1.0", "BOX-01") == "0.4.0")
+    check("a 0.1.0 reporter that has NOT said what it is gets nothing",
+          app.get_advertised_version("0.1.0", "UNKNOWN-1") is None)
+    check("...and neither does a 2.x companion", app.get_advertised_version("2.8.0") is None)
+
+    print("\n-- a platform with nothing published is silent, not borrowed --")
+    set_agent_version("3.35.1", linux=None)
+    check("an unpublished Linux train advertises nothing",
+          app.get_advertised_version("0.1.0", "BOX-01") is None)
+    check("...rather than handing over the Windows version",
+          app.get_advertised_version("0.1.0", "BOX-01") != "3.35.1")
+
+    print("\n-- silence means Windows, which is what keeps the fleet updating --")
+    # The opposite of capabilities.py's absent-report rule, and deliberately so: every agent
+    # in the field reports no platform and every one of them is a Windows agent. Reading
+    # silence as unknown would stop advertising updates fleet-wide, quietly.
+    check("a machine that reported no platform is on the Windows train",
+          app.get_advertised_version("3.30.0", "NEVER-REPORTED") == "3.35.1")
+    check("...and so is one with no machine named at all",
+          app.get_advertised_version("3.30.0") == "3.35.1")
+    check("an unrecognised platform normalises to Windows",
+          app.channels.normalize_platform("plan9") == "windows")
+
+    print("\n-- every platform has a manifest URL, and they differ --")
+    urls = {p: app.channels.agent_manifest_url("stable", p)
+            for p in app.channels.AGENT_PLATFORMS}
+    check("one per platform", len(set(urls.values())) == len(app.channels.AGENT_PLATFORMS))
+    check("the Windows one is unchanged, because agents in the field are baked to it",
+          urls["windows"].endswith("/agent/agent.manifest.json"))
+    check("each manifest sits beside its own agent",
+          urls["linux"].endswith("/agent-linux/agent-linux.manifest.json")
+          and urls["android"].endswith("/agent-android/agent-android.manifest.json"))
 
 
 def test_unknown_train():
@@ -901,6 +982,7 @@ if __name__ == "__main__":
     test_version_compare()
     test_pre_agent_clients_get_nothing()
     test_agent_train()
+    test_per_platform_trains()
     test_unknown_train()
     test_report_endpoint()
     test_channel_wiring()

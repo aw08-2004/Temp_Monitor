@@ -19,26 +19,29 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version, exactly like the Windows agent.
     /// MUST match &lt;Version&gt; in FleetHubAgent.csproj.
     ///
-    /// **Starting at 0.x is a safety mechanism, not modesty.** The hub's
-    /// AGENT_TRAIN_MIN_VERSION is "3.0.0", and three separate things key off being under it:
+    /// **This is its own version line, and the hub knows that now.** It used to be pinned
+    /// under the hub's AGENT_TRAIN_MIN_VERSION ("3.0.0") as a safety mechanism, because three
+    /// separate things read `companion_version` as though it could only ever mean the Windows
+    /// agent. Two of the three are fixed (roadmap #22):
     ///
-    ///   * get_advertised_version() returns nothing for a sub-3.0 reporter, so /api/report's
-    ///     reply carries no latest_version -- the hub never points this agent at the WINDOWS
-    ///     agent's signed manifest, which is a win-x64 binary it would have no idea what to
-    ///     do with. That is the failure this number prevents.
-    ///   * every MIN_*_AGENT gate in hub/static/js (MIN_PTY_AGENT, MIN_PROCESS_AGENT,
-    ///     MIN_FILES_AGENT, MIN_OPEN_AGENT and friends) reads 0.1.0 as too old, so the
-    ///     console does not offer a Linux machine a terminal, a process list or a file
-    ///     browser that this agent cannot answer. The compatibility API the Windows agent's
-    ///     MINOR feeds (see CLAUDE.md) does the right thing here for free.
-    ///   * the dashboard's agents_outdated tally skips sub-3.0 machines, so a fleet of Linux
-    ///     boxes does not permanently read as "behind" on a release train they are not on.
+    ///   * get_advertised_version() now picks a manifest by the PLATFORM this agent reports,
+    ///     so it can never point a Linux box at the Windows agent's signed manifest -- a
+    ///     win-x64 binary it would have no idea what to do with. That was the failure the old
+    ///     number prevented, and it is now prevented by the hub instead.
+    ///   * the dashboard's agents_outdated tally compares each machine against its own train,
+    ///     so a fleet of Linux boxes no longer reads as permanently "behind" on a release
+    ///     train they are not on.
     ///
-    /// So: this is a FOURTH version line, and it must stay under 3.0.0 until this agent
-    /// genuinely implements the features those gates protect. Rejected alternative: starting
-    /// at 3.35.0 to "match" the Windows agent. That reads to the hub as a fully-featured
-    /// agent, and the console would immediately offer a ConPTY terminal to a machine with no
-    /// ConPTY -- every one of those gates would pass on a lie.</summary>
+    /// What is NOT yet fixed, and is the reason this still says 0.1.0: the MIN_*_AGENT gates
+    /// in hub/static/js (MIN_PTY_AGENT, MIN_PROCESS_AGENT, MIN_FILES_AGENT and friends) still
+    /// read a version number, and 0.1.0 is what keeps the console from offering this machine a
+    /// terminal, a process list or a file browser it cannot answer. Capability reporting is
+    /// what replaces those gates; until this agent SENDS a capability report, the low number
+    /// is still doing that job.
+    ///
+    /// Rejected alternative, and it is worth keeping: starting at 3.35.0 to "match" the
+    /// Windows agent. That reads to the hub as a fully-featured agent on somebody else's
+    /// train, and every one of those gates would pass on a lie.</summary>
     public const string Version = "0.1.0";
 
     /// <summary>Reads a FLEETHUB_* setting. No TEMP_MONITOR_* fallback, unlike the Windows

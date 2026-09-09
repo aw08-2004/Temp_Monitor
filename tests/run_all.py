@@ -35,12 +35,20 @@ def main():
         print("no test_*.py files found")
         return 1
 
+    # Every module that imports app.py starts the agent-manifest watcher, which fetches
+    # release manifests from GitHub on its own thread. Nothing here wants that: it makes the
+    # suite depend on the internet, it slows every module's import, and it writes real
+    # version numbers over whatever a test seeded -- a race that made one version assertion
+    # pass or fail depending on how fast GitHub answered. Declared once here rather than in
+    # each module; a module run on its own sets it for itself (see test_versions.py).
+    env = dict(os.environ, HUB_SKIP_REMOTE_CHECKS="1")
+
     failures = []
     for path in files:
         name = os.path.basename(path)
         started = time.time()
         # Each module in a fresh interpreter: no shared db_writer thread, caches, or cwd.
-        proc = subprocess.run([sys.executable, path], capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, path], capture_output=True, text=True, env=env)
         elapsed = time.time() - started
         ok = proc.returncode == 0
         status = "PASS" if ok else "FAIL"

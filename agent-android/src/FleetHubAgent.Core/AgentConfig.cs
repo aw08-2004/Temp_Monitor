@@ -24,28 +24,29 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version, exactly like every other agent.
     /// MUST match &lt;Version&gt; in both csproj files -- see VersionGateTests.
     ///
-    /// **Starting at 0.x is a safety mechanism, not modesty**, and the reasoning is the Linux
-    /// agent's unchanged. The hub's AGENT_TRAIN_MIN_VERSION is "3.0.0", and three separate
-    /// things key off being under it:
+    /// **This is its own version line, and the hub knows that now** (roadmap #22). It used to
+    /// be pinned under the hub's AGENT_TRAIN_MIN_VERSION ("3.0.0") as a safety mechanism,
+    /// because three separate things read `companion_version` as though it could only ever
+    /// mean the Windows agent. Two of the three are fixed:
     ///
-    ///   * get_advertised_version() returns nothing for a sub-3.0 reporter, so /api/report's
-    ///     reply carries no latest_version -- the hub never points this agent at the WINDOWS
-    ///     agent's signed manifest. That matters more here than it does on Linux: there the
-    ///     advertised artifact is merely a win-x64 binary a Linux box cannot run, here it
-    ///     would be offered to a device that cannot execute a native binary at all.
-    ///   * every MIN_*_AGENT gate in hub/static/js (MIN_PTY_AGENT, MIN_PROCESS_AGENT,
-    ///     MIN_FILES_AGENT, MIN_OPEN_AGENT and friends) reads 0.1.0 as too old, so the
-    ///     console does not offer a phone a terminal, a process list or a file browser. On
-    ///     Android those are not merely unimplemented -- the platform forbids them to an
-    ///     ordinary app -- so there is no version of this agent that could answer them.
-    ///   * the dashboard's agents_outdated tally skips sub-3.0 machines, so a shelf of
-    ///     tablets does not permanently read as "behind" on a release train they are not on.
+    ///   * get_advertised_version() now picks a manifest by the PLATFORM this agent reports,
+    ///     so it can never point a phone at the Windows agent's signed manifest. That matters
+    ///     more here than on Linux: there the advertised artifact is merely a win-x64 binary
+    ///     the machine cannot run, here it would be offered to a device that cannot execute a
+    ///     native binary at all.
+    ///   * the dashboard's agents_outdated tally compares each machine against its own train,
+    ///     so a shelf of tablets no longer reads as permanently "behind".
     ///
-    /// So: this is a FIFTH version line (hub, agent, client, agent-linux, agent-android), and
-    /// it must stay under 3.0.0. Rejected alternative: matching the Windows agent's number so
-    /// the fleet "looks consistent". That reads to the hub as a fully-featured agent and the
-    /// console would immediately offer a ConPTY terminal to a phone -- every one of those
-    /// gates would pass on a lie.</summary>
+    /// What is NOT yet fixed, and is the reason this still says 0.1.0: the MIN_*_AGENT gates
+    /// in hub/static/js still read a version number, and 0.1.0 is what keeps the console from
+    /// offering a phone a terminal, a process list or a file browser. Unlike on Linux those
+    /// are not merely unimplemented -- the platform forbids them to an ordinary app -- so
+    /// there is no future version of this agent that could answer them, which is exactly what
+    /// a version number cannot say and a capability report can (see AgentCapabilities).
+    ///
+    /// Rejected alternative, and it is worth keeping: matching the Windows agent's number so
+    /// the fleet "looks consistent". That reads to the hub as a fully-featured agent on
+    /// somebody else's train, and every one of those gates would pass on a lie.</summary>
     public const string Version = "0.1.0";
 
     // --- Hub endpoints -----------------------------------------------------
