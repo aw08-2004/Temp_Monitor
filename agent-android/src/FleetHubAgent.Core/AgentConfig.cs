@@ -176,4 +176,67 @@ public static class AgentConfig
 
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;
+
+    // --- Self-update (roadmap #22) -----------------------------------------
+    //
+    // **The same trust root as every other artifact this fleet installs.** One offline Ed25519
+    // key signs the Windows agent's manifest, the Linux agent's, the client's and now this
+    // one, and it is compiled in rather than configurable: it is the one control that survives
+    // a compromised hub. A hub can move a device between channels; it cannot point one at a
+    // package of its choosing, because the destination is still signed by a key the hub has
+    // never held.
+    //
+    // Verbatim from the other two agents. Restated rather than shared, like every other wire
+    // constant across these three.
+    public const string UpdatePublicKeyHex =
+        "9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c";
+
+    /// <summary>This agent's OWN manifest, and the reason it can exist at all.
+    ///
+    /// The Windows manifest describes a `win-x64` executable, which a phone cannot execute in
+    /// any sense. Pointing this agent at it was the concrete hazard that kept this version
+    /// line pinned below the hub's train floor -- see <see cref="Version"/> -- and the hub now
+    /// keys the manifest it advertises on the platform a device reports (hub/channels.py).
+    /// The filename must match `channels._AGENT_MANIFEST`: a mismatch is a fleet that silently
+    /// never updates.</summary>
+    public const string StableManifestUrl =
+        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-android/"
+        + "agent-android.manifest.json";
+
+    /// <summary>The manifest URL. Overridable through managed configuration nowhere and
+    /// through an environment variable nowhere: unlike the other two agents there is no shell
+    /// to set one from, and adding an override that only a debugger could reach would be a
+    /// setting nobody can audit. A lab build changes the constant.</summary>
+    public static string UpdateManifestUrl => StableManifestUrl;
+
+    public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
+
+    /// <summary>Whether self-update is off. False here and settable only by rebuilding, for
+    /// the reason above.</summary>
+    public static bool UpdatesDisabled => false;
+
+    /// <summary>Where a downloaded APK is staged. Set at composition from the app's own
+    /// private files directory -- not the shared cache and not external storage, because the
+    /// file is about to be installed as this fleet's device owner and those are readable or
+    /// writable by things that are not this app.</summary>
+    public static string UpdateStagingDir { get; private set; } = Path.GetTempPath();
+
+    /// <summary>Called once, at composition, by the Android half -- Core has no way to ask
+    /// Android where its private storage is.</summary>
+    public static void ConfigureStaging(string directory)
+    {
+        if (!string.IsNullOrWhiteSpace(directory)) UpdateStagingDir = directory;
+    }
+
+    /// <summary>How many times an update to one target may be attempted before the agent stops
+    /// trying it. A build that installs, starts and immediately dies would otherwise be
+    /// installed again on every tick, forever.</summary>
+    public const int MaxChainRestarts = 3;
+
+    /// <summary>How often to look for a new build. Six hours rather than the fifteen minutes
+    /// the other two use: this one downloads a ten-megabyte APK over whatever connection a
+    /// phone happens to be on, and a device that is off or out of signal simply checks when it
+    /// comes back. An urgent release reaches a phone in hours rather than minutes, which is
+    /// the right trade for a device somebody is carrying and paying for the data on.</summary>
+    public const int UpdateCheckIntervalSeconds = 6 * 60 * 60;
 }

@@ -62,6 +62,13 @@ public static class StateKeys
     /// month ago would go on enforcing forever, one process kill at a time.</summary>
     public const string DevicePolicy = "device_policy";
 
+    /// <summary>What a self-update is aiming at, and how many attempts it has had
+    /// (roadmap #22). Persisted because the process that would remember it is the one
+    /// the platform kills to install the new package -- and because a build that
+    /// installs, starts and immediately dies would otherwise be downloaded and
+    /// installed again on the next tick, forever.</summary>
+    public const string RestartState = "update_state";
+
     /// <summary>The shared enrollment secret. **This is the hub's AGENT_ENROLLMENT_SECRET,
     /// the same value on every machine in the fleet** -- not a per-device credential. What IS
     /// minted per device, and returned exactly once, is the token enroll hands back.</summary>

@@ -89,4 +89,24 @@ public sealed class AgentState(IStateStore store)
 
     public bool SaveHubBaseOverride(string hubBase) =>
         _store.Set(StateKeys.HubBaseOverride, hubBase);
+
+    /// <summary>What a self-update is aiming at, or null if none is in flight.
+    ///
+    /// A corrupt value reads as "nothing in flight", which retries rather than refusing to
+    /// update -- the same fail-soft rule the identity above follows, and the safe direction
+    /// here: the worst case is one extra install attempt, bounded by the counter it just
+    /// forgot.</summary>
+    public RestartState? LoadRestartState()
+    {
+        var raw = _store.Get(StateKeys.RestartState);
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try { return JsonSerializer.Deserialize<RestartState>(raw); }
+        catch { return null; }
+    }
+
+    public bool SaveRestartState(RestartState restart) =>
+        _store.Set(StateKeys.RestartState, JsonSerializer.Serialize(restart));
+
+    /// <summary>Forget the update in flight, once this build has done real work.</summary>
+    public bool ClearRestartState() => _store.Set(StateKeys.RestartState, null);
 }

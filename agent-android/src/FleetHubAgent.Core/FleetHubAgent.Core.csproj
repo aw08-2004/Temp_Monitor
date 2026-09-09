@@ -29,6 +29,12 @@
     <!-- Abstractions only. The Android app supplies the logger; a console logger here would
          be a second logging stack that never runs on the target. -->
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.6" />
+    <!-- Ed25519, for verifying the signed update manifest. The same package and version
+         the Windows and Linux agents already depend on, deliberately: one offline key
+         signs all three manifests, and a differently-implemented verification would mean
+         an artifact one fleet accepts and another refuses. .NET 10 still has no Ed25519
+         in the base class library, so there is nothing to drop this for yet. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
 
   <ItemGroup>

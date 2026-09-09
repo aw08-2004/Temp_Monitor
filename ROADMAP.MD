@@ -2869,17 +2869,37 @@ scoped in detail under #11 phase 2 and still gated on the Windows client having 
 hub. This is a *managed endpoint*: a phone or tablet that appears in Inventory next to the PCs.
 The two share a platform and nothing else.
 
-### The version number does the gating
+### The version number used to do the gating; the platform does now
 
-`AgentConfig.Version` is `0.1.0` and must stay below `AGENT_TRAIN_MIN_VERSION` (`3.0.0`), which
-buys the same three things it buys for the Linux agent — no Windows manifest advertised, every
-`MIN_*_AGENT` gate reading it as too old, and no place in the `agents_outdated` tally.
+`AgentConfig.Version` is `0.1.0`. It was pinned below `AGENT_TRAIN_MIN_VERSION` (`3.0.0`) for
+the same three reasons the Linux agent was, and the same two are fixed: the hub picks a release
+manifest by the platform a device reports, and the `agents_outdated` tally compares each
+machine against its own train. What is left is the `MIN_*_AGENT` gates, which still read a
+version number — and that is the only reason this is still `0.1.0`.
 
-The middle one matters more here than on Linux. There, the console withholding a terminal or a
+That remaining one matters more here than on Linux. There, the console withholding a terminal or a
 file browser hides something merely *unimplemented*. Here it hides something **impossible**:
 Android has no shell for an app to run a script in, no API to reboot, and no way to see another
 app's processes. There is no future version of this agent that could answer those, so the gate
 is not a staging mechanism, it is permanent.
+
+It also has a release train of its own now (roadmap #22): `release.ps1`, an
+`agent-android.manifest.json` signed with the same offline key as the other two, and a
+self-update that is nothing like theirs. A Windows or Linux agent replaces a file and restarts;
+an Android app hands its own next APK to the platform's package installer, which is a **Device
+Owner** power — without device ownership `commit()` raises the system installer UI, which on a
+phone in a drawer is an update waiting forever behind a dialog nobody will tap. The platform
+then kills the process to replace the app, so the agent comes back through
+`ACTION_MY_PACKAGE_REPLACED` rather than by resuming, and the attempt counter is written
+**before** the install because nothing after it runs.
+
+**Two signatures, and they are not the same signature.** The APK is signed with the fleet's
+Android keystore, which is what lets it replace the installed app at all; the manifest is signed
+with the offline Ed25519 release key, which is what makes the download untrusted. Somebody
+holding the keystore would pass Android's check and still fail the agent's. Re-signing with a
+different key is unrecoverable in a way it is not on the other two: that certificate is what the
+provisioning QR's checksum covers *and* what Android checks before replacing the app, so a new
+key invalidates every printed code and makes every installed agent refuse the update at once.
 
 This is the **fifth** version line in the repo, and the first with **three** files to keep in
 step: `AgentConfig.Version`, the Core csproj's `<Version>`, and the Android csproj's

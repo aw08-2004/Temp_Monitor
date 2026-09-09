@@ -5,7 +5,7 @@ sibling to `agent-linux/`. Same hub, same wire protocol, same house rules; a muc
 feature set, and unlike the other two, most of what is missing can never be added.
 
 **Status: early, but it has now run.** It compiles to a release-signed APK, its protocol half
-has 202 tests, and it has enrolled, reported telemetry and taken a command on a real device
+has 214 tests, and it has enrolled, reported telemetry and taken a command on a real device
 (Samsung Galaxy A15, Android 16). Nothing has been released and no fleet runs it. What is
 verified, and what still is not, is stated exactly in *Build, test, run*.
 
@@ -78,6 +78,7 @@ on, and it survived contact with Android intact.
 | **Schedules** | Blocked hours and daily budgets, evaluated on the device against its own clock and its own usage -- so a curfew holds with the hub unreachable |
 | **App usage** | Foreground seconds per app, per local day, where usage access has been granted. What a budget is checked against, and what the console charts |
 | **Lock and wipe** | `lock_device` locks the screen; `wipe_device` erases the device after answering, because a wipe that answered afterwards would never answer at all |
+| **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed. The install is a Device Owner power rather than a file swap, and the agent comes back through ACTION_MY_PACKAGE_REPLACED |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
@@ -457,13 +458,14 @@ src/FleetHubAgent.Core/       the protocol -- plain net10.0, tested on the works
   MachineNaming.cs            the derived name, and why it cannot be the model alone
   MachineNameProvider.cs      the current name, and persist-before-adopt
   Fleet/                      hub client, dispatcher, capability report, inventory, rename, locate, policy, schedule, lock, wipe
+  Update/                     the signed self-update: manifest verification, the install decision
   State/                      the identity store, behind an interface
   Telemetry/                  the report builder, the sensor contracts, identity cleaning
 src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   AgentService.cs             the foreground service, and the composition root
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
-  Platform/                   SharedPreferences, Build fields, sensors, location, apps, usage, managed config, logcat
+  Platform/                   SharedPreferences, Build fields, sensors, location, apps, usage, package installer, managed config, logcat
   Policy/                     the device-admin component, the provisioning activities, app suspension, lock and wipe
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push
@@ -607,11 +609,35 @@ and sign even the pilot build with it.
 
 ### Releases
 
-None yet. When there is one, the shape to follow is `agent-linux`'s: a tag prefix and an asset
-name that whatever fetches it matches on exactly. Unlike the Windows agent there is **no signed
-manifest and no self-update** — an app cannot silently update itself on Android unless it is a
-device owner — so the trust root for an APK is the keystore above plus however the MDM delivers
-it.
+None yet, but the machinery exists. `release.ps1` does the whole flow in one command:
+
+```powershell
+.\release.ps1 -Version 0.2.0 -NotesFile .\release-notes\0.2.0.md
+```
+
+It bumps the version in all three places (this agent's pair is a triple — AgentConfig, the Core
+csproj, and the Android csproj's `ApplicationDisplayVersion`, which is the APK's own
+versionName), publishes a release-signed APK, creates the release, signs
+`agent-android.manifest.json` against the exact bytes and the exact asset URL, uploads, commits
+and pushes. **Nothing reaches a device until the push lands**, because the agent reads the
+manifest from `main`.
+
+**Two signatures, and they are not the same signature.** The APK is signed with the keystore
+above, which is what lets it replace the installed app at all — Android refuses an update
+signed by anything else. The manifest is signed with the fleet's offline Ed25519 release key,
+the same one that signs the Windows and Linux agents' manifests, and that is what makes the
+download itself untrusted. Somebody who obtained the Android keystore would pass the platform's
+check and still fail the agent's.
+
+**The install is a Device Owner power.** Without device ownership `commit()` raises the
+system's package-installer UI, which on a phone in a drawer is an update waiting forever behind
+a dialog nobody will tap. So an unmanaged build does not self-update, and says so once rather
+than retrying.
+
+**Re-signing the APK with a different key is unrecoverable.** That certificate is what the
+provisioning QR's checksum covers *and* what Android checks before replacing the app, so a new
+key invalidates every printed code and makes every installed agent refuse the update at the
+same time. The only way back is a factory reset and a re-provision, per device, by hand.
 
 ## Running unprivileged
 

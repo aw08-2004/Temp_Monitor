@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.Fleet;
 using FleetHubAgent.Telemetry;
+using FleetHubAgent.Update;
 
 namespace FleetHubAgent;
 
@@ -13,6 +14,7 @@ namespace FleetHubAgent;
 ///   * heartbeat -- liveness; the call that decides whether the machine reads online
 ///   * commands  -- poll, claim, and dispatch fleet commands
 ///   * inventory -- read the slow local things (installed apps) and leave a payload behind
+///   * update    -- look for a newer signed build, and hand it to the platform installer
 ///
 /// **Why they are separate**, which is a lesson the Windows agent learned the hard way and
 /// every port inherits rather than repeats: in a serial loop the slowest step sets the latency
@@ -39,7 +41,8 @@ public sealed class AgentLoops(
     MachineNameProvider names,
     IEnrollmentSecretSource secrets,
     IReadOnlyList<IInventorySource>? inventory = null,
-    PolicyCoordinator? policy = null)
+    PolicyCoordinator? policy = null,
+    SelfUpdater? updater = null)
 {
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -73,6 +76,7 @@ public sealed class AgentLoops(
             Task.Run(() => HeartbeatLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => InventoryLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait on
@@ -156,6 +160,9 @@ public sealed class AgentLoops(
                     if (reply is not null)
                     {
                         AcknowledgeInventory(blocks);
+                        // A heartbeat the hub accepted is proof this build works, which
+                        // resets the update attempt counter -- see SelfUpdater.
+                        updater?.ConfirmRunningBuild();
                         // A document only arrives when the hub's version differs from the one
                         // just reported; anything else is the hub confirming what is held,
                         // which refreshes the dead-man clock. Both matter: see PolicyCoordinator.
@@ -189,6 +196,33 @@ public sealed class AgentLoops(
     /// another every six hours without a timer each, and what makes Invalidate() take effect
     /// within a tick rather than at the end of an interval.
     /// </summary>
+    /// <summary>Look for a newer signed build, and hand it to the platform if there is one.
+    ///
+    /// **Its own loop, on a much slower cadence than the other three.** Six hours: this one
+    /// downloads a ten-megabyte APK over whatever connection a phone happens to be on, and a
+    /// device that is off or out of signal simply checks when it comes back. Folding it into
+    /// the heartbeat would tie that download to the call that decides whether the device reads
+    /// online.
+    ///
+    /// Returning after a successful install is mostly theoretical -- the platform kills this
+    /// process to replace the app -- but the loop exits rather than sleeping, so a build that
+    /// somehow survives the commit does not immediately try again.</summary>
+    private async Task UpdateLoopAsync(CancellationToken ct)
+    {
+        if (updater is null) return;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (await updater.CheckAndApplyAsync(ct)) return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { log.LogWarning(e, "Update check failed"); }
+
+            if (!await DelayAsync(AgentConfig.UpdateCheckIntervalSeconds, ct)) break;
+        }
+    }
+
     private async Task InventoryLoopAsync(CancellationToken ct)
     {
         // The policy coordinator is itself an inventory source, so a build with a policy and

@@ -8,6 +8,7 @@ using FleetHubAgent.Fleet;
 using FleetHubAgent.Fleet.Executors;
 using FleetHubAgent.State;
 using FleetHubAgent.Telemetry;
+using FleetHubAgent.Update;
 using FleetHubAgent.Android.Platform;
 using FleetHubAgent.Android.Policy;
 
@@ -218,10 +219,21 @@ public sealed class AgentService : Service
             policy,
         };
 
+        // Self-update (roadmap #22). Core owns everything except the install itself, which is
+        // a Device Owner power on Android rather than a file swap -- see AndroidPackageInstaller.
+        // The staging directory is set here because Core has no way to ask Android where this
+        // app's private storage is, and it must be private: the file is about to be installed
+        // as this fleet's device owner.
+        AgentConfig.ConfigureStaging(
+            Path.Combine(FilesDir?.AbsolutePath ?? Path.GetTempPath(), "update"));
+        var updater = new SelfUpdater(
+            _loggerFactory.CreateLogger<SelfUpdater>(), state,
+            new AndroidPackageInstaller(this, _loggerFactory.CreateLogger("Installer")));
+
         _agent = new AgentLoops(
             _loggerFactory.CreateLogger<AgentLoops>(), _sensors, new AndroidUptimeSource(),
             _reporter, _fleet, dispatcher, _names,
-            new AndroidEnrollmentSecretSource(this, state), inventory, policy);
+            new AndroidEnrollmentSecretSource(this, state), inventory, policy, updater);
     }
 
     /// <summary>The non-command abilities this device reports (hub/capabilities.py's FEATURE_*).
