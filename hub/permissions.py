@@ -110,6 +110,22 @@ LOCATE_DEVICE = "locate_device"
 # here -- that is VIEW plus machine scope. Knowing that an app is blocked on a device you
 # already administer is not a privilege; deciding that it should be is.
 MANAGE_DEVICE_POLICY = "manage_device_policy"
+# Locking a device's screen, and erasing it (roadmap #23 phase H). The largest blast radius in
+# this product: `wipe_device` is a factory reset with no undo, no dry run and no partial
+# version of itself, and it takes effect on a device somebody may be holding.
+#
+# Its own capability rather than ISSUE_COMMANDS, and the argument that keeps the other command
+# features under that gate is exactly what excludes these two: "less dangerous than the SYSTEM
+# shell it already grants" is true of a reboot and false of an erase. It is also not folded in
+# with MANAGE_DEVICE_POLICY, though both act on managed devices, because a policy is reversible
+# by editing it and this is not reversible at all.
+#
+# LOCK and WIPE share one capability rather than getting one each. They are different in
+# weight -- a lock is the ordinary first move for a phone left on a train, and is undone by
+# the person's own PIN -- but anybody trusted with the second is trusted with the first, and a
+# separate `lock_device` capability would be one more row in the permissions UI that nobody
+# would ever grant alone.
+WIPE_DEVICE = "wipe_device"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -136,6 +152,7 @@ CAPABILITIES = (
     MANAGE_PATCHES,
     LOCATE_DEVICE,
     MANAGE_DEVICE_POLICY,
+    WIPE_DEVICE,
     MANAGE_RULES,
     MANAGE_SETTINGS,
     MANAGE_USERS,

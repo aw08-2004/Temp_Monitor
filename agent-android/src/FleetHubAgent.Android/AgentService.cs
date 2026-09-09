@@ -147,6 +147,8 @@ public sealed class AgentService : Service
         // backlog: see CommandDispatcher, which distinguishes the commands Android forbids from
         // the ones simply not written yet. The hub is told this exact set on every heartbeat
         // (AgentCapabilities), which is what stops it queueing the other twenty-eight.
+        var security = new AndroidDeviceSecurity(this, _loggerFactory.CreateLogger("Security"));
+
         var executors = new ICommandExecutor[]
         {
             new RenameExecutor(_loggerFactory.CreateLogger<RenameExecutor>(), _names, identity),
@@ -157,6 +159,14 @@ public sealed class AgentService : Service
                 _loggerFactory.CreateLogger<LocateDeviceExecutor>(),
                 new AndroidLocationReader(this, _loggerFactory.CreateLogger("Location")),
                 new LocationNotifier(this, _loggerFactory.CreateLogger("LocationNotice"))),
+            // Roadmap #23 phase H. Both share one platform object because they are two calls
+            // on one manager; they stay two executors because the hub gates, confirms and
+            // audits them differently, and a single executor branching on a parameter is the
+            // shape that erases the wrong device the day a client sends the wrong string.
+            new LockDeviceExecutor(
+                _loggerFactory.CreateLogger<LockDeviceExecutor>(), security),
+            new WipeDeviceExecutor(
+                _loggerFactory.CreateLogger<WipeDeviceExecutor>(), security),
         };
 
         var dispatcher = new CommandDispatcher(

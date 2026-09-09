@@ -3536,6 +3536,71 @@ device.
 
 ---
 
+## 🚧 Remote lock and remote wipe · hub 1.105.0 · `wipe.py` / `wipe_web.py`
+
+Phase H of #23, and the only action in this product with no undo.
+
+**Two commands, deliberately unequal, and the friction is all on one of them.** `lock_device`
+locks the screen and is undone by the person holding the device with their own PIN; it is one
+click, because the case it exists for is a phone left in a taxi and seconds matter.
+`wipe_device` is a factory reset, so it sits behind a second button, a typed machine name and a
+confirmation dialog. Spreading the friction over both would teach people to type past it, which
+is worse than having none on the lock.
+
+**The typed-name confirmation is on the SERVER**, in `wipe.confirm_wipe`. A confirmation that
+lives only in the console stops an operator and does not stop a script, a copied curl command,
+or a second console written later -- and this is the one endpoint where those must not be a way
+around the pause. The comparison is exact and case-sensitive: `PHONE-1` and `phone-12` are two
+devices, and the whole value of the step is that it cannot be passed by somebody who is not
+looking at the name in front of them.
+
+**One capability for both, and it is not `issue_commands`.** The argument that keeps wake, the
+processes card and the file explorer under that gate -- each is less dangerous than the SYSTEM
+shell it already grants -- is true of a reboot and false of an erase. Lock and wipe share
+`wipe_device` because anybody trusted with the second is trusted with the first, and a
+`lock_device` capability nobody would ever grant alone is a row in the permissions UI that only
+adds noise.
+
+**Four doors, three of them closed.** `wipe_web.py` is the only way in. `/api/fleet/commands`
+refuses both types by name (its gate is `issue_commands`, which the whole helpdesk has),
+`_validate_favorite` refuses to save one, and `RULE_FORBIDDEN_COMMANDS` refuses to let a rule
+issue one -- the worst of the three, because a rule fires with nobody present. Closing the rules
+door also closed the same hole for `locate_device`, which phase B had left open: a rule could
+have located a device without the capability that exists to keep that apart from a reboot
+button.
+
+**The audit row is written before the command exists.** A wipe that is issued and then fails to
+be recorded is the one ordering that cannot be reconstructed afterwards: the device is gone and
+the trail never mentions it. Recording an intent that then failed to queue is the harmless
+direction of the same mistake, and it is visible -- the row has no command id.
+
+**The agent answers BEFORE it erases itself.** `wipeData` does not return, so an executor that
+called it inline would leave a command claimed and unanswered forever, beside a machine that
+stopped reporting -- indistinguishable from a flat battery. The executor answers "the wipe has
+started", the command loop posts that result, and the erase fires ten seconds later. Nothing
+depends on the device surviving the delay.
+
+**A request table of its own**, which location.py deliberately does not have. The reason is
+peculiar to this feature: the answer never comes back. A wiped device does not heartbeat again
+and does not exist to be asked, so its command row would sit at "sent" forever. The request row
+is the only thing that can say "wiped on the 9th, by X" about a device that will never speak
+again.
+
+**`reset_protection` is per device, not a hub setting.** Leaving Android's factory-reset
+protection on means the wiped device cannot be set up again without the account that was on it:
+theft protection when the device was stolen, a self-inflicted brick when it was a company
+handset with an ex-employee's account. Clearing it is the right default for company-owned
+hardware and the wrong one for a stolen personal device, so the answer rides the command and the
+console says in words which one it is sending.
+
+### Not done
+
+`resetPasswordWithToken` -- a one-time unlock code for a device whose holder is standing at a
+helpdesk. The policy is declared in `device_admin.xml` and nothing uses it yet. Nothing in this
+phase has been run against a real device, and a wipe must be tested only on a scratch one.
+
+---
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
@@ -3550,6 +3615,7 @@ This is that list, so nothing is quietly skipped:
 | **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |
 | **D** | The Installed apps fold populates; the count is plausible for the device (150-400); `system` is set on the right ones; the list survives an app being installed and uninstalled; **on an unmanaged device** the list is short, which is the expected answer without `QUERY_ALL_PACKAGES` and not a bug |
 | **D policy** | Apply a blocklist to one test app and confirm the system's "paused by your organisation" dialog; confirm the console shows it as enforced from the device's OWN inventory; confirm a package that cannot be suspended comes back in `failed`; **delete the policy and confirm the app comes back** (the empty-document release valve); confirm the dead-man switch by setting a short `policy.max_age_seconds` and taking the device off the network |
+| **H** | `lock_device` on the pilot: the screen locks and the console shows the row. Confirm the card is absent on a Windows PC, that a helpdesk account with `issue_commands` sees no buttons, and that a wrong typed name is refused by the API and not only by the page. **Wipe on a scratch device only**, and check both `reset_protection` answers: cleared means it can be set up again, kept means it asks for the previous account |
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
 **A is no longer blocked** — the pilot Galaxy A15 has been factory reset, so it can be

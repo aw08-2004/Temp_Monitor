@@ -129,6 +129,12 @@ by reflex.
   hub cannot brick a phone.
 - **Reading the full package list**, which a Device Owner gets without the broad
   `QUERY_ALL_PACKAGES` permission that Play policy flags.
+- **Locking the screen** (`lockNow`), undone by the person holding the device with their own
+  PIN, and **erasing the device** (`wipeData`). The second is the only action in this product
+  with no undo, so it is gated on its own `wipe_device` capability, requires the machine's name
+  typed out, is written to the audit trail *before* the command is created, and cannot be saved
+  as a favorite or issued by a rule. The device answers once and then stops reporting for good,
+  which is why the hub records the request rather than waiting for a result.
 
 **Deliberately not taken**, each available and each declined: no camera or screenshot
 restrictions, no factory-reset block, no certificate installation, no always-on VPN, no keyguard

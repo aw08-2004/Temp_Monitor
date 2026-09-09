@@ -519,6 +519,10 @@
       "manage_device_policy": {
         "label": "Geräterichtlinien verwalten",
         "description": "App-Richtlinien für verwaltete Geräte schreiben: welche Apps laufen dürfen und welche nicht, und auf welchen Rechnern. Eine eigene Berechtigung und kein Teil von „Einstellungen verwalten“, denn eine Richtlinie ist keine Einstellung -- sie ist eine dauerhafte Anweisung, die ohne Anwesende verändert, was das Gerät einer Person tut. Zum Lesen einer Richtlinie und des Erfüllungsstands genügen „Ansehen“ und der Rechner im Geltungsbereich."
+      },
+      "wipe_device": {
+        "label": "Gerät sperren und löschen",
+        "description": "Den Bildschirm eines verwalteten Geräts sperren und das Gerät löschen. Eine eigene Berechtigung statt Teil von 'Befehle erteilen': Das Argument, das alle anderen Befehle unter jener Berechtigung hält -- weniger gefährlich als die SYSTEM-Shell, die sie ohnehin gewährt -- trifft auf einen Neustart zu und auf ein Zurücksetzen auf Werkseinstellungen nicht. Für das Löschen muss zusätzlich der Name des Rechners eingegeben werden; es wird im Audit-Protokoll festgehalten, bevor der Befehl gesendet wird, und es kann weder als Favorit gespeichert noch von einer Regel ausgelöst werden. Um zu sehen, dass ein Gerät gesperrt oder gelöscht wurde, genügt 'Ansehen' plus der Rechner im eigenen Bereich."
       }
     }
   },
@@ -2207,6 +2211,9 @@
     },
     "usage": {
       "title": "App-Nutzung"
+    },
+    "secure": {
+      "title": "Sperren und löschen"
     }
   },
   "remote": {
@@ -3400,5 +3407,33 @@
       "total": "Gesamt",
       "top": "Am meisten genutzt"
     }
+  },
+  "secure": {
+    "action": {
+      "lock": "Gesperrt",
+      "wipe": "Gelöscht"
+    },
+    "column": {
+      "action": "Aktion",
+      "who": "Angefordert von",
+      "when": "Wann"
+    },
+    "intro": "Das Sperren wird von der Person, die das Gerät hält, mit ihrer eigenen PIN aufgehoben. Das Löschen ist ein Zurücksetzen auf Werkseinstellungen und kann von niemandem rückgängig gemacht werden.",
+    "lock": "Bildschirm jetzt sperren",
+    "lock_sent": "Sperre gesendet. Sie wirkt, sobald das Gerät erreichbar ist.",
+    "wipe_heading": "Dieses Gerät löschen",
+    "wipe": "Dieses Gerät löschen",
+    "wipe_sent": "Löschbefehl gesendet. Das Gerät antwortet einmal und meldet sich dann endgültig nicht mehr.",
+    "wipe_warning": "Damit wird alles auf dem Gerät gelöscht, und es lässt sich nicht rückgängig machen. Es gibt keinen Probelauf. Das Gerät antwortet einmal und verschwindet dann endgültig aus dieser Konsole.",
+    "confirm_label": "Zum Bestätigen den Namen des Rechners eingeben",
+    "confirm_dialog": "{machine} löschen? Das lässt sich nicht rückgängig machen.",
+    "clear_protection": "Schutz vor Zurücksetzen aufheben",
+    "clear_protection_help": "Das Gerät kann von jedem neu eingerichtet werden. Für firmeneigene Hardware ist das meist richtig.",
+    "keep_protection_help": "Das Gerät kann ohne das zuletzt angemeldete Konto nicht neu eingerichtet werden. Das ist Diebstahlschutz -- und ein Briefbeschwerer, wenn das Konto nicht Ihnen gehörte.",
+    "wiped_on": "Am {when} von {who} gelöscht. Es wird sich nicht mehr melden.",
+    "no_history": "Auf diesem Gerät wurde nichts gesperrt oder gelöscht.",
+    "count": "{count} Aktion(en)",
+    "failed": "Das wurde abgelehnt.",
+    "unreachable": "Der Hub war nicht erreichbar."
   }
 }

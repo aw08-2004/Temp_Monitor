@@ -5,7 +5,7 @@ sibling to `agent-linux/`. Same hub, same wire protocol, same house rules; a muc
 feature set, and unlike the other two, most of what is missing can never be added.
 
 **Status: early, but it has now run.** It compiles to a release-signed APK, its protocol half
-has 192 tests, and it has enrolled, reported telemetry and taken a command on a real device
+has 202 tests, and it has enrolled, reported telemetry and taken a command on a real device
 (Samsung Galaxy A15, Android 16). Nothing has been released and no fleet runs it. What is
 verified, and what still is not, is stated exactly in *Build, test, run*.
 
@@ -72,11 +72,12 @@ on, and it survived contact with Android intact.
 | **Identity** | `Build.MODEL` / `MANUFACTURER` for model and vendor, `Build.VERSION.RELEASE` for the OS caption, `Build.DISPLAY` as `os_build`, the primary ABI as `os_arch`, and the SSAID as `serial_number` — see below |
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or typed once on the setup screen |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
-| **Commands** | `rename`, `locate_device` |
+| **Commands** | `rename`, `locate_device`, `lock_device`, `wipe_device` |
 | **App inventory** | Every installed package, with its label, version, and whether the framework says it is enabled or suspended. Change-only, on its own loop |
 | **App policy** | Suspends the packages the hub says to, un-suspends what it suspended before, and reports the ones it could not. Lifts everything on its own if the hub goes silent |
 | **Schedules** | Blocked hours and daily budgets, evaluated on the device against its own clock and its own usage -- so a curfew holds with the hub unreachable |
 | **App usage** | Foreground seconds per app, per local day, where usage access has been granted. What a budget is checked against, and what the console charts |
+| **Lock and wipe** | `lock_device` locks the screen; `wipe_device` erases the device after answering, because a wipe that answered afterwards would never answer at all |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
@@ -379,6 +380,36 @@ suspend something somebody is holding; it needs the exact number. The totals are
 high-water mark per day, because the platform trims its event buffer while a day is still
 running and a smaller figure would un-suspend an app whose allowance is spent.
 
+## Locking and erasing
+
+**The result is reported before the wipe happens, and that ordering is the whole executor.**
+`wipeData` does not return: the process is killed, the data partition goes, and nothing on this
+device ever speaks to the hub again. Calling it inline would leave a command claimed and never
+answered -- the console would show it running forever, beside a machine that stopped reporting,
+which is indistinguishable from a flat battery. So the executor answers "the wipe has started",
+the command loop posts that result, and the erase fires ten seconds later. Nothing depends on
+the device surviving the delay: if it is switched off in between, the hub's own request row
+still records that somebody asked.
+
+**No second confirmation here.** The hub requires the machine's name typed out and writes its
+audit row before the command exists. A device that second-guessed a wipe would be a device that
+cannot be wiped when it matters, and the check belongs where a person is.
+
+**"Not fully managed" is a FAIL, not a success with a note** -- the opposite call from
+LocateDeviceExecutor's, and the difference is what an operator does next. A device that cannot
+give a position has answered truthfully. A device that cannot lock has not done what was asked,
+and somebody hoping a lost phone is now locked must not read "done".
+
+**No disclosure notification, unlike a locate.** A locate posts one because the person holding
+the device has a right to know they were found and the device goes on existing to show it. Here
+there is no afterwards: the notification would be erased along with everything else within
+seconds, and a warning that cannot be acted on is theatre.
+
+**Factory-reset protection is the hub's decision, carried in the command.** Clearing it lets
+anybody set the device up again; leaving it on means the device needs the account that was
+signed in on it. Which is right depends on whether the device was stolen or merely returned, so
+this agent does not choose -- it reports which it did in the result it sends before erasing.
+
 ## Fully managed (device owner)
 
 The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
@@ -425,7 +456,7 @@ src/FleetHubAgent.Core/       the protocol -- plain net10.0, tested on the works
   AgentLoops.cs               the three loops
   MachineNaming.cs            the derived name, and why it cannot be the model alone
   MachineNameProvider.cs      the current name, and persist-before-adopt
-  Fleet/                      hub client, dispatcher, capability report, inventory, rename, locate, policy, schedule
+  Fleet/                      hub client, dispatcher, capability report, inventory, rename, locate, policy, schedule, lock, wipe
   State/                      the identity store, behind an interface
   Telemetry/                  the report builder, the sensor contracts, identity cleaning
 src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
@@ -433,7 +464,7 @@ src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
   Platform/                   SharedPreferences, Build fields, sensors, location, apps, usage, managed config, logcat
-  Policy/                     the device-admin component, the provisioning activities, app suspension
+  Policy/                     the device-admin component, the provisioning activities, app suspension, lock and wipe
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push
   Resources/xml/device_admin.xml       the policies the admin component declares

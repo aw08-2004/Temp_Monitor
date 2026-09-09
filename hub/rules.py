@@ -2895,6 +2895,24 @@ RULE_FORBIDDEN_COMMANDS = (fleet.SESSION_CONTROL_COMMANDS | fleet.SCHEDULED_COMM
                            # hub would not supply this firmware update". Allowing it produced a
                            # rule that could never succeed, which is precisely what this set
                            # exists to prevent. No UI ever offered it, so nothing can be using it.
+                           # The two entries here that are about a CAPABILITY rather than about
+                           # one-shot params (roadmap #23). A rule's actions are gated on
+                           # ISSUE_COMMANDS, so a rule that could issue either of these would
+                           # be a way to reach `locate_device` and `wipe_device` without the
+                           # capabilities that exist to keep them apart from a reboot button --
+                           # and a rule fires with nobody present, which is the last way
+                           # anybody should discover that a phone has been erased. Both are
+                           # refused for the same reason by /api/fleet/commands and by
+                           # _validate_favorite; this is the third door.
+                           | fleet.LOCATION_COMMANDS | fleet.WIPE_COMMANDS
+                           # `update_bios` belongs with the one-shot params above and was only
+                           # ever absent from that list because it sits in the base ALL_COMMANDS
+                           # literal rather than in FIRMWARE_COMMANDS. Its `update_id` is minted
+                           # per target per maintenance window by firmware.py, so a rule can only
+                           # ever replay a stale one -- UpdateBiosExecutor refuses it with "the
+                           # hub would not supply this firmware update". Allowing it produced a
+                           # rule that could never succeed, which is precisely what this set
+                           # exists to prevent. No UI ever offered it, so nothing can be using it.
                            | frozenset({"install_virtual_display", "rename", "update_bios"}))
 RULE_ALLOWED_COMMANDS = frozenset(fleet.ALL_COMMANDS) - RULE_FORBIDDEN_COMMANDS
 

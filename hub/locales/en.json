@@ -578,6 +578,10 @@
       "manage_device_policy": {
         "label": "Manage device policy",
         "description": "Write app policy for managed devices: which apps may or may not run, and on which machines. Its own capability rather than part of 'Manage settings', because a policy is not a setting -- it is a standing instruction that changes what somebody's device will do, applied without anybody present. Reading a policy, and reading how a device is complying with one, only needs 'View' plus the machine being in scope."
+      },
+      "wipe_device": {
+        "label": "Lock and wipe a device",
+        "description": "Lock a managed device's screen, and erase it. Its own capability rather than part of 'Issue commands': the argument that puts every other command under that one -- less dangerous than the SYSTEM shell it already grants -- is true of a reboot and false of a factory reset. Wiping additionally requires the machine's name to be typed out, is recorded in the audit trail before the command is sent, and cannot be saved as a favorite or issued by a rule. Seeing that a device was locked or erased only needs 'View' plus the machine being in scope."
       }
     }
   },
@@ -2320,6 +2324,9 @@
     },
     "usage": {
       "title": "App usage"
+    },
+    "secure": {
+      "title": "Lock and wipe"
     }
   },
   "remote": {
@@ -3518,5 +3525,33 @@
       "total": "Total",
       "top": "Most used"
     }
+  },
+  "secure": {
+    "action": {
+      "lock": "Locked",
+      "wipe": "Erased"
+    },
+    "column": {
+      "action": "Action",
+      "who": "Asked by",
+      "when": "When"
+    },
+    "intro": "Locking is undone by whoever holds the device, with their own PIN. Wiping is a factory reset and cannot be undone by anybody.",
+    "lock": "Lock the screen now",
+    "lock_sent": "Lock sent. It takes effect the next time the device is reachable.",
+    "wipe_heading": "Erase this device",
+    "wipe": "Erase this device",
+    "wipe_sent": "Wipe sent. The device answers once and then stops reporting for good.",
+    "wipe_warning": "This erases everything on the device and cannot be undone. There is no dry run. The device answers once and is then gone from this console for good.",
+    "confirm_label": "Type the machine's name to confirm",
+    "confirm_dialog": "Erase {machine}? This cannot be undone.",
+    "clear_protection": "Clear factory-reset protection",
+    "clear_protection_help": "The device can be set up again by anybody. This is usually right for company-owned hardware.",
+    "keep_protection_help": "The device cannot be set up again without the account that was signed in on it. This is theft protection, and it is a brick if that account was not yours.",
+    "wiped_on": "Wiped on {when} by {who}. It will not report again.",
+    "no_history": "Nothing has been locked or erased on this device.",
+    "count": "{count} action(s)",
+    "failed": "That was refused.",
+    "unreachable": "The hub could not be reached."
   }
 }

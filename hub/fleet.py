@@ -258,6 +258,27 @@ LOCATION_COMMANDS = frozenset({
     "locate_device",
 })
 
+# Locking a device's screen, and erasing it (roadmap #23 phase H).
+#
+# **Refused by /api/fleet/commands and not favoritable**, for the same reason `locate_device`
+# is and with more at stake: that endpoint's gate is ISSUE_COMMANDS, and accepting a
+# `wipe_device` through it would hand a factory reset to everyone holding a reboot button. See
+# permissions.WIPE_DEVICE and wipe_web.py, which is the only door.
+#
+# The two are deliberately different in weight. `lock_device` locks the screen now; the person
+# holding the phone unlocks it with their own PIN, and nothing is lost. `wipe_device` is a
+# factory reset -- no undo, no dry run, and no partial version of itself -- which is why its
+# route requires the machine's name typed out and writes an audit row before the command is
+# created rather than after.
+#
+# `wipe_device`'s one param is `reset_protection`: whether to clear factory-reset protection as
+# part of the erase. It is in the command rather than a hub setting because it is a decision
+# about ONE device and its answer differs per device -- see wipe.py.
+WIPE_COMMANDS = frozenset({
+    "lock_device",
+    "wipe_device",
+})
+
 # The remote file explorer (see files.py) -- browsing a machine's disk, moving files on it,
 # and moving bytes between it and the operator's browser.
 #
@@ -291,7 +312,7 @@ ALL_COMMANDS = frozenset({
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
-      | FILE_COMMANDS | LOCATION_COMMANDS)
+      | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS
@@ -355,6 +376,13 @@ COMMAND_PARAMS = {
     # No parameters at all. Empty tuples on purpose: "this command takes nothing" and "nobody
     # has described this command yet" are different facts, and only the first should render as
     # a command with no fields -- see command_param_schema.
+    # Policy/WipeDeviceExecutor.cs. Described here even though this command can never be
+    # chosen from a list -- rules._validate_action reads this table, and an entry that is
+    # ABSENT reads as "nobody has described this yet" rather than as "this is not yours to
+    # queue". The refusals that actually stop it are in _validate_favorite and in
+    # /api/fleet/commands; this is what stops a rule quietly inventing its own params.
+    "wipe_device": (_p("reset_protection", "bool", True),),
+    "lock_device": (),
     "gpupdate": (),
     "prepare_wake": (),
     "refresh_bios_inventory": (),
@@ -1786,6 +1814,14 @@ def _validate_favorite(name, command_type, params):
         raise ValueError(f"{command_type!r} is gated on the 'locate_device' capability and "
                          f"cannot be saved as a favorite; locate a device from its own page "
                          f"instead")
+    if command_type in WIPE_COMMANDS:
+        # The same argument as location, at the other end of the blast-radius scale. A favorite
+        # is a saved command replayed against whichever machine an operator picked next, and a
+        # saved factory reset is precisely the shape of accident this feature must not make
+        # possible. Wiping requires the machine's name typed out on its own page.
+        raise ValueError(f"{command_type!r} is gated on the 'wipe_device' capability and "
+                         f"cannot be saved as a favorite; lock or wipe a device from its own "
+                         f"page instead")
     if params is None:
         params = {}
     if not isinstance(params, dict):

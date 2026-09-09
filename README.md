@@ -1521,6 +1521,46 @@ blocklist; usage arrives on the heartbeat under a `usage` key.
 > **Status:** built -- hub 1.104.0 / Android agent source. **Not yet exercised on hardware** --
 > see the hardware-validation table in `ROADMAP.MD`.
 
+## Locking and wiping a device
+
+Securing a managed device that has been lost, in the **Lock and wipe** card on the machine page.
+
+**Two actions, deliberately unequal.** **Lock** locks the screen now and is undone by whoever
+holds the device with their own PIN -- it is the ordinary first move for a phone left in a taxi,
+and it is one click. **Wipe** is a factory reset. There is no undo, no dry run and no partial
+version of it, so it is behind a second button, a typed machine name and a confirmation dialog.
+All the friction is on the half that cannot be taken back; spreading it over both is how people
+learn to type past it.
+
+**The typed name is checked on the server.** The console asks for it as a courtesy; the control
+is in the hub, because a dialog stops an operator and does not stop a script. The comparison is
+exact and case-sensitive -- `PHONE-1` and `phone-12` are two devices.
+
+**Factory-reset protection is a per-device choice, and the console says which it is sending.**
+Clearing it means the wiped device can be set up again by anybody, which is right for
+company-owned hardware. Leaving it on means the device cannot be set up again without the
+account that was signed in on it -- theft protection if it was stolen, a brick if that account
+was not yours. The default is to clear it.
+
+**A wiped device never reports back**, so the hub records the *request* rather than waiting for
+a result. That row is the only thing that can tell an operator why a machine stopped reporting;
+without it a wiped phone and a flat battery look identical in the console.
+
+**Gating**: `wipe_device`, a capability of its own. Not `issue_commands` -- the argument that
+puts every other command under that gate ("less dangerous than the SYSTEM shell it already
+grants") is true of a reboot and false of an erase. Seeing that a device was locked or erased is
+`view` + machine scope. This page is the only door: a hand-rolled `wipe_device` through the
+generic command endpoint is refused, it cannot be saved as a favorite, and a rule may not issue
+one.
+
+**Endpoints**: `GET /api/wipe/machines/<machine>`,
+`POST /api/wipe/machines/<machine>/lock`, `POST /api/wipe/machines/<machine>/wipe`. Every write
+is audited at security level, before the command is created.
+
+> **Status:** built -- hub 1.105.0 / Android agent source. **Not yet exercised on hardware**, and
+> a wipe must be tested only on a scratch device -- see the hardware-validation table in
+> `ROADMAP.MD`.
+
 ## App inventory
 
 What a managed Android device says is installed, on the machine page under **Installed apps**.

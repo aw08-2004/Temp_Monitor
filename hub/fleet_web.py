@@ -696,6 +696,15 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             return jsonify({"error": "Devices are located from the machine's own page, which "
                                      "checks the 'locate_device' permission and notifies the "
                                      "device."}), 400
+        # The second capability refusal, and the one with no way back. This endpoint's gate is
+        # `issue_commands`; erasing a device needs `wipe_device`. Accepting a hand-rolled
+        # `wipe_device` here would hand a factory reset to everybody holding a reboot button,
+        # past the typed-name confirmation and the audit row that exist to make it deliberate.
+        # See wipe_web.py, which is the only door.
+        if data.get("type") in fleet.WIPE_COMMANDS:
+            return jsonify({"error": "Devices are locked and wiped from the machine's own "
+                                     "page, which checks the 'wipe_device' permission and "
+                                     "requires the machine's name to be typed."}), 400
         if data.get("type") in fleet.PROCESS_COMMANDS:
             return jsonify({"error": "Processes are ended and restarted from the machine's "
                                      "Processes card, not the command channel."}), 400

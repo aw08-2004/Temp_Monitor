@@ -48,6 +48,7 @@ import apps
 import capabilities
 import policy
 import usage
+import wipe
 import location
 import provisioning
 import rules
@@ -80,6 +81,7 @@ from location_web import create_location_blueprint
 from apps_web import create_apps_blueprint
 from policy_web import create_policy_blueprint
 from usage_web import create_usage_blueprint
+from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -122,7 +124,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.104.0"
+HUB_VERSION = "1.105.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2198,6 +2200,13 @@ app.register_blueprint(create_policy_blueprint(DB_PATH, login_required, access))
 # spends the most time on their phone". See usage.py and SECURITY.MD's personal-data inventory.
 app.register_blueprint(create_usage_blueprint(DB_PATH, login_required, access))
 
+# Remote lock and remote wipe (roadmap #23 phase H). `wipe_device`, a capability of its own,
+# because the argument that keeps every other command feature under `issue_commands` -- "less
+# dangerous than the SYSTEM shell it already grants" -- is true of a reboot and false of a
+# factory reset. This blueprint is the ONLY door: the generic command endpoint, the favorites
+# validator and the rules engine each refuse these two command types by name.
+app.register_blueprint(create_wipe_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -3105,6 +3114,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Usage history merges, and a collision keeps the LARGER figure: both rows describe one
     # device on one day, and usage is cumulative, so the bigger number was reported later.
     usage.rename_machine(DB_PATH, dropped, survivor)
+    # Lock and wipe history follows the survivor: it IS the merged-away device, and
+    # "this handset was wiped in March" is true of it under either name.
+    wipe.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -4156,6 +4168,7 @@ location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
 policy.init_policy_db(DB_PATH)
 usage.init_usage_db(DB_PATH)
+wipe.init_wipe_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -5049,6 +5062,12 @@ def delete_machine(machine):
     # erasing on deletion: this is a record of what a person did with their evenings, and it
     # has no argument at all for surviving the device.
     usage.forget_machine(DB_PATH, machine_name)
+    # And any lock or wipe that was asked of it (roadmap #23 phase H). Kept until now
+    # so the machine page could explain why the device stopped reporting; once the
+    # machine is deleted there is no page, and what remains is a row a reused hostname
+    # would inherit. The AUDIT TRAIL carries the same facts and is not pruned, so
+    # "who erased this device" still has an answer.
+    wipe.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

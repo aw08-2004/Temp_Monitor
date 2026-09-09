@@ -237,6 +237,55 @@
         <div class="table-scroll" id="usage-body"></div>
     </details>
 
+    {# Lock and wipe -- roadmap #23 phase H.
+
+       Closed by default and last on the page, which is the only placement that is not an
+       argument for pressing it. The two live in one card because the case they exist for is
+       one case -- a device is lost -- and an operator working through it should not have to
+       find the second half somewhere else.
+
+       Hidden entirely unless the device has REPORTED that it can lock. That is the opposite
+       of capabilities.py's absent-report rule, deliberately: that rule exists so the hub does
+       not REFUSE work a machine never described, and it is the safe default for refusing. A
+       button is the other decision, and a Wipe button on every Windows PC in the console
+       because none of them has said otherwise is not a default anybody wants. #}
+    <details class="card fold" data-fold-key="machine:overview:secure" id="card-secure" hidden>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.secure.title') }}</span>
+            <span class="stat-card__meta" id="secure-count"></span>
+        </summary>
+
+        <p class="stat-card__meta" style="margin: var(--space-3) 0;">{{ t('secure.intro') }}</p>
+
+        <div class="toolbar" style="margin-bottom: var(--space-4);">
+            <button class="btn" type="button" id="secure-lock">{{ t('secure.lock') }}</button>
+            <span class="stat-card__meta" id="secure-status"></span>
+        </div>
+
+        {# The wipe half is hidden behind a button rather than behind a <details>, and that is
+           the one place on this page where the difference matters. collapse.js remembers a
+           fold's open state per browser, so an operator who opened this once on one device
+           would find it already open on every machine page afterwards -- the form for the
+           only irreversible action in the console, waiting, on a page they came to for a
+           temperature chart. This one starts closed every time, on every device. #}
+        <button class="btn" type="button" id="secure-wipe-reveal">{{ t('secure.wipe_heading') }}</button>
+        <div class="card" id="secure-wipe-panel" hidden style="margin: var(--space-3) 0;">
+            <p class="banner banner--warn" style="margin: 0 0 var(--space-3);">{{ t('secure.wipe_warning') }}</p>
+            <label class="stat-card__meta" for="secure-confirm">{{ t('secure.confirm_label') }}</label>
+            <input class="input" id="secure-confirm" type="text" autocomplete="off"
+                   style="max-width: 320px; display: block; margin: var(--space-2) 0;">
+            <label class="stat-card__meta">
+                <input id="secure-frp" class="checkbox" type="checkbox" checked>
+                {{ t('secure.clear_protection') }}
+            </label>
+            <p class="stat-card__meta" id="secure-frp-help" style="margin: var(--space-2) 0;"></p>
+            <button class="btn btn--danger" type="button" id="secure-wipe" disabled>{{ t('secure.wipe') }}</button>
+            <span class="stat-card__meta" id="secure-error"></span>
+        </div>
+
+        <div class="table-scroll" id="secure-history"></div>
+    </details>
+
     {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
        Collapsed by default and only polled while open, exactly like the sensor browser
        below, and here the argument is stronger than "it is a lot of rows": the machine does
@@ -416,5 +465,6 @@
 <script src="{{ url_for('static', filename='js/machine-location.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

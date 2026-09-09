@@ -519,6 +519,10 @@
       "manage_device_policy": {
         "label": "Gestionar la política de dispositivos",
         "description": "Escribir la política de aplicaciones de los dispositivos gestionados: qué apps pueden ejecutarse y cuáles no, y en qué máquinas. Es una capacidad propia y no parte de «Gestionar los ajustes», porque una política no es un ajuste: es una instrucción permanente que cambia lo que hace el dispositivo de una persona, aplicada sin nadie presente. Para leer una política y su cumplimiento basta «Ver» y que la máquina esté en el ámbito."
+      },
+      "wipe_device": {
+        "label": "Bloquear y borrar un dispositivo",
+        "description": "Bloquear la pantalla de un dispositivo gestionado y borrarlo. Es un permiso propio y no parte de 'Emitir comandos': el argumento que mantiene a los demás comandos bajo ese permiso -- menos peligroso que el shell SYSTEM que ya concede -- vale para un reinicio y no para un restablecimiento de fábrica. Borrar exige además escribir el nombre de la máquina, queda registrado en la auditoría antes de enviar el comando, y no se puede guardar como favorito ni emitir desde una regla. Para ver que un dispositivo fue bloqueado o borrado basta con 'Ver' más la máquina en el ámbito."
       }
     }
   },
@@ -2207,6 +2211,9 @@
     },
     "usage": {
       "title": "Uso de apps"
+    },
+    "secure": {
+      "title": "Bloquear y borrar"
     }
   },
   "remote": {
@@ -3400,5 +3407,33 @@
       "total": "Total",
       "top": "Más usadas"
     }
+  },
+  "secure": {
+    "action": {
+      "lock": "Bloqueado",
+      "wipe": "Borrado"
+    },
+    "column": {
+      "action": "Acción",
+      "who": "Solicitado por",
+      "when": "Cuándo"
+    },
+    "intro": "El bloqueo lo deshace quien tenga el dispositivo con su propio PIN. El borrado es un restablecimiento de fábrica y no lo puede deshacer nadie.",
+    "lock": "Bloquear la pantalla ahora",
+    "lock_sent": "Bloqueo enviado. Se aplica en cuanto el dispositivo sea accesible.",
+    "wipe_heading": "Borrar este dispositivo",
+    "wipe": "Borrar este dispositivo",
+    "wipe_sent": "Borrado enviado. El dispositivo responde una vez y luego deja de informar para siempre.",
+    "wipe_warning": "Esto borra todo lo que hay en el dispositivo y no se puede deshacer. No hay simulacro. El dispositivo responde una vez y desaparece de esta consola para siempre.",
+    "confirm_label": "Escribe el nombre de la máquina para confirmar",
+    "confirm_dialog": "¿Borrar {machine}? Esto no se puede deshacer.",
+    "clear_protection": "Quitar la protección de restablecimiento",
+    "clear_protection_help": "Cualquiera podrá volver a configurar el dispositivo. Suele ser lo correcto para hardware de la empresa.",
+    "keep_protection_help": "El dispositivo no se podrá volver a configurar sin la cuenta que estaba iniciada en él. Es protección antirrobo, y un ladrillo si esa cuenta no era vuestra.",
+    "wiped_on": "Borrado el {when} por {who}. No volverá a informar.",
+    "no_history": "En este dispositivo no se ha bloqueado ni borrado nada.",
+    "count": "{count} acción(es)",
+    "failed": "Se ha rechazado.",
+    "unreachable": "No se ha podido contactar con el hub."
   }
 }
