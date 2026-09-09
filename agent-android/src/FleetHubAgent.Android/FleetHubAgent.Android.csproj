@@ -30,6 +30,29 @@
     <Version>0.1.0</Version>
   </PropertyGroup>
 
+  <!-- **Trim the whole app, not just its dependencies, in Release.** The default
+       (`sdkonly`) leaves every managed assembly the app references intact, and this app now
+       references BouncyCastle for one thing: Ed25519 signature verification over a
+       hundred-byte manifest. Untrimmed that library costs more than five megabytes of an
+       APK that is otherwise ten, and this APK is not just installed once: it is DOWNLOADED
+       BY EVERY MANAGED PHONE ON EVERY RELEASE, over whatever connection and whatever data
+       allowance that phone has. `full` is what makes the crypto dependency cost what it is
+       worth rather than what it weighs.
+
+       The risk `full` carries everywhere else is reflection: the linker cannot see a type
+       resolved by name and removes it, and the failure lands at runtime rather than at build
+       time. Two things make it acceptable here. The .NET Android SDK preserves the types the
+       platform resolves reflectively (activities, services, receivers) through its own
+       linker descriptors, and nothing in this app resolves a type by name itself. The only
+       reflective surface is System.Text.Json, which the source generator is not used for but
+       which the SDK's own trimming annotations cover.
+
+       If a release ever crashes on startup with a MissingMethodException from a type nobody
+       calls directly, this is the first thing to turn off. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <AndroidLinkMode>full</AndroidLinkMode>
+  </PropertyGroup>
+
   <!-- Release signing, when this machine has been given the keystore.
        agent-android/signing.props is gitignored and holds a password, so it is treated like
        .env: real on the machine that cuts releases, absent everywhere else. Absent, this

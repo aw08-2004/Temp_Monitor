@@ -62,14 +62,36 @@ public class AndroidResourceXmlTests
         while (reader.Read()) { }
     }
 
-    [Fact]
-    public void The_csproj_parses_too()
+    /// <summary>Both csproj files, not just the app's.
+    ///
+    /// Neither is caught by the theory above, which only looks for *.xml, and BOTH have
+    /// already been broken by the double-hyphen habit -- the Core one was among the first six.
+    /// Checking only the app's was a gap that reappeared the moment Core grew a comment of its
+    /// own, so this walks up to the parent and takes every project file under it.</summary>
+    public static TheoryData<string> ProjectFiles()
     {
-        // Not caught by the theory above, which only looks for *.xml -- and the csproj is one
-        // of the files the double-hyphen habit has already broken.
-        var csproj = Path.Combine(AndroidProject().FullName, "FleetHubAgent.Android.csproj");
-        Assert.True(File.Exists(csproj), csproj);
-        using var reader = XmlReader.Create(csproj);
+        var src = AndroidProject().Parent
+                  ?? throw new DirectoryNotFoundException("No src/ above the Android project");
+        var data = new TheoryData<string>();
+        foreach (var path in Directory.EnumerateFiles(src.FullName, "*.csproj",
+                                                      SearchOption.AllDirectories))
+        {
+            if (path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                || path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+                continue;
+            data.Add(Path.GetRelativePath(src.FullName, path));
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ProjectFiles))]
+    public void Every_csproj_parses_too(string relative)
+    {
+        var src = AndroidProject().Parent!;
+        var full = Path.Combine(src.FullName, relative);
+        Assert.True(File.Exists(full), full);
+        using var reader = XmlReader.Create(full);
         while (reader.Read()) { }
     }
 
