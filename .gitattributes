@@ -9,6 +9,19 @@ agent/agent.manifest.json.sig -text
 # fleet would refuse the update with no obvious cause.
 agent/agent.manifest.beta.json -text
 agent/agent.manifest.beta.json.sig -text
+# The Linux and Android agents' own manifests (roadmap #22). Each agent has its own release
+# train now, because the hub picks a manifest by the platform a machine reports rather than
+# reading every version as though it belonged to the Windows agent. Pinned here BEFORE the
+# first release of either, for the reason above: getting this wrong produces a fleet that
+# refuses every update and no error that says why.
+agent-linux/agent-linux.manifest.json -text
+agent-linux/agent-linux.manifest.json.sig -text
+agent-linux/agent-linux.manifest.beta.json -text
+agent-linux/agent-linux.manifest.beta.json.sig -text
+agent-android/agent-android.manifest.json -text
+agent-android/agent-android.manifest.json.sig -text
+agent-android/agent-android.manifest.beta.json -text
+agent-android/agent-android.manifest.beta.json.sig -text
 # The client download catalogue (roadmap #11), signed with the same key. It ships under
 # hub/ because the hub's self-updater mirrors that directory and nothing else.
 hub/client.manifest.json -text

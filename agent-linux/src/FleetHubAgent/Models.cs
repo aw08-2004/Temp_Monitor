@@ -15,6 +15,31 @@ namespace FleetHubAgent;
 // What keeps the two copies honest is the hub: these names are the hub's field names, and a
 // drift here shows up as a machine reporting nothing rather than as a silent disagreement.
 
+/// <summary>What a self-update is aiming at, and how many times it has tried.
+///
+/// **The count is the whole point.** systemd restarts this unit on any exit, so a build that
+/// stages, starts and immediately dies would otherwise be downloaded and run forever, ten
+/// seconds apart, on every machine that took the release. Persisted rather than held in memory
+/// because the process that would remember it is the one that keeps dying.</summary>
+public sealed class RestartState
+{
+    [JsonPropertyName("target")] public string Target { get; set; } = "";
+    [JsonPropertyName("count")] public int Count { get; set; }
+}
+
+/// <summary>The signed self-update manifest: which version, where, and what it hashes to.
+///
+/// Field names are the ones sign_release.py writes and the Windows agent already reads. The
+/// sha256 is the load-bearing field: it is covered by the signature, so it is what makes the
+/// download itself untrusted -- the binary can come from anywhere as long as it hashes to what
+/// the signed manifest said.</summary>
+public sealed class UpdateManifest
+{
+    [JsonPropertyName("version")] public string Version { get; set; } = "";
+    [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+    [JsonPropertyName("url")] public string Url { get; set; } = "";
+}
+
 /// <summary>Persisted enrollment identity (agent.json). The token is returned by the hub
 /// exactly once at enroll and cannot be recovered, so it must survive restarts.</summary>
 public sealed class AgentIdentity

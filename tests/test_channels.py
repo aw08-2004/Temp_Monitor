@@ -162,6 +162,43 @@ def main():
               channels.agent_manifest_url(channels.STABLE)
               != channels.agent_manifest_url(channels.BETA))
 
+        # ------------------------------------------------------------ per-platform trains
+        # Roadmap #22. Every agent reports into one `companion_version` field, so the platform
+        # is the only thing that says which train a number belongs to. A machine matched to the
+        # wrong manifest is offered another platform's binary, and nothing anywhere says so.
+        print("\n== One train per platform ==")
+        check("every platform has its own manifest",
+              len({channels.agent_manifest_url(channels.STABLE, p)
+                   for p in channels.AGENT_PLATFORMS}) == len(channels.AGENT_PLATFORMS))
+        check("...and its own beta manifest",
+              len({channels.agent_manifest_url(channels.BETA, p)
+                   for p in channels.AGENT_PLATFORMS}) == len(channels.AGENT_PLATFORMS))
+        check("the Windows name is unchanged, because agents in the field are baked to it",
+              channels.agent_manifest_filename(channels.STABLE, "windows")
+              == "agent.manifest.json")
+        check("each manifest sits beside its own agent",
+              channels.agent_manifest_url(channels.STABLE, "linux")
+              .endswith("/agent-linux/agent-linux.manifest.json")
+              and channels.agent_manifest_url(channels.STABLE, "android")
+              .endswith("/agent-android/agent-android.manifest.json"))
+        check("every platform's manifests are read from main too",
+              all("/main/" in channels.agent_manifest_url(c, p)
+                  for c in channels.CHANNELS for p in channels.AGENT_PLATFORMS))
+
+        # **Silence means Windows here, which is the opposite of capabilities.py's rule.**
+        # That rule reads an unreported machine as unknown so the hub never refuses work it was
+        # not told about. This one picks a manifest, and every agent in the field today reports
+        # no platform and is a Windows agent -- reading silence as unknown would stop
+        # advertising updates fleet-wide on the day it shipped.
+        for value in ("", None, "  ", "plan9", "WINDOWS"):
+            check(f"a platform of {value!r} normalises to windows",
+                  channels.normalize_platform(value) == "windows")
+        check("...and a real one is kept",
+              channels.normalize_platform("linux") == "linux")
+        check("the default argument is Windows, so old call sites are unchanged",
+              channels.agent_manifest_url(channels.STABLE)
+              == channels.agent_manifest_url(channels.STABLE, "windows"))
+
         # The HUB is the one that switches branch, because it has no manifest to switch.
         check("a stable hub tracks main", channels.hub_ref(channels.STABLE) == "main")
         check("a beta hub tracks beta", channels.hub_ref(channels.BETA) == "beta")

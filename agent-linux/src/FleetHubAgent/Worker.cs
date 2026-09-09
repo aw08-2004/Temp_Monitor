@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.Fleet;
 using FleetHubAgent.State;
+using FleetHubAgent.Update;
 using FleetHubAgent.Telemetry;
 
 namespace FleetHubAgent;
@@ -15,6 +16,7 @@ namespace FleetHubAgent;
 ///   * telemetry -- read the sensors and report them
 ///   * heartbeat -- liveness; the call that decides whether the machine reads online
 ///   * commands  -- poll, claim, and dispatch fleet commands
+///   * update    -- look for a newer signed build, and exit onto it
 ///
 /// **Why they are separate**, which is a lesson the Windows agent learned the hard way and
 /// this one inherits rather than repeats: in a serial loop the slowest step sets the latency
@@ -24,10 +26,10 @@ namespace FleetHubAgent;
 /// takes. Worse, the machine can read offline (the hub's 90-second window) because its own
 /// telemetry post is queued in front of its heartbeat.
 ///
-/// The Windows agent runs six loops; this one runs three. The missing three (inventory,
-/// processes, self-update) back features this agent does not have -- see AgentConfig.Version
-/// for why it deliberately sits below the console's version gates for them, and README.md for
-/// what is next.
+/// The Windows agent runs six loops; this one runs four. The missing two (inventory,
+/// processes) back features this agent does not have -- see AgentConfig.Version for why it
+/// deliberately sits below the console's version gates for them, and README.md for what is
+/// next.
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -37,6 +39,7 @@ public sealed class Worker : BackgroundService
     private readonly TelemetryReporter _reporter;
     private readonly FleetClient _fleet;
     private readonly CommandDispatcher _dispatcher;
+    private readonly SelfUpdater _updater;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -60,7 +63,8 @@ public sealed class Worker : BackgroundService
 
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
-        TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher)
+        TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
+        SelfUpdater updater)
     {
         _log = log;
         _state = state;
@@ -68,6 +72,7 @@ public sealed class Worker : BackgroundService
         _reporter = reporter;
         _fleet = fleet;
         _dispatcher = dispatcher;
+        _updater = updater;
         _enrollmentSecret = ReadEnrollmentSecret(log);
     }
 
@@ -78,6 +83,12 @@ public sealed class Worker : BackgroundService
         _log.LogInformation("FleetHub Linux agent v{Version} - machine: {Machine} - hub: {Hub}",
             AgentConfig.Version, AgentConfig.MachineName, AgentConfig.HubBase);
 
+        // Before any loop starts: did we just come back from an update? This only NOTICES.
+        // Retiring the previous binary waits until this build has reached the hub, because
+        // "the process started" and "the update worked" are different claims -- see
+        // SelfUpdater.ReconcileAfterBoot.
+        _updater.ReconcileAfterBoot();
+
         // Task.Run, not a bare call: each loop must get its own thread-pool context so a
         // synchronous stretch inside one (a hwmon walk across a dozen chips, a DriveInfo stat
         // against a hung NFS mount) runs on that loop's thread and nowhere near the others.
@@ -86,6 +97,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => TelemetryLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => HeartbeatLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait on
@@ -120,6 +132,11 @@ public sealed class Worker : BackgroundService
 
                     if (includeSensors) lastSensor = now;
                     if (includeUptime) lastUptime = now;
+                    // The other half of the update confirmation. /api/report needs no
+                    // enrollment, so this lands on a machine whose heartbeat cannot; the
+                    // heartbeat lands on one with no readable thermal zone. Whichever arrives
+                    // first retires the previous binary, and the second call is free.
+                    _updater.ConfirmRunningBuild();
                 }
                 else if (!_noTempLogged)
                 {
@@ -173,14 +190,63 @@ public sealed class Worker : BackgroundService
         {
             try
             {
-                if (await EnsureEnrolledAsync(ct))
-                    await _fleet.HeartbeatAsync(ct);
+                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct))
+                {
+                    // A heartbeat the hub accepted is proof this build can do its job, which
+                    // is what retires the previous binary after an update. The telemetry loop
+                    // says the same thing independently; either is enough, and neither is
+                    // sufficient on its own -- see SelfUpdater.ConfirmRunningBuild.
+                    _updater.ConfirmRunningBuild();
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Heartbeat tick failed"); }
 
             if (!await DelayAsync(AgentConfig.HeartbeatSeconds, ct)) break;
         }
+    }
+
+    // ------------------------------------------------------------------ self-update
+
+    /// <summary>Look for a newer signed build, and exit onto it if there is one.
+    ///
+    /// **Its own loop, on its own cadence.** Fifteen minutes, matching the Windows agent and
+    /// the hub's own watcher, so a release reaches every train in one well-known interval.
+    /// Folding it into the heartbeat would tie "check for an update" to a five-second tick and
+    /// make the manifest fetch part of the call that decides whether this machine reads online.
+    ///
+    /// The exit is the last thing that happens: systemd brings the unit back ten seconds later
+    /// (Restart=always) running whatever is now at ExecStart.</summary>
+    private async Task UpdateLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (await _updater.CheckAndApplyAsync(ct))
+                {
+                    Restart();
+                    return;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { _log.LogWarning(e, "Update check failed"); }
+
+            if (!await DelayAsync(AgentConfig.UpdateCheckIntervalSeconds, ct)) break;
+        }
+    }
+
+    /// <summary>Exit so systemd starts the binary the updater just put in place.
+    ///
+    /// Environment.Exit rather than stopping the host gracefully, matching the Windows agent:
+    /// a graceful stop runs every loop's shutdown path, and the one thing that must happen
+    /// here is that this process stops executing the OLD binary. The exit code is a marker in
+    /// the journal -- this unit restarts on any exit, so it buys no behaviour.</summary>
+    private void Restart()
+    {
+        _log.LogInformation("Exiting {Code} to restart onto the updated binary",
+            AgentConfig.RestartExitCode);
+        Environment.Exit(AgentConfig.RestartExitCode);
     }
 
     // ------------------------------------------------------------------ commands

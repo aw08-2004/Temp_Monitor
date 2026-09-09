@@ -31,6 +31,12 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
     <!-- Type=notify plus systemd's own lifecycle; the counterpart of AddWindowsService. -->
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.6" />
+    <!-- Ed25519, for verifying the signed update manifest. The same package and version the
+         Windows agent already depends on, deliberately: one offline key signs both manifests,
+         and a differently-implemented verification would mean an artifact one fleet accepts
+         and the other refuses. .NET 10 still has no Ed25519 in the base class library, so
+         there is nothing to drop this for yet. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <!-- Console only, unlike the Windows agent's rolling file sink. Windows has nowhere to put
          a service's stdout, so that agent had to grow its own log file and its own rotation;

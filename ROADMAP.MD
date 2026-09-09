@@ -2735,25 +2735,53 @@ command channel — and emits the sensor identifiers `extract_diagnostics` alrea
 (`/cpu/0`, `/ram`, `/volume/...`), so a Linux machine's overview page populates against today's
 hub.
 
-### The version number does the gating
+### The version number used to do the gating; the platform does now
 
-`AgentConfig.Version` is `0.1.0` and must stay below the hub's `AGENT_TRAIN_MIN_VERSION`
-(`3.0.0`). Three things follow, all of them wanted:
+`AgentConfig.Version` is `0.1.0`, and it was pinned below the hub's `AGENT_TRAIN_MIN_VERSION`
+(`3.0.0`) because every agent reports into one `companion_version` field and the hub read every
+value in it as though it belonged to the Windows agent. Three things keyed off that. Two are
+fixed:
 
-- `get_advertised_version()` returns nothing, so the hub never advertises the **Windows**
-  agent's signed manifest to a Linux box. That binary is `win-x64`; a Linux agent that took the
-  hint would download it and have nothing to do with it.
-- Every `MIN_*_AGENT` gate in `hub/static/js` reads `0.1.0` as too old, so the console does not
-  offer a Linux machine the terminal, process list or file browser it cannot answer. The
-  compatibility API those constants form does the right thing here for free.
-- `agents_outdated` skips sub-3.0 machines, so a Linux fleet is not permanently counted as
-  behind a release train it is not on.
+- `get_advertised_version()` would have advertised the **Windows** agent's signed manifest to a
+  Linux box — a `win-x64` binary a Linux agent that took the hint would download and have
+  nothing to do with. **The hub now picks a manifest by the platform a machine reports.** That
+  is what made a Linux release train possible at all.
+- `agents_outdated` counted every machine against the Windows manifest. **It now compares each
+  machine against its own train.**
+- Every `MIN_*_AGENT` gate in `hub/static/js` still reads `0.1.0` as too old, which is what
+  keeps the console from offering a Linux machine the terminal, process list or file browser it
+  cannot answer. **Unchanged, and it is the only reason the number is still 0.1.0.** Those gates
+  move onto the capability report when there is something to gate.
 
 Enforced by `VersionGateTests`, not just written down: "bring the version in line with the other
-components" is a plausible change that would break all three at once and silently.
+components" is a plausible change that would silently start offering features that do not exist.
 
 **Rejected:** starting at 3.35.0 to match the Windows agent. Every gate above would then pass
-on a lie.
+on a lie, and the machine would be measured against somebody else's release train.
+
+### Signed self-update
+
+Ported from the Windows agent, with three differences and no fourth. The restart is systemd's
+(`Restart=always`, so the exit code is a marker in the journal rather than a contract); the swap
+is the same rename-aside sequence, because Linux lets a running binary be renamed just as
+Windows does; and the staged file needs its mode set before it moves into place, since a
+downloaded file is `0600` and a `0600` binary at `ExecStart` is a service that cannot start on a
+machine that has just renamed away the one that worked.
+
+Everything else is deliberately identical, including the parts that look like caution: the
+manifest signature is verified fail-closed before anything is parsed, the download is verified
+against the **signed** sha256 and then re-verified from disk, and the previous binary survives
+boot and is deleted only once the new one has reached the hub. That last one is the Windows
+agent's hardest-won lesson — treating "the process started" as "the update succeeded" deletes
+the only artifact that could undo a build which starts but cannot reach the hub, on every
+machine at once.
+
+**The trust root is the fleet's offline key, not GitHub.** The same Ed25519 key signs this
+manifest, the Windows agent's and the client's, so the download itself is untrusted: the binary
+can come from anywhere as long as it hashes to the value inside a signed manifest. A compromised
+hub can move a machine between channels; it cannot point one at a binary of its choosing.
+
+`release.ps1` is a sibling of the Windows agent's, which answers the open parameter below.
 
 ### Rejected alternatives
 
@@ -2815,10 +2843,11 @@ reject it, and the telemetry loop stalls. Only that loop: heartbeat and commands
 so the machine stays online and answerable and merely stops reporting readings. The fix is to
 parse `/proc/mounts` and `statfs` only the survivors on a bounded thread.
 
-**Open parameter.** Whether the Linux agent eventually joins the 3.x version line (and with it
-the feature gates and the shared manifest machinery), or keeps a line of its own forever. It
-cannot join until it implements what those gates promise, so the question is not live yet —
-but the answer decides whether `release.sh` is a sibling of `release.ps1` or a fourth thing.
+**Answered (was an open parameter).** The Linux agent keeps a line of its own rather than
+joining the 3.x train. Joining would have meant one number that has to mean two things: a
+position on the Windows agent's feature timeline and a position on this agent's. The hub reads
+the platform instead, so both can be true at once and neither has to lie. `release.ps1` is a
+sibling of the Windows agent's, not a fourth thing.
 
 ---
 

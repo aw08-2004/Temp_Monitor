@@ -32,23 +32,29 @@ has a release train of its own. What keeps the duplicated wire shapes honest in 
 the hub: the field names are the hub's, so drift shows up as a machine reporting nothing rather
 than as a silent disagreement.
 
-## The version number is a safety mechanism
+## The version number, and why it is still 0.1.0
 
-`AgentConfig.Version` is `0.1.0`, and it must stay below `3.0.0`. The hub's
-`AGENT_TRAIN_MIN_VERSION` is what makes this work, and three separate things key off it:
+This agent has its own version line and its own release train. It did not always: every agent
+reports into the same `companion_version` field, and the hub used to read every value in it as
+though it belonged to the Windows agent. Three things keyed off that, and staying below
+`AGENT_TRAIN_MIN_VERSION` (`3.0.0`) opted out of all three at once.
 
-| Below 3.0.0 | What that buys |
+Two of the three are fixed (roadmap #22). The hub reads a machine's reported **platform** first
+now, so:
+
+| Was | Is |
 |---|---|
-| `get_advertised_version()` returns nothing | The hub never points this agent at the **Windows** agent's signed manifest — a `win-x64` binary it would have no idea what to do with |
-| Every `MIN_*_AGENT` gate in `hub/static/js` reads it as too old | The console does not offer a Linux machine a terminal, a process list or a file browser this agent cannot answer |
-| `agents_outdated` skips sub-3.0 machines | A Linux fleet does not read as permanently "behind" on a release train it is not on |
+| `get_advertised_version()` would have offered this agent the **Windows** manifest — a `win-x64` binary it has no idea what to do with | It picks a manifest by platform, so this agent is offered its own, and can therefore have a version at all |
+| `agents_outdated` counted every machine against the Windows manifest | Each machine is compared against its own train |
+| Every `MIN_*_AGENT` gate in `hub/static/js` reads `0.1.0` as too old | **Unchanged.** Those gates still read a version number, and this one is what keeps the console from offering a Linux box a terminal or a file browser this agent cannot answer |
 
-The compatibility API the Windows agent's MINOR feeds does the right thing here for free. This
-is enforced by `VersionGateTests`, not just documented — a well-meaning "bring the version in
-line with the other components" change would break all three at once, silently.
+So the number stays at `0.1.0` for the third reason only, and it moves when the console's gates
+read the capability report instead. `VersionGateTests` enforces the floor rather than merely
+documenting it — a well-meaning "bring the version in line with the other components" change
+would silently start offering features that do not exist.
 
-**No hub change was needed to support this agent.** That is the property the whole design rests
-on.
+**One hub change was needed, and it was the point.** Everything else about this agent still
+works against an unmodified hub.
 
 ## What it does
 
@@ -59,9 +65,11 @@ on.
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from `/etc/fleethub/agent.secret` (0600, permissions *checked*, not assumed) or the env var of the same name |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script` |
+| **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops measuring it against the Windows train and stops queueing work it can never perform. Derived from the dispatcher, not written out |
+| **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed before anything is written. systemd restarts the unit onto the new binary |
 
-Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's
-six exist: in a serial loop the slowest step sets the latency of every other one.
+Four concurrent loops — telemetry, heartbeat, commands, update — for the reason the Windows
+agent's six exist: in a serial loop the slowest step sets the latency of every other one.
 
 ## What it does not do
 
@@ -71,15 +79,11 @@ above). In rough order of what would be worth doing next:
 1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0) — the endpoint and the
    sequencing already exist on the hub; `onOutput` is threaded through the executors ready for
    it.
-2. **Signed self-update.** The Windows agent's Ed25519 manifest verification ports one-to-one,
-   but it needs its own manifest, its own channel and a `release.sh` that moves the two-file
-   version pair. Until that exists, an upgrade is `install/install.sh` run again. **Do not point
-   this agent at the Windows manifest.**
-3. **Patch inventory** (`apt`/`dnf` — roadmap #14's Linux half).
-4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
+2. **Patch inventory** (`apt`/`dnf` — roadmap #14's Linux half).
+3. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
    one.
-5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
-6. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
+4. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
+5. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
 Two things need a **hub** change and are recorded in `ROADMAP.MD` #22 rather than worked around
 here:
@@ -97,7 +101,8 @@ here:
 src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
   Worker.cs               the three loops
-  Fleet/                  hub client, dispatcher, executors
+  Fleet/                  hub client, dispatcher, executors, capability report
+  Update/                 the signed self-update: manifest verification and the swap
   Telemetry/              /proc and /sys readers, the report builder
   State/                  agent.json, and keeping it root-only
 tests/FleetHubAgent.Tests/  xunit; everything under test is pure
@@ -205,10 +210,23 @@ already carries 50+ releases and Windows agent releases are frequent while Linux
 rare, so the newest `linux-agent-v*` sinks down the list — past a page boundary it would be
 reported as "no published release" for a release that plainly exists.
 
-Unlike the Windows agent there is **no signed manifest and no self-update**, so this release is
-only ever read by `install.sh` over HTTPS — the trust root is GitHub plus TLS, not the fleet's
-Ed25519 key. That is the main reason not to widen this beyond a pilot machine yet; see
-*What it does not do* above.
+`release.ps1` does all of that in one command, and should be used rather than the steps above:
+
+```powershell
+.\release.ps1 -Version 0.2.0 -NotesFile .\release-notes\0.2.0.md
+```
+
+It bumps the two-file version pair, publishes, creates the release, signs
+`agent-linux.manifest.json` against the exact bytes and the exact asset URL, uploads the binary,
+commits the manifest and its signature, and pushes. **Nothing reaches a machine until the push
+lands**, because the agent reads the manifest from `main` — an unpushed manifest is a release
+that exists on GitHub, is signed, and updates nobody.
+
+The trust root for an UPDATE is the fleet's offline Ed25519 key, the same one that signs the
+Windows agent's manifest and the client's: the download itself is untrusted, and the binary can
+come from anywhere as long as it hashes to the value inside a signed manifest. The trust root
+for a first INSTALL is still GitHub plus TLS, because `install.sh` has no key to check against
+and nothing to check it with.
 
 ## Running as root
 
