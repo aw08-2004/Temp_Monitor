@@ -2327,6 +2327,10 @@
     },
     "secure": {
       "title": "Lock and wipe"
+    },
+    "tools": {
+      "hidden": "Some tools are hidden: this machine has reported that it cannot answer them.",
+      "hidden_android": "Some tools are hidden: this is an Android device, and there is no shell, no BIOS and no filesystem for them to work on."
     }
   },
   "remote": {

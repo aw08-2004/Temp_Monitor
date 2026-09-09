@@ -39,23 +39,33 @@
 
        No Remote link: remote view/control lives on the Remote page, which can hold several
        PCs side by side. A second entry point meant two viewers for the same machine. #}
-    <div class="toolbar" style="margin-bottom: var(--space-5);">
+    {# `data-needs-command` is roadmap #23 phase F.2: the machine's own capability report
+       decides whether a link is drawn at all. A machine that has reported NOTHING keeps every
+       link, which is every Windows PC in the field -- see machine-capabilities.js on why
+       silence has to mean yes here and no on the newer cards. The routes behind each tab
+       re-decide either way; this only stops an operator clicking Terminal on a phone to be
+       told there is no shell for an app to run a script in. #}
+    <div class="toolbar" style="margin-bottom: var(--space-5);" id="machine-tools">
         <span class="stat-card__meta">{{ t('machine.open.label') }}</span>
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=terminal&amp;machine={{ machine|urlencode }}">{{ t('machine.open.terminal') }}</a>
+        <a class="btn btn--ghost" data-needs-command="run_script" href="{{ url_for('tools_page') }}?tab=terminal&amp;machine={{ machine|urlencode }}">{{ t('machine.open.terminal') }}</a>
         {% if cap.MANAGE_BACKUPS in user_capabilities %}
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=backup&amp;machine={{ machine|urlencode }}">{{ t('machine.open.backup') }}</a>
+        <a class="btn btn--ghost" data-needs-command="backup_files" href="{{ url_for('tools_page') }}?tab=backup&amp;machine={{ machine|urlencode }}">{{ t('machine.open.backup') }}</a>
         {% endif %}
         {# Firmware and Network are NOT capability-gated, matching the Tools page and the
            tabs these replaced: what a PC's BIOS is set to, and whether it can be woken at
            all, is inventory in the sense its model and its disks are. #}
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
+        <a class="btn btn--ghost" data-needs-command="refresh_bios_inventory" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
+        <a class="btn btn--ghost" data-needs-command="prepare_wake" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
         {# Files IS gated, and it is the only one of these that is. A folder listing is not
            inventory the way a BIOS setting is -- those are the names of somebody's
            documents -- and every route behind that tab needs issue_commands. #}
         {% if cap.ISSUE_COMMANDS in user_capabilities %}
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=files&amp;machine={{ machine|urlencode }}">{{ t('machine.open.files') }}</a>
+        <a class="btn btn--ghost" data-needs-command="list_directory" href="{{ url_for('tools_page') }}?tab=files&amp;machine={{ machine|urlencode }}">{{ t('machine.open.files') }}</a>
         {% endif %}
+        {# Said rather than left as an absence. A row of buttons that is shorter than it was on
+           the last machine reads as a broken page; one sentence turns it into a fact about the
+           device. Only rendered when something was actually hidden. #}
+        <span class="stat-card__meta" id="machine-tools-note" hidden></span>
     </div>
 
     {# Every section on this page folds and remembers being folded (collapse.js). Native
@@ -298,7 +308,10 @@
        payload it cannot see. #}
     {# No `open`: this one stays closed on a browser that has never been told otherwise,
        because the machine does no process sampling at all until somebody opens it. #}
+    {# `data-needs-command` (roadmap #23 phase F.2): a device that has reported it cannot end a
+       process loses the card rather than polling for a list it will never be given. #}
     <details class="card sensor-browser process-card fold"
+             data-needs-command="kill_process"
              data-fold-key="machine:overview:processes" id="process-browser">
         <summary class="sensor-browser__summary">
             <span class="section-title" style="margin-bottom: 0;">{{ t('machine.processes.title') }}</span>
@@ -456,6 +469,9 @@
    The terminal, backup, firmware, network and favorites scripts left with their panels; see
    tools.html. xterm is no longer loaded here either, which is most of this page's weight. #}
 <script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
+{# Before every module that asks what this machine can do: it holds the one request they
+   share, so three cards asking the same question cost one answer. #}
+<script src="{{ url_for('static', filename='js/machine-capabilities.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/processes.js') }}"></script>
 {# Before collapse.js, like every other module that hangs off a fold's `toggle`: collapse.js
@@ -466,5 +482,6 @@
 <script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-tools-gate.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

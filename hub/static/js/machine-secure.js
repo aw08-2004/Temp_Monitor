@@ -20,7 +20,7 @@
     'use strict';
 
     const fold = document.getElementById('card-secure');
-    if (!fold || !window.MachineContext) return;
+    if (!fold || !window.MachineContext || !window.MachineCapabilities) return;
 
     const machine = window.MachineContext.current();
     if (!machine) return;
@@ -166,19 +166,11 @@
     }
 
     async function load() {
-        // Whether this device can lock at all, from its own capability report. A machine that
-        // has reported nothing is left without the card -- see machine.html.
-        let supported = [];
-        try {
-            const response = await fetch(`/api/machines/${encodeURIComponent(machine)}`);
-            if (response.ok) {
-                const detail = await response.json();
-                supported = (detail && detail.supported_commands) || [];
-            }
-        } catch (e) {
-            return;
-        }
-        if (!supported.includes('lock_device')) return;
+        // Whether this device can lock at all, from its own capability report. `claims`, not
+        // `can`: a machine that has reported nothing is left without the card entirely -- see
+        // machine-capabilities.js on why this one asks the question the other way round.
+        await window.MachineCapabilities.ready();
+        if (!window.MachineCapabilities.claims('lock_device')) return;
 
         let response;
         try {

@@ -1418,8 +1418,17 @@ would be a way to tell the hub that a phone can run a script.
 change-only, so a hub restored from a backup re-learns the fleet without anybody reinstalling
 an agent. Machine pages carry `platform`, `features` and `supported_commands` already.
 
-> **Status:** built — hub 1.98.0. Only the Android agent reports capabilities today; the
-> Windows and Linux agents send nothing and are treated as unknown by design.
+**What the console does with it.** A machine page hides the tools its machine has said it cannot
+answer -- Terminal, Backup, Firmware, Network, Files and the Processes card -- and says in one
+sentence that it did, because a toolbar that is shorter than it was on the last machine reads as
+a page that failed to load. Two questions, answering silence differently on purpose: an action
+the console has always offered stays offered by a machine that has reported nothing, while a
+new one (locking, wiping) waits for an explicit claim. It is a courtesy either way; every route
+re-decides.
+
+> **Status:** built — hub 1.106.0. Only the Android agent reports capabilities today; the
+> Windows and Linux agents send nothing and are treated as unknown by design, which means
+> nothing on their pages changes.
 
 ## Blocking apps
 

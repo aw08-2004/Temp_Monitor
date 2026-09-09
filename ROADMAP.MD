@@ -3601,6 +3601,42 @@ phase has been run against a real device, and a wipe must be tested only on a sc
 
 ---
 
+## ✅ Console gating · hub 1.106.0 · `machine-capabilities.js`
+
+Phase F.2 of #23, and the half of F.1 that had nothing to hide until D, E and H existed.
+
+F.1 made the hub stop *queueing* work a device cannot do. This makes the console stop *offering*
+it. The Terminal, Backup, Firmware, Network and Files links and the Processes card had always
+been drawn for every machine, because until capability reporting there was nothing to draw them
+from: an agent's VERSION can say "too old for this yet", which is a sentence about time, and
+cannot say "this device will never have a shell", which is a fact about the platform. On a phone
+all six were the second kind, and clicking one produced a correct and useless refusal from the
+agent's own dispatcher.
+
+**Two questions, and the difference between them is the whole module.** `can(type)` asks whether
+a machine may still be offered something the console has always offered -- silence means YES,
+because every Windows agent in the field reports nothing and hiding Restart from all of them
+would be a regression dressed as a feature. `claims(type)` asks whether a machine has explicitly
+said it can do something NEW -- silence means NO, because a Wipe button on every Windows PC
+because none of them has said otherwise is not a default anybody wants. The rule of thumb is
+written down where the next person will need it: `can` for an action that predates capability
+reporting, `claims` for one that does not.
+
+**It is a courtesy, never a control.** Every route re-decides, and `create_command` refuses a
+disclaimed command type whatever the console drew.
+
+**And it says so rather than just shortening the row.** A toolbar with three buttons where the
+last machine had six reads as a page that failed to load; one sentence naming the platform turns
+it into a fact about the device.
+
+`tests/test_machine_gating.py` pins the joins, because all three ways this can break are silent:
+a `data-needs-command` naming a command type that does not exist hides nothing forever; a module
+whose script tag comes before the shared report's finds no global and leaves its card absent,
+which on a Windows PC looks exactly like correct behaviour; and swapping `can` for `claims` is
+one word that either hides the Terminal button fleet-wide or shows a Wipe button fleet-wide.
+
+---
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
@@ -3610,6 +3646,7 @@ This is that list, so nothing is quietly skipped:
 | Phase | What has to be seen on a device |
 |---|---|
 | **F.1** | The phone's heartbeat carries a `capabilities` block; the machine page shows `platform: android`; a fleet-wide `backup_files` is **not** queued at it |
+| **F.2** | On the phone's page the Terminal, Backup, Firmware, Network and Files links and the Processes card are gone, with the sentence saying why. On a Windows PC every one of them is still there |
 | **A** | *Only on a scratch device.* Factory reset, provision by QR, confirm `isDeviceOwnerApp()`, and that the agent survives a force-stop attempt. **The pilot phone carries personal data and must not be used** |
 | **B** | Locate returns a fix inside 60 s; the notification naming the operator appears on the phone; an `audit_log` row records it; the foreground-service promotion is accepted (API 34 throws if it is not); a locate with location switched off comes back `unavailable` with a readable reason, not a failure |
 | **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |

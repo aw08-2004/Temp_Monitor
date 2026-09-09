@@ -18,7 +18,7 @@
     'use strict';
 
     const fold = document.getElementById('card-usage');
-    if (!fold || !window.MachineContext) return;
+    if (!fold || !window.MachineContext || !window.MachineCapabilities) return;
 
     const machine = window.MachineContext.current();
     if (!machine) return;
@@ -28,7 +28,6 @@
     const statusEl = document.getElementById('usage-status');
 
     let ledger = null;
-    let loaded = false;
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -115,27 +114,15 @@
 
     /** The line above the tables: how long this is kept, and -- when it applies -- that the
      *  device has not been allowed to measure it. */
-    function status(features) {
+    function status() {
         const lines = [t('usage.retention', { days: ledger.retention_days })];
         // Only said on a device that claims the schedule feature at all. On a Windows PC the
         // sentence would be true and meaningless.
-        if (features.includes('time_policy') && !features.includes('usage_access')) {
+        if (window.MachineCapabilities.hasFeature('time_policy')
+            && !window.MachineCapabilities.hasFeature('usage_access')) {
             lines.push(t('usage.no_access'));
         }
         statusEl.textContent = lines.join(' ');
-    }
-
-    async function features() {
-        // A capability report is per machine and already on the machine detail endpoint, so
-        // this is a read of something the page has rather than a new question.
-        try {
-            const response = await fetch(`/api/machines/${encodeURIComponent(machine)}`);
-            if (!response.ok) return [];
-            const data = await response.json();
-            return (data && data.features) || [];
-        } catch (e) {
-            return [];
-        }
     }
 
     async function load() {
@@ -149,18 +136,18 @@
             fold.hidden = true;      // out of scope, which for this operator is "no such card"
             return;
         }
-        loaded = true;
         ledger = await response.json();
 
-        const reported = await features();
+        await window.MachineCapabilities.ready();
         // Shown when the device has ever reported usage, OR when it is a device that would if
         // it could. The second case is the whole reason the fold can be empty: an operator has
         // to be able to see that a budget on this phone will never fire.
-        const relevant = ledger.reported_at !== null || reported.includes('time_policy');
+        const relevant = ledger.reported_at !== null
+            || window.MachineCapabilities.hasFeature('time_policy');
         fold.hidden = !relevant;
         if (fold.hidden) return;
 
-        status(reported);
+        status();
         draw();
     }
 

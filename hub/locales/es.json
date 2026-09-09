@@ -2214,6 +2214,10 @@
     },
     "secure": {
       "title": "Bloquear y borrar"
+    },
+    "tools": {
+      "hidden": "Algunas herramientas están ocultas: esta máquina ha informado de que no puede responderlas.",
+      "hidden_android": "Algunas herramientas están ocultas: es un dispositivo Android, y no hay shell, ni BIOS, ni sistema de archivos sobre el que actúen."
     }
   },
   "remote": {

@@ -2214,6 +2214,10 @@
     },
     "secure": {
       "title": "Sperren und löschen"
+    },
+    "tools": {
+      "hidden": "Einige Werkzeuge sind ausgeblendet: Dieser Rechner hat gemeldet, dass er sie nicht beantworten kann.",
+      "hidden_android": "Einige Werkzeuge sind ausgeblendet: Das ist ein Android-Gerät, und es gibt dafür weder eine Shell noch ein BIOS noch ein Dateisystem."
     }
   },
   "remote": {
