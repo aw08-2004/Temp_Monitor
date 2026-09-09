@@ -56,9 +56,45 @@
     </div>
 </div>
 
-{# The converter. A route for two lines of arithmetic, because pasting apksigner's hex digest
-   into the checksum field produces a string that looks right, saves without complaint, and
-   fails on a device that has already been wiped. See provisioning.py. #}
+{# The hosted APK. Above the converter and below the code, because it is the one thing on this
+   page an operator has to DO before the code above can exist -- and the code above is what
+   they came for.
+
+   Structure only; provisioning.js renders one of the two panes from /api/provisioning/apk. #}
+<div class="card" style="margin-bottom: var(--space-5);">
+    <h2 class="section-title" style="font-size: var(--text-md);">{{ t('provisioning.apk.heading') }}</h2>
+    <p class="stat-card__meta">{{ t('provisioning.apk.intro') }}</p>
+
+    <p class="stat-card__meta" id="apk-loading">{{ t('provisioning.apk.loading') }}</p>
+
+    {# Nothing hosted yet. Not an error -- it is the state every hub starts in, and the code
+       above says so in its own words. #}
+    <div id="apk-empty" hidden style="margin-top: var(--space-3);">
+        <p class="stat-card__meta">{{ t('provisioning.apk.none') }}</p>
+    </div>
+
+    <div id="apk-hosted" hidden style="margin-top: var(--space-3);">
+        <div class="table-scroll"><div id="apk-detail"></div></div>
+        <p class="stat-card__meta" style="margin-top: var(--space-3);">{{ t('provisioning.apk.url_note') }}</p>
+    </div>
+
+    <div class="toolbar" style="margin-top: var(--space-4); align-items: flex-end; gap: var(--space-3);">
+        <div>
+            <label class="stat-card__meta" for="apk-file">{{ t('provisioning.apk.choose') }}</label>
+            <input class="input" type="file" id="apk-file" accept=".apk"
+                   style="display: block; margin-top: var(--space-2);">
+        </div>
+        <button class="btn btn--primary" type="button" id="apk-upload">{{ t('provisioning.apk.upload') }}</button>
+        <button class="btn btn--danger" type="button" id="apk-remove" hidden>{{ t('provisioning.apk.remove') }}</button>
+        <span class="stat-card__meta" id="apk-status"></span>
+    </div>
+</div>
+
+{# The converter, which is now a CROSS-CHECK rather than an input. The hub derives the checksum
+   from the uploaded APK, so nobody types one -- but that derivation is code, and it is only
+   discovered to be wrong on a device that has already been wiped. Pasting what apksigner prints
+   and watching it match the card above costs nothing and is the only independent check
+   available. See provisioning.py. #}
 <div class="card" style="margin-bottom: var(--space-5);">
     <h2 class="section-title" style="font-size: var(--text-md);">{{ t('provisioning.checksum.heading') }}</h2>
     <p class="stat-card__meta">{{ t('provisioning.checksum.help') }}</p>

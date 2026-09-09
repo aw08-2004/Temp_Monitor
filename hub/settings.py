@@ -462,24 +462,27 @@ REGISTRY = (
     _s("wake.auto_wake_targets", "wake", "bool", False),
 
     # ------------- Provisioning: the Android device-owner QR (roadmap #23) -------------
-    # Two facts the hub cannot work out for itself, and one behaviour knob. Together they
-    # become a QR code that a technician scans at a factory-reset device's setup wizard --
-    # see provisioning.py, which refuses to build a partial one, because a payload missing a
-    # field still SCANS and then fails minutes later on a device that has already been wiped.
+    # One size cap and one behaviour knob. Everything else the QR needs is DERIVED -- see
+    # apkhost.py: the APK is uploaded on the provisioning page, the hub reads the signing
+    # certificate out of it, and the download URL is this hub's own.
     #
-    # `apk_url` is where the setup wizard downloads the agent from, over whatever network the
-    # device has been put on, before it has any configuration of its own. `signature_checksum`
-    # is what makes that download safe: the wizard refuses an APK whose signing certificate
-    # does not match. It is FLEET STATE in the same sense the Android keystore is -- the same
-    # key that decides what every device reports as its serial number -- so it changes only
-    # when the signing key does, and a fleet with two of them is a fleet with two identities.
+    # There used to be two more here, `apk_url` and `signature_checksum`, typed in by hand.
+    # They are gone rather than kept as a fallback, and the removal is the point of that
+    # change: producing the checksum meant running apksigner and converting a hex digest, and
+    # getting it wrong produced 43 plausible characters, a code that scanned, and a device that
+    # failed provisioning after a factory reset. A field nobody has to fill in cannot be filled
+    # in wrongly.
     #
     # Deliberately NOT settings: the admin component name, which is a constant on both sides
     # (a setting could drift from the APK, and the drift is only discovered on a device that
     # has already been reset), and any Wi-Fi credential -- see provisioning.py for why a PSK
     # has no honest home here.
-    _s("provisioning.apk_url", "provisioning", "str", ""),
-    _s("provisioning.signature_checksum", "provisioning", "str", ""),
+    #
+    # Its own cap rather than a reuse of `deploy.max_upload_mb`: that one is rendered under
+    # Deploy and belongs to Windows installers, and an operator lowering it for those would
+    # silently start refusing agent APKs on a page they were not looking at.
+    _s("provisioning.max_apk_mb", "provisioning", "int", 64, minimum=1, maximum=256,
+       unit="mb"),
     # False turns the device into a kiosk: provisioning DISABLES every system app the device
     # owner has not explicitly enabled, which on a phone somebody carries means no camera, no
     # dialer and no settings. Correct for a single-purpose device and wrong for every other

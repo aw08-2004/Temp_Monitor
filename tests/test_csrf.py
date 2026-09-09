@@ -151,10 +151,11 @@ def test_uploads_are_exempt_but_narrowly():
     The set is pinned literally, and that is the point of this test: multipart is the one
     state-changing shape a cross-site HTML form can still produce, so every name added here
     is a route that stays reachable from any page on the internet with an operator's cookie
-    attached. Each one is only safe because it is INERT -- it stores bytes and returns an id,
-    creating no package, no payload record, no deployment and no command -- and the JSON call
-    that gives those bytes meaning is covered by the rule. A name appearing here without that
-    property is the bug this assertion exists to catch."""
+    attached. Three of the four are safe because they are INERT -- they store bytes and return
+    an id, creating no package, no payload record, no deployment and no command -- and the JSON
+    call that gives those bytes meaning is covered by the rule. A name appearing here without
+    that property is the bug this assertion exists to catch, and the fourth is the one that
+    does not have it, which is precisely why this assertion is written by hand."""
     print("\n-- the upload exemption is by endpoint name, not by content type --")
     check("exactly the known uploads are exempt",
           app.CSRF_UPLOAD_ENDPOINTS
@@ -162,7 +163,14 @@ def test_uploads_are_exempt_but_narrowly():
               # The file explorer's upload. Inert in the same way: it spools the file and
               # answers with a transfer id, and POST .../files/push -- which takes JSON --
               # is what aims it at a folder and tells the machine to collect it.
-              "files.upload_file_to_spool"})
+              "files.upload_file_to_spool",
+              # The provisioning APK, and it is NOT inert: it changes what the next device to
+              # be provisioned installs as its device owner. It is here on a different
+              # argument, spelled out beside the set in app.py -- a forged request needs a
+              # logged-in operator holding `manage_settings` AND a validly signed APK whose
+              # signing block parses, and the result is visible on the provisioning page,
+              # which shows the hosted file, its digest and its checksum.
+              "provisioning.upload_provisioning_apk"})
     # All are real, registered endpoints -- a typo here would silently un-exempt an
     # upload, which fails loudly, but a rename would silently exempt nothing at all.
     registered = set(app.app.view_functions)

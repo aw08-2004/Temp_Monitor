@@ -3150,8 +3150,66 @@ first and returns "this device is not fully managed" rather than throwing. Witho
 sideloaded build answers a lock or a suspend with a SecurityException that an executor turns
 into "executor error: …", which reads in the console exactly like broken hardware.
 
+### The hub hosts the APK · hub 1.107.0 · `apkhost.py`
+
+Added after the phase was built, and it removes the three manual steps that stood in front of
+it. The APK used to be hosted by the operator somewhere else, and two fields were typed in:
+a URL, and a signature checksum produced by running `apksigner verify --print-certs` and
+converting the hex digest it printed. That middle step is the one that produces a wiped device:
+a wrong checksum is 43 characters of valid base64url, it saves without complaint, the code
+scans, and the wizard rejects the download minutes later. **A field nobody has to fill in cannot
+be filled in wrongly**, so the two settings are gone rather than kept as a fallback.
+
+**The checksum is read out of the APK's own signing block**, in about eighty lines of `struct`
+unpacking with no ASN.1 parsing and no new dependency. The certificate is stored as a
+length-prefixed DER blob and the checksum is a hash of exactly those bytes, so the parser walks
+lengths and never decodes a certificate. What it refuses rather than guesses about: an APK with
+no signing block (v1-only or unsigned), one with two signers, and one whose v2 and v3 blocks
+name different certificates. Each of those would otherwise produce a plausible checksum.
+
+**The v3 trap is worth writing down.** A v3 block's signed data continues past the certificate
+list with a bare `minSdkVersion` and `maxSdkVersion` — plain uint32 values, not length-prefixed
+elements. A reader that keeps walking treats `maxSdkVersion` (0x7FFFFFFF) as the next element's
+length; an unchecked one slices past the end of the buffer, gets whatever is left and carries
+on. It has its own test, because it is the shape that reads correctly right up until it does
+not.
+
+**The download URL carries a random token and the route has no gate**, which it cannot: the
+setup wizard has no session, no agent token and nothing to enrol with, because it is downloading
+the app that would later enrol it. The token is looked up rather than joined to a path, so the
+route can only ever serve the one digest recorded as hosted. It is anti-enumeration and a
+revocation handle rather than a boundary, and `SECURITY.MD` says so — the file is a signed
+release binary with no fleet data in it.
+
+**One row, enforced by `CHECK (id = 1)`.** A fleet has one agent APK for the same reason it has
+one signing key. Uploading replaces, and mints a new token, so codes printed from the previous
+APK stop resolving rather than pointing at a file that is gone.
+
 ### Rejected alternatives
 
+- **A content-addressed download path** (`/provisioning/apk/<sha256>.apk`) instead of a token.
+  Simpler, and wrong twice: the digest is not a secret, since anyone holding the APK can compute
+  it, and the URL cannot be rotated — re-uploading identical bytes reproduces the same path, so
+  there would be no way to kill a code somebody photographed.
+- **`PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_COOKIE_HEADER`**, which would let the download be
+  gated behind a real header. It adds bytes to a payload that already lands near QR version 18,
+  and a header the wizard sends wrongly is undiagnosable on a device that has already been
+  wiped — whereas a token in a URL can be tested with `curl` before anybody resets anything.
+  Named here as the upgrade path if the trade changes.
+- **A `provisioning.serve_apk` toggle** beside Remove. It would create a state where a record
+  exists, the console says an APK is hosted, and the QR points at a route that answers nothing.
+  Remove is the off switch.
+- **A version history or rollback list.** Two hosted APKs is a fleet with two identities, and the
+  only thing that could then choose between them is whichever row a query sorted first.
+- **Extracting the package and version name from the APK** for a caption. That needs a
+  binary-AXML parser for `AndroidManifest.xml`, which is a real parser for a label.
+- **Sharing `packages.blob_root`**, which would have been free. `packages.delete_blob_if_orphaned`
+  decides orphanhood from `package_sources` alone, so an APK in that tree is a file no packages
+  row points at — nothing sweeps today, and the day something does it would be a fleet-wide
+  deletion of the file every new device downloads.
+- **Reusing `deploy.max_upload_mb`** as the size cap. It is rendered under Deploy and belongs to
+  Windows installers; an operator lowering it for those would silently start refusing agent APKs
+  on a page they were not looking at.
 - **Wi-Fi credentials in the QR**, which the phase plan called for. There is no secret-typed
   setting, `settings` is rendered into a form and partly shipped to agents, and the only secret
   store is the master-key-wrapped file the BIOS password uses. A QR shown on a console screen —
@@ -3166,7 +3224,7 @@ into "executor error: …", which reads in the console exactly like broken hardw
   downgrade with no upside, and a hub that allowed it would allow it forever.
 - **`qrious` for the encoder** (GPL-3.0; nothing else here is copyleft), and the encoder's own
   `createSvgTag`/`createImgTag` helpers — `provisioning.js` paints a canvas from `isDark()`
-  instead, which keeps `innerHTML` away from a payload containing an operator-supplied URL.
+  instead, which keeps `innerHTML` off a page that renders an operator-supplied file name.
 
 ### Not done
 

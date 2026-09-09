@@ -1674,8 +1674,8 @@ background with their coordinates and says so, rather than showing grey squares.
 ## Android device provisioning
 
 Enrolling an Android device as a **fully managed device** (device owner), so the agent can be
-located, locked and policed rather than merely installed. Settings → Provisioning holds the two
-fields; the **Device provisioning** page draws the QR.
+located, locked and policed rather than merely installed. The **Device provisioning** page is
+the whole of it: upload the signed APK, scan the code.
 
 **A device owner is taken once, at a factory-reset device's setup wizard, and never again.** It
 cannot be granted after an account exists on the device, there is no API to add it later, and
@@ -1687,15 +1687,22 @@ So the hub **refuses to build a partial payload**. A payload missing a field sti
 still scans, and still fails several minutes later on a device you cannot get back. An
 unconfigured hub answers the page with what is missing and how to produce it.
 
-**What you need**, once per fleet:
+**What you need**, once per fleet: the signed APK. Upload it on that page and the hub does the
+rest.
 
-- **Agent APK URL** — where a factory-reset device downloads the agent from during setup. Must
-  be `https` and reachable from wherever devices are provisioned.
-- **APK signature checksum** — the signing certificate's SHA-256 as URL-safe base64.
-  `apksigner verify --print-certs <apk>` prints it in **hex**; the page has a converter, because
-  pasting the hex produces a 64-character string in the right alphabet that saves without
-  complaint and fails on a wiped device. This is fleet state in the same sense the Android
-  keystore is — it changes only when the signing key does.
+- **The hub hosts the file.** A factory-reset device downloads it from this hub's own address,
+  over whatever network it has been put on, at a URL carrying a random token. That download
+  needs no sign-in and cannot — the device has nothing to sign in with, because it is
+  downloading the app that would later enrol it.
+- **The hub derives the checksum**, by reading the signing certificate out of the APK itself.
+  This used to be typed in, converted by hand from what `apksigner verify --print-certs` prints,
+  and it was the single most likely thing to get wrong: the hex form is 64 characters in the
+  right alphabet, so it saves without complaint and fails on a device that has already been
+  wiped. The converter is still on the page, now as a cross-check — paste what apksigner prints
+  and confirm it matches what the hub derived.
+- **Uploading again, or removing the APK, mints a new token**, so codes printed from the
+  previous one stop working rather than pointing at a file that is gone. That is also how you
+  kill a code somebody photographed off a bench.
 
 **One scan does everything.** The code carries the hub URL and the fleet's enrollment secret in
 the provisioning extras bundle, so a device comes up managed, pointed at this hub, and enrolled.
@@ -1709,18 +1716,23 @@ the hub has nowhere honest to keep a PSK (settings are rendered into a form and 
 to agents), and a QR displayed on a screen or taped to a bench should not be a network
 credential. The setup wizard asks for Wi-Fi itself.
 
-**Gating**: `manage_settings` throughout — page, payload and converter. Not `issue_commands`,
-which is the capability somebody reaches for by reflex: this endpoint hands out a credential,
-so it belongs with the capability that can already read the rest of the hub's configuration.
-There is no write surface; the two fields are edited through Settings like everything else.
+**Gating**: `manage_settings` throughout — page, payload, upload and converter. Not
+`issue_commands`, which is the capability somebody reaches for by reflex: this page hands out a
+credential and decides what a device installs as its owner, so it belongs with the capability
+that can already read and write the rest of the hub's configuration. The APK download is the one
+exception, and the one route in this product with no gate at all. What the file contains is a
+signed release binary and nothing else: no fleet data, no hub address, no credentials. See
+`SECURITY.MD`.
 
 **Endpoints**: `GET /provisioning` (the page), `GET /api/provisioning/qr`,
-`POST /api/provisioning/checksum`.
+`GET|POST|DELETE /api/provisioning/apk`, `POST /api/provisioning/checksum`, and the
+unauthenticated `GET /provisioning/apk/<token>/fleethub-agent.apk`.
 
-> **Status:** built — hub 1.99.0 / Android agent source. **Not yet validated on hardware**: the
-> only Android device available carries personal data, and provisioning it would erase that.
-> The agent's three provisioning components are verified present in the built manifest with the
-> right actions, permission and metadata; the flow itself has not been run.
+> **Status:** built — hub 1.107.0 / Android agent source. **Not yet validated on hardware**, and
+> the flow itself has not been run. The agent's three provisioning components are verified
+> present in the built manifest with the right actions, permission and metadata, and the
+> checksum the hub derives from the real signed APK has been confirmed byte-for-byte against
+> what `apksigner verify --print-certs` prints for it.
 
 ## Signing releases
 

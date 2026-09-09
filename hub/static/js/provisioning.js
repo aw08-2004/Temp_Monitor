@@ -12,9 +12,11 @@
 //      string, and no way to tell them apart afterwards.
 //   2. **Nothing is drawn from a half-configured payload.** A 409 renders the reason and no
 //      code at all. A greyed-out or placeholder QR still scans.
-//   3. **No innerHTML anywhere near the payload.** It contains an operator-supplied URL, and
-//      the encoder's own createSvgTag/createImgTag helpers are not used for that reason --
-//      isDark() plus a canvas is fifteen lines and takes no markup at all.
+//   3. **No innerHTML anywhere on this page.** The payload used to carry an operator-supplied
+//      URL; it now carries this hub's own, and what is operator-supplied instead is the
+//      uploaded file's NAME, which the card below renders. The encoder's own
+//      createSvgTag/createImgTag helpers are not used for the same reason -- isDark() plus a
+//      canvas is fifteen lines and takes no markup at all.
 (function () {
     'use strict';
 
@@ -65,17 +67,19 @@
         // A 4-module quiet zone is required by the specification, not decoration: without it
         // many scanners cannot find the code's edges at all.
         const quiet = 4;
-        // Sized so the whole thing lands near 420px on a normal display, then rounded DOWN to
+        // Sized so the whole thing lands near 480px on a normal display, then rounded DOWN to
         // a whole number of device pixels per module. A fractional module size is what makes a
         // rendered QR look soft and scan badly: the browser antialiases the boundary between
         // two modules into grey, and grey is neither dark nor light to a decoder.
         //
-        // 420 rather than something smaller because a real payload is ~565 bytes, which lands
-        // around a version-18 code -- 89 modules across. At 320px that would be three device
-        // pixels per module, which a phone camera reads from a screen only in good light and
-        // straight on. Four pixels is the difference between scanning first time and scanning
-        // on the fourth attempt, at a device that has already been wiped.
-        const scale = Math.max(3, Math.floor(420 / (count + quiet * 2)));
+        // 480 rather than something smaller because of what a real payload measures. It was
+        // ~565 bytes when the APK URL was typed in by an operator; now that the hub hosts the
+        // file the URL carries a 43-character download token, and a real payload is ~630 --
+        // around a version-21 code, 101 modules across. At 420px that is three device pixels
+        // per module, which a phone camera reads from a screen only in good light and straight
+        // on; 480 keeps it at four. That is the difference between scanning first time and
+        // scanning on the fourth attempt, at a device that has already been wiped.
+        const scale = Math.max(3, Math.floor(480 / (count + quiet * 2)));
         const size = (count + quiet * 2) * scale;
 
         canvas.width = size;
@@ -213,5 +217,131 @@
             : (data.error || t('provisioning.checksum.failed'));
     });
 
+    // ---------------------------------------------------------------- the hosted APK
+    //
+    // The upload that replaces two hand-typed fields. Rule 3 at the top of this file applies
+    // with full force here: the file name is whatever an operator called the file, so it
+    // reaches the page through textContent and nothing else.
+    const apkLoading = document.getElementById('apk-loading');
+    const apkEmpty = document.getElementById('apk-empty');
+    const apkHostedPane = document.getElementById('apk-hosted');
+    const apkDetail = document.getElementById('apk-detail');
+    const apkFile = document.getElementById('apk-file');
+    const apkUpload = document.getElementById('apk-upload');
+    const apkRemove = document.getElementById('apk-remove');
+    const apkStatus = document.getElementById('apk-status');
+
+    function megabytes(bytes) {
+        return `${(Number(bytes || 0) / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function renderApk(data) {
+        apkLoading.hidden = true;
+        apkDetail.replaceChildren();
+        apkEmpty.hidden = Boolean(data.hosted);
+        apkHostedPane.hidden = !data.hosted;
+        apkRemove.hidden = !data.hosted;
+        if (!data.hosted) return;
+
+        const table = el('table', 'data-table');
+        const body = el('tbody');
+        [
+            [t('provisioning.apk.file_name'), data.file_name],
+            [t('provisioning.apk.size'), megabytes(data.size_bytes)],
+            [t('provisioning.apk.sha256'), data.sha256],
+            // The row this whole feature exists to fill in. Shown so an operator can compare it
+            // against what apksigner prints, using the converter below.
+            [t('provisioning.apk.checksum'), data.checksum],
+            [t('provisioning.apk.download_url'), data.download_url],
+            [t('provisioning.apk.uploaded'),
+             `${new Date((data.uploaded_at || 0) * 1000).toLocaleString()} ${data.uploaded_by || ''}`],
+        ].forEach(([field, value]) => {
+            const row = el('tr');
+            row.append(el('td', null, field));
+            const cell = el('td', null, value);
+            cell.style.fontFamily = 'var(--font-mono)';
+            cell.style.wordBreak = 'break-all';
+            row.append(cell);
+            body.append(row);
+        });
+        table.append(body);
+        apkDetail.append(table);
+    }
+
+    async function loadApk() {
+        let response;
+        try {
+            response = await fetch('/api/provisioning/apk');
+        } catch (e) {
+            apkLoading.textContent = t('provisioning.qr.unreachable');
+            return;
+        }
+        if (!response.ok) {
+            apkLoading.textContent = t('provisioning.apk.failed');
+            return;
+        }
+        renderApk(await response.json());
+    }
+
+    /** Redraw the code as well as the card. An upload that left a stale QR on screen would be
+     *  showing a code for an APK this hub no longer serves -- which scans, and then fails. */
+    async function reloadBoth() {
+        loading.hidden = false;
+        ready.hidden = true;
+        unconfigured.hidden = true;
+        await Promise.all([loadApk(), load()]);
+    }
+
+    apkUpload.addEventListener('click', async () => {
+        apkStatus.textContent = '';
+        const file = apkFile.files && apkFile.files[0];
+        if (!file) {
+            apkStatus.textContent = t('provisioning.apk.choose_first');
+            return;
+        }
+
+        const form = new FormData();
+        form.append('file', file);
+        // No Content-Type header: the browser sets the multipart boundary, and naming the type
+        // by hand produces a body the server cannot parse.
+        apkUpload.disabled = true;
+        // Ten megabytes with no feedback reads as a dead page, and the instinct that follows is
+        // to click again.
+        apkStatus.textContent = t('provisioning.apk.uploading');
+        let response;
+        try {
+            response = await fetch('/api/provisioning/apk', { method: 'POST', body: form });
+        } catch (e) {
+            apkUpload.disabled = false;
+            apkStatus.textContent = t('provisioning.qr.unreachable');
+            return;
+        }
+        apkUpload.disabled = false;
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            // Verbatim: the parser names the exact cause -- signed only with a v1 signature,
+            // two signers, a v2 and v3 block that disagree -- and that sentence is the only
+            // part that tells somebody what to do next.
+            apkStatus.textContent = data.error || t('provisioning.apk.failed');
+            return;
+        }
+        apkFile.value = '';
+        apkStatus.textContent = t('provisioning.apk.uploaded_ok');
+        await reloadBoth();
+    });
+
+    apkRemove.addEventListener('click', async () => {
+        if (!window.confirm(t('provisioning.apk.remove_confirm'))) return;
+        apkStatus.textContent = '';
+        try {
+            await fetch('/api/provisioning/apk', { method: 'DELETE' });
+        } catch (e) {
+            apkStatus.textContent = t('provisioning.qr.unreachable');
+            return;
+        }
+        await reloadBoth();
+    });
+
+    loadApk();
     load();
 })();

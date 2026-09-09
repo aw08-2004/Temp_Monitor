@@ -16,8 +16,11 @@ gets this wrong:
     of valid base64url alphabet, so a shape check alone waves it through. It has its own error
     message naming the mistake, because a generic "invalid checksum" sends somebody to look at
     their keystore instead of at two lines of conversion.
-  * **A half-configured hub.** Refusing with the reason beats building a payload without the
-    field, because the payload without the field still scans.
+  * **A hub with no APK.** Refusing with the reason beats building a payload without the
+    field, because the payload without the field still scans. Since the hub started hosting
+    the APK itself there is a second shape of this: the download location is derived from
+    `HUB_URL`, so a hub that does not know its own https address has to refuse and to SAY that
+    rather than blaming a field nobody typed.
   * **The enrollment secret reaching the audit trail.** The QR must carry it; a copy in
     `audit_log` would put the fleet's shared secret in front of everyone holding
     `view_audit_log`, which is a far wider audience than `manage_settings`.
@@ -128,30 +131,31 @@ def main():
         # encodes, scans, starts provisioning and fails on a wiped device.
         try:
             provisioning.build_payload(db_path)
-            check("a hub with nothing configured refuses to build a payload", False)
-        except provisioning.ProvisioningIncomplete:
-            check("a hub with nothing configured refuses to build a payload", True)
-
-        settings.set_many(db_path, {"provisioning.signature_checksum": REAL_B64},
-                          updated_by="test@x.com")
-        settings.invalidate()
-        try:
-            provisioning.build_payload(db_path)
-            check("...and still refuses with only the checksum set", False)
+            check("a hub hosting no APK refuses to build a payload", False)
         except provisioning.ProvisioningIncomplete as e:
-            check("...and still refuses with only the checksum set", True)
-            check("...naming the field that is missing, not the one that is set",
-                  "APK download URL" in str(e))
+            check("a hub hosting no APK refuses to build a payload", True)
+            check("...telling the operator to upload one, which is the whole fix",
+                  "upload" in str(e).lower())
 
-        settings.set_many(db_path,
-                          {"provisioning.apk_url":
-                           "https://fleet.example.com/fleethub-agent.apk"},
-                          updated_by="test@x.com")
-        settings.invalidate()
+        # The misconfiguration this arrangement introduces, and the reason the derived URL is
+        # validated exactly as a typed one used to be: the download location is now built from
+        # HUB_URL, so a hub that does not know its own https address cannot provision anything.
+        try:
+            provisioning.build_payload(
+                db_path, hosted={"url": "http://fleet.example.com/provisioning/apk/x/a.apk",
+                                 "checksum": REAL_B64})
+            check("a hub whose own address is not https refuses", False)
+        except provisioning.ProvisioningIncomplete as e:
+            check("a hub whose own address is not https refuses", True)
+            check("...naming HUB_URL rather than blaming a field nobody typed",
+                  "HUB_URL" in str(e))
 
         print("\n== The payload ==")
+        HOSTED = {"url": "https://fleet.example.com/fleethub-agent.apk",
+                  "checksum": REAL_B64}
         payload = provisioning.build_payload(
-            db_path, hub_url="https://fleet.example.com", enrollment_secret="s3cr3t")
+            db_path, hub_url="https://fleet.example.com", enrollment_secret="s3cr3t",
+            hosted=HOSTED)
         check("it names the admin component",
               payload[provisioning.EXTRA_COMPONENT] == provisioning.ADMIN_COMPONENT)
         check("it carries the download location",
@@ -173,11 +177,12 @@ def main():
         # A hub with no enrollment secret set is a real state (app.py fails closed and says
         # so), and it must still produce a usable provisioning code -- the device comes up
         # managed and unenrolled, which the agent's own setup screen makes visible.
-        bare = provisioning.build_payload(db_path, hub_url="https://fleet.example.com")
+        bare = provisioning.build_payload(db_path, hub_url="https://fleet.example.com",
+                                          hosted=HOSTED)
         check("a hub with no enrollment secret still builds a payload",
               provisioning.BUNDLE_ENROLLMENT_SECRET
               not in (bare.get(provisioning.EXTRA_ADMIN_EXTRAS) or {}))
-        empty = provisioning.build_payload(db_path)
+        empty = provisioning.build_payload(db_path, hosted=HOSTED)
         check("...and one with nothing to pass sends no extras bundle at all",
               provisioning.EXTRA_ADMIN_EXTRAS not in empty)
 
@@ -185,8 +190,8 @@ def main():
                           updated_by="test@x.com")
         settings.invalidate()
         check("the kiosk setting reaches the payload",
-              provisioning.build_payload(db_path)[provisioning.EXTRA_LEAVE_SYSTEM_APPS]
-              is False)
+              provisioning.build_payload(db_path, hosted=HOSTED)[
+                  provisioning.EXTRA_LEAVE_SYSTEM_APPS] is False)
         settings.set_many(db_path, {"provisioning.leave_system_apps_enabled": True},
                           updated_by="test@x.com")
         settings.invalidate()

@@ -50,6 +50,7 @@ import policy
 import usage
 import wipe
 import location
+import apkhost
 import provisioning
 import rules
 import scripts
@@ -124,7 +125,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.106.0"
+HUB_VERSION = "1.107.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1963,6 +1964,17 @@ CSRF_UPLOAD_ENDPOINTS = frozenset({
     # above. See files_web.upload_file_to_spool -- that endpoint's inertness is the whole
     # reason this line is safe, and anything machine-facing added to it would undo this.
     "files.upload_file_to_spool",
+    # The provisioning APK, and it is the one entry here that is NOT inert -- said plainly
+    # rather than left to be inferred from the company it keeps. A successful cross-site
+    # multipart POST changes what the next device to be provisioned installs as its device
+    # owner. What makes it acceptable is the size of what an attacker would need: a logged-in
+    # operator holding `manage_settings`, the widest capability in this hub, AND a validly
+    # signed APK whose signing block this hub can parse -- an unsigned or v1-only file is
+    # refused before anything is stored. What makes it recoverable is that the result is
+    # visible: the provisioning page shows the hosted file name, its digest and its checksum,
+    # and Remove takes it offline. The alternative was a hidden form token checked by this one
+    # endpoint, which would be a CSRF mechanism that exists nowhere else in this codebase.
+    "provisioning.upload_provisioning_apk",
 })
 
 
@@ -2169,8 +2181,12 @@ app.register_blueprint(create_capabilities_blueprint(DB_PATH, login_required, ac
 # hub's address. The enrollment secret rides along so ONE scan both provisions and enrols;
 # without it a device comes up managed, reporting telemetry, and silently accepting no
 # commands, which is the state the Android agent's own setup screen exists to make visible.
+# LOG_DIR because this blueprint now stores something: the signed APK itself, beside the
+# database rather than in the source tree the self-updater replaces. It also carries the one
+# route in this hub with no gate at all -- the setup wizard of a factory-reset device has no
+# credential to present, so the download is addressed by a random token instead. See apkhost.py.
 app.register_blueprint(create_provisioning_blueprint(
-    DB_PATH, login_required, access,
+    DB_PATH, LOG_DIR, login_required, access,
     hub_url=HUB_URL, enrollment_secret=AGENT_ENROLLMENT_SECRET))
 
 # On-demand device location (roadmap #23 phase B). Reading a last known position is `view` +
@@ -4169,6 +4185,7 @@ apps.init_apps_db(DB_PATH)
 policy.init_policy_db(DB_PATH)
 usage.init_usage_db(DB_PATH)
 wipe.init_wipe_db(DB_PATH)
+apkhost.init_apkhost_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)

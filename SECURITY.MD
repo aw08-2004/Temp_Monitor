@@ -146,6 +146,25 @@ checksum and the enrollment secret; anyone who can photograph it can enrol a dev
 fleet. Treat it like the keystore: generate it when a device is being provisioned, do not paste
 it into a ticket, and rotate the enrollment secret if one escapes.
 
+**The hub hosts the agent APK, on the one route in this product that has no gate.** The setup
+wizard of a factory-reset device has no session, no agent token and nothing to enrol with — it
+is downloading the very app that would later enrol it — so the download cannot be
+authenticated. What is worth knowing about it:
+
+- **What the file is:** the signed FleetHub Android agent, a release binary. It carries no fleet
+  data, no hub address, no machine list and no credentials. The hub URL and the enrollment
+  secret ride in the QR's admin-extras bundle, never in the APK, so downloading it enrols
+  nobody and tells the downloader nothing about this fleet.
+- **What the URL's token is:** anti-enumeration and a revocation handle, not a security
+  boundary. It is looked up rather than joined to a filesystem path, so the route can only ever
+  serve the one APK recorded as hosted. Uploading again or removing the APK mints a new token
+  and every code printed before it stops resolving — which is how a QR photographed off a bench
+  is killed.
+- **What is not there:** the hub has no rate limiting, anywhere, and this route will serve about
+  ten megabytes to anyone holding the token. It sits under a single stable `/provisioning/apk/`
+  prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
+  provisioning page takes it offline entirely.
+
 ## Device tokens (the native client)
 
 The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather

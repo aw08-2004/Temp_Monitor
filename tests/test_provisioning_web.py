@@ -15,15 +15,28 @@ Neither of those is visible from the outside: the page looks identical either wa
 The second thing asserted is that an unconfigured hub answers with instructions rather than a
 payload. A partial payload still encodes, still scans, and still fails minutes later on a
 device that has already been factory reset.
+
+The third arrived with the hub hosting the APK itself: **one route here has no gate at all, and
+that is the requirement rather than an oversight.** The setup wizard of a factory-reset device
+has no session, no agent token and nothing to enrol with -- it is downloading the app that would
+later enrol it. So the download must answer an anonymous request, and what stands in for a gate
+is a token that is looked UP rather than joined to a path. Asserted directly, in both
+directions: it answers with no session, and it answers nothing at all for a token that was never
+issued, with the same body a malformed one gets so the route says nothing about whether an APK
+is hosted.
 """
 import functools
+import hashlib
+import io
 import json
 import os
+import re
 import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "hub"))
+import apkhost
 import fleet
 import i18n
 import permissions
@@ -31,6 +44,9 @@ import provisioning
 import settings
 from permissions_web import create_access
 from provisioning_web import create_provisioning_blueprint
+# The signing-block builder lives beside the parser's own tests. Imported rather than
+# duplicated: two copies of a binary format description is how they come to disagree.
+from test_apkhost import block_value, signer, synth_apk
 from flask import Blueprint, Flask, session as flask_session
 
 PASS = 0
@@ -39,7 +55,7 @@ CURRENT_USER = "super@x.com"
 
 SECRET = "fleet-enrollment-secret"
 CHECKSUM = "s5oWEFPq3ECQxStcWufVzr1o2G5wngEgQ1R7NRKF9Gg"
-APK_URL = "https://fleet.example.com/fleethub-agent.apk"
+CERT = b"pretend-certificate-bytes"
 
 
 def check(name, cond):
@@ -85,6 +101,7 @@ def main():
     os.close(db_fd)
     try:
         fleet.init_fleet_db(db_path)
+        apkhost.init_apkhost_db(db_path)
         permissions.init_permissions_db(db_path)
         settings.init_settings_db(db_path)
         settings.invalidate()
@@ -108,13 +125,22 @@ def main():
             machines=[], members=["admin@x.com"])
         settings.invalidate()
 
+        # A stand-in for LOG_DIR. apkhost puts its blobs in a `provisioning`
+        # directory under it, which is why the assertions below go through
+        # apkhost.blob_root rather than joining a path by hand.
+        state_dir = tempfile.mkdtemp(prefix="prov-web-")
         app.register_blueprint(create_provisioning_blueprint(
-            db_path, fake_login_required, access,
+            db_path, state_dir, fake_login_required, access,
             hub_url="https://fleet.example.com", enrollment_secret=SECRET))
 
         @app.before_request
         def _seed_session():
-            flask_session["user"] = {"email": CURRENT_USER}
+            # None means genuinely signed out, which is the state the APK download has to work
+            # in -- a factory-reset device has no session to seed.
+            if CURRENT_USER:
+                flask_session["user"] = {"email": CURRENT_USER}
+            else:
+                flask_session.pop("user", None)
 
         # Mirrors app.py's inject_nav_context, so base.html and denied.html render. Every
         # capability is granted to the SIDEBAR because nav rendering is not what is under
@@ -136,15 +162,36 @@ def main():
         check("it answers 409, not 200 with a half-built payload", r.status_code == 409)
         check("...and says so plainly", body.get("configured") is False)
         check("...naming what is missing and how to produce it",
-              "checksum" in (body.get("error") or "").lower()
-              and "apksigner" in (body.get("error") or ""))
+              "upload" in (body.get("error") or "").lower())
         check("...and carries no payload at all",
               "text" not in body and "payload" not in body)
 
-        settings.set_many(db_path, {"provisioning.signature_checksum": CHECKSUM,
-                                    "provisioning.apk_url": APK_URL},
-                          updated_by="admin@x.com")
-        settings.invalidate()
+        print("\n== Uploading the APK is what configures it ==")
+        apk = synth_apk({0x7109871A: block_value([signer([CERT])])})
+        r = c.post("/api/provisioning/apk",
+                   data={"file": (io.BytesIO(apk), "fleethub-agent.apk")},
+                   content_type="multipart/form-data")
+        hosted = r.get_json()
+        check("an APK uploads", r.status_code == 201)
+        check("...and the hub derived the checksum, so nobody typed one",
+              hosted["checksum"] == provisioning.checksum_from_hex(
+                  hashlib.sha256(CERT).hexdigest()))
+        check("...naming the file it came from", hosted["file_name"] == "fleethub-agent.apk")
+        check("...and answering with a download URL under this hub's own address",
+              hosted["download_url"].startswith(
+                  "https://fleet.example.com/provisioning/apk/"))
+        # The token is the URL's only unguessable part, so it is not shipped as a field of its
+        # own -- there is one place to copy from, and one place it can leak from.
+        check("the raw token is not a field of its own", "token" not in hosted)
+
+        r = c.post("/api/provisioning/apk",
+                   data={"file": (io.BytesIO(b"not an apk at all"), "junk.apk")},
+                   content_type="multipart/form-data")
+        check("a file that is not an APK is refused with a reason", r.status_code == 400)
+        check("...and the hosted APK is unchanged",
+              c.get("/api/provisioning/apk").get_json()["sha256"] == hosted["sha256"])
+        r = c.post("/api/provisioning/apk", content_type="multipart/form-data")
+        check("an upload with no file at all is a 400, not a 500", r.status_code == 400)
 
         print("\n== Configured ==")
         r = c.get("/api/provisioning/qr")
@@ -152,7 +199,11 @@ def main():
         check("it answers 200", r.status_code == 200)
         check("...with the exact string to encode", bool(body.get("text")))
         check("...which parses as the provisioning JSON",
-              json.loads(body["text"])[provisioning.EXTRA_SIGNATURE_CHECKSUM] == CHECKSUM)
+              json.loads(body["text"])[provisioning.EXTRA_SIGNATURE_CHECKSUM]
+              == hosted["checksum"])
+        check("...whose download location is this hub, not somewhere an operator typed",
+              json.loads(body["text"])[provisioning.EXTRA_DOWNLOAD_LOCATION]
+              == hosted["download_url"])
         check("...and names the admin component separately for the page to show",
               body.get("component") == provisioning.ADMIN_COMPONENT)
         # The one thing the browser must NOT do: rebuild the string itself. Asserted here
@@ -200,6 +251,15 @@ def main():
         html = page.get_data(as_text=True)
         check("...which carries the canvas provisioning.js paints into",
               'id="qr-canvas"' in html)
+        # Every id the script reaches for. A rename in one file and not the other is silent:
+        # getElementById returns null, the listener is never attached, and the card renders as
+        # a button that does nothing on the one page whose mistakes cost a factory reset.
+        script = open(os.path.join(ROOT, "hub", "static", "js", "provisioning.js"),
+                      encoding="utf-8").read()
+        wanted = set(re.findall(r"getElementById\('([^']+)'\)", script))
+        missing = sorted(i for i in wanted if f'id="{i}"' not in html)
+        check(f"the page carries every id the script looks up ({len(wanted)} of them)",
+              not missing)
         check("...loads the vendored encoder before the page script, and in that order",
               html.index("vendor/qrcode.js") < html.index("vendor/qrcode_UTF8.js")
               < html.index("js/provisioning.js"))
@@ -221,15 +281,67 @@ def main():
               c.get("/api/provisioning/qr").status_code == 403)
         CURRENT_USER = "super@x.com"
 
-        print("\n== There is no write surface ==")
-        # The two settings behind this are written through the ordinary settings API, by the
-        # same capability, with the same validation. A second write path would be a second set
-        # of rules for one value.
-        for method, path in (("post", "/api/provisioning/qr"),
-                             ("delete", "/api/provisioning/qr"),
-                             ("get", "/api/provisioning/checksum")):
-            r = getattr(c, method)(path, json={})
-            check(f"{method.upper()} {path} is not a route", r.status_code == 405)
+        print("\n== The download answers an anonymous request, because it must ==")
+        # The assertion this section exists for. The caller is the setup wizard of a device
+        # that has just been factory reset: no session, no agent token, nothing to present.
+        url = hosted["download_url"]
+        path = url[len("https://fleet.example.com"):]
+        CURRENT_USER = None
+        check("a signed-out caller cannot read what is hosted, which is the control case",
+              c.get("/api/provisioning/apk").status_code == 403)
+        r = c.get(path)
+        check("...but the APK downloads anyway, because it has to", r.status_code == 200)
+        check("...as an APK, so a browser used to test the URL offers to save it",
+              r.headers.get("Content-Type") == apkhost.CONTENT_TYPE)
+        check("...and it is the bytes that were uploaded", r.get_data() == apk)
+
+        r = c.get("/provisioning/apk/" + "b" * 43 + "/fleethub-agent.apk")
+        check("a well-formed token that was never issued answers 404", r.status_code == 404)
+        unissued = r.get_json()
+        r = c.get("/provisioning/apk/not-a-token/fleethub-agent.apk")
+        check("...and so does a malformed one", r.status_code == 404)
+        # Identical bodies on purpose: the route must not become a way to ask whether this hub
+        # is hosting anything at all.
+        check("...with the same body, so the route says nothing about what is hosted",
+              r.get_json() == unissued)
+
+        print("\n== A row that outlives its blob says so ==")
+        # What a database restored without its state directory looks like. 404 would send
+        # somebody looking for a wrong token; this is a different problem and gets a different
+        # answer.
+        os.remove(apkhost.blob_path(apkhost.blob_root(state_dir), hosted["sha256"]))
+        r = c.get(path)
+        check("a missing file answers 410 rather than 404", r.status_code == 410)
+        check("...and says the APK has to be uploaded again",
+              "upload" in (r.get_json().get("error") or "").lower())
+
+        print("\n== Uploading and removing need manage_settings ==")
+        CURRENT_USER = "tech@x.com"
+        check("issue_commands cannot upload an APK",
+              c.post("/api/provisioning/apk",
+                     data={"file": (io.BytesIO(apk), "a.apk")},
+                     content_type="multipart/form-data").status_code == 403)
+        check("...nor remove one", c.delete("/api/provisioning/apk").status_code == 403)
+        check("...nor read what is hosted",
+              c.get("/api/provisioning/apk").status_code == 403)
+        CURRENT_USER = "admin@x.com"
+        check("manage_settings can remove it",
+              c.delete("/api/provisioning/apk").status_code == 200)
+        check("...and afterwards the token is dead", c.get(path).status_code == 404)
+        check("...and no QR can be built at all",
+              c.get("/api/provisioning/qr").status_code == 409)
+        check("removing again is a 404, not a 500",
+              c.delete("/api/provisioning/apk").status_code == 404)
+        CURRENT_USER = "super@x.com"
+
+        print("\n== The write surface is exactly the APK ==")
+        # The QR and the converter still have none: what they render is derived, and a second
+        # write path would be a second set of validation rules for one value.
+        for method, route in (("post", "/api/provisioning/qr"),
+                              ("delete", "/api/provisioning/qr"),
+                              ("get", "/api/provisioning/checksum")):
+            r = getattr(c, method)(route, json={})
+            check(f"{method.upper()} {route} is not a route", r.status_code == 405)
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         return 1 if FAIL else 0

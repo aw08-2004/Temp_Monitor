@@ -943,17 +943,13 @@
         "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición -- una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
       },
       "provisioning": {
-        "apk_url": {
-          "label": "URL del APK del agente",
-          "help": "De dónde descarga el agente de Android un dispositivo recién restablecido durante la configuración. Debe ser una URL https accesible desde donde se aprovisionan los dispositivos, porque el dispositivo todavía no tiene configuración propia."
-        },
-        "signature_checksum": {
-          "label": "Suma de comprobación de la firma del APK",
-          "help": "El SHA-256 del certificado de firma en base64 seguro para URL: 43 caracteres, sin relleno. El asistente de configuración rechaza un APK cuya firma no coincida. Solo cambia cuando cambia la clave de firma de Android."
-        },
         "leave_system_apps_enabled": {
           "label": "Dejar activadas las apps propias del dispositivo",
           "help": "Activado, un dispositivo aprovisionado conserva su cámara, su teléfono y sus ajustes. Desactivado lo convierte en un dispositivo de un solo uso: el aprovisionamiento desactiva toda app del sistema que este agente no haya habilitado explícitamente."
+        },
+        "max_apk_mb": {
+          "label": "APK más grande que el hub aceptará",
+          "help": "Un límite para la subida, no un objetivo. Un APK de release de .NET Android ocupa unos diez megabytes."
         }
       },
       "location": {
@@ -3208,10 +3204,10 @@
       "secret_note": "El código lleva el secreto de inscripción de esta flota, de modo que un escaneo aprovisiona e inscribe el dispositivo. Trate una fotografía suya como trataría el propio secreto.",
       "unreachable": "El hub no respondió.",
       "failed": "No se pudieron construir los datos de aprovisionamiento.",
-      "too_large": "Los datos no caben en un código QR. Acorte la URL de descarga del APK."
+      "too_large": "Los datos no caben en un código QR. Acorta la dirección pública de este hub."
     },
     "unconfigured": {
-      "help": "Rellene esto en Ajustes, en la sección Aprovisionamiento. El conversor de abajo transforma el resumen que imprime apksigner en la forma que el código necesita."
+      "help": "Sube arriba el APK firmado del agente. El hub lee de él la suma de comprobación de la firma y sirve el archivo a los dispositivos que se provisionan, así que no hay nada que rellenar en Ajustes."
     },
     "payload": {
       "field": "Campo",
@@ -3219,8 +3215,8 @@
       "component": "DEVICE_ADMIN_COMPONENT_NAME"
     },
     "checksum": {
-      "heading": "Conversor de la suma de comprobación de la firma",
-      "help": "apksigner verify --print-certs imprime el SHA-256 del certificado de firma en hexadecimal. El código de aprovisionamiento necesita los mismos bytes en base64 seguro para URL. Pegar el hexadecimal produce un valor que parece correcto y falla en un dispositivo que ya ha sido borrado.",
+      "heading": "Comprobar la suma de comprobación",
+      "help": "El hub ya lo deriva del APK que has subido. Pega aquí lo que imprime apksigner verify --print-certs para comprobar que coinciden antes de restablecer un dispositivo.",
       "input_label": "Resumen SHA-256 (hexadecimal)",
       "placeholder": "b39a161053ea...",
       "convert": "Convertir",
@@ -3233,6 +3229,27 @@
       "wifi": "Conéctese a una red cuando se le pida. Este código no lleva credenciales de wifi, deliberadamente.",
       "scan": "Escanee el código de arriba. El dispositivo descarga e instala el agente por su cuenta.",
       "verify": "Al terminar la configuración, la pantalla del agente FleetHub debería decir “Fully managed (device owner)” y la máquina debería aparecer en el Inventario."
+    },
+    "apk": {
+      "heading": "APK del agente",
+      "intro": "El hub sirve este archivo a los dispositivos que se están provisionando y lee de él la suma de comprobación de la firma. Sube el APK firmado; no hay nada más que escribir.",
+      "loading": "Comprobando qué se está sirviendo...",
+      "none": "Todavía no se sirve ningún APK, así que no se puede generar un código de provisión.",
+      "choose": "APK firmado",
+      "choose_first": "Elige un archivo primero.",
+      "upload": "Subir",
+      "uploading": "Subiendo...",
+      "uploaded_ok": "Subido.",
+      "remove": "Dejar de servirlo",
+      "remove_confirm": "¿Dejar de servir este APK? Los códigos ya impresos dejarán de funcionar.",
+      "failed": "Se ha rechazado.",
+      "file_name": "Archivo",
+      "size": "Tamaño",
+      "sha256": "SHA-256 del archivo",
+      "checksum": "Suma de comprobación de la firma",
+      "download_url": "URL de descarga",
+      "uploaded": "Subido",
+      "url_note": "La URL de descarga lleva un token y no requiere iniciar sesión, porque un dispositivo restablecido de fábrica no tiene con qué iniciarla. Volver a subir el archivo o dejar de servirlo cambia el token, lo que invalida todos los códigos impresos antes."
     }
   },
   "location": {

@@ -943,17 +943,13 @@
         "help": "Wie lange die Zugangsdaten eines gekoppelten Hubs gültig bleiben; die Frist verlängert sich bei jeder Nutzung. Das begrenzt die Kopplung, nicht eine Freigabe -- eine Freigabe kann ein eigenes Ablaufdatum haben oder gar keines. Jede Kopplung behält die bei der Einrichtung geltende Dauer."
       },
       "provisioning": {
-        "apk_url": {
-          "label": "APK-URL des Agents",
-          "help": "Von wo ein zurückgesetztes Gerät den Android-Agent während der Einrichtung herunterlädt. Muss eine https-URL sein, die von dort erreichbar ist, wo Geräte provisioniert werden, denn das Gerät hat noch keine eigene Konfiguration."
-        },
-        "signature_checksum": {
-          "label": "APK-Signaturprüfsumme",
-          "help": "Der SHA-256 des Signaturzertifikats als URL-sicheres Base64: 43 Zeichen, ohne Auffüllung. Der Einrichtungsassistent lehnt eine APK ab, deren Signatur nicht passt. Ändert sich nur, wenn der Android-Signaturschlüssel sich ändert."
-        },
         "leave_system_apps_enabled": {
           "label": "Geräteeigene Apps aktiviert lassen",
           "help": "Aktiviert behält ein provisioniertes Gerät Kamera, Telefon und Einstellungen. Deaktiviert wird es zum Einzweckgerät: die Provisionierung deaktiviert jede System-App, die dieser Agent nicht ausdrücklich aktiviert hat."
+        },
+        "max_apk_mb": {
+          "label": "Größte APK, die der Hub annimmt",
+          "help": "Eine Obergrenze für den Upload, kein Richtwert. Eine .NET-Android-Release-APK ist etwa zehn Megabyte groß."
         }
       },
       "location": {
@@ -3208,10 +3204,10 @@
       "secret_note": "Der Code enthält das Anmeldegeheimnis dieser Flotte, damit ein Scan das Gerät provisioniert und anmeldet. Behandeln Sie ein Foto davon wie das Geheimnis selbst.",
       "unreachable": "Der Hub hat nicht geantwortet.",
       "failed": "Die Provisionierungsnutzdaten konnten nicht erstellt werden.",
-      "too_large": "Die Nutzdaten passen in keinen QR-Code. Kürzen Sie die APK-Download-URL."
+      "too_large": "Die Nutzdaten passen nicht in einen QR-Code. Kürzen Sie die öffentliche Adresse dieses Hubs."
     },
     "unconfigured": {
-      "help": "Tragen Sie dies in den Einstellungen im Abschnitt Provisionierung ein. Der Umrechner unten wandelt den von apksigner ausgegebenen Digest in die benötigte Form um."
+      "help": "Laden Sie oben die signierte Agent-APK hoch. Der Hub liest die Signaturprüfsumme daraus und stellt die Datei den zu provisionierenden Geräten bereit; unter Einstellungen ist nichts einzutragen."
     },
     "payload": {
       "field": "Feld",
@@ -3219,8 +3215,8 @@
       "component": "DEVICE_ADMIN_COMPONENT_NAME"
     },
     "checksum": {
-      "heading": "Umrechner für die Signaturprüfsumme",
-      "help": "apksigner verify --print-certs gibt den SHA-256 des Signaturzertifikats hexadezimal aus. Der Provisionierungscode braucht dieselben Bytes als URL-sicheres Base64. Das Einfügen der Hex-Form ergibt einen Wert, der richtig aussieht und an einem bereits gelöschten Gerät scheitert.",
+      "heading": "Signaturprüfsumme vergleichen",
+      "help": "Der Hub leitet diesen Wert bereits aus der hochgeladenen APK ab. Fügen Sie hier ein, was apksigner verify --print-certs ausgibt, um beides zu vergleichen, bevor Sie ein Gerät zurücksetzen.",
       "input_label": "SHA-256-Digest (hexadezimal)",
       "placeholder": "b39a161053ea...",
       "convert": "Umrechnen",
@@ -3233,6 +3229,27 @@
       "wifi": "Auf Nachfrage ein Netzwerk verbinden. Dieser Code enthält bewusst keine WLAN-Zugangsdaten.",
       "scan": "Den Code oben scannen. Das Gerät lädt den Agent selbst herunter und installiert ihn.",
       "verify": "Nach der Einrichtung sollte der Bildschirm des FleetHub-Agents „Fully managed (device owner)“ zeigen und der Rechner im Bestand erscheinen."
+    },
+    "apk": {
+      "heading": "Agent-APK",
+      "intro": "Der Hub stellt diese Datei den Geräten bereit, die provisioniert werden, und liest die Signaturprüfsumme daraus. Laden Sie die signierte APK hoch; mehr muss nicht eingetragen werden.",
+      "loading": "Prüfe, was bereitgestellt wird...",
+      "none": "Es wird noch keine APK bereitgestellt, daher lässt sich kein Provisionierungscode erzeugen.",
+      "choose": "Signierte APK",
+      "choose_first": "Wählen Sie zuerst eine Datei aus.",
+      "upload": "Hochladen",
+      "uploading": "Wird hochgeladen...",
+      "uploaded_ok": "Hochgeladen.",
+      "remove": "Bereitstellung beenden",
+      "remove_confirm": "Bereitstellung dieser APK beenden? Bereits gedruckte Codes funktionieren dann nicht mehr.",
+      "failed": "Das wurde abgelehnt.",
+      "file_name": "Datei",
+      "size": "Größe",
+      "sha256": "Datei-SHA-256",
+      "checksum": "Signaturprüfsumme",
+      "download_url": "Download-URL",
+      "uploaded": "Hochgeladen",
+      "url_note": "Die Download-URL enthält ein Token und erfordert keine Anmeldung, denn ein auf Werkseinstellungen zurückgesetztes Gerät hat nichts, womit es sich anmelden könnte. Erneutes Hochladen oder das Beenden der Bereitstellung ändert das Token und setzt alle zuvor gedruckten Codes außer Kraft."
     }
   },
   "location": {
