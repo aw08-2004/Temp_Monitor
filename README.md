@@ -1472,6 +1472,55 @@ scope. Every write is audited at security level.
 > **Status:** built -- hub 1.103.0 / Android agent source. **Not yet exercised on hardware** --
 > see the hardware-validation table in `ROADMAP.MD`.
 
+## Blocked hours and screen-time budgets
+
+When a managed device may run what, in the **Schedules** section of the Device policy page.
+
+**Two kinds, again.** **Blocked hours** name days and a span -- "nothing on weeknights between
+22:00 and 07:00", over named apps or over the whole device. A **daily budget** names an
+allowance -- "sixty minutes of TikTok", or "two hours of screen time" for the device as a whole.
+Zero minutes is a real budget and means "not at all today".
+
+**An end earlier than the start runs past midnight**, which is the only kind of curfew anybody
+actually writes. The half after midnight belongs to the day *after* the one the rule names, so a
+Friday-night curfew still holds at 02:00 on Saturday.
+
+**The device decides, not the hub.** The hub sends the rules; the agent evaluates them every
+minute against its own clock and its own usage, whether or not it can reach the hub. A phone
+with no signal at 22:00 still has a bedtime. This is also why blocked hours keep working on a
+device where usage access was never granted: they need a clock, not a ledger.
+
+**Both apply, and nothing is reconciled.** If one rule says "no TikTok after 22:00" and another
+says "sixty minutes a day", both hold and whichever bites first is the answer. Two budgets on
+the same app keep the smaller number.
+
+**The clock is not the user's to move.** A fully managed device is held to network time, so a
+curfew cannot be escaped in date and time settings. Where that cannot be applied the agent logs
+it in as many words rather than pretending.
+
+**Budgets need usage access, and somebody has to grant it on the device.** It is an appop --
+`setPermissionGrantState` does not reach it and no Device Owner can turn it on remotely. A
+device without it reports no usage, and the console says so on the machine page rather than
+showing zeroes that would read as "nobody used this". The agent app has a **Grant usage access**
+button that opens the right settings screen.
+
+**Gating**: writing is `manage_device_policy`, the same capability as a blocklist. Reading a
+machine's usage is `view` + machine scope, and there is deliberately **no fleet-wide usage
+view** -- the app inventory has one because a policy author has to pick a package from
+somewhere, and the question a fleet-wide usage listing would answer is "who spends the most time
+on their phone". Every write is audited at security level.
+
+**Retention**: `data.usage_retention_days`, 14 days by default and meant to come down. Pruned by
+the device's own local day, and erased immediately when a machine is deleted. See the
+personal-data inventory in `SECURITY.MD`.
+
+**Endpoints**: `GET|POST /api/policy/times`, `GET|PUT|DELETE /api/policy/times/<id>`,
+`GET /api/usage/machines/<machine>`. Rules reach devices in the same `device_policy` block as a
+blocklist; usage arrives on the heartbeat under a `usage` key.
+
+> **Status:** built -- hub 1.104.0 / Android agent source. **Not yet exercised on hardware** --
+> see the hardware-validation table in `ROADMAP.MD`.
+
 ## App inventory
 
 What a managed Android device says is installed, on the machine page under **Installed apps**.

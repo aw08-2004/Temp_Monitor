@@ -47,6 +47,7 @@ import wake
 import apps
 import capabilities
 import policy
+import usage
 import location
 import provisioning
 import rules
@@ -78,6 +79,7 @@ from provisioning_web import create_provisioning_blueprint
 from location_web import create_location_blueprint
 from apps_web import create_apps_blueprint
 from policy_web import create_policy_blueprint
+from usage_web import create_usage_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -120,7 +122,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.103.0"
+HUB_VERSION = "1.104.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2190,6 +2192,12 @@ app.register_blueprint(create_apps_blueprint(DB_PATH, login_required, access))
 # do, applied without anybody present. Same argument `manage_rules` already makes for itself.
 app.register_blueprint(create_policy_blueprint(DB_PATH, login_required, access))
 
+# How long each app was in the foreground (roadmap #23 phase E). `view` + machine scope, and
+# deliberately no fleet-wide view: the inventory has one because a policy author must pick a
+# package from somewhere, while the question a fleet-wide usage endpoint would answer is "who
+# spends the most time on their phone". See usage.py and SECURITY.MD's personal-data inventory.
+app.register_blueprint(create_usage_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -3094,6 +3102,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Policy targets follow the survivor: it IS the merged-away device, and a policy that
     # stopped covering it would silently un-block apps somebody deliberately blocked.
     policy.rename_machine(DB_PATH, dropped, survivor)
+    # Usage history merges, and a collision keeps the LARGER figure: both rows describe one
+    # device on one day, and usage is cumulative, so the bigger number was reported later.
+    usage.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -3382,6 +3393,22 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} location fix(es).")
             except Exception as e:
                 print(f"[retention] Location prune failed: {e}")
+            # App usage (roadmap #23 phase E). Its own try, and the second prune here that is a
+            # privacy control rather than a disk-space one -- and the shorter of the two, at
+            # fourteen days by default, because this is a record of what a person did with
+            # their evenings rather than of where a device was once.
+            #
+            # Compared as a DATE STRING against the device's own local day: the device decided
+            # what day it was, and converting that to a hub timestamp would prune a day early
+            # or late for every device outside the hub's own timezone.
+            try:
+                keep = settings.get_int(DB_PATH, "data.usage_retention_days")
+                cutoff_day = (datetime.now() - timedelta(days=keep)).strftime("%Y-%m-%d")
+                dropped = usage.prune(DB_PATH, cutoff_day)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} usage row(s) before {cutoff_day}.")
+            except Exception as e:
+                print(f"[retention] Usage prune failed: {e}")
             # ...and file a "no answer" row for any locate whose command expired or failed
             # without one. Separate try, and not really retention -- but this is the only tick
             # that runs for a feature with no scheduler of its own, and without it a locate
@@ -4128,6 +4155,7 @@ capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
 policy.init_policy_db(DB_PATH)
+usage.init_usage_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -5017,6 +5045,10 @@ def delete_machine(machine):
     # elsewhere: a reused hostname would silently inherit a policy nobody aimed at it, and
     # the symptom is apps that will not open on a machine whose page shows no reason why.
     policy.forget_machine(DB_PATH, machine_name)
+    # And its usage history (roadmap #23 phase E). The strongest case in the product for
+    # erasing on deletion: this is a record of what a person did with their evenings, and it
+    # has no argument at all for surviving the device.
+    usage.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

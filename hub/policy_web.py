@@ -231,6 +231,118 @@ def create_policy_blueprint(db_path, login_required, access):
         _audit(permissions_web.current_actor(), "app_policy_delete", policy_id)
         return jsonify({"status": "deleted"}), 200
 
+    # ---------------- Time policies ----------------
+    # A separate resource rather than a mode of the one above, because the two answer different
+    # questions and share only a target list. A blocklist says WHICH apps; a schedule says WHEN,
+    # and it is enforced on the device against the device's own clock and its own usage rather
+    # than resolved to a package list here. Folding them together would mean one endpoint whose
+    # body shape depends on a mode field, and one editor that has to hide half of itself.
+
+    @bp.route("/api/policy/times", methods=["GET"])
+    @login_required
+    @can_view
+    def list_time_policies():
+        return jsonify({
+            "policies": [_policy_view(p) for p in policy.list_time_policies(db_path)],
+            "can_manage": access.can(permissions.MANAGE_DEVICE_POLICY),
+            "protected_prefixes": list(policy.NEVER_SUSPEND_PREFIXES),
+            # The sentinel for "the whole device", served for the same reason the protected
+            # list is: the console has to render a rule that names no package, and a second
+            # copy of this string in JavaScript is a typo away from a rule that silently covers
+            # one app called "*".
+            "every_package": policy.EVERY_PACKAGE,
+        }), 200
+
+    @bp.route("/api/policy/times/<policy_id>", methods=["GET"])
+    @login_required
+    @can_view
+    def read_time_policy(policy_id):
+        found = policy.get_time_policy(db_path, policy_id)
+        if found is None:
+            return jsonify({"error": "unknown policy"}), 404
+        return jsonify(_policy_view(found)), 200
+
+    @bp.route("/api/policy/times", methods=["POST"])
+    @login_required
+    @can_manage
+    def create_time():
+        bad = _require_json()
+        if bad:
+            return bad
+        body = _body()
+        actor = permissions_web.current_actor()
+        try:
+            policy_id = policy.create_time_policy(
+                db_path, name=body.get("name"), rules=_rules(body),
+                machines=body.get("machines"), fleet_wide=body.get("fleet_wide"),
+                enabled=body.get("enabled", True), actor=actor)
+        except policy.PolicyRejected as e:
+            return refusals.refuse(e)
+        _audit_time(actor, "time_policy_create", policy_id)
+        return jsonify(_policy_view(policy.get_time_policy(db_path, policy_id))), 201
+
+    @bp.route("/api/policy/times/<policy_id>", methods=["PUT"])
+    @login_required
+    @can_manage
+    def update_time(policy_id):
+        bad = _require_json()
+        if bad:
+            return bad
+        body = _body()
+        try:
+            found = policy.update_time_policy(
+                db_path, policy_id, name=body.get("name"), rules=_rules(body),
+                machines=body.get("machines"), fleet_wide=body.get("fleet_wide"),
+                enabled=body.get("enabled", True))
+        except policy.PolicyRejected as e:
+            return refusals.refuse(e)
+        if not found:
+            return jsonify({"error": "unknown policy"}), 404
+        _audit_time(permissions_web.current_actor(), "time_policy_update", policy_id)
+        return jsonify(_policy_view(policy.get_time_policy(db_path, policy_id))), 200
+
+    @bp.route("/api/policy/times/<policy_id>", methods=["DELETE"])
+    @login_required
+    @can_manage
+    def remove_time(policy_id):
+        # Read before the delete, so the audit row can carry what was removed. Afterwards there
+        # is nothing left to describe, and "somebody deleted a schedule" without saying which
+        # one is the trail failing at the only question anybody asks of it.
+        found = policy.get_time_policy(db_path, policy_id)
+        if not policy.delete_time_policy(db_path, policy_id):
+            return jsonify({"error": "unknown policy"}), 404
+        _audit_time(permissions_web.current_actor(), "time_policy_delete", policy_id,
+                    found=found)
+        return jsonify({"status": "deleted"}), 200
+
+    def _rules(body):
+        """The windows and budgets, accepted either nested under `rules` or at the top level.
+
+        Both shapes because the console posts the whole form object and a script posting one
+        rule finds the nesting arbitrary. validate_time_rules is what decides whether either is
+        usable; this only says where to look.
+        """
+        rules = body.get("rules")
+        if isinstance(rules, dict):
+            return rules
+        return {"windows": body.get("windows"), "budgets": body.get("budgets")}
+
+    def _audit_time(actor, action, policy_id, found=None):
+        """Every write, at security level -- the same reasoning as _audit below.
+
+        The rules ride along rather than being summarised, because "who put a curfew on this
+        phone, and what did it say" is asked after the policy is gone, and a count of windows
+        does not answer it.
+        """
+        found = policy.get_time_policy(db_path, policy_id) if found is None else found
+        fleet.audit(db_path, actor=actor, action=action, level=fleet.LEVEL_SECURITY,
+                    target=policy_id,
+                    detail={"name": (found or {}).get("name", ""),
+                            "windows": (found or {}).get("windows", []),
+                            "budgets": (found or {}).get("budgets", []),
+                            "fleet_wide": (found or {}).get("fleet_wide", False),
+                            "machines": (found or {}).get("machines", [])})
+
     def _audit(actor, action, policy_id):
         """Every write, at security level.
 

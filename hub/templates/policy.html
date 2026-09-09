@@ -84,7 +84,73 @@
        Deliberately: see the note at the top of the file. #}
     <div id="policy-preview-out" style="margin-top: var(--space-4);"></div>
 </div>
+
+{# ---------------- Schedules ---------------- #}
+{# A second section on the same page rather than a page of its own, because both answer "what
+   may this device run" and an operator writing one usually wants to see the other. They are
+   separate RESOURCES underneath -- a blocklist names apps, a schedule names hours -- and the
+   editors are separate for the same reason: folding them together would produce one form that
+   hides half of itself.
+
+   No preview here, and that is not an oversight. A blocklist is previewed because "block
+   fourteen apps on ninety phones" is a number nobody can picture from the form. A curfew is
+   its own preview: "no TikTok between 22:00 and 07:00" says exactly what it does, and the part
+   that is genuinely hard to see -- whether the device's clock can be trusted -- is a device
+   property the preview could not answer anyway. #}
+<div class="toolbar" style="justify-content: space-between; margin: var(--space-6) 0 var(--space-3);">
+    <div>
+        <h2 class="section-title" style="font-size: var(--text-lg); margin-bottom: var(--space-2);">{{ t('policy.time.heading') }}</h2>
+        <p class="stat-card__meta">{{ t('policy.time.intro') }}</p>
+    </div>
+    <button class="btn btn--primary" type="button" id="time-new" hidden>{{ t('policy.time.new') }}</button>
+</div>
+
+{# The second thing somebody has to know before writing a curfew, after the dead-man switch:
+   the device decides, against its own clock, whether or not it can reach this hub. That is
+   what makes a curfew hold on a phone in a tunnel, and it is also why a device whose usage
+   access was never granted enforces the hours and ignores the budgets. #}
+<p class="banner" style="margin-bottom: var(--space-5);">{{ t('policy.time.local') }}</p>
+
+<div class="table-scroll" id="time-list"></div>
+
+<div class="card" id="time-editor" hidden style="margin-top: var(--space-5);">
+    <div class="toolbar" style="margin-bottom: var(--space-4);">
+        <input class="input" id="time-name" type="text" placeholder="{{ t('policy.name') }}"
+               aria-label="{{ t('policy.name') }}" style="min-width: 260px;">
+        <label class="stat-card__meta">
+            <input id="time-enabled" class="checkbox" type="checkbox" checked> {{ t('policy.enabled') }}
+        </label>
+    </div>
+
+    <h3 class="section-title" style="font-size: var(--text-md);">{{ t('policy.section_targets') }}</h3>
+    <label class="stat-card__meta">
+        <input id="time-fleet" class="checkbox" type="checkbox"> {{ t('policy.fleet_wide') }}
+    </label>
+    <div id="time-machines-wrap" style="margin-top: var(--space-3);">
+        <label for="time-machine-filter" class="sr-only">{{ t('policy.filter_machines') }}</label>
+        <input type="search" id="time-machine-filter" class="input"
+               placeholder="{{ t('policy.filter_machines') }}" style="max-width: 320px;">
+        <div id="time-machines" class="policy-picker"></div>
+    </div>
+
+    <h3 class="section-title" style="font-size: var(--text-md); margin-top: var(--space-5);">{{ t('policy.time.windows') }}</h3>
+    <p class="stat-card__meta">{{ t('policy.time.windows_help') }}</p>
+    <div id="time-windows" style="margin-top: var(--space-3);"></div>
+    <button class="btn" type="button" id="time-add-window">{{ t('policy.time.add_window') }}</button>
+
+    <h3 class="section-title" style="font-size: var(--text-md); margin-top: var(--space-5);">{{ t('policy.time.budgets') }}</h3>
+    <p class="stat-card__meta">{{ t('policy.time.budgets_help') }}</p>
+    <div id="time-budgets" style="margin-top: var(--space-3);"></div>
+    <button class="btn" type="button" id="time-add-budget">{{ t('policy.time.add_budget') }}</button>
+
+    <div class="toolbar" style="margin-top: var(--space-5); gap: var(--space-3);">
+        <button class="btn btn--primary" type="button" id="time-save">{{ t('policy.save') }}</button>
+        <button class="btn btn--ghost" type="button" id="time-cancel">{{ t('policy.cancel') }}</button>
+        <span class="stat-card__meta" id="time-error"></span>
+    </div>
+</div>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/policy.js') }}"></script>
+<script src="{{ url_for('static', filename='js/policy-time.js') }}"></script>
 {% endblock %}

@@ -5,7 +5,7 @@ sibling to `agent-linux/`. Same hub, same wire protocol, same house rules; a muc
 feature set, and unlike the other two, most of what is missing can never be added.
 
 **Status: early, but it has now run.** It compiles to a release-signed APK, its protocol half
-has 93 tests, and it has enrolled, reported telemetry and taken a command on a real device
+has 192 tests, and it has enrolled, reported telemetry and taken a command on a real device
 (Samsung Galaxy A15, Android 16). Nothing has been released and no fleet runs it. What is
 verified, and what still is not, is stated exactly in *Build, test, run*.
 
@@ -75,6 +75,8 @@ on, and it survived contact with Android intact.
 | **Commands** | `rename`, `locate_device` |
 | **App inventory** | Every installed package, with its label, version, and whether the framework says it is enabled or suspended. Change-only, on its own loop |
 | **App policy** | Suspends the packages the hub says to, un-suspends what it suspended before, and reports the ones it could not. Lifts everything on its own if the hub goes silent |
+| **Schedules** | Blocked hours and daily budgets, evaluated on the device against its own clock and its own usage -- so a curfew holds with the hub unreachable |
+| **App usage** | Foreground seconds per app, per local day, where usage access has been granted. What a budget is checked against, and what the console charts |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
 Three concurrent loops — telemetry, heartbeat, commands — for the reason the Windows agent's six
@@ -332,6 +334,51 @@ the hub is reachable -- and when the switch matters, it is not.
 DPC in its past, or by a vendor tool; lifting those would be this agent quietly taking ownership
 of decisions nobody asked it to make.
 
+## Enforcing a schedule
+
+Blocked hours and daily budgets ride the same `device_policy` document as the blocklist, and
+they are the one part of it this agent EVALUATES rather than applies.
+
+**That is not an optimisation, it is the feature.** A curfew depends on what time it is where
+the device is; a budget depends on how much the device has been used today. The hub has neither
+fact promptly, so it sends the rules and this evaluates them on every inventory tick -- once a
+minute, whether or not anything is reachable. A phone at 22:00 on a train with no signal still
+has a bedtime.
+
+**The local clock, with no timezone from the hub.** A curfew is about the evening of the person
+holding the phone: a hub-imposed zone would put a traveller's curfew at the wrong hour, and a
+fleet across two zones would need a policy each. `DeviceOwner.ApplyBaseline` enforces automatic
+time, which is what makes trusting the local clock defensible rather than naive -- and when that
+call fails the log says, in as many words, that a schedule on this device can be defeated by
+changing the clock.
+
+**An end before the start wraps past midnight, and the morning half belongs to the NEXT day.**
+22:00 to 07:00 is the only kind of curfew anybody writes, and reading it naively lifts it at
+midnight -- exactly when it matters and least likely to be noticed by whoever set it. Reading
+the morning half as "any day" is the mistake on the other side: it would curfew every night of
+the week from a rule that named Monday.
+
+**A whole-device rule expands against the inventory, and no inventory expands to NOTHING.**
+Backwards, a freshly enrolled phone suspends nothing on the first pass and every app it owns on
+the second -- at 22:00, with no operator in the loop. The protected set is applied to that
+expansion too, because it is the one place a rule can reach the launcher without anybody having
+named it.
+
+**`PACKAGE_USAGE_STATS` is an appop, and a device owner cannot grant it.** `setPermissionGrantState`
+covers dangerous runtime permissions; usage access is one of the special-access screens, and
+somebody has to open Settings and turn it on, once, per device. Assuming otherwise would produce
+a fleet where every budget silently never fires, because "nothing was used" and "I was not
+allowed to look" are the same zero. So `UsageStatsReader` detects the state, reports it to the
+hub as the `usage_access` capability, and the setup screen has a **Grant usage access** button
+that opens the right list. Blocked hours are unaffected -- they need a clock, not a ledger.
+
+**Foreground time is summed from resume/pause EVENTS, not from `queryUsageStats`.** The daily
+buckets that API returns are maintained lazily and can span more than the interval asked for, so
+"today" from it is somewhere between accurate and a day and a half. A budget decides whether to
+suspend something somebody is holding; it needs the exact number. The totals are kept as a
+high-water mark per day, because the platform trims its event buffer while a day is still
+running and a smaller figure would un-suspend an app whose allowance is spent.
+
 ## Fully managed (device owner)
 
 The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
@@ -355,9 +402,11 @@ throwing. Without it, a sideloaded build answers a lock or a suspend with a Secu
 that the dispatcher turns into "executor error: ...", which in the console reads exactly like
 broken hardware.
 
-**One power is taken today**, `setUserControlDisabledPackages`, which stops a person
-force-stopping the agent from the app info screen. It is **not** a fix for the OEM
-power-manager problem: those killers run inside the system and do not go through that path.
+**Two powers are taken today.** `setUserControlDisabledPackages` stops a person force-stopping
+the agent from the app info screen; it is **not** a fix for the OEM power-manager problem, since
+those killers run inside the system and do not go through that path. `setAutoTimeEnabled` holds
+the device to network time, which is what a schedule evaluated against the local clock rests on.
+Nothing sets a time and the time zone stays the device's own.
 `device_admin.xml` declares three more (`force-lock`, `limit-password`, `reset-password`) plus
 `wipe-data` before any is used, because a device owner cannot be re-prompted -- a policy
 discovered missing later may cost another factory reset to add.
@@ -376,14 +425,14 @@ src/FleetHubAgent.Core/       the protocol -- plain net10.0, tested on the works
   AgentLoops.cs               the three loops
   MachineNaming.cs            the derived name, and why it cannot be the model alone
   MachineNameProvider.cs      the current name, and persist-before-adopt
-  Fleet/                      hub client, dispatcher, capability report, inventory, rename, locate
+  Fleet/                      hub client, dispatcher, capability report, inventory, rename, locate, policy, schedule
   State/                      the identity store, behind an interface
   Telemetry/                  the report builder, the sensor contracts, identity cleaning
 src/FleetHubAgent.Android/    the app -- net10.0-android, needs the workload
   AgentService.cs             the foreground service, and the composition root
   MainActivity.cs             the setup and diagnostics screen
   BootReceiver.cs             coming back after a reboot
-  Platform/                   SharedPreferences, Build fields, sensors, location, apps, managed config, logcat
+  Platform/                   SharedPreferences, Build fields, sensors, location, apps, usage, managed config, logcat
   Policy/                     the device-admin component, the provisioning activities, app suspension
   Properties/AndroidManifest.xml   permissions and application settings only -- see the note in it
   Resources/xml/app_restrictions.xml   the keys an MDM can push

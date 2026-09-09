@@ -3465,8 +3465,74 @@ copy. The same check now runs in 200 ms with no SDK, no workload and no device.
 
 ### Not done
 
-`setApplicationHidden` as an explicit kiosk mode, and time-based restrictions (phase E), which
-ride the same `device_policy` channel. Nothing here has been run against a real device.
+`setApplicationHidden` as an explicit kiosk mode. Nothing here has been run against a real
+device.
+
+---
+
+## 🚧 Time restrictions · hub 1.104.0 · `usage.py` / `usage_web.py` + `policy.py`
+
+Phase E of #23: blocked hours and daily screen-time budgets, riding the same `device_policy`
+channel phase D built.
+
+**The rules travel; the device decides.** A curfew depends on what time it is where the device
+is, and a budget on how much the device has been used today. The hub has neither fact promptly,
+so it resolves the *rules* into the document and the agent evaluates them every minute, whether
+or not anything is reachable. A phone at 22:00 on a train with no signal still has a bedtime.
+Resolving curfews hub-side would have been simpler and would have produced a fleet that enforces
+its bedtime only while online, which is the opposite of what a curfew is for.
+
+**The document version had to cover the schedule.** Editing a curfew changes nothing about the
+blocked list, so a version hashed over `blocked` alone would leave every device holding the old
+schedule until something unrelated changed — with the console showing the new curfew and the
+device enforcing the old one. There is no error anywhere in that failure, which is why it is
+asserted through the real endpoint.
+
+**Windows and budgets both apply, and nothing is reconciled.** "No TikTok after 22:00" and
+"sixty minutes a day" both hold; whichever bites first is the answer. Combining them would mean
+inventing a precedence nobody asked for. The single exception is a duplicate budget on the same
+package, where a union has no meaning: the smaller number wins.
+
+**A week starts on Monday, as an index, on the wire.** A locale-dependent first day would put a
+Sunday curfew on a Saturday for half a fleet, silently. The wrapped window — an end before its
+start — is the ordinary bedtime rule rather than an error, and its morning half belongs to the
+day *after* the one it names; getting that wrong lifts a curfew at midnight, which is exactly
+when it matters and when nobody is watching.
+
+**Clock tampering is answered with the Device Owner, not with cleverness.** The agent enforces
+automatic time (`setAutoTimeEnabled`), so trusting the device's local clock is defensible rather
+than naive. Where that cannot be applied the log says so in as many words: the schedule still
+holds, against a clock the user can move.
+
+### Usage, which is the part that needed care
+
+Screen-time budgets have to be checked against something, and that something is a record of what
+a person did with their evening. It is inventoried in `SECURITY.MD` alongside location, with the
+same treatment: `view` **plus** machine scope to read, `data.usage_retention_days` (14 days, and
+meant to come down) to keep, and **no fleet-wide endpoint at all** — the app inventory has one
+because a policy author must pick a package from somewhere, and the question a fleet-wide usage
+view would answer is "who spends the most time on their phone".
+
+Pruning compares the **device's own local day**, not a hub timestamp: a device in a timezone
+ahead of the hub would otherwise have its current day pruned out from under it. Reports **merge**
+by day rather than replacing the machine's rows — the opposite of the app inventory, and the
+mistake a copy of that neighbour would make, because a device reports only today and a replace
+would erase a week's history the moment a phone came back from a drawer.
+
+**`PACKAGE_USAGE_STATS` is an appop, and a Device Owner cannot grant it.** That was the phase's
+one real surprise. `setPermissionGrantState` covers dangerous runtime permissions; usage access
+is a special-access screen somebody has to open by hand, once, per device. Assuming otherwise
+would have shipped a fleet where every budget silently never fired — "nothing was used" and "I
+was not allowed to look" are the same zero. So the agent detects the state, reports it as a
+`usage_access` capability, shows it on the device's own setup screen with a button that opens
+the right settings page, and the console says which devices need somebody to walk over. Blocked
+hours are unaffected: they need a clock, not a ledger.
+
+### Not done
+
+No console chart for usage — a table of days and a table of apps, because the question an
+operator arrives with is "how long", not "what shape". Nothing here has been run against a real
+device.
 
 ---
 
@@ -3484,9 +3550,11 @@ This is that list, so nothing is quietly skipped:
 | **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |
 | **D** | The Installed apps fold populates; the count is plausible for the device (150-400); `system` is set on the right ones; the list survives an app being installed and uninstalled; **on an unmanaged device** the list is short, which is the expected answer without `QUERY_ALL_PACKAGES` and not a bug |
 | **D policy** | Apply a blocklist to one test app and confirm the system's "paused by your organisation" dialog; confirm the console shows it as enforced from the device's OWN inventory; confirm a package that cannot be suspended comes back in `failed`; **delete the policy and confirm the app comes back** (the empty-document release valve); confirm the dead-man switch by setting a short `policy.max_age_seconds` and taking the device off the network |
+| **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
-Two things are blocked rather than merely pending: **A needs a device that can be wiped**, and
-everything needs the pilot phone to re-authorise USB debugging, which it dropped.
+**A is no longer blocked** — the pilot Galaxy A15 has been factory reset, so it can be
+provisioned by QR and used for the whole table. The remaining blocker is the phone re-authorising
+USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 
 ---
 

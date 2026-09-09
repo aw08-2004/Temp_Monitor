@@ -51,6 +51,19 @@ public sealed class AppInventoryReader(Context context, ILogger log) : IInventor
     /// this is a ceiling on a pathological case, not a limit anybody will meet.</summary>
     private const int MaxApps = 1000;
 
+    private volatile IReadOnlyList<string> _packages = [];
+
+    /// <summary>The package names from the last successful read, for the one caller that needs
+    /// the list rather than the report: a whole-device curfew names no packages and has to be
+    /// expanded against what is installed (DeviceSchedule).
+    ///
+    /// Served from the last read rather than re-enumerated, because the policy tick runs every
+    /// minute and walking every package on the device that often is exactly the cost this
+    /// reader was put on the slow loop to avoid. **Empty until the first read**, which is the
+    /// answer DeviceSchedule is built to handle: no inventory expands to nothing, never to
+    /// everything.</summary>
+    public IReadOnlyList<string> InstalledPackages => _packages;
+
     public JsonObject? Read()
     {
         var manager = context.PackageManager;
@@ -75,11 +88,17 @@ public sealed class AppInventoryReader(Context context, ILogger log) : IInventor
         }
 
         var apps = new JsonArray();
+        var names = new List<string>();
         foreach (var package in packages.Take(MaxApps))
         {
             var app = Describe(manager, package);
-            if (app is not null) apps.Add(app);
+            if (app is null) continue;
+            apps.Add(app);
+            if (package.PackageName is { Length: > 0 } name) names.Add(name);
         }
+        // Published only on a SUCCESSFUL read, so a failed enumeration leaves the previous list
+        // standing rather than shrinking a whole-device curfew to nothing.
+        _packages = names;
 
         log.LogInformation("App inventory: {Count} package(s)", apps.Count);
         // An OBJECT wrapping the array, always. The hub tests this key with `is not None`, and

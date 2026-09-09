@@ -59,6 +59,13 @@ public sealed class AgentCapabilities
     public const string FeatureAppPolicy = "app_policy";
     /// <summary>Screen-time budgets and blocked hours (phase E).</summary>
     public const string FeatureTimePolicy = "time_policy";
+    /// <summary>Usage access has actually been granted on this device (phase E). Separate from
+    /// <see cref="FeatureTimePolicy"/> because the two fail differently: without usage access a
+    /// curfew still holds and a BUDGET never fires, silently, since "nobody has used anything"
+    /// and "I was not allowed to look" are the same zero. It is an appop no Device Owner can
+    /// grant, so this is the only way the console learns that somebody has to walk over to the
+    /// device.</summary>
+    public const string FeatureUsageAccess = "usage_access";
     /// <summary>Enrolled as an Android Device Owner (phase A). Not something this agent
     /// chooses -- it is a fact about how the device was provisioned, and every policy feature
     /// degrades without it.</summary>

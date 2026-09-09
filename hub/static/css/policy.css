@@ -51,3 +51,24 @@
     font-size: var(--text-xs);
     word-break: break-all;
 }
+
+/* One rule row in the schedule editor: a curfew or a budget. Bordered rather than separated
+   by whitespace because two curfews next to each other are two independent things, and a
+   reader has to be able to see where the days of one stop and the hours of the next begin. */
+.policy-rule {
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+/* The multi-select of packages inside a curfew. Bounded so a fleet with four hundred packages
+   does not produce a rule row taller than the screen. */
+.policy-rule select[multiple] {
+    max-width: 360px;
+    min-width: 220px;
+}

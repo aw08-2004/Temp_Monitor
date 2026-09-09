@@ -244,6 +244,60 @@ def main():
         check("...and deleting an unknown one is a 404, not a 500",
               c.delete("/api/policy/apps/nope").status_code == 404)
 
+        print("\n== Schedules (roadmap #23 phase E) ==")
+        # A separate resource behind the same capability, so the gate is asserted separately:
+        # a route added later under a different decorator would pass every test above.
+        curfew = {"name": "Bedtime",
+                  "windows": [{"days": [0, 1, 2, 3, 4], "start": "22:00", "end": "07:00",
+                               "packages": ["com.zhiliaoapp.musically"]}],
+                  "machines": ["PHONE-1"]}
+        CURRENT_USER = "reader@x.com"
+        check("a reader cannot create a schedule",
+              c.post("/api/policy/times", json=curfew).status_code == 403)
+        check("...but can read the list", c.get("/api/policy/times").status_code == 200)
+        check("...and is told they may not write",
+              c.get("/api/policy/times").get_json()["can_manage"] is False)
+
+        CURRENT_USER = "author@x.com"
+        r = c.post("/api/policy/times", json=curfew)
+        check("an author can create one", r.status_code == 201)
+        made_time = r.get_json()["id"]
+        check("...with its window normalised to minutes past midnight",
+              r.get_json()["windows"][0]["start"] == 1320)
+
+        r = c.post("/api/policy/times", json={"name": "Nothing", "machines": ["PHONE-1"]})
+        check("a schedule with no rule at all is refused with a sentence",
+              r.status_code == 400 and r.get_json().get("error"))
+
+        print("\n== A schedule rides the SAME heartbeat document ==")
+        CURRENT_USER = "super@x.com"
+        r = c.post("/api/agent/heartbeat", headers=phone_auth,
+                   json={"config_version": "", "policy_version": "stale"})
+        reply = r.get_json()
+        check("the document carries the schedule beside the blocked list",
+              len(reply["device_policy"]["schedule"]["windows"]) == 1)
+        # The one that matters: a curfew changes nothing about the blocked list, so a version
+        # computed over `blocked` alone would leave every device holding the old schedule.
+        before = reply["device_policy_version"]
+        CURRENT_USER = "author@x.com"
+        c.put(f"/api/policy/times/{made_time}",
+              json={"name": "Bedtime",
+                    "windows": [{"days": [0], "start": "21:00", "end": "07:00"}],
+                    "machines": ["PHONE-1"]})
+        CURRENT_USER = "super@x.com"
+        r = c.post("/api/agent/heartbeat", headers=phone_auth,
+                   json={"config_version": "", "policy_version": before})
+        check("editing a curfew alone produces a new document version",
+              "device_policy" in r.get_json())
+
+        CURRENT_USER = "reader@x.com"
+        check("a reader cannot delete a schedule",
+              c.delete(f"/api/policy/times/{made_time}").status_code == 403)
+        CURRENT_USER = "author@x.com"
+        check("an author can", c.delete(f"/api/policy/times/{made_time}").status_code == 200)
+        check("...and deleting an unknown one is a 404, not a 500",
+              c.delete("/api/policy/times/nope").status_code == 404)
+
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         return 1 if FAIL else 0
     finally:

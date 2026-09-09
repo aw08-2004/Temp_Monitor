@@ -114,8 +114,7 @@ public class DevicePolicyTests
     [Fact]
     public void A_protected_package_is_dropped_from_the_effective_list()
     {
-        var policy = new DevicePolicy(
-            "v1", ["com.zhiliaoapp.musically", "com.android.settings"],
+        var policy = new DevicePolicy("v1", ["com.zhiliaoapp.musically", "com.android.settings"], DeviceSchedule.Empty,
             TimeSpan.FromDays(7), T0);
         Assert.Equal(["com.zhiliaoapp.musically"], policy.Effective(T0));
     }
@@ -125,7 +124,8 @@ public class DevicePolicyTests
     [Fact]
     public void A_fresh_policy_is_enforced()
     {
-        var policy = new DevicePolicy("v1", ["com.x"], TimeSpan.FromDays(7), T0);
+        var policy = new DevicePolicy("v1", ["com.x"], DeviceSchedule.Empty,
+            TimeSpan.FromDays(7), T0);
         Assert.False(policy.IsExpired(T0.AddDays(6)));
         Assert.Equal(["com.x"], policy.Effective(T0.AddDays(6)));
     }
@@ -133,7 +133,8 @@ public class DevicePolicyTests
     [Fact]
     public void A_policy_the_hub_has_stopped_confirming_lifts_itself()
     {
-        var policy = new DevicePolicy("v1", ["com.x"], TimeSpan.FromDays(7), T0);
+        var policy = new DevicePolicy("v1", ["com.x"], DeviceSchedule.Empty,
+            TimeSpan.FromDays(7), T0);
         Assert.True(policy.IsExpired(T0.AddDays(8)));
         // The assertion that keeps a phone usable when its hub is gone.
         Assert.Empty(policy.Effective(T0.AddDays(8)));
@@ -144,7 +145,8 @@ public class DevicePolicyTests
     {
         // The hub re-affirms the same version on every heartbeat. Anchoring on FIRST receipt
         // instead would expire a policy that has been confirmed every ten seconds for a week.
-        var policy = new DevicePolicy("v1", ["com.x"], TimeSpan.FromDays(7), T0);
+        var policy = new DevicePolicy("v1", ["com.x"], DeviceSchedule.Empty,
+            TimeSpan.FromDays(7), T0);
         policy.Reaffirm(T0.AddDays(6));
         Assert.False(policy.IsExpired(T0.AddDays(12)));
     }
@@ -156,9 +158,11 @@ public class DevicePolicyTests
         // sanity-checked -- would make every device lift its policy on the next tick, which is
         // a fleet-wide un-enforcement with no operator anywhere in it.
         Assert.Equal(DevicePolicy.MinMaxAge,
-            new DevicePolicy("v", [], TimeSpan.Zero, T0).MaxAge);
+            new DevicePolicy("v", [], DeviceSchedule.Empty,
+            TimeSpan.Zero, T0).MaxAge);
         Assert.Equal(DevicePolicy.MaxMaxAge,
-            new DevicePolicy("v", [], TimeSpan.FromDays(3650), T0).MaxAge);
+            new DevicePolicy("v", [], DeviceSchedule.Empty,
+            TimeSpan.FromDays(3650), T0).MaxAge);
     }
 
     // ---------------------------------------------------------------- parsing
@@ -208,7 +212,8 @@ public class DevicePolicyTests
         // Persisted so a process kill resumes the STALENESS CLOCK, not merely the enforcement:
         // an agent that forgot it every restart would restart the clock with it, and a device
         // whose hub went silent a month ago would enforce forever, one kill at a time.
-        var original = new DevicePolicy("v3", ["com.x"], TimeSpan.FromDays(2), T0);
+        var original = new DevicePolicy("v3", ["com.x"], DeviceSchedule.Empty,
+            TimeSpan.FromDays(2), T0);
         var restored = DevicePolicy.FromJson(JsonNode.Parse(original.ToJson().ToJsonString()));
         Assert.NotNull(restored);
         Assert.Equal("v3", restored!.Version);

@@ -231,6 +231,11 @@ REGISTRY = (
     # personal-data inventory.
     _s("data.location_retention_days", "data", "int", 30, minimum=1, maximum=365,
        unit="days"),
+    # The second privacy prune, and the shorter one. App usage is a record of what a person
+    # did with their evenings rather than of where a device was once, so fourteen days is the
+    # default and it is meant to come down further. Pruned by the DEVICE's own local day, never
+    # by a hub timestamp -- see usage.prune.
+    _s("data.usage_retention_days", "data", "int", 14, minimum=1, maximum=365, unit="days"),
 
     # ---------------- History metrics: which sensors are recorded to history ----------------
     # One on/off toggle per chartable metric on the per-machine History dashboard. Off means

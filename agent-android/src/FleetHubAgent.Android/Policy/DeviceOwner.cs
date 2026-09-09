@@ -93,6 +93,8 @@ public static class DeviceOwner
         // killers run inside the system and do not go through the user-control path this
         // blocks; this stops a PERSON, not Samsung's battery manager. The overnight survival
         // question is still open (roadmap #23).
+        EnforceAutomaticTime(dpm, admin, log);
+
         if (!OperatingSystem.IsAndroidVersionAtLeast(30)) return;
         var package = context.PackageName;
         if (string.IsNullOrEmpty(package)) return;
@@ -107,6 +109,53 @@ public static class DeviceOwner
             // telemetry and takes commands; it is one where somebody can stop the agent by
             // hand. Worth a line in the log and nothing more.
             log.LogWarning("Device Owner: could not disable user control: {Msg}", e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Take the device's clock away from the person holding it -- roadmap #23 phase E.
+    ///
+    /// **This is the power a curfew rests on.** Windows and budgets are evaluated on the
+    /// device against its own local clock, which is the only way a phone with no signal at
+    /// 22:00 still has a bedtime. That trust is only defensible if the clock is not a setting
+    /// somebody can move: without this, "no TikTok after 22:00" is undone by walking into
+    /// date and time settings and saying it is 09:00.
+    ///
+    /// It is the narrow version of the power, deliberately. The device takes its time from the
+    /// network, as it would out of the box; nothing here SETS a time, and the time zone stays
+    /// the device's own, because a fleet-imposed zone would put a traveller's curfew at the
+    /// wrong hour for the person it is about.
+    ///
+    /// Applied on every service start rather than once, because an OS update can reset it and
+    /// there is nobody at the device to notice.
+    /// </summary>
+    private static void EnforceAutomaticTime(DevicePolicyManager dpm, ComponentName admin,
+        ILogger log)
+    {
+        try
+        {
+            if (OperatingSystem.IsAndroidVersionAtLeast(30))
+            {
+                dpm.SetAutoTimeEnabled(admin, true);
+            }
+            else
+            {
+#pragma warning disable CA1422 // the pre-30 spelling, reached only below 30
+                // setAutoTimeRequired is the older, blunter form: it forbids manual time
+                // rather than turning automatic time on. Same effect for this purpose, and it
+                // is what a device below 30 has.
+                dpm.SetAutoTimeRequired(admin, true);
+#pragma warning restore CA1422
+            }
+            log.LogInformation("Device Owner: automatic time enforced");
+        }
+        catch (Exception e)
+        {
+            // Never fatal, and worth being explicit about what is lost: the device still
+            // enforces its schedule, against a clock the user can move. The console cannot
+            // see that from here, which is why this line exists.
+            log.LogWarning("Device Owner: could not enforce automatic time, so a schedule on " +
+                           "this device can be defeated by changing the clock: {Msg}", e.Message);
         }
     }
 

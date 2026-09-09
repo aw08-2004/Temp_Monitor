@@ -39,18 +39,26 @@ public sealed class DevicePolicy
     /// <summary>The empty policy: nothing blocked. **Not the same as "no policy".** A device
     /// with no policy at all still enforces whatever it last applied; this one actively lifts
     /// it, which is what makes removing a machine from a policy able to un-block its apps.</summary>
-    public static DevicePolicy Empty(DateTimeOffset now) => new("", [], DefaultMaxAge, now);
+    public static DevicePolicy Empty(DateTimeOffset now) =>
+        new("", [], DeviceSchedule.Empty, DefaultMaxAge, now);
 
     public string Version { get; }
     public IReadOnlyList<string> Blocked { get; }
+
+    /// <summary>Curfews and budgets (roadmap #23 phase E). Evaluated on the device against its
+    /// own clock and its own usage, because the hub has neither fact promptly -- see
+    /// DeviceSchedule.</summary>
+    public DeviceSchedule Schedule { get; }
+
     public TimeSpan MaxAge { get; }
     public DateTimeOffset ReceivedAtUtc { get; private set; }
 
-    public DevicePolicy(string version, IReadOnlyList<string> blocked, TimeSpan maxAge,
-        DateTimeOffset receivedAtUtc)
+    public DevicePolicy(string version, IReadOnlyList<string> blocked, DeviceSchedule schedule,
+        TimeSpan maxAge, DateTimeOffset receivedAtUtc)
     {
         Version = version ?? "";
         Blocked = blocked;
+        Schedule = schedule;
         MaxAge = maxAge < MinMaxAge ? MinMaxAge : (maxAge > MaxMaxAge ? MaxMaxAge : maxAge);
         ReceivedAtUtc = receivedAtUtc;
     }
@@ -62,10 +70,29 @@ public sealed class DevicePolicy
     /// <summary>Has this policy gone stale enough to lift?</summary>
     public bool IsExpired(DateTimeOffset now) => now - ReceivedAtUtc > MaxAge;
 
-    /// <summary>What should actually be suspended right now: the blocked list, minus anything
-    /// protected, and nothing at all once the policy has expired.</summary>
-    public IReadOnlyList<string> Effective(DateTimeOffset now)
-        => IsExpired(now) ? [] : Blocked.Where(p => !NeverSuspend.Contains(p)).ToArray();
+    /// <summary>What should actually be suspended right now: the blocked list plus whatever the
+    /// schedule says at this moment, minus anything protected, and nothing at all once the
+    /// policy has expired.
+    ///
+    /// **The schedule half is re-evaluated on every call**, which is why the coordinator ticks
+    /// even when nothing has arrived from the hub: a curfew starts at 22:00 with no message
+    /// from anywhere, and a budget is exceeded while the device is offline.</summary>
+    public IReadOnlyList<string> Effective(DateTimeOffset now, IUsageSource? usage = null,
+        IReadOnlyList<string>? installed = null)
+    {
+        if (IsExpired(now)) return [];
+        var blocked = new HashSet<string>(Blocked, StringComparer.Ordinal);
+        if (usage is not null && !Schedule.IsEmpty)
+        {
+            foreach (var package in Schedule.Blocked(usage.LocalNow, usage.SecondsToday(),
+                                                     installed ?? []))
+            {
+                blocked.Add(package);
+            }
+        }
+        return blocked.Where(p => !NeverSuspend.Contains(p))
+                      .OrderBy(p => p, StringComparer.Ordinal).ToArray();
+    }
 
     /// <summary>Parse a `device_policy` block. Null when it is not one.
     ///
@@ -93,7 +120,8 @@ public sealed class DevicePolicy
             catch { seconds = 0; }
         }
         var maxAge = seconds > 0 ? TimeSpan.FromSeconds(seconds) : DefaultMaxAge;
-        return new DevicePolicy(version ?? "", blocked, maxAge, now);
+        return new DevicePolicy(version ?? "", blocked, DeviceSchedule.Parse(obj["schedule"]),
+                                maxAge, now);
     }
 
     /// <summary>Round-trip for the state store, so a policy survives the process being killed.
@@ -106,9 +134,39 @@ public sealed class DevicePolicy
     {
         ["version"] = Version,
         ["blocked"] = new JsonArray(Blocked.Select(p => (JsonNode)p!).ToArray()),
+        ["schedule"] = ScheduleJson(),
         ["max_age_seconds"] = (int)MaxAge.TotalSeconds,
         ["received_at"] = ReceivedAtUtc.ToUnixTimeSeconds(),
     };
+
+    /// <summary>The schedule, back in the shape Parse reads. Written out rather than kept as
+    /// the original node because a JsonNode has a single parent, and stashing the hub's would
+    /// tie this object's lifetime to the reply it came in.</summary>
+    private JsonObject ScheduleJson()
+    {
+        var windows = new JsonArray();
+        foreach (var window in Schedule.Windows)
+        {
+            windows.Add(new JsonObject
+            {
+                ["days"] = new JsonArray(window.Days.Select(d => (JsonNode)d).ToArray()),
+                ["start"] = window.Start,
+                ["end"] = window.End,
+                ["packages"] = new JsonArray(
+                    window.Packages.Select(p => (JsonNode)p!).ToArray()),
+            });
+        }
+        var budgets = new JsonArray();
+        foreach (var budget in Schedule.Budgets)
+        {
+            budgets.Add(new JsonObject
+            {
+                ["package"] = budget.Package,
+                ["minutes"] = budget.Minutes,
+            });
+        }
+        return new JsonObject { ["windows"] = windows, ["budgets"] = budgets };
+    }
 
     public static DevicePolicy? FromJson(JsonNode? node)
     {
@@ -121,7 +179,8 @@ public sealed class DevicePolicy
         var version = "";
         try { version = obj["version"]?.GetValue<string>() ?? ""; } catch { version = ""; }
         return Parse(obj, version, when) is { } parsed
-            ? new DevicePolicy(parsed.Version, parsed.Blocked, parsed.MaxAge, when)
+            ? new DevicePolicy(parsed.Version, parsed.Blocked, parsed.Schedule, parsed.MaxAge,
+                               when)
             : null;
     }
 }

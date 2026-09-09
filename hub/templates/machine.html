@@ -216,6 +216,27 @@
         <div class="table-scroll" id="apps-body"></div>
     </details>
 
+    {# How long each app was in the foreground -- roadmap #23 phase E.
+
+       Closed by default, and that is a privacy decision rather than a page-weight one. Every
+       other fold on this page describes a machine; this one describes a person's evening. It
+       opens when somebody deliberately opens it, which is also what makes the audit question
+       ("who looked at this") a meaningful one to ask later.
+
+       Hidden entirely on a device that has never reported usage, which is every Windows PC --
+       and, importantly, also every Android device where usage access was never granted. The
+       script tells those two apart, because the second is fixable in thirty seconds by
+       somebody holding the device and the first never will be. #}
+    <details class="card sensor-browser fold" data-fold-key="machine:overview:usage"
+             id="card-usage" hidden>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.usage.title') }}</span>
+            <span class="stat-card__meta" id="usage-count"></span>
+        </summary>
+        <p class="stat-card__meta" style="margin: var(--space-3) 0;" id="usage-status"></p>
+        <div class="table-scroll" id="usage-body"></div>
+    </details>
+
     {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
        Collapsed by default and only polled while open, exactly like the sensor browser
        below, and here the argument is stronger than "it is a lot of rows": the machine does
@@ -394,5 +415,6 @@
 <script src="{{ url_for('static', filename='js/location-map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-location.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

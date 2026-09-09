@@ -26,7 +26,8 @@ namespace FleetHubAgent.Fleet;
 /// enforcing forever, one restart at a time.
 /// </summary>
 public sealed class PolicyCoordinator(
-    ILogger<PolicyCoordinator> log, AgentState state, IPolicyEnforcer enforcer)
+    ILogger<PolicyCoordinator> log, AgentState state, IPolicyEnforcer enforcer,
+    IUsageSource? usage = null, Func<IReadOnlyList<string>>? installed = null)
     : IInventorySource
 {
     /// <summary>Matches the heartbeat key hub/fleet_web.py ingests.</summary>
@@ -44,6 +45,10 @@ public sealed class PolicyCoordinator(
     /// same as the version held: between accepting a document and the next tick they differ,
     /// and so do they after an application that partly failed.</summary>
     private string _appliedVersion = "";
+    /// <summary>The exact set last handed to the enforcer. The version alone cannot answer
+    /// "has anything changed" once a schedule is involved -- the document is identical at 21:59
+    /// and 22:00 and the answer is not.</summary>
+    private IReadOnlyList<string> _lastWanted = [];
     private DateTimeOffset? _appliedAt;
     private IReadOnlyList<string> _failed = [];
     private string _error = "";
@@ -120,17 +125,28 @@ public sealed class PolicyCoordinator(
         DevicePolicy? policy;
         string applied;
         bool lifted;
+        IReadOnlyList<string> lastWanted;
         lock (_gate)
         {
             policy = _policy;
             applied = _appliedVersion;
             lifted = _lifted;
+            lastWanted = _lastWanted;
         }
+
         if (policy is null) return;
 
         var expired = policy.IsExpired(now);
+        // What should be suspended AT THIS MOMENT. Computed before the short-circuits below,
+        // because a schedule changes the answer without the version changing: a curfew starts
+        // at 22:00 and a budget runs out mid-afternoon, both with nothing arriving from the
+        // hub. Comparing against what is actually applied is what turns that into an action --
+        // the version alone would say "unchanged" at 21:59 and at 22:00 alike.
+        var wanted = policy.Effective(now, usage, installed?.Invoke() ?? []);
+        var unchanged = applied == policy.Version && Same(wanted, lastWanted);
+
         if (expired && lifted) return;                       // already lifted; nothing to do
-        if (!expired && applied == policy.Version) return;   // already applied; nothing to do
+        if (!expired && unchanged) return;                   // already applied; nothing to do
 
         if (!enforcer.CanEnforce)
         {
@@ -149,7 +165,6 @@ public sealed class PolicyCoordinator(
             return;
         }
 
-        var wanted = policy.Effective(now);
         if (expired)
         {
             // The dead-man switch firing. Logged at Warning because it is not routine and
@@ -181,6 +196,7 @@ public sealed class PolicyCoordinator(
         lock (_gate)
         {
             _appliedVersion = policy.Version;
+            _lastWanted = wanted;
             _appliedAt = now;
             _failed = failed;
             _lifted = expired;
@@ -212,6 +228,9 @@ public sealed class PolicyCoordinator(
             };
         }
     }
+
+    private static bool Same(IReadOnlyList<string> a, IReadOnlyList<string> b)
+        => a.Count == b.Count && !a.Except(b, StringComparer.Ordinal).Any();
 
     private void Persist(DevicePolicy policy)
     {

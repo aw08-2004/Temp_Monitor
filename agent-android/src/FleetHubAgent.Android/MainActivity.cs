@@ -8,6 +8,7 @@ using Android.Widget;
 using FleetHubAgent;
 using FleetHubAgent.State;
 using FleetHubAgent.Android.Platform;
+using FleetHubAgent.Android.Policy;
 
 namespace FleetHubAgent.Android;
 
@@ -110,6 +111,10 @@ public sealed class MainActivity : Activity
         battery.Click += (_, _) => OpenBatterySettings();
         root.AddView(battery);
 
+        var usage = new Button(this) { Text = "Grant usage access" };
+        usage.Click += (_, _) => OpenUsageAccessSettings();
+        root.AddView(usage);
+
         var hint = new TextView(this)
         {
             Text =
@@ -209,6 +214,41 @@ public sealed class MainActivity : Activity
         Toast.MakeText(this, "No battery settings screen on this device", ToastLength.Long)?.Show();
     }
 
+    /// <summary>Open the usage-access screen -- roadmap #23 phase E.
+    ///
+    /// **The one permission a Device Owner cannot grant for you.** Usage access is an appop,
+    /// not a dangerous runtime permission, so setPermissionGrantState does not reach it and no
+    /// provisioning flow turns it on. Without it every screen-time BUDGET reads zero minutes
+    /// used and therefore never fires -- which looks, from the console, exactly like a device
+    /// nobody has been using. Curfews are unaffected; they need a clock, not a ledger.
+    ///
+    /// The list screen is opened rather than this app's row in it, because the per-app deep
+    /// link is not public API and several OEMs do not honour it. Falls back to the app's own
+    /// settings page, which is where a technician can reach the same switch by hand.</summary>
+    private void OpenUsageAccessSettings()
+    {
+        var candidates = new[]
+        {
+            global::Android.Provider.Settings.ActionUsageAccessSettings,
+            global::Android.Provider.Settings.ActionApplicationDetailsSettings,
+        };
+
+        foreach (var action in candidates)
+        {
+            try
+            {
+                var intent = new Intent(action);
+                if (action == global::Android.Provider.Settings.ActionApplicationDetailsSettings)
+                    intent.SetData(global::Android.Net.Uri.Parse("package:" + PackageName));
+                StartActivity(intent);
+                return;
+            }
+            catch { /* try the next one */ }
+        }
+
+        Toast.MakeText(this, "No usage access screen on this device", ToastLength.Long)?.Show();
+    }
+
     private void RequestNotificationPermissionIfNeeded()
     {
         // OperatingSystem.IsAndroidVersionAtLeast rather than a Build.VERSION.SdkInt
@@ -233,6 +273,14 @@ public sealed class MainActivity : Activity
             $"FleetHub Agent {AgentConfig.Version}",
             $"Hub: {AgentConfig.HubBase}",
             $"Machine: {name ?? "(derived from this device)"}",
+            // Whether the QR provisioning actually took, and whether the one switch nobody can
+            // flip remotely has been flipped. Both are invisible otherwise, and both are things
+            // a technician holding the device can fix in the next thirty seconds.
+            DeviceOwner.Describe(this),
+            UsageStatsReader.IsGranted(this)
+                ? "Usage access granted -- screen-time budgets can be enforced."
+                : "Usage access NOT granted. Blocked hours still work; screen-time budgets " +
+                  "will never fire, because this device cannot see how long an app was used.",
         };
 
         if (identity.IsEnrolled)

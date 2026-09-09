@@ -49,6 +49,7 @@ import refusals
 import remote
 import settings
 import terminal
+import usage
 import wake
 
 
@@ -201,6 +202,15 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 policy.record_state(db_path, machine, data["policy_state"])
             except Exception as e:
                 print(f"[policy] Could not record the policy state for {machine}: {e}")
+        # Foreground time per app per day (roadmap #23 phase E). Change-only like its
+        # neighbours and never fatal, and merged by day rather than replacing the machine's
+        # history: a device coming back from a week offline reports what it has, and believing
+        # that was the whole record would erase the days before it went away.
+        if data.get("usage"):
+            try:
+                usage.record_usage(db_path, machine, data["usage"])
+            except Exception as e:
+                print(f"[usage] Could not record usage for {machine}: {e}")
         # Logon sessions + display outputs, on the same change-only cadence and with the same
         # never-fatal handling: this feeds the remote session picker and the headless badge,
         # and neither is worth failing a heartbeat over.
@@ -334,6 +344,13 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             if data.get("policy_version") != document["version"]:
                 payload["device_policy"] = {
                     "blocked": document["blocked"],
+                    # Curfews and budgets (roadmap #23 phase E). Sent as RULES rather than
+                    # resolved into `blocked`, because both depend on facts the hub does not
+                    # have and cannot have promptly: what time it is where the device is, and
+                    # how much the device has been used today. The device evaluates them every
+                    # minute whether or not the hub is reachable, which is the only way a
+                    # curfew holds at 22:00 on a phone that is offline.
+                    "schedule": document["schedule"],
                     "max_age_seconds": settings.get_int(db_path, "policy.max_age_seconds"),
                 }
                 payload["device_policy_version"] = document["version"]

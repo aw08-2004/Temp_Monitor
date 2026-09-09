@@ -962,6 +962,10 @@
         "location_retention_days": {
           "label": "Conservar el historial de ubicación",
           "help": "Cuánto tiempo se conservan las posiciones registradas antes de borrarse. Es un control de privacidad y no de espacio en disco -- la tabla es diminuta --, así que está pensado para bajarlo. Borrar una máquina elimina su historial de ubicación de inmediato, independientemente de esto."
+        },
+        "usage_retention_days": {
+          "label": "Conservar el uso de apps",
+          "help": "Cuánto tiempo se conserva el tiempo en primer plano por app antes de borrarse. Es un registro de lo que alguien hizo con sus tardes, así que por defecto es más corto que el de ubicación y está pensado para bajarlo más. Borrar una máquina elimina su uso de inmediato, independientemente de esto."
         }
       },
       "map": {
@@ -2200,6 +2204,9 @@
     },
     "apps": {
       "title": "Aplicaciones instaladas"
+    },
+    "usage": {
+      "title": "Uso de apps"
     }
   },
   "remote": {
@@ -3338,6 +3345,60 @@
       "dropped": "Estas apps no pueden pausarse nunca y se han omitido: {packages}",
       "machine": "Dispositivo",
       "would_suspend": "Pausaría"
+    },
+    "time": {
+      "heading": "Horarios",
+      "intro": "Horas bloqueadas y límites diarios de tiempo de pantalla.",
+      "new": "Nuevo horario",
+      "none": "Todavía no hay horarios.",
+      "local": "Un horario lo aplica el propio dispositivo, con su propio reloj, alcance o no este hub. Los dispositivos gestionados se fijan a la hora de red para que no se pueda cambiar el reloj y escapar de un bloqueo.",
+      "windows": "Horas bloqueadas",
+      "windows_help": "Nada en los días elegidos entre estas horas. Un final anterior al inicio pasa de la medianoche, que es lo que necesita una regla de hora de dormir.",
+      "add_window": "Añadir horas bloqueadas",
+      "no_windows": "Sin horas bloqueadas.",
+      "budgets": "Límites diarios",
+      "budgets_help": "Cuánto se puede usar una app, o todo el dispositivo, cada día. Los límites agotados se levantan a la medianoche del dispositivo. Cero significa nada hoy.",
+      "add_budget": "Añadir un límite",
+      "no_budgets": "Sin límites.",
+      "whole_device": "Todo el dispositivo",
+      "from": "Desde",
+      "until": "Hasta",
+      "wraps": "pasa de la medianoche",
+      "minutes": "Minutos",
+      "minutes_a_day": "minutos al día",
+      "remove_rule": "Quitar",
+      "window_summary": "{days} {start}-{end}: {apps}",
+      "budget_summary": "{app}: {minutes} min al día",
+      "column": {
+        "rules": "Reglas"
+      },
+      "day": {
+        "mon": "Lun",
+        "tue": "Mar",
+        "wed": "Mié",
+        "thu": "Jue",
+        "fri": "Vie",
+        "sat": "Sáb",
+        "sun": "Dom"
+      }
+    }
+  },
+  "usage": {
+    "recent_total": "Días recientes, por app",
+    "by_day": "Día a día",
+    "days_counted": "{count} día(s)",
+    "none": "Este dispositivo no ha informado de uso de apps.",
+    "retention": "Se conserva {days} días y luego se borra.",
+    "no_access": "No se ha concedido el acceso al uso en este dispositivo, así que los límites de tiempo de pantalla nunca se aplicarán. Las horas bloqueadas siguen funcionando. Quien tenga el dispositivo puede concederlo en la app del agente.",
+    "hours_minutes": "{hours} h {minutes} min",
+    "hours": "{hours} h",
+    "minutes": "{minutes} min",
+    "column": {
+      "app": "App",
+      "time": "Tiempo en primer plano",
+      "day": "Día",
+      "total": "Total",
+      "top": "Más usadas"
     }
   }
 }

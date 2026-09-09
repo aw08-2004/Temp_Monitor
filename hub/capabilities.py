@@ -75,12 +75,19 @@ FEATURE_APP_POLICY = "app_policy"
 #: Screen-time budgets and blocked hours (phase E), enforced agent-side from a persisted
 #: schedule. Same channel, same reason.
 FEATURE_TIME_POLICY = "time_policy"
+#: Usage access has actually been granted on the device (phase E). Separate from the feature
+#: above because the two fail differently: without usage access a curfew still holds and a
+#: BUDGET never fires, silently, because "nothing was used" and "I was not allowed to look" are
+#: the same zero. On Android it is an appop that no Device Owner can grant, so this is the only
+#: way the console can say "somebody has to walk over to that device".
+FEATURE_USAGE_ACCESS = "usage_access"
 #: The device is enrolled as an Android Device Owner (phase A). Not a capability the agent
 #: chooses -- it is a fact about how the device was provisioned, and every policy feature
 #: degrades without it. Reported so the console can say "this device is not fully managed"
 #: rather than letting a policy silently do nothing.
 FEATURE_DEVICE_OWNER = "device_owner"
-FEATURES = (FEATURE_LOCATE, FEATURE_APP_POLICY, FEATURE_TIME_POLICY, FEATURE_DEVICE_OWNER)
+FEATURES = (FEATURE_LOCATE, FEATURE_APP_POLICY, FEATURE_TIME_POLICY, FEATURE_USAGE_ACCESS,
+            FEATURE_DEVICE_OWNER)
 
 # ---------------------------------------------------------------- ingest caps
 #: Bounds a misbehaving or hostile agent, not a real one. The largest honest report is the

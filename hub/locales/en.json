@@ -1034,6 +1034,10 @@
         "location_retention_days": {
           "label": "Keep location history for",
           "help": "How long recorded positions are kept before being deleted. This is a privacy control rather than a disk-space one -- the table is tiny -- so it is meant to be turned down. Deleting a machine erases its location history immediately, regardless of this."
+        },
+        "usage_retention_days": {
+          "label": "Keep app usage for",
+          "help": "How long per-app foreground time is kept before being deleted. A record of what somebody did with their evenings, so it is shorter than the location window by default and is meant to come down further. Deleting a machine erases its usage immediately, regardless of this."
         }
       },
       "map": {
@@ -2313,6 +2317,9 @@
     },
     "apps": {
       "title": "Installed apps"
+    },
+    "usage": {
+      "title": "App usage"
     }
   },
   "remote": {
@@ -3456,6 +3463,60 @@
       "dropped": "These apps can never be suspended and were left out: {packages}",
       "machine": "Device",
       "would_suspend": "Would suspend"
+    },
+    "time": {
+      "heading": "Schedules",
+      "intro": "Blocked hours and daily screen-time budgets.",
+      "new": "New schedule",
+      "none": "No schedule yet.",
+      "local": "A schedule is enforced by the device itself, against the device's own clock, whether or not it can reach this hub. Managed devices are held to network time so the clock cannot be moved to escape a curfew.",
+      "windows": "Blocked hours",
+      "windows_help": "Nothing on the chosen days between these times. An end earlier than the start runs past midnight, which is what a bedtime rule needs.",
+      "add_window": "Add blocked hours",
+      "no_windows": "No blocked hours.",
+      "budgets": "Daily budgets",
+      "budgets_help": "How long an app, or the whole device, may be used each day. Spent budgets lift at the device's own midnight. Zero means not at all today.",
+      "add_budget": "Add a budget",
+      "no_budgets": "No budgets.",
+      "whole_device": "The whole device",
+      "from": "From",
+      "until": "Until",
+      "wraps": "runs past midnight",
+      "minutes": "Minutes",
+      "minutes_a_day": "minutes a day",
+      "remove_rule": "Remove",
+      "window_summary": "{days} {start}-{end}: {apps}",
+      "budget_summary": "{app}: {minutes} min a day",
+      "column": {
+        "rules": "Rules"
+      },
+      "day": {
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat",
+        "sun": "Sun"
+      }
+    }
+  },
+  "usage": {
+    "recent_total": "Recent days, by app",
+    "by_day": "Day by day",
+    "days_counted": "{count} day(s)",
+    "none": "This device has reported no app usage.",
+    "retention": "Kept for {days} days, then deleted.",
+    "no_access": "Usage access has not been granted on this device, so screen-time budgets will never fire. Blocked hours still work. Somebody holding the device can grant it in the agent app.",
+    "hours_minutes": "{hours} h {minutes} min",
+    "hours": "{hours} h",
+    "minutes": "{minutes} min",
+    "column": {
+      "app": "App",
+      "time": "Foreground time",
+      "day": "Day",
+      "total": "Total",
+      "top": "Most used"
     }
   }
 }

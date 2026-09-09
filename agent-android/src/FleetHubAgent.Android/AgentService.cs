@@ -85,6 +85,9 @@ public sealed class AgentService : Service
     private TelemetryReporter? _reporter;
     private FleetClient? _fleet;
     private ISensorSource? _sensors;
+    /// <summary>Held as a field only so the capability report can ask it, live, whether usage
+    /// access has been granted -- see ReportedFeatures.</summary>
+    private UsageStatsReader? _usage;
 
     public override IBinder? OnBind(Intent? intent) => null;
 
@@ -181,9 +184,18 @@ public sealed class AgentService : Service
         // Restored before the loops start so a process kill resumes the staleness clock where
         // it left off rather than restarting it -- see PolicyCoordinator on why that matters
         // more than resuming the enforcement itself.
+        // Built before the coordinator because the coordinator reads from both: a budget needs
+        // the usage ledger, and a whole-device curfew needs the installed list to expand
+        // against. Both are passed as the reader objects rather than as snapshots -- the values
+        // change under the policy tick, which is the entire point of evaluating a schedule on
+        // the device.
+        _usage = new UsageStatsReader(this, _loggerFactory.CreateLogger("Usage"));
+        var apps = new AppInventoryReader(this, _loggerFactory.CreateLogger("AppInventory"));
+
         var policy = new PolicyCoordinator(
             _loggerFactory.CreateLogger<PolicyCoordinator>(), state,
-            new AndroidPolicyEnforcer(this, _loggerFactory.CreateLogger("AppPolicy")));
+            new AndroidPolicyEnforcer(this, _loggerFactory.CreateLogger("AppPolicy")),
+            _usage, () => apps.InstalledPackages);
         policy.Restore();
 
         // The slow local reads, on their own loop -- see AgentLoops.InventoryLoopAsync for why
@@ -191,7 +203,8 @@ public sealed class AgentService : Service
         // did with its policy is exactly the shape of every other change-only block.
         var inventory = new IInventorySource[]
         {
-            new AppInventoryReader(this, _loggerFactory.CreateLogger("AppInventory")),
+            apps,
+            _usage,
             policy,
         };
 
@@ -212,7 +225,22 @@ public sealed class AgentService : Service
     /// see by asking.</summary>
     private List<string> ReportedFeatures()
     {
-        var features = new List<string> { AgentCapabilities.FeatureLocate };
+        var features = new List<string>
+        {
+            AgentCapabilities.FeatureLocate,
+            // Same reasoning as locate: these say "this agent implements app policy and
+            // schedules", not "this device can enforce them right now". Whether it can is
+            // `device_owner`, reported beside them, and keeping the two apart is what lets the
+            // console draw a policy editor and a "this device is not fully managed" warning at
+            // the same time instead of hiding the feature and explaining nothing.
+            AgentCapabilities.FeatureAppPolicy,
+            AgentCapabilities.FeatureTimePolicy,
+        };
+        // The exception to the rule above, and the reason it is an exception: usage access is
+        // not a fact about this build, it is a switch somebody has to flip in Settings on this
+        // one device, and no Device Owner can flip it for them. Reported live so the console
+        // can name the devices where a budget would silently never fire.
+        if (_usage?.CanRead == true) features.Add(AgentCapabilities.FeatureUsageAccess);
         features.AddRange(DeviceOwner.Features(this));
         return features;
     }

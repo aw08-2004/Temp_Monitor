@@ -962,6 +962,10 @@
         "location_retention_days": {
           "label": "Standortverlauf aufbewahren für",
           "help": "Wie lange erfasste Positionen aufbewahrt werden, bevor sie gelöscht werden. Das ist eine Datenschutz- und keine Speicherplatzeinstellung -- die Tabelle ist winzig --, also ist sie zum Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seinen Standortverlauf unabhängig davon sofort."
+        },
+        "usage_retention_days": {
+          "label": "App-Nutzung aufbewahren für",
+          "help": "Wie lange die Vordergrundzeit je App aufbewahrt wird, bevor sie gelöscht wird. Eine Aufzeichnung dessen, was jemand mit seinen Abenden gemacht hat, daher standardmäßig kürzer als der Standortzeitraum und zum weiteren Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seine Nutzung unabhängig davon sofort."
         }
       },
       "map": {
@@ -2200,6 +2204,9 @@
     },
     "apps": {
       "title": "Installierte Apps"
+    },
+    "usage": {
+      "title": "App-Nutzung"
     }
   },
   "remote": {
@@ -3338,6 +3345,60 @@
       "dropped": "Diese Apps können nie pausiert werden und wurden ausgelassen: {packages}",
       "machine": "Gerät",
       "would_suspend": "Würde pausieren"
+    },
+    "time": {
+      "heading": "Zeitpläne",
+      "intro": "Sperrzeiten und tägliche Bildschirmzeit-Budgets.",
+      "new": "Neuer Zeitplan",
+      "none": "Noch kein Zeitplan.",
+      "local": "Ein Zeitplan wird vom Gerät selbst durchgesetzt, anhand der eigenen Uhr des Geräts, unabhängig davon, ob es diesen Hub erreicht. Verwaltete Geräte werden auf die Netzwerkzeit festgelegt, damit die Uhr nicht verstellt werden kann, um eine Sperrzeit zu umgehen.",
+      "windows": "Sperrzeiten",
+      "windows_help": "Nichts an den gewählten Tagen zwischen diesen Zeiten. Ein Ende vor dem Beginn läuft über Mitternacht hinaus, was eine Regel zur Nachtruhe braucht.",
+      "add_window": "Sperrzeit hinzufügen",
+      "no_windows": "Keine Sperrzeiten.",
+      "budgets": "Tägliche Budgets",
+      "budgets_help": "Wie lange eine App oder das ganze Gerät pro Tag genutzt werden darf. Aufgebrauchte Budgets werden um Mitternacht des Geräts aufgehoben. Null bedeutet heute gar nicht.",
+      "add_budget": "Budget hinzufügen",
+      "no_budgets": "Keine Budgets.",
+      "whole_device": "Das ganze Gerät",
+      "from": "Von",
+      "until": "Bis",
+      "wraps": "läuft über Mitternacht",
+      "minutes": "Minuten",
+      "minutes_a_day": "Minuten pro Tag",
+      "remove_rule": "Entfernen",
+      "window_summary": "{days} {start}-{end}: {apps}",
+      "budget_summary": "{app}: {minutes} Min. pro Tag",
+      "column": {
+        "rules": "Regeln"
+      },
+      "day": {
+        "mon": "Mo",
+        "tue": "Di",
+        "wed": "Mi",
+        "thu": "Do",
+        "fri": "Fr",
+        "sat": "Sa",
+        "sun": "So"
+      }
+    }
+  },
+  "usage": {
+    "recent_total": "Letzte Tage, nach App",
+    "by_day": "Tag für Tag",
+    "days_counted": "{count} Tag(e)",
+    "none": "Dieses Gerät hat keine App-Nutzung gemeldet.",
+    "retention": "Wird {days} Tage aufbewahrt und danach gelöscht.",
+    "no_access": "Der Nutzungszugriff wurde auf diesem Gerät nicht erteilt, daher greifen Bildschirmzeit-Budgets nie. Sperrzeiten funktionieren weiterhin. Wer das Gerät in der Hand hat, kann den Zugriff in der Agent-App erteilen.",
+    "hours_minutes": "{hours} Std. {minutes} Min.",
+    "hours": "{hours} Std.",
+    "minutes": "{minutes} Min.",
+    "column": {
+      "app": "App",
+      "time": "Vordergrundzeit",
+      "day": "Tag",
+      "total": "Gesamt",
+      "top": "Am meisten genutzt"
     }
   }
 }

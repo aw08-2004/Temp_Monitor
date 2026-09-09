@@ -61,6 +61,21 @@
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+  <!-- **Screen-time budgets (roadmap #23 phase E).** Declared, and NOT grantable here: this
+       is an appop, one of the special-access screens, and the platform never grants it at
+       install time whatever the manifest says. A Device Owner cannot grant it silently either
+       - setPermissionGrantState covers dangerous runtime permissions, and usage access is not
+       one of them. Somebody has to open Settings and turn it on, once, per device.
+
+       So why declare it at all? Because the appop's own default resolves to the manifest
+       permission, and because a device only appears in the usage-access list when its app has
+       asked. Without this line there is no switch for anybody to find.
+
+       The agent detects whether it was granted and reports that as a capability, so the
+       console can say "usage access has not been granted on this device" rather than showing
+       a budget that silently never fires. See UsageStatsReader. -->
+  <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+
   <!-- Android 13+ will not show the service's notification without this being granted at
        runtime. The service still RUNS without it, so this is not fatal; what is lost is the
        only status display the agent has. See MainActivity. -->
