@@ -66,6 +66,28 @@ function Warn($msg) { Write-Host "  [!!] $msg"   -ForegroundColor Yellow }
 function Die($msg)  { Write-Host "  [xx] $msg"   -ForegroundColor Red; exit 1 }
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 
+# **Run a native program whose stderr we do not want to be fatal.**
+#
+# PowerShell 5.1 wraps every line a native program writes to stderr in an ErrorRecord, and
+# $ErrorActionPreference = "Stop" then makes that record terminate the script -- even when the
+# program exited 0 and the text was a warning nobody asked about. It killed a release here:
+# the provisioned JDK 17 started printing "WARNING: A restricted method in java.lang.System has
+# been called" and took down the step that merely PRINTS the signing certificate, after a
+# successful publish and before anything had been uploaded.
+#
+# An informational step must not be able to end a release, and `2>$null` does not prevent this
+# -- the record is created before the redirection discards it. So the preference is relaxed
+# around the call and error records are flattened to plain text.
+function Native([scriptblock]$Command) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ }
+        }
+    } finally { $ErrorActionPreference = $prev }
+}
+
 # ---------------------------------------------------------------- checks
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
@@ -178,7 +200,7 @@ Ok ("published {0:N1} MB" -f ($apk.Length / 1MB))
 $apksigner = Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools\36.0.0\apksigner.bat"
 if (Test-Path $apksigner) {
     Say "signing certificate:"
-    & $apksigner verify --print-certs $ApkPath 2>$null |
+    Native { & $apksigner verify --print-certs $ApkPath } |
         Select-String -Pattern "SHA-256 digest" | ForEach-Object { Say "  $_" }
     Say "If that digest changed, every printed provisioning QR is now invalid AND every"
     Say "installed agent will refuse this update. Stop and check before continuing."
@@ -187,7 +209,7 @@ if (Test-Path $apksigner) {
 # ---------------------------------------------------------------- 3. release
 
 Step "Creating the GitHub release"
-$existing = & gh release view $Tag --repo $Repo 2>$null
+$existing = Native { & gh release view $Tag --repo $Repo }
 if ($LASTEXITCODE -eq 0) {
     Warn "$Tag already exists; reusing it"
 } else {
