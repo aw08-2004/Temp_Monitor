@@ -16,7 +16,7 @@ public class HubUrlTests
 {
     // Pinned rather than read from AgentConfig.HubBase so the expectations below stay true
     // regardless of what FLEETHUB_HUB is set to on the machine running the tests.
-    private const string Hub = "https://temp.arkeanos.net";
+    private const string Hub = "https://your.hub.url";
 
     private static void WithHub(string hubBase, Action body)
     {
@@ -29,20 +29,20 @@ public class HubUrlTests
     [Theory]
     [InlineData(Hub + "/api/agent/packages/abc")]
     [InlineData(Hub + "/")]
-    [InlineData("HTTPS://TEMP.ARKEANOS.NET/api/agent/packages/abc")]  // host case is irrelevant
+    [InlineData("HTTPS://your.hub.url/api/agent/packages/abc")]  // host case is irrelevant
     [InlineData(Hub + ":443/api/agent/packages/abc")]                  // explicit default port
     public void Our_own_hub_is_recognised(string url) =>
         WithHub(Hub, () => Assert.True(AgentConfig.IsHubUrl(url), url));
 
     [Theory]
     // A suffixed domain: the real host is attacker.net, but it starts with the hub string.
-    [InlineData("https://temp.arkeanos.net.attacker.net/payload.exe")]
+    [InlineData("https://your.hub.url.attacker.net/payload.exe")]
     // Userinfo: everything before the @ is a username, so the real host is attacker.net.
-    [InlineData("https://temp.arkeanos.net@attacker.net/payload.exe")]
-    [InlineData("https://temp.arkeanos.net:pw@attacker.net/payload.exe")]
+    [InlineData("https://your.hub.url@attacker.net/payload.exe")]
+    [InlineData("https://your.hub.url:pw@attacker.net/payload.exe")]
     // A different scheme or port is a different origin, even on the right host.
-    [InlineData("http://temp.arkeanos.net/payload.exe")]
-    [InlineData("https://temp.arkeanos.net:8443/payload.exe")]
+    [InlineData("http://your.hub.url/payload.exe")]
+    [InlineData("https://your.hub.url:8443/payload.exe")]
     // Plainly elsewhere.
     [InlineData("https://attacker.net/payload.exe")]
     [InlineData("file:///C:/Windows/System32/calc.exe")]

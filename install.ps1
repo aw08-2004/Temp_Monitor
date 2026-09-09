@@ -1299,6 +1299,13 @@ function Register-TurnBootTask([string]$Distro) {
       The repeating trigger is a watchdog: `wsl --shutdown` gets issued by all sorts of things
       (Docker Desktop's own restart flow among them) and takes the distro down with it, with no
       other recovery path.
+
+      The action BLOCKS FOREVER by design -- fleethub-turn-boot.sh ends in `exec sleep infinity`.
+      A WSL distro lives only while some wsl.exe client process is attached to it, so a task that
+      starts coturn and returns leaves the distro to be torn down about 15 seconds later. Holding
+      that process open IS the mechanism. ExecutionTimeLimit is Zero for the same reason, and
+      MultipleInstances stays at its IgnoreNew default so a watchdog tick cannot stack a second
+      holder on top of a healthy one -- it simply does nothing while the first is alive.
     #>
     $sid       = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
     $atStartup = New-ScheduledTaskTrigger -AtStartup
@@ -1354,6 +1361,12 @@ function Register-TurnBootTask([string]$Distro) {
             Warn "S4U was refused for this account, so the task runs only once $env:USERNAME logs on."
             Say  "On a machine that boots unattended, the relay stays down until that login."
         }
+        # Neither trigger has fired yet on install day: the boot one waits for a reboot, the
+        # watchdog for its first tick. Start it now, so the holder has the distro before the
+        # installer's own wsl.exe calls let go of it -- otherwise Test-TurnServer below is
+        # verifying a distro that is about to vanish.
+        try { Start-ScheduledTask -TaskName $TaskTurn -ErrorAction Stop }
+        catch { Warn "Registered '$TaskTurn' but could not start it now -- $($_.Exception.Message)" }
         return $true
     }
 
@@ -1508,11 +1521,24 @@ function Install-TurnWsl {
         Write-LinuxFile (Join-Path $stage "coturn.default") @("TURNSERVER_ENABLED=1")
         Write-LinuxFile (Join-Path $stage "fleethub-turn-boot.sh") @(
             "#!/bin/sh",
-            "# Started by the '$TaskTurn' scheduled task. Booting the distro is the point;",
-            "# starting coturn is belt-and-braces in case systemd hasn't got there yet.",
+            "# Started by the '$TaskTurn' scheduled task, and it deliberately NEVER RETURNS.",
+            "#",
+            "# WSL tears a distro down roughly 15 seconds after the last wsl.exe client process",
+            "# exits. systemd running as PID 1 inside the distro does NOT prevent that: the",
+            "# lifetime is owned by the Windows side, not by anything running in Linux.",
+            "#",
+            "# This script used to start coturn and 'exit 0'. That reads fine and is wrong -- the",
+            "# task returned, ~15s later WSL stopped the distro, and coturn went with it. Against",
+            "# the 5-minute watchdog tick that left the relay alive for about 20 seconds out of",
+            "# every 300, never long enough for a peer to allocate. Found in the field 2026-09-08:",
+            "# turn.log held 10312 startup banners and not one allocation.",
+            "#",
+            "# Blocking here keeps one wsl.exe client attached for as long as the task runs, and",
+            "# THAT is what holds the distro -- and so coturn -- up. Do not tidy this back into",
+            "# something that exits.",
             "systemctl start coturn >/dev/null 2>&1 || true",
             "systemctl start coturn-lan >/dev/null 2>&1 || true",
-            "exit 0")
+            "exec sleep infinity")
 
         $provision = @'
 #!/bin/bash
@@ -1657,6 +1683,25 @@ function Test-TurnServer {
         Say ($log.Output.Trim())
         Say "Re-run  install.ps1 -Component Turn  once the cause is fixed."
         return
+    }
+
+    # 1b. Does the distro stay up with nothing of OURS attached? This is the check whose absence
+    #     let a relay ship at roughly 7% uptime: every wsl call above holds the distro open for
+    #     as long as it runs, so "active" says nothing about the next fifteen seconds. Wait past
+    #     WSL's teardown window and look again. --running --quiet is deliberate: the STATE column
+    #     of --list --verbose is localised on some installs, the quiet list is just names.
+    Say "Checking the distro stays up on its own (about 25s)..."
+    Start-Sleep -Seconds 25
+    $still = Invoke-Wsl @('--list', '--running', '--quiet')
+    if ($still.Output -match "(?m)^\s*$([regex]::Escape($Distro))\s*$") {
+        Ok "'$Distro' is still running with nothing attached -- the boot task is holding it up"
+    } else {
+        Warn "'$Distro' stopped the moment nothing was attached to it."
+        Say  "coturn exists only while the distro runs, so the relay is down now and will be up"
+        Say  "for only a few seconds per watchdog tick. Check the task is running and that its"
+        Say  "script blocks:"
+        Say  "  Get-ScheduledTask -TaskName '$TaskTurn' | Get-ScheduledTaskInfo"
+        Say  "  wsl -d $Distro -u root -- tail -3 /usr/local/sbin/fleethub-turn-boot.sh"
     }
 
     # 2. Bound to the control port?

@@ -95,7 +95,7 @@ env vars set, and an agent that self-updates must keep honouring them or a box p
 at a non-default hub silently swings back to the production default.
 
 - `FLEETHUB_HUB` (legacy `TEMP_MONITOR_HUB`) — hub base URL (default
-  `https://temp.arkeanos.net`).
+  `https://your.hub.url`).
 - `FLEETHUB_MACHINE` (legacy `TEMP_MONITOR_MACHINE`) — machine name (default
   `Environment.MachineName`).
 - `AGENT_ENROLLMENT_SECRET` — enrollment secret (installer writes it to
@@ -148,7 +148,7 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
 ```powershell
 agent/install/agent-install.ps1 -AgentExe .\dist\TempMonitorAgent.exe -EnrollmentSecret <secret>
 agent/install/agent-install.ps1 -AgentUrl <release-url> -EnrollmentSecret <secret> `
-    -HubUrl https://temp.arkeanos.net
+    -HubUrl https://your.hub.url
 agent/install/agent-install.ps1 -Uninstall
 ```
 `-InstallDir` defaults to `C:\Program Files\FleetHub\Agent`. The Windows service is
