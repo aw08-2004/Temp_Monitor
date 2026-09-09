@@ -22,7 +22,7 @@
          Note this is NOT the shared core that agent-linux/README.md rejects. That rejection
          is about reaching into `agent/`, which is deployed on every managed PC and
          self-updates from a signed manifest. Nothing here touches that project. -->
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

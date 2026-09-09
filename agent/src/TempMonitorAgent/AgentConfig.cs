@@ -29,7 +29,7 @@ public static class AgentConfig
     // Base URL is overridable via FLEETHUB_HUB (legacy: TEMP_MONITOR_HUB) for local
     // testing (e.g. http://localhost:3001).
     public static string HubBase =>
-        (Env("HUB", "HUB") ?? "https://temp.arkeanos.net").TrimEnd('/');
+        (Env("HUB", "HUB") ?? "https://your.hub.url").TrimEnd('/');
 
     public static string ReportUrl => HubBase + "/api/report";
     public static string EnrollUrl => HubBase + "/api/agent/enroll";
@@ -61,7 +61,7 @@ public static class AgentConfig
     ///
     /// The question that decides whether a request carries this agent's bearer token, so it
     /// has to be answered on the URL's parsed ORIGIN and never on its spelling. A plain
-    /// <c>url.StartsWith(HubBase)</c> — which is what this replaces — says yes to
+    /// <c>url.StartsWith(HubBase)</c> ï¿½ which is what this replaces ï¿½ says yes to
     /// <c>https://hub.example.com.attacker.net/x</c> and to
     /// <c>https://hub.example.com@attacker.net/x</c>, whose real hosts are
     /// <c>attacker.net</c> in both cases. Either one hands the agent's credential to

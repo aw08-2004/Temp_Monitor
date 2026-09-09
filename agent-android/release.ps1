@@ -66,6 +66,35 @@ function Warn($msg) { Write-Host "  [!!] $msg"   -ForegroundColor Yellow }
 function Die($msg)  { Write-Host "  [xx] $msg"   -ForegroundColor Red; exit 1 }
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 
+# **Run a native program whose stderr we do not want to be fatal.**
+#
+# PowerShell 5.1 wraps every line a native program writes to stderr in an ErrorRecord, and
+# $ErrorActionPreference = "Stop" then makes that record terminate the script -- even when the
+# program exited 0 and the text was a warning nobody asked about. It killed a release here:
+# the provisioned JDK 17 started printing "WARNING: A restricted method in java.lang.System has
+# been called" and took down the step that merely PRINTS the signing certificate, after a
+# successful publish and before anything had been uploaded.
+#
+# An informational step must not be able to end a release, and `2>$null` does not prevent this
+# -- the record is created before the redirection discards it. So the preference is relaxed
+# around the call and error records are flattened to plain text.
+# Write a text file as UTF-8 with NO byte order mark. Set-Content -Encoding UTF8 on
+# PowerShell 5.1 writes one, and a BOM at the top of AgentConfig.cs and both csproj files turns
+# a one-line version bump into a whole-file diff on every release.
+function SetText($path, $text) {
+    [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Native([scriptblock]$Command) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ }
+        }
+    } finally { $ErrorActionPreference = $prev }
+}
+
 # ---------------------------------------------------------------- checks
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
@@ -86,10 +115,20 @@ if (-not (Test-Path (Join-Path $AgentDir "signing.props"))) {
          "and publishing one would produce a release every device refuses. See signing.props.example.")
 }
 
+# **gh is handed a PATH to the notes, never the prose itself.** This script used to read the
+# file and pass the text as an argument, which threw away the entire reason -NotesFile exists.
+# Release notes are prose, prose contains quotation marks, and PowerShell's native-argument
+# binding splits an argument on them -- everything positional after the tag is then an asset
+# path to `gh release create`. It failed here on the sentence about what a permission implies,
+# with `no matches found for restart`: gh had gone looking for a file named after a word in the
+# middle of a sentence. agent/release-notes/README.md records the same failure on the Windows
+# agent, twice, which is two more times than this needed to happen.
+$notesPath = ""
 $notesBody = ""
 if ($NotesFile) {
     if (-not (Test-Path $NotesFile)) { Die "Notes file not found: $NotesFile" }
-    $notesBody = Get-Content $NotesFile -Raw
+    $notesPath = (Resolve-Path $NotesFile).Path
+    $notesBody = Get-Content $notesPath -Raw
 } elseif ($Notes) {
     $notesBody = $Notes
 } else {
@@ -115,19 +154,41 @@ Step "Bumping the version"
 # what the agent reports would have the console and the device showing different versions of
 # the same thing. ApplicationVersion is deliberately NOT touched: it is the integer Android
 # sorts upgrades by, and VersionGateTests pins that it is not tied to this number.
+# "Unchanged" has two causes that must not read the same, and this script used to conflate
+# them: it died with "could not find" on a re-run of a version that was already applied, which
+# sends you looking for a broken regex in a file that is perfectly correct. Either the file
+# already carries this version -- normal, on a second run after a later step failed, or when
+# the bump was made by hand -- or the pattern no longer matches, in which case the version is
+# NOT $Version, the publish below ships whatever the file does say, and the manifest advertises
+# a version no APK reports. Told apart by looking for the target text, exactly as
+# agent/release.ps1 does.
 $config = Get-Content $ConfigCs -Raw
 $configNew = $config -replace '(public const string Version = ")[^"]+(")', "`${1}$Version`${2}"
-if ($configNew -eq $config) { Die "Could not find AgentConfig.Version in $ConfigCs" }
-Set-Content -Path $ConfigCs -Value $configNew -NoNewline -Encoding UTF8
+if ($configNew -eq $config) {
+    if ($config -notmatch [regex]::Escape("public const string Version = `"$Version`";")) {
+        Die "AgentConfig.cs Version line does not match the pattern and is not already $Version -- check it by hand."
+    }
+    Ok "AgentConfig.cs already at $Version"
+} else {
+    SetText $ConfigCs $configNew
+    Ok "AgentConfig.cs -> $Version"
+}
 
 foreach ($proj in @($CoreCsproj, $AppCsproj)) {
+    $name = Split-Path -Leaf $proj
     $text = Get-Content $proj -Raw
     $updated = $text -replace '(<Version>)[^<]+(</Version>)', "`${1}$Version`${2}"
     $updated = $updated -replace '(<ApplicationDisplayVersion>)[^<]+(</ApplicationDisplayVersion>)', "`${1}$Version`${2}"
-    if ($updated -eq $text) { Die "Could not find a version element in $proj" }
-    Set-Content -Path $proj -Value $updated -NoNewline -Encoding UTF8
+    if ($updated -eq $text) {
+        if ($text -notmatch [regex]::Escape("<Version>$Version</Version>")) {
+            Die "$name <Version> does not match the pattern and is not already $Version -- check it by hand."
+        }
+        Ok "$name already at $Version"
+    } else {
+        SetText $proj $updated
+        Ok "$name -> $Version"
+    }
 }
-Ok "AgentConfig.cs and both csproj files say $Version"
 
 # ---------------------------------------------------------------- 2. publish
 
@@ -149,7 +210,7 @@ Ok ("published {0:N1} MB" -f ($apk.Length / 1MB))
 $apksigner = Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools\36.0.0\apksigner.bat"
 if (Test-Path $apksigner) {
     Say "signing certificate:"
-    & $apksigner verify --print-certs $ApkPath 2>$null |
+    Native { & $apksigner verify --print-certs $ApkPath } |
         Select-String -Pattern "SHA-256 digest" | ForEach-Object { Say "  $_" }
     Say "If that digest changed, every printed provisioning QR is now invalid AND every"
     Say "installed agent will refuse this update. Stop and check before continuing."
@@ -158,12 +219,18 @@ if (Test-Path $apksigner) {
 # ---------------------------------------------------------------- 3. release
 
 Step "Creating the GitHub release"
-$existing = & gh release view $Tag --repo $Repo 2>$null
+$existing = Native { & gh release view $Tag --repo $Repo }
 if ($LASTEXITCODE -eq 0) {
     Warn "$Tag already exists; reusing it"
 } else {
+    # Short notes given with -Notes go through a temp file too, rather than being special-cased
+    # as "safe enough". One route means one thing to have got right.
+    if (-not $notesPath) {
+        $notesPath = Join-Path ([System.IO.Path]::GetTempPath()) "android-agent-release-$Version.md"
+        SetText $notesPath $notesBody
+    }
     $ghArgs = @("release", "create", $Tag, "--repo", $Repo, "--title", "Android agent v$Version",
-                "--notes", $notesBody)
+                "--notes-file", $notesPath)
     if ($IsBeta) { $ghArgs += "--prerelease" }
     & gh @ghArgs | Out-Host
     if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }

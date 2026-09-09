@@ -55,7 +55,7 @@ public static class AgentConfig
 
     // --- Hub endpoints -----------------------------------------------------
     public static string HubBase =>
-        (Env("HUB") ?? "https://temp.arkeanos.net").TrimEnd('/');
+        (Env("HUB") ?? "https://your.hub.url").TrimEnd('/');
 
     public static string ReportUrl => HubBase + "/api/report";
     public static string EnrollUrl => HubBase + "/api/agent/enroll";

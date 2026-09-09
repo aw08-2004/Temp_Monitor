@@ -120,7 +120,9 @@ complete relay:
   file rather than overwriting it (a timestamped backup is taken). This is what makes the relay
   work — see below.
 - Opens **both firewalls**: normal Windows Firewall *and* the Hyper-V firewall.
-- Registers a **boot scheduled task**, because WSL distros do not start at boot.
+- Registers a **boot scheduled task**, because WSL distros do not start at boot. Its action
+  blocks forever (`exec sleep infinity`) on purpose: a distro lives only while some `wsl.exe`
+  client is attached to it, so holding that one process open is what keeps coturn alive.
 - **Verifies itself**: mints a credential exactly as the hub does and performs a real STUN
   Binding and TURN Allocate, including a wrong-password negative control.
 
@@ -310,7 +312,8 @@ Read the candidate types first — they decide which row below applies:
 | Works cross-NAT, fails when **both** peers are on the relay's own LAN | The relay candidate is being rewritten to the public IP by `--external-ip`, so both peers are pointed back out at the router. Add the LAN listener and `turn:<lan-ip>:3479`. Adding a LAN URL to the *public* listener does not help — the advertised address is chosen by coturn's config, not by the URL the client dialled. |
 | LAN sessions get 401 but internet sessions work (or vice versa) | The two listeners' `static-auth-secret` values have drifted. Rotation must update `/etc/turnserver.conf` **and** `/etc/turnserver-lan.conf`. |
 | `coturn-lan` dead, journal shows `bind: Address already in use` on a relay port | The two relay ranges overlap. They must be disjoint — both instances share one network namespace. |
-| **Worked on install day, dead after a reboot** | WSL distros do **not** auto-start. Check the `FleetHub - TURN (WSL)` scheduled task exists and is running. Note it must run as the **installing user** (S4U), not SYSTEM — distros are registered per-user, so a SYSTEM task cannot see it and fails every time. |
+| **Worked on install day, dead after a reboot** | WSL distros do **not** auto-start. Check the `FleetHub - TURN (WSL)` scheduled task exists and is running. Note it must run as the **installing user** (S4U), not SYSTEM — distros are registered per-user, so a SYSTEM task cannot see it and fails every time. It must also still be **Running**, not merely *Ready* -- its action blocks by design, so a task that has returned means the distro is already gone. |
+| Relay works for seconds at a time; `turn.log` is huge but has **zero allocations** | The boot task's script returns instead of blocking. WSL stops a distro about 15s after the last `wsl.exe` client detaches -- systemd inside it does not prevent this -- so a script that starts coturn and exits leaves the relay up only around each watchdog tick, roughly 20s in every 300, never long enough for a peer to allocate. `/usr/local/sbin/fleethub-turn-boot.sh` must end in `exec sleep infinity`; re-run `install.ps1 -Component Turn` to rewrite it. |
 | Remote machines can't allocate, but the LAN can | The **Hyper-V firewall**, which is on by default with WSL 2.0.9+ and blocks inbound to WSL even in mirrored mode. This is the single most likely cause of an otherwise-correct WSL setup failing. Check `Get-NetFirewallHyperVRule`. |
 | TURN died out of nowhere, nothing was changed | Someone ran `wsl --shutdown` — Docker Desktop's own restart flow does this — and took the distro with it. The boot task's 5-minute repeating trigger recovers it; that gap is why the trigger exists. |
 | `wsl -d FleetHubTurn -- hostname -I` shows a `172.x` address | Mirrored networking is configured but **not active**. Either `wsl --shutdown` was never run, or `.wslconfig` was written to a different user profile than the one WSL reads. |

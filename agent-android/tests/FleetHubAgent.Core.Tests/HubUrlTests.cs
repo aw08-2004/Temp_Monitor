@@ -28,10 +28,10 @@ public class HubUrlTests : IDisposable
     }
 
     [Theory]
-    [InlineData("https://temp.arkeanos.net.attacker.net/x")]  // suffix, not the same host
-    [InlineData("https://temp.arkeanos.net@attacker.net/x")]  // userinfo -- real host is attacker.net
-    [InlineData("http://temp.arkeanos.net/x")]                // scheme differs
-    [InlineData("https://temp.arkeanos.net:8443/x")]          // port differs
+    [InlineData("https://your.hub.url.attacker.net/x")]  // suffix, not the same host
+    [InlineData("https://your.hub.url@attacker.net/x")]  // userinfo -- real host is attacker.net
+    [InlineData("http://your.hub.url/x")]                // scheme differs
+    [InlineData("https://your.hub.url:8443/x")]          // port differs
     [InlineData("not a url")]
     [InlineData("")]
     [InlineData(null)]
