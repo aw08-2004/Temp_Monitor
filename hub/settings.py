@@ -223,6 +223,19 @@ REGISTRY = (
        unit="days"),
     _s("data.command_output_retention_seconds", "data", "int", 86400, minimum=3600,
        maximum=2592000, unit="seconds"),
+    # **The one retention knob here that is a privacy control rather than a disk-space one.**
+    # Readings and command output are pruned because those tables grow; location fixes are
+    # pruned because a record of where a person was three months ago should not exist by
+    # default. Thirty days matches data.retention_days by coincidence rather than by
+    # derivation, and this one is meant to be turned DOWN -- see location.py and SECURITY.MD's
+    # personal-data inventory.
+    _s("data.location_retention_days", "data", "int", 30, minimum=1, maximum=365,
+       unit="days"),
+    # The second privacy prune, and the shorter one. App usage is a record of what a person
+    # did with their evenings rather than of where a device was once, so fourteen days is the
+    # default and it is meant to come down further. Pruned by the DEVICE's own local day, never
+    # by a hub timestamp -- see usage.prune.
+    _s("data.usage_retention_days", "data", "int", 14, minimum=1, maximum=365, unit="days"),
 
     # ---------------- History metrics: which sensors are recorded to history ----------------
     # One on/off toggle per chartable metric on the per-machine History dashboard. Off means
@@ -448,6 +461,79 @@ REGISTRY = (
     # a deploy.
     _s("wake.auto_wake_targets", "wake", "bool", False),
 
+    # ------------- Provisioning: the Android device-owner QR (roadmap #23) -------------
+    # One size cap and one behaviour knob. Everything else the QR needs is DERIVED -- see
+    # apkhost.py: the APK is uploaded on the provisioning page, the hub reads the signing
+    # certificate out of it, and the download URL is this hub's own.
+    #
+    # There used to be two more here, `apk_url` and `signature_checksum`, typed in by hand.
+    # They are gone rather than kept as a fallback, and the removal is the point of that
+    # change: producing the checksum meant running apksigner and converting a hex digest, and
+    # getting it wrong produced 43 plausible characters, a code that scanned, and a device that
+    # failed provisioning after a factory reset. A field nobody has to fill in cannot be filled
+    # in wrongly.
+    #
+    # Deliberately NOT settings: the admin component name, which is a constant on both sides
+    # (a setting could drift from the APK, and the drift is only discovered on a device that
+    # has already been reset), and any Wi-Fi credential -- see provisioning.py for why a PSK
+    # has no honest home here.
+    #
+    # Its own cap rather than a reuse of `deploy.max_upload_mb`: that one is rendered under
+    # Deploy and belongs to Windows installers, and an operator lowering it for those would
+    # silently start refusing agent APKs on a page they were not looking at.
+    _s("provisioning.max_apk_mb", "provisioning", "int", 64, minimum=1, maximum=256,
+       unit="mb"),
+    # False turns the device into a kiosk: provisioning DISABLES every system app the device
+    # owner has not explicitly enabled, which on a phone somebody carries means no camera, no
+    # dialer and no settings. Correct for a single-purpose device and wrong for every other
+    # one, hence a knob defaulted to the case an operator will actually be doing.
+    _s("provisioning.leave_system_apps_enabled", "provisioning", "bool", True),
+
+    # ---------------- Location: asking a device where it is (roadmap #23) ----------------
+    # How long the DEVICE spends looking, sent as the command's only parameter. A satellite
+    # fix from cold takes tens of seconds outdoors and never arrives indoors, so this is the
+    # point at which the device gives up and answers with its last known position instead of
+    # leaving an operator watching a spinner. Which provider to ask is deliberately NOT
+    # settable: the device is the only thing that knows what it actually has.
+    _s("location.default_timeout_seconds", "location", "int", 45, minimum=5, maximum=300,
+       unit="seconds"),
+
+    # ---------------- Map: where the console gets its tiles (roadmap #23) ----------------
+    # **The one thing in the console that is fetched from a third party at page load**, and
+    # the deliberate exception to hub/static/vendor/README.md's isolated-LAN claim. Tiles are
+    # content rather than code, they are requested only by an operator's browser and only on a
+    # page showing a map, and this setting exists so a site with no egress can point at its own
+    # tile server. Blank it and the map draws no tile layer at all and says so, rather than
+    # rendering a field of grey squares that reads as a broken page.
+    #
+    # The attribution is a setting rather than a constant because it must match whatever the
+    # tile URL points at: OpenStreetMap's tile policy requires their credit, and a self-hosted
+    # server usually requires a different one. Hardcoding OSM's text next to somebody else's
+    # tiles would be a false statement rather than a cosmetic mistake.
+    _s("map.tile_url", "map", "str",
+       "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+    _s("map.tile_attribution", "map", "str",
+       "(c) OpenStreetMap contributors"),
+    # How far in the map zooms on a single device. 16 is a city block: close enough to see
+    # which building, wide enough that a fix with a 200 m accuracy circle still fits on screen.
+    _s("map.default_zoom", "map", "int", 16, minimum=1, maximum=19),
+
+    # ---------------- Policy: the dead-man switch (roadmap #23) ----------------
+    # How long a device goes on enforcing its app policy after it stops hearing from this hub.
+    # Past this, the agent lifts EVERY restriction on its own.
+    #
+    # **This is a release valve, and it is deliberately one-way.** The hub can make a device
+    # more restricted only while it can reach it; a phone whose hub is gone -- decommissioned,
+    # misconfigured, on the wrong side of a firewall -- must not be a device somebody has to
+    # factory reset to use. Seven days is long enough that a fortnight's holiday with the phone
+    # switched off does not lift a curfew, and short enough that a genuinely orphaned device
+    # frees itself before anybody has to.
+    #
+    # Sent to the device inside the policy document rather than as agent config, because it is
+    # a property of the policy being enforced rather than of the agent enforcing it.
+    _s("policy.max_age_seconds", "policy", "int", 604800, minimum=3600, maximum=7776000,
+       unit="seconds"),
+
     # ---------------- Rules: conditions over machine data, and what they do ----------------
     # A rule is "condition + who it applies to + what happens". These knobs are the fuses
     # around the last third of that, because a rule engine that can issue commands is a
@@ -505,7 +591,8 @@ REGISTRY = (
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "rules", "sharing")
+            "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
+            "policy", "rules", "sharing")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

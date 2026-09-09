@@ -25,7 +25,10 @@
     "download": "Client herunterladen",
     "rules": "Regeln",
     "tools": "Werkzeuge",
-    "sharing": "Freigabe"
+    "sharing": "Freigabe",
+    "provisioning": "Geräte-Provisionierung",
+    "map": "Karte",
+    "policy": "Geräterichtlinie"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -85,6 +88,7 @@
         "windows_10": "Windows 10",
         "windows_server": "Windows Server",
         "linux": "Linux",
+        "android": "Android",
         "unknown": "Unbekannt"
       }
     },
@@ -507,6 +511,18 @@
       "manage_rules": {
         "label": "Regeln verwalten",
         "description": "Regeln erstellen und bearbeiten: Bedingungen über Maschinendaten und was bei Zutreffen geschieht. Eine Regel, die Befehle an PCs sendet, benötigt zusätzlich Befehle erteilen."
+      },
+      "locate_device": {
+        "label": "Gerät orten",
+        "description": "Ein Gerät auf Anfrage nach seinem Standort fragen. Bewusst eine eigene Berechtigung und kein Teil von „Befehle erteilen“: einen PC neu starten zu dürfen darf nicht stillschweigend bedeuten, den Aufenthaltsort einer Person ermitteln zu dürfen. Zum Lesen der zuletzt bekannten Position genügen „Ansehen“ und der Rechner im Geltungsbereich. Jede Anfrage wird mit dem Namen der Bedienperson im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung, die denselben Namen nennt."
+      },
+      "manage_device_policy": {
+        "label": "Geräterichtlinien verwalten",
+        "description": "App-Richtlinien für verwaltete Geräte schreiben: welche Apps laufen dürfen und welche nicht, und auf welchen Rechnern. Eine eigene Berechtigung und kein Teil von „Einstellungen verwalten“, denn eine Richtlinie ist keine Einstellung -- sie ist eine dauerhafte Anweisung, die ohne Anwesende verändert, was das Gerät einer Person tut. Zum Lesen einer Richtlinie und des Erfüllungsstands genügen „Ansehen“ und der Rechner im Geltungsbereich."
+      },
+      "wipe_device": {
+        "label": "Gerät sperren und löschen",
+        "description": "Den Bildschirm eines verwalteten Geräts sperren und das Gerät löschen. Eine eigene Berechtigung statt Teil von 'Befehle erteilen': Das Argument, das alle anderen Befehle unter jener Berechtigung hält -- weniger gefährlich als die SYSTEM-Shell, die sie ohnehin gewährt -- trifft auf einen Neustart zu und auf ein Zurücksetzen auf Werkseinstellungen nicht. Für das Löschen muss zusätzlich der Name des Rechners eingegeben werden; es wird im Audit-Protokoll festgehalten, bevor der Befehl gesendet wird, und es kann weder als Favorit gespeichert noch von einer Regel ausgelöst werden. Um zu sehen, dass ein Gerät gesperrt oder gelöscht wurde, genügt 'Ansehen' plus der Rechner im eigenen Bereich."
       }
     }
   },
@@ -528,7 +544,11 @@
       "signin": "Anmeldung",
       "wake": "Wake-on-LAN",
       "rules": "Regeln",
-      "sharing": "Hub-übergreifende Freigabe"
+      "sharing": "Hub-übergreifende Freigabe",
+      "provisioning": "Provisionierung",
+      "location": "Standort",
+      "map": "Karte",
+      "policy": "Richtlinie"
     },
     "unit": {
       "celsius": "°C",
@@ -921,6 +941,52 @@
       "sharing.peer_lifetime_days": {
         "label": "Gültigkeit der Hub-Kopplung",
         "help": "Wie lange die Zugangsdaten eines gekoppelten Hubs gültig bleiben; die Frist verlängert sich bei jeder Nutzung. Das begrenzt die Kopplung, nicht eine Freigabe -- eine Freigabe kann ein eigenes Ablaufdatum haben oder gar keines. Jede Kopplung behält die bei der Einrichtung geltende Dauer."
+      },
+      "provisioning": {
+        "leave_system_apps_enabled": {
+          "label": "Geräteeigene Apps aktiviert lassen",
+          "help": "Aktiviert behält ein provisioniertes Gerät Kamera, Telefon und Einstellungen. Deaktiviert wird es zum Einzweckgerät: die Provisionierung deaktiviert jede System-App, die dieser Agent nicht ausdrücklich aktiviert hat."
+        },
+        "max_apk_mb": {
+          "label": "Größte APK, die der Hub annimmt",
+          "help": "Eine Obergrenze für den Upload, kein Richtwert. Eine .NET-Android-Release-APK ist etwa zehn Megabyte groß."
+        }
+      },
+      "location": {
+        "default_timeout_seconds": {
+          "label": "Suchdauer auf dem Gerät",
+          "help": "Wie lange ein Gerät nach einer frischen Position sucht, bevor es stattdessen die zuletzt bekannte meldet. Eine Satellitenortung aus dem Kaltstart dauert im Freien Dutzende Sekunden und gelingt in Gebäuden gar nicht, deshalb hört das Gerät hier auf, statt jemanden vor einem sich drehenden Rad warten zu lassen."
+        }
+      },
+      "data": {
+        "location_retention_days": {
+          "label": "Standortverlauf aufbewahren für",
+          "help": "Wie lange erfasste Positionen aufbewahrt werden, bevor sie gelöscht werden. Das ist eine Datenschutz- und keine Speicherplatzeinstellung -- die Tabelle ist winzig --, also ist sie zum Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seinen Standortverlauf unabhängig davon sofort."
+        },
+        "usage_retention_days": {
+          "label": "App-Nutzung aufbewahren für",
+          "help": "Wie lange die Vordergrundzeit je App aufbewahrt wird, bevor sie gelöscht wird. Eine Aufzeichnung dessen, was jemand mit seinen Abenden gemacht hat, daher standardmäßig kürzer als der Standortzeitraum und zum weiteren Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seine Nutzung unabhängig davon sofort."
+        }
+      },
+      "map": {
+        "tile_url": {
+          "label": "URL der Kartenkacheln",
+          "help": "Woher die Konsole das Kartenmaterial lädt, als {z}/{x}/{y}-Vorlage. Das ist das Einzige, was die Konsole beim Laden einer Seite von Dritten abruft; richten Sie es auf Ihren eigenen Kachelserver, oder lassen Sie es leer, um Geräte auf leerem Grund mit ihren Koordinaten darzustellen."
+        },
+        "tile_attribution": {
+          "label": "Kachel-Quellenangabe",
+          "help": "Der Hinweis in der Ecke der Karte. Er muss zu dem passen, worauf die Kachel-URL zeigt: OpenStreetMaps Kachelrichtlinie verlangt ihre Nennung, und sie neben fremden Kacheln zu zeigen wäre eine Falschaussage und kein Schönheitsfehler."
+        },
+        "default_zoom": {
+          "label": "Zoom bei einem einzelnen Gerät",
+          "help": "Wie weit die Karte heranzoomt, wenn sie ein einzelnes Gerät zeigt. 16 entspricht etwa einem Häuserblock: nah genug, um das Gebäude zu erkennen, weit genug, dass ein Genauigkeitskreis von 200 m noch hineinpasst."
+        }
+      },
+      "policy": {
+        "max_age_seconds": {
+          "label": "Einschränkungen aufheben nach",
+          "help": "Wie lange ein Gerät seine App-Richtlinie weiter durchsetzt, nachdem es nichts mehr von diesem Hub gehört hat. Danach hebt das Gerät alle Einschränkungen von selbst auf. Das ist ein Sicherheitsventil und keine Zeitüberschreitung: ein Telefon, dessen Hub verschwunden ist, darf kein Gerät sein, das jemand zurücksetzen muss."
+        }
       }
     },
     "choice": {
@@ -2131,7 +2197,24 @@
     "channel_pinned": "Kanal: {value} (festgelegt)",
     "channel_pin": "Release-Kanal",
     "channel_follow_fleet": "Flotten-Standard folgen",
-    "channel_ahead": "Läuft mit {running} und ist damit der stabilen Version ({stable}) voraus. Es wird erst wieder aktualisiert, wenn Stabil daran vorbeizieht — der Wechsel weg von Beta macht ein installiertes Update nicht rückgängig."
+    "channel_ahead": "Läuft mit {running} und ist damit der stabilen Version ({stable}) voraus. Es wird erst wieder aktualisiert, wenn Stabil daran vorbeizieht — der Wechsel weg von Beta macht ein installiertes Update nicht rückgängig.",
+    "location": {
+      "title": "Standort",
+      "disclosure": "Jede Anfrage wird im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung mit dem Namen der anfragenden Bedienperson."
+    },
+    "apps": {
+      "title": "Installierte Apps"
+    },
+    "usage": {
+      "title": "App-Nutzung"
+    },
+    "secure": {
+      "title": "Sperren und löschen"
+    },
+    "tools": {
+      "hidden": "Einige Werkzeuge sind ausgeblendet: Dieser Rechner hat gemeldet, dass er sie nicht beantworten kann.",
+      "hidden_android": "Einige Werkzeuge sind ausgeblendet: Das ist ein Android-Gerät, und es gibt dafür weder eine Shell noch ein BIOS noch ein Dateisystem."
+    }
   },
   "remote": {
     "title": "Remote",
@@ -3105,5 +3188,273 @@
       "days": "{days} Tage",
       "projection_note": "Mehr sendet der besitzende Hub zu einem geliehenen Rechner nicht. Seriennummer, Inventarnummer und Verzeichniseintrag bleiben dort."
     }
+  },
+  "provisioning": {
+    "heading": "Provisionierung von Android-Geräten",
+    "intro": "Diesen Code an einem zurückgesetzten Android-Gerät scannen, um es als vollständig verwaltetes Gerät aufzunehmen. Ein Scan installiert den Agent, übergibt ihm die Geräteinhaberschaft, richtet ihn auf diesen Hub aus und meldet ihn an.",
+    "warning": "Die Provisionierung setzt das Gerät zurück. Alles darauf wird gelöscht, und die Geräteinhaberschaft lässt sich später weder vergeben noch auf eine andere App übertragen. Scannen Sie dies nur an einem bereits zurückgesetzten Gerät, dessen Inhalt Sie nicht mehr brauchen.",
+    "qr": {
+      "heading": "Provisionierungscode",
+      "loading": "Nutzdaten werden erstellt ...",
+      "alt": "QR-Code zur Android-Provisionierung",
+      "copy": "Nutzdaten kopieren",
+      "copied": "Kopiert.",
+      "copy_failed": "Der Browser hat den Zugriff auf die Zwischenablage abgelehnt.",
+      "print": "Drucken",
+      "secret_note": "Der Code enthält das Anmeldegeheimnis dieser Flotte, damit ein Scan das Gerät provisioniert und anmeldet. Behandeln Sie ein Foto davon wie das Geheimnis selbst.",
+      "unreachable": "Der Hub hat nicht geantwortet.",
+      "failed": "Die Provisionierungsnutzdaten konnten nicht erstellt werden.",
+      "too_large": "Die Nutzdaten passen nicht in einen QR-Code. Kürzen Sie die öffentliche Adresse dieses Hubs."
+    },
+    "unconfigured": {
+      "help": "Laden Sie oben die signierte Agent-APK hoch. Der Hub liest die Signaturprüfsumme daraus und stellt die Datei den zu provisionierenden Geräten bereit; unter Einstellungen ist nichts einzutragen."
+    },
+    "payload": {
+      "field": "Feld",
+      "value": "Wert",
+      "component": "DEVICE_ADMIN_COMPONENT_NAME"
+    },
+    "checksum": {
+      "heading": "Signaturprüfsumme vergleichen",
+      "help": "Der Hub leitet diesen Wert bereits aus der hochgeladenen APK ab. Fügen Sie hier ein, was apksigner verify --print-certs ausgibt, um beides zu vergleichen, bevor Sie ein Gerät zurücksetzen.",
+      "input_label": "SHA-256-Digest (hexadezimal)",
+      "placeholder": "b39a161053ea...",
+      "convert": "Umrechnen",
+      "failed": "Das konnte nicht umgerechnet werden."
+    },
+    "steps": {
+      "heading": "Ein Gerät provisionieren",
+      "reset": "Das Gerät auf Werkseinstellungen zurücksetzen, oder ein fabrikneues verwenden.",
+      "tap": "Im Willkommensbildschirm sechsmal auf dieselbe Stelle tippen, um den QR-Scanner zu öffnen.",
+      "wifi": "Auf Nachfrage ein Netzwerk verbinden. Dieser Code enthält bewusst keine WLAN-Zugangsdaten.",
+      "scan": "Den Code oben scannen. Das Gerät lädt den Agent selbst herunter und installiert ihn.",
+      "verify": "Nach der Einrichtung sollte der Bildschirm des FleetHub-Agents „Fully managed (device owner)“ zeigen und der Rechner im Bestand erscheinen."
+    },
+    "apk": {
+      "heading": "Agent-APK",
+      "intro": "Der Hub stellt diese Datei den Geräten bereit, die provisioniert werden, und liest die Signaturprüfsumme daraus. Laden Sie die signierte APK hoch; mehr muss nicht eingetragen werden.",
+      "loading": "Prüfe, was bereitgestellt wird...",
+      "none": "Es wird noch keine APK bereitgestellt, daher lässt sich kein Provisionierungscode erzeugen.",
+      "choose": "Signierte APK",
+      "choose_first": "Wählen Sie zuerst eine Datei aus.",
+      "upload": "Hochladen",
+      "uploading": "Wird hochgeladen...",
+      "uploaded_ok": "Hochgeladen.",
+      "remove": "Bereitstellung beenden",
+      "remove_confirm": "Bereitstellung dieser APK beenden? Bereits gedruckte Codes funktionieren dann nicht mehr.",
+      "failed": "Das wurde abgelehnt.",
+      "file_name": "Datei",
+      "size": "Größe",
+      "sha256": "Datei-SHA-256",
+      "checksum": "Signaturprüfsumme",
+      "download_url": "Download-URL",
+      "uploaded": "Hochgeladen",
+      "url_note": "Die Download-URL enthält ein Token und erfordert keine Anmeldung, denn ein auf Werkseinstellungen zurückgesetztes Gerät hat nichts, womit es sich anmelden könnte. Erneutes Hochladen oder das Beenden der Bereitstellung ändert das Token und setzt alle zuvor gedruckten Codes außer Kraft."
+    }
+  },
+  "location": {
+    "locate_now": "Jetzt orten",
+    "locating": "Wird geortet ...",
+    "failed": "Die Anfrage konnte nicht gesendet werden.",
+    "status": {
+      "fixed": "Geortet {when}",
+      "last_known": "Zuletzt bekannte Position, von {when}",
+      "waiting": "Warte auf die Antwort des Geräts ...",
+      "never": "Dieses Gerät wurde noch nie geortet."
+    },
+    "history": {
+      "when": "Angefragt",
+      "outcome": "Ergebnis",
+      "who": "Angefragt von"
+    },
+    "outcome": {
+      "located": "Geortet",
+      "located_stale": "Zuletzt bekannte Position",
+      "unavailable": "Keine Position verfügbar",
+      "no_answer": "Das Gerät hat nicht geantwortet"
+    },
+    "popup": {
+      "fixed": "Geortet {age}",
+      "last_known": "Zuletzt bekannte Position, {age}",
+      "accuracy": "Genau auf etwa {metres} m",
+      "provider": "Quelle: {provider}",
+      "open": "Dieses Gerät öffnen"
+    },
+    "age": {
+      "moments": "gerade eben",
+      "minutes": "vor {count} Min.",
+      "hours": "vor {count} Std.",
+      "days": "vor {count} Tagen"
+    },
+    "list": {
+      "fixed": "Geortet {when}",
+      "last_known": "Zuletzt bekannt, {when}"
+    },
+    "map": {
+      "heading": "Gerätekarte",
+      "intro": "Wo sich jedes Gerät befand, als zuletzt jemand gefragt hat. Nichts davon ist live, und kein Gerät wird verfolgt -- ein Punkt existiert, weil eine Bedienperson ihn angefordert hat.",
+      "filter": "Geräte filtern",
+      "count": "{count} angezeigt",
+      "none": "Kein für Sie sichtbares Gerät wurde je geortet.",
+      "no_match": "Kein Gerät passt zu diesem Filter.",
+      "unreachable": "Der Hub hat nicht geantwortet."
+    }
+  },
+  "apps": {
+    "filter": "Apps filtern",
+    "show_system": "System-Apps einschließen",
+    "count": "{shown} von {total}",
+    "reported": "Gemeldet {when}",
+    "none": "Dieses Gerät hat keine Apps gemeldet.",
+    "no_match": "Keine App passt zu diesem Filter.",
+    "column": {
+      "name": "App",
+      "package": "Paket",
+      "version": "Version",
+      "state": "Zustand"
+    },
+    "state": {
+      "installed": "Installiert",
+      "suspended": "Pausiert",
+      "disabled": "Deaktiviert"
+    },
+    "system": "System"
+  },
+  "policy": {
+    "heading": "Geräterichtlinie",
+    "intro": "Welche Apps ein verwaltetes Gerät ausführen darf. Richtlinien werden hier geschrieben und von jedem Gerät bei der nächsten Meldung angewendet.",
+    "deadman": "Ein Gerät, das nichts mehr von diesem Hub hört, hebt nach der in den Einstellungen gesetzten Frist alle Einschränkungen von selbst auf. Das ist beabsichtigt: ein Gerät, dessen Hub nicht erreichbar ist, darf nicht zu einem werden, das man zurücksetzen muss.",
+    "new": "Neue Richtlinie",
+    "none": "Es wurde noch keine Richtlinie geschrieben.",
+    "off": "(aus)",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "confirm_delete": "Die Richtlinie „{name}“ löschen? Bei den erfassten Geräten werden ihre Einschränkungen bei der nächsten Meldung aufgehoben.",
+    "column": {
+      "name": "Richtlinie",
+      "mode": "Art",
+      "packages": "Apps",
+      "targets": "Gilt für"
+    },
+    "targets": {
+      "fleet": "Alle Geräte",
+      "machines": "{count} Gerät(e)",
+      "hidden": "(+{count} für Sie nicht sichtbar)"
+    },
+    "name": "Name der Richtlinie",
+    "mode_label": "Art",
+    "mode": {
+      "block": "Sperrliste",
+      "allow": "Erlaubnisliste",
+      "block_help": "Die unten gewählten Apps werden pausiert. Alles andere bleibt unberührt.",
+      "allow_help": "Nur die unten gewählten Apps dürfen laufen. Alles andere Installierte wird pausiert, außer Apps, die nie pausiert werden können."
+    },
+    "enabled": "Aktiv",
+    "section_targets": "Welche Geräte",
+    "section_packages": "Welche Apps",
+    "fleet_wide": "Alle Geräte der Flotte",
+    "filter_machines": "Geräte filtern",
+    "filter_packages": "Apps filtern",
+    "show_system": "System-Apps einschließen",
+    "package_count": "{chosen} gewählt, {shown} angezeigt",
+    "on_machines": "auf {count}",
+    "protected": "kann nicht gesperrt werden",
+    "no_packages": "Noch kein Gerät hat eine App-Inventur gemeldet, es gibt also nichts zur Auswahl.",
+    "no_package_match": "Keine App passt zu diesem Filter.",
+    "preview_button": "Vorschau",
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "failed": "Das konnte nicht gespeichert werden.",
+    "unreachable": "Der Hub hat nicht geantwortet.",
+    "preview": {
+      "summary": "Würde {machines} von {total} Gerät(en) betreffen.",
+      "hidden": "{count} betroffene Gerät(e) liegen außerhalb Ihres Sichtbereichs.",
+      "nothing": "Kein Gerät wäre betroffen. Auf keinem sind die gewählten Apps installiert.",
+      "dropped": "Diese Apps können nie pausiert werden und wurden ausgelassen: {packages}",
+      "machine": "Gerät",
+      "would_suspend": "Würde pausieren"
+    },
+    "time": {
+      "heading": "Zeitpläne",
+      "intro": "Sperrzeiten und tägliche Bildschirmzeit-Budgets.",
+      "new": "Neuer Zeitplan",
+      "none": "Noch kein Zeitplan.",
+      "local": "Ein Zeitplan wird vom Gerät selbst durchgesetzt, anhand der eigenen Uhr des Geräts, unabhängig davon, ob es diesen Hub erreicht. Verwaltete Geräte werden auf die Netzwerkzeit festgelegt, damit die Uhr nicht verstellt werden kann, um eine Sperrzeit zu umgehen.",
+      "windows": "Sperrzeiten",
+      "windows_help": "Nichts an den gewählten Tagen zwischen diesen Zeiten. Ein Ende vor dem Beginn läuft über Mitternacht hinaus, was eine Regel zur Nachtruhe braucht.",
+      "add_window": "Sperrzeit hinzufügen",
+      "no_windows": "Keine Sperrzeiten.",
+      "budgets": "Tägliche Budgets",
+      "budgets_help": "Wie lange eine App oder das ganze Gerät pro Tag genutzt werden darf. Aufgebrauchte Budgets werden um Mitternacht des Geräts aufgehoben. Null bedeutet heute gar nicht.",
+      "add_budget": "Budget hinzufügen",
+      "no_budgets": "Keine Budgets.",
+      "whole_device": "Das ganze Gerät",
+      "from": "Von",
+      "until": "Bis",
+      "wraps": "läuft über Mitternacht",
+      "minutes": "Minuten",
+      "minutes_a_day": "Minuten pro Tag",
+      "remove_rule": "Entfernen",
+      "window_summary": "{days} {start}-{end}: {apps}",
+      "budget_summary": "{app}: {minutes} Min. pro Tag",
+      "column": {
+        "rules": "Regeln"
+      },
+      "day": {
+        "mon": "Mo",
+        "tue": "Di",
+        "wed": "Mi",
+        "thu": "Do",
+        "fri": "Fr",
+        "sat": "Sa",
+        "sun": "So"
+      }
+    }
+  },
+  "usage": {
+    "recent_total": "Letzte Tage, nach App",
+    "by_day": "Tag für Tag",
+    "days_counted": "{count} Tag(e)",
+    "none": "Dieses Gerät hat keine App-Nutzung gemeldet.",
+    "retention": "Wird {days} Tage aufbewahrt und danach gelöscht.",
+    "no_access": "Der Nutzungszugriff wurde auf diesem Gerät nicht erteilt, daher greifen Bildschirmzeit-Budgets nie. Sperrzeiten funktionieren weiterhin. Wer das Gerät in der Hand hat, kann den Zugriff in der Agent-App erteilen.",
+    "hours_minutes": "{hours} Std. {minutes} Min.",
+    "hours": "{hours} Std.",
+    "minutes": "{minutes} Min.",
+    "column": {
+      "app": "App",
+      "time": "Vordergrundzeit",
+      "day": "Tag",
+      "total": "Gesamt",
+      "top": "Am meisten genutzt"
+    }
+  },
+  "secure": {
+    "action": {
+      "lock": "Gesperrt",
+      "wipe": "Gelöscht"
+    },
+    "column": {
+      "action": "Aktion",
+      "who": "Angefordert von",
+      "when": "Wann"
+    },
+    "intro": "Das Sperren wird von der Person, die das Gerät hält, mit ihrer eigenen PIN aufgehoben. Das Löschen ist ein Zurücksetzen auf Werkseinstellungen und kann von niemandem rückgängig gemacht werden.",
+    "lock": "Bildschirm jetzt sperren",
+    "lock_sent": "Sperre gesendet. Sie wirkt, sobald das Gerät erreichbar ist.",
+    "wipe_heading": "Dieses Gerät löschen",
+    "wipe": "Dieses Gerät löschen",
+    "wipe_sent": "Löschbefehl gesendet. Das Gerät antwortet einmal und meldet sich dann endgültig nicht mehr.",
+    "wipe_warning": "Damit wird alles auf dem Gerät gelöscht, und es lässt sich nicht rückgängig machen. Es gibt keinen Probelauf. Das Gerät antwortet einmal und verschwindet dann endgültig aus dieser Konsole.",
+    "confirm_label": "Zum Bestätigen den Namen des Rechners eingeben",
+    "confirm_dialog": "{machine} löschen? Das lässt sich nicht rückgängig machen.",
+    "clear_protection": "Schutz vor Zurücksetzen aufheben",
+    "clear_protection_help": "Das Gerät kann von jedem neu eingerichtet werden. Für firmeneigene Hardware ist das meist richtig.",
+    "keep_protection_help": "Das Gerät kann ohne das zuletzt angemeldete Konto nicht neu eingerichtet werden. Das ist Diebstahlschutz -- und ein Briefbeschwerer, wenn das Konto nicht Ihnen gehörte.",
+    "wiped_on": "Am {when} von {who} gelöscht. Es wird sich nicht mehr melden.",
+    "no_history": "Auf diesem Gerät wurde nichts gesperrt oder gelöscht.",
+    "count": "{count} Aktion(en)",
+    "failed": "Das wurde abgelehnt.",
+    "unreachable": "Der Hub war nicht erreichbar."
   }
 }

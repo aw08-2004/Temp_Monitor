@@ -1381,6 +1381,359 @@ existing `POST /api/agent/heartbeat` under a `network` key.
 > adapter, and whether `powercfg /deviceenablewake` matches on the description this reader
 > reports. Everything else is covered by tests against literal payloads.
 
+## Machine capabilities
+
+What each managed machine can actually do, reported by the machine rather than inferred from
+its agent version — so the hub stops queueing work a device can never perform.
+
+**Why a version number was not enough.** The console decides which buttons to draw from
+`MIN_*_AGENT` constants that hardcode the agent minor a feature arrived in. That works while
+every machine is a Windows PC on one release train, because "newer" really does mean "can do
+more". It cannot express *"this device can be renamed but will never run a script"*, which on
+an Android device is a fact about the platform, not a backlog position.
+
+**And those gates are JavaScript, so scheduled work never sees them.** They stop an operator
+being *offered* a button. Nothing evaluates them for a command the backup, patch or deployment
+scheduler — or the rules engine — dispatches, because those target a machine *set*. The first
+Android device to enroll was inside a fleet-wide backup profile and was queued `backup_files`
+within a minute.
+
+**The absent-report rule.** A machine that has reported nothing is *unknown*, never
+*incapable*. Every Windows agent in the field reports nothing here and keeps working exactly as
+before; only an explicit report can refuse anything.
+
+**Where it is enforced.** `fleet.create_command` — the one function every command in the system
+passes through — refuses a type the target has said it cannot run, with a reason naming the
+machine, the command and the platform. The four schedulers additionally filter their targets
+first, so a phone in a nightly backup profile is never aimed at rather than collecting a failed
+run every night.
+
+**Gating**: reading is `view` + machine scope, like a model or a disk layout. There is no write
+surface: a capability is something a machine reports about itself, and an operator override
+would be a way to tell the hub that a phone can run a script.
+
+**Endpoints** (console-facing): `GET /api/capabilities/machines/<machine>`,
+`GET /api/capabilities/platforms`. The report arrives on the existing
+`POST /api/agent/heartbeat` under a `capabilities` key — on every heartbeat rather than
+change-only, so a hub restored from a backup re-learns the fleet without anybody reinstalling
+an agent. Machine pages carry `platform`, `features` and `supported_commands` already.
+
+**What the console does with it.** A machine page hides the tools its machine has said it cannot
+answer -- Terminal, Backup, Firmware, Network, Files and the Processes card -- and says in one
+sentence that it did, because a toolbar that is shorter than it was on the last machine reads as
+a page that failed to load. Two questions, answering silence differently on purpose: an action
+the console has always offered stays offered by a machine that has reported nothing, while a
+new one (locking, wiping) waits for an explicit claim. It is a courtesy either way; every route
+re-decides.
+
+> **Status:** built — hub 1.106.0. Only the Android agent reports capabilities today; the
+> Windows and Linux agents send nothing and are treated as unknown by design, which means
+> nothing on their pages changes.
+
+## Blocking apps
+
+Deciding which apps a managed device may run, on the **Device policy** page.
+
+**Two kinds.** A **blocklist** names apps to suspend and leaves everything else alone. An
+**allowlist** names the only apps that may run; everything else installed is suspended. A device
+can be covered by several: blocklists union, and allowlists **intersect** -- each says "only
+these", so two of them applying leaves what both permit. A union would let a second allowlist
+quietly widen the first.
+
+**Suspended, not hidden.** The icon stays where it was, greyed, and the system itself says
+"paused by your organisation" when somebody taps it. Hiding makes an app silently vanish, which
+reads as "uninstalled" -- and what follows is a ticket, or somebody factory-resetting a phone to
+get their app back.
+
+**Nothing can suspend the launcher, the settings app, the dialer, the emergency app or the agent
+itself.** The agent enforces that list independently of the hub, so a hub that is compromised,
+misconfigured or simply newer cannot brick a device. The console holds a copy so it never offers
+you a policy it already knows will be partly refused, and names anything it drops rather than
+removing it silently.
+
+**Saving is gated on previewing.** The preview answers "which packages, on which devices, and
+how many are actually installed" before anything is stored, and it answers *per device* rather
+than as a fleet total -- "14 apps" reads as small; "14 apps on this phone, including the camera"
+does not. Any edit invalidates it.
+
+**The dead-man switch.** A device that stops hearing from this hub lifts every restriction on
+its own after `policy.max_age_seconds` (7 days). That is deliberate and one-way: the hub can
+make a device *more* restricted only while it can reach it, and a phone whose hub is
+decommissioned, misconfigured or behind a firewall must not become one somebody has to factory
+reset. The clock is measured from the hub's last *confirmation*, so a policy re-affirmed every
+ten seconds never expires.
+
+**Compliance is three views, not two**: what the policy asks for, what the device says it did,
+and what its own inventory shows. The interesting failures are where they disagree --
+`setPackagesSuspended` returns the packages it could **not** suspend, and a policy reported as
+applied while three of its targets are still running is worse than no policy.
+
+**Gating**: writing is `manage_device_policy`, a capability of its own -- a policy is not a
+setting but a standing instruction that changes what somebody's device does, applied without
+anybody present. Reading a policy is `view`; reading a machine's compliance is `view` + machine
+scope. Every write is audited at security level.
+
+**Endpoints**: `GET /policy` (the page), `GET|POST /api/policy/apps`,
+`GET|PUT|DELETE /api/policy/apps/<id>`, `POST /api/policy/preview`,
+`GET /api/policy/machines/<machine>`. The document reaches devices on the existing
+`POST /api/agent/heartbeat`, sent only when its version differs from the one the device reports.
+
+> **Status:** built -- hub 1.103.0 / Android agent source. **Not yet exercised on hardware** --
+> see the hardware-validation table in `ROADMAP.MD`.
+
+## Blocked hours and screen-time budgets
+
+When a managed device may run what, in the **Schedules** section of the Device policy page.
+
+**Two kinds, again.** **Blocked hours** name days and a span -- "nothing on weeknights between
+22:00 and 07:00", over named apps or over the whole device. A **daily budget** names an
+allowance -- "sixty minutes of TikTok", or "two hours of screen time" for the device as a whole.
+Zero minutes is a real budget and means "not at all today".
+
+**An end earlier than the start runs past midnight**, which is the only kind of curfew anybody
+actually writes. The half after midnight belongs to the day *after* the one the rule names, so a
+Friday-night curfew still holds at 02:00 on Saturday.
+
+**The device decides, not the hub.** The hub sends the rules; the agent evaluates them every
+minute against its own clock and its own usage, whether or not it can reach the hub. A phone
+with no signal at 22:00 still has a bedtime. This is also why blocked hours keep working on a
+device where usage access was never granted: they need a clock, not a ledger.
+
+**Both apply, and nothing is reconciled.** If one rule says "no TikTok after 22:00" and another
+says "sixty minutes a day", both hold and whichever bites first is the answer. Two budgets on
+the same app keep the smaller number.
+
+**The clock is not the user's to move.** A fully managed device is held to network time, so a
+curfew cannot be escaped in date and time settings. Where that cannot be applied the agent logs
+it in as many words rather than pretending.
+
+**Budgets need usage access, and somebody has to grant it on the device.** It is an appop --
+`setPermissionGrantState` does not reach it and no Device Owner can turn it on remotely. A
+device without it reports no usage, and the console says so on the machine page rather than
+showing zeroes that would read as "nobody used this". The agent app has a **Grant usage access**
+button that opens the right settings screen.
+
+**Gating**: writing is `manage_device_policy`, the same capability as a blocklist. Reading a
+machine's usage is `view` + machine scope, and there is deliberately **no fleet-wide usage
+view** -- the app inventory has one because a policy author has to pick a package from
+somewhere, and the question a fleet-wide usage listing would answer is "who spends the most time
+on their phone". Every write is audited at security level.
+
+**Retention**: `data.usage_retention_days`, 14 days by default and meant to come down. Pruned by
+the device's own local day, and erased immediately when a machine is deleted. See the
+personal-data inventory in `SECURITY.MD`.
+
+**Endpoints**: `GET|POST /api/policy/times`, `GET|PUT|DELETE /api/policy/times/<id>`,
+`GET /api/usage/machines/<machine>`. Rules reach devices in the same `device_policy` block as a
+blocklist; usage arrives on the heartbeat under a `usage` key.
+
+> **Status:** built -- hub 1.104.0 / Android agent source. **Not yet exercised on hardware** --
+> see the hardware-validation table in `ROADMAP.MD`.
+
+## Locking and wiping a device
+
+Securing a managed device that has been lost, in the **Lock and wipe** card on the machine page.
+
+**Two actions, deliberately unequal.** **Lock** locks the screen now and is undone by whoever
+holds the device with their own PIN -- it is the ordinary first move for a phone left in a taxi,
+and it is one click. **Wipe** is a factory reset. There is no undo, no dry run and no partial
+version of it, so it is behind a second button, a typed machine name and a confirmation dialog.
+All the friction is on the half that cannot be taken back; spreading it over both is how people
+learn to type past it.
+
+**The typed name is checked on the server.** The console asks for it as a courtesy; the control
+is in the hub, because a dialog stops an operator and does not stop a script. The comparison is
+exact and case-sensitive -- `PHONE-1` and `phone-12` are two devices.
+
+**Factory-reset protection is a per-device choice, and the console says which it is sending.**
+Clearing it means the wiped device can be set up again by anybody, which is right for
+company-owned hardware. Leaving it on means the device cannot be set up again without the
+account that was signed in on it -- theft protection if it was stolen, a brick if that account
+was not yours. The default is to clear it.
+
+**A wiped device never reports back**, so the hub records the *request* rather than waiting for
+a result. That row is the only thing that can tell an operator why a machine stopped reporting;
+without it a wiped phone and a flat battery look identical in the console.
+
+**Gating**: `wipe_device`, a capability of its own. Not `issue_commands` -- the argument that
+puts every other command under that gate ("less dangerous than the SYSTEM shell it already
+grants") is true of a reboot and false of an erase. Seeing that a device was locked or erased is
+`view` + machine scope. This page is the only door: a hand-rolled `wipe_device` through the
+generic command endpoint is refused, it cannot be saved as a favorite, and a rule may not issue
+one.
+
+**Endpoints**: `GET /api/wipe/machines/<machine>`,
+`POST /api/wipe/machines/<machine>/lock`, `POST /api/wipe/machines/<machine>/wipe`. Every write
+is audited at security level, before the command is created.
+
+> **Status:** built -- hub 1.105.0 / Android agent source. **Not yet exercised on hardware**, and
+> a wipe must be tested only on a scratch device -- see the hardware-validation table in
+> `ROADMAP.MD`.
+
+## App inventory
+
+What a managed Android device says is installed, on the machine page under **Installed apps**.
+
+**It exists so that app policy can be written by a human.** Blocking an app means naming a
+package, and a package name is not something an operator knows: `com.google.android.youtube` is
+guessable, `com.zhiliaoapp.musically` is TikTok. Without a list to pick from, a policy editor is
+a text box that punishes typos with silence -- a package that does not exist on the device is
+simply not blocked, and nothing says so.
+
+**System apps are hidden by default and findable on demand.** A phone reports 150-400 packages
+and perhaps thirty are things somebody installed. Showing all of them first buries the thirty
+that answer the question; showing only the thirty hides the browser, the store and the camera,
+which are exactly the ones a helpdesk gets asked about.
+
+**`Suspended` and `Disabled` are what the DEVICE says, not what a policy asked for.** That is
+the whole reason those states are stored: a policy applied to fourteen apps that took on eleven
+must be visible, and a table written from intent could never show it.
+
+**`QUERY_ALL_PACKAGES` is not requested.** Android 11 hid the full package list behind that
+permission; a device owner is exempt, so a fully managed device reports everything without it.
+An unmanaged device reports a partial list, which reads honestly as a device that is not fully
+managed.
+
+**Gating**: `view` + machine scope, like a disk layout. Read-only -- there is no way to tell the
+hub a device has an app it does not have.
+
+**Endpoints**: `GET /api/apps/machines/<machine>`, `GET /api/apps/packages`,
+`GET /api/apps/packages/<package>/machines`. The inventory arrives on the existing
+`POST /api/agent/heartbeat` under an `apps` key, change-only.
+
+> **Status:** built -- hub 1.102.0 / Android agent source. Blocking apps is the next phase; this
+> is the list it will be written against. **Not yet exercised on hardware.**
+
+## Locating a device
+
+Asking a managed Android device where it is, on demand.
+
+**On demand only, and that is the design rather than a first step.** Nothing polls. A position
+exists in the hub because an operator pressed a button and the device answered; there is no
+background collection and no travel history, only a history of *when somebody asked*.
+
+**Asking has its own capability — `locate_device` — and it is deliberately not
+`issue_commands`.** Wake, the Processes card and the file explorer all reuse that one on the
+argument that each is less dangerous than the SYSTEM shell it already grants, which holds
+because all three act on a machine. This one acts on a person: *being able to reboot a PC must
+not silently mean being able to find out where an employee is*. The hub refuses a hand-rolled
+`locate_device` through the generic command endpoint and refuses to save one as a favorite, so
+the capability cannot be routed around. **Reading** a last known position is `view` + machine
+scope, like any other thing a machine reports.
+
+**The device says who asked.** The agent posts a notification naming the operator, every time,
+*including when it has no position to give* — otherwise a failed request would be a quiet way
+to check whether somebody's phone is switched on. The audit trail records the same name.
+
+**Three outcomes, kept apart**, because they send you to three different places: a position; the
+device answered and had no fix (location switched off, nothing within the time budget, the
+permission never granted — the reason comes back with it); and the device never answered at all
+(switched off, out of coverage). A stale answer is labelled `stale` and carries the time the fix
+was actually taken — a last-known position shown as current is somebody driving to where a phone
+used to be.
+
+**Framework `LocationManager`, not Google Play Services.** The fused provider is better
+indoors, and would be the first Google dependency in a repo that vendors nothing from Google —
+failing outright on de-Googled builds and on the cheap tablets a fleet buys. Both providers are
+asked at once and the most accurate answer within the budget wins, so a network fix does not
+beat a GPS one just by arriving first.
+
+**Settings**: `location.default_timeout_seconds` (45) is how long the device spends looking;
+`data.location_retention_days` (30) is how long positions are kept. The second is a privacy
+control rather than a disk-space one — see the personal-data inventory in `SECURITY.MD`.
+
+### Seeing it
+
+Two views over the same data. A **Location fold** on the machine page carries the last known
+fix, a Locate button, and the history of who asked and what came back. The **Map** page
+(`/map`, in the sidebar under Inventory) plots every device in scope that has a known position,
+with a filter and a list beside it.
+
+**The map never claims more precision than the fix had.** The accuracy radius is drawn as a
+real circle in metres, so a fix that might be a kilometre wide looks a kilometre wide; a radius
+the device did not state is not drawn at all rather than assumed. Stale fixes are a different
+colour and say how old they are. The coordinates are always shown in full — they are what you
+paste into a phone before walking out of the door to find something.
+
+**The fold does not appear on a device that cannot locate**, which today is every Windows PC.
+Hidden rather than greyed: a permanently dead card on several hundred machine pages is worse
+than no card.
+
+**Map tiles are the one thing the console fetches from a third party at page load** — a
+deliberate exception to the "works on an isolated LAN" claim in
+`hub/static/vendor/README.md`. Tiles are content rather than code, and `map.tile_url` exists so
+you can point at your own tile server. Blank it and the map draws devices on an empty
+background with their coordinates and says so, rather than showing grey squares.
+
+**Endpoints**: `GET|POST /api/location/machines/<machine>`, `GET /api/location/fleet`,
+`GET /map`.
+
+> **Status:** built — hub 1.101.0 / Android agent source. **Not yet exercised on hardware** —
+> see the hardware-validation table in `ROADMAP.MD`.
+
+## Android device provisioning
+
+Enrolling an Android device as a **fully managed device** (device owner), so the agent can be
+located, locked and policed rather than merely installed. The **Device provisioning** page is
+the whole of it: upload the signed APK, scan the code.
+
+**A device owner is taken once, at a factory-reset device's setup wizard, and never again.** It
+cannot be granted after an account exists on the device, there is no API to add it later, and
+there is no supported way to move it to a different app. That is what makes every field in this
+payload consequential: a wrong component name or a wrong checksum is not "the QR did not work",
+it is "the QR did not work and the device has already been wiped".
+
+So the hub **refuses to build a partial payload**. A payload missing a field still encodes,
+still scans, and still fails several minutes later on a device you cannot get back. An
+unconfigured hub answers the page with what is missing and how to produce it.
+
+**What you need**, once per fleet: the signed APK. Upload it on that page and the hub does the
+rest.
+
+- **The hub hosts the file.** A factory-reset device downloads it from this hub's own address,
+  over whatever network it has been put on, at a URL carrying a random token. That download
+  needs no sign-in and cannot — the device has nothing to sign in with, because it is
+  downloading the app that would later enrol it.
+- **The hub derives the checksum**, by reading the signing certificate out of the APK itself.
+  This used to be typed in, converted by hand from what `apksigner verify --print-certs` prints,
+  and it was the single most likely thing to get wrong: the hex form is 64 characters in the
+  right alphabet, so it saves without complaint and fails on a device that has already been
+  wiped. The converter is still on the page, now as a cross-check — paste what apksigner prints
+  and confirm it matches what the hub derived.
+- **Uploading again, or removing the APK, mints a new token**, so codes printed from the
+  previous one stop working rather than pointing at a file that is gone. That is also how you
+  kill a code somebody photographed off a bench.
+
+**One scan does everything.** The code carries the hub URL and the fleet's enrollment secret in
+the provisioning extras bundle, so a device comes up managed, pointed at this hub, and enrolled.
+Without the secret it would come up managed, reporting telemetry, and silently accepting no
+commands. **Treat a photograph of the code the way you would treat the enrollment secret**, and
+note that every fetch is recorded in the audit trail at security level — with the secret itself
+redacted out of the row.
+
+**No Wi-Fi credentials are in the code, deliberately.** The extras can carry an SSID and PSK;
+the hub has nowhere honest to keep a PSK (settings are rendered into a form and partly shipped
+to agents), and a QR displayed on a screen or taped to a bench should not be a network
+credential. The setup wizard asks for Wi-Fi itself.
+
+**Gating**: `manage_settings` throughout — page, payload, upload and converter. Not
+`issue_commands`, which is the capability somebody reaches for by reflex: this page hands out a
+credential and decides what a device installs as its owner, so it belongs with the capability
+that can already read and write the rest of the hub's configuration. The APK download is the one
+exception, and the one route in this product with no gate at all. What the file contains is a
+signed release binary and nothing else: no fleet data, no hub address, no credentials. See
+`SECURITY.MD`.
+
+**Endpoints**: `GET /provisioning` (the page), `GET /api/provisioning/qr`,
+`GET|POST|DELETE /api/provisioning/apk`, `POST /api/provisioning/checksum`, and the
+unauthenticated `GET /provisioning/apk/<token>/fleethub-agent.apk`.
+
+> **Status:** built — hub 1.107.0 / Android agent source. **Not yet validated on hardware**, and
+> the flow itself has not been run. The agent's three provisioning components are verified
+> present in the built manifest with the right actions, permission and metadata, and the
+> checksum the hub derives from the real signed APK has been confirmed byte-for-byte against
+> what `apksigner verify --print-certs` prints for it.
+
 ## Signing releases
 
 One artifact in this repo is Ed25519-signed so a compromised hub or repo commit

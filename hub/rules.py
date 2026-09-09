@@ -41,6 +41,7 @@ from collections import namedtuple
 from datetime import datetime
 
 import alerts
+import capabilities
 import fleet
 import scripts
 
@@ -2894,6 +2895,24 @@ RULE_FORBIDDEN_COMMANDS = (fleet.SESSION_CONTROL_COMMANDS | fleet.SCHEDULED_COMM
                            # hub would not supply this firmware update". Allowing it produced a
                            # rule that could never succeed, which is precisely what this set
                            # exists to prevent. No UI ever offered it, so nothing can be using it.
+                           # The two entries here that are about a CAPABILITY rather than about
+                           # one-shot params (roadmap #23). A rule's actions are gated on
+                           # ISSUE_COMMANDS, so a rule that could issue either of these would
+                           # be a way to reach `locate_device` and `wipe_device` without the
+                           # capabilities that exist to keep them apart from a reboot button --
+                           # and a rule fires with nobody present, which is the last way
+                           # anybody should discover that a phone has been erased. Both are
+                           # refused for the same reason by /api/fleet/commands and by
+                           # _validate_favorite; this is the third door.
+                           | fleet.LOCATION_COMMANDS | fleet.WIPE_COMMANDS
+                           # `update_bios` belongs with the one-shot params above and was only
+                           # ever absent from that list because it sits in the base ALL_COMMANDS
+                           # literal rather than in FIRMWARE_COMMANDS. Its `update_id` is minted
+                           # per target per maintenance window by firmware.py, so a rule can only
+                           # ever replay a stale one -- UpdateBiosExecutor refuses it with "the
+                           # hub would not supply this firmware update". Allowing it produced a
+                           # rule that could never succeed, which is precisely what this set
+                           # exists to prevent. No UI ever offered it, so nothing can be using it.
                            | frozenset({"install_virtual_display", "rename", "update_bios"}))
 RULE_ALLOWED_COMMANDS = frozenset(fleet.ALL_COMMANDS) - RULE_FORBIDDEN_COMMANDS
 
@@ -3833,8 +3852,17 @@ def dispatch_actions(db_path, actions, machine, variables, *, rule, now, config,
                 command_params, missing = render_params_checked(params.get("params") or {},
                                                                 variables)
                 record["command_type"] = params["command_type"]
+                unsupported = capabilities.refusal_for(db_path, machine,
+                                                       params["command_type"])
                 if missing:
                     record["skipped"] = _unresolved_reason(missing)
+                elif unsupported:
+                    # This machine has told us it cannot run this type (roadmap #23). SKIPPED
+                    # rather than left to create_command's refusal landing in `error` below:
+                    # a rule matching a phone and a hundred PCs is working exactly as written,
+                    # and a fire row that reads "error" for the phone every evening trains an
+                    # operator to ignore the column that means something.
+                    record["skipped"] = unsupported
                 else:
                     record["command_id"] = fleet.create_command(
                         db_path, machine, params["command_type"], command_params,
@@ -3891,6 +3919,13 @@ def _dispatch_script(db_path, params, machine, variables, *, rule, config):
     or disabled one records an error and issues nothing rather than falling back to anything.
     """
     name = str(params.get("script") or "").strip().lower()
+    # Before the script is even looked up (roadmap #23). A machine with no shell for an app to
+    # run a script in cannot be helped by any script in the library, and reporting "there is no
+    # script named X" for a device that could not have run it either way would send an operator
+    # to fix the wrong thing entirely.
+    unsupported = capabilities.refusal_for(db_path, machine, "run_script")
+    if unsupported:
+        return {"script": name, "skipped": unsupported}
     script = scripts.get_script(db_path, name)
     if script is None:
         return {"script": name, "error": f"there is no script named '{name}'"}
@@ -3938,6 +3973,14 @@ def _dispatch_message(db_path, action, machine, variables, *, rule, now, config,
     than that for a human, so without this the hub would expire a command whose dialog is
     still on screen -- and the answer would arrive against a command that no longer exists.
     """
+    # Same check as the other two dispatch paths (roadmap #23), and the same reason for
+    # skipping rather than erroring: a rule that matches a phone and a hundred PCs is working
+    # as written, and a nightly "error" against the one machine that could never show a dialog
+    # is how a fire history stops being read.
+    unsupported = capabilities.refusal_for(db_path, machine, ACTION_SHOW_MESSAGE)
+    if unsupported:
+        return {"skipped": unsupported}
+
     params = dict(action.get("params") or {})
     params["title"] = render_template(params.get("title"), variables)
     params["body"] = render_template(params.get("body"), variables)

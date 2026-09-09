@@ -25,7 +25,10 @@
     "download": "Descargar cliente",
     "rules": "Reglas",
     "tools": "Herramientas",
-    "sharing": "Compartir"
+    "sharing": "Compartir",
+    "provisioning": "Aprovisionamiento de dispositivos",
+    "map": "Mapa",
+    "policy": "Política del dispositivo"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -85,6 +88,7 @@
         "windows_10": "Windows 10",
         "windows_server": "Windows Server",
         "linux": "Linux",
+        "android": "Android",
         "unknown": "Desconocido"
       }
     },
@@ -507,6 +511,18 @@
       "manage_rules": {
         "label": "Gestionar reglas",
         "description": "Crear y editar reglas: condiciones sobre los datos de los equipos y qué ocurre cuando se cumplen. Una regla que envía comandos a los PC necesita además Emitir comandos."
+      },
+      "locate_device": {
+        "label": "Localizar un dispositivo",
+        "description": "Preguntar a un dispositivo dónde está, a petición. Es una capacidad propia y no parte de «Emitir comandos», deliberadamente: poder reiniciar un PC no debe significar en silencio poder averiguar dónde está una persona. Para leer la última posición conocida basta «Ver» y que la máquina esté en el ámbito. Cada petición queda registrada en la auditoría con el nombre del operador, y el dispositivo muestra una notificación que también lo nombra."
+      },
+      "manage_device_policy": {
+        "label": "Gestionar la política de dispositivos",
+        "description": "Escribir la política de aplicaciones de los dispositivos gestionados: qué apps pueden ejecutarse y cuáles no, y en qué máquinas. Es una capacidad propia y no parte de «Gestionar los ajustes», porque una política no es un ajuste: es una instrucción permanente que cambia lo que hace el dispositivo de una persona, aplicada sin nadie presente. Para leer una política y su cumplimiento basta «Ver» y que la máquina esté en el ámbito."
+      },
+      "wipe_device": {
+        "label": "Bloquear y borrar un dispositivo",
+        "description": "Bloquear la pantalla de un dispositivo gestionado y borrarlo. Es un permiso propio y no parte de 'Emitir comandos': el argumento que mantiene a los demás comandos bajo ese permiso -- menos peligroso que el shell SYSTEM que ya concede -- vale para un reinicio y no para un restablecimiento de fábrica. Borrar exige además escribir el nombre de la máquina, queda registrado en la auditoría antes de enviar el comando, y no se puede guardar como favorito ni emitir desde una regla. Para ver que un dispositivo fue bloqueado o borrado basta con 'Ver' más la máquina en el ámbito."
       }
     }
   },
@@ -528,7 +544,11 @@
       "signin": "Inicio de sesión",
       "wake": "Wake-on-LAN",
       "rules": "Reglas",
-      "sharing": "Uso compartido entre concentradores"
+      "sharing": "Uso compartido entre concentradores",
+      "provisioning": "Aprovisionamiento",
+      "location": "Ubicación",
+      "map": "Mapa",
+      "policy": "Política"
     },
     "unit": {
       "celsius": "°C",
@@ -921,6 +941,52 @@
       "sharing.peer_lifetime_days": {
         "label": "Vigencia del enlace entre concentradores",
         "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición -- una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
+      },
+      "provisioning": {
+        "leave_system_apps_enabled": {
+          "label": "Dejar activadas las apps propias del dispositivo",
+          "help": "Activado, un dispositivo aprovisionado conserva su cámara, su teléfono y sus ajustes. Desactivado lo convierte en un dispositivo de un solo uso: el aprovisionamiento desactiva toda app del sistema que este agente no haya habilitado explícitamente."
+        },
+        "max_apk_mb": {
+          "label": "APK más grande que el hub aceptará",
+          "help": "Un límite para la subida, no un objetivo. Un APK de release de .NET Android ocupa unos diez megabytes."
+        }
+      },
+      "location": {
+        "default_timeout_seconds": {
+          "label": "Tiempo que el dispositivo dedica a buscar",
+          "help": "Cuánto intenta un dispositivo obtener una posición nueva antes de responder con la última conocida. Una fijación por satélite en frío tarda decenas de segundos al aire libre y no llega nunca en interiores, así que este es el punto en el que el dispositivo se detiene en lugar de dejar a alguien mirando un indicador de carga."
+        }
+      },
+      "data": {
+        "location_retention_days": {
+          "label": "Conservar el historial de ubicación",
+          "help": "Cuánto tiempo se conservan las posiciones registradas antes de borrarse. Es un control de privacidad y no de espacio en disco -- la tabla es diminuta --, así que está pensado para bajarlo. Borrar una máquina elimina su historial de ubicación de inmediato, independientemente de esto."
+        },
+        "usage_retention_days": {
+          "label": "Conservar el uso de apps",
+          "help": "Cuánto tiempo se conserva el tiempo en primer plano por app antes de borrarse. Es un registro de lo que alguien hizo con sus tardes, así que por defecto es más corto que el de ubicación y está pensado para bajarlo más. Borrar una máquina elimina su uso de inmediato, independientemente de esto."
+        }
+      },
+      "map": {
+        "tile_url": {
+          "label": "URL de las teselas del mapa",
+          "help": "De dónde carga la consola las imágenes del mapa, como plantilla {z}/{x}/{y}. Es lo único que la consola solicita a un tercero al cargar una página; apúntelo a su propio servidor de teselas, o déjelo en blanco para dibujar los dispositivos sobre un fondo vacío con sus coordenadas."
+        },
+        "tile_attribution": {
+          "label": "Atribución de las teselas",
+          "help": "El crédito que se muestra en la esquina del mapa. Debe corresponder con lo que apunta la URL de teselas: la política de OpenStreetMap exige su crédito, y mostrarlo junto a teselas ajenas sería una afirmación falsa y no un descuido estético."
+        },
+        "default_zoom": {
+          "label": "Zoom sobre un solo dispositivo",
+          "help": "Cuánto se acerca el mapa cuando muestra un solo dispositivo. 16 es aproximadamente una manzana: lo bastante cerca para ver de qué edificio se trata, y lo bastante amplio para que quepa un círculo de precisión de 200 m."
+        }
+      },
+      "policy": {
+        "max_age_seconds": {
+          "label": "Levantar las restricciones tras",
+          "help": "Cuánto tiempo sigue un dispositivo aplicando su política de aplicaciones después de dejar de recibir noticias de este hub. Pasado ese plazo, el dispositivo levanta todas las restricciones por su cuenta. Es una válvula de escape, no un tiempo de espera: un teléfono cuyo hub ha desaparecido no debe ser un aparato que haya que restablecer."
+        }
       }
     },
     "choice": {
@@ -2131,7 +2197,24 @@
     "channel_pinned": "Canal: {value} (fijado)",
     "channel_pin": "Canal de versiones",
     "channel_follow_fleet": "Seguir el valor de la flota",
-    "channel_ahead": "Ejecuta {running}, por delante de estable ({stable}). No volverá a actualizarse hasta que estable lo supere: salir de beta no deshace una actualización ya instalada."
+    "channel_ahead": "Ejecuta {running}, por delante de estable ({stable}). No volverá a actualizarse hasta que estable lo supere: salir de beta no deshace una actualización ya instalada.",
+    "location": {
+      "title": "Ubicación",
+      "disclosure": "Cada petición queda registrada en la auditoría, y el dispositivo muestra una notificación con el nombre del operador que la hizo."
+    },
+    "apps": {
+      "title": "Aplicaciones instaladas"
+    },
+    "usage": {
+      "title": "Uso de apps"
+    },
+    "secure": {
+      "title": "Bloquear y borrar"
+    },
+    "tools": {
+      "hidden": "Algunas herramientas están ocultas: esta máquina ha informado de que no puede responderlas.",
+      "hidden_android": "Algunas herramientas están ocultas: es un dispositivo Android, y no hay shell, ni BIOS, ni sistema de archivos sobre el que actúen."
+    }
   },
   "remote": {
     "title": "Remoto",
@@ -3105,5 +3188,273 @@
       "days": "{days} días",
       "projection_note": "Esto es todo lo que el concentrador propietario envía sobre un equipo prestado. Su número de serie, su etiqueta de inventario y su registro de directorio se quedan en su lado."
     }
+  },
+  "provisioning": {
+    "heading": "Aprovisionamiento de dispositivos Android",
+    "intro": "Escanee este código en un dispositivo Android restablecido de fábrica para inscribirlo como dispositivo totalmente gestionado. Un escaneo instala el agente, le entrega la propiedad del dispositivo, lo apunta a este hub y lo inscribe.",
+    "warning": "El aprovisionamiento exige un restablecimiento de fábrica. Todo lo que hay en el dispositivo se borra, y la propiedad del dispositivo no puede concederse después ni trasladarse a otra app. Escanee esto únicamente en un dispositivo ya restablecido cuyo contenido ya no necesite.",
+    "qr": {
+      "heading": "Código de aprovisionamiento",
+      "loading": "Construyendo los datos...",
+      "alt": "Código QR de aprovisionamiento de Android",
+      "copy": "Copiar los datos",
+      "copied": "Copiado.",
+      "copy_failed": "El navegador denegó el acceso al portapapeles.",
+      "print": "Imprimir",
+      "secret_note": "El código lleva el secreto de inscripción de esta flota, de modo que un escaneo aprovisiona e inscribe el dispositivo. Trate una fotografía suya como trataría el propio secreto.",
+      "unreachable": "El hub no respondió.",
+      "failed": "No se pudieron construir los datos de aprovisionamiento.",
+      "too_large": "Los datos no caben en un código QR. Acorta la dirección pública de este hub."
+    },
+    "unconfigured": {
+      "help": "Sube arriba el APK firmado del agente. El hub lee de él la suma de comprobación de la firma y sirve el archivo a los dispositivos que se provisionan, así que no hay nada que rellenar en Ajustes."
+    },
+    "payload": {
+      "field": "Campo",
+      "value": "Valor",
+      "component": "DEVICE_ADMIN_COMPONENT_NAME"
+    },
+    "checksum": {
+      "heading": "Comprobar la suma de comprobación",
+      "help": "El hub ya lo deriva del APK que has subido. Pega aquí lo que imprime apksigner verify --print-certs para comprobar que coinciden antes de restablecer un dispositivo.",
+      "input_label": "Resumen SHA-256 (hexadecimal)",
+      "placeholder": "b39a161053ea...",
+      "convert": "Convertir",
+      "failed": "No se pudo convertir."
+    },
+    "steps": {
+      "heading": "Aprovisionar un dispositivo",
+      "reset": "Restablezca el dispositivo de fábrica, o empiece con uno recién sacado de la caja.",
+      "tap": "En la pantalla de bienvenida, toque seis veces el mismo punto para abrir el lector de QR.",
+      "wifi": "Conéctese a una red cuando se le pida. Este código no lleva credenciales de wifi, deliberadamente.",
+      "scan": "Escanee el código de arriba. El dispositivo descarga e instala el agente por su cuenta.",
+      "verify": "Al terminar la configuración, la pantalla del agente FleetHub debería decir “Fully managed (device owner)” y la máquina debería aparecer en el Inventario."
+    },
+    "apk": {
+      "heading": "APK del agente",
+      "intro": "El hub sirve este archivo a los dispositivos que se están provisionando y lee de él la suma de comprobación de la firma. Sube el APK firmado; no hay nada más que escribir.",
+      "loading": "Comprobando qué se está sirviendo...",
+      "none": "Todavía no se sirve ningún APK, así que no se puede generar un código de provisión.",
+      "choose": "APK firmado",
+      "choose_first": "Elige un archivo primero.",
+      "upload": "Subir",
+      "uploading": "Subiendo...",
+      "uploaded_ok": "Subido.",
+      "remove": "Dejar de servirlo",
+      "remove_confirm": "¿Dejar de servir este APK? Los códigos ya impresos dejarán de funcionar.",
+      "failed": "Se ha rechazado.",
+      "file_name": "Archivo",
+      "size": "Tamaño",
+      "sha256": "SHA-256 del archivo",
+      "checksum": "Suma de comprobación de la firma",
+      "download_url": "URL de descarga",
+      "uploaded": "Subido",
+      "url_note": "La URL de descarga lleva un token y no requiere iniciar sesión, porque un dispositivo restablecido de fábrica no tiene con qué iniciarla. Volver a subir el archivo o dejar de servirlo cambia el token, lo que invalida todos los códigos impresos antes."
+    }
+  },
+  "location": {
+    "locate_now": "Localizar ahora",
+    "locating": "Localizando...",
+    "failed": "No se pudo enviar la petición.",
+    "status": {
+      "fixed": "Localizado {when}",
+      "last_known": "Última posición conocida, de {when}",
+      "waiting": "Esperando la respuesta del dispositivo...",
+      "never": "Este dispositivo nunca se ha localizado."
+    },
+    "history": {
+      "when": "Petición",
+      "outcome": "Resultado",
+      "who": "Pedido por"
+    },
+    "outcome": {
+      "located": "Localizado",
+      "located_stale": "Última posición conocida",
+      "unavailable": "Sin posición disponible",
+      "no_answer": "El dispositivo no respondió"
+    },
+    "popup": {
+      "fixed": "Localizado {age}",
+      "last_known": "Última posición conocida, {age}",
+      "accuracy": "Precisión de unos {metres} m",
+      "provider": "Fuente: {provider}",
+      "open": "Abrir este dispositivo"
+    },
+    "age": {
+      "moments": "hace un momento",
+      "minutes": "hace {count} min",
+      "hours": "hace {count} h",
+      "days": "hace {count} días"
+    },
+    "list": {
+      "fixed": "Localizado {when}",
+      "last_known": "Última posición, {when}"
+    },
+    "map": {
+      "heading": "Mapa de dispositivos",
+      "intro": "Dónde estaba cada dispositivo la última vez que alguien lo pidió. Nada de esto es en vivo, y ningún dispositivo es rastreado: un punto existe porque un operador lo solicitó.",
+      "filter": "Filtrar dispositivos",
+      "count": "{count} mostrados",
+      "none": "Ningún dispositivo que pueda ver se ha localizado nunca.",
+      "no_match": "Ningún dispositivo coincide con ese filtro.",
+      "unreachable": "El hub no respondió."
+    }
+  },
+  "apps": {
+    "filter": "Filtrar aplicaciones",
+    "show_system": "Incluir apps del sistema",
+    "count": "{shown} de {total}",
+    "reported": "Reportado {when}",
+    "none": "Este dispositivo no reportó ninguna aplicación.",
+    "no_match": "Ninguna aplicación coincide con ese filtro.",
+    "column": {
+      "name": "Aplicación",
+      "package": "Paquete",
+      "version": "Versión",
+      "state": "Estado"
+    },
+    "state": {
+      "installed": "Instalada",
+      "suspended": "En pausa",
+      "disabled": "Desactivada"
+    },
+    "system": "sistema"
+  },
+  "policy": {
+    "heading": "Política del dispositivo",
+    "intro": "Qué aplicaciones puede ejecutar un dispositivo gestionado. Las políticas se escriben aquí y las aplica cada dispositivo en su siguiente comunicación.",
+    "deadman": "Un dispositivo que deja de recibir noticias de este hub levanta todas las restricciones por su cuenta pasado el plazo fijado en Ajustes. Es deliberado: un dispositivo cuyo hub es inalcanzable no debe convertirse en uno que haya que restablecer.",
+    "new": "Nueva política",
+    "none": "Todavía no se ha escrito ninguna política.",
+    "off": "(desactivada)",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "confirm_delete": "¿Eliminar la política «{name}»? A los dispositivos que cubre se les levantarán sus restricciones en la siguiente comunicación.",
+    "column": {
+      "name": "Política",
+      "mode": "Tipo",
+      "packages": "Apps",
+      "targets": "Se aplica a"
+    },
+    "targets": {
+      "fleet": "Todos los dispositivos",
+      "machines": "{count} dispositivo(s)",
+      "hidden": "(+{count} que no puede ver)"
+    },
+    "name": "Nombre de la política",
+    "mode_label": "Tipo",
+    "mode": {
+      "block": "Lista de bloqueo",
+      "allow": "Lista de permitidos",
+      "block_help": "Las apps elegidas abajo quedan en pausa. Todo lo demás se deja intacto.",
+      "allow_help": "Solo las apps elegidas abajo pueden ejecutarse. Todo lo demás que esté instalado queda en pausa, salvo las apps que nunca pueden pausarse."
+    },
+    "enabled": "Activa",
+    "section_targets": "Qué dispositivos",
+    "section_packages": "Qué aplicaciones",
+    "fleet_wide": "Todos los dispositivos de la flota",
+    "filter_machines": "Filtrar dispositivos",
+    "filter_packages": "Filtrar aplicaciones",
+    "show_system": "Incluir apps del sistema",
+    "package_count": "{chosen} elegidas, {shown} mostradas",
+    "on_machines": "en {count}",
+    "protected": "no puede bloquearse",
+    "no_packages": "Ningún dispositivo ha reportado todavía un inventario, así que no hay nada que elegir.",
+    "no_package_match": "Ninguna aplicación coincide con ese filtro.",
+    "preview_button": "Vista previa",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "failed": "No se pudo guardar.",
+    "unreachable": "El hub no respondió.",
+    "preview": {
+      "summary": "Afectaría a {machines} de {total} dispositivo(s).",
+      "hidden": "{count} dispositivo(s) afectados quedan fuera de lo que usted puede ver.",
+      "nothing": "Ningún dispositivo se vería afectado. En ninguno están instaladas las apps elegidas.",
+      "dropped": "Estas apps no pueden pausarse nunca y se han omitido: {packages}",
+      "machine": "Dispositivo",
+      "would_suspend": "Pausaría"
+    },
+    "time": {
+      "heading": "Horarios",
+      "intro": "Horas bloqueadas y límites diarios de tiempo de pantalla.",
+      "new": "Nuevo horario",
+      "none": "Todavía no hay horarios.",
+      "local": "Un horario lo aplica el propio dispositivo, con su propio reloj, alcance o no este hub. Los dispositivos gestionados se fijan a la hora de red para que no se pueda cambiar el reloj y escapar de un bloqueo.",
+      "windows": "Horas bloqueadas",
+      "windows_help": "Nada en los días elegidos entre estas horas. Un final anterior al inicio pasa de la medianoche, que es lo que necesita una regla de hora de dormir.",
+      "add_window": "Añadir horas bloqueadas",
+      "no_windows": "Sin horas bloqueadas.",
+      "budgets": "Límites diarios",
+      "budgets_help": "Cuánto se puede usar una app, o todo el dispositivo, cada día. Los límites agotados se levantan a la medianoche del dispositivo. Cero significa nada hoy.",
+      "add_budget": "Añadir un límite",
+      "no_budgets": "Sin límites.",
+      "whole_device": "Todo el dispositivo",
+      "from": "Desde",
+      "until": "Hasta",
+      "wraps": "pasa de la medianoche",
+      "minutes": "Minutos",
+      "minutes_a_day": "minutos al día",
+      "remove_rule": "Quitar",
+      "window_summary": "{days} {start}-{end}: {apps}",
+      "budget_summary": "{app}: {minutes} min al día",
+      "column": {
+        "rules": "Reglas"
+      },
+      "day": {
+        "mon": "Lun",
+        "tue": "Mar",
+        "wed": "Mié",
+        "thu": "Jue",
+        "fri": "Vie",
+        "sat": "Sáb",
+        "sun": "Dom"
+      }
+    }
+  },
+  "usage": {
+    "recent_total": "Días recientes, por app",
+    "by_day": "Día a día",
+    "days_counted": "{count} día(s)",
+    "none": "Este dispositivo no ha informado de uso de apps.",
+    "retention": "Se conserva {days} días y luego se borra.",
+    "no_access": "No se ha concedido el acceso al uso en este dispositivo, así que los límites de tiempo de pantalla nunca se aplicarán. Las horas bloqueadas siguen funcionando. Quien tenga el dispositivo puede concederlo en la app del agente.",
+    "hours_minutes": "{hours} h {minutes} min",
+    "hours": "{hours} h",
+    "minutes": "{minutes} min",
+    "column": {
+      "app": "App",
+      "time": "Tiempo en primer plano",
+      "day": "Día",
+      "total": "Total",
+      "top": "Más usadas"
+    }
+  },
+  "secure": {
+    "action": {
+      "lock": "Bloqueado",
+      "wipe": "Borrado"
+    },
+    "column": {
+      "action": "Acción",
+      "who": "Solicitado por",
+      "when": "Cuándo"
+    },
+    "intro": "El bloqueo lo deshace quien tenga el dispositivo con su propio PIN. El borrado es un restablecimiento de fábrica y no lo puede deshacer nadie.",
+    "lock": "Bloquear la pantalla ahora",
+    "lock_sent": "Bloqueo enviado. Se aplica en cuanto el dispositivo sea accesible.",
+    "wipe_heading": "Borrar este dispositivo",
+    "wipe": "Borrar este dispositivo",
+    "wipe_sent": "Borrado enviado. El dispositivo responde una vez y luego deja de informar para siempre.",
+    "wipe_warning": "Esto borra todo lo que hay en el dispositivo y no se puede deshacer. No hay simulacro. El dispositivo responde una vez y desaparece de esta consola para siempre.",
+    "confirm_label": "Escribe el nombre de la máquina para confirmar",
+    "confirm_dialog": "¿Borrar {machine}? Esto no se puede deshacer.",
+    "clear_protection": "Quitar la protección de restablecimiento",
+    "clear_protection_help": "Cualquiera podrá volver a configurar el dispositivo. Suele ser lo correcto para hardware de la empresa.",
+    "keep_protection_help": "El dispositivo no se podrá volver a configurar sin la cuenta que estaba iniciada en él. Es protección antirrobo, y un ladrillo si esa cuenta no era vuestra.",
+    "wiped_on": "Borrado el {when} por {who}. No volverá a informar.",
+    "no_history": "En este dispositivo no se ha bloqueado ni borrado nada.",
+    "count": "{count} acción(es)",
+    "failed": "Se ha rechazado.",
+    "unreachable": "No se ha podido contactar con el hub."
   }
 }

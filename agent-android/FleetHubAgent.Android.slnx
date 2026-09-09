@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FleetHubAgent.Core/FleetHubAgent.Core.csproj" />
+    <Project Path="src/FleetHubAgent.Android/FleetHubAgent.Android.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FleetHubAgent.Core.Tests/FleetHubAgent.Core.Tests.csproj" />
+  </Folder>
+</Solution>

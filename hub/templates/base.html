@@ -23,7 +23,12 @@
     } catch (e) { /* localStorage unavailable, default dark stays */ }
 })();
 </script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+{# Self-hosted, not Google Fonts. This <link> was on EVERY page including login, so it was
+   the one request the whole console made to a third party before anyone had authenticated --
+   and it made static/vendor/README.md's "works on an isolated LAN" claim false everywhere
+   rather than just on the pages with charts. One variable font replaces the five static
+   weights the old URL asked for. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">

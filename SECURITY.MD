@@ -47,6 +47,124 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    its creator holds, and is bounded by a seat count, an expiry and optional pinned
    addresses (see "Invite links" below)
 
+## Personal data inventory
+
+Most of what FleetHub stores is about a machine: its temperature, its disks, its BIOS
+settings, which updates it is missing. One thing it stores is about a **person**, and it is
+inventoried separately here so that nobody has to infer it from a feature list.
+
+| What | From whom | Why | Where | How long | Who can see it |
+|---|---|---|---|---|---|
+| **Device position** — latitude, longitude, accuracy radius, provider, and when the fix was taken | Managed Android devices, **only when an operator asks**. Never sampled, never periodic, never in the background | Finding a lost or stolen device, and confirming where a company device is before securing it | `machine_locations` in the hub's SQLite database | `data.location_retention_days`, default **30 days**, then deleted by the retention pruner. Deleting a machine erases its history immediately | Reading: `view` **plus** the machine being in the operator's scope. Asking for a new fix: the separate `locate_device` capability |
+| **Installed applications** — package name, label, version, and whether each is enabled or suspended | Managed Android devices, on the inventory loop | Writing an app policy at all: blocking an app means naming a package, and nobody types `com.zhiliaoapp.musically` from memory. Also how a partly-applied policy becomes visible | `machine_apps` in the hub's SQLite database, replaced on each report | Held while the device is enrolled, replaced on each report. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
+| **App usage** — foreground seconds per package, per the device's own local day | Managed Android devices, **only where somebody has granted usage access on the device itself** | Enforcing daily screen-time budgets, and showing an operator why a budget did or did not bite | `machine_usage` in the hub's SQLite database | `data.usage_retention_days`, default **14 days**, then deleted by the retention pruner. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
+
+Four properties of that row are deliberate and worth stating plainly:
+
+- **Collection is on demand only.** There is no background location, no periodic sample and no
+  travel history. The only history that exists is a history of *when somebody asked*, which is
+  a different and much smaller thing.
+- **Asking has its own capability.** `locate_device` is not part of `issue_commands`, which
+  every other command-issuing feature reuses. Being able to reboot a PC does not imply being
+  able to find out where an employee is. The hub refuses a hand-rolled `locate_device` through
+  its generic command endpoint, and refuses to save one as a favorite, so the capability cannot
+  be routed around.
+- **The person holding the device is told.** The agent posts a notification naming the operator
+  who asked, every time — including when it has no position to give, so that a failed request
+  cannot be used as a quiet way to check whether a phone is switched on.
+- **Every request is in the audit trail** with the operator's address, the device, and the time.
+
+The usage row is the most personal thing in this table, and its properties are stated with the
+same care:
+
+- **It exists to make a budget enforceable, not to produce a report.** A screen-time budget has
+  to be checked against something, and it is checked on the device, every minute, whether or not
+  the hub is reachable. What reaches the hub is the same ledger, so that an operator can see why
+  an app was suspended at 15:40.
+- **There is no fleet-wide view, deliberately.** The app inventory has one, because a policy
+  author has to pick a package from somewhere. Usage has none: the question it would answer at
+  fleet scale is "who spends the most time on their phone", and this product does not make that
+  easy to ask. The only endpoint names one machine and checks scope.
+- **The device cannot measure it unless somebody grants it, by hand, on that device.** Usage
+  access on Android is an appop; a Device Owner cannot grant it silently and this agent does not
+  try. A device where it was never granted reports nothing, enforces blocked hours normally, and
+  says so in the console rather than reporting zeroes that would read as "nobody used this".
+- **Retention is shorter than location's and is meant to come down.** Fourteen days by default,
+  pruned by the DEVICE's own local day rather than by a hub timestamp, so a device in a timezone
+  ahead of the hub does not have its current day pruned out from under it.
+
+**FleetHub cannot give your workforce notice on your behalf.** Whether locating a
+company-owned device is lawful where you operate, what you must tell the people carrying those
+devices, and what basis you rely on are decisions for the deploying organisation. The product
+provides the controls — a separate capability, machine scope, short retention, an audit trail
+and an on-device disclosure — and no more than that.
+
+**Not collected**, and each absence is a decision rather than a gap: no background or periodic
+location, no browsing history, no message or call content, no contacts,
+no photographs, no keystrokes, and no microphone or camera access of any kind. Screen sharing
+(roadmap #2) exists on Windows and requires a system prompt the person at the machine accepts
+for every session.
+
+## What a managed Android device grants, and what it does not
+
+A device provisioned by QR after a factory reset makes this agent its **Device Owner**, which is
+the strongest position an app can hold on Android. What that position is actually used for is a
+short list, and it is written down here so that a later addition is made on purpose rather than
+by reflex.
+
+**Taken:**
+
+- **Blocking user control of the agent** (`setUserControlDisabledPackages`), so the person
+  holding the phone cannot force-stop it from Settings. Without this the whole feature set is
+  optional from the device's side, and a stopped agent is indistinguishable from a flat battery.
+  It stops a *person*; it is not a fix for an OEM power manager, which runs inside the system.
+- **Enforcing automatic time** (`setAutoTimeEnabled`). Curfews and budgets are evaluated on the
+  device against the device's own clock, which is the only way a phone with no signal at 22:00
+  still has a bedtime. That is only defensible if the clock is not a setting somebody can move.
+  Nothing *sets* a time, and the time zone stays the device's own.
+- **Suspending applications** (`setPackagesSuspended`), which greys the icon and shows the
+  system's own "paused by your organisation" message rather than making an app vanish. An
+  unconditional never-suspend list on the agent — the launcher, dialer, settings, emergency and
+  the agent itself — is enforced on the device, not by the hub, so a compromised or simply newer
+  hub cannot brick a phone.
+- **Reading the full package list**, which a Device Owner gets without the broad
+  `QUERY_ALL_PACKAGES` permission that Play policy flags.
+- **Locking the screen** (`lockNow`), undone by the person holding the device with their own
+  PIN, and **erasing the device** (`wipeData`). The second is the only action in this product
+  with no undo, so it is gated on its own `wipe_device` capability, requires the machine's name
+  typed out, is written to the audit trail *before* the command is created, and cannot be saved
+  as a favorite or issued by a rule. The device answers once and then stops reporting for good,
+  which is why the hub records the request rather than waiting for a result.
+
+**Deliberately not taken**, each available and each declined: no camera or screenshot
+restrictions, no factory-reset block, no certificate installation, no always-on VPN, no keyguard
+restrictions, no account-management restrictions, and no background location. Usage access is
+not taken either — it cannot be, and the agent does not pretend otherwise.
+
+**The provisioning QR is a fleet credential.** It carries the APK's download URL and signature
+checksum and the enrollment secret; anyone who can photograph it can enrol a device into this
+fleet. Treat it like the keystore: generate it when a device is being provisioned, do not paste
+it into a ticket, and rotate the enrollment secret if one escapes.
+
+**The hub hosts the agent APK, on the one route in this product that has no gate.** The setup
+wizard of a factory-reset device has no session, no agent token and nothing to enrol with — it
+is downloading the very app that would later enrol it — so the download cannot be
+authenticated. What is worth knowing about it:
+
+- **What the file is:** the signed FleetHub Android agent, a release binary. It carries no fleet
+  data, no hub address, no machine list and no credentials. The hub URL and the enrollment
+  secret ride in the QR's admin-extras bundle, never in the APK, so downloading it enrols
+  nobody and tells the downloader nothing about this fleet.
+- **What the URL's token is:** anti-enumeration and a revocation handle, not a security
+  boundary. It is looked up rather than joined to a filesystem path, so the route can only ever
+  serve the one APK recorded as hosted. Uploading again or removing the APK mints a new token
+  and every code printed before it stops resolving — which is how a QR photographed off a bench
+  is killed.
+- **What is not there:** the hub has no rate limiting, anywhere, and this route will serve about
+  ten megabytes to anyone holding the token. It sits under a single stable `/provisioning/apk/`
+  prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
+  provisioning page takes it offline entirely.
+
 ## Device tokens (the native client)
 
 The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather

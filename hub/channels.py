@@ -51,6 +51,12 @@ fleet_web.py answer a heartbeat with a machine's channel without importing app.
 """
 import sqlite3
 
+# For the platform slugs, imported rather than restated. The two must agree -- a
+# platform named differently here is one whose machines silently never match a
+# manifest and are never told about an update. capabilities.py imports nothing but
+# the standard library, so there is no cycle to worry about.
+import capabilities
+
 #: The repository every channel resolves against. One constant rather than four copies of
 #: the same slug -- the pre-rename path is deliberate everywhere it appears (see
 #: AgentConfig.UpdateManifestUrl on the agent for why moving it early 404s the fleet).
@@ -75,10 +81,36 @@ CHANNEL_TEXT_KEY = "channels.channel"
 #: The git ref each channel tracks. Only the hub uses these -- see the module docstring.
 _REFS = {STABLE: "main", BETA: "beta"}
 
-#: Manifest filenames. The stable names are the existing files and must not change: they are
+#: Manifest filenames. The Windows names are the existing files and must not change: they are
 #: pinned `-text` in .gitattributes and baked into every agent already in the field.
-_AGENT_MANIFEST = {STABLE: "agent.manifest.json", BETA: "agent.manifest.beta.json"}
+#:
+#: **One set per PLATFORM, because a version number means nothing across them.** Every agent
+#: reports its version in the same `companion_version` field, and for a long time the hub read
+#: that field as though it could only ever mean the Windows agent -- so a Linux box reporting
+#: 3.35.0 would have been told to install a win-x64 executable. The Linux and Android agents
+#: were pinned below `AGENT_TRAIN_MIN_VERSION` to opt out of exactly that, which meant they
+#: could never have version numbers of their own. Keying the manifest on the platform the
+#: machine REPORTED is what retires that workaround: a version is only ever compared against
+#: the train it belongs to.
+_AGENT_MANIFEST = {
+    capabilities.PLATFORM_WINDOWS: {
+        STABLE: ("agent", "agent.manifest.json"),
+        BETA: ("agent", "agent.manifest.beta.json"),
+    },
+    capabilities.PLATFORM_LINUX: {
+        STABLE: ("agent-linux", "agent-linux.manifest.json"),
+        BETA: ("agent-linux", "agent-linux.manifest.beta.json"),
+    },
+    capabilities.PLATFORM_ANDROID: {
+        STABLE: ("agent-android", "agent-android.manifest.json"),
+        BETA: ("agent-android", "agent-android.manifest.beta.json"),
+    },
+}
 _CLIENT_MANIFEST = {STABLE: "client.manifest.json", BETA: "client.manifest.beta.json"}
+
+#: The platforms that have a release train. Derived from the manifest table rather than
+#: written out again, so a platform added to one and not the other cannot happen.
+AGENT_PLATFORMS = tuple(_AGENT_MANIFEST)
 
 
 def normalize(value):
@@ -115,19 +147,39 @@ def is_override(override):
 # ================================
 # AGENT
 # ================================
-def agent_manifest_filename(channel):
-    return _AGENT_MANIFEST[normalize(channel)]
+def normalize_platform(value):
+    """An agent platform with a release train, defaulting to Windows.
+
+    **Silence means Windows, and that is the opposite of capabilities.py's absent-report
+    rule.** That rule reads an unreported machine as *unknown* so the hub never refuses work
+    it was not told about. This answers a different question -- which manifest to read a
+    version out of -- and the honest default is the other way round, because every agent in
+    the field today reports no platform and every one of them is a Windows agent. Reading
+    silence as unknown here would stop advertising updates to the entire fleet, quietly, on
+    the day this shipped.
+    """
+    text = str(value or "").strip().lower()
+    return text if text in _AGENT_MANIFEST else capabilities.PLATFORM_WINDOWS
 
 
-def agent_manifest_url(channel=DEFAULT):
+def agent_manifest_filename(channel, platform=capabilities.PLATFORM_WINDOWS):
+    return _AGENT_MANIFEST[normalize_platform(platform)][normalize(channel)][1]
+
+
+def agent_manifest_url(channel=DEFAULT, platform=capabilities.PLATFORM_WINDOWS):
     """Where the HUB reads a channel's agent manifest to learn its version.
 
-    The agent does not use this -- it holds both URLs compiled in. This is the hub's version
-    hint, and it deliberately reads the same file the agent's own updater would install
-    from, so `/api/report` never advertises a version the agent would then decline.
+    The agent does not use this -- it holds its own URLs compiled in. This is the hub's
+    version hint, and it deliberately reads the same file the agent's own updater would
+    install from, so `/api/report` never advertises a version the agent would then decline.
+
+    Each platform's manifest lives beside its agent rather than all three under `agent/`: the
+    directory is what an operator cutting a release is already standing in, and a manifest
+    filed under another agent's directory is one that gets updated by the wrong release
+    script exactly once.
     """
-    return (f"https://raw.githubusercontent.com/{REPO}/main/agent/"
-            f"{agent_manifest_filename(channel)}")
+    directory, filename = _AGENT_MANIFEST[normalize_platform(platform)][normalize(channel)]
+    return f"https://raw.githubusercontent.com/{REPO}/main/{directory}/{filename}"
 
 
 # ================================

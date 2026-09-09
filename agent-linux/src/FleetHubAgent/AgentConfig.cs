@@ -19,26 +19,29 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version, exactly like the Windows agent.
     /// MUST match &lt;Version&gt; in FleetHubAgent.csproj.
     ///
-    /// **Starting at 0.x is a safety mechanism, not modesty.** The hub's
-    /// AGENT_TRAIN_MIN_VERSION is "3.0.0", and three separate things key off being under it:
+    /// **This is its own version line, and the hub knows that now.** It used to be pinned
+    /// under the hub's AGENT_TRAIN_MIN_VERSION ("3.0.0") as a safety mechanism, because three
+    /// separate things read `companion_version` as though it could only ever mean the Windows
+    /// agent. Two of the three are fixed (roadmap #22):
     ///
-    ///   * get_advertised_version() returns nothing for a sub-3.0 reporter, so /api/report's
-    ///     reply carries no latest_version -- the hub never points this agent at the WINDOWS
-    ///     agent's signed manifest, which is a win-x64 binary it would have no idea what to
-    ///     do with. That is the failure this number prevents.
-    ///   * every MIN_*_AGENT gate in hub/static/js (MIN_PTY_AGENT, MIN_PROCESS_AGENT,
-    ///     MIN_FILES_AGENT, MIN_OPEN_AGENT and friends) reads 0.1.0 as too old, so the
-    ///     console does not offer a Linux machine a terminal, a process list or a file
-    ///     browser that this agent cannot answer. The compatibility API the Windows agent's
-    ///     MINOR feeds (see CLAUDE.md) does the right thing here for free.
-    ///   * the dashboard's agents_outdated tally skips sub-3.0 machines, so a fleet of Linux
-    ///     boxes does not permanently read as "behind" on a release train they are not on.
+    ///   * get_advertised_version() now picks a manifest by the PLATFORM this agent reports,
+    ///     so it can never point a Linux box at the Windows agent's signed manifest -- a
+    ///     win-x64 binary it would have no idea what to do with. That was the failure the old
+    ///     number prevented, and it is now prevented by the hub instead.
+    ///   * the dashboard's agents_outdated tally compares each machine against its own train,
+    ///     so a fleet of Linux boxes no longer reads as permanently "behind" on a release
+    ///     train they are not on.
     ///
-    /// So: this is a FOURTH version line, and it must stay under 3.0.0 until this agent
-    /// genuinely implements the features those gates protect. Rejected alternative: starting
-    /// at 3.35.0 to "match" the Windows agent. That reads to the hub as a fully-featured
-    /// agent, and the console would immediately offer a ConPTY terminal to a machine with no
-    /// ConPTY -- every one of those gates would pass on a lie.</summary>
+    /// What is NOT yet fixed, and is the reason this still says 0.1.0: the MIN_*_AGENT gates
+    /// in hub/static/js (MIN_PTY_AGENT, MIN_PROCESS_AGENT, MIN_FILES_AGENT and friends) still
+    /// read a version number, and 0.1.0 is what keeps the console from offering this machine a
+    /// terminal, a process list or a file browser it cannot answer. Capability reporting is
+    /// what replaces those gates; until this agent SENDS a capability report, the low number
+    /// is still doing that job.
+    ///
+    /// Rejected alternative, and it is worth keeping: starting at 3.35.0 to "match" the
+    /// Windows agent. That reads to the hub as a fully-featured agent on somebody else's
+    /// train, and every one of those gates would pass on a lie.</summary>
     public const string Version = "0.1.0";
 
     /// <summary>Reads a FLEETHUB_* setting. No TEMP_MONITOR_* fallback, unlike the Windows
@@ -163,6 +166,11 @@ public static class AgentConfig
 
     public static string AgentIdentityPath => Path.Combine(StateDir, "agent.json");
 
+    /// <summary>Where an update in flight is recorded. Beside agent.json rather than in it:
+    /// the identity file is the one thing on this machine that cannot be regenerated, and a
+    /// restart counter has no business sharing a write with it.</summary>
+    public static string RestartStatePath => Path.Combine(StateDir, "update-state.json");
+
     /// <summary>Where the installer drops the shared enrollment secret, when it is not
     /// supplied through the unit's EnvironmentFile instead.
     ///
@@ -180,4 +188,67 @@ public static class AgentConfig
     /// <summary>The env var the systemd unit's EnvironmentFile can carry the secret in,
     /// matching the name the Windows agent already honours.</summary>
     public const string EnrollmentSecretVar = "AGENT_ENROLLMENT_SECRET";
+
+    // --- Self-update -------------------------------------------------------
+    //
+    // **The same trust root as every other artifact this fleet installs.** One offline
+    // Ed25519 key signs the Windows agent's manifest, the client's, and now this one, and it
+    // is compiled in rather than configurable for the reason the Windows agent's copy states:
+    // it is the one control that survives a compromised hub. A hub can move a machine between
+    // channels; it cannot point one at a binary of its choosing, because the destination is
+    // still signed by a key the hub has never held.
+    //
+    // Verbatim from agent/src/TempMonitorAgent/AgentConfig.cs. Restated rather than shared,
+    // like every other wire constant across these three agents -- see agent-linux/README.md on
+    // why nothing is shared with a project that self-updates a live fleet.
+    public const string UpdatePublicKeyHex =
+        "9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c";
+
+    /// <summary>This agent's OWN manifest, and the reason it can exist at all.
+    ///
+    /// The Windows manifest describes a `win-x64` executable. Pointing this agent at it was
+    /// the concrete hazard that kept this version line pinned below the hub's train floor --
+    /// see <see cref="Version"/> -- and the hub now keys the manifest it advertises on the
+    /// platform a machine reports (hub/channels.py). This is that file, and its name must
+    /// match `channels._AGENT_MANIFEST`: a mismatch is a fleet that silently never updates.
+    /// </summary>
+    public const string StableManifestUrl =
+        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/"
+        + "agent-linux.manifest.json";
+
+    /// <summary>The manifest URL, overridable so the update path can be exercised against a
+    /// local server rather than raw.githubusercontent. **The KEY is not overridable**, which
+    /// is what makes that safe: a redirected manifest still has to be signed.</summary>
+    public static string UpdateManifestUrl => Env("UPDATE_MANIFEST_URL") ?? StableManifestUrl;
+
+    public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
+
+    /// <summary>Set FLEETHUB_NO_UPDATE=1 to pin a machine to its current build. Honoured for
+    /// the same reason the Windows agent honours it: a box being used to reproduce a bug must
+    /// not update out from under whoever is looking at it.</summary>
+    public static bool UpdatesDisabled => Env("NO_UPDATE") == "1";
+
+    /// <summary>Where a downloaded build is staged before it replaces the running one. Under
+    /// the state directory rather than /tmp: /tmp is world-writable and frequently a tmpfs,
+    /// and this file is about to be executed as root.</summary>
+    public static string UpdateStagingDir => Path.Combine(StateDir, "update");
+
+    /// <summary>How many times an update to one target may restart before the agent stops
+    /// trying it. Matches the Windows agent, and exists for the same reason: a build that
+    /// starts and immediately dies would otherwise be downloaded and run forever.</summary>
+    public const int MaxChainRestarts = 3;
+
+    /// <summary>How often to look for a new build. Fifteen minutes, matching the Windows
+    /// agent and the hub's own watcher, so a release reaches the whole fleet in one
+    /// well-known interval rather than three.</summary>
+    public const int UpdateCheckIntervalSeconds = 15 * 60;
+
+    /// <summary>The exit code the agent uses to ask for a restart after staging an update.
+    ///
+    /// **systemd restarts this unit on ANY exit** (`Restart=always`, `RestartSec=10`), so
+    /// unlike the Windows agent's SCM contract the specific number buys no behaviour -- it is
+    /// a marker in the journal saying which exits were deliberate. Non-zero rather than 0
+    /// because a zero exit from a `Type=notify` service reads as a clean shutdown, and this is
+    /// not one.</summary>
+    public const int RestartExitCode = 17;
 }

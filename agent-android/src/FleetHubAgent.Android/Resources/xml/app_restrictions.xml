@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Managed configuration: the keys an MDM can push to this app, and the reason a fleet
+  deployment is one policy rather than fifty people typing a shared secret into fifty handsets.
+
+  These are read in Platform/ManagedConfig.cs. The `key` strings are the contract with the MDM
+  and with that file, so renaming one silently stops an existing policy applying: the device
+  keeps running on whatever it already had, and nothing reports an error. Treat them the way
+  the rest of this repo treats wire field names.
+
+  The titles and descriptions are @string references rather than literals because aapt2
+  requires it (APT2259); they live in Resources/values/strings.xml.
+
+  `restrictionType="string"` throughout, including for the secret: Android has no secret type
+  here, and every MDM renders these as plain text fields in its own console. That is a real
+  consequence rather than a detail. The fleet's enrollment secret will be visible to whoever
+  can read the policy in the MDM, which is the same set of people who can already enroll a
+  machine, but it is worth knowing before it is pasted there.
+-->
+<restrictions xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <restriction
+      android:key="hub_url"
+      android:title="@string/restriction_hub_url_title"
+      android:description="@string/restriction_hub_url_description"
+      android:restrictionType="string"
+      android:defaultValue="" />
+
+  <restriction
+      android:key="enrollment_secret"
+      android:title="@string/restriction_enrollment_secret_title"
+      android:description="@string/restriction_enrollment_secret_description"
+      android:restrictionType="string"
+      android:defaultValue="" />
+
+  <restriction
+      android:key="machine_name"
+      android:title="@string/restriction_machine_name_title"
+      android:description="@string/restriction_machine_name_description"
+      android:restrictionType="string"
+      android:defaultValue="" />
+
+  <restriction
+      android:key="asset_tag"
+      android:title="@string/restriction_asset_tag_title"
+      android:description="@string/restriction_asset_tag_description"
+      android:restrictionType="string"
+      android:defaultValue="" />
+
+</restrictions>

@@ -60,7 +60,10 @@ def _register_sidebar_stubs(app):
                            ("rules", "rules_page"),
                            ("patches", "patches_page"),
                            ("apitokens", "download_page"),
-                           ("sharing", "sharing_page")):
+                           ("sharing", "sharing_page"),
+                           ("provisioning", "provisioning_page"),
+                           ("location", "fleet_map_page"),
+                           ("policy", "policy_page")):
         bp = Blueprint(name, __name__)
         bp.add_url_rule(f"/_stub/{name}", endpoint, lambda: "", methods=["GET"])
         app.register_blueprint(bp)

@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FleetHubAgent</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+
+    <!-- **Plain net10.0, with no Android reference at all, and that is the whole point of
+         this project existing.** The Linux agent is one project because a net10.0 worker can
+         be referenced by a net10.0 xunit project and tested on the workstation. A
+         net10.0-android project cannot: it needs the Android workload to restore and an
+         emulator or a device to run a test on, so a protocol bug would only be findable by
+         someone holding a phone.
+
+         Splitting the protocol out means the dangerous half (enrollment identity, the
+         offline buffer, the poll/hold cadence, the version gate) builds and is tested by
+         `dotnet test` on the same Windows workstation as every other agent in this repo,
+         with no SDK anyone has to install first. See agent-android/README.md.
+
+         Note this is NOT the shared core that agent-linux/README.md rejects. That rejection
+         is about reaching into `agent/`, which is deployed on every managed PC and
+         self-updates from a signed manifest. Nothing here touches that project. -->
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Abstractions only. The Android app supplies the logger; a console logger here would
+         be a second logging stack that never runs on the target. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.6" />
+    <!-- Ed25519, for verifying the signed update manifest. The same package and version
+         the Windows and Linux agents already depend on, deliberately: one offline key
+         signs all three manifests, and a differently-implemented verification would mean
+         an artifact one fleet accepts and another refuses. .NET 10 still has no Ed25519
+         in the base class library, so there is nothing to drop this for yet. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FleetHubAgent.Core.Tests" />
+  </ItemGroup>
+
+</Project>

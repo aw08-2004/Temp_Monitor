@@ -6,6 +6,7 @@ using FleetHubAgent;
 using FleetHubAgent.Fleet;
 using FleetHubAgent.Fleet.Executors;
 using FleetHubAgent.State;
+using FleetHubAgent.Update;
 using FleetHubAgent.Telemetry;
 
 // Composition root, and nothing else -- the same rule the hub's app.py follows.
@@ -42,9 +43,20 @@ try
         SystemInfo.Read(sp.GetRequiredService<ILoggerFactory>().CreateLogger("SystemInfo")));
     builder.Services.AddSingleton<TelemetryReporter>();
 
-    // Fleet command channel
-    builder.Services.AddSingleton<FleetClient>();
+    // Fleet command channel.
+    //
+    // The client is handed a FUNCTION that builds the capability report rather than a report,
+    // and the function resolves the dispatcher from the container rather than closing over one
+    // built here. Both are the same decision: the report has to describe the executor set the
+    // command loop actually uses, and anything captured or duplicated would describe an agent
+    // that does not exist -- which the hub would then believe, and refuse commands on. Lazy
+    // resolution also breaks what would otherwise be a construction cycle, since the dispatcher
+    // is registered below the client that reports on it.
     builder.Services.AddSingleton<CommandDispatcher>();
+    builder.Services.AddSingleton(sp => new FleetClient(
+        sp.GetRequiredService<ILogger<FleetClient>>(),
+        sp.GetRequiredService<AgentState>(),
+        () => AgentCapabilities.For(sp.GetRequiredService<CommandDispatcher>())));
 
     // The executors, which are the whole of what this agent can be TOLD to do today. Four out
     // of the hub's ~thirty command types, and the gap is deliberate rather than unfinished:
@@ -55,6 +67,11 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+
+    // Signed self-update (roadmap #22). Its own manifest and its own train -- the hub
+    // picks which by the platform this agent reports, so it can never be handed the
+    // Windows build. See SelfUpdater.
+    builder.Services.AddSingleton<SelfUpdater>();
 
     builder.Services.AddHostedService<Worker>();
 

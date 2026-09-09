@@ -32,6 +32,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import backups
+import capabilities
 import fleet
 
 PASS = 0
@@ -911,6 +912,20 @@ def main():
         check("a machine that opted out is not dispatched",
               backups.files_dispatch_once(sched_db, sched_log, machines=["PC-OUT"],
                                           now=1_900_000_000, **policy) == 0)
+
+        # roadmap #23. The bug this closes: a phone inside a fleet-wide backup profile was
+        # queued backup_files within a minute of enrolling, because the console's MIN_*_AGENT
+        # gates are JavaScript about buttons and nothing evaluates them here. Filtered in the
+        # CANDIDATE phase rather than caught by fleet.create_command's refusal, because by
+        # then a run row and a one-shot upload URL have been minted -- so the second check
+        # below is the one that matters.
+        capabilities.record_capabilities(
+            sched_db, "PHONE-1", {"platform": "android", "commands": ["rename"]})
+        check("a machine that reported it cannot back up is not dispatched",
+              backups.files_dispatch_once(sched_db, sched_log, machines=["PHONE-1"],
+                                          now=1_900_000_000, **policy) == 0)
+        check("...and no run row was started for it either",
+              backups.current_running_file_run(sched_db, "PHONE-1") is None)
 
         dispatched = backups.files_dispatch_once(
             sched_db, sched_log, machines=["PC-A", "PC-B"], now=1_900_000_000, **policy)

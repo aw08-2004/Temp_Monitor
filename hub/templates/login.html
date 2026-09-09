@@ -21,7 +21,10 @@ if (window.top !== window.self) window.top.location.replace(window.location.href
     } catch (e) { /* localStorage unavailable, default dark stays */ }
 })();
 </script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+{# Self-hosted -- see base.html. These two pages carry their own <head> rather than
+   extending it, which is exactly how the Google Fonts link survived on the ONE page
+   every unauthenticated visitor reaches. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">

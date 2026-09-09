@@ -40,10 +40,21 @@ public sealed class FleetClient : IDisposable
 
     private AgentIdentity _identity;
 
-    public FleetClient(ILogger<FleetClient> log, AgentState state)
+    /// <summary>What this agent claims it can do, asked fresh on every heartbeat.
+    ///
+    /// A FUNCTION rather than a value because the dispatcher that answers for it is built
+    /// after this client -- and because capturing the report once would freeze it, which is
+    /// exactly the drift AgentCapabilities exists to avoid. Null on a build that does not
+    /// pass one, in which case the heartbeat carries no capabilities block at all and the hub
+    /// reads this machine as "has not said", which is what it did before this existed.</summary>
+    private readonly Func<AgentCapabilities>? _capabilities;
+
+    public FleetClient(ILogger<FleetClient> log, AgentState state,
+                       Func<AgentCapabilities>? capabilities = null)
     {
         _log = log;
         _state = state;
+        _capabilities = capabilities;
         _identity = state.LoadIdentity();
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _commandHttp = new HttpClient
@@ -118,7 +129,8 @@ public sealed class FleetClient : IDisposable
     /// The Windows agent's heartbeat also carries the change-only inventory blocks (backup
     /// profiles, network adapters, BIOS settings, available patches, the process list) and
     /// applies the config the hub replies with. None of that is ported yet, so this sends the
-    /// minimum the endpoint accepts and reads nothing back but the status code.
+    /// minimum the endpoint accepts plus the capability report, and reads nothing back but the
+    /// status code.
     ///
     /// It still has to EXIST, and on the Windows cadence: this is what refreshes the hub's
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
@@ -134,6 +146,23 @@ public sealed class FleetClient : IDisposable
             // we currently ignore; ignoring it is honest, since nothing here reads a
             // preferred-sensor list yet.
             var body = new JsonObject { ["config_version"] = "" };
+            // What this machine is and what it can be told to do. The hub keys a release
+            // manifest, an outdated tally and a set of console gates on the platform in here,
+            // so a heartbeat that omitted it would leave this machine measured against the
+            // WINDOWS agent's train -- which is the arrangement AgentConfig.Version's low
+            // number used to work around. Built per heartbeat rather than captured; see
+            // _capabilities.
+            try
+            {
+                if (_capabilities is not null) body["capabilities"] = _capabilities().ToJson();
+            }
+            catch (Exception e)
+            {
+                // Never fatal, and never at the cost of the heartbeat itself: this ping is
+                // what decides whether the machine reads online, and a capability report is a
+                // hint. Same discipline the hub applies at the other end of the wire.
+                _log.LogDebug("Could not build the capability report: {Msg}", e.Message);
+            }
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);

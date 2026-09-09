@@ -41,6 +41,37 @@ public sealed class AgentState
         StateDirectory.RestrictFile(AgentConfig.AgentIdentityPath);
     }
 
+    /// <summary>What a self-update is aiming at, or null if none is in flight. See
+    /// RestartState on why this is on disk rather than in memory.</summary>
+    public RestartState? LoadRestartState()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.RestartStatePath))
+            {
+                var json = File.ReadAllText(AgentConfig.RestartStatePath);
+                return JsonSerializer.Deserialize<RestartState>(json);
+            }
+        }
+        catch { /* a corrupt file reads as "no update in flight", which retries rather than
+                   refusing to start -- the same fail-soft rule as the identity above */ }
+        return null;
+    }
+
+    public void SaveRestartState(RestartState state)
+    {
+        EnsureStateDir();
+        AtomicWrite(AgentConfig.RestartStatePath, JsonSerializer.Serialize(state, JsonOpts));
+    }
+
+    /// <summary>Forget the update in flight. Called once the new build has done real work, not
+    /// merely started -- see SelfUpdater.ConfirmRunningBuild.</summary>
+    public void ClearRestartState()
+    {
+        try { File.Delete(AgentConfig.RestartStatePath); }
+        catch { /* a file that cannot be deleted only costs one extra guard check */ }
+    }
+
     /// <summary>Write via a temp file and rename.
     ///
     /// **The identity file is the one thing on this machine that cannot be regenerated.** The

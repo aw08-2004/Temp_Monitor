@@ -32,8 +32,10 @@ import functools
 
 from flask import Blueprint, jsonify, request, session
 
+import apps
 import backups
 import bios
+import capabilities
 import channels
 import firmware
 import fleet
@@ -41,11 +43,13 @@ import live
 import patches
 import permissions
 import permissions_web
+import policy
 import processes
 import refusals
 import remote
 import settings
 import terminal
+import usage
 import wake
 
 
@@ -134,8 +138,11 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         The agent sends the config_version it currently holds and the hub replies with
         config only when that differs, so the steady-state heartbeat stays two fields.
 
-        It may also send `profiles`, `remote`, `bios` and `network` -- the slow local
-        inventories, each on its own change-only cadence, none of them ever fatal -- and
+        It may also send `capabilities` -- what this machine can actually do (roadmap #23),
+        the one block sent on every heartbeat rather than change-only, because the hub does
+        the comparing so the agent can stay stateless -- plus `profiles`, `remote`, `bios`
+        and `network`, the slow local inventories, each on its own change-only cadence and
+        none of them ever fatal -- and
         `processes`, which is neither slow nor change-only but is only sent at all while an
         operator has that machine's Processes card open (see the `processes_wanted` reply).
 
@@ -153,11 +160,57 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         if data.get("config_version") != current_version:
             payload["config"] = settings.agent_config(db_path)
             payload["config_version"] = current_version
+        # What this machine can actually do (roadmap #23). First among the inventory blocks
+        # because it is the one that decides what the others are allowed to mean: it is the
+        # input fleet.create_command refuses on, so a machine that cannot run `backup_files`
+        # stops being queued one from the moment this lands rather than from the moment
+        # somebody looks.
+        #
+        # Sent on EVERY heartbeat rather than change-only, unlike its neighbours, and
+        # capabilities.record_capabilities only writes when the content differs -- see its
+        # docstring for why the comparison belongs to the hub. Never fatal, like everything
+        # else here; a dropped report leaves the machine ungated, which is exactly the state
+        # every Windows agent in the field is already in.
+        if data.get("capabilities"):
+            try:
+                capabilities.record_capabilities(db_path, machine, data["capabilities"])
+            except Exception as e:
+                print(f"[capabilities] Could not record capabilities for {machine}: {e}")
         if data.get("profiles"):
             try:
                 backups.record_profiles(db_path, machine, data["profiles"])
             except Exception as e:
                 print(f"[backup] Could not record profiles for {machine}: {e}")
+        # What is installed on the device (roadmap #23 phase D). Change-only and never fatal
+        # like its neighbours, and tested with `is not None` for the same reason `patches` is:
+        # the agent sends an OBJECT ({"apps": [...]}) so that a device reporting an EMPTY list
+        # stays truthy along the whole path. That transition is a real report -- a device that
+        # has had everything uninstalled -- and a truthiness check anywhere would be the one
+        # thing that could never arrive.
+        if data.get("apps") is not None:
+            try:
+                apps.record_inventory(db_path, machine, data["apps"])
+            except Exception as e:
+                print(f"[apps] Could not record the app inventory for {machine}: {e}")
+        # What the device says it did with its app policy (roadmap #23 phase D). Sent after
+        # an application attempt rather than on a cadence, and never fatal like everything
+        # else here. `failed` is the field this exists for: setPackagesSuspended returns the
+        # packages it could NOT suspend, and a policy reported as applied while three of its
+        # targets are still running is worse than no policy at all.
+        if data.get("policy_state"):
+            try:
+                policy.record_state(db_path, machine, data["policy_state"])
+            except Exception as e:
+                print(f"[policy] Could not record the policy state for {machine}: {e}")
+        # Foreground time per app per day (roadmap #23 phase E). Change-only like its
+        # neighbours and never fatal, and merged by day rather than replacing the machine's
+        # history: a device coming back from a week offline reports what it has, and believing
+        # that was the whole record would erase the days before it went away.
+        if data.get("usage"):
+            try:
+                usage.record_usage(db_path, machine, data["usage"])
+            except Exception as e:
+                print(f"[usage] Could not record usage for {machine}: {e}")
         # Logon sessions + display outputs, on the same change-only cadence and with the same
         # never-fatal handling: this feeds the remote session picker and the headless badge,
         # and neither is worth failing a heartbeat over.
@@ -268,6 +321,41 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 db_path, machine, settings.get(db_path, "fleet.default_agent_channel"))
         except Exception as e:
             print(f"[channels] Could not resolve the channel for {machine}: {e}")
+        # The device's app policy (roadmap #23 phase D), resolved to a flat list of packages
+        # to suspend. Sent only when the version the agent holds differs from the current
+        # one -- the same shape `config` above uses, and for the same reason: this is a
+        # ten-second heartbeat and re-sending an unchanged document would be most of it.
+        #
+        # **An EMPTY document is still sent**, and that is the release valve. Removing a
+        # machine from a policy has to be able to un-block its apps, so "no policy applies"
+        # is a document saying `blocked: []` rather than an absent block -- which the agent
+        # would read as "the hub had nothing to say" and go on enforcing what it had.
+        #
+        # `max_age_seconds` rides inside the document rather than as agent config because it
+        # is a property of the policy being enforced: it is how long the device keeps
+        # enforcing THIS after it stops hearing from us, and past it the agent lifts
+        # everything on its own. See policy.py and hub/settings.py's policy.* section.
+        #
+        # Its own try/except, like every block here: a policy that cannot be resolved must
+        # not cost the machine its heartbeat, and the device simply keeps what it has until
+        # the next one -- bounded by that same dead-man switch.
+        try:
+            document = policy.resolve_for(db_path, machine, apps.list_apps(db_path, machine))
+            if data.get("policy_version") != document["version"]:
+                payload["device_policy"] = {
+                    "blocked": document["blocked"],
+                    # Curfews and budgets (roadmap #23 phase E). Sent as RULES rather than
+                    # resolved into `blocked`, because both depend on facts the hub does not
+                    # have and cannot have promptly: what time it is where the device is, and
+                    # how much the device has been used today. The device evaluates them every
+                    # minute whether or not the hub is reachable, which is the only way a
+                    # curfew holds at 22:00 on a phone that is offline.
+                    "schedule": document["schedule"],
+                    "max_age_seconds": settings.get_int(db_path, "policy.max_age_seconds"),
+                }
+                payload["device_policy_version"] = document["version"]
+        except Exception as e:
+            print(f"[policy] Could not resolve the policy for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])
@@ -597,6 +685,26 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # (name, pid) pairing that protects against PID reuse and refuses the critical
         # Windows processes whose termination is a bugcheck rather than a closed program.
         # Accepting a hand-rolled copy here would make both of those guards optional.
+        # **The one refusal here that is about a CAPABILITY rather than about params.** Every
+        # other entry in this list is refused because a hand-rolled copy would carry a session
+        # id or an expired snapshot; `locate_device` carries nothing at all. It is refused
+        # because this endpoint's gate is `issue_commands`, and asking a device where it is
+        # needs `locate_device` -- a separate capability precisely so that "may reboot a PC"
+        # does not silently mean "may find out where an employee is". Accepting one here would
+        # route around that gate for the whole helpdesk. See location_web.py.
+        if data.get("type") in fleet.LOCATION_COMMANDS:
+            return jsonify({"error": "Devices are located from the machine's own page, which "
+                                     "checks the 'locate_device' permission and notifies the "
+                                     "device."}), 400
+        # The second capability refusal, and the one with no way back. This endpoint's gate is
+        # `issue_commands`; erasing a device needs `wipe_device`. Accepting a hand-rolled
+        # `wipe_device` here would hand a factory reset to everybody holding a reboot button,
+        # past the typed-name confirmation and the audit row that exist to make it deliberate.
+        # See wipe_web.py, which is the only door.
+        if data.get("type") in fleet.WIPE_COMMANDS:
+            return jsonify({"error": "Devices are locked and wiped from the machine's own "
+                                     "page, which checks the 'wipe_device' permission and "
+                                     "requires the machine's name to be typed."}), 400
         if data.get("type") in fleet.PROCESS_COMMANDS:
             return jsonify({"error": "Processes are ended and restarted from the machine's "
                                      "Processes card, not the command channel."}), 400

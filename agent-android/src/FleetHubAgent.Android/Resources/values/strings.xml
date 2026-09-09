@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The managed-configuration labels an MDM shows an administrator.
+
+  These live here rather than inline in app_restrictions.xml because aapt2 requires
+  android:title and android:description on a <restriction> to be resource REFERENCES; a literal
+  string there fails the build with APT2259, which is how this file came to exist.
+
+  Nothing else in this app is a resource string. The agent's own user-facing text is in
+  MainActivity and in the executors' results, in English, exactly as the Windows and Linux
+  agents keep theirs. An agent is not the hub, and hub/locales/en.json is the hub's catalogue.
+  Do not take this file as a precedent for moving the rest.
+
+  Apostrophes must be escaped as \' in an Android string resource. Unescaped, aapt2 fails with a
+  message about an unterminated string that does not name the character.
+-->
+<resources>
+
+  <string name="restriction_hub_url_title">Hub URL</string>
+  <string name="restriction_hub_url_description">The FleetHub server this device reports to, for example https://fleet.example.com. Leave blank to use the build\'s default.</string>
+
+  <string name="restriction_enrollment_secret_title">Enrollment secret</string>
+  <string name="restriction_enrollment_secret_description">The hub\'s AGENT_ENROLLMENT_SECRET: one shared value for the whole fleet, from the hub\'s .env file. Without it the device reports telemetry and never accepts a command.</string>
+
+  <string name="restriction_machine_name_title">Machine name</string>
+  <string name="restriction_machine_name_description">What this device is called in the console. Applied only to a device still using its derived default, so it never undoes a rename issued from the console.</string>
+
+  <string name="restriction_asset_tag_title">Asset tag</string>
+  <string name="restriction_asset_tag_description">This device\'s number in your own asset register. Android has no asset tag of its own, so this is the only honest source for the console\'s Asset Tag column.</string>
+
+
+  <!-- What Settings -> Device admin apps shows for FleetDeviceAdminReceiver. android:description
+       on a receiver is a reference-typed attribute, so a literal there is the same APT2259
+       failure the restriction strings above ran into. -->
+  <string name="device_admin_label">FleetHub device management</string>
+  <string name="device_admin_description">Lets your organisation\'s helpdesk locate, lock and manage this device through the FleetHub console.</string>
+
+</resources>

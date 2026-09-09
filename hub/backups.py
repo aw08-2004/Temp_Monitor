@@ -74,6 +74,7 @@ from urllib.parse import quote, unquote, urlsplit
 import requests
 
 import backup_paths
+import capabilities
 import fleet
 
 # AES-GCM comes from `cryptography`, which Authlib already pulls in -- so this is not a
@@ -2760,9 +2761,21 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
     # writes a run row, so a machine that is skipped by the throttle below is left in
     # exactly the state it started in and will be picked up by a later pass.
     candidates = []
+    # Machines that have told us they cannot run `backup_files` at all (roadmap #23), resolved
+    # in ONE query rather than per machine inside the loop. This is the scheduler that found
+    # the bug: the first Android device to enroll was inside a fleet-wide backup profile and
+    # was queued a backup within a minute, because the console's MIN_*_AGENT gates are
+    # JavaScript about buttons and nothing evaluates them here. fleet.create_command refuses
+    # such a command as a backstop, but reaching that would be too late -- a run row and a
+    # one-shot upload URL are minted first, so the machine would collect a failed run every
+    # night forever. A machine that has reported nothing is not filtered out, which is every
+    # Windows agent in the field; see capabilities.py's absent-report rule.
+    backupable = set(capabilities.filter_machines(
+        db_path, [roster_entry(entry)[0] for entry in machines or []],
+        COMMAND_BACKUP_FILES))
     for entry in machines or []:
         machine, online = roster_entry(entry)
-        if not machine:
+        if not machine or machine not in backupable:
             continue
         try:
             config = effective_file_config(

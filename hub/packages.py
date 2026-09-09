@@ -62,6 +62,7 @@ import sqlite3
 import time
 import uuid
 
+import capabilities
 import fleet
 
 # ================================
@@ -1692,6 +1693,17 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
         if target["window_start"] and target["window_start"] > now:
             continue
         if target["next_attempt_at"] and target["next_attempt_at"] > now:
+            continue
+        unsupported = capabilities.refusal_for(db_path, target["machine"], COMMAND_TYPE)
+        if unsupported:
+            # This machine has told us it cannot install packages at all (roadmap #23) --
+            # an Android device, say, where no app may install another. Retired here with a
+            # real reason rather than left to fleet.create_command's refusal below, which
+            # would raise out of this loop and cost the other thirty-nine targets their pass.
+            # RETIRED and not skipped: a target nothing will ever dispatch must reach a
+            # terminal state, or the deployment sits at 39/40 for the rest of its life.
+            retire.append((target["deployment_id"], target["machine"], TARGET_FAILED, None,
+                           unsupported))
             continue
         if target["attempts"] >= target["max_attempts"]:
             # Belt and braces: reconcile normally retires these, but a target must only

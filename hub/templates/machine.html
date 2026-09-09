@@ -3,21 +3,23 @@
 {% block extra_head %}
 {# xterm, permissions and backups left with the panels that used them; see tools.html. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
-{# Version-pinned with subresource integrity: an unversioned CDN URL resolves to whatever
-   the package publishes next, which would be a silent code-push into a console that can
-   run commands fleet-wide. Bumping a version means recomputing its integrity hash. #}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
-        integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
-        crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
-        integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
-        crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"
-        integrity="sha384-dwwI6ICEN/0ZQlS5owhUa/6ZzvwUPmjH45bFVCAcjgjTulbHJvlE+TGU3g1k0N3R"
-        crossorigin="anonymous"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"
-        integrity="sha384-ijk2QwnixVP19l5ENflXHY2/BMo9ANUiTqH6MiVk6i7wp68I6wjNQFOcyayHgClg"
-        crossorigin="anonymous"></script>
+{# The map, for the Location fold. Loaded on every machine page even though the fold is hidden
+   on most of them: 163 KB from our own origin, cached after the first page, against the
+   alternative of injecting a stylesheet and a script at runtime from JavaScript -- which is a
+   loading order to get wrong for a card that is one <details> among nine. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/map.css') }}">
+{# Served from our own origin, pinned by what is checked in rather than by a URL -- see
+   static/vendor/README.md for the versions and their checksums. These were CDN-loaded with
+   subresource integrity until the whole set was vendored; SRI is how you make a THIRD
+   party's copy trustworthy, and on a same-origin file it protects nothing while adding a
+   failure the old setup did not have (a stale hash after a version bump disables the script
+   silently, in the browser, with nothing in the hub's logs). #}
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-plugin-zoom.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
 {% endblock %}
 {% block content %}
 {# data-can-issue-commands decides only whether the Processes card DRAWS its End task /
@@ -37,23 +39,33 @@
 
        No Remote link: remote view/control lives on the Remote page, which can hold several
        PCs side by side. A second entry point meant two viewers for the same machine. #}
-    <div class="toolbar" style="margin-bottom: var(--space-5);">
+    {# `data-needs-command` is roadmap #23 phase F.2: the machine's own capability report
+       decides whether a link is drawn at all. A machine that has reported NOTHING keeps every
+       link, which is every Windows PC in the field -- see machine-capabilities.js on why
+       silence has to mean yes here and no on the newer cards. The routes behind each tab
+       re-decide either way; this only stops an operator clicking Terminal on a phone to be
+       told there is no shell for an app to run a script in. #}
+    <div class="toolbar" style="margin-bottom: var(--space-5);" id="machine-tools">
         <span class="stat-card__meta">{{ t('machine.open.label') }}</span>
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=terminal&amp;machine={{ machine|urlencode }}">{{ t('machine.open.terminal') }}</a>
+        <a class="btn btn--ghost" data-needs-command="run_script" href="{{ url_for('tools_page') }}?tab=terminal&amp;machine={{ machine|urlencode }}">{{ t('machine.open.terminal') }}</a>
         {% if cap.MANAGE_BACKUPS in user_capabilities %}
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=backup&amp;machine={{ machine|urlencode }}">{{ t('machine.open.backup') }}</a>
+        <a class="btn btn--ghost" data-needs-command="backup_files" href="{{ url_for('tools_page') }}?tab=backup&amp;machine={{ machine|urlencode }}">{{ t('machine.open.backup') }}</a>
         {% endif %}
         {# Firmware and Network are NOT capability-gated, matching the Tools page and the
            tabs these replaced: what a PC's BIOS is set to, and whether it can be woken at
            all, is inventory in the sense its model and its disks are. #}
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
+        <a class="btn btn--ghost" data-needs-command="refresh_bios_inventory" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
+        <a class="btn btn--ghost" data-needs-command="prepare_wake" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
         {# Files IS gated, and it is the only one of these that is. A folder listing is not
            inventory the way a BIOS setting is -- those are the names of somebody's
            documents -- and every route behind that tab needs issue_commands. #}
         {% if cap.ISSUE_COMMANDS in user_capabilities %}
-        <a class="btn btn--ghost" href="{{ url_for('tools_page') }}?tab=files&amp;machine={{ machine|urlencode }}">{{ t('machine.open.files') }}</a>
+        <a class="btn btn--ghost" data-needs-command="list_directory" href="{{ url_for('tools_page') }}?tab=files&amp;machine={{ machine|urlencode }}">{{ t('machine.open.files') }}</a>
         {% endif %}
+        {# Said rather than left as an absence. A row of buttons that is shorter than it was on
+           the last machine reads as a broken page; one sentence turns it into a fact about the
+           device. Only rendered when something was actually hidden. #}
+        <span class="stat-card__meta" id="machine-tools-note" hidden></span>
     </div>
 
     {# Every section on this page folds and remembers being folded (collapse.js). Native
@@ -156,6 +168,134 @@
         <div id="fan-empty" class="stat-card__meta">{{ t('machine.no_fans') }}</div>
     </details>
 
+    {# Where this device was when somebody last asked (roadmap #23 phase B/C).
+
+       Rendered `hidden` and revealed by machine-location.js only for a device that reports the
+       `locate` feature -- which today is Android only. Hidden rather than disabled: every
+       Windows PC in the fleet would otherwise carry a permanently dead card, and a greyed-out
+       button that can never work is worse than no button.
+
+       Closed by default, unlike Storage and Cooling. Those show data the machine is reporting
+       anyway; this one costs a request the moment it opens, and on most machine pages the
+       answer is "nobody has ever asked". #}
+    <details class="card fold" data-fold-key="machine:overview:location" id="card-location" hidden>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.location.title') }}</span>
+        </summary>
+        <div class="toolbar" style="justify-content: space-between; margin: var(--space-3) 0;">
+            <div>
+                <div id="location-status" class="stat-card__meta"></div>
+                <div id="location-detail" class="stat-card__meta map-popup__coords"></div>
+            </div>
+            {# Rendered hidden and revealed only for an operator holding `locate_device`. The
+               endpoint re-decides, so a console that got this wrong would be offering a 403
+               rather than a way past one. #}
+            <button class="btn btn--primary" type="button" id="locate-now" hidden>{{ t('location.locate_now') }}</button>
+        </div>
+        <div id="location-map" class="map" hidden></div>
+        <p class="stat-card__meta" style="margin-top: var(--space-3);">{{ t('machine.location.disclosure') }}</p>
+        <div class="table-scroll" id="location-history"></div>
+    </details>
+
+    {# What this device says is INSTALLED (roadmap #23 phase D). Distinct from the Processes
+       card below, which is what is running right now: this is inventory, it changes when
+       somebody installs something, and nothing polls it.
+
+       Rendered `hidden` and revealed by machine-apps.js only for a device that has actually
+       reported an inventory -- every Windows PC has not, and a permanently empty card on
+       several hundred machine pages is worse than no card.
+
+       Closed by default and fetched on page load anyway: the fetch is what decides whether the
+       card exists at all, so it cannot wait for a click on something invisible. Opening it
+       afterwards costs nothing. #}
+    <details class="card sensor-browser fold" data-fold-key="machine:overview:apps" id="card-apps" hidden>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.apps.title') }}</span>
+            <span class="stat-card__meta" id="apps-count"></span>
+        </summary>
+        <div class="toolbar" style="margin: var(--space-3) 0;">
+            <label for="apps-filter" class="sr-only">{{ t('apps.filter') }}</label>
+            <input type="search" id="apps-filter" class="input" placeholder="{{ t('apps.filter') }}"
+                   aria-label="{{ t('apps.filter') }}">
+            {# Off by default: a phone reports several hundred packages and perhaps thirty are
+               things somebody installed. The other three hundred bury them. #}
+            <input id="apps-system" class="checkbox" type="checkbox">
+            <label for="apps-system">{{ t('apps.show_system') }}</label>
+            <span id="apps-status" class="stat-card__meta"></span>
+        </div>
+        <div class="table-scroll" id="apps-body"></div>
+    </details>
+
+    {# How long each app was in the foreground -- roadmap #23 phase E.
+
+       Closed by default, and that is a privacy decision rather than a page-weight one. Every
+       other fold on this page describes a machine; this one describes a person's evening. It
+       opens when somebody deliberately opens it, which is also what makes the audit question
+       ("who looked at this") a meaningful one to ask later.
+
+       Hidden entirely on a device that has never reported usage, which is every Windows PC --
+       and, importantly, also every Android device where usage access was never granted. The
+       script tells those two apart, because the second is fixable in thirty seconds by
+       somebody holding the device and the first never will be. #}
+    <details class="card sensor-browser fold" data-fold-key="machine:overview:usage"
+             id="card-usage" hidden>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.usage.title') }}</span>
+            <span class="stat-card__meta" id="usage-count"></span>
+        </summary>
+        <p class="stat-card__meta" style="margin: var(--space-3) 0;" id="usage-status"></p>
+        <div class="table-scroll" id="usage-body"></div>
+    </details>
+
+    {# Lock and wipe -- roadmap #23 phase H.
+
+       Closed by default and last on the page, which is the only placement that is not an
+       argument for pressing it. The two live in one card because the case they exist for is
+       one case -- a device is lost -- and an operator working through it should not have to
+       find the second half somewhere else.
+
+       Hidden entirely unless the device has REPORTED that it can lock. That is the opposite
+       of capabilities.py's absent-report rule, deliberately: that rule exists so the hub does
+       not REFUSE work a machine never described, and it is the safe default for refusing. A
+       button is the other decision, and a Wipe button on every Windows PC in the console
+       because none of them has said otherwise is not a default anybody wants. #}
+    <details class="card fold" data-fold-key="machine:overview:secure" id="card-secure" hidden>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.secure.title') }}</span>
+            <span class="stat-card__meta" id="secure-count"></span>
+        </summary>
+
+        <p class="stat-card__meta" style="margin: var(--space-3) 0;">{{ t('secure.intro') }}</p>
+
+        <div class="toolbar" style="margin-bottom: var(--space-4);">
+            <button class="btn" type="button" id="secure-lock">{{ t('secure.lock') }}</button>
+            <span class="stat-card__meta" id="secure-status"></span>
+        </div>
+
+        {# The wipe half is hidden behind a button rather than behind a <details>, and that is
+           the one place on this page where the difference matters. collapse.js remembers a
+           fold's open state per browser, so an operator who opened this once on one device
+           would find it already open on every machine page afterwards -- the form for the
+           only irreversible action in the console, waiting, on a page they came to for a
+           temperature chart. This one starts closed every time, on every device. #}
+        <button class="btn" type="button" id="secure-wipe-reveal">{{ t('secure.wipe_heading') }}</button>
+        <div class="card" id="secure-wipe-panel" hidden style="margin: var(--space-3) 0;">
+            <p class="banner banner--warn" style="margin: 0 0 var(--space-3);">{{ t('secure.wipe_warning') }}</p>
+            <label class="stat-card__meta" for="secure-confirm">{{ t('secure.confirm_label') }}</label>
+            <input class="input" id="secure-confirm" type="text" autocomplete="off"
+                   style="max-width: 320px; display: block; margin: var(--space-2) 0;">
+            <label class="stat-card__meta">
+                <input id="secure-frp" class="checkbox" type="checkbox" checked>
+                {{ t('secure.clear_protection') }}
+            </label>
+            <p class="stat-card__meta" id="secure-frp-help" style="margin: var(--space-2) 0;"></p>
+            <button class="btn btn--danger" type="button" id="secure-wipe" disabled>{{ t('secure.wipe') }}</button>
+            <span class="stat-card__meta" id="secure-error"></span>
+        </div>
+
+        <div class="table-scroll" id="secure-history"></div>
+    </details>
+
     {# What is actually RUNNING on this PC, with what it costs -- the console's task manager.
        Collapsed by default and only polled while open, exactly like the sensor browser
        below, and here the argument is stronger than "it is a lot of rows": the machine does
@@ -168,7 +308,10 @@
        payload it cannot see. #}
     {# No `open`: this one stays closed on a browser that has never been told otherwise,
        because the machine does no process sampling at all until somebody opens it. #}
+    {# `data-needs-command` (roadmap #23 phase F.2): a device that has reported it cannot end a
+       process loses the card rather than polling for a list it will never be given. #}
     <details class="card sensor-browser process-card fold"
+             data-needs-command="kill_process"
              data-fold-key="machine:overview:processes" id="process-browser">
         <summary class="sensor-browser__summary">
             <span class="section-title" style="margin-bottom: 0;">{{ t('machine.processes.title') }}</span>
@@ -326,7 +469,19 @@
    The terminal, backup, firmware, network and favorites scripts left with their panels; see
    tools.html. xterm is no longer loaded here either, which is most of this page's weight. #}
 <script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
+{# Before every module that asks what this machine can do: it holds the one request they
+   share, so three cards asking the same question cost one answer. #}
+<script src="{{ url_for('static', filename='js/machine-capabilities.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/processes.js') }}"></script>
+{# Before collapse.js, like every other module that hangs off a fold's `toggle`: collapse.js
+   restores a section by setting `open`, and a listener registered after that has already run
+   never hears about it. #}
+<script src="{{ url_for('static', filename='js/location-map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-location.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-tools-gate.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

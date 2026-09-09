@@ -46,6 +46,13 @@ import time
 from collections import namedtuple
 import uuid
 
+# The only hub module this one imports, and it points one way on purpose: capabilities.py is
+# storage over sqlite3 with no idea that commands exist, so there is nothing to cycle back.
+# It is imported HERE, in the model half, rather than being checked by each caller, because
+# create_command is the single funnel every command in the system goes through -- and the
+# schedulers are exactly the callers that already forgot (see its docstring, and roadmap #23).
+import capabilities
+
 # ================================
 # COMMAND TAXONOMY
 # ================================
@@ -230,6 +237,48 @@ PROBE_COMMANDS = frozenset({
     "collect_probe",
 })
 
+# Asking a device where it is (roadmap #23).
+#
+# **The only command type in this catalog gated on something other than ISSUE_COMMANDS**, and
+# the only one refused outright by /api/fleet/commands for a reason that is not about its
+# params. Every other refusal there is because a hand-rolled copy would carry a session id or a
+# snapshot that has expired. This one is refused because the generic endpoint's gate is
+# ISSUE_COMMANDS, and accepting a `locate_device` through it would hand location to everyone
+# holding a reboot button -- silently, and past the capability that exists to stop exactly
+# that. See permissions.LOCATE_DEVICE and location_web.py.
+#
+# NOT favoritable, for the same reason: a favorite is replayed through that endpoint.
+#
+# Its only param is a time budget (`timeout_seconds`, from location.default_timeout_seconds).
+# WHICH provider to ask is deliberately not in it: the device is the only thing that knows what
+# it actually has, and a hub that named a provider would be choosing on behalf of forty models
+# it has never seen. The answer carries the provider that produced the fix and the accuracy it
+# claims, so nothing has to be assumed at this end.
+LOCATION_COMMANDS = frozenset({
+    "locate_device",
+})
+
+# Locking a device's screen, and erasing it (roadmap #23 phase H).
+#
+# **Refused by /api/fleet/commands and not favoritable**, for the same reason `locate_device`
+# is and with more at stake: that endpoint's gate is ISSUE_COMMANDS, and accepting a
+# `wipe_device` through it would hand a factory reset to everyone holding a reboot button. See
+# permissions.WIPE_DEVICE and wipe_web.py, which is the only door.
+#
+# The two are deliberately different in weight. `lock_device` locks the screen now; the person
+# holding the phone unlocks it with their own PIN, and nothing is lost. `wipe_device` is a
+# factory reset -- no undo, no dry run, and no partial version of itself -- which is why its
+# route requires the machine's name typed out and writes an audit row before the command is
+# created rather than after.
+#
+# `wipe_device`'s one param is `reset_protection`: whether to clear factory-reset protection as
+# part of the erase. It is in the command rather than a hub setting because it is a decision
+# about ONE device and its answer differs per device -- see wipe.py.
+WIPE_COMMANDS = frozenset({
+    "lock_device",
+    "wipe_device",
+})
+
 # The remote file explorer (see files.py) -- browsing a machine's disk, moving files on it,
 # and moving bytes between it and the operator's browser.
 #
@@ -263,7 +312,7 @@ ALL_COMMANDS = frozenset({
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
-      | FILE_COMMANDS)
+      | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS
@@ -327,6 +376,13 @@ COMMAND_PARAMS = {
     # No parameters at all. Empty tuples on purpose: "this command takes nothing" and "nobody
     # has described this command yet" are different facts, and only the first should render as
     # a command with no fields -- see command_param_schema.
+    # Policy/WipeDeviceExecutor.cs. Described here even though this command can never be
+    # chosen from a list -- rules._validate_action reads this table, and an entry that is
+    # ABSENT reads as "nobody has described this yet" rather than as "this is not yours to
+    # queue". The refusals that actually stop it are in _validate_favorite and in
+    # /api/fleet/commands; this is what stops a rule quietly inventing its own params.
+    "wipe_device": (_p("reset_protection", "bool", True),),
+    "lock_device": (),
     "gpupdate": (),
     "prepare_wake": (),
     "refresh_bios_inventory": (),
@@ -650,7 +706,17 @@ def get_conn(db_path):
 
 def init_fleet_db(db_path):
     """Create the fleet tables if absent. Idempotent -- safe to call next to
-    app.init_db() on every hub start."""
+    app.init_db() on every hub start.
+
+    It also creates the capability table, which belongs to another module and is created
+    again from app.py. That is deliberate rather than sloppy: `create_command` reads it on
+    every call now (roadmap #23), so a database with a command queue and no capability table
+    is a database where queueing a command raises `no such table` -- and the failure would
+    appear in whichever scheduler ran first, naming a module the reader has no reason to
+    connect to it. A table this function guarantees cannot be missed by a caller that
+    initialises the fleet and nothing else.
+    """
+    capabilities.init_capabilities_db(db_path)
     with get_conn(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute(
@@ -1147,6 +1213,17 @@ def delete_machine(db_path, machine):
 AUDIT_PARAMS_MAX_CHARS = 4096
 
 
+class UnsupportedCommand(ValueError):
+    """A command the target machine has told us it cannot run (roadmap #23).
+
+    A ValueError subclass rather than a new base, deliberately: every caller that already
+    handles `create_command` refusing a bad type -- wake.py's dispatch, rules' probe loop,
+    refusals.refuse in the web layer -- keeps working unchanged and reports a sentence that
+    happens to be a much better one. Its own type so a scheduler that wants to retire a
+    target with "this machine cannot answer" can tell that apart from a genuine bug.
+    """
+
+
 def create_command(db_path, machine, command_type, params, issued_by,
                    ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS):
     """Queue a command for a machine. Returns its id.
@@ -1155,12 +1232,31 @@ def create_command(db_path, machine, command_type, params, issued_by,
     session gate (see fleet_web.create_fleet_blueprint / app.login_required).
     Every call is audited with the full params, because that record is the only
     thing standing behind "who ran this script?".
+
+    **And it refuses a command the machine has said it cannot run.** That check is here, in
+    the funnel, and not in each caller -- because the callers are the problem. The console's
+    MIN_*_AGENT gates are JavaScript that decides which BUTTONS to render, and nothing
+    evaluates them for the backup scheduler, the patch scheduler, the deployment scheduler or
+    the rules engine, all of which target a machine set instead. The first Android device to
+    enroll was inside a fleet-wide backup profile and had `backup_files` queued to it within a
+    minute (roadmap #23). Those four now consult capabilities themselves before queueing --
+    backups filters its candidate list, packages and patches retire the target with a real
+    reason, rules records a skip -- because reaching this raise is already too late for a
+    scheduler that has minted a run row first. This is what makes the guarantee hold for the
+    fifth one somebody adds without reading this paragraph.
+
+    It costs one indexed lookup per command and cannot refuse anything for a machine that has
+    not reported -- which is every Windows agent in the field. See capabilities.py's
+    absent-report rule; the asymmetry is the whole reason this is safe to put in the funnel.
     """
     machine = str(machine or "").strip()
     if not machine:
         raise ValueError("machine is required")
     if command_type not in ALL_COMMANDS:
         raise ValueError(f"unknown command type: {command_type!r}")
+    refusal = capabilities.refusal_for(db_path, machine, command_type)
+    if refusal:
+        raise UnsupportedCommand(refusal)
     if params is None:
         params = {}
     if not isinstance(params, dict):
@@ -1709,6 +1805,23 @@ def _validate_favorite(name, command_type, params):
         # listing the operator is looking at, and that is where they belong.
         raise ValueError(f"{command_type!r} commands name paths on one machine's disk and "
                          f"cannot be saved as a favorite; use the Files tool instead")
+    if command_type in LOCATION_COMMANDS:
+        # The only entry in this list refused for a REASON THAT IS NOT ABOUT ITS PARAMS -- it
+        # has none. A favorite is replayed through /api/fleet/commands, which is gated on
+        # ISSUE_COMMANDS, so a saveable locate would be a way around the capability that
+        # exists to keep "may reboot a PC" from meaning "may find out where an employee is".
+        # See permissions.LOCATE_DEVICE.
+        raise ValueError(f"{command_type!r} is gated on the 'locate_device' capability and "
+                         f"cannot be saved as a favorite; locate a device from its own page "
+                         f"instead")
+    if command_type in WIPE_COMMANDS:
+        # The same argument as location, at the other end of the blast-radius scale. A favorite
+        # is a saved command replayed against whichever machine an operator picked next, and a
+        # saved factory reset is precisely the shape of accident this feature must not make
+        # possible. Wiping requires the machine's name typed out on its own page.
+        raise ValueError(f"{command_type!r} is gated on the 'wipe_device' capability and "
+                         f"cannot be saved as a favorite; lock or wipe a device from its own "
+                         f"page instead")
     if params is None:
         params = {}
     if not isinstance(params, dict):

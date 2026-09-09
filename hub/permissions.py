@@ -85,6 +85,47 @@ MANAGE_FIRMWARE = "manage_firmware"
 # like a machine's disks or its BIOS version. Knowing a PC is missing a security update is
 # not a privilege; deciding what happens about it is.
 MANAGE_PATCHES = "manage_patches"
+# Asking a device where it is (roadmap #23). **The one command-issuing feature in this product
+# that does NOT reuse ISSUE_COMMANDS**, and the departure is deliberate rather than an
+# oversight: wake, the Processes card and the file explorer all reuse it on the argument that
+# each is less dangerous than the SYSTEM shell that gate already grants. That argument works
+# because all three act on a MACHINE. This one acts on a person.
+#
+# "May reboot a PC" must not silently imply "may find out where an employee is." Folding this
+# into ISSUE_COMMANDS would have handed it, on the day it shipped, to everyone who already had
+# a reboot button -- which is the whole helpdesk.
+#
+# READING a device's last known position is deliberately NOT gated here: that is VIEW plus
+# machine scope, like every other thing a machine reports about itself. Knowing where a device
+# was when somebody last asked is not the privilege; making a device answer is.
+LOCATE_DEVICE = "locate_device"
+# Writing app and time policy for managed devices (roadmap #23). Its own capability rather than
+# a reuse of MANAGE_SETTINGS, on the same argument MANAGE_RULES already makes for itself: a
+# policy is not a setting. A setting is a threshold somebody tunes; a policy is a standing
+# instruction that changes what a person's device will do, applied without anybody present, and
+# it is the first thing in this product that can make a device less useful to the person
+# holding it.
+#
+# READING a policy, and reading how a device is complying with one, is deliberately NOT gated
+# here -- that is VIEW plus machine scope. Knowing that an app is blocked on a device you
+# already administer is not a privilege; deciding that it should be is.
+MANAGE_DEVICE_POLICY = "manage_device_policy"
+# Locking a device's screen, and erasing it (roadmap #23 phase H). The largest blast radius in
+# this product: `wipe_device` is a factory reset with no undo, no dry run and no partial
+# version of itself, and it takes effect on a device somebody may be holding.
+#
+# Its own capability rather than ISSUE_COMMANDS, and the argument that keeps the other command
+# features under that gate is exactly what excludes these two: "less dangerous than the SYSTEM
+# shell it already grants" is true of a reboot and false of an erase. It is also not folded in
+# with MANAGE_DEVICE_POLICY, though both act on managed devices, because a policy is reversible
+# by editing it and this is not reversible at all.
+#
+# LOCK and WIPE share one capability rather than getting one each. They are different in
+# weight -- a lock is the ordinary first move for a phone left on a train, and is undone by
+# the person's own PIN -- but anybody trusted with the second is trusted with the first, and a
+# separate `lock_device` capability would be one more row in the permissions UI that nobody
+# would ever grant alone.
+WIPE_DEVICE = "wipe_device"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -109,6 +150,9 @@ CAPABILITIES = (
     MANAGE_BACKUPS,
     MANAGE_FIRMWARE,
     MANAGE_PATCHES,
+    LOCATE_DEVICE,
+    MANAGE_DEVICE_POLICY,
+    WIPE_DEVICE,
     MANAGE_RULES,
     MANAGE_SETTINGS,
     MANAGE_USERS,

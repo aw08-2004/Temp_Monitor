@@ -2735,25 +2735,53 @@ command channel — and emits the sensor identifiers `extract_diagnostics` alrea
 (`/cpu/0`, `/ram`, `/volume/...`), so a Linux machine's overview page populates against today's
 hub.
 
-### The version number does the gating
+### The version number used to do the gating; the platform does now
 
-`AgentConfig.Version` is `0.1.0` and must stay below the hub's `AGENT_TRAIN_MIN_VERSION`
-(`3.0.0`). Three things follow, all of them wanted:
+`AgentConfig.Version` is `0.1.0`, and it was pinned below the hub's `AGENT_TRAIN_MIN_VERSION`
+(`3.0.0`) because every agent reports into one `companion_version` field and the hub read every
+value in it as though it belonged to the Windows agent. Three things keyed off that. Two are
+fixed:
 
-- `get_advertised_version()` returns nothing, so the hub never advertises the **Windows**
-  agent's signed manifest to a Linux box. That binary is `win-x64`; a Linux agent that took the
-  hint would download it and have nothing to do with it.
-- Every `MIN_*_AGENT` gate in `hub/static/js` reads `0.1.0` as too old, so the console does not
-  offer a Linux machine the terminal, process list or file browser it cannot answer. The
-  compatibility API those constants form does the right thing here for free.
-- `agents_outdated` skips sub-3.0 machines, so a Linux fleet is not permanently counted as
-  behind a release train it is not on.
+- `get_advertised_version()` would have advertised the **Windows** agent's signed manifest to a
+  Linux box — a `win-x64` binary a Linux agent that took the hint would download and have
+  nothing to do with. **The hub now picks a manifest by the platform a machine reports.** That
+  is what made a Linux release train possible at all.
+- `agents_outdated` counted every machine against the Windows manifest. **It now compares each
+  machine against its own train.**
+- Every `MIN_*_AGENT` gate in `hub/static/js` still reads `0.1.0` as too old, which is what
+  keeps the console from offering a Linux machine the terminal, process list or file browser it
+  cannot answer. **Unchanged, and it is the only reason the number is still 0.1.0.** Those gates
+  move onto the capability report when there is something to gate.
 
 Enforced by `VersionGateTests`, not just written down: "bring the version in line with the other
-components" is a plausible change that would break all three at once and silently.
+components" is a plausible change that would silently start offering features that do not exist.
 
 **Rejected:** starting at 3.35.0 to match the Windows agent. Every gate above would then pass
-on a lie.
+on a lie, and the machine would be measured against somebody else's release train.
+
+### Signed self-update
+
+Ported from the Windows agent, with three differences and no fourth. The restart is systemd's
+(`Restart=always`, so the exit code is a marker in the journal rather than a contract); the swap
+is the same rename-aside sequence, because Linux lets a running binary be renamed just as
+Windows does; and the staged file needs its mode set before it moves into place, since a
+downloaded file is `0600` and a `0600` binary at `ExecStart` is a service that cannot start on a
+machine that has just renamed away the one that worked.
+
+Everything else is deliberately identical, including the parts that look like caution: the
+manifest signature is verified fail-closed before anything is parsed, the download is verified
+against the **signed** sha256 and then re-verified from disk, and the previous binary survives
+boot and is deleted only once the new one has reached the hub. That last one is the Windows
+agent's hardest-won lesson — treating "the process started" as "the update succeeded" deletes
+the only artifact that could undo a build which starts but cannot reach the hub, on every
+machine at once.
+
+**The trust root is the fleet's offline key, not GitHub.** The same Ed25519 key signs this
+manifest, the Windows agent's and the client's, so the download itself is untrusted: the binary
+can come from anywhere as long as it hashes to the value inside a signed manifest. A compromised
+hub can move a machine between channels; it cannot point one at a binary of its choosing.
+
+`release.ps1` is a sibling of the Windows agent's, which answers the open parameter below.
 
 ### Rejected alternatives
 
@@ -2815,10 +2843,929 @@ reject it, and the telemetry loop stalls. Only that loop: heartbeat and commands
 so the machine stays online and answerable and merely stops reporting readings. The fix is to
 parse `/proc/mounts` and `statfs` only the survivors on a bounded thread.
 
-**Open parameter.** Whether the Linux agent eventually joins the 3.x version line (and with it
-the feature gates and the shared manifest machinery), or keeps a line of its own forever. It
-cannot join until it implements what those gates promise, so the question is not live yet —
-but the answer decides whether `release.sh` is a sibling of `release.ps1` or a fourth thing.
+**Answered (was an open parameter).** The Linux agent keeps a line of its own rather than
+joining the 3.x train. Joining would have meant one number that has to mean two things: a
+position on the Windows agent's feature timeline and a position on this agent's. The hub reads
+the platform instead, so both can be true at once and neither has to lie. `release.ps1` is a
+sibling of the Windows agent's, not a fourth thing.
+
+---
+
+## 🚧 23. Android agent   ·   `agent-android/`, unreleased (0.1.0)
+
+An Android counterpart to the Windows agent, in `agent-android/`. Started 2026-09-06 on
+`feat/android-agent`; **nothing is released and no fleet runs it**, but it has now been
+validated on real hardware: a Samsung Galaxy A15 on Android 16 enrolled, reported telemetry
+the hub accepted, and answered a command. Release-signed with the fleet's own Android
+keystore; the protocol half has 93 tests. Full detail in `agent-android/README.md`.
+
+**No hub change was required**, same as #22 and for the same reason: the agent speaks the
+existing wire protocol exactly and emits the sensor identifiers `extract_diagnostics` already
+reads (`/cpu/0`, `/ram`, `/volume/...`), so an Android device's overview page populates against
+today's hub. The version gate below is what keeps it that way.
+
+**This is not #11's Android build.** That is the *operator's* client — the console in a pocket,
+scoped in detail under #11 phase 2 and still gated on the Windows client having talked to a real
+hub. This is a *managed endpoint*: a phone or tablet that appears in Inventory next to the PCs.
+The two share a platform and nothing else.
+
+### The version number used to do the gating; the platform does now
+
+`AgentConfig.Version` is `0.1.0`. It was pinned below `AGENT_TRAIN_MIN_VERSION` (`3.0.0`) for
+the same three reasons the Linux agent was, and the same two are fixed: the hub picks a release
+manifest by the platform a device reports, and the `agents_outdated` tally compares each
+machine against its own train. What is left is the `MIN_*_AGENT` gates, which still read a
+version number — and that is the only reason this is still `0.1.0`.
+
+That remaining one matters more here than on Linux. There, the console withholding a terminal or a
+file browser hides something merely *unimplemented*. Here it hides something **impossible**:
+Android has no shell for an app to run a script in, no API to reboot, and no way to see another
+app's processes. There is no future version of this agent that could answer those, so the gate
+is not a staging mechanism, it is permanent.
+
+It also has a release train of its own now (roadmap #22): `release.ps1`, an
+`agent-android.manifest.json` signed with the same offline key as the other two, and a
+self-update that is nothing like theirs. A Windows or Linux agent replaces a file and restarts;
+an Android app hands its own next APK to the platform's package installer, which is a **Device
+Owner** power — without device ownership `commit()` raises the system installer UI, which on a
+phone in a drawer is an update waiting forever behind a dialog nobody will tap. The platform
+then kills the process to replace the app, so the agent comes back through
+`ACTION_MY_PACKAGE_REPLACED` rather than by resuming, and the attempt counter is written
+**before** the install because nothing after it runs.
+
+**Two signatures, and they are not the same signature.** The APK is signed with the fleet's
+Android keystore, which is what lets it replace the installed app at all; the manifest is signed
+with the offline Ed25519 release key, which is what makes the download untrusted. Somebody
+holding the keystore would pass Android's check and still fail the agent's. Re-signing with a
+different key is unrecoverable in a way it is not on the other two: that certificate is what the
+provisioning QR's checksum covers *and* what Android checks before replacing the app, so a new
+key invalidates every printed code and makes every installed agent refuse the update at once.
+
+This is the **fifth** version line in the repo, and the first with **three** files to keep in
+step: `AgentConfig.Version`, the Core csproj's `<Version>`, and the Android csproj's
+`<ApplicationDisplayVersion>`, which is what a phone's own app-info screen shows.
+`VersionGateTests` holds all three, and deliberately leaves `<ApplicationVersion>` out — that is
+the integer Android sorts upgrades by, a build counter with no relationship to a dotted version.
+
+### Two projects, not one
+
+`FleetHubAgent.Core` (plain `net10.0`) holds the protocol, the loops, machine naming, the
+dispatcher and `rename`; `FleetHubAgent.Android` (`net10.0-android`) holds the foreground
+service, the readers and the setup screen.
+
+**Forced, not chosen.** A `net10.0-android` project cannot be referenced by an xunit project on
+a Windows workstation — it needs the workload to restore and a device to run a test on. Had the
+protocol lived in the app project, testing it would have required hardware, which in practice
+means it would have had no tests. As split, the dangerous half has 88 tests that run with
+nothing installed but the .NET SDK.
+
+This is **not** the shared core `agent-linux/README.md` rejects; that rejection is about
+refactoring `agent/`, which is deployed on every managed PC and self-updates from a signed
+manifest. Nothing here touches it, and the wire shapes are still duplicated rather than shared.
+
+### What Android costs, honestly
+
+- **Temperature is usually the BATTERY's.** `/sys/class/thermal` is SELinux-blocked on most
+  modern devices and `HardwarePropertiesManager` is system-only, so the reader tries the thermal
+  zones and falls back to battery temperature. That is a real measurement — a phone in a hot
+  van, a tablet in a sealed enclosure, a failing cell — but it is not a CPU temperature, so the
+  sensor is labelled `Battery` and the agent logs which source it charted.
+- **`serial_number` is the SSAID, not a serial.** `Build.getSerial()` needs a signature-level
+  permission, so no normal build reads a hardware serial on any device since Android 10. The
+  SSAID is unique per device *per app-signing key* — which makes the Android keystore **fleet
+  state**, alongside `BACKUP_MASTER_KEY` and the Ed25519 key: re-signing the APK makes every
+  device in the fleet look like a new machine at once.
+- **`rename` changes what the device reports, not a hostname**, and refuses outright on a device
+  with no usable SSAID rather than renaming into a duplicate the hub can never merge.
+- **The default machine name cannot be `Build.MODEL`.** It is a marketing name shared by every
+  unit of a model, and thirty tablets reporting `Pixel Tablet` would collapse into **one**
+  machine overwriting itself, not thirty confusingly-named ones. The derived name carries eight
+  characters of the stable id for that reason, and `MachineNamingTests` is what keeps it there.
+- **A foreground service with a permanent notification is the only way to keep running.**
+  WorkManager's floor is fifteen minutes and JobScheduler's is longer under Doze; both would put
+  a device far outside the hub's 90-second online window.
+
+### The hub change it needed — done in 1.98.0
+
+`_OS_MATCHES` had no `android` bucket, so every Android device counted as `unknown` on the
+Dashboard. The agent reports `Android 16` honestly rather than smuggling "Linux" into the
+caption — which would be defensible for an Android kernel, and would file phones in with the
+servers while showing an operator a string the device never said. The bucket is now there,
+ordered **before** `linux` because an Android device really is running a Linux kernel and a
+caption mentioning both must not land with the servers. #22's `PRETTY_NAME` gap is unrelated
+after all and stays open on its own.
+
+### Rejected alternatives
+
+- **Kotlin, the idiomatic choice.** It would rewrite enrollment, the offline buffer and the poll
+  hold — the most dangerous code in the fleet — in a language nobody here maintains, for an agent
+  that does less than either existing one. The protocol is the hard part; the platform code is
+  not.
+- **Matching the Windows agent's version so the fleet "looks consistent."** Every gate above
+  would pass on a lie, and the console would offer a phone a ConPTY terminal.
+- **`dataSync` as the foreground service type**, which is the closer description of the work.
+  Since Android 15 it is capped at six hours in any 24, after which the system stops the service
+  and the machine drops out of the console every night. `specialUse` where it exists (API 34+),
+  `dataSync` below it, where the cap does not exist either.
+- **Emulating `restart` by any available means.** There isn't one, and a command that appeared to
+  work and did nothing would be worse than the refusal.
+
+### Not done
+
+**What the first real device settled**, on a Galaxy A15 / Android 16: battery temperature reads
+and is the ONLY temperature available (all 26 thermal zones are denied even to `adb shell`,
+not merely to an app); the foreground service runs as `specialUse`, the API-34+ branch; the
+enrollment identity and machine name survive a reinstall signed with the same key; and the
+SSAID really is per-signing-key -- the app's differs from the shell's, which is the concrete
+proof that the keystore is fleet state.
+
+**Still unverified: everything time-dependent.** Whether the service survives an OEM power
+manager overnight, whether the boot receiver fires on Samsung's skin, and every command
+except `rename`.
+
+**Two design errors the device found, which review had not.** The notification status line
+could not distinguish "reporting fine, waiting for its secret" from "cannot reach the hub" --
+the exact question during a fresh install, and it now reports the link and the enrollment as
+the separate facts they are. And `FleetClient` logged the missing-secret warning on every
+30-second retry forever, which on a ring-buffered logcat steadily evicts everything else the
+agent said.
+
+`show_message` is the obvious next command (the one place a phone beats a PC), and FCM against
+the `push_*` columns already on `api_tokens` is what would let the command loop stop holding a
+request every 25 seconds.
+
+### Scheduled commands reach an Android device regardless of the version gates
+
+**The assumption that `MIN_*_AGENT` keeps unsupported commands away from this agent was
+wrong, and the first phone disproved it within a minute of enrolling.** Those gates are
+console-side JavaScript: they stop an operator being OFFERED a button. Nothing runs them for
+a command the hub's scheduler or rules engine dispatches, because those target a machine set
+rather than a button. `fleet.py`'s `SCHEDULED_COMMANDS` -- `backup_files`, `restore_files`,
+`install_patches`, `deploy_package` -- arrive anyway. The pilot device was inside a
+fleet-wide backup profile and was sent `backup_files` immediately.
+
+Agent side, those types now answer "cannot be run on Android" with the reason and the action,
+rather than "not implemented", which would send an operator looking for a version that will
+never exist. **The hub-side fix shipped in 1.98.0** — see *Machine capabilities* below, which
+is the entry that closes this and the `_OS_MATCHES` gap above.
+
+**Three things cost real time getting the first build out, recorded so they cost nobody else.**
+The build machine's Oracle JDK 24 cannot be parsed by .NET Android 36 — the symptom is
+`XA0034` followed by a `NullReferenceException` in `ResolveAndroidTooling`, which reads like a
+broken SDK rather than a too-new JDK; `-t:InstallAndroidDependencies` provisions a usable
+OpenJDK 17 alongside the SDK. `--` is illegal inside an XML comment, which this repo's house
+style puts there by reflex and which bit the csproj, the manifest and `strings.xml` in turn.
+And `<restriction android:title|description>` must be an `@string` reference, not a literal
+(`APT2259`), which is the only reason `Resources/values/strings.xml` exists — it is not a
+precedent for moving the agent's own English out of the code.
+
+**Open parameter.** Whether an Android device belongs in the same Inventory list as the PCs at
+all, or wants a view of its own. It reports the same shape and costs nothing to leave where it
+is; the question becomes live the first time somebody sorts the fleet by CPU temperature and
+finds a tablet's battery at the top.
+
+---
+
+## ✅ Vendored browser dependencies   ·   hub 1.97.0
+
+`hub/static/vendor/README.md` opens by saying the hub's pages "must work on an isolated LAN
+with no internet egress". **That was true of exactly one tab.** Terminal loaded xterm.js from
+`static/vendor/`; everything else reached out at page load — Chart.js, its date adapter and
+its zoom plugin from jsDelivr, socket.io from cdnjs, and the Inter webfont from Google Fonts
+on **every** page, including `login.html` and `invite.html`, which carry their own `<head>`
+rather than extending `base.html` and so kept their own copy of the link.
+
+So an air-gapped hub rendered unstyled and chart-less, and the failure looks cosmetic rather
+than broken — it reads as "the console is ugly here", not "a dependency is unreachable". All
+seven files are now checked in with pinned versions and SHA-256s in that README, next to the
+`curl` block that reproduces them.
+
+**`integrity` and `crossorigin` were dropped with the move, deliberately.** Subresource
+integrity is how you make a *third party's* copy trustworthy. On a file served from our own
+origin it protects nothing that serving it ourselves has not already protected, and it adds a
+failure the old setup did not have: a stale hash after a version bump disables the script
+silently, in the browser, with nothing in the hub's logs.
+
+**Rejected: keeping the CDN and relying on SRI.** SRI protects integrity, not availability,
+and the claim in that README is about availability.
+
+Two pins are load-bearing rather than merely current. **socket.io stays at 4.7.2** because it
+must match the Socket.IO protocol the server's Flask-SocketIO speaks — upgrade the two
+together or not at all. **Inter is the variable font**, one file covering 100–900, replacing
+the five static weights the Google URL requested; `--font-sans` in `tokens.css` gained a real
+fallback chain at the same time, because the old one reached bare `sans-serif` on Windows and
+a woff2 that fails to load must land on Segoe UI rather than Times.
+
+This also builds the muscle the Android map needs: adding Leaflet is now the same three steps
+(download pinned, record the checksum, reference from `static/`) rather than a new argument
+about whether the frontend may have a dependency at all.
+
+---
+
+## ✅ Machine capabilities   ·   hub 1.98.0   ·   `capabilities.py` / `capabilities_web.py`
+
+Machines now tell the hub what they can do, and the hub stops queueing work they cannot
+perform. This closes the two open hub items under #23 and is the foundation every later
+Android phase sits on.
+
+**A version number cannot say "never".** Every gate in the console is a `MIN_*_AGENT` constant
+hardcoding the agent minor a feature arrived in — a compatibility API, and a good one while
+every managed machine is a Windows PC on one release train, because there "newer" really does
+mean "can do more". It cannot express *"this device can be renamed but will never run a
+script"*, which on Android is a fact about the platform rather than a position in a backlog.
+That is also what lets the Android agent's `AgentConfig.Version` stay at `0.1.0` permanently:
+the version identifies a release train, capabilities describe a feature set, and conflating
+them is what would otherwise force a bump past the `3.0.0` floor `VersionGateTests` protects.
+
+**And for scheduled work, none of those gates run at all.** They are console-side JavaScript
+deciding which buttons to draw. Nothing evaluates them for a command the backup scheduler, the
+patch scheduler, the deployment scheduler or the rules engine dispatches, because those target
+a machine *set* rather than a button. The pilot phone was inside a fleet-wide backup profile
+and was queued `backup_files` within a minute of enrolling (#23).
+
+**The absent-report rule is the load-bearing one.** A machine that has reported no capabilities
+is **unknown**, never **incapable**. Every Windows agent in the field reports nothing here and
+must keep working unchanged, so absence permits everything and only an explicit report can
+refuse anything. Inverting it would stop every command on every machine in the fleet on the
+morning this shipped, with nothing logging an error anywhere — the console would look fine. It
+lives in one function (`_missing_reads_as_capable`) so a later caller cannot re-decide it, and
+is asserted from four directions in `tests/test_capabilities.py`.
+
+**Enforcement is in the funnel, and filtering is in the schedulers — both, on purpose.**
+`fleet.create_command` refuses a type the target has said it cannot run, because it is the one
+function every command in the system passes through and the schedulers are precisely the
+callers that already forgot four times over. But reaching that refusal is too late for a
+scheduler that has already minted a run row and a one-shot upload URL, so `backups`, `packages`,
+`patches` and `rules` filter their targets first — the backstop makes the guarantee real, the
+filter is what stops a phone collecting a failed backup every night for the rest of its life.
+Each retires its target with a real reason rather than an error: `TARGET_FAILED` in patches and
+not `nothing_to_do`, because "already up to date" is a claim about a machine's patch state and
+would be a lie.
+
+**Two lists, because they travel on different channels.** `commands` are command types, checked
+by `create_command`; `features` (`locate`, `app_policy`, `time_policy`, `device_owner`) are
+things that arrive on the heartbeat's policy block instead, and the console has to decide
+whether to render a map fold *before* anyone issues anything. They also default oppositely, and
+that asymmetry is deliberate: an unreported command list permits everything (the fleet is full
+of agents that will never report one), while an unreported feature is `false` (a feature exists
+only on an agent new enough to report it), so defaulting the other way would put a Locate
+button on every Windows PC in the fleet.
+
+**The agent derives its command list from its own dispatcher**, never from a hand-kept copy. A
+second list drifts the first time an executor is added, and it drifts the way that hurts: the
+hub goes on refusing a command the agent has just learned to run, and the only symptom is a
+button that stays grey.
+
+**Reported on every heartbeat, not change-only** — the one block here that is. It is a hundred
+bytes and never changes in normal operation, and the hub writes only when the content differs.
+Keeping the "have I sent this" state on the *hub* is what makes a device re-report itself after
+a hub restores its database from a backup; an agent holding that flag would stay silent, and
+the machine would be silently ungated until somebody reinstalled it. `reported_at` therefore
+means "when this capability set first appeared", not "when we last heard from this machine" —
+liveness already has an answer, and a second, subtly different one is how a page ends up
+showing two disagreeing "last seen" values.
+
+### Rejected alternatives
+
+- **Inferring the platform from `os_caption`.** `normalize_os` is a deliberately fuzzy
+  *display* bucketer over a string a remote machine chose. An enforcement decision must not
+  hang off a substring of that. The `android` OS bucket added alongside this is for the
+  Dashboard tally and nothing else.
+- **Extending `MIN_*_AGENT` with a per-platform table.** It would put the same
+  version-means-ability assumption behind a bigger lookup, still in JavaScript, still invisible
+  to every scheduler.
+- **Letting an operator override a capability in the console.** There is no write surface here
+  at all: a capability is something a machine reports about itself, and an override would be a
+  way to tell the hub that a phone can run a script.
+- **Storing an unreported list as `[]`.** The NULL/empty distinction *is* the absent-report
+  rule, which is why the columns are nullable and why a test asserts the stored shape directly
+  — a migration adding `DEFAULT '[]'` would pass every behavioural test on a fresh row and
+  silence the entire existing fleet.
+
+### Open parameter
+
+Whether the Windows and Linux agents should report capabilities too. Nothing needs it — they
+are unknown, which permits everything, which is correct — but it would let the console hide
+what an agent is genuinely too old for instead of computing it from a version, and retire the
+`MIN_*_AGENT` constants one at a time. That is a Windows-agent release, so it waits.
+
+---
+
+## 🚧 Android device-owner provisioning · hub 1.99.0 · `provisioning.py` / `provisioning_web.py`
+
+Phase A of #23. The hub draws a QR; a technician scans it at a factory-reset Android device's
+setup wizard; the device downloads the agent, verifies its signature, installs it, hands it
+device ownership, points it at this hub and enrols it. **Built, and deliberately not yet
+validated on hardware** — see *Not done* below.
+
+**Everything about this feature is shaped by one fact: a device owner is a one-way door.** It
+can only be taken before any account exists on the device, there is no API to grant it later,
+and there is no supported way to move it to another app. So the failure mode of a wrong field
+is never "the QR did not work" — it is "the QR did not work, and the device has already been
+factory reset". A payload missing a field still encodes, still scans, and fails several minutes
+later with everything on that device gone.
+
+Hence the two decisions that shape the module:
+
+- **`build_payload` is all-or-nothing.** An unconfigured hub answers 409 with the field that is
+  missing and the command that produces it. There is no preview-with-placeholders mode, because
+  a placeholder payload scans.
+- **The admin component name is a constant on both sides, not a setting.** The agent pins its
+  receiver's class name explicitly (`FleetDeviceAdminReceiver.ComponentClassName`) rather than
+  letting .NET Android generate the usual `crc64…` mangled name, whose hash can change between
+  builds. A printed QR naming a component no build carries is a wipe with no way back, and a
+  setting would let the two drift — discovered only on a device already reset.
+
+**One scan provisions AND enrols.** The hub URL and the fleet's enrollment secret ride in
+`PROVISIONING_ADMIN_EXTRAS_BUNDLE`, which the agent already reads as managed configuration.
+Without them a device comes up managed, reporting telemetry, and silently accepting no commands
+— exactly the state the agent's setup screen was rewritten to make visible. That is also why the
+gate is **`manage_settings`**: the endpoint hands out `AGENT_ENROLLMENT_SECRET`, so it belongs
+with the capability that can already read the hub's configuration, not with `issue_commands`,
+which is what somebody reaches for by reflex. Every fetch is audited at security level with the
+secret redacted out of the row — a copy there would put the fleet's shared secret in front of
+everyone holding `view_audit_log`.
+
+**Four device-owner powers are declared, one is taken.** `device_admin.xml` declares
+`force-lock`, `limit-password`, `reset-password` and `wipe-data` now, before any of them is
+used, because a device owner cannot be re-prompted: a policy discovered missing at phase H may
+cost a factory reset to add, and these devices are wiped by hand, one at a time. The only power
+actually taken today is `setUserControlDisabledPackages`, which stops a person force-stopping
+the agent from the app info screen. **It is not a fix for the OEM power-manager problem** —
+those killers run inside the system and do not go through that path.
+
+**The degradation contract.** Everything that needs device ownership asks `DeviceOwner.IsManaged`
+first and returns "this device is not fully managed" rather than throwing. Without it a
+sideloaded build answers a lock or a suspend with a SecurityException that an executor turns
+into "executor error: …", which reads in the console exactly like broken hardware.
+
+### The hub hosts the APK · hub 1.107.0 · `apkhost.py`
+
+Added after the phase was built, and it removes the three manual steps that stood in front of
+it. The APK used to be hosted by the operator somewhere else, and two fields were typed in:
+a URL, and a signature checksum produced by running `apksigner verify --print-certs` and
+converting the hex digest it printed. That middle step is the one that produces a wiped device:
+a wrong checksum is 43 characters of valid base64url, it saves without complaint, the code
+scans, and the wizard rejects the download minutes later. **A field nobody has to fill in cannot
+be filled in wrongly**, so the two settings are gone rather than kept as a fallback.
+
+**The checksum is read out of the APK's own signing block**, in about eighty lines of `struct`
+unpacking with no ASN.1 parsing and no new dependency. The certificate is stored as a
+length-prefixed DER blob and the checksum is a hash of exactly those bytes, so the parser walks
+lengths and never decodes a certificate. What it refuses rather than guesses about: an APK with
+no signing block (v1-only or unsigned), one with two signers, and one whose v2 and v3 blocks
+name different certificates. Each of those would otherwise produce a plausible checksum.
+
+**The v3 trap is worth writing down.** A v3 block's signed data continues past the certificate
+list with a bare `minSdkVersion` and `maxSdkVersion` — plain uint32 values, not length-prefixed
+elements. A reader that keeps walking treats `maxSdkVersion` (0x7FFFFFFF) as the next element's
+length; an unchecked one slices past the end of the buffer, gets whatever is left and carries
+on. It has its own test, because it is the shape that reads correctly right up until it does
+not.
+
+**The download URL carries a random token and the route has no gate**, which it cannot: the
+setup wizard has no session, no agent token and nothing to enrol with, because it is downloading
+the app that would later enrol it. The token is looked up rather than joined to a path, so the
+route can only ever serve the one digest recorded as hosted. It is anti-enumeration and a
+revocation handle rather than a boundary, and `SECURITY.MD` says so — the file is a signed
+release binary with no fleet data in it.
+
+**One row, enforced by `CHECK (id = 1)`.** A fleet has one agent APK for the same reason it has
+one signing key. Uploading replaces, and mints a new token, so codes printed from the previous
+APK stop resolving rather than pointing at a file that is gone.
+
+### Rejected alternatives
+
+- **A content-addressed download path** (`/provisioning/apk/<sha256>.apk`) instead of a token.
+  Simpler, and wrong twice: the digest is not a secret, since anyone holding the APK can compute
+  it, and the URL cannot be rotated — re-uploading identical bytes reproduces the same path, so
+  there would be no way to kill a code somebody photographed.
+- **`PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_COOKIE_HEADER`**, which would let the download be
+  gated behind a real header. It adds bytes to a payload that already lands near QR version 18,
+  and a header the wizard sends wrongly is undiagnosable on a device that has already been
+  wiped — whereas a token in a URL can be tested with `curl` before anybody resets anything.
+  Named here as the upgrade path if the trade changes.
+- **A `provisioning.serve_apk` toggle** beside Remove. It would create a state where a record
+  exists, the console says an APK is hosted, and the QR points at a route that answers nothing.
+  Remove is the off switch.
+- **A version history or rollback list.** Two hosted APKs is a fleet with two identities, and the
+  only thing that could then choose between them is whichever row a query sorted first.
+- **Extracting the package and version name from the APK** for a caption. That needs a
+  binary-AXML parser for `AndroidManifest.xml`, which is a real parser for a label.
+- **Sharing `packages.blob_root`**, which would have been free. `packages.delete_blob_if_orphaned`
+  decides orphanhood from `package_sources` alone, so an APK in that tree is a file no packages
+  row points at — nothing sweeps today, and the day something does it would be a fleet-wide
+  deletion of the file every new device downloads.
+- **Reusing `deploy.max_upload_mb`** as the size cap. It is rendered under Deploy and belongs to
+  Windows installers; an operator lowering it for those would silently start refusing agent APKs
+  on a page they were not looking at.
+- **Wi-Fi credentials in the QR**, which the phase plan called for. There is no secret-typed
+  setting, `settings` is rendered into a form and partly shipped to agents, and the only secret
+  store is the master-key-wrapped file the BIOS password uses. A QR shown on a console screen —
+  and often printed and taped to a bench — should also not be a photographable network
+  credential. The setup wizard asks for Wi-Fi itself, once. **Open parameter**: if this changes,
+  the PSK goes in the secret file, never in `settings`.
+- **Making the admin component a setting**, for the drift reason above.
+- **Allowing an `http://` APK URL** for a lab, the way `AgentConfig.Configure` does for a hub
+  URL. That one is typed by somebody who owns the machine; this one is fetched by a device with
+  no configuration of its own and installed as the fleet's device owner. The signature checksum
+  makes a tampered download fail rather than take over, so plain HTTP is not fatal — it is a
+  downgrade with no upside, and a hub that allowed it would allow it forever.
+- **`qrious` for the encoder** (GPL-3.0; nothing else here is copyleft), and the encoder's own
+  `createSvgTag`/`createImgTag` helpers — `provisioning.js` paints a canvas from `isDark()`
+  instead, which keeps `innerHTML` off a page that renders an operator-supplied file name.
+
+### Not done
+
+**The flow has never been run.** The only Android device available is a personal phone with
+data on it, and provisioning requires a factory reset — so the one step this phase's plan put
+first ("validate the entire QR payload on a scratch device before writing any policy code")
+is the step that could not be taken. What *is* verified: the three provisioning components
+(`FleetDeviceAdminReceiver`, `GetProvisioningModeActivity`, `PolicyComplianceActivity`) are
+present in the built manifest with the right actions, `BIND_DEVICE_ADMIN`, `exported`, the
+`DEFAULT` category and the `android.app.device_admin` metadata; the payload and its refusals
+have 46 tests; the routes and their gating have 32.
+
+`ACTION_GET_PROVISIONING_MODE` and `ACTION_ADMIN_POLICY_COMPLIANCE` are both mandatory from
+API 29 and a DPC missing either does not provision at all — which is exactly the class of
+mistake that costs a second wipe to find. **Do not scan a code from this page at a device
+whose contents matter until it has been run once on a scratch device.**
+
+---
+
+## 🚧 On-demand device location · hub 1.100.0 · `location.py` / `location_web.py`
+
+Phase B of #23. An operator asks a device where it is; the device answers, tells the person
+holding it who asked, and the hub files the answer. **Built and tested end to end in software;
+not yet exercised on hardware.**
+
+**On demand only, and that is the design rather than a first step.** Nothing polls. The only
+history that exists is a history of when somebody asked, which is a different and much smaller
+thing than a travel history.
+
+### The capability is the whole feature
+
+`locate_device` is its own capability, and **not** a reuse of `ISSUE_COMMANDS`. That breaks the
+house precedent deliberately: wake, the Processes card and the file explorer all reuse it, each
+on the argument that the action is less dangerous than the SYSTEM shell that gate already
+grants. The argument holds because all three act on a **machine**. This one acts on a **person**
+— "may reboot a PC" must not silently mean "may find out where an employee is", and folding it
+in would have handed location, on the day it shipped, to the whole helpdesk.
+
+**A capability is only real if there is no other door**, and there were two:
+
+- `POST /api/fleet/commands`, gated on `ISSUE_COMMANDS`, now refuses `locate_device`. It is the
+  only entry in that refusal list justified by a *capability* rather than by params that would
+  be stale on replay.
+- A saved **favorite** is replayed through that same endpoint, so `locate_device` is
+  unfavoritable for the same reason.
+
+Both refusals are invisible from outside — a hub with either hole behaves identically until
+somebody notices a technician has been locating phones — so both are asserted in
+`tests/test_location_web.py`.
+
+### Decisions
+
+- **Three outcomes, kept apart**: `located`, `unavailable` (the device answered and had no fix,
+  with the reason it gave) and `no_answer` (the command failed or expired). They send an
+  operator to three different places, and collapsing any pair is the tidy-looking change that
+  costs an afternoon. "No fix" is a **success** at the agent, on the same reasoning as
+  `ShowMessageExecutor`'s `no_session`: a failure is indistinguishable from a network problem.
+- **No request lifecycle of its own**, unlike `wake.py`. A wake needs one because delivery is a
+  relay through a third machine and success is confirmed by the target's later check-in; a
+  locate is one command to one device with one answer, so the command queue already models
+  every state it has. The retention tick sweeps locates that expired unanswered, because this
+  is a feature with no scheduler of its own.
+- **`stale` is carried end to end** and the console must show it. A last-known position two
+  hours old rendered as current is somebody driving to where a phone used to be.
+- **The disclosure fires before the fix is taken, and whether or not one is found.** A
+  notification only on success would make a failed locate the quiet way to check whether
+  somebody's phone is switched on.
+- **Retention is a privacy control**, not a disk-space one: the table is tiny and would never
+  need pruning for size. `data.location_retention_days` defaults to 30 and is meant to be turned
+  down. `forget_machine` erases a device's history immediately — unlike patch outcomes and
+  backup manifests, which survive deletion because they are facts about an update or an archive.
+
+### Rejected alternatives
+
+- **`FusedLocationProviderClient`.** Better indoors, and the first Google dependency in a repo
+  that vendors nothing from Google: a large transitive binding graph plus a hard requirement
+  that Play Services is present and current, which fails on de-Googled builds and on exactly the
+  cheap tablets a fleet buys by the dozen.
+- **`ACCESS_BACKGROUND_LOCATION`.** Still out of scope. The agent reaches location with the
+  screen off by promoting its foreground service to include the `location` type for the length
+  of one request and demoting immediately after — a narrower thing to hold than a standing grant
+  to follow a device, and one the system shows an indicator for.
+- **Taking the first fix that arrives.** That is always the network one: about a second, with a
+  radius of several hundred metres, while GPS takes tens of seconds and lands inside ten. For
+  "find this device" a kilometre-wide circle is often not an answer, so both providers are asked
+  and the most accurate within the budget wins.
+- **Letting the hub name the provider.** The device is the only thing that knows what it has.
+  The command's only param is a time budget; the answer carries the provider and accuracy.
+
+`SECURITY.MD` gained a **personal-data inventory** in this phase — what is collected, from whom,
+why, where, for how long and who can see it — plus the explicit note that FleetHub cannot supply
+workforce notice on a deploying organisation's behalf.
+
+### Not done
+
+No console UI yet: that is phase C (a fold on the machine page and a fleet map over
+`GET /api/location/fleet`). Today this is an API, a capability and storage, with 56 model tests
+and 41 route tests. **Nothing here has been run against a real device**, so the parts that can
+only fail on hardware are untested: whether the foreground-service promotion is accepted, what
+the OEM's location settings actually report, and how long a cold fix really takes on the pilot
+phone.
+
+---
+
+## 🚧 The device map · hub 1.101.0 · `map.html`, `location-map.js`
+
+Phase C of #23, and the first phase an operator can see. Two views over the data phase B
+already stores: a **Location fold** on the machine page (last known fix, a Locate button, and
+the history of who asked) and a **fleet map** at `/map` showing every device in scope that has a
+known position.
+
+**A last-known-position map, and the page says so.** Nothing is live. Each point is where a
+device was the last time somebody asked, which for most devices is never. A map that looked
+live would be read as live, so the age of every fix is on screen, stale fixes are drawn in a
+different colour, and the page's own intro line says no device is tracked.
+
+**The map never claims more precision than the fix had.** The accuracy radius is drawn as a
+real circle in metres beside the point — a fix that might be a kilometre wide looks a kilometre
+wide — and a radius the device did not state is not drawn at all rather than assumed. The
+coordinates are always shown in full, because they are what somebody pastes into their phone
+before walking out of the door.
+
+**The fold is hidden, not disabled, on a device that cannot locate.** Every Windows PC reports
+no `locate` feature, and F.1's asymmetry makes that a "no" rather than an "unknown" — so the
+card is absent rather than permanently dead on several hundred machine pages.
+
+### Decisions
+
+- **`L.circleMarker`, and therefore no `vendor/images/`.** Leaflet's default marker pulls three
+  PNGs through a path-guessing heuristic in its CSS. Circle markers need none of that and are
+  the better fit anyway: the accuracy circle is the honest thing to show, and a pin cannot
+  express it. `static/vendor/README.md` records the absence so a 404 is never mistaken for a
+  missing file.
+- **Tiles are the one deliberate exception to the isolated-LAN claim.** They are content rather
+  than code, requested only by an operator's browser and only on a page showing a map, and
+  `map.tile_url` exists so an air-gapped site can point at its own server. Blank it and the map
+  draws points on a hatched empty ground and says so — a supported configuration, not a broken
+  one.
+- **The tile config is served with the fixes, not from `/api/settings`.** That is a gate
+  decision: settings needs `manage_settings`, a map needs `view`, and an operator who may see
+  where a device is must be able to see it on something.
+- **`invalidateSize()` on the fold's `toggle`, deferred a frame.** Leaflet measures its
+  container once, at construction: one built inside a closed `<details>` is zero pixels tall
+  forever. The deferral is not superstition — `toggle` fires while the browser is still laying
+  the newly-open content out, so a synchronous measure reads the size it had a frame ago, which
+  is exactly the zero this call exists to correct. The same defect `machine.js` already handles
+  for Chart.js.
+
+### Rejected alternatives
+
+- **Drawing it ourselves.** A static image with dots positioned by an equirectangular
+  approximation works until somebody needs to zoom, and then it is a mapping library with none
+  of the corner cases handled.
+- **`qrious`-style convenience libraries for the map** — specifically **`qrious`'s neighbour
+  `leaflet-providers`** and any other add-on. One vendored file is a dependency; a stack of them
+  is a build step waiting to be asked for.
+- **A live-refreshing map.** There is nothing to refresh: a position only changes when somebody
+  asks for one. A refresh loop would either show the same fix forever or imply the console was
+  watching.
+
+---
+
+## 🚧 App inventory · hub 1.102.0 · `apps.py` / `apps_web.py`
+
+Phase D.1 and D.2 of #23: the change-only inventory pipeline the Android agent has never had,
+and the first thing carried on it — what is installed on the device.
+
+**The inventory is what makes an app policy writable by a human.** Blocking an app means naming
+a package, and nobody knows package names. Without a list to pick from, the policy editor of
+D.3 would be a text box that punishes a typo with silence: a package that is not on the device
+is simply not suspended, and nothing anywhere says so.
+
+### D.1 — the pipeline
+
+Ported from the Windows agent's five `*Reporter` classes, but written **once** rather than
+copied, because it is a pattern with three separate ways to be quietly wrong:
+
+- **A block is not "sent" until a heartbeat has actually succeeded.** This is one step stricter
+  than the Windows original, deliberately. There, `TakeIfChanged` records the hash as it hands
+  the payload over — so a heartbeat that fails a second later leaves the agent convinced the hub
+  has it, and because the next scan finds the same content the block is never re-sent until it
+  changes again. One network blip costs a report, and the symptom is a stale inventory with
+  nothing anywhere saying so. Here the payload stays pending until the heartbeat returns 2xx.
+- **The payload is an OBJECT wrapping the list, and "became empty" is a change like any other.**
+  A device that has had everything uninstalled has to be able to say so, and any truthiness
+  check between the agent and the table makes that the one report that can never arrive. The
+  hub tests the key with `is not None`. That is `PatchInventoryReporter`'s lesson, inherited
+  rather than re-learned.
+- **Reading happens on its own loop.** Enumerating every package walks the whole device, and the
+  hub's offline window is 90 seconds — a multi-second read in front of the heartbeat would
+  flicker a healthy device offline for the crime of having a lot of apps. `AgentLoops` gains a
+  fourth loop; each source states its own refresh interval and the loop only asks who is due.
+
+### D.2 — the inventory
+
+`AppInventoryReader` reports every package including system ones, with a `system` flag, plus
+`enabled` and `suspended` **read back from the framework**. The last two are the point:
+`setPackagesSuspended` returns the packages it could NOT suspend, and a policy reported as
+applied while three of its targets are still running is worse than no policy. The console will
+compare intent against this table, so this table is never written from intent.
+
+**`QUERY_ALL_PACKAGES` is still not requested**, and the manifest's note saying so is rewritten
+rather than deleted: the console does ask this question now, but a device owner is exempt from
+Android 11's package-visibility restriction. Requesting it would buy an inventory on *unmanaged*
+devices at the cost of a broad, Play-policy-flagged permission on every device — and the
+unmanaged case is exactly the one where a partial list is the honest answer.
+
+### Rejected alternatives
+
+- **User-installed apps only.** Shorter and much less useful: the apps a helpdesk is asked to
+  restrict most often — the browser, the store, the camera — ship with the device. The console
+  hides system apps by default instead, with a checkbox, which is a display decision rather than
+  a collection one.
+- **Storing what a policy asked for and calling it the state.** That is the failure the whole
+  `suspended`/`enabled` pair exists to prevent.
+- **Believing a malformed report.** The app set is replaced on every report so an uninstalled
+  app disappears, which means a payload whose `apps` is not a list would empty a good inventory
+  in one heartbeat. An empty LIST is honoured; an absent or non-list one is ignored. Exactly
+  `wake.record_network`'s reasoning, which had the same shape and the same hazard.
+
+### Not done
+
+Blocking is the next phase (D.3/D.4): a policy model, a `device_policy` heartbeat block, the
+agent-side never-suspend list and the dead-man switch. Nothing here has been run against a real
+device — see the hardware-validation table below.
+
+---
+
+## 🚧 App policy · hub 1.103.0 · `policy.py` / `policy_web.py`
+
+Phase D.3 and D.4 of #23: deciding which apps a managed device may run, and making a device
+actually do it. **The first thing in this product that can make a device less useful to the
+person holding it**, which is what shapes every decision below.
+
+**Its own pair rather than more of `apps.py`, and that split is the important one.** `apps.py`
+holds what the DEVICE says is installed — reported, replaced wholesale, never written by an
+operator. `policy.py` holds what an OPERATOR says is allowed. Keeping them apart is what makes
+compliance answerable: the console compares one against the other, and a module owning both
+would be one edit away from writing the device's own report from the policy meant to change it.
+
+**Resolved to a flat list per device; the device is never given a rule engine.** Precedence,
+overlap and mode all happen in the hub where they can be previewed. Blocklists union;
+allowlists **intersect**, because each says "only these" and a union would let a second one
+quietly widen the first.
+
+### The four things that keep a phone usable
+
+- **The never-suspend set**, enforced by the agent independently of the hub. The launcher, the
+  settings app, the dialer, the emergency app, the system UI, the package installer — and the
+  agent itself, which is the one failure with no route back, because the channel that would
+  carry "stop" is the thing that got suspended. The hub holds a copy so the console never
+  offers a policy it knows will be partly refused, but that copy is *advice* and the agent's is
+  *enforcement*: a hub that is compromised, misconfigured or simply newer cannot brick a device.
+- **The dead-man switch.** A device that stops hearing from its hub lifts everything after
+  `policy.max_age_seconds` (7 days), on its own. Deliberately one-way: the hub can make a device
+  more restricted only while it can reach it. Measured from the last *confirmation* rather than
+  first receipt — anchoring on receipt would expire a policy the hub has been re-affirming every
+  ten seconds for a week. Persisted, so a process kill resumes the clock instead of restarting
+  it, which would otherwise mean a device whose hub went silent a month ago enforcing forever,
+  one kill at a time.
+- **An empty document is sent, never silence.** "No policy applies" resolves to `blocked: []`.
+  Sending nothing would leave a device enforcing what it had, with the console showing no policy
+  and nothing to explain the app that will not open. That is the release valve for the whole
+  feature, and it is asserted through the real endpoint in both directions.
+- **An allowlist with no inventory yields nothing, not everything.** Backwards, that suspends
+  every app on a device the hub has not finished learning about — which is exactly the
+  freshly-enrolled one.
+
+### Other decisions
+
+- **`setPackagesSuspended`, not `setApplicationHidden`.** Suspension leaves the icon in place,
+  greyed, with the system's own "paused by your organisation". Hiding makes an app vanish, which
+  reads as uninstalled and ends in a ticket or a factory reset. Hiding stays available for a
+  future kiosk mode; it is not the default.
+- **The refused list is plumbed all the way back.** `setPackagesSuspended` returns what it could
+  not suspend, and a policy reported as applied while three targets are still running is a
+  compliance answer that is confidently wrong. Compliance is therefore three views — intent, the
+  device's claim, and its own inventory — because the interesting failures are where they
+  disagree.
+- **Saving is gated on previewing**, and any edit invalidates the preview. Friction on purpose.
+  The preview answers per device rather than as a fleet total: "14 apps" reads as small, "14 apps
+  on this phone, including the camera" does not.
+- **`MANAGE_DEVICE_POLICY` is a new capability**, on the argument `MANAGE_RULES` already makes:
+  a policy is not a setting but a standing instruction applied with nobody present.
+- **The agent un-suspends only what IT suspended.** A device may have been suspended by another
+  DPC in its past or by a vendor tool; lifting those would be this agent quietly taking
+  ownership of decisions nobody asked it to make.
+
+### Also in this phase
+
+`AndroidResourceXmlTests` — every XML file in the Android project is parsed by the Core test
+run. XML forbids `--` inside a comment and this repo's house style puts double hyphens in prose
+by reflex; that single mistake had cost **six** Android builds by the time it was written, each
+one ninety seconds to discover a typo, reported as an MSBuild stack trace naming a generated
+copy. The same check now runs in 200 ms with no SDK, no workload and no device.
+
+### Not done
+
+`setApplicationHidden` as an explicit kiosk mode. Nothing here has been run against a real
+device.
+
+---
+
+## 🚧 Time restrictions · hub 1.104.0 · `usage.py` / `usage_web.py` + `policy.py`
+
+Phase E of #23: blocked hours and daily screen-time budgets, riding the same `device_policy`
+channel phase D built.
+
+**The rules travel; the device decides.** A curfew depends on what time it is where the device
+is, and a budget on how much the device has been used today. The hub has neither fact promptly,
+so it resolves the *rules* into the document and the agent evaluates them every minute, whether
+or not anything is reachable. A phone at 22:00 on a train with no signal still has a bedtime.
+Resolving curfews hub-side would have been simpler and would have produced a fleet that enforces
+its bedtime only while online, which is the opposite of what a curfew is for.
+
+**The document version had to cover the schedule.** Editing a curfew changes nothing about the
+blocked list, so a version hashed over `blocked` alone would leave every device holding the old
+schedule until something unrelated changed — with the console showing the new curfew and the
+device enforcing the old one. There is no error anywhere in that failure, which is why it is
+asserted through the real endpoint.
+
+**Windows and budgets both apply, and nothing is reconciled.** "No TikTok after 22:00" and
+"sixty minutes a day" both hold; whichever bites first is the answer. Combining them would mean
+inventing a precedence nobody asked for. The single exception is a duplicate budget on the same
+package, where a union has no meaning: the smaller number wins.
+
+**A week starts on Monday, as an index, on the wire.** A locale-dependent first day would put a
+Sunday curfew on a Saturday for half a fleet, silently. The wrapped window — an end before its
+start — is the ordinary bedtime rule rather than an error, and its morning half belongs to the
+day *after* the one it names; getting that wrong lifts a curfew at midnight, which is exactly
+when it matters and when nobody is watching.
+
+**Clock tampering is answered with the Device Owner, not with cleverness.** The agent enforces
+automatic time (`setAutoTimeEnabled`), so trusting the device's local clock is defensible rather
+than naive. Where that cannot be applied the log says so in as many words: the schedule still
+holds, against a clock the user can move.
+
+### Usage, which is the part that needed care
+
+Screen-time budgets have to be checked against something, and that something is a record of what
+a person did with their evening. It is inventoried in `SECURITY.MD` alongside location, with the
+same treatment: `view` **plus** machine scope to read, `data.usage_retention_days` (14 days, and
+meant to come down) to keep, and **no fleet-wide endpoint at all** — the app inventory has one
+because a policy author must pick a package from somewhere, and the question a fleet-wide usage
+view would answer is "who spends the most time on their phone".
+
+Pruning compares the **device's own local day**, not a hub timestamp: a device in a timezone
+ahead of the hub would otherwise have its current day pruned out from under it. Reports **merge**
+by day rather than replacing the machine's rows — the opposite of the app inventory, and the
+mistake a copy of that neighbour would make, because a device reports only today and a replace
+would erase a week's history the moment a phone came back from a drawer.
+
+**`PACKAGE_USAGE_STATS` is an appop, and a Device Owner cannot grant it.** That was the phase's
+one real surprise. `setPermissionGrantState` covers dangerous runtime permissions; usage access
+is a special-access screen somebody has to open by hand, once, per device. Assuming otherwise
+would have shipped a fleet where every budget silently never fired — "nothing was used" and "I
+was not allowed to look" are the same zero. So the agent detects the state, reports it as a
+`usage_access` capability, shows it on the device's own setup screen with a button that opens
+the right settings page, and the console says which devices need somebody to walk over. Blocked
+hours are unaffected: they need a clock, not a ledger.
+
+### Not done
+
+No console chart for usage — a table of days and a table of apps, because the question an
+operator arrives with is "how long", not "what shape". Nothing here has been run against a real
+device.
+
+---
+
+## 🚧 Remote lock and remote wipe · hub 1.105.0 · `wipe.py` / `wipe_web.py`
+
+Phase H of #23, and the only action in this product with no undo.
+
+**Two commands, deliberately unequal, and the friction is all on one of them.** `lock_device`
+locks the screen and is undone by the person holding the device with their own PIN; it is one
+click, because the case it exists for is a phone left in a taxi and seconds matter.
+`wipe_device` is a factory reset, so it sits behind a second button, a typed machine name and a
+confirmation dialog. Spreading the friction over both would teach people to type past it, which
+is worse than having none on the lock.
+
+**The typed-name confirmation is on the SERVER**, in `wipe.confirm_wipe`. A confirmation that
+lives only in the console stops an operator and does not stop a script, a copied curl command,
+or a second console written later -- and this is the one endpoint where those must not be a way
+around the pause. The comparison is exact and case-sensitive: `PHONE-1` and `phone-12` are two
+devices, and the whole value of the step is that it cannot be passed by somebody who is not
+looking at the name in front of them.
+
+**One capability for both, and it is not `issue_commands`.** The argument that keeps wake, the
+processes card and the file explorer under that gate -- each is less dangerous than the SYSTEM
+shell it already grants -- is true of a reboot and false of an erase. Lock and wipe share
+`wipe_device` because anybody trusted with the second is trusted with the first, and a
+`lock_device` capability nobody would ever grant alone is a row in the permissions UI that only
+adds noise.
+
+**Four doors, three of them closed.** `wipe_web.py` is the only way in. `/api/fleet/commands`
+refuses both types by name (its gate is `issue_commands`, which the whole helpdesk has),
+`_validate_favorite` refuses to save one, and `RULE_FORBIDDEN_COMMANDS` refuses to let a rule
+issue one -- the worst of the three, because a rule fires with nobody present. Closing the rules
+door also closed the same hole for `locate_device`, which phase B had left open: a rule could
+have located a device without the capability that exists to keep that apart from a reboot
+button.
+
+**The audit row is written before the command exists.** A wipe that is issued and then fails to
+be recorded is the one ordering that cannot be reconstructed afterwards: the device is gone and
+the trail never mentions it. Recording an intent that then failed to queue is the harmless
+direction of the same mistake, and it is visible -- the row has no command id.
+
+**The agent answers BEFORE it erases itself.** `wipeData` does not return, so an executor that
+called it inline would leave a command claimed and unanswered forever, beside a machine that
+stopped reporting -- indistinguishable from a flat battery. The executor answers "the wipe has
+started", the command loop posts that result, and the erase fires ten seconds later. Nothing
+depends on the device surviving the delay.
+
+**A request table of its own**, which location.py deliberately does not have. The reason is
+peculiar to this feature: the answer never comes back. A wiped device does not heartbeat again
+and does not exist to be asked, so its command row would sit at "sent" forever. The request row
+is the only thing that can say "wiped on the 9th, by X" about a device that will never speak
+again.
+
+**`reset_protection` is per device, not a hub setting.** Leaving Android's factory-reset
+protection on means the wiped device cannot be set up again without the account that was on it:
+theft protection when the device was stolen, a self-inflicted brick when it was a company
+handset with an ex-employee's account. Clearing it is the right default for company-owned
+hardware and the wrong one for a stolen personal device, so the answer rides the command and the
+console says in words which one it is sending.
+
+### Not done
+
+`resetPasswordWithToken` -- a one-time unlock code for a device whose holder is standing at a
+helpdesk. The policy is declared in `device_admin.xml` and nothing uses it yet. Nothing in this
+phase has been run against a real device, and a wipe must be tested only on a scratch one.
+
+---
+
+## ✅ Console gating · hub 1.106.0 · `machine-capabilities.js`
+
+Phase F.2 of #23, and the half of F.1 that had nothing to hide until D, E and H existed.
+
+F.1 made the hub stop *queueing* work a device cannot do. This makes the console stop *offering*
+it. The Terminal, Backup, Firmware, Network and Files links and the Processes card had always
+been drawn for every machine, because until capability reporting there was nothing to draw them
+from: an agent's VERSION can say "too old for this yet", which is a sentence about time, and
+cannot say "this device will never have a shell", which is a fact about the platform. On a phone
+all six were the second kind, and clicking one produced a correct and useless refusal from the
+agent's own dispatcher.
+
+**Two questions, and the difference between them is the whole module.** `can(type)` asks whether
+a machine may still be offered something the console has always offered -- silence means YES,
+because every Windows agent in the field reports nothing and hiding Restart from all of them
+would be a regression dressed as a feature. `claims(type)` asks whether a machine has explicitly
+said it can do something NEW -- silence means NO, because a Wipe button on every Windows PC
+because none of them has said otherwise is not a default anybody wants. The rule of thumb is
+written down where the next person will need it: `can` for an action that predates capability
+reporting, `claims` for one that does not.
+
+**It is a courtesy, never a control.** Every route re-decides, and `create_command` refuses a
+disclaimed command type whatever the console drew.
+
+**And it says so rather than just shortening the row.** A toolbar with three buttons where the
+last machine had six reads as a page that failed to load; one sentence naming the platform turns
+it into a fact about the device.
+
+`tests/test_machine_gating.py` pins the joins, because all three ways this can break are silent:
+a `data-needs-command` naming a command type that does not exist hides nothing forever; a module
+whose script tag comes before the shared report's finds no global and leaves its card absent,
+which on a Windows PC looks exactly like correct behaviour; and swapping `can` for `claims` is
+one word that either hides the Terminal button fleet-wide or shows a Wipe button fleet-wide.
+
+---
+
+## 📋 Hardware validation still owed (roadmap #23)
+
+**Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
+tested in software on the understanding that one hardware pass covers all of it at the end.
+This is that list, so nothing is quietly skipped:
+
+| Phase | What has to be seen on a device |
+|---|---|
+| **F.1** | The phone's heartbeat carries a `capabilities` block; the machine page shows `platform: android`; a fleet-wide `backup_files` is **not** queued at it |
+| **F.2** | On the phone's page the Terminal, Backup, Firmware, Network and Files links and the Processes card are gone, with the sentence saying why. On a Windows PC every one of them is still there |
+| **A** | *Only on a scratch device.* Factory reset, provision by QR, confirm `isDeviceOwnerApp()`, and that the agent survives a force-stop attempt. **The pilot phone carries personal data and must not be used** |
+| **B** | Locate returns a fix inside 60 s; the notification naming the operator appears on the phone; an `audit_log` row records it; the foreground-service promotion is accepted (API 34 throws if it is not); a locate with location switched off comes back `unavailable` with a readable reason, not a failure |
+| **C** | The fold's map renders at full height after being opened from closed (the `invalidateSize` trap); the accuracy circle is drawn; the fleet map plots and frames more than one device |
+| **D** | The Installed apps fold populates; the count is plausible for the device (150-400); `system` is set on the right ones; the list survives an app being installed and uninstalled; **on an unmanaged device** the list is short, which is the expected answer without `QUERY_ALL_PACKAGES` and not a bug |
+| **D policy** | Apply a blocklist to one test app and confirm the system's "paused by your organisation" dialog; confirm the console shows it as enforced from the device's OWN inventory; confirm a package that cannot be suspended comes back in `failed`; **delete the policy and confirm the app comes back** (the empty-document release valve); confirm the dead-man switch by setting a short `policy.max_age_seconds` and taking the device off the network |
+| **H** | `lock_device` on the pilot: the screen locks and the console shows the row. Confirm the card is absent on a Windows PC, that a helpdesk account with `issue_commands` sees no buttons, and that a wrong typed name is refused by the API and not only by the page. **Wipe on a scratch device only**, and check both `reset_protection` answers: cleared means it can be set up again, kept means it asks for the previous account |
+| **#22 self-update** | Cut a `0.2.0` of each agent and confirm each machine takes ITS OWN build: the Linux box updates from the Linux manifest, the phone from the Android one, and neither is ever offered the Windows exe. On the phone confirm the install is silent and the agent comes back on its own (ACTION_MY_PACKAGE_REPLACED) rather than sitting stopped. Confirm a device that is NOT a device owner declines rather than raising the system installer. Confirm the dashboard's outdated count is right per platform. Then break one on purpose: serve a manifest signed with the wrong key and confirm both agents refuse it |
+| **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
+
+**A is no longer blocked** — the pilot Galaxy A15 has been factory reset, so it can be
+provisioned by QR and used for the whole table. The remaining blocker is the phone re-authorising
+USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 
 ---
 

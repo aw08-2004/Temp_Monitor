@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The policies FleetDeviceAdminReceiver declares. Referenced from that class as
+  android:resource="@xml/device_admin"; without this file the component is not an admin at all
+  and provisioning fails on a device that has already been factory reset.
+
+  **The full set the roadmap commits to is declared now, before any of it is used, and that is
+  deliberate.** A device owner is granted at provisioning time and cannot be re-prompted: there
+  is no "an app wants a new permission" dialog for it, and no supported way to hand ownership
+  to a different component. The safe reading of that is that a policy discovered to be missing
+  later may cost a factory reset to add, and this fleet's devices are wiped by hand, one at a
+  time, by somebody standing in front of them. Declaring four lines now against that risk is
+  the cheapest insurance in the project.
+
+  Each one is inert until its phase lands. Declaring a policy grants nothing on its own. It
+  states what this admin may ask for, and every ask still goes through DeviceOwner, which
+  refuses on a device that is not fully managed.
+
+  (No double hyphens anywhere in this file's comments: XML forbids them inside a comment, and
+  this repo's house style puts them there by reflex. That has now cost four builds.)
+
+  Deliberately NOT declared, so that adding one is a decision somebody makes on purpose:
+  disable-camera, disable-keyguard-features, encrypted-storage, expire-password and
+  watch-login. Each changes how the device behaves for the person holding it rather than
+  answering a question the console asks, and a fleet agent should hold the narrowest set that
+  does its job. See DeviceOwner for the device-owner APIs left alone for the same reason.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-policies>
+
+    <!-- lockNow(), for "locate then secure": a phone reported lost is found on the map and
+         locked in the same minute. Roadmap #23 phase H. -->
+    <force-lock />
+
+    <!-- setPasswordQuality / setPasswordMinimumLength, so a lock can require a real
+         credential rather than whatever the device had. Phase H. -->
+    <limit-password />
+
+    <!-- resetPasswordWithToken, which is how a one-time unlock code reaches a device whose
+         holder is standing at a helpdesk. Phase H, and the reason lock ships before wipe. -->
+    <reset-password />
+
+    <!-- wipeData(). The one action in this product with no undo and no dry run, which is why
+         it is last in the build order, gated on its own capability, and behind a typed
+         machine-name confirmation in the console. Phase H. -->
+    <wipe-data />
+
+  </uses-policies>
+</device-admin>

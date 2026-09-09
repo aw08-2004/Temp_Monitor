@@ -35,7 +35,10 @@
     "download": "Download Client",
     "rules": "Rules",
     "tools": "Tools",
-    "sharing": "Sharing"
+    "sharing": "Sharing",
+    "provisioning": "Device provisioning",
+    "map": "Map",
+    "policy": "Device policy"
   },
   "hub_update": {
     "_note": [
@@ -110,6 +113,7 @@
         "windows_10": "Windows 10",
         "windows_server": "Windows Server",
         "linux": "Linux",
+        "android": "Android",
         "unknown": "Unknown"
       }
     },
@@ -566,6 +570,18 @@
       "manage_rules": {
         "label": "Manage rules",
         "description": "Create and edit rules: conditions over machine data, and what happens when they match. A rule that sends commands to PCs also needs Issue commands."
+      },
+      "locate_device": {
+        "label": "Locate a device",
+        "description": "Ask a device where it is, on demand. Its own capability rather than part of 'Issue commands', deliberately: being able to reboot a PC must not silently mean being able to find out where an employee is. Reading a device's last known position only needs 'View' plus the machine being in scope. Every request is recorded in the audit trail with the operator's name, and the device shows a notification naming them too."
+      },
+      "manage_device_policy": {
+        "label": "Manage device policy",
+        "description": "Write app policy for managed devices: which apps may or may not run, and on which machines. Its own capability rather than part of 'Manage settings', because a policy is not a setting -- it is a standing instruction that changes what somebody's device will do, applied without anybody present. Reading a policy, and reading how a device is complying with one, only needs 'View' plus the machine being in scope."
+      },
+      "wipe_device": {
+        "label": "Lock and wipe a device",
+        "description": "Lock a managed device's screen, and erase it. Its own capability rather than part of 'Issue commands': the argument that puts every other command under that one -- less dangerous than the SYSTEM shell it already grants -- is true of a reboot and false of a factory reset. Wiping additionally requires the machine's name to be typed out, is recorded in the audit trail before the command is sent, and cannot be saved as a favorite or issued by a rule. Seeing that a device was locked or erased only needs 'View' plus the machine being in scope."
       }
     }
   },
@@ -587,7 +603,11 @@
       "signin": "Sign-in",
       "wake": "Wake-on-LAN",
       "rules": "Rules",
-      "sharing": "Cross-hub Sharing"
+      "sharing": "Cross-hub Sharing",
+      "provisioning": "Provisioning",
+      "location": "Location",
+      "map": "Map",
+      "policy": "Policy"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -993,6 +1013,52 @@
       "sharing.peer_lifetime_days": {
         "label": "Peer link lifetime",
         "help": "How long a paired hub's credential stays valid, sliding each time it is used. This bounds the link, not a share -- a share can carry its own expiry, or none. Each peer keeps the lifetime in force when it was paired."
+      },
+      "provisioning": {
+        "leave_system_apps_enabled": {
+          "label": "Leave the device's own apps enabled",
+          "help": "On, a provisioned device keeps its camera, dialer and settings. Off makes it a single-purpose kiosk: provisioning disables every system app this agent has not explicitly enabled."
+        },
+        "max_apk_mb": {
+          "label": "Largest APK the hub will accept",
+          "help": "A bound on the upload, not a target. A .NET Android release APK is around ten megabytes."
+        }
+      },
+      "location": {
+        "default_timeout_seconds": {
+          "label": "Time a device spends looking",
+          "help": "How long a device tries for a fresh position before answering with its last known one instead. A satellite fix from cold takes tens of seconds outdoors and never arrives indoors, so this is the point at which the device stops rather than leaving somebody watching a spinner."
+        }
+      },
+      "data": {
+        "location_retention_days": {
+          "label": "Keep location history for",
+          "help": "How long recorded positions are kept before being deleted. This is a privacy control rather than a disk-space one -- the table is tiny -- so it is meant to be turned down. Deleting a machine erases its location history immediately, regardless of this."
+        },
+        "usage_retention_days": {
+          "label": "Keep app usage for",
+          "help": "How long per-app foreground time is kept before being deleted. A record of what somebody did with their evenings, so it is shorter than the location window by default and is meant to come down further. Deleting a machine erases its usage immediately, regardless of this."
+        }
+      },
+      "map": {
+        "tile_url": {
+          "label": "Map tile URL",
+          "help": "Where the console loads map imagery from, as an {z}/{x}/{y} template. This is the one thing the console fetches from a third party at page load; point it at your own tile server, or leave it blank to draw devices on an empty background with their coordinates."
+        },
+        "tile_attribution": {
+          "label": "Tile attribution",
+          "help": "The credit shown in the map's corner. It must match whatever the tile URL points at -- OpenStreetMap's tile policy requires their credit, and showing it next to somebody else's tiles would be a false statement rather than a cosmetic mistake."
+        },
+        "default_zoom": {
+          "label": "Zoom on a single device",
+          "help": "How far in the map goes when it is showing one device. 16 is about a city block: close enough to see which building, wide enough that a fix with a 200 m accuracy circle still fits."
+        }
+      },
+      "policy": {
+        "max_age_seconds": {
+          "label": "Lift restrictions after",
+          "help": "How long a device keeps enforcing its app policy after it stops hearing from this hub. Past this, the device lifts every restriction on its own. This is a release valve rather than a timeout: a phone whose hub is gone must not be a device somebody has to factory reset in order to use."
+        }
       }
     },
     "_choice": [
@@ -2244,7 +2310,24 @@
     "channel_pinned": "Channel: {value} (pinned)",
     "channel_pin": "Release channel",
     "channel_follow_fleet": "Follow the fleet default",
-    "channel_ahead": "Running {running}, ahead of stable ({stable}). It will not update again until stable passes it — moving off beta does not undo an installed update."
+    "channel_ahead": "Running {running}, ahead of stable ({stable}). It will not update again until stable passes it — moving off beta does not undo an installed update.",
+    "location": {
+      "title": "Location",
+      "disclosure": "Asking is recorded in the audit trail, and the device shows a notification naming the operator who asked."
+    },
+    "apps": {
+      "title": "Installed apps"
+    },
+    "usage": {
+      "title": "App usage"
+    },
+    "secure": {
+      "title": "Lock and wipe"
+    },
+    "tools": {
+      "hidden": "Some tools are hidden: this machine has reported that it cannot answer them.",
+      "hidden_android": "Some tools are hidden: this is an Android device, and there is no shell, no BIOS and no filesystem for them to work on."
+    }
   },
   "remote": {
     "title": "Remote",
@@ -3223,5 +3306,273 @@
       "days": "{days} days",
       "projection_note": "This is everything the owning hub sends about a borrowed machine. Its serial, asset tag and directory record stay on their side."
     }
+  },
+  "provisioning": {
+    "heading": "Android device provisioning",
+    "intro": "Scan this code at a factory-reset Android device to enrol it as a fully managed device. One scan installs the agent, hands it device ownership, points it at this hub and enrols it.",
+    "warning": "Provisioning requires a factory reset. Everything on the device is erased, and device ownership cannot be granted afterwards or moved to another app. Only scan this at a device that has already been reset and whose contents you no longer need.",
+    "qr": {
+      "heading": "Provisioning code",
+      "loading": "Building the payload...",
+      "alt": "Android provisioning QR code",
+      "copy": "Copy payload",
+      "copied": "Copied.",
+      "copy_failed": "The browser refused clipboard access.",
+      "print": "Print",
+      "secret_note": "The code carries this fleet's enrollment secret, so one scan both provisions and enrols the device. Treat a photograph of it the way you would treat the secret itself.",
+      "unreachable": "The hub did not answer.",
+      "failed": "The provisioning payload could not be built.",
+      "too_large": "The payload is too large to fit in a QR code. Shorten this hub's public address."
+    },
+    "unconfigured": {
+      "help": "Upload the signed agent APK above. The hub reads the signature checksum out of it and serves the file to devices being provisioned, so there is nothing to fill in under Settings."
+    },
+    "payload": {
+      "field": "Field",
+      "value": "Value",
+      "component": "DEVICE_ADMIN_COMPONENT_NAME"
+    },
+    "checksum": {
+      "heading": "Check the signature checksum",
+      "help": "The hub already derives this from the APK you uploaded. Paste what apksigner verify --print-certs prints here to check the two agree before you reset a device.",
+      "input_label": "SHA-256 digest (hex)",
+      "placeholder": "b39a161053ea...",
+      "convert": "Convert",
+      "failed": "That could not be converted."
+    },
+    "steps": {
+      "heading": "Provisioning a device",
+      "reset": "Factory reset the device, or start with one out of the box.",
+      "tap": "At the welcome screen, tap the same spot six times to open the QR scanner.",
+      "wifi": "Join a network when asked. This code deliberately carries no Wi-Fi credentials.",
+      "scan": "Scan the code above. The device downloads and installs the agent itself.",
+      "verify": "When setup finishes, the FleetHub Agent screen should read “Fully managed (device owner)” and the machine should appear in Inventory."
+    },
+    "apk": {
+      "heading": "Agent APK",
+      "intro": "The hub serves this file to devices being provisioned, and reads the signature checksum out of it. Upload the signed APK; nothing else has to be typed.",
+      "loading": "Checking what is hosted...",
+      "none": "No APK is hosted yet, so no provisioning code can be built.",
+      "choose": "Signed APK",
+      "choose_first": "Choose a file first.",
+      "upload": "Upload",
+      "uploading": "Uploading...",
+      "uploaded_ok": "Uploaded.",
+      "remove": "Stop hosting",
+      "remove_confirm": "Stop hosting this APK? Any code already printed will stop working.",
+      "failed": "That was refused.",
+      "file_name": "File",
+      "size": "Size",
+      "sha256": "File SHA-256",
+      "checksum": "Signature checksum",
+      "download_url": "Download URL",
+      "uploaded": "Uploaded",
+      "url_note": "The download URL carries a token and needs no sign-in, because a factory-reset device has nothing to sign in with. Uploading again or stopping hosting changes the token, which stops every code printed before it."
+    }
+  },
+  "location": {
+    "locate_now": "Locate now",
+    "locating": "Locating...",
+    "failed": "The request could not be sent.",
+    "status": {
+      "fixed": "Located {when}",
+      "last_known": "Last known position, from {when}",
+      "waiting": "Waiting for the device to answer...",
+      "never": "This device has never been located."
+    },
+    "history": {
+      "when": "Asked",
+      "outcome": "Outcome",
+      "who": "Asked by"
+    },
+    "outcome": {
+      "located": "Located",
+      "located_stale": "Last known position",
+      "unavailable": "No position available",
+      "no_answer": "The device did not answer"
+    },
+    "popup": {
+      "fixed": "Located {age}",
+      "last_known": "Last known position, {age}",
+      "accuracy": "Accurate to about {metres} m",
+      "provider": "Source: {provider}",
+      "open": "Open this device"
+    },
+    "age": {
+      "moments": "moments ago",
+      "minutes": "{count} min ago",
+      "hours": "{count} h ago",
+      "days": "{count} days ago"
+    },
+    "list": {
+      "fixed": "Located {when}",
+      "last_known": "Last known, {when}"
+    },
+    "map": {
+      "heading": "Device map",
+      "intro": "Where each device was the last time somebody asked. Nothing here is live, and no device is tracked -- a point exists because an operator requested it.",
+      "filter": "Filter devices",
+      "count": "{count} shown",
+      "none": "No device you can see has ever been located.",
+      "no_match": "No device matches that filter.",
+      "unreachable": "The hub did not answer."
+    }
+  },
+  "apps": {
+    "filter": "Filter apps",
+    "show_system": "Include system apps",
+    "count": "{shown} of {total}",
+    "reported": "Reported {when}",
+    "none": "This device reported no apps.",
+    "no_match": "No app matches that filter.",
+    "column": {
+      "name": "App",
+      "package": "Package",
+      "version": "Version",
+      "state": "State"
+    },
+    "state": {
+      "installed": "Installed",
+      "suspended": "Suspended",
+      "disabled": "Disabled"
+    },
+    "system": "system"
+  },
+  "policy": {
+    "heading": "Device policy",
+    "intro": "Which apps a managed device may run. Policies are written here and applied by each device on its next check-in.",
+    "deadman": "A device that stops hearing from this hub lifts every restriction on its own after the period set in Settings. That is deliberate: a device whose hub is unreachable must not become one somebody has to factory reset.",
+    "new": "New policy",
+    "none": "No policy has been written yet.",
+    "off": "(off)",
+    "edit": "Edit",
+    "delete": "Delete",
+    "confirm_delete": "Delete the policy “{name}”? Devices it covers will have its restrictions lifted on their next check-in.",
+    "column": {
+      "name": "Policy",
+      "mode": "Kind",
+      "packages": "Apps",
+      "targets": "Applies to"
+    },
+    "targets": {
+      "fleet": "Every device",
+      "machines": "{count} device(s)",
+      "hidden": "(+{count} you cannot see)"
+    },
+    "name": "Policy name",
+    "mode_label": "Kind",
+    "mode": {
+      "block": "Blocklist",
+      "allow": "Allowlist",
+      "block_help": "The apps chosen below are suspended. Everything else is left alone.",
+      "allow_help": "Only the apps chosen below may run. Everything else installed on the device is suspended, apart from apps that can never be suspended."
+    },
+    "enabled": "Enabled",
+    "section_targets": "Which devices",
+    "section_packages": "Which apps",
+    "fleet_wide": "Every device in the fleet",
+    "filter_machines": "Filter devices",
+    "filter_packages": "Filter apps",
+    "show_system": "Include system apps",
+    "package_count": "{chosen} chosen, {shown} shown",
+    "on_machines": "on {count}",
+    "protected": "cannot be blocked",
+    "no_packages": "No device has reported an app inventory yet, so there is nothing to choose from.",
+    "no_package_match": "No app matches that filter.",
+    "preview_button": "Preview",
+    "save": "Save",
+    "cancel": "Cancel",
+    "failed": "That could not be saved.",
+    "unreachable": "The hub did not answer.",
+    "preview": {
+      "summary": "Would affect {machines} of {total} device(s).",
+      "hidden": "{count} targeted device(s) are outside what you can see.",
+      "nothing": "No device would be affected. None of them has the chosen apps installed.",
+      "dropped": "These apps can never be suspended and were left out: {packages}",
+      "machine": "Device",
+      "would_suspend": "Would suspend"
+    },
+    "time": {
+      "heading": "Schedules",
+      "intro": "Blocked hours and daily screen-time budgets.",
+      "new": "New schedule",
+      "none": "No schedule yet.",
+      "local": "A schedule is enforced by the device itself, against the device's own clock, whether or not it can reach this hub. Managed devices are held to network time so the clock cannot be moved to escape a curfew.",
+      "windows": "Blocked hours",
+      "windows_help": "Nothing on the chosen days between these times. An end earlier than the start runs past midnight, which is what a bedtime rule needs.",
+      "add_window": "Add blocked hours",
+      "no_windows": "No blocked hours.",
+      "budgets": "Daily budgets",
+      "budgets_help": "How long an app, or the whole device, may be used each day. Spent budgets lift at the device's own midnight. Zero means not at all today.",
+      "add_budget": "Add a budget",
+      "no_budgets": "No budgets.",
+      "whole_device": "The whole device",
+      "from": "From",
+      "until": "Until",
+      "wraps": "runs past midnight",
+      "minutes": "Minutes",
+      "minutes_a_day": "minutes a day",
+      "remove_rule": "Remove",
+      "window_summary": "{days} {start}-{end}: {apps}",
+      "budget_summary": "{app}: {minutes} min a day",
+      "column": {
+        "rules": "Rules"
+      },
+      "day": {
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat",
+        "sun": "Sun"
+      }
+    }
+  },
+  "usage": {
+    "recent_total": "Recent days, by app",
+    "by_day": "Day by day",
+    "days_counted": "{count} day(s)",
+    "none": "This device has reported no app usage.",
+    "retention": "Kept for {days} days, then deleted.",
+    "no_access": "Usage access has not been granted on this device, so screen-time budgets will never fire. Blocked hours still work. Somebody holding the device can grant it in the agent app.",
+    "hours_minutes": "{hours} h {minutes} min",
+    "hours": "{hours} h",
+    "minutes": "{minutes} min",
+    "column": {
+      "app": "App",
+      "time": "Foreground time",
+      "day": "Day",
+      "total": "Total",
+      "top": "Most used"
+    }
+  },
+  "secure": {
+    "action": {
+      "lock": "Locked",
+      "wipe": "Erased"
+    },
+    "column": {
+      "action": "Action",
+      "who": "Asked by",
+      "when": "When"
+    },
+    "intro": "Locking is undone by whoever holds the device, with their own PIN. Wiping is a factory reset and cannot be undone by anybody.",
+    "lock": "Lock the screen now",
+    "lock_sent": "Lock sent. It takes effect the next time the device is reachable.",
+    "wipe_heading": "Erase this device",
+    "wipe": "Erase this device",
+    "wipe_sent": "Wipe sent. The device answers once and then stops reporting for good.",
+    "wipe_warning": "This erases everything on the device and cannot be undone. There is no dry run. The device answers once and is then gone from this console for good.",
+    "confirm_label": "Type the machine's name to confirm",
+    "confirm_dialog": "Erase {machine}? This cannot be undone.",
+    "clear_protection": "Clear factory-reset protection",
+    "clear_protection_help": "The device can be set up again by anybody. This is usually right for company-owned hardware.",
+    "keep_protection_help": "The device cannot be set up again without the account that was signed in on it. This is theft protection, and it is a brick if that account was not yours.",
+    "wiped_on": "Wiped on {when} by {who}. It will not report again.",
+    "no_history": "Nothing has been locked or erased on this device.",
+    "count": "{count} action(s)",
+    "failed": "That was refused.",
+    "unreachable": "The hub could not be reached."
   }
 }

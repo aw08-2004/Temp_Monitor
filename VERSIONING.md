@@ -1,6 +1,6 @@
 # Versioning
 
-Three version numbers ship from this repo, independently, and each one drives a real
+Five version numbers ship from this repo, independently, and each one drives a real
 updater that compares numbers and acts on the answer. This file says what the digits mean
 and what the format rules are. It is short on purpose — the rules that matter are the ones
 some piece of code already depends on.
@@ -8,8 +8,17 @@ some piece of code already depends on.
 | Line | Declared in | Compared by |
 |---|---|---|
 | **Hub** | `HUB_VERSION` in [hub/app.py](hub/app.py) | `hub_update_available()`, against `main` |
-| **Agent** | `Version` in [AgentConfig.cs](agent/src/TempMonitorAgent/AgentConfig.cs) **and** `<Version>` in [TempMonitorAgent.csproj](agent/src/TempMonitorAgent/TempMonitorAgent.csproj) | `SelfUpdater`, against the signed manifest |
+| **Agent (Windows)** | `Version` in [AgentConfig.cs](agent/src/TempMonitorAgent/AgentConfig.cs) **and** `<Version>` in [TempMonitorAgent.csproj](agent/src/TempMonitorAgent/TempMonitorAgent.csproj) | `SelfUpdater`, against the signed manifest |
+| **Agent (Linux)** | `Version` in [agent-linux/…/AgentConfig.cs](agent-linux/src/FleetHubAgent/AgentConfig.cs) **and** `<Version>` in its csproj | its own signed manifest |
+| **Agent (Android)** | `Version` in [agent-android/…/AgentConfig.cs](agent-android/src/FleetHubAgent.Core/AgentConfig.cs) **and** `<Version>` in **both** csproj files | its own signed manifest |
 | **Client** | `clientVersion` in [app/lib/version.dart](app/lib/version.dart) **and** `version:` in [app/pubspec.yaml](app/pubspec.yaml) | `updater.dart`, against the signed client manifest |
+
+**The three agent lines are not comparable with each other, and nothing may compare them.**
+All three report into the same `companion_version` field, which is a wire-compatibility
+decision rather than a claim that the numbers mean the same thing. What tells them apart is
+the `platform` a machine reports (`hub/capabilities.py`), and every place the hub reasons
+about an agent version now reads it: which manifest to advertise, whether a machine counts as
+outdated, and what "ahead of stable" means. See `channels._AGENT_MANIFEST`.
 
 ## Format
 
@@ -61,11 +70,20 @@ then the agent, which propagates in about 15 minutes.
 Everything short of that is a minor, however large it looks. The hub has been `1.x`
 through a page removal and a full i18n rewrite, and that was right both times.
 
-The agent's major digit carries a second meaning: it names the **train**. `2.x` was the
-Python companion (removed), `3.x` is the C# agent. `AGENT_TRAIN_MIN_VERSION = "3.0.0"`
+The Windows agent's major digit carries a second meaning: it names the **train**. `2.x` was
+the Python companion (removed), `3.x` is the C# agent. `AGENT_TRAIN_MIN_VERSION = "3.0.0"`
 and `get_advertised_version()` in [hub/app.py](hub/app.py) gate on it — and note that a
 `4.x` agent would still satisfy `>= 3.0.0`, so moving the agent to `4` is a decision about
 that constant and about the install channel, not just a note that something broke.
+
+**That floor is about the Windows train's history and applies to nothing else.** The Linux
+and Android agents were never preceded by a Python companion, so measuring them against
+`3.0.0` answers a question they were never asked. It used to be applied to them anyway, which
+is why both were pinned at `0.1.0`: reporting anything higher would have had the hub offer
+them the Windows agent's signed manifest, a `win-x64` executable. Since the hub reads a
+machine's reported `platform` before it reads its version, that workaround is retired and
+each agent is free to number its own line. Both still sit at `0.1.0` because neither has a
+release worth numbering yet, not because they may not move.
 
 ### MINOR — new capability, or a user-visible change in behaviour
 

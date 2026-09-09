@@ -44,6 +44,14 @@ import channels
 import firmware
 import patches
 import wake
+import apps
+import capabilities
+import policy
+import usage
+import wipe
+import location
+import apkhost
+import provisioning
 import rules
 import scripts
 import notify
@@ -68,6 +76,13 @@ from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
+from capabilities_web import create_capabilities_blueprint
+from provisioning_web import create_provisioning_blueprint
+from location_web import create_location_blueprint
+from apps_web import create_apps_blueprint
+from policy_web import create_policy_blueprint
+from usage_web import create_usage_blueprint
+from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from rules_web import create_rules_blueprint
@@ -110,7 +125,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.96.1"
+HUB_VERSION = "1.108.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -119,6 +134,15 @@ HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
 # operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. The Settings tab can
 # override this per-hub -- see hub_auto_update_enabled() and hub_update_watcher().
 HUB_AUTO_UPDATE_ENV = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in ("1", "true", "yes", "on")
+# Suppresses the outbound version reads this process makes on its own -- the agent-manifest
+# watcher that fills in `latest_agent_version`. **For the test suite, and named so that is
+# obvious**: importing app.py starts that watcher, which immediately fetches every manifest
+# from raw.githubusercontent and writes what it finds over whatever a test just seeded. That
+# is a race a test cannot win, because the write lands on a thread it did not start, and it
+# is what made a version assertion pass or fail depending on how quickly GitHub answered.
+# Set it before importing app; production never sets it, and a hub that did would simply stop
+# noticing new agent releases.
+HUB_SKIP_REMOTE_CHECKS = os.environ.get("HUB_SKIP_REMOTE_CHECKS", "").strip() == "1"
 
 # Absolute, and overridable via HUB_LOG_DIR, so the database location never depends on
 # the process's current working directory. A relative "logs" is re-resolved by sqlite on
@@ -907,14 +931,19 @@ def derive_machine_status(updated_at):
 #: The buckets a fleet is counted in. Deliberately coarse: the Dashboard's question is
 #: "what are we still running", and a breakdown by build number answers a different one
 #: (that lives on the machine page, where the exact caption and build are shown as-is).
-OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "unknown")
+OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "android", "unknown")
 
 #: Substrings that put a caption in a bucket, checked in order. Server is first because a
-#: Server caption also contains "Windows".
+#: Server caption also contains "Windows"; android is before linux because an Android device
+#: IS running a Linux kernel and a caption that mentioned both would otherwise be filed with
+#: the servers. Without this entry every phone counted as `unknown` -- the agent reports
+#: "Android 16" honestly rather than smuggling "Linux" into the caption, which would have
+#: shown an operator a string the device never said (roadmap #23).
 _OS_MATCHES = (
     ("windows_server", ("windows server", "server 20")),
     ("windows_11", ("windows 11",)),
     ("windows_10", ("windows 10",)),
+    ("android", ("android",)),
     ("linux", ("linux", "ubuntu", "debian", "red hat", "rhel", "centos", "fedora",
                "suse", "alma", "rocky")),
 )
@@ -997,10 +1026,11 @@ def normalize_os(os_caption, os_build, ad_os):
 # two reads cost one HTTPS GET each per 15 minutes. See channels.agent_manifest_url -- the
 # hub reads exactly the file the agent's own updater would install from, so /api/report can
 # never advertise a version that agent would then decline.
-AGENT_MANIFEST_URLS = {c: channels.agent_manifest_url(c) for c in channels.CHANNELS}
+AGENT_MANIFEST_URLS = {(p, c): channels.agent_manifest_url(c, p)
+                       for p in channels.AGENT_PLATFORMS for c in channels.CHANNELS}
 # Kept as a name because the old constant is referenced in comments and tests as the stable
 # manifest; it is now simply the stable channel's entry.
-AGENT_MANIFEST_URL = AGENT_MANIFEST_URLS[channels.STABLE]
+AGENT_MANIFEST_URL = AGENT_MANIFEST_URLS[(capabilities.PLATFORM_WINDOWS, channels.STABLE)]
 # The hub reads its own latest version straight out of app.py on the ref its channel tracks --
 # same source-of-truth and raw-GitHub trust as the client version hints above. Used by the
 # sidebar update notice always, and by the opt-in self-updater when it is enabled. Resolved
@@ -1017,11 +1047,14 @@ AGENT_TRAIN_MIN_VERSION = "3.0.0"
 # train -- nothing is served from it, since companion.py no longer exists on main.
 COMPANION_FINAL_VERSION = "2.10.1"
 
-#: Latest version per channel, filled in by the watcher. A dict rather than a scalar since
-#: roadmap #21 -- a hub with a pilot ring has to answer for both trains at once. None for a
-#: channel means "never successfully read", which is not the same as "nothing published" and
-#: is why callers omit the hint rather than guessing.
-latest_agent_version = {c: None for c in channels.CHANNELS}
+#: Latest version per (platform, channel), filled in by the watcher. A dict rather than a
+#: scalar since roadmap #21 -- a hub with a pilot ring has to answer for both trains at once
+#: -- and keyed by platform as well since #22, because a Linux box and a Windows PC are on
+#: different trains whose numbers are not comparable. None for a key means "never
+#: successfully read", which is not the same as "nothing published" and is why callers omit
+#: the hint rather than guessing.
+latest_agent_version = {(p, c): None
+                        for p in channels.AGENT_PLATFORMS for c in channels.CHANNELS}
 latest_version_lock = threading.Lock()
 
 def agent_channel_for(machine=None):
@@ -1068,15 +1101,20 @@ def cmp_versions(a, b):
     tb += (0,) * (n - len(tb))
     return (ta > tb) - (ta < tb)
 
-def get_latest_agent_version(channel=None):
-    """The newest agent published on `channel`, or None if it has never been read.
+def get_latest_agent_version(channel=None, platform=None):
+    """The newest agent published on `channel` for `platform`, or None if never read.
 
     Defaults to stable rather than to the fleet setting: callers that care about a specific
     machine pass its channel, and a caller with nothing in hand is asking the general
     question, which stable is the honest answer to.
+
+    Platform defaults to Windows for the same shape of reason -- see
+    channels.normalize_platform. A caller with no machine in hand is asking about the fleet,
+    and the fleet is Windows.
     """
     with latest_version_lock:
-        return latest_agent_version.get(channels.normalize(channel))
+        return latest_agent_version.get(
+            (channels.normalize_platform(platform), channels.normalize(channel)))
 
 def get_advertised_version(reported_version, machine=None):
     """The version to echo back to a client currently running `reported_version`.
@@ -1094,11 +1132,23 @@ def get_advertised_version(reported_version, machine=None):
     have it check, find something newer than we said, and install it anyway, which is merely
     confusing rather than wrong.
 
-    Returns None when there is nothing useful to say -- a pre-agent client, or a
-    manifest we haven't read yet -- in which case /api/report omits latest_version
-    entirely and the client falls back to its own poll."""
+    **The train floor applies to the Windows train and to nothing else** (roadmap #22). Its
+    job is telling a 3.x agent from the 2.x Python companion that preceded it, and that is a
+    question about one platform's history. A Linux or Android agent is on neither train, so
+    measuring it against 3.0.0 answers a question it was never asked -- and for a long time
+    the answer was "pretend to be ancient", which is why both of those agents were pinned at
+    0.1.0 and could not have version numbers of their own. A machine that has REPORTED a
+    non-Windows platform is now compared against its own manifest, whatever it reports.
+
+    Returns None when there is nothing useful to say -- a pre-agent client, a platform with
+    nothing published, or a manifest we haven't read yet -- in which case /api/report omits
+    latest_version entirely and the client falls back to its own poll."""
+    platform = capabilities.platform_of(DB_PATH, machine) if machine else ""
+    if platform and platform != capabilities.PLATFORM_WINDOWS:
+        return get_latest_agent_version(agent_channel_for(machine), platform)
     if reported_version and cmp_versions(reported_version, AGENT_TRAIN_MIN_VERSION) >= 0:
-        return get_latest_agent_version(agent_channel_for(machine))
+        return get_latest_agent_version(agent_channel_for(machine),
+                                        capabilities.PLATFORM_WINDOWS)
     return None
 
 def refresh_latest_agent_version():
@@ -1110,8 +1160,11 @@ def refresh_latest_agent_version():
     A channel whose manifest is missing is left as None rather than falling back to the
     other one: a beta manifest that has never been published means "no beta build exists",
     and answering with the stable version would tell a pilot machine it was up to date on a
-    train that has nothing on it."""
-    for channel, url in AGENT_MANIFEST_URLS.items():
+    train that has nothing on it. The same reasoning now covers a whole PLATFORM -- an
+    unpublished Linux train reads as nothing to advertise, not as the Windows version."""
+    if HUB_SKIP_REMOTE_CHECKS:
+        return
+    for (platform, channel), url in AGENT_MANIFEST_URLS.items():
         try:
             resp = requests.get(url, timeout=10)
             # A channel with no manifest is a normal, permanent state -- most fleets never
@@ -1124,9 +1177,9 @@ def refresh_latest_agent_version():
             version = (resp.json() or {}).get("version")
             if version:
                 with latest_version_lock:
-                    latest_agent_version[channel] = str(version)
+                    latest_agent_version[(platform, channel)] = str(version)
         except Exception as e:
-            print(f"[agent-version] Could not refresh the {channel} version: {e}")
+            print(f"[agent-version] Could not refresh the {platform} {channel} version: {e}")
 
 def agent_version_watcher():
     while True:
@@ -1944,6 +1997,17 @@ CSRF_UPLOAD_ENDPOINTS = frozenset({
     # above. See files_web.upload_file_to_spool -- that endpoint's inertness is the whole
     # reason this line is safe, and anything machine-facing added to it would undo this.
     "files.upload_file_to_spool",
+    # The provisioning APK, and it is the one entry here that is NOT inert -- said plainly
+    # rather than left to be inferred from the company it keeps. A successful cross-site
+    # multipart POST changes what the next device to be provisioned installs as its device
+    # owner. What makes it acceptable is the size of what an attacker would need: a logged-in
+    # operator holding `manage_settings`, the widest capability in this hub, AND a validly
+    # signed APK whose signing block this hub can parse -- an unsigned or v1-only file is
+    # refused before anything is stored. What makes it recoverable is that the result is
+    # visible: the provisioning page shows the hosted file name, its digest and its checksum,
+    # and Remove takes it offline. The alternative was a hidden form token checked by this one
+    # endpoint, which would be a CSRF mechanism that exists nowhere else in this codebase.
+    "provisioning.upload_provisioning_apk",
 })
 
 
@@ -2043,6 +2107,16 @@ def _on_command_result(command_id, machine, success, result, output=None):
     if rules.handle_probe_result(DB_PATH, command_id, success=success, result=result,
                                  output=output) is not None:
         return None
+    # Location fixes arrive the same way again (roadmap #23). Its own try/except, unlike the
+    # two beside it: this is the endpoint EVERY agent in the fleet posts every result to, so a
+    # malformed position from one phone must not turn into a 500 that makes another machine's
+    # command look like it failed. A dropped fix costs one locate; a 500 here costs a result.
+    try:
+        if location.handle_result(DB_PATH, command_id, success=success, result=result,
+                                  output=output) is not None:
+            return None
+    except Exception as e:
+        print(f"[location] Could not record a fix for {machine}: {e}")
     return rules.handle_message_result(
         DB_PATH, command_id,
         status=fleet.STATUS_DONE if success else fleet.STATUS_FAILED,
@@ -2121,6 +2195,66 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 # confirmed against the moment its packet went out rather than against mere online-ness.
 app.register_blueprint(create_wake_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
+
+# What each machine can actually do (roadmap #23). Read-only and gated on `view` + machine
+# scope, because a machine's abilities are inventory in the same sense its disks are -- and
+# because this is what the console reads to decide which tabs to render at all, so a narrower
+# gate would leave an operator on a page it could not decide about. Nothing writes here: a
+# capability is reported by the machine on its heartbeat, and an operator override would be a
+# way to tell the hub that a phone can run a script.
+app.register_blueprint(create_capabilities_blueprint(DB_PATH, login_required, access))
+
+# The Android device-owner provisioning QR (roadmap #23 phase A). Gated on `manage_settings`
+# throughout: the payload carries the fleet's shared enrollment secret, so this endpoint is a
+# way to read AGENT_ENROLLMENT_SECRET out of the hub and belongs with the capability that can
+# already read the rest of the configuration.
+#
+# HUB_URL is passed for the same reason packages and BIOS images need it -- a provisioned
+# device gets exactly one chance to be pointed at the right hub, and a Host header is not the
+# hub's address. The enrollment secret rides along so ONE scan both provisions and enrols;
+# without it a device comes up managed, reporting telemetry, and silently accepting no
+# commands, which is the state the Android agent's own setup screen exists to make visible.
+# LOG_DIR because this blueprint now stores something: the signed APK itself, beside the
+# database rather than in the source tree the self-updater replaces. It also carries the one
+# route in this hub with no gate at all -- the setup wizard of a factory-reset device has no
+# credential to present, so the download is addressed by a random token instead. See apkhost.py.
+app.register_blueprint(create_provisioning_blueprint(
+    DB_PATH, LOG_DIR, login_required, access,
+    hub_url=HUB_URL, enrollment_secret=AGENT_ENROLLMENT_SECRET))
+
+# On-demand device location (roadmap #23 phase B). Reading a last known position is `view` +
+# machine scope, like any other thing a machine reports about itself; ASKING is its own
+# `locate_device` capability rather than the `issue_commands` that wake, the Processes card and
+# the file explorer all reuse. Those act on a machine and this one acts on a person -- "may
+# reboot a PC" must not silently mean "may find out where an employee is". fleet_web.py refuses
+# a hand-rolled locate through the generic command endpoint for the same reason.
+app.register_blueprint(create_location_blueprint(DB_PATH, login_required, access))
+
+# What is installed on a managed device (roadmap #23 phase D). Read-only and gated on `view` +
+# machine scope: an app list is inventory in the sense a disk layout is, and an operator who can
+# see the machine can see what it runs. The write half -- deciding which apps are allowed -- is
+# a separate thing an operator authors and lands in its own pair.
+app.register_blueprint(create_apps_blueprint(DB_PATH, login_required, access))
+
+# Which apps a managed device may run (roadmap #23 phase D). Reading a policy and reading how a
+# device complies with one is `view` (+ machine scope for anything naming a machine); WRITING is
+# `manage_device_policy`, a capability of its own rather than a reuse of `manage_settings` -- a
+# policy is not a setting but a standing instruction that changes what somebody's device will
+# do, applied without anybody present. Same argument `manage_rules` already makes for itself.
+app.register_blueprint(create_policy_blueprint(DB_PATH, login_required, access))
+
+# How long each app was in the foreground (roadmap #23 phase E). `view` + machine scope, and
+# deliberately no fleet-wide view: the inventory has one because a policy author must pick a
+# package from somewhere, while the question a fleet-wide usage endpoint would answer is "who
+# spends the most time on their phone". See usage.py and SECURITY.MD's personal-data inventory.
+app.register_blueprint(create_usage_blueprint(DB_PATH, login_required, access))
+
+# Remote lock and remote wipe (roadmap #23 phase H). `wipe_device`, a capability of its own,
+# because the argument that keeps every other command feature under `issue_commands` -- "less
+# dangerous than the SYSTEM shell it already grants" -- is true of a reboot and false of a
+# factory reset. This blueprint is the ONLY door: the generic command endpoint, the favorites
+# validator and the rules engine each refuse these two command types by name.
+app.register_blueprint(create_wipe_blueprint(DB_PATH, login_required, access))
 
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
@@ -3012,6 +3146,26 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Capabilities follow too, and the survivor's own row wins a collision (roadmap #23) --
+    # both rows describe one physical machine, and the survivor is the one still reporting.
+    # Not merged: a union of two command lists would claim an ability neither agent reported.
+    capabilities.rename_machine(DB_PATH, dropped, survivor)
+    # Location history MERGES rather than picking a winner, unlike the capability report above:
+    # a merge folds two records of one physical device together, and "where was this phone on
+    # Tuesday" is the same question afterwards.
+    location.rename_machine(DB_PATH, dropped, survivor)
+    # The app inventory follows, and the survivor's own wins a collision: both rows describe
+    # one physical device, and a union would claim apps that were uninstalled before the merge.
+    apps.rename_machine(DB_PATH, dropped, survivor)
+    # Policy targets follow the survivor: it IS the merged-away device, and a policy that
+    # stopped covering it would silently un-block apps somebody deliberately blocked.
+    policy.rename_machine(DB_PATH, dropped, survivor)
+    # Usage history merges, and a collision keeps the LARGER figure: both rows describe one
+    # device on one day, and usage is cumulative, so the bigger number was reported later.
+    usage.rename_machine(DB_PATH, dropped, survivor)
+    # Lock and wipe history follows the survivor: it IS the merged-away device, and
+    # "this handset was wiped in March" is true of it under either name.
+    wipe.rename_machine(DB_PATH, dropped, survivor)
     # Processes are dropped rather than renamed: unlike an adapter list or a firmware
     # inventory this is a live sample that the survivor's own agent replaces within seconds
     # of anyone looking, so carrying the merged-away name's copy across would only put a
@@ -3287,6 +3441,43 @@ def retention_pruner():
                 prune_command_output_once()
             except Exception as e:
                 print(f"[retention] Command-output prune failed: {e}")
+            # Location fixes (roadmap #23). Its own try, like its neighbours, and the one
+            # prune here that is a PRIVACY control rather than a disk-space one: the table is
+            # tiny and would never need pruning for size. What expires is the record of where
+            # somebody was, which is why the default is short and why this failing is worth a
+            # line in the log rather than being silently skipped.
+            try:
+                cutoff = int(time.time()) - (
+                    settings.get_int(DB_PATH, "data.location_retention_days") * 86400)
+                dropped = location.prune(DB_PATH, cutoff)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} location fix(es).")
+            except Exception as e:
+                print(f"[retention] Location prune failed: {e}")
+            # App usage (roadmap #23 phase E). Its own try, and the second prune here that is a
+            # privacy control rather than a disk-space one -- and the shorter of the two, at
+            # fourteen days by default, because this is a record of what a person did with
+            # their evenings rather than of where a device was once.
+            #
+            # Compared as a DATE STRING against the device's own local day: the device decided
+            # what day it was, and converting that to a hub timestamp would prune a day early
+            # or late for every device outside the hub's own timezone.
+            try:
+                keep = settings.get_int(DB_PATH, "data.usage_retention_days")
+                cutoff_day = (datetime.now() - timedelta(days=keep)).strftime("%Y-%m-%d")
+                dropped = usage.prune(DB_PATH, cutoff_day)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} usage row(s) before {cutoff_day}.")
+            except Exception as e:
+                print(f"[retention] Usage prune failed: {e}")
+            # ...and file a "no answer" row for any locate whose command expired or failed
+            # without one. Separate try, and not really retention -- but this is the only tick
+            # that runs for a feature with no scheduler of its own, and without it a locate
+            # aimed at a switched-off phone sits in the console as "waiting" forever.
+            try:
+                location.sweep_unanswered(DB_PATH)
+            except Exception as e:
+                print(f"[retention] Location sweep failed: {e}")
             # Lapsed process watches. Not a retention question -- is_watched already tests
             # the expiry, so a stale row is never believed -- just housekeeping, so that a
             # table which gains a row per machine anyone ever opened the card on does not
@@ -4021,6 +4212,13 @@ bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
+capabilities.init_capabilities_db(DB_PATH)
+location.init_location_db(DB_PATH)
+apps.init_apps_db(DB_PATH)
+policy.init_policy_db(DB_PATH)
+usage.init_usage_db(DB_PATH)
+wipe.init_wipe_db(DB_PATH)
+apkhost.init_apkhost_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
 files.init_files_db(DB_PATH)
 live.init_live_db(DB_PATH)
@@ -4324,6 +4522,13 @@ def _build_fleet_summary(top):
     # such would make the dashboard's one actionable number permanently wrong by the size of
     # the ring. Machines pinned to another channel are excluded from the count below.
     latest_agent = get_latest_agent_version(agent_channel_for())
+    # ...and the same question per platform, because since roadmap #22 a machine is measured
+    # against its OWN train. `agent_latest` below stays the Windows number: it is what the
+    # card shows beside the count, and the fleet it describes is a Windows fleet.
+    fleet_channel = agent_channel_for()
+    latest_by_platform = {p: get_latest_agent_version(fleet_channel, p)
+                          for p in channels.AGENT_PLATFORMS}
+    machine_platforms = capabilities.platforms_for(DB_PATH, scoped_names)
     hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
     low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
 
@@ -4343,17 +4548,27 @@ def _build_fleet_summary(top):
         if row["machine"] not in enrolled:
             counts["never_enrolled"] += 1
         version = row.get("companion_version")
-        # Only machines on the agent train are compared: a 2.x companion has no agent
-        # release to be behind, and counting it as outdated would name a number nobody can
-        # act on. See get_advertised_version.
-        # ...and only machines on the fleet's own channel. A pilot-ring PC is measured
-        # against a different manifest, and it is normally AHEAD of stable rather than
-        # behind it -- counting it here would make the dashboard's one actionable number
+        # Each machine against ITS OWN train (roadmap #22). A Linux box's 0.4.0 and a Windows
+        # PC's 3.35.1 are not two points on one scale, and comparing them produced the
+        # workaround this replaced: both non-Windows agents were pinned below the train floor
+        # so the hub would leave them alone. Now the platform picks the manifest.
+        #
+        # A machine that has reported no platform is Windows -- see
+        # channels.normalize_platform -- and on that train the 3.0.0 floor still applies,
+        # because a 2.x companion has no agent release to be behind and counting it as
+        # outdated would name a number nobody can act on.
+        #
+        # Machines pinned to another channel are excluded either way. A pilot-ring PC is
+        # measured against a different manifest and is normally AHEAD of stable rather than
+        # behind it, so counting it would make the dashboard's one actionable number
         # permanently wrong by the size of the ring (roadmap #21).
-        if (version and latest_agent
-                and not channels.is_override(row.get("update_channel"))
-                and cmp_versions(version, AGENT_TRAIN_MIN_VERSION) >= 0):
-            if cmp_versions(latest_agent, version) > 0:
+        platform = channels.normalize_platform(machine_platforms.get(row["machine"]))
+        latest_for_row = latest_by_platform.get(platform)
+        on_a_train = (platform != capabilities.PLATFORM_WINDOWS
+                      or cmp_versions(version or "", AGENT_TRAIN_MIN_VERSION) >= 0)
+        if (version and latest_for_row and on_a_train
+                and not channels.is_override(row.get("update_channel"))):
+            if cmp_versions(latest_for_row, version) > 0:
                 counts["agents_outdated"] += 1
 
         bucket = normalize_os(row.get("os_caption"), row.get("os_build"), row.get("ad_os"))
@@ -4600,6 +4815,16 @@ def machine_detail(machine):
     # here ("which build is this one on?") wants the detail the bucket throws away.
     result['os'] = normalize_os(result.get('os_caption'), result.get('os_build'),
                                 result.get('ad_os'))
+    # What this machine says it can do (roadmap #23), carried on the page's own payload so
+    # deciding which tabs to render costs no second request. Deliberately NOT derived from
+    # `os` above: normalize_os is a fuzzy DISPLAY bucketer over a caption a remote machine
+    # chose, and an enforcement decision must not hang off a substring of that. A machine
+    # that has reported nothing comes back `platform: ""` with null lists, which the console
+    # must read as "we have not been told" -- see capabilities.py's absent-report rule.
+    reported = capabilities.get_capabilities(DB_PATH, machine_name)
+    result['platform'] = reported['platform']
+    result['features'] = reported['features']
+    result['supported_commands'] = reported['commands']
     return result
 
 
@@ -4768,7 +4993,11 @@ def get_machine_channel(machine):
     machine_name = str(machine).strip()
     override = machine_channel_override(machine_name)
     effective = agent_channel_for(machine_name)
-    stable_latest = get_latest_agent_version(channels.STABLE)
+    # This machine's own train (roadmap #22). Both numbers below have to come from the same
+    # platform or "ahead of stable" compares a Linux build against a Windows one and answers
+    # yes forever.
+    platform = channels.normalize_platform(capabilities.platform_of(DB_PATH, machine_name))
+    stable_latest = get_latest_agent_version(channels.STABLE, platform)
     with get_db_conn() as conn:
         row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
                            (machine_name,)).fetchone()
@@ -4777,6 +5006,7 @@ def get_machine_channel(machine):
         "machine": machine_name,
         "channel": override,
         "effective_channel": effective,
+        "platform": platform,
         "pinned": channels.is_override(override),
         "channels": [
             {"name": name,
@@ -4785,7 +5015,7 @@ def get_machine_channel(machine):
             for name in channels.CHANNELS
         ],
         "can_manage": access.can(permissions.MANAGE_SETTINGS),
-        "latest_version": get_latest_agent_version(effective),
+        "latest_version": get_latest_agent_version(effective, platform),
         "latest_stable_version": stable_latest,
         "running_version": running,
         "ahead_of_stable": bool(running and stable_latest
@@ -4823,6 +5053,7 @@ def put_machine_channel(machine):
 
     applied = set_machine_channel_override(machine_name, wanted)
     effective = agent_channel_for(machine_name)
+    platform = channels.normalize_platform(capabilities.platform_of(DB_PATH, machine_name))
     fleet.audit(DB_PATH, permissions_web.current_actor(),
                 "machine.update_channel", machine_name,
                 {"to": applied or "inherit", "effective": effective},
@@ -4832,10 +5063,12 @@ def put_machine_channel(machine):
         "channel": applied,
         "effective_channel": effective,
         "pinned": channels.is_override(applied),
-        # What that channel currently offers, so the page can say "ahead of stable" without
-        # a second request. None when the manifest has never been read.
-        "latest_version": get_latest_agent_version(effective),
-        "latest_stable_version": get_latest_agent_version(channels.STABLE),
+        # What that channel currently offers ON THIS MACHINE'S TRAIN, so the page can say
+        # "ahead of stable" without a second request. None when the manifest has never been
+        # read. Platform-scoped for the same reason the GET above is: two numbers from
+        # different trains compare to nonsense.
+        "latest_version": get_latest_agent_version(effective, platform),
+        "latest_stable_version": get_latest_agent_version(channels.STABLE, platform),
     })
 
 
@@ -4882,6 +5115,34 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And what it reported it could do (roadmap #23). Unlike most of the rows above this one
+    # is an ENFORCEMENT input, so leaving it behind is worse than leaving stale display data:
+    # a different box reusing this hostname would silently have commands REFUSED that it can
+    # run perfectly well, with a message naming a platform it is not.
+    capabilities.forget_machine(DB_PATH, machine_name)
+    # And every position it ever reported (roadmap #23). No exception here, unlike patch
+    # outcomes and backup manifests: those survive because they are facts about an update or an
+    # archive, while where a device WAS is a fact about a person, and keeping it after the
+    # device is gone is pure liability.
+    location.forget_machine(DB_PATH, machine_name)
+    # And what it had installed (roadmap #23). Same argument as location, one step out: a
+    # list of somebody's apps is a fact about them rather than about an update or an
+    # archive, so it has no claim to survive the machine the way patch history does.
+    apps.forget_machine(DB_PATH, machine_name)
+    # And drop it from every app policy that named it. A stale target is worse here than
+    # elsewhere: a reused hostname would silently inherit a policy nobody aimed at it, and
+    # the symptom is apps that will not open on a machine whose page shows no reason why.
+    policy.forget_machine(DB_PATH, machine_name)
+    # And its usage history (roadmap #23 phase E). The strongest case in the product for
+    # erasing on deletion: this is a record of what a person did with their evenings, and it
+    # has no argument at all for surviving the device.
+    usage.forget_machine(DB_PATH, machine_name)
+    # And any lock or wipe that was asked of it (roadmap #23 phase H). Kept until now
+    # so the machine page could explain why the device stopped reporting; once the
+    # machine is deleted there is no page, and what remains is a row a reused hostname
+    # would inherit. The AUDIT TRAIL carries the same facts and is not pruned, so
+    # "who erased this device" still has an answer.
+    wipe.forget_machine(DB_PATH, machine_name)
     # And its last process snapshot and any live watch on it. This is transient state that
     # would lapse on its own within the minute, but a deleted machine leaving a table row
     # naming what its users had open is exactly the kind of residue a deletion is for.

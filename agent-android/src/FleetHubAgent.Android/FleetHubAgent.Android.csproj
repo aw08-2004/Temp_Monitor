@@ -1,0 +1,81 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FleetHubAgent.Android</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <ApplicationId>net.arkeanos.fleethub.agent</ApplicationId>
+    <ApplicationTitle>FleetHub Agent</ApplicationTitle>
+
+    <!-- API 26 (Android 8.0). Notification channels arrive here and a foreground service
+         cannot post its notification without one, so nothing below this could run the agent
+         at all. Deliberately not raised to something newer: the devices most worth managing
+         remotely are the old ones nobody wants to touch. -->
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+
+    <!-- Android sorts upgrades by this integer and IGNORES the dotted version entirely. It
+         must increase on every build a device might install over another, which is a
+         different rule from every other version in this repo: it is a build counter, not a
+         release number, and VersionGateTests deliberately does NOT tie it to
+         AgentConfig.Version. -->
+    <ApplicationVersion>1</ApplicationVersion>
+
+    <!-- What a person reads, on the phone's own app info screen. This one IS the agent's
+         version and must agree with AgentConfig.Version and the Core csproj; the three are
+         held together by VersionGateTests, since there is no release script yet. -->
+    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <!-- **Trim the whole app, not just its dependencies, in Release.** The default
+       (`sdkonly`) leaves every managed assembly the app references intact, and this app now
+       references BouncyCastle for one thing: Ed25519 signature verification over a
+       hundred-byte manifest. Untrimmed that library costs more than five megabytes of an
+       APK that is otherwise ten, and this APK is not just installed once: it is DOWNLOADED
+       BY EVERY MANAGED PHONE ON EVERY RELEASE, over whatever connection and whatever data
+       allowance that phone has. `full` is what makes the crypto dependency cost what it is
+       worth rather than what it weighs.
+
+       The risk `full` carries everywhere else is reflection: the linker cannot see a type
+       resolved by name and removes it, and the failure lands at runtime rather than at build
+       time. Two things make it acceptable here. The .NET Android SDK preserves the types the
+       platform resolves reflectively (activities, services, receivers) through its own
+       linker descriptors, and nothing in this app resolves a type by name itself. The only
+       reflective surface is System.Text.Json, which the source generator is not used for but
+       which the SDK's own trimming annotations cover.
+
+       If a release ever crashes on startup with a MissingMethodException from a type nobody
+       calls directly, this is the first thing to turn off. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <AndroidLinkMode>full</AndroidLinkMode>
+  </PropertyGroup>
+
+  <!-- Release signing, when this machine has been given the keystore.
+       agent-android/signing.props is gitignored and holds a password, so it is treated like
+       .env: real on the machine that cuts releases, absent everywhere else. Absent, this
+       import does nothing and the build falls back to the SDK's debug keystore, which is what
+       makes `dotnet build` work for anyone who only wants to compile.
+
+       **A debug-signed build is not merely unsigned-for-release, it has a different
+       identity.** The SSAID this agent reports as serial_number is derived from the signing
+       key, so a device that runs a debug build and later a release build reports two different
+       serial numbers and appears in the console as two machines. Copy signing.props.example
+       and fill it in BEFORE the first install on any device you intend to keep. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\..\signing.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\signing.props')" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\FleetHubAgent.Core\FleetHubAgent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Only the logging plumbing. The protocol's own dependencies live in Core, which is
+         what keeps this project's restore graph small enough that a build failure here is
+         about Android and never about the agent. -->
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.6" />
+  </ItemGroup>
+
+</Project>

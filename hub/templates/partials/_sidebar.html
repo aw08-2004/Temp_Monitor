@@ -33,6 +33,18 @@
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg>
             <span class="sidebar__link-label">{{ t('nav.inventory') }}</span>
         </a>
+        {# Beneath Inventory: the map is the same fleet asked a different question, and it is
+           scoped identically -- two operators on this URL see different devices.
+
+           Gated on `view` explicitly, unlike the three links above it, and matching the rule
+           this file states further down: a link that 403s is worse than no link. Dashboard,
+           Inventory and Alerts predate that rule and are left alone. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'location.fleet_map_page' else '' }}" data-nav-prefix="/map" href="{{ url_for('location.fleet_map_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 20l-5.4 1.8a1 1 0 0 1-1.3-1V5.6a1 1 0 0 1 .7-1L9 3z"/><path d="M9 3l6 2.2"/><path d="M15 5.2l5.4-1.8a1 1 0 0 1 1.3 1v14.6a1 1 0 0 1-.7 1L15 21z"/><path d="M9 3v17"/><path d="M15 5v16"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.map') }}</span>
+        </a>
+        {% endif %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'alerts_page' else '' }}" data-nav-prefix="/alerts" href="{{ url_for('alerts_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a6 6 0 0 0-6 6c0 4-2 5-2 7h16c0-2-2-3-2-7a6 6 0 0 0-6-6z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
             <span class="sidebar__link-label">{{ t('nav.alerts') }}</span>
@@ -72,6 +84,15 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'tools_page' else '' }}" data-nav-prefix="/tools" href="{{ url_for('tools_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 1 5.3 5.2l-8.4 8.4a2 2 0 0 1-2.8-2.8l8.4-8.4"/><path d="M6 12L3.5 9.5a3.5 3.5 0 0 1 4.9-4.9L11 7"/></svg>
             <span class="sidebar__link-label">{{ t('nav.tools') }}</span>
+        </a>
+        {% endif %}
+        {# Device policy (roadmap #23). Gated on `view` like the route: a reader who cannot
+           author one can still see which policies exist and why an app on a device they
+           administer will not open. The page hides its own write controls. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'policy.policy_page' else '' }}" data-nav-prefix="/policy" href="{{ url_for('policy.policy_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.policy') }}</span>
         </a>
         {% endif %}
         {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
@@ -122,6 +143,13 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'settings_page' else '' }}" data-nav-prefix="/settings" href="{{ url_for('settings_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>
             <span class="sidebar__link-label">{{ t('nav.settings') }}</span>
+        </a>
+        {# Directly beneath Settings, and gated on the same capability: the QR is built from
+           two settings and carries the fleet's enrollment secret, so it is the same trust
+           reached by a different door -- the same call Invites makes under Permission Groups. #}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'provisioning.provisioning_page' else '' }}" data-nav-prefix="/provisioning" href="{{ url_for('provisioning.provisioning_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M20 14v3"/><path d="M14 20h3"/><path d="M20 20h1"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.provisioning') }}</span>
         </a>
         {% endif %}
         {% if cap.MANAGE_PERMISSION_GROUPS in user_capabilities %}

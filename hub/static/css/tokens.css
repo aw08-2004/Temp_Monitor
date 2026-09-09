@@ -1,7 +1,12 @@
 /* Design tokens: color, type, spacing, radius. Themed via [data-theme] on <html>. */
 
 :root {
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    /* Inter is self-hosted (see static/vendor/fonts/inter.css). The chain after it is a real
+       fallback, not decoration: a woff2 that fails to load must land on the platform's own UI
+       font, and the old chain reached bare `sans-serif` on Windows -- which is Arial at best
+       and Times in some configurations. system-ui and Segoe UI are what a Windows operator
+       should actually see if the font never arrives. */
+    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
     --text-xs: 12px;
