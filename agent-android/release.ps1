@@ -78,6 +78,13 @@ function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 # An informational step must not be able to end a release, and `2>$null` does not prevent this
 # -- the record is created before the redirection discards it. So the preference is relaxed
 # around the call and error records are flattened to plain text.
+# Write a text file as UTF-8 with NO byte order mark. Set-Content -Encoding UTF8 on
+# PowerShell 5.1 writes one, and a BOM at the top of AgentConfig.cs and both csproj files turns
+# a one-line version bump into a whole-file diff on every release.
+function SetText($path, $text) {
+    [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 function Native([scriptblock]$Command) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -108,10 +115,20 @@ if (-not (Test-Path (Join-Path $AgentDir "signing.props"))) {
          "and publishing one would produce a release every device refuses. See signing.props.example.")
 }
 
+# **gh is handed a PATH to the notes, never the prose itself.** This script used to read the
+# file and pass the text as an argument, which threw away the entire reason -NotesFile exists.
+# Release notes are prose, prose contains quotation marks, and PowerShell's native-argument
+# binding splits an argument on them -- everything positional after the tag is then an asset
+# path to `gh release create`. It failed here on the sentence about what a permission implies,
+# with `no matches found for restart`: gh had gone looking for a file named after a word in the
+# middle of a sentence. agent/release-notes/README.md records the same failure on the Windows
+# agent, twice, which is two more times than this needed to happen.
+$notesPath = ""
 $notesBody = ""
 if ($NotesFile) {
     if (-not (Test-Path $NotesFile)) { Die "Notes file not found: $NotesFile" }
-    $notesBody = Get-Content $NotesFile -Raw
+    $notesPath = (Resolve-Path $NotesFile).Path
+    $notesBody = Get-Content $notesPath -Raw
 } elseif ($Notes) {
     $notesBody = $Notes
 } else {
@@ -145,13 +162,6 @@ Step "Bumping the version"
 # NOT $Version, the publish below ships whatever the file does say, and the manifest advertises
 # a version no APK reports. Told apart by looking for the target text, exactly as
 # agent/release.ps1 does.
-function SetText($path, $text) {
-    # UTF-8 with NO byte order mark. Set-Content -Encoding UTF8 on PowerShell 5.1 writes one,
-    # and a BOM appearing at the top of AgentConfig.cs and both csproj files turns a one-line
-    # version bump into a whole-file diff on every release.
-    [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
-}
-
 $config = Get-Content $ConfigCs -Raw
 $configNew = $config -replace '(public const string Version = ")[^"]+(")', "`${1}$Version`${2}"
 if ($configNew -eq $config) {
@@ -213,8 +223,14 @@ $existing = Native { & gh release view $Tag --repo $Repo }
 if ($LASTEXITCODE -eq 0) {
     Warn "$Tag already exists; reusing it"
 } else {
+    # Short notes given with -Notes go through a temp file too, rather than being special-cased
+    # as "safe enough". One route means one thing to have got right.
+    if (-not $notesPath) {
+        $notesPath = Join-Path ([System.IO.Path]::GetTempPath()) "android-agent-release-$Version.md"
+        SetText $notesPath $notesBody
+    }
     $ghArgs = @("release", "create", $Tag, "--repo", $Repo, "--title", "Android agent v$Version",
-                "--notes", $notesBody)
+                "--notes-file", $notesPath)
     if ($IsBeta) { $ghArgs += "--prerelease" }
     & gh @ghArgs | Out-Host
     if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }
