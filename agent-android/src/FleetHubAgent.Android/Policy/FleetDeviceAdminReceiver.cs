@@ -1,6 +1,8 @@
 using Android.App;
 using Android.App.Admin;
 using Android.Content;
+using FleetHubAgent.Android.Platform;
+using FleetHubAgent.State;
 
 namespace FleetHubAgent.Android.Policy;
 
@@ -61,7 +63,7 @@ public sealed class FleetDeviceAdminReceiver : DeviceAdminReceiver
     {
         base.OnProfileProvisioningComplete(context, intent);
         global::Android.Util.Log.Info(Tag, "Provisioning complete; finishing device-owner setup");
-        FinishProvisioning(context);
+        FinishProvisioning(context, intent);
     }
 
     public override void OnEnabled(Context context, Intent intent)
@@ -85,9 +87,21 @@ public sealed class FleetDeviceAdminReceiver : DeviceAdminReceiver
     }
 
     /// <summary>Idempotent, and called from both provisioning paths. Everything expensive is
-    /// the service's job; this only takes the powers and starts it.</summary>
-    internal static void FinishProvisioning(Context context)
+    /// the service's job; this only adopts the QR's configuration, takes the powers and starts
+    /// it.
+    ///
+    /// **The intent is a parameter because it carries the fleet's configuration.** The hub puts
+    /// the hub URL and the enrollment secret in the QR's ADMIN_EXTRAS_BUNDLE, and this is the one
+    /// moment they are handed to the app. Dropping the intent -- which this method did -- makes
+    /// provisioning by QR complete successfully and produce a device that reports to the
+    /// compiled-in placeholder hub and enrolls nowhere. See ProvisioningExtras.</summary>
+    internal static void FinishProvisioning(Context context, Intent? intent)
     {
+        // BEFORE the service starts, not after. The hub URL is read once when the loops are
+        // composed, so a secret and a URL adopted afterwards would not be picked up until
+        // something restarted the service -- on a device nobody is holding.
+        ProvisioningExtras.Adopt(context, intent, new AgentState(new AndroidStateStore(context)));
+
         // Started before the powers are applied rather than after, and on purpose: the service
         // is what makes the device appear in the console, and a failure in ApplyBaseline must
         // not be the reason a freshly provisioned device never checks in. ApplyBaseline runs
