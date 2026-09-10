@@ -51,12 +51,33 @@ public static class AgentConfig
 
     // --- Hub endpoints -----------------------------------------------------
 
-    /// <summary>The compiled-in hub, used until <see cref="Configure"/> says otherwise. Same
-    /// default as the Linux agent so a device installed with no configuration at all lands in
-    /// the same place as every other machine.</summary>
+    /// <summary>
+    /// A deliberate placeholder, and the same one the other two agents carry.
+    ///
+    /// **This repository is public, so no agent ships pointed at a real fleet.** A default that
+    /// named an actual hub would put one organisation's address in every clone, and every device
+    /// built from source would try to report to it.
+    ///
+    /// **It is a sentinel, not a destination** -- see <see cref="IsHubConfigured"/>. This used to
+    /// be a real hub, which meant an unconfigured device quietly worked; now it means an
+    /// unconfigured device quietly does not, and "quietly" is the part that costs a day. Nothing
+    /// should ever ask whether this value is reachable. Ask whether it is still in place.
+    /// </summary>
     public const string DefaultHubBase = "https://your.hub.url";
 
     private static string _hubBase = DefaultHubBase;
+
+    /// <summary>Whether anything has actually pointed this agent at a hub.
+    ///
+    /// **The one question worth asking before believing a device is set up.** A phone has no
+    /// installer output and no console to read, so an agent still on the placeholder is
+    /// indistinguishable from a working one from the front: the service runs, the notification
+    /// posts, and the reports go to a hostname that does not resolve. Compared against the
+    /// placeholder rather than tracked with a flag, so it stays true no matter which of the three
+    /// configuration sources ran -- the QR's extras, managed configuration, or the setup screen.
+    /// </summary>
+    public static bool IsHubConfigured =>
+        !string.Equals(_hubBase, DefaultHubBase, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Point the agent at a hub. Called ONCE by the platform layer before any loop starts.

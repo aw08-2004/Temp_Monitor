@@ -271,7 +271,14 @@ public sealed class MainActivity : Activity
         var lines = new List<string>
         {
             $"FleetHub Agent {AgentConfig.Version}",
-            $"Hub: {AgentConfig.HubBase}",
+            // Not "Hub: https://your.hub.url". That line is read by somebody deciding whether
+            // this device is finished, and a placeholder URL formatted exactly like a real one
+            // reads as configured at a glance. This is the state a QR-provisioned device was
+            // silently left in, so it is now the loudest line on the screen.
+            AgentConfig.IsHubConfigured
+                ? $"Hub: {AgentConfig.HubBase}"
+                : "NO HUB CONFIGURED -- this device is reporting NOWHERE. Enter the hub URL "
+                  + "below, or provision it with a QR code minted by the console.",
             $"Machine: {name ?? "(derived from this device)"}",
             // Whether the QR provisioning actually took, and whether the one switch nobody can
             // flip remotely has been flipped. Both are invisible otherwise, and both are things

@@ -22,6 +22,32 @@ public class HubUrlTests : IDisposable
     public void Dispose() => AgentConfig.Configure(AgentConfig.DefaultHubBase);
 
     [Fact]
+    public void An_untouched_agent_reports_that_it_has_no_hub()
+    {
+        // The placeholder is a sentinel, not a destination. If this ever passes because
+        // DefaultHubBase was pointed at a real fleet, an unconfigured device silently starts
+        // reporting to somebody else's hub -- and this repository is public.
+        Assert.False(AgentConfig.IsHubConfigured);
+    }
+
+    [Fact]
+    public void A_configured_agent_says_it_is_configured()
+    {
+        AgentConfig.Configure("https://hub.example.com");
+        Assert.True(AgentConfig.IsHubConfigured);
+    }
+
+    [Fact]
+    public void A_refused_url_leaves_the_agent_unconfigured()
+    {
+        // The silent failure this whole property exists for: Configure ignores a value it
+        // cannot use, so a typo must leave the agent KNOWING it has no hub rather than
+        // believing the placeholder.
+        AgentConfig.Configure("hub.example.com");
+        Assert.False(AgentConfig.IsHubConfigured);
+    }
+
+    [Fact]
     public void The_hubs_own_url_is_recognised()
     {
         Assert.True(AgentConfig.IsHubUrl(AgentConfig.HubBase + "/api/agent/commands"));

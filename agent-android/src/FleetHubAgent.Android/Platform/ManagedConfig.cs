@@ -72,10 +72,26 @@ internal static class ManagedConfig
     }
 
     /// <summary>Point the agent at the configured hub: the MDM's value first, then whatever an
-    /// operator typed on the setup screen, then the compiled-in default.</summary>
+    /// operator typed on the setup screen or arrived in the provisioning QR, then the
+    /// compiled-in placeholder.
+    ///
+    /// **Says so, loudly, when none of them supplied anything.** The placeholder is not a hub
+    /// (see AgentConfig.DefaultHubBase), so a device that reaches this point unconfigured will
+    /// run perfectly and report nowhere. logcat is the only place a technician can see that
+    /// before the console fails to show the device.</summary>
     public static void ApplyHubUrl(Context context, AgentState state)
     {
         AgentConfig.Configure(HubUrl(context) ?? state.LoadHubBaseOverride());
+
+        if (AgentConfig.IsHubConfigured)
+        {
+            global::Android.Util.Log.Info("FleetHubAgent", $"Hub: {AgentConfig.HubBase}");
+            return;
+        }
+
+        global::Android.Util.Log.Error("FleetHubAgent",
+            "NO HUB CONFIGURED. This device will report nowhere. Nothing supplied a hub URL: " +
+            "not managed configuration, not the provisioning QR, not the setup screen.");
     }
 }
 
