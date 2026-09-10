@@ -107,3 +107,92 @@ internal sealed class AndroidEnrollmentSecretSource(Context context, AgentState 
         catch { return null; }
     }
 }
+
+/// <summary>
+/// Configuration carried INSIDE the provisioning QR, adopted once when a device is provisioned.
+///
+/// **This is the source that was missing, and its absence made QR provisioning useless.** The
+/// hub mints a QR whose ADMIN_EXTRAS_BUNDLE carries the hub URL and the enrollment secret (see
+/// hub/provisioning.py's BUNDLE_HUB_URL and BUNDLE_ENROLLMENT_SECRET), which is the entire point
+/// of provisioning by QR: nobody types a fleet-wide credential into a handset. The agent read
+/// only <see cref="ManagedConfig"/>, which is RestrictionsManager -- and application
+/// restrictions are set by an EXTERNAL device policy controller. On a device where this app IS
+/// the controller nothing sets them, so a QR-provisioned device found no hub URL and no secret,
+/// silently kept the compiled-in <see cref="AgentConfig.DefaultHubBase"/>, and reported nowhere.
+/// It looked identical, from the device, to a working install: device owner confirmed, service
+/// running, notification posted, and nothing in the console. **Observed on the first
+/// QR-provisioned device.**
+///
+/// **The bundle is written into the agent's own store, not held in memory.** It arrives exactly
+/// once, in the intent that completes provisioning, and a value only in memory would be gone the
+/// first time the platform killed the process -- leaving a device that enrolled once and could
+/// never enroll again. Writing it also puts it at the right precedence: below live managed
+/// configuration, which an administrator can still correct on a policy, and above the
+/// compiled-in default. See <see cref="AndroidEnrollmentSecretSource"/> for the same ordering.
+///
+/// Only the two keys the hub actually sends are read. A key the hub does not mint has never been
+/// in a QR, so handling it here would be code that cannot be exercised.
+/// </summary>
+internal static class ProvisioningExtras
+{
+    // android.app.admin.DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE. Written out
+    // rather than referenced for the same reason as the action strings in ProvisioningActivities:
+    // the constant carries ApiSince = 23 but the bundle is only ever populated by the flows this
+    // app supports, and the value is a frozen platform string.
+    private const string ExtraAdminExtrasBundle = "android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE";
+
+    private const string Tag = "FleetHubAgent";
+
+    /// <summary>Take the hub URL and enrollment secret out of a provisioning intent, if it
+    /// carries them. Never throws: this runs on the path whose failure strands a
+    /// freshly-wiped device in the setup wizard.</summary>
+    internal static void Adopt(Context context, Intent? intent, AgentState state)
+    {
+        try
+        {
+            var extras = intent?.GetBundleExtra(ExtraAdminExtrasBundle);
+            if (extras is null)
+            {
+                // Info, not Warn. A device provisioned by an MDM rather than by a FleetHub QR
+                // legitimately has no bundle and gets its configuration from the policy instead.
+                global::Android.Util.Log.Info(Tag,
+                    "No provisioning extras in this intent; falling back to managed " +
+                    "configuration and the setup screen");
+                return;
+            }
+
+            var hub = Clean(extras.GetString(ManagedConfig.KeyHubUrl));
+            if (hub is not null && state.SaveHubBaseOverride(hub))
+            {
+                AgentConfig.Configure(hub);
+                // The URL is logged and the secret never is. One is what a technician needs to
+                // read back off the device; the other is a fleet-wide credential, and logcat is
+                // readable by adb and included in every bug report.
+                global::Android.Util.Log.Info(Tag, $"Adopted hub URL from the QR: {hub}");
+            }
+            else if (hub is not null)
+            {
+                global::Android.Util.Log.Error(Tag,
+                    "Could not store the hub URL from the QR; this device will report nowhere");
+            }
+
+            var secret = Clean(extras.GetString(ManagedConfig.KeyEnrollmentSecret));
+            if (secret is not null)
+            {
+                global::Android.Util.Log.Info(Tag, state.SaveEnrollmentSecret(secret)
+                    ? "Adopted the enrollment secret from the QR"
+                    : "Could not store the enrollment secret from the QR; this device will " +
+                      "report telemetry and never accept a command");
+            }
+        }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Error(Tag, $"Could not read the provisioning extras: {e.Message}");
+        }
+    }
+
+    /// <summary>Trimmed, or null when there is nothing usable. The hub trims before it mints, so
+    /// this is about a bundle assembled by hand or by another tool.</summary>
+    private static string? Clean(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}

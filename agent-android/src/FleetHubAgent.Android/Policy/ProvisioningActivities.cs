@@ -116,7 +116,7 @@ public sealed class PolicyComplianceActivity : Activity
         {
             global::Android.Util.Log.Info("FleetHubAgent",
                 $"Policy compliance check; {DeviceOwner.Describe(this)}");
-            FleetDeviceAdminReceiver.FinishProvisioning(this);
+            FleetDeviceAdminReceiver.FinishProvisioning(this, Intent);
         }
         catch (Exception e)
         {
