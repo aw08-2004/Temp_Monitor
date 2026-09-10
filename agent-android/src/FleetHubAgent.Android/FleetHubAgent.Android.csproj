@@ -26,8 +26,8 @@
     <!-- What a person reads, on the phone's own app info screen. This one IS the agent's
          version and must agree with AgentConfig.Version and the Core csproj; the three are
          held together by VersionGateTests, since there is no release script yet. -->
-    <ApplicationDisplayVersion>0.2.0</ApplicationDisplayVersion>
-    <Version>0.2.0</Version>
+    <ApplicationDisplayVersion>0.2.1</ApplicationDisplayVersion>
+    <Version>0.2.1</Version>
   </PropertyGroup>
 
   <!-- **Trim the whole app, not just its dependencies, in Release.** The default
