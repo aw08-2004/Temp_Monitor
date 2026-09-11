@@ -48,7 +48,7 @@ automatically if not already run as admin.
 **From the web:**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1)))
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1)))"
 ```
 
 **Non-interactive**, pass `-Component` plus the relevant parameters (`iex`
@@ -58,8 +58,8 @@ prompted for again, so a fully-specified invocation runs start to finish
 without input:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) `
-    -Component Agent -HubUrl https://hub.example.com -EnrollmentSecret <secret> -AddDefenderExclusion
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) `
+    -Component Agent -HubUrl https://hub.example.com -EnrollmentSecret <secret> -AddDefenderExclusion"
 ```
 
 Note `-HubUrl` — the address of the hub the agent reports to. `-AgentUrl` is a
