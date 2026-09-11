@@ -35,6 +35,7 @@ import time
 
 from flask import Blueprint, Response, jsonify, redirect, request, url_for
 
+import auth_helpers
 import backup_paths
 import backups
 import fleet
@@ -44,20 +45,8 @@ import permissions_web
 import refusals
 import settings
 
-
-def _bearer_agent(db_path):
-    """Same header contract as fleet_web._bearer_agent: 'Bearer <agent_id>:<token>'."""
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None, None
-    raw = header[len("Bearer "):].strip()
-    agent_id, _, token = raw.partition(":")
-    if not agent_id or not token:
-        return None, None
-    machine = fleet.authenticate_agent(db_path, agent_id, token)
-    if machine is None:
-        return None, None
-    return agent_id, machine
+# Backwards-compatible alias so callers using the old private name keep working.
+_bearer_agent = auth_helpers.bearer_agent
 
 
 def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
