@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -1996,7 +1997,7 @@ print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 # fetch/XHR, which preflights and fails here (no ACAO on these routes), so requiring a
 # content type on those would break working callers to defend against a request no browser
 # will send.
-CSRF_CHECKED_METHODS = frozenset({"POST"})
+CSRF_CHECKED_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
 # The two console endpoints that legitimately post something other than JSON: a file.
 # multipart/form-data IS form-producible, so these stay reachable cross-site -- but both
 # are deliberately inert (they store bytes and return a digest, creating no package, no
@@ -2026,8 +2027,38 @@ CSRF_UPLOAD_ENDPOINTS = frozenset({
 })
 
 
+def _get_or_create_csrf_token():
+    """Return the CSRF token for the current session, creating one if absent.
+
+    The token is a 64-hex-char random string stored in the signed session cookie.
+    It is rotated on each new login (_complete_login) and persisted for the
+    session's lifetime.  The browser reads it from a <meta> tag in base.html
+    and sends it back as the X-CSRF-Token header on every state-changing request.
+    """
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(32)
+        session["csrf_token"] = token
+    return token
+
+
+def _csrf_token_valid():
+    """Does this request carry a valid CSRF token in the X-CSRF-Token header?"""
+    expected = session.get("csrf_token")
+    if not expected:
+        return False
+    provided = request.headers.get("X-CSRF-Token")
+    if not provided:
+        return False
+    return hmac.compare_digest(expected, provided)
+
+
 def _csrf_content_type_ok():
-    """May this state-changing, cookie-authenticated request proceed?"""
+    """May this state-changing, cookie-authenticated request proceed?
+
+    Legacy check: JSON content-type was the original CSRF defence.  Retained as
+    a defence-in-depth layer alongside the token check.
+    """
     if request.method not in CSRF_CHECKED_METHODS:
         return True
     if request.endpoint in CSRF_UPLOAD_ENDPOINTS:
@@ -2085,6 +2116,16 @@ def login_required(view):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Authentication required"}), 401
             return redirect(url_for("login"))
+        # CSRF protection: token check (new) + content-type check (legacy, defence
+        # in depth).  Both must pass for a cookie-authenticated state-changing request
+        # to proceed.  Bearer-auth requests are already exempt above.  The token is
+        # issued in a <meta> tag by base.html and echoed as X-CSRF-Token by a global
+        # fetch interceptor in common.js.
+        if request.method in CSRF_CHECKED_METHODS:
+            if request.endpoint not in CSRF_UPLOAD_ENDPOINTS:
+                if not _csrf_token_valid():
+                    return jsonify({"error": "CSRF token missing or invalid. "
+                                             "Include X-CSRF-Token header."}), 403
         if not _csrf_content_type_ok():
             return jsonify({"error": "This endpoint requires Content-Type: "
                                      "application/json."}), 415
@@ -2424,6 +2465,9 @@ def _complete_login(user_info, provider):
     # opts this session into that lifetime -- without it Flask issues a cookie that dies
     # when the browser closes, no matter what the lifetime says.
     session.permanent = True
+    # Rotate the CSRF token on every login so a leaked token from a previous session
+    # cannot be reused after re-authentication.
+    session.pop("csrf_token", None)
     session["user"] = {
         "email": email,
         "name": user_info.get("name") or email,
@@ -5687,7 +5731,11 @@ def inject_nav_context():
                # First-paint state for the sidebar update notice, so it is correct before
                # its poller has run once. The template also gates on MANAGE_SETTINGS.
                "latest_hub_version": get_latest_hub_version(),
-               "hub_update_available": _hub_update_notice_visible()}
+               "hub_update_available": _hub_update_notice_visible(),
+               # CSRF token for the meta tag; _get_or_create_csrf_token is safe to
+               # call on every render -- it only creates a token when the session
+               # does not already carry one.
+               "csrf_token": _get_or_create_csrf_token()}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
         return context
