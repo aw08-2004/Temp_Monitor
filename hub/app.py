@@ -1,4 +1,5 @@
 import ctypes
+import hmac
 import io
 import json
 import os
@@ -1815,6 +1816,15 @@ AGENT_ENROLLMENT_SECRET = os.environ.get("AGENT_ENROLLMENT_SECRET", "")
 if not AGENT_ENROLLMENT_SECRET:
     print("[fleet] AGENT_ENROLLMENT_SECRET unset -- agent enrollment disabled (fail closed).")
 
+# Optional shared secret for the /api/report telemetry endpoint. When set, every
+# report POST must include a matching 'report_secret' field. When unset the endpoint
+# remains open (backwards compatible with existing telemetry-only deployments) but
+# a warning is printed so operators know the exposure.
+AGENT_REPORT_SECRET = os.environ.get("AGENT_REPORT_SECRET", "")
+if not AGENT_REPORT_SECRET:
+    print("[fleet] AGENT_REPORT_SECRET unset -- /api/report is unauthenticated.")
+    print("       Set AGENT_REPORT_SECRET in .env to require a shared secret from agents.")
+
 # ================================
 # WEB & WEBSOCKET SETUP
 # ================================
@@ -1852,6 +1862,11 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=SESSION_LIFETIME_DAYS),
     SESSION_REFRESH_EACH_REQUEST=True,
 )
+
+# Rate limiter for sensitive endpoints (Finding 7: no rate limiting on
+# enrollment or API endpoints). Lightweight in-memory, no external deps.
+from rate_limit import RateLimiter
+rate_limiter = RateLimiter(app)
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
@@ -3032,17 +3047,21 @@ def is_valid_serial(serial):
 # textContent and Jinja autoescapes, so this is the second layer, not the only one;
 # it exists so a future innerHTML slip isn't immediately exploitable.
 #
-# Deliberately a rejection of characters that cannot appear in a real hostname, not an
-# allow-list of the ones that can: an allow-list here would silently drop legitimate
-# machines from a fleet that already has odd names in it, and the point is defence in
-# depth, not naming policy.
+# Machine name validation uses two layers:
+# 1. An allowlist of hostname-safe characters (letters, digits, hyphens, dots, spaces,
+#    underscores) as the primary control -- matching RFC 1123 hostname conventions plus
+#    common enterprise naming patterns like "IT-LAB-PC_04" or "Workstation 12".
+# 2. The original blocklist as secondary defense-in-depth against any edge cases.
 MACHINE_NAME_MAX_CHARS = 128
+_MACHINE_NAME_ALLOWED = re.compile(r'^[a-zA-Z0-9 ._-]+$')
 _MACHINE_NAME_FORBIDDEN = re.compile(r'[<>"\'&\x00-\x1f\x7f-\x9f]')
 
 def is_valid_machine_name(machine):
     """True if `machine` is safe to store and render as a machine identifier."""
     name = str(machine or "").strip()
     if not name or len(name) > MACHINE_NAME_MAX_CHARS:
+        return False
+    if not _MACHINE_NAME_ALLOWED.match(name):
         return False
     return _MACHINE_NAME_FORBIDDEN.search(name) is None
 
@@ -4330,11 +4349,24 @@ def start_local_logger():
 # API FOR REMOTE MACHINES
 # ================================
 @app.route('/api/report', methods=['POST'])
+@rate_limiter.limit('120/minute')
 def report_temp():
-    """Endpoint for other machines to send their temps via POST request"""
+    """Endpoint for other machines to send their temps via POST request.
+
+    When AGENT_REPORT_SECRET is configured, every report must include a
+    matching 'report_secret' field. This prevents unauthenticated spoofing
+    of machine telemetry while remaining backwards-compatible with existing
+    deployments that have not yet set the secret.
+    """
     data = request.json
     if not data or 'machine' not in data or 'temp' not in data:
         return jsonify({"error": "Invalid payload"}), 400
+
+    # --- secret gate (Finding 1 fix) ---
+    if AGENT_REPORT_SECRET:
+        provided = data.get('report_secret', '')
+        if not hmac.compare_digest(str(provided), AGENT_REPORT_SECRET):
+            return jsonify({"error": "Invalid or missing report secret"}), 403
 
     machine = data['machine']
     if not is_valid_machine_name(machine):

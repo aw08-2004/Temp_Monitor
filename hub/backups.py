@@ -1264,21 +1264,36 @@ def _validate_name(name):
     return text
 
 
+# Ports allowed for plain HTTP to loopback addresses. MinIO defaults to 9000;
+# 9001 is its console port. Anything else on loopback over HTTP is likely an
+# unintended internal-service exposure.
+_LOOPBACK_HTTP_PORTS = frozenset({9000, 9001})
+
 def _validate_url(value, field):
     """An http(s) URL, refusing plain http anywhere but a loopback host.
 
     The whole feature is 'backups via HTTPS'. Allowing http to localhost is not a
     loophole -- it is how a MinIO container on the same box is tested -- but allowing it
     to a remote host would silently ship the ciphertext AND the credentials in clear.
+    Loopback HTTP is further restricted to known-safe ports (MinIO defaults) to
+    prevent SSRF against internal services on arbitrary ports.
     """
     text = str(value or "").strip().rstrip("/")
     if not _URL_RE.match(text):
         raise ValueError(f"{field} must be a URL starting with https://.")
     parsed = urlsplit(text)
     host = (parsed.hostname or "").lower()
-    if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"):
-        raise ValueError(f"{field} must use https:// -- plain http would send your "
-                         f"credentials in clear.")
+    if parsed.scheme == "http":
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError(f"{field} must use https:// -- plain http would send your "
+                             f"credentials in clear.")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if port not in _LOOPBACK_HTTP_PORTS:
+            raise ValueError(
+                f"{field}: plain http to loopback is only allowed on ports "
+                f"{', '.join(str(p) for p in sorted(_LOOPBACK_HTTP_PORTS))} "
+                f"(MinIO defaults). Got port {port}."
+            )
     return text
 
 

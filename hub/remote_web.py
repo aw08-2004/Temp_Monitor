@@ -23,6 +23,7 @@ import os
 
 from flask import Blueprint, jsonify, request, session
 
+import auth_helpers
 import fleet
 import permissions
 import permissions_web
@@ -38,21 +39,8 @@ import sharing_web
 # at hub startup), never from the settings table -- secrets are structurally barred from there.
 TURN_SECRET_ENV = "REMOTE_TURN_SECRET"
 
-
-def _bearer_agent(db_path):
-    """Resolve (agent_id, machine) from the Authorization header, or (None, None). Same scheme
-    as fleet_web: '<agent_id>:<token>', only the token's hash is stored server-side."""
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None, None
-    raw = header[len("Bearer "):].strip()
-    agent_id, _, token = raw.partition(":")
-    if not agent_id or not token:
-        return None, None
-    machine = fleet.authenticate_agent(db_path, agent_id, token)
-    if machine is None:
-        return None, None
-    return agent_id, machine
+# Backwards-compatible alias so callers using the old private name keep working.
+_bearer_agent = auth_helpers.bearer_agent
 
 
 def create_remote_blueprint(db_path, login_required, access, env_path=None):

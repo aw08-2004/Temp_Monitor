@@ -42,6 +42,7 @@ import os
 
 from flask import Blueprint, jsonify, redirect, request, send_file, url_for
 
+import auth_helpers
 import backups
 import bios
 import firmware
@@ -52,20 +53,8 @@ import permissions_web
 import refusals
 import settings
 
-
-def _bearer_agent(db_path):
-    """Same header contract as fleet_web._bearer_agent: 'Bearer <agent_id>:<token>'."""
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None, None
-    raw = header[len("Bearer "):].strip()
-    agent_id, _, token = raw.partition(":")
-    if not agent_id or not token:
-        return None, None
-    machine = fleet.authenticate_agent(db_path, agent_id, token)
-    if machine is None:
-        return None, None
-    return agent_id, machine
+# Backwards-compatible alias so callers using the old private name keep working.
+_bearer_agent = auth_helpers.bearer_agent
 
 
 def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
