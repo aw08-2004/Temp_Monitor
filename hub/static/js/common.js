@@ -1,5 +1,31 @@
 // Shared helpers used across dashboard/machine/history pages.
 
+// ---- CSRF token interceptor ----
+// Reads the token from <meta name="csrf-token"> and attaches it as the
+// X-CSRF-Token header on every state-changing fetch.  The server issues the
+// token in the session cookie and exposes it via the base.html meta tag.
+// login_required validates the header on POST/PUT/DELETE/PATCH for
+// cookie-authenticated requests.
+(function () {
+    const _origFetch = window.fetch;
+    window.fetch = function (input, init) {
+        init = init || {};
+        const method = (init.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            const token = meta && meta.getAttribute('content');
+            if (token) {
+                const headers = new Headers(init.headers || {});
+                if (!headers.has('X-CSRF-Token')) {
+                    headers.set('X-CSRF-Token', token);
+                }
+                init.headers = headers;
+            }
+        }
+        return _origFetch.call(this, input, init);
+    };
+})();
+
 const THEME_STORAGE_KEY = 'tempmonitor:theme';
 const SIDEBAR_STORAGE_KEY = 'tempmonitor:sidebar';
 
