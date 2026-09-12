@@ -25,6 +25,40 @@
     <p class="stat-card__meta" style="margin: 0;">{{ t('rules.actions_disabled') }}</p>
 </div>
 
+{# ------------------------------------------------------------------ AI drafter --
+   Roadmap #24. Hidden unless GET /api/ai/status says the feature is both switched on and
+   configured AND the operator holds manage_rules -- a box that takes a sentence and answers
+   "the AI features are switched off" is worse than no box, and most hubs will never turn
+   this on. Everything it produces lands in the editor below; nothing here saves a rule. #}
+<div class="card" id="ai-drafter" hidden style="margin-bottom: var(--space-4);">
+    <h2 class="section-title">{{ t('ai.drafter_title') }}</h2>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-3);">{{ t('ai.drafter_intro') }}</p>
+    <textarea class="input" id="ai-text" rows="2" spellcheck="false"
+              placeholder="{{ t('ai.placeholder') }}" style="width: 100%;"></textarea>
+    <div class="toolbar" style="margin-top: var(--space-3);">
+        <button type="button" class="btn btn--primary" id="ai-draft">{{ t('ai.draft') }}</button>
+        <span class="stat-card__meta" id="ai-status"></span>
+    </div>
+
+    <div id="ai-result" hidden style="margin-top: var(--space-4);">
+        <p class="stat-card__meta" id="ai-summary" style="margin-bottom: var(--space-2);"></p>
+        {# The canonical expression, not what the model typed: it is what parsed, and it is
+           what /api/rules/preview will evaluate. #}
+        <p id="ai-expression" style="font-family: var(--font-mono, monospace); margin: 0 0 var(--space-3);"></p>
+        <div class="toolbar">
+            <input class="input" id="ai-refine-text" type="text"
+                   placeholder="{{ t('ai.refine_placeholder') }}" style="min-width: 260px;">
+            <button type="button" class="btn btn--ghost" id="ai-refine">{{ t('ai.refine') }}</button>
+        </div>
+        <div class="toolbar" style="margin-top: var(--space-3);">
+            <button type="button" class="btn btn--ghost" id="ai-preview">{{ t('ai.preview') }}</button>
+            <button type="button" class="btn btn--primary" id="ai-create">{{ t('ai.create') }}</button>
+            <button type="button" class="btn btn--ghost" id="ai-discard">{{ t('ai.discard') }}</button>
+            <span class="stat-card__meta" id="ai-preview-result"></span>
+        </div>
+    </div>
+</div>
+
 <div class="toolbar" style="margin-bottom: var(--space-4);">
     <button id="rules-new" type="button" class="btn btn--primary" hidden>{{ t('rules.new') }}</button>
     <span class="stat-card__meta" id="rules-count"></span>

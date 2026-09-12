@@ -1128,9 +1128,153 @@ document.getElementById('script-input-add').addEventListener('click', () => {
     renderScriptInputs();
 });
 
+
+// ---------------------------------------------------------------- AI drafter (#24)
+//
+// A sentence in, a DRAFT out -- never a rule. Everything the model produces has already been
+// through the engine's own parser and validators server-side (see hub/ai.py), so what arrives
+// here is either a condition that parses or a refusal written in words, and this file does not
+// have to second-guess either.
+//
+// Three things it deliberately does NOT do:
+//
+//  * It does not render the model's prose. `summary` is built server-side from the AST by
+//    ai.summarise_draft, so the sentence an operator reads describes the rule that will run
+//    rather than the one the model says it wrote.
+//  * It does not have its own preview. The Preview button posts the draft's canonical
+//    expression to the SAME /api/rules/preview every hand-written rule uses, so "which
+//    machines match" is answered by the evaluator that will actually run it.
+//  * It does not save. Create posts to the commit endpoint, which stores the rule DISABLED
+//    and then opens it in the editor below -- so the last thing between a sentence and the
+//    fleet is somebody reading the ordinary rule form and pressing Enable.
+
+let aiDraft = null;
+
+function aiSetStatus(text, isError) {
+    const node = document.getElementById('ai-status');
+    node.textContent = text || '';
+    node.style.color = isError ? 'var(--color-danger, #f85149)' : '';
+}
+
+function aiShowDraft(payload) {
+    aiDraft = payload && payload.draft ? payload.draft : null;
+    const result = document.getElementById('ai-result');
+    if (!aiDraft) { result.hidden = true; return; }
+    document.getElementById('ai-summary').textContent = payload.summary || '';
+    document.getElementById('ai-expression').textContent = aiDraft.condition_text || '';
+    document.getElementById('ai-preview-result').textContent = '';
+    result.hidden = false;
+}
+
+async function aiSubmit(path, payload, busyKey) {
+    aiSetStatus(t(busyKey), false);
+    try {
+        const data = await api(path, json('POST', payload));
+        aiShowDraft(data);
+        aiSetStatus('', false);
+        return data;
+    } catch (e) {
+        // The server's message is the useful half: "unknown variable: cpu.temp_c" tells an
+        // operator what to rephrase, and a generic failure tells them nothing. ai_web.py is
+        // what decides which errors are safe to send, so this shows whatever arrives.
+        aiSetStatus(t('ai.failed', { error: e.message }), true);
+        return null;
+    }
+}
+
+async function aiDraftRule() {
+    const text = document.getElementById('ai-text').value.trim();
+    if (!text) return;
+    await aiSubmit('/api/ai/rules/draft', { text }, 'ai.drafting');
+}
+
+async function aiRefineRule() {
+    if (!aiDraft) return;
+    const box = document.getElementById('ai-refine-text');
+    const text = box.value.trim();
+    if (!text) return;
+    const data = await aiSubmit(
+        `/api/ai/rules/drafts/${encodeURIComponent(aiDraft.id)}/refine`, { text }, 'ai.drafting');
+    if (data) box.value = '';
+}
+
+async function aiPreviewDraft() {
+    if (!aiDraft) return;
+    const result = document.getElementById('ai-preview-result');
+    result.textContent = '';
+    try {
+        const data = await api('/api/rules/preview', json('POST', {
+            condition_text: aiDraft.condition_text, target: aiDraft.target, limit: 25,
+        }));
+        result.textContent = t('rules.preview_result', {
+            true: data.tally.true, false: data.tally.false, unknown: data.tally.unknown,
+        });
+    } catch (e) {
+        aiSetStatus(t('ai.failed', { error: e.message }), true);
+    }
+}
+
+async function aiCreateRule() {
+    if (!aiDraft) return;
+    aiSetStatus(t('ai.creating'), false);
+    try {
+        const data = await api(
+            `/api/ai/rules/drafts/${encodeURIComponent(aiDraft.id)}/commit`, json('POST', {}));
+        // Clear, not discard: committing already consumed the draft server-side, and a
+        // DELETE for a row that is gone is a 404 nobody reads.
+        aiClearDraft();
+        document.getElementById('ai-text').value = '';
+        aiSetStatus(t('ai.created'), false);
+        await loadRules();
+        // Straight into the ordinary editor. The rule is stored disabled, so this is where
+        // somebody reads what was actually written before it can fire once.
+        if (data && data.rule) openEditor(data.rule);
+    } catch (e) {
+        aiSetStatus(t('ai.failed', { error: e.message }), true);
+    }
+}
+
+function aiClearDraft() {
+    aiDraft = null;
+    document.getElementById('ai-result').hidden = true;
+    document.getElementById('ai-refine-text').value = '';
+}
+
+function aiDiscardDraft() {
+    // Deleted server-side as well as hidden: an abandoned draft keeps the English somebody
+    // typed, and leaving it for the pruner means a week of somebody else's half-thoughts
+    // sitting in a table for no reason.
+    if (aiDraft) {
+        api(`/api/ai/rules/drafts/${encodeURIComponent(aiDraft.id)}`, { method: 'DELETE' })
+            .catch(() => { /* already gone, or never stored -- nothing to recover */ });
+    }
+    aiClearDraft();
+}
+
+async function loadAiDrafter() {
+    // A failure here must not take the Rules page with it: the drafter is an extra, and a
+    // hub with no AI configured is the normal case rather than a broken one.
+    let status = null;
+    try {
+        status = await api('/api/ai/status');
+    } catch (e) {
+        return;
+    }
+    if (!status || !status.ready || !canManage) return;
+    document.getElementById('ai-drafter').hidden = false;
+    document.getElementById('ai-draft').addEventListener('click', aiDraftRule);
+    document.getElementById('ai-refine').addEventListener('click', aiRefineRule);
+    document.getElementById('ai-preview').addEventListener('click', aiPreviewDraft);
+    document.getElementById('ai-create').addEventListener('click', aiCreateRule);
+    document.getElementById('ai-discard').addEventListener('click', aiDiscardDraft);
+}
+
+
 (async function start() {
     await loadCatalog();
     fillKindSelects();
     renderScripts();
     await loadRules();
+    // Last, because it needs canManage -- which loadRules() is what sets.
+    await loadAiDrafter();
 })();

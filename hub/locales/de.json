@@ -548,7 +548,8 @@
       "provisioning": "Provisionierung",
       "location": "Standort",
       "map": "Karte",
-      "policy": "Richtlinie"
+      "policy": "Richtlinie",
+      "ai": "KI-Unterstützung"
     },
     "unit": {
       "celsius": "°C",
@@ -942,6 +943,46 @@
         "label": "Gültigkeit der Hub-Kopplung",
         "help": "Wie lange die Zugangsdaten eines gekoppelten Hubs gültig bleiben; die Frist verlängert sich bei jeder Nutzung. Das begrenzt die Kopplung, nicht eine Freigabe -- eine Freigabe kann ein eigenes Ablaufdatum haben oder gar keines. Jede Kopplung behält die bei der Einrichtung geltende Dauer."
       },
+      "ai": {
+        "enabled": {
+          "label": "KI-Unterstützung verwenden",
+          "help": "Aus, bis jemand sie einschaltet. Solange sie aus ist, verlässt keine Anfrage diesen Hub, und die Entwurfsseiten sagen das auch; die übrigen Einstellungen hier tun nichts."
+        },
+        "provider": {
+          "label": "Anbieter-API",
+          "help": "Das Anfrageformat, nicht eine Firma. Das genannte sprechen Ollama, vLLM, LM Studio, OpenRouter und OpenAI gleichermaßen, also entscheidet die Adresse unten, wohin Anfragen tatsächlich gehen."
+        },
+        "base_url": {
+          "label": "Adresse des Anbieters",
+          "help": "Wohin eine Anfrage geht, ohne Pfad. Ein Modell auf dieser Maschine braucht keinen Schlüssel, und nichts verlässt das Haus.",
+          "placeholder": "http://127.0.0.1:11434"
+        },
+        "model": {
+          "label": "Modell",
+          "help": "Genau so, wie der Anbieter es benennt.",
+          "placeholder": "llama3.1:8b"
+        },
+        "max_tokens": {
+          "label": "Längste Antwort",
+          "help": "Eine Grenze für eine einzelne Antwort. Eine entworfene Regel sind einige hundert Token, das hier ist also eine Sicherung und kein Ziel."
+        },
+        "timeout_seconds": {
+          "label": "Aufgeben nach",
+          "help": "Wie lange auf eine Antwort gewartet wird. Ein Modell auf dieser Maschine antwortet in Sekunden; ein gehostetes über eine langsame Leitung kann deutlich länger brauchen."
+        },
+        "allow_private_endpoint": {
+          "label": "Anbieter in diesem Netz erlauben",
+          "help": "An, damit ein Modell auf dieser Maschine oder im LAN genutzt werden kann. Aus verlangt einen Anbieter, der über das Internet erreichbar ist, und sonst nichts."
+        },
+        "send_machine_names": {
+          "label": "PC-Namen senden",
+          "help": "Aus. Eine Frage zu einem PC würde sonst dessen Namen, die angemeldete Person und die Seriennummer an den Anbieter tragen. Der Regelentwurf sendet ohnehin keine Maschinendaten."
+        },
+        "draft_retention_days": {
+          "label": "Unfertige Entwürfe aufbewahren",
+          "help": "Eine entworfene Regel, die niemand übernommen hat, wird danach gelöscht. Übernommene Regeln bleiben unberührt."
+        }
+      },
       "provisioning": {
         "leave_system_apps_enabled": {
           "label": "Geräteeigene Apps aktiviert lassen",
@@ -990,6 +1031,9 @@
       }
     },
     "choice": {
+      "ai.provider": {
+        "openai_chat": "OpenAI-kompatible Chat Completions"
+      },
       "hub.default_language": {
         "auto": "Automatisch (Browser der jeweiligen Person)",
         "en": "English",
@@ -2784,6 +2828,21 @@
     "no_scripts": "Noch keine Skripte. Legen Sie zuerst eines im Reiter „Skripte“ an.",
     "script_disabled": "abgeschaltet",
     "script_reads": "Liest: {variables}"
+  },
+  "ai": {
+    "drafter_title": "Eine Regel beschreiben",
+    "drafter_intro": "Sagen Sie in normalem Deutsch, was Sie wollen. Zur\u00fcck kommt ein Entwurf, gepr\u00fcft gegen die Variablen und Aktionen, die dieser Hub tats\u00e4chlich hat. Nichts wird gespeichert, bis Sie die Regel anlegen, und eine angelegte Regel startet ausgeschaltet.",
+    "placeholder": "Melde dich, wenn auf einem Laufwerk weniger als 10 GB frei sind",
+    "draft": "Entwerfen",
+    "drafting": "Einen Moment...",
+    "creating": "Wird angelegt...",
+    "created": "Angelegt und ausgeschaltet. Lesen Sie sie unten, bevor Sie sie einschalten.",
+    "refine_placeholder": "Mach lieber 5 GB daraus",
+    "refine": "Anpassen",
+    "preview": "Welche PCs passen jetzt",
+    "create": "Regel anlegen",
+    "discard": "Verwerfen",
+    "failed": "{error}"
   },
   "scripts": {
     "body": "Skript",
