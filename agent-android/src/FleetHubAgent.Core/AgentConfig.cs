@@ -47,7 +47,7 @@ public static class AgentConfig
     /// Rejected alternative, and it is worth keeping: matching the Windows agent's number so
     /// the fleet "looks consistent". That reads to the hub as a fully-featured agent on
     /// somebody else's train, and every one of those gates would pass on a lie.</summary>
-    public const string Version = "0.2.1";
+    public const string Version = "0.2.2";
 
     // --- Hub endpoints -----------------------------------------------------
 
