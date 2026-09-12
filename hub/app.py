@@ -1991,13 +1991,25 @@ print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 # authenticate with a bearer token that no browser attaches on its own, so they are not
 # CSRF-able and correctly do not pass through this.
 #
-# POST is the only method checked, and that is the whole rule rather than an oversight: a
-# cross-site HTML form is the one request that reaches us without a preflight, and a form
-# can only issue GET or POST. A cross-origin PUT, PATCH or DELETE has to go through
-# fetch/XHR, which preflights and fails here (no ACAO on these routes), so requiring a
-# content type on those would break working callers to defend against a request no browser
-# will send.
-CSRF_CHECKED_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
+# TWO sets, not one, and keeping them apart is what stops the console breaking.
+#
+# The TOKEN covers every state-changing method. It costs a caller nothing -- common.js
+# attaches the header on anything that is not GET/HEAD/OPTIONS -- and it is the control that
+# actually stops a cross-site write, so there is no reason to exempt a method from it.
+#
+# The CONTENT TYPE covers POST only, and that is the whole rule rather than an oversight: a
+# cross-site HTML form is the one request that reaches us without a preflight, and a form can
+# only issue GET or POST. A cross-origin PUT, PATCH or DELETE has to go through fetch/XHR,
+# which preflights and fails here (no ACAO on these routes), so requiring a content type on
+# those defends against a request no browser sends -- and breaks the ones the console does.
+#
+# **This has already happened once.** The two were briefly the same set, and the twenty-six
+# bodyless `fetch(url, {method: 'DELETE'})` calls in hub/static/js -- delete a machine, delete
+# a package, revoke an invite, remove a firmware image, drop a maintenance window -- all
+# started answering 415, because the interceptor adds the token header and no content type.
+# The token check was fine; widening the legacy check alongside it was the regression.
+CSRF_TOKEN_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
+CSRF_CHECKED_METHODS = frozenset({"POST"})
 # The two console endpoints that legitimately post something other than JSON: a file.
 # multipart/form-data IS form-producible, so these stay reachable cross-site -- but both
 # are deliberately inert (they store bytes and return a digest, creating no package, no
@@ -2056,8 +2068,9 @@ def _csrf_token_valid():
 def _csrf_content_type_ok():
     """May this state-changing, cookie-authenticated request proceed?
 
-    Legacy check: JSON content-type was the original CSRF defence.  Retained as
-    a defence-in-depth layer alongside the token check.
+    The older half of the gate: a JSON content type was the original CSRF defence, and it is
+    kept behind the token as defence in depth. POST only -- see CSRF_CHECKED_METHODS for why
+    applying it to DELETE and PUT is not caution but a broken console.
     """
     if request.method not in CSRF_CHECKED_METHODS:
         return True
@@ -2121,7 +2134,7 @@ def login_required(view):
         # to proceed.  Bearer-auth requests are already exempt above.  The token is
         # issued in a <meta> tag by base.html and echoed as X-CSRF-Token by a global
         # fetch interceptor in common.js.
-        if request.method in CSRF_CHECKED_METHODS:
+        if request.method in CSRF_TOKEN_METHODS:
             if request.endpoint not in CSRF_UPLOAD_ENDPOINTS:
                 if not _csrf_token_valid():
                     return jsonify({"error": "CSRF token missing or invalid. "

@@ -1,17 +1,28 @@
 """The CSRF gate in app.login_required.
 
 A console session can run arbitrary code as SYSTEM on any enrolled machine, so a CSRF
-against a signed-in operator is fleet-wide RCE. Two controls carry that: SameSite=Lax on
-the session cookie, and a required JSON content type on every state-changing request.
+against a signed-in operator is fleet-wide RCE. Three controls carry that: SameSite=Lax on
+the session cookie, a per-session token echoed as `X-CSRF-Token`, and the older requirement
+of a JSON content type.
 
-Every blueprint's docstring has always claimed the second one, but until it was enforced
-in login_required it was only INCIDENTALLY true -- bodies are read with
-get_json(silent=True), which returns None on a wrong content type rather than refusing, so
-the requirement held only for views that then failed over a missing field. The routes
-below read no body at all, and for those the documented control did not exist. They are
-the cases worth pinning: a `/cancel` or `/dismiss` that a cross-site form can fire is a
-real one, and it is invisible in a code review of the route itself, because the control it
-depends on is somewhere else.
+**The two server-side layers cover different method sets, and this file exists to keep them
+apart.** The token covers POST, PUT, PATCH and DELETE, because it costs a caller nothing --
+common.js attaches it to everything that is not a read. The content type covers POST alone,
+because a cross-site HTML form is the only state-changing request that arrives without a
+preflight and a form can only issue GET or POST.
+
+Merging the two sets is not extra caution; it is an outage. It happened once already: for
+one commit both checks used one set, and the twenty-six bodyless `fetch(url, {method:
+'DELETE'})` calls in hub/static/js -- delete a machine, delete a package, revoke an invite,
+remove a firmware image -- all began answering 415, because the interceptor attaches a token
+header and no content type. So the last test below sends a bodyless DELETE with a good token
+and asserts it is NOT refused.
+
+The content-type layer still earns its place for the reason it was added: bodies are read
+with get_json(silent=True), which returns None on a wrong content type rather than refusing,
+so before it was enforced the requirement held only for views that then failed over a missing
+field. Around fifteen state-changing endpoints read no body at all, and for those the
+documented control did not exist.
 
 Run from the repo root so `import app` resolves.
 """
@@ -28,6 +39,7 @@ os.environ["ALLOWED_EMAILS"] = "tester@example.com"
 
 import alerts
 import app
+import console_session
 
 PASS = 0
 FAIL = 0
@@ -44,8 +56,15 @@ def check(name, cond):
 
 
 client = app.app.test_client()
-with client.session_transaction() as sess:
+TOKEN = console_session.sign_in(client, "tester@example.com")
+
+# A second client signed in the old way: a session cookie and no token. It stands in for
+# every caller that is not the console -- a cross-site form, a stale tab, a script somebody
+# wrote against the API with a copied cookie.
+tokenless = app.app.test_client()
+with tokenless.session_transaction() as sess:
     sess["user"] = {"email": "tester@example.com"}
+    sess["csrf_token"] = TOKEN
 
 
 def test_form_content_types_are_refused():
@@ -59,6 +78,7 @@ def test_form_content_types_are_refused():
     aid = alerts.upsert_duplicate(app.DB_PATH, "SER-CSRF-1", ["m1", "m2"])
     url = f"/api/alerts/{aid}/dismiss"
 
+    # WITH a valid token, so what is being measured here is the content-type layer alone.
     for ctype in ("application/x-www-form-urlencoded", "multipart/form-data",
                   "text/plain"):
         r = client.post(url, data="x=1", content_type=ctype)
@@ -66,6 +86,15 @@ def test_form_content_types_are_refused():
     check("no content type at all -> 415", client.post(url).status_code == 415)
     check("the alert is still open -- nothing was dismissed",
           alerts.get(app.DB_PATH, aid)["status"] == "open")
+
+    # And without one, which is the layer that actually stops a cross-site request: the
+    # token check runs first, so this is a 403 before the content type is ever considered.
+    r = tokenless.post(url, json={})
+    check("a signed-in caller with no token is refused (403)", r.status_code == 403)
+    check("...and a wrong token is refused the same way",
+          client.post(url, json={},
+                      headers={"X-CSRF-Token": "0" * 64}).status_code == 403)
+    check("the alert is STILL open", alerts.get(app.DB_PATH, aid)["status"] == "open")
 
     r = client.post(url, json={})
     check("the real console call still works", r.status_code == 200)
@@ -87,13 +116,30 @@ def test_charset_parameter_is_tolerated():
 def test_reads_and_preflighted_methods_are_untouched():
     """GET is not state-changing, and PUT/PATCH/DELETE cannot come from a form -- a
     cross-origin one has to use fetch, which preflights and fails. Requiring a content
-    type on those would break working callers to stop a request no browser sends."""
+    type on those would break working callers to stop a request no browser sends.
+
+    **This is the regression guard, not a formality.** The console issues twenty-six bodyless
+    DELETEs and several bodyless PUTs, none of which sets a content type, because common.js
+    attaches a token header and nothing else. A 415 here means every one of those buttons is
+    dead, and the symptom an operator reports is "Delete does nothing" -- which reads like a
+    broken button rather than like a security control, so nobody looks here.
+    """
     print("\n-- GET and the preflighted methods are not gated --")
     check("GET /api/alerts is unaffected", client.get("/api/alerts").status_code == 200)
+
+    # The two method sets are the design. Pinned literally so re-merging them fails HERE,
+    # with this comment attached, rather than in six unrelated modules at once.
+    check("the token covers every state-changing method",
+          app.CSRF_TOKEN_METHODS == {"POST", "PUT", "DELETE", "PATCH"})
+    check("the content-type rule covers POST alone",
+          app.CSRF_CHECKED_METHODS == {"POST"})
+
     # A DELETE with no body reaches its view; 404 is the view answering, not the gate.
     r = client.delete("/api/machines/no-such-machine")
-    check("DELETE with no content type reaches the view",
-          r.status_code in (200, 400, 403, 404))
+    check("a bodyless DELETE with a token reaches the view, not a 415",
+          r.status_code != 415 and r.status_code in (200, 400, 403, 404))
+    check("...and without a token it is still refused, by the token check",
+          tokenless.delete("/api/machines/no-such-machine").status_code == 403)
 
 
 def test_agent_endpoints_are_not_gated():
@@ -136,7 +182,8 @@ def test_device_tokens_are_not_gated_either():
     cookie_resp = client.post("/api/fleet/commands", data=form, content_type=ctype)
     token_resp = client.post("/api/fleet/commands", data=form, content_type=ctype,
                              headers=headers)
-    check("the cookie caller is refused (415)", cookie_resp.status_code == 415)
+    check("the cookie caller is refused (415, on the content type)",
+          cookie_resp.status_code == 415)
     check("the bearer caller is not", token_resp.status_code != 415)
 
     check("a GET with a device token is authenticated at all",

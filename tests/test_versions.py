@@ -12,6 +12,7 @@ Run from the repo root so `import app` resolves.
 """
 import os
 import sys
+import console_session
 import threading
 import time
 import tempfile
@@ -692,15 +693,13 @@ def test_hub_update_notice():
         client = app.app.test_client()
         check("signed out -> not served", client.get("/api/hub/version").status_code != 200)
 
-        with client.session_transaction() as sess:
-            sess["user"] = {"email": "nobody@example.com"}
+        console_session.sign_in(client, "nobody@example.com")
         check("signed in without manage_settings -> 403",
               client.get("/api/hub/version").status_code == 403)
         check("...and cannot trigger an update either",
               client.post("/api/hub/update", json={}).status_code == 403)
 
-        with client.session_transaction() as sess:
-            sess["user"] = {"email": "tester@example.com"}
+        console_session.sign_in(client, "tester@example.com")
         resp = client.get("/api/hub/version")
         body = resp.get_json()
         check("manage_settings -> 200", resp.status_code == 200)
@@ -913,8 +912,7 @@ def test_channel_wiring():
 
     check("signed out -> the channel endpoint is not served",
           client.get("/api/machines/chan-beta-box/channel").status_code != 200)
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "tester@example.com"}
+    console_session.sign_in(client, "tester@example.com")
 
     def outdated_count():
         # Through the endpoint rather than _build_fleet_summary directly: the summary

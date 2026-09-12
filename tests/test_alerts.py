@@ -30,6 +30,7 @@ os.environ["ALLOWED_EMAILS"] = "tester@example.com"
 
 import app
 import alerts
+import console_session
 import settings
 
 PASS = 0
@@ -47,8 +48,7 @@ def check(name, cond):
 
 
 client = app.app.test_client()
-with client.session_transaction() as sess:
-    sess["user"] = {"email": "tester@example.com"}
+console_session.sign_in(client, "tester@example.com")
 
 
 def report(machine, serial, temp=42.0):
