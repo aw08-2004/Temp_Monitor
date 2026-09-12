@@ -1,5 +1,31 @@
 // Shared helpers used across dashboard/machine/history pages.
 
+// ---- CSRF token interceptor ----
+// Reads the token from <meta name="csrf-token"> and attaches it as the
+// X-CSRF-Token header on every state-changing fetch.  The server issues the
+// token in the session cookie and exposes it via the base.html meta tag.
+// login_required validates the header on POST/PUT/DELETE/PATCH for
+// cookie-authenticated requests.
+(function () {
+    const _origFetch = window.fetch;
+    window.fetch = function (input, init) {
+        init = init || {};
+        const method = (init.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            const token = meta && meta.getAttribute('content');
+            if (token) {
+                const headers = new Headers(init.headers || {});
+                if (!headers.has('X-CSRF-Token')) {
+                    headers.set('X-CSRF-Token', token);
+                }
+                init.headers = headers;
+            }
+        }
+        return _origFetch.call(this, input, init);
+    };
+})();
+
 const THEME_STORAGE_KEY = 'tempmonitor:theme';
 const SIDEBAR_STORAGE_KEY = 'tempmonitor:sidebar';
 
@@ -18,11 +44,18 @@ function formatUptime(seconds) {
 }
 
 // Writes state-dot + label + color-modifier onto a .status-pill element.
+// Uses DOM manipulation (createElement + textContent) instead of innerHTML to
+// prevent XSS -- even though current callers only pass catalog keys, any future
+// caller passing user-controlled text would otherwise create a vulnerability.
 function setStatusPill(el, state, label) {
     if (!el) return;
     el.classList.remove('status-pill--ok', 'status-pill--warn', 'status-pill--danger', 'status-pill--muted');
     el.classList.add(`status-pill--${state}`);
-    el.innerHTML = `<span class="status-pill__dot"></span>${label}`;
+    el.textContent = '';
+    const dot = document.createElement('span');
+    dot.className = 'status-pill__dot';
+    el.appendChild(dot);
+    el.appendChild(document.createTextNode(label));
 }
 
 // A machine's online/offline pill, qualified when it has no fleet enrollment.

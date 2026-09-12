@@ -1,8 +1,10 @@
 import ctypes
+import hmac
 import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -125,7 +127,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.108.0"
+HUB_VERSION = "1.108.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1815,6 +1817,15 @@ AGENT_ENROLLMENT_SECRET = os.environ.get("AGENT_ENROLLMENT_SECRET", "")
 if not AGENT_ENROLLMENT_SECRET:
     print("[fleet] AGENT_ENROLLMENT_SECRET unset -- agent enrollment disabled (fail closed).")
 
+# Optional shared secret for the /api/report telemetry endpoint. When set, every
+# report POST must include a matching 'report_secret' field. When unset the endpoint
+# remains open (backwards compatible with existing telemetry-only deployments) but
+# a warning is printed so operators know the exposure.
+AGENT_REPORT_SECRET = os.environ.get("AGENT_REPORT_SECRET", "")
+if not AGENT_REPORT_SECRET:
+    print("[fleet] AGENT_REPORT_SECRET unset -- /api/report is unauthenticated.")
+    print("       Set AGENT_REPORT_SECRET in .env to require a shared secret from agents.")
+
 # ================================
 # WEB & WEBSOCKET SETUP
 # ================================
@@ -1852,6 +1863,11 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=SESSION_LIFETIME_DAYS),
     SESSION_REFRESH_EACH_REQUEST=True,
 )
+
+# Rate limiter for sensitive endpoints (Finding 7: no rate limiting on
+# enrollment or API endpoints). Lightweight in-memory, no external deps.
+from rate_limit import RateLimiter
+rate_limiter = RateLimiter(app)
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
@@ -1981,7 +1997,7 @@ print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 # fetch/XHR, which preflights and fails here (no ACAO on these routes), so requiring a
 # content type on those would break working callers to defend against a request no browser
 # will send.
-CSRF_CHECKED_METHODS = frozenset({"POST"})
+CSRF_CHECKED_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
 # The two console endpoints that legitimately post something other than JSON: a file.
 # multipart/form-data IS form-producible, so these stay reachable cross-site -- but both
 # are deliberately inert (they store bytes and return a digest, creating no package, no
@@ -2011,8 +2027,38 @@ CSRF_UPLOAD_ENDPOINTS = frozenset({
 })
 
 
+def _get_or_create_csrf_token():
+    """Return the CSRF token for the current session, creating one if absent.
+
+    The token is a 64-hex-char random string stored in the signed session cookie.
+    It is rotated on each new login (_complete_login) and persisted for the
+    session's lifetime.  The browser reads it from a <meta> tag in base.html
+    and sends it back as the X-CSRF-Token header on every state-changing request.
+    """
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(32)
+        session["csrf_token"] = token
+    return token
+
+
+def _csrf_token_valid():
+    """Does this request carry a valid CSRF token in the X-CSRF-Token header?"""
+    expected = session.get("csrf_token")
+    if not expected:
+        return False
+    provided = request.headers.get("X-CSRF-Token")
+    if not provided:
+        return False
+    return hmac.compare_digest(expected, provided)
+
+
 def _csrf_content_type_ok():
-    """May this state-changing, cookie-authenticated request proceed?"""
+    """May this state-changing, cookie-authenticated request proceed?
+
+    Legacy check: JSON content-type was the original CSRF defence.  Retained as
+    a defence-in-depth layer alongside the token check.
+    """
     if request.method not in CSRF_CHECKED_METHODS:
         return True
     if request.endpoint in CSRF_UPLOAD_ENDPOINTS:
@@ -2070,6 +2116,16 @@ def login_required(view):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Authentication required"}), 401
             return redirect(url_for("login"))
+        # CSRF protection: token check (new) + content-type check (legacy, defence
+        # in depth).  Both must pass for a cookie-authenticated state-changing request
+        # to proceed.  Bearer-auth requests are already exempt above.  The token is
+        # issued in a <meta> tag by base.html and echoed as X-CSRF-Token by a global
+        # fetch interceptor in common.js.
+        if request.method in CSRF_CHECKED_METHODS:
+            if request.endpoint not in CSRF_UPLOAD_ENDPOINTS:
+                if not _csrf_token_valid():
+                    return jsonify({"error": "CSRF token missing or invalid. "
+                                             "Include X-CSRF-Token header."}), 403
         if not _csrf_content_type_ok():
             return jsonify({"error": "This endpoint requires Content-Type: "
                                      "application/json."}), 415
@@ -2409,6 +2465,9 @@ def _complete_login(user_info, provider):
     # opts this session into that lifetime -- without it Flask issues a cookie that dies
     # when the browser closes, no matter what the lifetime says.
     session.permanent = True
+    # Rotate the CSRF token on every login so a leaked token from a previous session
+    # cannot be reused after re-authentication.
+    session.pop("csrf_token", None)
     session["user"] = {
         "email": email,
         "name": user_info.get("name") or email,
@@ -3032,17 +3091,21 @@ def is_valid_serial(serial):
 # textContent and Jinja autoescapes, so this is the second layer, not the only one;
 # it exists so a future innerHTML slip isn't immediately exploitable.
 #
-# Deliberately a rejection of characters that cannot appear in a real hostname, not an
-# allow-list of the ones that can: an allow-list here would silently drop legitimate
-# machines from a fleet that already has odd names in it, and the point is defence in
-# depth, not naming policy.
+# Machine name validation uses two layers:
+# 1. An allowlist of hostname-safe characters (letters, digits, hyphens, dots, spaces,
+#    underscores) as the primary control -- matching RFC 1123 hostname conventions plus
+#    common enterprise naming patterns like "IT-LAB-PC_04" or "Workstation 12".
+# 2. The original blocklist as secondary defense-in-depth against any edge cases.
 MACHINE_NAME_MAX_CHARS = 128
+_MACHINE_NAME_ALLOWED = re.compile(r'^[a-zA-Z0-9 ._-]+$')
 _MACHINE_NAME_FORBIDDEN = re.compile(r'[<>"\'&\x00-\x1f\x7f-\x9f]')
 
 def is_valid_machine_name(machine):
     """True if `machine` is safe to store and render as a machine identifier."""
     name = str(machine or "").strip()
     if not name or len(name) > MACHINE_NAME_MAX_CHARS:
+        return False
+    if not _MACHINE_NAME_ALLOWED.match(name):
         return False
     return _MACHINE_NAME_FORBIDDEN.search(name) is None
 
@@ -4330,11 +4393,24 @@ def start_local_logger():
 # API FOR REMOTE MACHINES
 # ================================
 @app.route('/api/report', methods=['POST'])
+@rate_limiter.limit('120/minute')
 def report_temp():
-    """Endpoint for other machines to send their temps via POST request"""
+    """Endpoint for other machines to send their temps via POST request.
+
+    When AGENT_REPORT_SECRET is configured, every report must include a
+    matching 'report_secret' field. This prevents unauthenticated spoofing
+    of machine telemetry while remaining backwards-compatible with existing
+    deployments that have not yet set the secret.
+    """
     data = request.json
     if not data or 'machine' not in data or 'temp' not in data:
         return jsonify({"error": "Invalid payload"}), 400
+
+    # --- secret gate (Finding 1 fix) ---
+    if AGENT_REPORT_SECRET:
+        provided = data.get('report_secret', '')
+        if not hmac.compare_digest(str(provided), AGENT_REPORT_SECRET):
+            return jsonify({"error": "Invalid or missing report secret"}), 403
 
     machine = data['machine']
     if not is_valid_machine_name(machine):
@@ -5655,7 +5731,11 @@ def inject_nav_context():
                # First-paint state for the sidebar update notice, so it is correct before
                # its poller has run once. The template also gates on MANAGE_SETTINGS.
                "latest_hub_version": get_latest_hub_version(),
-               "hub_update_available": _hub_update_notice_visible()}
+               "hub_update_available": _hub_update_notice_visible(),
+               # CSRF token for the meta tag; _get_or_create_csrf_token is safe to
+               # call on every render -- it only creates a token when the session
+               # does not already carry one.
+               "csrf_token": _get_or_create_csrf_token()}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
         return context
