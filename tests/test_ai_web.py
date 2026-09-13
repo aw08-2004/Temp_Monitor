@@ -37,7 +37,7 @@ API_KEY = "sk-do-not-leak-me"
 
 CONFIG = {
     "enabled": True,
-    "provider": ai.PROVIDER_OPENAI_CHAT,
+    "provider": ai.PRESET_CUSTOM,
     "base_url": "http://127.0.0.1:11434",
     "model": "test-model",
     "max_tokens": 512,
@@ -72,6 +72,22 @@ def answer(condition_text, target=None, actions=None):
             "actions": actions or [{"type": "alert", "params": {"text": "hi"}}],
             "for_seconds": 0, "cooldown_seconds": 0, "refusal": ""}
     return lambda config, messages, **kwargs: (None, json.dumps(body))
+
+
+class FakeResponse:
+    """The slice of a requests response that ai.py's streamed reads touch."""
+
+    def __init__(self, chunks, status=200):
+        self.chunks, self.status_code = chunks, status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def iter_content(self, chunk_size=8192):
+        return iter(self.chunks)
 
 
 def main():
@@ -240,6 +256,38 @@ def main():
               r.status_code == 501)
         r = c.post("/api/ai/query", json={"text": "which are hot?"})
         check("fleet query answers 501 rather than half-working", r.status_code == 501)
+
+        print("\n== The model list, and who may refresh it ==")
+        CURRENT_USER = "scoped@x.com"
+        r = c.get("/api/ai/models")
+        body = r.get_json()
+        check("a rule author can read the cached model list", r.status_code == 200)
+        check("...which is empty until somebody refreshes it", body["models"] == [])
+        check("...and says they may NOT refresh it, holding no manage_settings",
+              body["can_refresh"] is False)
+        r = c.post("/api/ai/models/refresh", json={})
+        check("refreshing is manage_settings, not manage_rules", r.status_code == 403)
+
+        CURRENT_USER = "super@x.com"
+        real_get = ai.requests.get
+        try:
+            ai.requests.get = lambda *a, **k: FakeResponse(
+                [json.dumps({"data": [{"id": "b-model"}, {"id": "a-model"}]}).encode()])
+            r = c.post("/api/ai/models/refresh", json={})
+            check("an admin can refresh", r.status_code == 200)
+            check("...and gets the provider's list back, sorted",
+                  r.get_json()["models"] == ["a-model", "b-model"])
+            r = c.get("/api/ai/models")
+            check("...which is then cached for everyone",
+                  r.get_json()["models"] == ["a-model", "b-model"])
+
+            # A provider that will not answer is THEIR fault, not this hub's misconfiguration,
+            # and the two need different fixes -- so they get different status codes.
+            ai.requests.get = lambda *a, **k: FakeResponse([b""], status=500)
+            r = c.post("/api/ai/models/refresh", json={})
+            check("a provider that fails answers 502, not 400", r.status_code == 502)
+        finally:
+            ai.requests.get = real_get
 
         print("\n== With the feature switched off ==")
         CURRENT_USER = "super@x.com"

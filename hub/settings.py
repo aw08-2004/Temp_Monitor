@@ -600,14 +600,22 @@ REGISTRY = (
     # like one that is broken. #17 asks for exactly this default, and an operator turning it
     # on is the moment somebody decides telemetry may leave the building.
     _s("ai.enabled", "ai", "bool", False),
-    # The WIRE SHAPE, not the vendor. Ollama, vLLM, LM Studio, OpenRouter and OpenAI all speak
-    # this one, so a LAN-only deployment and a hosted one differ by base_url alone. An enum
-    # from the start because a second adapter is additive and a bool would have to be migrated.
-    _s("ai.provider", "ai", "enum", ai.PROVIDER_OPENAI_CHAT, choices=list(ai.PROVIDERS)),
-    # No default, deliberately: there is no address this hub should guess at. The nearest
-    # thing to a recommended value is http://127.0.0.1:11434 and typing that here would point
-    # every fleet at a port nobody asked it to open.
+    # Which provider, by name. They all speak one wire shape (ai.WIRE_SHAPES), so this picks
+    # an ADDRESS rather than a code path -- "point it at OpenRouter" is the question somebody
+    # actually has, and which url OpenRouter's OpenAI-compatible endpoint lives at is trivia
+    # they should not have to look up. `custom` is first and is the default, so the list reads
+    # as a convenience rather than as a hub with a preferred vendor.
+    _s("ai.provider", "ai", "enum", ai.PRESET_CUSTOM, choices=list(ai.PROVIDERS)),
+    # Read only while the preset is `custom`; every other preset carries its own address, so
+    # this field cannot drift out of step with the choice above. No default, deliberately:
+    # there is no address this hub should guess at, and writing one here would point a fleet
+    # at a port nobody asked it to open.
     _s("ai.base_url", "ai", "str", ""),
+    # Free text, NOT an enum over the cached model list. The list comes from a third party
+    # that may be unreachable, renamed a model this morning, or serve one this hub has never
+    # heard of through a gateway -- an enum would make any of those unconfigurable. The picker
+    # lives in settings-ai.js, which suggests the cached ids over this field while leaving it
+    # typable, so the list is an aid rather than a gate.
     _s("ai.model", "ai", "str", ""),
     _s("ai.max_tokens", "ai", "int", 1024, minimum=64, maximum=32768),
     _s("ai.timeout_seconds", "ai", "int", 60, minimum=5, maximum=600, unit="seconds"),
@@ -754,8 +762,13 @@ def coerce_and_validate(setting, raw, lang=None):
         return value
 
     if setting.type == "str":
+        # None becomes "", not None. A str setting holds a string; every reader here treats
+        # blank as "not configured", and `/api/settings/reset` is how a value goes back to its
+        # default. Storing null instead was how the old number-input bug erased a configured
+        # tile URL or LDAP server -- the JS no longer sends it, and this makes the erasure
+        # unrepresentable rather than merely unlikely.
         if raw is None:
-            return None
+            return ""
         return str(raw).strip()
 
     if setting.type == "enum":

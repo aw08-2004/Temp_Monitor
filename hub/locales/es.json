@@ -950,16 +950,16 @@
         },
         "provider": {
           "label": "API del proveedor",
-          "help": "El formato de la petición, no una empresa. El indicado lo hablan Ollama, vLLM, LM Studio, OpenRouter y OpenAI por igual, así que la dirección de abajo es la que decide adónde van realmente las consultas."
+          "help": "Qué proveedor usar. Al elegir uno se rellena su dirección; elige Dirección propia para escribir la tuya. Todos hablan la misma API, así que esto decide adónde van las consultas, no cómo se envían."
         },
         "base_url": {
           "label": "Dirección del proveedor",
-          "help": "Adónde enviar una consulta, sin la ruta. Un modelo que se ejecuta en esta máquina no necesita clave y nada sale del edificio.",
+          "help": "Solo se usa con Dirección propia. Adónde enviar una consulta, sin la ruta. Un modelo que se ejecuta en esta máquina no necesita clave y nada sale del edificio.",
           "placeholder": "http://127.0.0.1:11434"
         },
         "model": {
           "label": "Modelo",
-          "help": "Exactamente como lo nombra el proveedor.",
+          "help": "Exactamente como lo nombra el proveedor. Actualiza arriba la lista de modelos y este campo sugerirá lo que sirve el proveedor.",
           "placeholder": "llama3.1:8b"
         },
         "max_tokens": {
@@ -1030,9 +1030,25 @@
         }
       }
     },
+    "ai": {
+      "models_title": "Modelos que sirve este proveedor",
+      "refresh": "Actualizar la lista",
+      "refreshing": "Preguntando al proveedor...",
+      "count": "{count} modelos, leídos {age}",
+      "never": "Aún no se ha leído. Actualiza para llenar el campo de modelo de abajo con una lista que puedes buscar.",
+      "stale": "{count} modelos, leídos {age}: lo bastante antiguos como para actualizar.",
+      "needs_key": "Este proveedor necesita una clave. Define AI_API_KEY en .env y reinicia el concentrador.",
+      "custom_hint": "Elige un proveedor arriba, o déjalo en una dirección propia y escríbela abajo.",
+      "failed": "{error}"
+    },
     "choice": {
       "ai.provider": {
-        "openai_chat": "Chat completions compatible con OpenAI"
+        "custom": "Dirección propia",
+        "ollama": "Ollama (esta máquina)",
+        "lm_studio": "LM Studio (esta máquina)",
+        "vllm": "vLLM (esta máquina)",
+        "openai": "OpenAI",
+        "openrouter": "OpenRouter"
       },
       "hub.default_language": {
         "auto": "Automático (el navegador de cada persona)",

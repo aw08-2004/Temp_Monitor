@@ -950,16 +950,16 @@
         },
         "provider": {
           "label": "Anbieter-API",
-          "help": "Das Anfrageformat, nicht eine Firma. Das genannte sprechen Ollama, vLLM, LM Studio, OpenRouter und OpenAI gleichermaßen, also entscheidet die Adresse unten, wohin Anfragen tatsächlich gehen."
+          "help": "Welcher Anbieter genutzt wird. Eine Auswahl trägt dessen Adresse gleich ein; wählen Sie Eigene Adresse, um selbst eine einzugeben. Alle sprechen dieselbe API, das hier entscheidet also wohin Anfragen gehen, nicht wie sie gesendet werden."
         },
         "base_url": {
           "label": "Adresse des Anbieters",
-          "help": "Wohin eine Anfrage geht, ohne Pfad. Ein Modell auf dieser Maschine braucht keinen Schlüssel, und nichts verlässt das Haus.",
+          "help": "Wird nur mit Eigene Adresse verwendet. Wohin eine Anfrage geht, ohne Pfad. Ein Modell auf dieser Maschine braucht keinen Schlüssel, und nichts verlässt das Haus.",
           "placeholder": "http://127.0.0.1:11434"
         },
         "model": {
           "label": "Modell",
-          "help": "Genau so, wie der Anbieter es benennt.",
+          "help": "Genau so, wie der Anbieter es benennt. Aktualisieren Sie oben die Modellliste, dann schlägt dieses Feld vor, was der Anbieter anbietet.",
           "placeholder": "llama3.1:8b"
         },
         "max_tokens": {
@@ -1030,9 +1030,25 @@
         }
       }
     },
+    "ai": {
+      "models_title": "Modelle dieses Anbieters",
+      "refresh": "Liste aktualisieren",
+      "refreshing": "Anbieter wird gefragt...",
+      "count": "{count} Modelle, gelesen {age}",
+      "never": "Noch nicht gelesen. Aktualisieren Sie, um das Modellfeld unten mit einer durchsuchbaren Liste zu füllen.",
+      "stale": "{count} Modelle, gelesen {age} -- alt genug, um eine Aktualisierung zu lohnen.",
+      "needs_key": "Dieser Anbieter braucht einen Schlüssel. Setzen Sie AI_API_KEY in .env und starten Sie den Hub neu.",
+      "custom_hint": "Wählen Sie oben einen Anbieter, oder lassen Sie es bei einer eigenen Adresse und tragen Sie sie unten ein.",
+      "failed": "{error}"
+    },
     "choice": {
       "ai.provider": {
-        "openai_chat": "OpenAI-kompatible Chat Completions"
+        "custom": "Eigene Adresse",
+        "ollama": "Ollama (diese Maschine)",
+        "lm_studio": "LM Studio (diese Maschine)",
+        "vllm": "vLLM (diese Maschine)",
+        "openai": "OpenAI",
+        "openrouter": "OpenRouter"
       },
       "hub.default_language": {
         "auto": "Automatisch (Browser der jeweiligen Person)",

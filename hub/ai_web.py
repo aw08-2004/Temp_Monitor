@@ -36,6 +36,7 @@ import traceback
 from flask import Blueprint, jsonify, request
 
 import ai
+import fleet
 import permissions
 import rules
 
@@ -75,6 +76,11 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
     bp = Blueprint("ai", __name__)
     can_view = access.require(permissions.VIEW)
     can_manage = access.require(permissions.MANAGE_RULES)
+    # Refreshing the model list is CONFIGURING the provider, not authoring a rule: it is the
+    # one action here that makes this hub talk to the third party without an operator having
+    # asked a question, and the field it fills in lives on the Settings page. So it is gated
+    # with the rest of that page rather than with the drafter.
+    can_configure = access.require(permissions.MANAGE_SETTINGS)
 
     def _extra():
         return rules.all_extra_variables(db_path)
@@ -148,7 +154,9 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         error, resolved = ai.provider_config(config, api_key)
         if error:
             return jsonify({"enabled": ai.is_enabled(config), "ready": False,
-                            "error": error, "providers": list(ai.PROVIDERS)}), 200
+                            "error": error, "providers": list(ai.PROVIDERS),
+                            "provider": ai.preset_for(config.get("provider")).name,
+                            "has_api_key": bool(api_key)}), 200
         return jsonify({
             "enabled": True,
             "ready": True,
@@ -157,8 +165,46 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
             "base_url": resolved["base_url"],
             "send_machine_names": resolved["send_machine_names"],
             "providers": list(ai.PROVIDERS),
+            # Whether a key EXISTS, never the key. An operator debugging a 401 needs to know
+            # that .env was read; nobody needs the value back out of the hub that holds it.
+            "has_api_key": bool(api_key),
             "can_manage": access.can(permissions.MANAGE_RULES),
         }), 200
+
+    # ---------------- The model list ----------------
+
+    @bp.route("/api/ai/models", methods=["GET"])
+    @login_required
+    @can_view
+    def ai_models():
+        """What the chosen provider last reported. Reads the cache, never the network."""
+        config = ai_config()
+        provider = ai.preset_for(config.get("provider")).name
+        listing = ai.list_models(db_path, provider)
+        listing["provider"] = provider
+        listing["can_refresh"] = access.can(permissions.MANAGE_SETTINGS)
+        return jsonify(listing), 200
+
+    @bp.route("/api/ai/models/refresh", methods=["POST"])
+    @login_required
+    @can_configure
+    def refresh_ai_models():
+        """Ask the provider what it serves. The one route here that reaches out on its own.
+
+        502 when the provider is the problem, which separates "your hub is fine and theirs is
+        not" from a 400 about this hub's own configuration -- the same split sharing_web.py
+        draws for a peer that will not answer.
+        """
+        config = ai_config()
+        error, listing = ai.refresh_models(db_path, config, api_key=api_key)
+        if error:
+            unconfigured = ("switched off" in error or "no AI provider" in error)
+            return jsonify({"error": error}), (400 if unconfigured else 502)
+        listing["provider"] = ai.preset_for(config.get("provider")).name
+        fleet.audit(db_path, actor=_actor(), action="ai_models_refreshed",
+                    target=listing["provider"],
+                    detail={"models": len(listing["models"])})
+        return jsonify(listing), 200
 
     # ---------------- Drafting ----------------
 

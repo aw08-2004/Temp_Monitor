@@ -93,4 +93,7 @@
 {# The Sign-in panel is built entirely by this script -- there are no schema fields for it,
    since its settings live in .env rather than the settings table. #}
 <script src="{{ url_for('static', filename='js/settings-auth.js') }}"></script>
+{# settings-ai.js adds the model list and its Refresh button on top of the schema-rendered
+   ai.* fields, and turns the model box into a picker over what the provider last reported. #}
+<script src="{{ url_for('static', filename='js/settings-ai.js') }}"></script>
 {% endblock %}

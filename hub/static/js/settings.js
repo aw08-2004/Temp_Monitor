@@ -156,8 +156,10 @@ function buildControl(field) {
             ? buildTriStateControl(field)
             : buildCheckboxControl(field);
     }
-    if (field.type === 'str_list' || field.type === 'url_list') return buildListControl(field);
+    if (field.type === 'str_list' || field.type === 'url_list'
+        || field.type === 'path_list') return buildListControl(field);
     if (field.type === 'enum') return buildEnumControl(field);
+    if (field.type === 'str') return buildTextControl(field);
     return buildNumberControl(field);
 }
 
@@ -170,6 +172,29 @@ function buildCheckboxControl(field) {
     // for a concrete-default bool.
     input.checked = Boolean(field.value);
     input.addEventListener('change', () => { markDirty(field.key, input.checked); requestSave(); });
+    return input;
+}
+
+// Every `str` setting used to land in buildNumberControl, and it was not a cosmetic slip.
+// An input[type=number] DISCARDS any value that is not a number, so `map.tile_url`,
+// `directory.computer_filter` and the rest rendered as an empty spinner -- the operator could
+// not see the configured value, could not type a new one, and the first blur sent `null` and
+// wiped what was stored, under a green "Saved". Nine visible fields across four sections.
+//
+// The two things this control does that the number one cannot: it keeps the value as a
+// STRING all the way to markDirty, and it shows `field.placeholder`, which the catalog has
+// been carrying for these fields the whole time.
+function buildTextControl(field) {
+    const input = document.createElement('input');
+    input.className = 'input setting__input';
+    input.id = controlId(field.key);
+    input.type = 'text';
+    if (field.placeholder) input.placeholder = field.placeholder;
+    input.value = field.value === null || field.value === undefined ? '' : String(field.value);
+    // Empty means empty, never null: "" is a string a str field can hold, and null is what
+    // the number control used to send on its way to erasing one.
+    input.addEventListener('input', () => markDirty(field.key, input.value));
+    input.addEventListener('change', requestSave);
     return input;
 }
 
