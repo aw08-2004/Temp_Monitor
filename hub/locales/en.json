@@ -607,7 +607,8 @@
       "provisioning": "Provisioning",
       "location": "Location",
       "map": "Map",
-      "policy": "Policy"
+      "policy": "Policy",
+      "ai": "AI Assistance"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1014,6 +1015,46 @@
         "label": "Peer link lifetime",
         "help": "How long a paired hub's credential stays valid, sliding each time it is used. This bounds the link, not a share -- a share can carry its own expiry, or none. Each peer keeps the lifetime in force when it was paired."
       },
+      "ai": {
+        "enabled": {
+          "label": "Use AI assistance",
+          "help": "Off until somebody turns it on. While it is off no prompt leaves this hub and the drafting pages say so; the rest of the settings here do nothing."
+        },
+        "provider": {
+          "label": "Provider API",
+          "help": "The request format, not a company. The one listed is spoken by Ollama, vLLM, LM Studio, OpenRouter and OpenAI alike, so the address below is what decides where prompts actually go."
+        },
+        "base_url": {
+          "label": "Provider address",
+          "help": "Where to send a prompt, without the path. A model running on this machine needs no key and nothing leaves the building.",
+          "placeholder": "http://127.0.0.1:11434"
+        },
+        "model": {
+          "label": "Model",
+          "help": "Exactly as the provider names it.",
+          "placeholder": "llama3.1:8b"
+        },
+        "max_tokens": {
+          "label": "Longest answer",
+          "help": "A bound on one reply. A drafted rule is a few hundred tokens, so this is a fuse rather than a target."
+        },
+        "timeout_seconds": {
+          "label": "Give up after",
+          "help": "How long to wait for a reply. A model on this machine answers in seconds; a hosted one over a slow link can take much longer."
+        },
+        "allow_private_endpoint": {
+          "label": "Allow a provider on this network",
+          "help": "On, so a model running on this machine or on the LAN can be used. Turn it off to require a provider reachable over the internet and nothing else."
+        },
+        "send_machine_names": {
+          "label": "Send machine names",
+          "help": "Off. A question about one PC would otherwise carry its name, its signed-in user and its serial number to the provider. The rule drafter never sends machine data either way."
+        },
+        "draft_retention_days": {
+          "label": "Keep unfinished drafts for",
+          "help": "A drafted rule nobody committed is deleted after this. Committed rules are unaffected."
+        }
+      },
       "provisioning": {
         "leave_system_apps_enabled": {
           "label": "Leave the device's own apps enabled",
@@ -1067,6 +1108,9 @@
       "entries here -- an operator's own name for a bucket is not ours to translate."
     ],
     "choice": {
+      "ai.provider": {
+        "openai_chat": "OpenAI-compatible chat completions"
+      },
       "hub.default_language": {
         "auto": "Automatic (each person's browser)",
         "en": "English",
@@ -2902,6 +2946,21 @@
     "no_scripts": "No scripts yet. Add one on the Scripts tab first.",
     "script_disabled": "switched off",
     "script_reads": "Reads: {variables}"
+  },
+  "ai": {
+    "drafter_title": "Describe a rule",
+    "drafter_intro": "Say what you want in plain English. What comes back is a draft, checked against the variables and actions this hub actually has. Nothing is saved until you create it, and a created rule starts switched off.",
+    "placeholder": "Alert me when any drive drops below 10 GB free",
+    "draft": "Draft it",
+    "drafting": "Working...",
+    "creating": "Creating...",
+    "created": "Created, switched off. Read it below before enabling it.",
+    "refine_placeholder": "Make it 5 GB instead",
+    "refine": "Adjust",
+    "preview": "Which machines match now",
+    "create": "Create it",
+    "discard": "Discard",
+    "failed": "{error}"
   },
   "scripts": {
     "body": "Script",

@@ -56,6 +56,7 @@ import apkhost
 import provisioning
 import rules
 import scripts
+import ai
 import notify
 import processes
 import files
@@ -87,6 +88,7 @@ from usage_web import create_usage_blueprint
 from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
+from ai_web import create_ai_blueprint
 from rules_web import create_rules_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
@@ -127,7 +129,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.108.1"
+HUB_VERSION = "1.109.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1817,6 +1819,22 @@ AGENT_ENROLLMENT_SECRET = os.environ.get("AGENT_ENROLLMENT_SECRET", "")
 if not AGENT_ENROLLMENT_SECRET:
     print("[fleet] AGENT_ENROLLMENT_SECRET unset -- agent enrollment disabled (fail closed).")
 
+# ================================
+# AI PROVIDER CONFIG (roadmap #24)
+# ================================
+# The provider's API key, and the only piece of AI configuration that is NOT a setting: the
+# rest (whether the feature is on, which base url, which model) lives in settings.REGISTRY
+# where an admin can edit it, and settings.py says no secrets live there.
+#
+# Unset is NOT a failure. A provider on this network -- Ollama or vLLM on the hub itself, the
+# deployment with no data-egress question attached at all -- needs no key, so an empty value
+# is the LAN configuration rather than a broken one. The feature is switched off by default
+# anyway (`ai.enabled`), which is the actual fail-closed control here.
+AI_API_KEY = os.environ.get("AI_API_KEY", "")
+if not AI_API_KEY:
+    print("[ai] AI_API_KEY unset -- fine for a provider on this network, required by a "
+          "hosted one.")
+
 # Optional shared secret for the /api/report telemetry endpoint. When set, every
 # report POST must include a matching 'report_secret' field. When unset the endpoint
 # remains open (backwards compatible with existing telemetry-only deployments) but
@@ -1991,13 +2009,25 @@ print(f"[auth] Sessions last {SESSION_LIFETIME_DAYS} day(s), rolling.")
 # authenticate with a bearer token that no browser attaches on its own, so they are not
 # CSRF-able and correctly do not pass through this.
 #
-# POST is the only method checked, and that is the whole rule rather than an oversight: a
-# cross-site HTML form is the one request that reaches us without a preflight, and a form
-# can only issue GET or POST. A cross-origin PUT, PATCH or DELETE has to go through
-# fetch/XHR, which preflights and fails here (no ACAO on these routes), so requiring a
-# content type on those would break working callers to defend against a request no browser
-# will send.
-CSRF_CHECKED_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
+# TWO sets, not one, and keeping them apart is what stops the console breaking.
+#
+# The TOKEN covers every state-changing method. It costs a caller nothing -- common.js
+# attaches the header on anything that is not GET/HEAD/OPTIONS -- and it is the control that
+# actually stops a cross-site write, so there is no reason to exempt a method from it.
+#
+# The CONTENT TYPE covers POST only, and that is the whole rule rather than an oversight: a
+# cross-site HTML form is the one request that reaches us without a preflight, and a form can
+# only issue GET or POST. A cross-origin PUT, PATCH or DELETE has to go through fetch/XHR,
+# which preflights and fails here (no ACAO on these routes), so requiring a content type on
+# those defends against a request no browser sends -- and breaks the ones the console does.
+#
+# **This has already happened once.** The two were briefly the same set, and the twenty-six
+# bodyless `fetch(url, {method: 'DELETE'})` calls in hub/static/js -- delete a machine, delete
+# a package, revoke an invite, remove a firmware image, drop a maintenance window -- all
+# started answering 415, because the interceptor adds the token header and no content type.
+# The token check was fine; widening the legacy check alongside it was the regression.
+CSRF_TOKEN_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
+CSRF_CHECKED_METHODS = frozenset({"POST"})
 # The two console endpoints that legitimately post something other than JSON: a file.
 # multipart/form-data IS form-producible, so these stay reachable cross-site -- but both
 # are deliberately inert (they store bytes and return a digest, creating no package, no
@@ -2056,8 +2086,9 @@ def _csrf_token_valid():
 def _csrf_content_type_ok():
     """May this state-changing, cookie-authenticated request proceed?
 
-    Legacy check: JSON content-type was the original CSRF defence.  Retained as
-    a defence-in-depth layer alongside the token check.
+    The older half of the gate: a JSON content type was the original CSRF defence, and it is
+    kept behind the token as defence in depth. POST only -- see CSRF_CHECKED_METHODS for why
+    applying it to DELETE and PUT is not caution but a broken console.
     """
     if request.method not in CSRF_CHECKED_METHODS:
         return True
@@ -2121,7 +2152,7 @@ def login_required(view):
         # to proceed.  Bearer-auth requests are already exempt above.  The token is
         # issued in a <meta> tag by base.html and echoed as X-CSRF-Token by a global
         # fetch interceptor in common.js.
-        if request.method in CSRF_CHECKED_METHODS:
+        if request.method in CSRF_TOKEN_METHODS:
             if request.endpoint not in CSRF_UPLOAD_ENDPOINTS:
                 if not _csrf_token_valid():
                     return jsonify({"error": "CSRF token missing or invalid. "
@@ -2343,6 +2374,20 @@ app.register_blueprint(create_rules_blueprint(
     DB_PATH, login_required, access,
     lambda machine: resolve_rule_vars(machine),
     lambda: _rules_config(),
+))
+
+# The AI drafter (roadmap #24). Same two injections as the rules blueprint above, because it
+# is a front end onto that engine rather than a second one -- a draft is validated by
+# rules.py's own parser and committed through rules.save_rule. No new capability: reading is
+# `view`, drafting and committing are `manage_rules`, and a drafted COMMAND still needs
+# `issue_commands` down in rules.validate_actions. The key is passed once here rather than
+# read inside ai.py, so the module stays testable and settings.py stays free of secrets.
+app.register_blueprint(create_ai_blueprint(
+    DB_PATH, login_required, access,
+    lambda machine: resolve_rule_vars(machine),
+    lambda: _rules_config(),
+    lambda: _ai_config(),
+    api_key=AI_API_KEY,
 ))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
@@ -3576,6 +3621,17 @@ def retention_pruner():
                     print(f"[retention] Dropped {dropped} stale patch inventory row(s).")
             except Exception as e:
                 print(f"[retention] Patch-inventory prune failed: {e}")
+            # Abandoned AI drafts (roadmap #24). Housekeeping rather than a privacy control --
+            # a draft is the author's own sentence and is only ever shown back to them -- but
+            # nothing else deletes one, so a table that gains a row every time somebody
+            # experiments would keep them all. Its own try, as above.
+            try:
+                dropped = ai.prune_drafts(
+                    DB_PATH, settings.get_int(DB_PATH, "ai.draft_retention_days"))
+                if dropped:
+                    print(f"[retention] Pruned {dropped} unfinished AI draft(s).")
+            except Exception as e:
+                print(f"[retention] AI-draft prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 
@@ -3872,6 +3928,18 @@ def start_sweep_worker():
 # (rules.evaluator_interval_seconds), and folding a settable cadence into a fixed-tick thread
 # means the setting quietly does nothing.
 # ================================
+
+def _ai_config():
+    """The AI settings, read fresh on every request.
+
+    Same seam and same reasoning as _rules_config below: ai.py stays free of settings and
+    Flask, and re-reading per request means an admin switching `ai.enabled` off is obeyed on
+    the next call rather than at the next restart. The key is NOT in here -- it comes from
+    AI_API_KEY and is passed separately, so a config dict can be logged or handed to a test
+    without carrying a credential.
+    """
+    return {key: settings.get(DB_PATH, f"ai.{key}") for key in ai.CONFIG_KEYS}
+
 
 def _rules_config():
     """The settings the evaluator obeys, read fresh each pass.
@@ -4290,6 +4358,7 @@ apitokens.init_apitokens_db(DB_PATH)
 sharing.init_sharing_db(DB_PATH)
 scripts.init_scripts_db(DB_PATH)
 rules.init_rules_db(DB_PATH)
+ai.init_ai_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
 # never block on a mail server that has stopped answering.

@@ -29,6 +29,7 @@ os.chdir(_TMPDIR)
 os.environ["ALLOWED_EMAILS"] = "super@example.com"
 
 import app
+import console_session
 import live
 import permissions
 import settings
@@ -51,8 +52,7 @@ client = app.app.test_client()
 
 
 def sign_in(email):
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": email}
+    console_session.sign_in(client, email)
 
 
 JSON = {"Content-Type": "application/json"}

@@ -22,6 +22,7 @@ os.chdir(_TMPDIR)
 os.environ["ALLOWED_EMAILS"] = "root@x.com"
 
 import app
+import console_session
 import fleet
 import permissions
 import rules
@@ -41,8 +42,7 @@ def check(name, cond):
 
 
 client = app.app.test_client()
-with client.session_transaction() as sess:
-    sess["user"] = {"email": "root@x.com"}
+console_session.sign_in(client, "root@x.com")
 
 
 def report(machine, temp=45.0, uptime=None):

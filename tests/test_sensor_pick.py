@@ -30,6 +30,7 @@ os.chdir(_TMPDIR)
 os.environ["ALLOWED_EMAILS"] = "tester@example.com"
 
 import app
+import console_session
 import settings
 
 PASS = 0
@@ -150,8 +151,7 @@ def test_sensor_name_listing():
 def test_end_to_end_through_report():
     print("\n-- /api/report records the re-derived temperature --")
     client = app.app.test_client()
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "tester@example.com"}
+    console_session.sign_in(client, "tester@example.com")
 
     def report(machine, temp, sensors=None):
         payload = {"machine": machine, "temp": temp, "serial_number": f"SN-{machine}"}

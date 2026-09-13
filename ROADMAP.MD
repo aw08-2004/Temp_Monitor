@@ -2579,7 +2579,9 @@ a rule set and a time window, it is testable, and it never invents a cause. Only
 on top — a recommended fix, a suggested script — goes to a language model, behind a
 **pluggable provider** with no vendor privileged in the schema, off by default, and with the
 PRD's own mitigation kept: a suggested script is drafted into the existing script library for
-a human to run, never executed from the suggestion.
+a human to run, never executed from the suggestion. **That provider is #24's**, `ai.complete()`
+— one configuration, one audit trail and one off switch for every place a language model is
+asked anything, rather than a second one grown here.
 
 Anomaly baselining (FR-02) lands here too, and for the same reason: a per-machine baseline is
 a statistic over the history table, not a model.
@@ -2631,6 +2633,10 @@ who may raise an alert also issue a command.
 What it adds is **local evaluation**: today a rule is evaluated hub-side on reported data,
 which is the wrong latency for "restart this within two minutes" and useless if the machine is
 briefly offline. A watchdog is a small rule the agent holds and runs itself.
+
+A watchdog somebody describes in English is drafted through #24 and committed by hand like any
+other rule — the drafting path is shared, and the mitigation #17 records holds here too: a
+suggestion reaches the script library, never the machine.
 
 **Open parameters.** Flap protection — how many restarts in what window before it stops and
 escalates instead. Whether a locally held watchdog is authored separately, or is an ordinary
@@ -3023,6 +3029,87 @@ precedent for moving the agent's own English out of the code.
 all, or wants a view of its own. It reports the same shape and costs nothing to leave where it
 is; the question becomes live the first time somebody sorts the fleet by CPU temperature and
 finds a tablet's battery at the top.
+
+---
+
+## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0
+
+A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
+**one-line expression string the existing parser already accepts**, so `parse_expression` →
+`validate_condition` → `format_expression` hands back syntax checking, variable checking and a
+canonical form to show the operator, for free. The variable catalog goes into the prompt from
+`rules.catalog(db_path)` at request time rather than being typed into a prompt by hand, because
+a hand-typed namespace is one that rots the first time somebody adds a custom field.
+
+What it deliberately does not do: correlation, bundling and anomaly baselining stay in #17, and
+local watchdogs stay in #20. The provider abstraction is the one #17's wording layer will use —
+`ai.complete()`, speaking OpenAI-compatible chat completions, which is also what Ollama, vLLM
+and LM Studio speak, so a LAN-only deployment and a hosted one differ by a base url. One
+provider in the schema, one audit trail, off by default.
+
+**Nothing reaches the fleet without an operator commit.** A draft is validated, summarised
+deterministically (`format_expression` plus the catalog's own labels, never a second model call
+— otherwise the operator is confirming a sentence rather than a rule), and previewed through the
+existing `/api/rules/preview`, so "which machines match right now" is answered by the evaluator
+that will actually run the rule. Scope is `rules.save_rule`'s `author_scope`, untouched: a
+drafted rule can shrink relative to its author's reach but never grow past it. Every draft
+keeps the English that produced it.
+
+**Rejected: natural language to SQL.** It reads as the safe place to start and is the most
+dangerous thing in the idea. Generated SQL cannot be passed through `access.filter_machines()`,
+so an operator scoped to one department asks a question and is answered from the whole fleet.
+The fleet-query surface targets the existing filter layer instead.
+
+**Rejected: a rule shape authored by the model.** The engine's own text expression is already
+the narrower interface and already has a validator; a second authoring format would need its
+own, and the two would eventually disagree.
+
+**What the source plan assumed and this hub does not have.** Written down rather than dropped,
+because the drafter's refusals should read as *not yet* rather than as *never*:
+
+- **`disable_usb` does not exist, and will.** "Block USB on the HR machines" needs a command
+  type with no executor behind it. It is a policy write, so it belongs with `policy.py` and a
+  `*Executor.cs`, gated on `manage_device_policy`, and it needs an agent MINOR because the
+  console would gate on it. Not stubbed in the meantime: a command type with no executor is a
+  refusal nobody can act on.
+- **`lock_account` does not exist, and will.** A directory write rather than a fleet command,
+  so it lands with #4 and not on the command channel.
+- **Tags do not exist.** A target is `all`, an explicit list, an AD OU, or a custom field, and
+  "the servers" is a custom field today. A first-class tag is worth having and is not assumed
+  here.
+- **A schedule is not a rule.** `fleet.SCHEDULED_COMMANDS` sits inside
+  `RULE_FORBIDDEN_COMMANDS`, so "reboot the workstations every Sunday at three" cannot be
+  expressed as a rule at all, and the drafter has to say so rather than produce one that never
+  fires.
+- **Per-process variables do not exist.** The `proc` group is a count, a core count and total
+  memory, and it resolves only while somebody has the Processes card open; process commands are
+  forbidden in rules besides. "Kill anything over 80% for ten minutes" fails on both halves.
+- **History is pruned at thirty days** by `data.retention_days`, so anything that learns from it
+  needs rollups written before the pruner runs. That is #17's problem and is noted there.
+
+Two of the open parameters below are now decided. A draft **is** a stored row, keyed to its
+author, capped per author and pruned after a week — the browser holding it would have lost a
+half-finished rule to a refresh, and the stored English is what makes a drafted rule auditable
+six months later. A refinement re-sends **only the current draft's canonical expression**, not
+the conversation: a refinement edits a rule that already parsed, and replaying the model's
+earlier prose invites it to re-open a decision the operator has already accepted.
+
+The console half is on the Rules page, above the rule list, and hidden unless the feature is
+both switched on and configured. Describe, adjust, preview through the existing
+`/api/rules/preview`, then create — which stores the rule **disabled** and opens it in the
+ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
+the normal form and pressing Enable.
+
+**Partial, and the line is the drafter.** Describe, adjust, preview and create are built and
+tested at 1.109.0, off until somebody configures a provider. **The machine chat panel, the
+fleet query and the daily summary are not built** — each is a stub in `ai.py` with its seam
+named and nothing behind it. The first needs the redaction that `ai.send_machine_names`
+implies; the third wants #17's correlation under it, without which a summary is the alert list
+in longer words.
+
+**Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
+starts off, which is right for a hosted provider and probably wrong for one on the same LAN.
+Whether the drafter belongs anywhere other than the Rules page once #17's wording layer exists.
 
 ---
 

@@ -27,6 +27,7 @@ import functools
 import json
 import os
 import sys
+import console_session
 import tempfile
 
 _TMPDIR = tempfile.mkdtemp(prefix="hub-apitokens-test-")
@@ -62,14 +63,13 @@ def check(name, cond):
 
 
 def sign_in(client, email):
-    """Put a session cookie on the client, the way _complete_login would."""
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": email, "name": email, "directory_groups": []}
+    """Put a session cookie AND a CSRF token on the client, the way _complete_login would."""
+    console_session.sign_in(
+        client, {"email": email, "name": email, "directory_groups": []})
 
 
 def sign_out(client):
-    with client.session_transaction() as sess:
-        sess.clear()
+    console_session.sign_out(client)
 
 
 def auth(token):

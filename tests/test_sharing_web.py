@@ -27,6 +27,7 @@ What is worth stating about the assertions:
 import functools
 import os
 import sys
+import console_session
 import tempfile
 
 _TMPDIR = tempfile.mkdtemp(prefix="hub-sharing-web-test-")
@@ -67,13 +68,12 @@ def check(name, cond):
 
 
 def sign_in(client, email):
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": email, "name": email, "directory_groups": []}
+    console_session.sign_in(
+        client, {"email": email, "name": email, "directory_groups": []})
 
 
 def sign_out(client):
-    with client.session_transaction() as sess:
-        sess.clear()
+    console_session.sign_out(client)
 
 
 # ================================

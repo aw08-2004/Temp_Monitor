@@ -548,7 +548,8 @@
       "provisioning": "Aprovisionamiento",
       "location": "Ubicación",
       "map": "Mapa",
-      "policy": "Política"
+      "policy": "Política",
+      "ai": "Asistencia con IA"
     },
     "unit": {
       "celsius": "°C",
@@ -942,6 +943,46 @@
         "label": "Vigencia del enlace entre concentradores",
         "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición -- una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
       },
+      "ai": {
+        "enabled": {
+          "label": "Usar asistencia con IA",
+          "help": "Desactivada hasta que alguien la active. Mientras esté desactivada ninguna consulta sale de este concentrador y las páginas de borrador lo indican; el resto de los ajustes de aquí no hacen nada."
+        },
+        "provider": {
+          "label": "API del proveedor",
+          "help": "El formato de la petición, no una empresa. El indicado lo hablan Ollama, vLLM, LM Studio, OpenRouter y OpenAI por igual, así que la dirección de abajo es la que decide adónde van realmente las consultas."
+        },
+        "base_url": {
+          "label": "Dirección del proveedor",
+          "help": "Adónde enviar una consulta, sin la ruta. Un modelo que se ejecuta en esta máquina no necesita clave y nada sale del edificio.",
+          "placeholder": "http://127.0.0.1:11434"
+        },
+        "model": {
+          "label": "Modelo",
+          "help": "Exactamente como lo nombra el proveedor.",
+          "placeholder": "llama3.1:8b"
+        },
+        "max_tokens": {
+          "label": "Respuesta más larga",
+          "help": "Un límite para una respuesta. Una regla redactada son unos cientos de tokens, así que esto es un fusible y no un objetivo."
+        },
+        "timeout_seconds": {
+          "label": "Abandonar tras",
+          "help": "Cuánto esperar una respuesta. Un modelo en esta máquina responde en segundos; uno alojado tras un enlace lento puede tardar mucho más."
+        },
+        "allow_private_endpoint": {
+          "label": "Permitir un proveedor en esta red",
+          "help": "Activado, para poder usar un modelo en esta máquina o en la LAN. Descactívalo para exigir un proveedor accesible por internet y nada más."
+        },
+        "send_machine_names": {
+          "label": "Enviar nombres de equipos",
+          "help": "Desactivado. Una pregunta sobre un PC llevaría de otro modo su nombre, la persona conectada y el número de serie al proveedor. El redactor de reglas no envía datos de equipos en ningún caso."
+        },
+        "draft_retention_days": {
+          "label": "Conservar borradores sin terminar",
+          "help": "Una regla redactada que nadie ha confirmado se elimina después de este plazo. Las reglas confirmadas no se ven afectadas."
+        }
+      },
       "provisioning": {
         "leave_system_apps_enabled": {
           "label": "Dejar activadas las apps propias del dispositivo",
@@ -990,6 +1031,9 @@
       }
     },
     "choice": {
+      "ai.provider": {
+        "openai_chat": "Chat completions compatible con OpenAI"
+      },
       "hub.default_language": {
         "auto": "Automático (el navegador de cada persona)",
         "en": "English",
@@ -2784,6 +2828,21 @@
     "no_scripts": "Aún no hay scripts. Cree uno primero en la pestaña Scripts.",
     "script_disabled": "desactivado",
     "script_reads": "Lee: {variables}"
+  },
+  "ai": {
+    "drafter_title": "Describe una regla",
+    "drafter_intro": "Di lo que quieres en lenguaje normal. Lo que vuelve es un borrador, comprobado contra las variables y acciones que este concentrador tiene de verdad. No se guarda nada hasta que la crees, y una regla creada arranca desactivada.",
+    "placeholder": "Av\u00edsame cuando alg\u00fan disco baje de 10 GB libres",
+    "draft": "Redactar",
+    "drafting": "Un momento...",
+    "creating": "Creando...",
+    "created": "Creada y desactivada. L\u00e9ela abajo antes de activarla.",
+    "refine_placeholder": "Mejor que sean 5 GB",
+    "refine": "Ajustar",
+    "preview": "Qu\u00e9 equipos coinciden ahora",
+    "create": "Crear la regla",
+    "discard": "Descartar",
+    "failed": "{error}"
   },
   "scripts": {
     "body": "Script",

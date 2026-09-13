@@ -49,6 +49,11 @@ from collections import namedtuple
 # cycle.
 import channels
 import i18n
+# The AI provider vocabulary, so `ai.provider`'s choices have ONE home (ai.PROVIDERS) rather
+# than a literal here that drifts from it. Safe in both directions: ai.py deliberately does
+# NOT import settings -- it takes its configuration dict from app.py, the same seam rules.py
+# uses -- so there is no cycle, and keeping it that way is what this comment is for.
+import ai
 
 # ---------------------------------------------------------------- the registry
 
@@ -587,12 +592,46 @@ REGISTRY = (
     # silently extends one somebody already agreed to a shorter lifetime for.
     _s("sharing.peer_lifetime_days", "sharing", "int", 365, minimum=1, maximum=3650,
        unit="days"),
+
+    # ---------------- AI assistance (roadmap #24) ----------------
+    # **Off, and it is the only control that matters here.** Everything else in this block is
+    # inert while this is false -- ai.provider_config refuses before reading any of it -- so a
+    # hub that has never been configured behaves like a hub without the feature rather than
+    # like one that is broken. #17 asks for exactly this default, and an operator turning it
+    # on is the moment somebody decides telemetry may leave the building.
+    _s("ai.enabled", "ai", "bool", False),
+    # The WIRE SHAPE, not the vendor. Ollama, vLLM, LM Studio, OpenRouter and OpenAI all speak
+    # this one, so a LAN-only deployment and a hosted one differ by base_url alone. An enum
+    # from the start because a second adapter is additive and a bool would have to be migrated.
+    _s("ai.provider", "ai", "enum", ai.PROVIDER_OPENAI_CHAT, choices=list(ai.PROVIDERS)),
+    # No default, deliberately: there is no address this hub should guess at. The nearest
+    # thing to a recommended value is http://127.0.0.1:11434 and typing that here would point
+    # every fleet at a port nobody asked it to open.
+    _s("ai.base_url", "ai", "str", ""),
+    _s("ai.model", "ai", "str", ""),
+    _s("ai.max_tokens", "ai", "int", 1024, minimum=64, maximum=32768),
+    _s("ai.timeout_seconds", "ai", "int", 60, minimum=5, maximum=600, unit="seconds"),
+    # TRUE, which is the opposite of the equivalent webhook switch, and the reason
+    # ai.check_provider_url exists rather than reusing notify.check_webhook_url. A webhook
+    # aimed at a private address is almost always an SSRF attempt; a model server aimed at one
+    # is the deployment with no egress at all. Turning this OFF is what a fleet does when it
+    # wants a hosted provider and nothing else.
+    _s("ai.allow_private_endpoint", "ai", "bool", True),
+    # Whether a hostname may be sent to the provider. Off, because a prompt about one PC
+    # otherwise carries its name, its logged-in user and its serial number -- and the people
+    # in this fleet are colleagues. The redaction this implies is what #24's chat panel is
+    # waiting on, so today it gates that rather than the rule drafter, which sends no
+    # machine data at all.
+    _s("ai.send_machine_names", "ai", "bool", False),
+    # A draft is somebody's unfinished sentence. A week is long enough to come back to one
+    # after a holiday and short enough that abandoned experiments do not accumulate.
+    _s("ai.draft_retention_days", "ai", "int", 7, minimum=1, maximum=365, unit="days"),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
             "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
-            "policy", "rules", "sharing")
+            "policy", "rules", "sharing", "ai")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;
