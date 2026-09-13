@@ -3032,7 +3032,7 @@ finds a tablet's battery at the top.
 
 ---
 
-## 📋 24. AI assistance — natural language over the rules engine
+## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3099,6 +3099,13 @@ both switched on and configured. Describe, adjust, preview through the existing
 `/api/rules/preview`, then create — which stores the rule **disabled** and opens it in the
 ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
 the normal form and pressing Enable.
+
+**Partial, and the line is the drafter.** Describe, adjust, preview and create are built and
+tested at 1.109.0, off until somebody configures a provider. **The machine chat panel, the
+fleet query and the daily summary are not built** — each is a stub in `ai.py` with its seam
+named and nothing behind it. The first needs the redaction that `ai.send_machine_names`
+implies; the third wants #17's correlation under it, without which a summary is the alert list
+in longer words.
 
 **Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
 starts off, which is right for a hosted provider and probably wrong for one on the same LAN.

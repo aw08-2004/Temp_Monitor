@@ -17,6 +17,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from ipaddress import ip_address
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "hub"))
@@ -246,6 +247,51 @@ def main():
               ai.check_provider_url("http://169.254.169.254", True) is not None)
         check("a scheme that is not http(s) is refused",
               ai.check_provider_url("file:///etc/passwd", True) is not None)
+
+        # The metadata address wearing a costume. CPython files the whole of ::ffff:0:0/96
+        # under "private" but reports none of it as link-local or reserved, so an unwrapped
+        # ::ffff:169.254.169.254 skips the unconditional refusal above and lands in the
+        # merely-private bucket that allow_private waves through. Checked at both levels:
+        # the unwrapper on its own, and the whole check against a resolver that returns one.
+        for spelling, plain in (("::ffff:169.254.169.254", "169.254.169.254"),
+                                ("::ffff:127.0.0.1", "127.0.0.1"),
+                                ("2002:a9fe:a9fe::", "169.254.169.254")):
+            check(f"{spelling} is unwrapped to {plain}",
+                  str(ai._unwrap_v4(ip_address(spelling))) == plain)
+
+        real_getaddrinfo = ai.socket.getaddrinfo
+
+        def resolves_to(address):
+            return lambda *a, **k: [(0, 0, 0, "", (address, 80, 0, 0))]
+
+        try:
+            ai.socket.getaddrinfo = resolves_to("::ffff:169.254.169.254")
+            check("a host resolving to the MAPPED metadata address is refused outright",
+                  ai.check_provider_url("http://model.internal", True) is not None)
+            ai.socket.getaddrinfo = resolves_to("2002:a9fe:a9fe::")
+            check("...and so is the 6to4 spelling of it",
+                  ai.check_provider_url("http://model.internal", True) is not None)
+            ai.socket.getaddrinfo = resolves_to("::ffff:127.0.0.1")
+            check("a mapped loopback is still allowed, private endpoints being on",
+                  ai.check_provider_url("http://model.internal", True) is None)
+            check("...and refused when they are off",
+                  ai.check_provider_url("http://model.internal", False) is not None)
+
+            # The resolver's own words are for the hub log. This string is rendered in a
+            # browser, and CodeQL flags the path for the same reason rules_web.py splits its
+            # error text: what the OS wrote is not ours to forward.
+            def unresolvable(*a, **k):
+                raise ai.socket.gaierror(-2, "Name or service not known")
+
+            ai.socket.getaddrinfo = unresolvable
+            message = ai.check_provider_url("http://model.internal", True)
+            check("an unresolvable host is refused", message)
+            check("...naming the host, which the admin typed",
+                  "model.internal" in str(message))
+            check("...but not the resolver's own text",
+                  "Name or service not known" not in str(message))
+        finally:
+            ai.socket.getaddrinfo = real_getaddrinfo
 
         print("\n== Drafts, and what a commit turns one into ==")
         fake_provider(envelope(name="Low disk", condition_text="disk.min_free_gb < 10"))

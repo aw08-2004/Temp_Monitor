@@ -209,6 +209,30 @@ def provider_config(config, api_key=""):
     }
 
 
+def _unwrap_v4(address):
+    """An IPv6 address that carries an IPv4 one inside it -> that IPv4 address.
+
+    **Without this, the hard-coded metadata block below is bypassable.** CPython puts the
+    whole of `::ffff:0:0/96` in its private-networks table but does NOT report those addresses
+    as link-local, reserved or multicast -- so `::ffff:169.254.169.254` is the cloud metadata
+    endpoint wearing a costume: the unconditional refusal never fires, and it lands in the
+    merely-"private" bucket that `ai.allow_private_endpoint` waves through by default.
+
+    `sixtofour` (2002::/16) and `teredo` (2001::/32) embed an IPv4 address the same way and
+    are unwrapped for the same reason. Cheap, and the alternative is a second list of special
+    ranges to keep in step with the stdlib's.
+    """
+    for attribute in ("ipv4_mapped", "sixtofour"):
+        inner = getattr(address, attribute, None)
+        if inner is not None:
+            return inner
+    teredo = getattr(address, "teredo", None)
+    if teredo:
+        # (server, client). The CLIENT is where a packet would actually go.
+        return teredo[1]
+    return address
+
+
 def check_provider_url(url, allow_private):
     """Refuse a provider endpoint this hub should not be calling. Returns an error or None.
 
@@ -240,13 +264,19 @@ def check_provider_url(url, allow_private):
                                    parsed.port or (443 if parsed.scheme == "https" else 80),
                                    proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
-        return f"cannot resolve {parsed.hostname}: {exc}"
+        # The resolver's own text does NOT go back to the caller. It is written by the OS,
+        # it varies by platform, and this string is rendered in a browser -- the same split
+        # rules_web.py spends a paragraph on. The hostname is the admin's own input, so
+        # naming it is useful and safe; everything else goes to the hub log.
+        print(f"[ai] Could not resolve the AI provider host {parsed.hostname}: {exc}")
+        return (f"cannot resolve {parsed.hostname}; see the hub log for what the resolver "
+                "said")
 
     # link_local covers 169.254.0.0/16, where the cloud metadata endpoints live -- the single
     # most valuable target an SSRF has, and the one address that is never a model server.
     local = []
     for info in infos:
-        address = ip_address(info[4][0])
+        address = _unwrap_v4(ip_address(info[4][0]))
         if address.is_link_local or address.is_reserved or address.is_multicast:
             return (f"{parsed.hostname} resolves to {address}, which is not somewhere this "
                     "hub will send a prompt")
@@ -300,10 +330,17 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
             # No redirects, for the reason notify.py gives: a 302 walks straight past every
             # check check_provider_url just made.
             allow_redirects=False)
-    except requests.RequestException as exc:
-        # The exception TYPE, never its text. A requests exception carries the full url, and
-        # that url can carry a key in a query string on some gateways.
-        return f"the AI provider could not be reached ({type(exc).__name__})", None
+    except requests.Timeout:
+        return "the AI provider did not answer in time", None
+    except requests.ConnectionError:
+        return "the AI provider could not be reached", None
+    except requests.RequestException:
+        # OUR words for every one of these, not the library's and not the exception's type
+        # name. A requests exception carries the full url, and that url carries a key in a
+        # query string on some gateways; the type name leaks less but is still text this hub
+        # did not write, rendered in a browser. What actually went wrong is in the hub log
+        # via the traceback the caller prints -- this is the sentence an operator can act on.
+        return "the AI provider answered in a way this hub could not use", None
 
     if response.status_code >= 400:
         return f"the AI provider returned HTTP {response.status_code}", None
