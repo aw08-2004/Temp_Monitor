@@ -52,6 +52,7 @@ import socket
 import sqlite3
 import time
 import uuid
+from collections import namedtuple
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
@@ -65,12 +66,68 @@ import scripts
 # ---------------------------------------------------------------------------------------
 
 # One wire shape, deliberately. "openai_chat" names the REQUEST FORMAT, not a vendor -- it is
-# what Ollama, vLLM, LM Studio, OpenRouter and OpenAI itself all accept, so the enum is a
-# protocol choice rather than a privileged vendor. #17 calls for "no vendor privileged in the
-# schema"; a second entry here (say an Anthropic Messages adapter) is additive and changes
-# nothing else in this file, which is the point of the indirection.
-PROVIDER_OPENAI_CHAT = "openai_chat"
-PROVIDERS = (PROVIDER_OPENAI_CHAT,)
+# what Ollama, vLLM, LM Studio, OpenRouter and OpenAI itself all accept. #17 calls for "no
+# vendor privileged in the schema"; a second wire shape here (say an Anthropic Messages
+# adapter) is additive and changes nothing else in this file, which is the point.
+WIRE_OPENAI_CHAT = "openai_chat"
+WIRE_SHAPES = (WIRE_OPENAI_CHAT,)
+
+# Kept as the old name because settings.py and the tests import it, and because the wire
+# shape is still what a provider IS from this module's point of view.
+PROVIDER_OPENAI_CHAT = WIRE_OPENAI_CHAT
+
+# The presets an operator picks from, and the reason the setting stopped being a free-text
+# url. "Point FleetHub at OpenRouter" is the question somebody actually has; "which base url
+# does OpenRouter's OpenAI-compatible endpoint live at" is trivia they should not have to
+# look up, and a typo in it fails as a DNS error rather than as a wrong answer.
+#
+# **The preset names a URL; it does not name a vendor's privileges.** Every entry here speaks
+# the same wire shape, none gets special handling anywhere in this file, and `custom` exists
+# so the list is a convenience rather than a gate -- anything OpenAI-compatible still works by
+# typing its address, which is what keeps a self-hosted endpoint a first-class option.
+Preset = namedtuple("Preset", "name base_url wire")
+
+PRESET_CUSTOM = "custom"
+PROVIDER_PRESETS = (
+    # First, and the default, so the list never implies this hub prefers a vendor.
+    Preset(PRESET_CUSTOM, "", WIRE_OPENAI_CHAT),
+    # The three that run on the operator's own hardware. Their ports are the projects' own
+    # defaults; an operator who moved one picks `custom`.
+    Preset("ollama", "http://127.0.0.1:11434", WIRE_OPENAI_CHAT),
+    Preset("lm_studio", "http://127.0.0.1:1234", WIRE_OPENAI_CHAT),
+    Preset("vllm", "http://127.0.0.1:8000", WIRE_OPENAI_CHAT),
+    # The hosted two. Both need AI_API_KEY in .env; neither can work without it, which is
+    # what the status endpoint says rather than letting the first draft fail as a 401.
+    Preset("openai", "https://api.openai.com", WIRE_OPENAI_CHAT),
+    Preset("openrouter", "https://openrouter.ai/api", WIRE_OPENAI_CHAT),
+)
+PRESETS_BY_NAME = {preset.name: preset for preset in PROVIDER_PRESETS}
+PROVIDERS = tuple(preset.name for preset in PROVIDER_PRESETS)
+
+
+def preset_for(name):
+    """The preset a stored `ai.provider` names, falling back to `custom`.
+
+    Tolerant on purpose. The setting briefly held a WIRE SHAPE ("openai_chat") rather than a
+    preset name, and an unrecognised value must leave the hub configurable -- falling back to
+    custom means the base url an operator already typed still governs, which is the reading
+    that loses nobody's configuration.
+    """
+    return PRESETS_BY_NAME.get(str(name or ""), PRESETS_BY_NAME[PRESET_CUSTOM])
+
+
+def resolved_base_url(config):
+    """The address to call, given the chosen preset and the typed url.
+
+    The preset wins where it has one, so picking OpenRouter needs no second field filled in
+    and cannot drift from a stale url left behind by a previous choice. `custom` has no url of
+    its own, so it reads `ai.base_url` -- which is the only state in which that field means
+    anything.
+    """
+    preset = preset_for((config or {}).get("provider"))
+    if preset.base_url:
+        return preset.base_url
+    return str((config or {}).get("base_url") or "").strip().rstrip("/")
 
 # How many times a draft may be handed back to the model with the validator's complaint
 # attached. ONE. An unbounded repair loop is an unbounded bill on a hosted provider and an
@@ -155,6 +212,18 @@ def init_ai_db(db_path):
                             model        TEXT NOT NULL DEFAULT ''
                         )""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_drafts_actor ON ai_drafts(actor)")
+        # The model list a provider last reported, keyed by preset. Cached rather than
+        # fetched on demand for the reason sharing.py caches a peer's catalogue: the Settings
+        # page must render whether or not a third party is answering right now, and a network
+        # call on every page load is a page that hangs when the provider does. Keyed by
+        # provider so switching from Ollama to OpenRouter and back does not show one's models
+        # under the other's name.
+        conn.execute("""CREATE TABLE IF NOT EXISTS ai_models (
+                            provider   TEXT NOT NULL,
+                            model_id   TEXT NOT NULL,
+                            cached_at  REAL NOT NULL,
+                            PRIMARY KEY (provider, model_id)
+                        )""")
 
 
 # ---------------------------------------------------------------------------------------
@@ -193,17 +262,19 @@ def provider_config(config, api_key=""):
     config = config or {}
     if not is_enabled(config):
         return "the AI features are switched off (Settings -> AI)", None
-    base_url = str(config.get("base_url") or "").strip().rstrip("/")
+    preset = preset_for(config.get("provider"))
+    base_url = resolved_base_url(config)
     model = str(config.get("model") or "").strip()
     if not base_url:
-        return "no AI provider is configured (set the base URL in Settings -> AI)", None
+        return "no AI provider is configured (pick one in Settings -> AI)", None
     if not model:
-        return "no AI model is configured (set the model in Settings -> AI)", None
+        return "no AI model is configured (pick one in Settings -> AI)", None
     error = check_provider_url(base_url, bool(config.get("allow_private_endpoint")))
     if error:
         return error, None
     return None, {
-        "provider": str(config.get("provider") or PROVIDER_OPENAI_CHAT),
+        "provider": preset.name,
+        "wire": preset.wire,
         "base_url": base_url,
         "model": model,
         "api_key": str(api_key or ""),
@@ -235,6 +306,34 @@ def _unwrap_v4(address):
         # (server, client). The CLIENT is where a packet would actually go.
         return teredo[1]
     return address
+
+
+def endpoint_config(config, api_key=""):
+    """Everything provider_config resolves EXCEPT the model. Returns (error, resolved).
+
+    Its own function because `provider_config` refuses when no model is set, and the one
+    request that most needs to work in that state is "list the models" -- an operator asks for
+    the list precisely because they have not picked one yet. Sharing the refusal would have
+    made the picker unusable until somebody had typed a model id by hand, which is the problem
+    the picker exists to remove.
+    """
+    config = config or {}
+    if not is_enabled(config):
+        return "the AI features are switched off (Settings -> AI)", None
+    preset = preset_for(config.get("provider"))
+    base_url = resolved_base_url(config)
+    if not base_url:
+        return "no AI provider is configured (pick one in Settings -> AI)", None
+    error = check_provider_url(base_url, bool(config.get("allow_private_endpoint")))
+    if error:
+        return error, None
+    return None, {
+        "provider": preset.name,
+        "wire": preset.wire,
+        "base_url": base_url,
+        "api_key": str(api_key or ""),
+        "timeout": int(config.get("timeout_seconds") or 60),
+    }
 
 
 def check_provider_url(url, allow_private):
@@ -372,6 +471,116 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
     if not text.strip():
         return "the AI provider returned an empty response", None
     return None, text[:MAX_RESPONSE_CHARS]
+
+
+# ---------------------------------------------------------------------------------------
+# The model list
+# ---------------------------------------------------------------------------------------
+
+# How long a cached list is presented without a caveat. Three hours, because a provider's
+# catalogue changes on the order of weeks and the cost of a stale entry is one failed draft
+# with a readable error, not a wrong answer. Past it the list is still SHOWN and merely
+# flagged -- the same choice sharing.py makes about a peer's catalogue, and for the same
+# reason: an operator with a stale list can still work, and one with an empty list cannot.
+MODELS_STALE_SECONDS = 3 * 3600
+MAX_MODELS = 2000
+
+
+def list_models(db_path, provider, now=None):
+    """What this provider last reported. Returns {"models": [...], "cached_at", "stale"}.
+
+    Never goes to the network. The Settings page reads this on every render, and a page that
+    reaches a third party to draw itself is a page that hangs when that third party does.
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT model_id, cached_at FROM ai_models WHERE provider = ? "
+            "ORDER BY model_id", (str(provider or ""),)).fetchall()
+    if not rows:
+        return {"models": [], "cached_at": None, "stale": True}
+    cached_at = max(row["cached_at"] for row in rows)
+    return {"models": [row["model_id"] for row in rows],
+            "cached_at": cached_at,
+            "stale": (float(now or time.time()) - cached_at) > MODELS_STALE_SECONDS}
+
+
+def model_choices(db_path, provider):
+    """The cached ids alone, for a picker. Separate from list_models so a caller that only
+    wants the vocabulary does not have to know about staleness."""
+    return list_models(db_path, provider)["models"]
+
+
+def _store_models(db_path, provider, models, now=None):
+    """Replace this provider's cached list wholesale.
+
+    Wholesale rather than merged, for the reason sharing.replace_borrowed gives: the
+    provider's catalogue is authoritative, and a model missing from it has been withdrawn.
+    Merging would leave a retired model in the picker forever, and the failure would arrive
+    much later as a 404 from a draft nobody could explain.
+    """
+    stamp = float(now or time.time())
+    with get_conn(db_path) as conn:
+        conn.execute("DELETE FROM ai_models WHERE provider = ?", (str(provider),))
+        conn.executemany(
+            "INSERT OR REPLACE INTO ai_models (provider, model_id, cached_at) VALUES (?,?,?)",
+            [(str(provider), str(model), stamp) for model in models[:MAX_MODELS]])
+    return len(models[:MAX_MODELS])
+
+
+def refresh_models(db_path, config, *, api_key="", now=None):
+    """Ask the provider what it serves, and replace the cache. Returns (error, listing).
+
+    GET `{base}/v1/models`, the companion of the chat-completions endpoint every preset here
+    speaks, so this needs no per-vendor branch. Same discipline as complete(): the endpoint is
+    re-checked through check_provider_url first, redirects are refused, the body is read under
+    a cap, and every failure becomes a sentence this hub wrote.
+
+    **A failure leaves the previous list in place.** An operator who cannot reach the provider
+    for a minute should not also lose the picker they were using -- and an empty list looks
+    identical to "this provider serves nothing", which is a lie with no way to notice it.
+    """
+    error, resolved = endpoint_config(config, api_key)
+    if error:
+        return error, None
+
+    headers = {"Accept": "application/json", "User-Agent": "FleetHub-AI/1.0"}
+    if resolved["api_key"]:
+        headers["Authorization"] = f"Bearer {resolved['api_key']}"
+    try:
+        with requests.get(f"{resolved['base_url']}/v1/models", headers=headers,
+                          timeout=resolved["timeout"], stream=True,
+                          allow_redirects=False) as response:
+            if response.status_code == 401 or response.status_code == 403:
+                # Named separately because it is the one failure with an obvious fix, and
+                # "HTTP 401" sends an operator to the wrong place.
+                return ("the AI provider rejected the credentials -- check AI_API_KEY in "
+                        ".env"), None
+            if response.status_code >= 400:
+                return f"the AI provider returned HTTP {response.status_code}", None
+            raw = bytearray()
+            for chunk in response.iter_content(chunk_size=8192):
+                raw.extend(chunk)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    return "the AI provider's model list was too large to read", None
+    except requests.Timeout:
+        return "the AI provider did not answer in time", None
+    except requests.ConnectionError:
+        return "the AI provider could not be reached", None
+    except requests.RequestException:
+        return "the AI provider answered in a way this hub could not use", None
+
+    try:
+        payload = json.loads(bytes(raw).decode("utf-8", "replace"))
+        entries = payload["data"]
+    except (ValueError, KeyError, TypeError):
+        return "the AI provider's model list was not in a shape this hub could read", None
+
+    models = sorted({str(entry.get("id") or "").strip()
+                     for entry in entries if isinstance(entry, dict)} - {""})
+    if not models:
+        return "the AI provider listed no models", None
+    _store_models(db_path, resolved["provider"], models, now=now)
+    return None, list_models(db_path, resolved["provider"], now=now)
 
 
 # ---------------------------------------------------------------------------------------

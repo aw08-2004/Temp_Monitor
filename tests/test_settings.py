@@ -490,6 +490,62 @@ def test_every_section_has_somewhere_to_render():
               f"{name}: document.getElementById('tab-{name}')" in script)
 
 
+def test_every_registry_type_has_a_control():
+    """Every `type` in the registry has a branch in settings.js's buildControl.
+
+    **The silent failure: a type with no branch falls through to the NUMBER input.** That is
+    not a cosmetic mismatch. An input[type=number] discards any value that is not a number, so
+    a `str` field rendered as an empty spinner -- the operator could not read the configured
+    value or type a new one -- and the first blur sent `null`, which the server stored, wiping
+    a configured tile URL or LDAP server under a green "Saved". Nine fields across four
+    sections were affected and no test saw it, because nothing here ever asserted which
+    control a type gets.
+
+    Read out of the JS as text rather than executed, the same way the section-panel test
+    above works: there is no DOM here, and the fall-through is visible in the source.
+    """
+    hub = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub")
+    with open(os.path.join(hub, "static", "js", "settings.js"), encoding="utf-8") as handle:
+        script = handle.read()
+
+    # int and float are the two the fall-through is CORRECT for, which is why they have no
+    # branch and why this test names them rather than pattern-matching.
+    number_is_right = {"int", "float"}
+    for kind in sorted({setting.type for setting in settings.REGISTRY}):
+        if kind in number_is_right:
+            continue
+        check(f"the {kind!r} type has its own branch in buildControl",
+              f"field.type === '{kind}'" in script)
+    check("there is a text control for str at all", "buildTextControl" in script)
+    check("...and it renders a text input, not a number one",
+          "input.type = 'text'" in script)
+    check("...and shows the placeholder the catalog carries for these fields",
+          "field.placeholder" in script)
+
+
+def test_a_str_setting_cannot_be_erased_to_null():
+    """Clearing a `str` field stores "", never null.
+
+    The pair to the test above, on the server side. The browser no longer sends null for a
+    str, but a setting whose stored value can be null is one every reader has to defend
+    against -- and the readers here (the map template, the directory sync, ai.provider_config)
+    were written expecting a string. Reset is how a value goes back to its default; clearing
+    is how it becomes empty.
+    """
+    db = fresh_db()
+    settings.set_many(db, {"map.tile_url": None}, updated_by="test")
+    check("a null sent for a str is stored as an empty string",
+          settings.get(db, "map.tile_url") == "")
+    settings.set_many(db, {"map.tile_url": "  https://tiles.example/{z}/{x}/{y}.png  "},
+                      updated_by="test")
+    check("...and a real value is kept, trimmed",
+          settings.get(db, "map.tile_url") == "https://tiles.example/{z}/{x}/{y}.png")
+    settings.reset(db, ["map.tile_url"])
+    settings.invalidate()
+    check("reset still returns the registry default",
+          settings.get(db, "map.tile_url") == settings.BY_KEY["map.tile_url"].default)
+
+
 if __name__ == "__main__":
     test_defaults_match_the_old_constants()
     test_init_is_idempotent()
@@ -507,5 +563,7 @@ if __name__ == "__main__":
     test_schema_shape()
     test_agent_config()
     test_every_section_has_somewhere_to_render()
+    test_every_registry_type_has_a_control()
+    test_a_str_setting_cannot_be_erased_to_null()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

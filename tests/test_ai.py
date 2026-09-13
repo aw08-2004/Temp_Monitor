@@ -231,8 +231,9 @@ def main():
         error, text = ai.complete(off, [{"role": "user", "content": "hello"}])
         check("complete() refuses while ai.enabled is false", text is None and error)
         check("...saying so in words an operator can act on", "switched off" in error)
-        error, _ = ai.complete(dict(CONFIG, base_url=""), [])
-        check("a missing base URL is refused before any request", "base URL" in str(error))
+        error, _ = ai.complete(dict(CONFIG, base_url="", provider=ai.PRESET_CUSTOM), [])
+        check("a custom provider with no address is refused before any request",
+              "no AI provider is configured" in str(error))
         error, _ = ai.complete(dict(CONFIG, model=""), [])
         check("a missing model is refused before any request", "model" in str(error))
 
@@ -344,6 +345,85 @@ def main():
                   "Name or service not known" not in str(message))
         finally:
             ai.socket.getaddrinfo = real_getaddrinfo
+
+        print("\n== Picking a provider by name ==")
+        check("custom is the default, so no vendor is implied by the list",
+              ai.PROVIDER_PRESETS[0].name == ai.PRESET_CUSTOM)
+        check("every preset speaks a wire shape this hub implements",
+              all(p.wire in ai.WIRE_SHAPES for p in ai.PROVIDER_PRESETS))
+        check("a named provider carries its own address",
+              ai.resolved_base_url({"provider": "openrouter"})
+              == "https://openrouter.ai/api")
+        check("...which wins over a url left behind by an earlier choice",
+              ai.resolved_base_url({"provider": "openrouter",
+                                    "base_url": "http://127.0.0.1:11434"})
+              == "https://openrouter.ai/api")
+        check("custom reads the typed url, trailing slash trimmed",
+              ai.resolved_base_url({"provider": "custom", "base_url": "http://x:1/"})
+              == "http://x:1")
+        # The setting briefly held a wire shape rather than a preset name. An unrecognised
+        # value must leave the hub configurable rather than unreachable.
+        check("an unrecognised provider falls back to custom, not to nothing",
+              ai.preset_for("openai_chat").name == ai.PRESET_CUSTOM)
+        error, resolved = ai.provider_config(
+            dict(CONFIG, provider="openrouter", base_url="", model="m"), "k")
+        check("a preset alone is enough to be configured", error is None)
+        check("...and the call goes to the preset's address",
+              resolved["base_url"] == "https://openrouter.ai/api")
+
+        print("\n== The model list is cached, not fetched to draw a page ==")
+        listing = ai.list_models(db_path, "openrouter")
+        check("an unread provider reports no models", listing["models"] == [])
+        check("...and says so by being stale rather than by looking fresh",
+              listing["stale"] is True and listing["cached_at"] is None)
+
+        models_body = json.dumps({"data": [{"id": "z-model"}, {"id": "a-model"},
+                                           {"id": ""}, "not-an-object"]}).encode()
+        real_get = ai.requests.get
+        try:
+            ai.requests.get = lambda *a, **k: FakeResponse([models_body])
+            error, listing = ai.refresh_models(
+                db_path, dict(CONFIG, provider="openrouter", model=""), api_key="k")
+            check("a refresh works with NO model chosen yet", error is None)
+            check("...which is the whole point of the picker", listing is not None)
+            check("...sorted, with the junk dropped",
+                  listing["models"] == ["a-model", "z-model"])
+            check("...and fresh", listing["stale"] is False)
+            check("the cache is readable without touching the network",
+                  ai.model_choices(db_path, "openrouter") == ["a-model", "z-model"])
+            check("...and is keyed by provider, not shared between them",
+                  ai.model_choices(db_path, "ollama") == [])
+
+            # A withdrawn model must leave the picker, or it reappears months later as a 404
+            # from a draft nobody can explain.
+            ai.requests.get = lambda *a, **k: FakeResponse(
+                [json.dumps({"data": [{"id": "a-model"}]}).encode()])
+            ai.refresh_models(db_path, dict(CONFIG, provider="openrouter"), api_key="k")
+            check("a model the provider stopped serving is dropped",
+                  ai.model_choices(db_path, "openrouter") == ["a-model"])
+
+            ai.requests.get = lambda *a, **k: FakeResponse([b""], status=401)
+            error, listing = ai.refresh_models(
+                db_path, dict(CONFIG, provider="openrouter"), api_key="")
+            check("a rejected credential is named as one, not as HTTP 401",
+                  error and "AI_API_KEY" in error)
+            check("...and the previous list survives the failure",
+                  ai.model_choices(db_path, "openrouter") == ["a-model"])
+
+            ai.requests.get = lambda *a, **k: FakeResponse([b"<html>proxy</html>"])
+            error, _ = ai.refresh_models(db_path, dict(CONFIG, provider="openrouter"))
+            check("a proxy page is refused rather than parsed",
+                  error and "not in a shape" in error)
+
+            ai.requests.get = lambda *a, **k: FakeResponse(
+                [json.dumps({"data": []}).encode()])
+            error, _ = ai.refresh_models(db_path, dict(CONFIG, provider="openrouter"))
+            check("an empty catalogue is an error, not an empty picker",
+                  error and "no models" in error)
+            check("...and still leaves what was cached",
+                  ai.model_choices(db_path, "openrouter") == ["a-model"])
+        finally:
+            ai.requests.get = real_get
 
         print("\n== Drafts, and what a commit turns one into ==")
         fake_provider(envelope(name="Low disk", condition_text="disk.min_free_gb < 10"))
