@@ -83,6 +83,10 @@ MAX_REPAIR_ATTEMPTS = 1
 # this is not a description of one rule.
 MAX_REQUEST_CHARS = 2000
 MAX_RESPONSE_CHARS = 20000
+# The bound on what is READ, as opposed to what is kept. Generous next to a rule envelope of a
+# few hundred bytes, small next to what an unbounded read costs: this is the number standing
+# between a misbehaving endpoint on the LAN and the hub's memory.
+MAX_RESPONSE_BYTES = 256 * 1024
 MAX_DRAFTS_PER_ACTOR = 25
 MAX_REFUSAL_CHARS = 400
 
@@ -303,8 +307,12 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
     to become an error string an operator can read, because the alternative is a stack trace in
     the hub log and a spinner that never stops in the console.
 
-    Response text is capped rather than trusted. A provider that streams back a megabyte is
-    either broken or hostile, and no rule description needs more than MAX_RESPONSE_CHARS.
+    The response is read INCREMENTALLY and abandoned once it passes MAX_RESPONSE_BYTES. That
+    is the difference between a cap and a claim: `response.json()` buffers and parses the whole
+    body first, so truncating its result afterwards bounds what we keep and not what we read.
+    A provider answering with a gigabyte is either broken or hostile, and `base_url` is allowed
+    to point at something on the LAN by default -- so "the admin configured it" is a reason to
+    trust the intent, not the bytes.
     """
     error, resolved = provider_config(config, api_key)
     if error:
@@ -323,13 +331,26 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
         "temperature": 0,
     }
     try:
-        response = requests.post(
-            f"{resolved['base_url']}/v1/chat/completions",
-            json=body, headers=headers,
-            timeout=int(timeout or resolved["timeout"] or 60),
-            # No redirects, for the reason notify.py gives: a 302 walks straight past every
-            # check check_provider_url just made.
-            allow_redirects=False)
+        # stream=True so the body arrives in chunks we can stop taking. Closed either way by
+        # the context manager, which a streamed response needs and a buffered one does not.
+        with requests.post(
+                f"{resolved['base_url']}/v1/chat/completions",
+                json=body, headers=headers,
+                timeout=int(timeout or resolved["timeout"] or 60),
+                stream=True,
+                # No redirects, for the reason notify.py gives: a 302 walks straight past
+                # every check check_provider_url just made.
+                allow_redirects=False) as response:
+            if response.status_code >= 400:
+                return f"the AI provider returned HTTP {response.status_code}", None
+            raw = bytearray()
+            for chunk in response.iter_content(chunk_size=8192):
+                raw.extend(chunk)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    # Abandoned mid-body rather than truncated and parsed: half a JSON
+                    # document is not a smaller answer, it is a different failure wearing the
+                    # same clothes.
+                    return "the AI provider's answer was too large to read", None
     except requests.Timeout:
         return "the AI provider did not answer in time", None
     except requests.ConnectionError:
@@ -342,10 +363,8 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
         # via the traceback the caller prints -- this is the sentence an operator can act on.
         return "the AI provider answered in a way this hub could not use", None
 
-    if response.status_code >= 400:
-        return f"the AI provider returned HTTP {response.status_code}", None
     try:
-        payload = response.json()
+        payload = json.loads(bytes(raw).decode("utf-8", "replace"))
         text = payload["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError):
         return "the AI provider returned a response this hub could not read", None

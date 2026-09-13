@@ -236,6 +236,58 @@ def main():
         error, _ = ai.complete(dict(CONFIG, model=""), [])
         check("a missing model is refused before any request", "model" in str(error))
 
+        print("\n== A provider answering with too much is abandoned, not buffered ==")
+        # The claim in complete()'s docstring used to be false: response.json() buffers and
+        # parses the whole body, so truncating its result bounded what was KEPT and not what
+        # was read. The recorder below counts bytes actually handed over, which is the only
+        # thing that distinguishes a cap from a promise.
+        real_post = ai.requests.post
+
+        class FakeResponse:
+            def __init__(self, chunks, status=200):
+                self.chunks, self.status_code, self.served = chunks, status, 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def iter_content(self, chunk_size=8192):
+                for chunk in self.chunks:
+                    self.served += len(chunk)
+                    yield chunk
+
+        try:
+            oversize = [b"x" * 8192] * ((ai.MAX_RESPONSE_BYTES // 8192) + 40)
+            fake = FakeResponse(oversize)
+            ai.requests.post = lambda *a, **k: fake
+            error, text = ai.complete(CONFIG, [{"role": "user", "content": "hi"}])
+            check("an oversized body is refused", text is None and error)
+            check("...in words an operator can read", "too large" in str(error))
+            check("...having stopped reading near the cap, not at the end",
+                  fake.served <= ai.MAX_RESPONSE_BYTES + 8192)
+            check("...which is well short of what was on offer",
+                  fake.served < sum(len(c) for c in oversize))
+
+            body = json.dumps({"choices": [{"message": {"content": envelope(
+                condition_text="disk.min_free_gb < 10")}}]}).encode()
+            ai.requests.post = lambda *a, **k: FakeResponse([body[:10], body[10:]])
+            error, text = ai.complete(CONFIG, [{"role": "user", "content": "hi"}])
+            check("a normal answer split across chunks is reassembled", error is None)
+            check("...and carries the model's text", "disk.min_free_gb" in str(text))
+
+            ai.requests.post = lambda *a, **k: FakeResponse([b"<html>proxy</html>"])
+            error, text = ai.complete(CONFIG, [{"role": "user", "content": "hi"}])
+            check("a proxy's HTML page is refused rather than parsed",
+                  text is None and "could not read" in str(error))
+
+            ai.requests.post = lambda *a, **k: FakeResponse([b""], status=503)
+            error, text = ai.complete(CONFIG, [{"role": "user", "content": "hi"}])
+            check("an HTTP error is reported by its status", "503" in str(error))
+        finally:
+            ai.requests.post = real_post
+
         print("\n== Where a prompt may be sent ==")
         check("a model on this machine is allowed",
               ai.check_provider_url("http://127.0.0.1:11434", True) is None)
