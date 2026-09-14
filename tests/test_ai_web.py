@@ -65,12 +65,22 @@ def fake_login_required(view):
     return wrapped
 
 
-def answer(condition_text, target=None, actions=None):
-    """Stand in for the provider with one canned envelope."""
-    body = {"name": "Drafted", "condition_text": condition_text,
+def _rule(condition_text, target=None, actions=None):
+    return {"name": "Drafted", "condition_text": condition_text,
             "target": target or {"include": [{"kind": "all"}]},
             "actions": actions or [{"type": "alert", "params": {"text": "hi"}}],
-            "for_seconds": 0, "cooldown_seconds": 0, "refusal": ""}
+            "for_seconds": 0, "cooldown_seconds": 0}
+
+
+def answer(condition_text, target=None, actions=None):
+    """Stand in for the provider with one canned envelope."""
+    body = dict(_rule(condition_text, target, actions), refusal="")
+    return lambda config, messages, **kwargs: (None, json.dumps(body))
+
+
+def answer_stages(*stages):
+    """Stand in for the provider with a canned ESCALATION -- one rule object per stage."""
+    body = {"rules": [_rule(*stage) for stage in stages], "refusal": ""}
     return lambda config, messages, **kwargs: (None, json.dumps(body))
 
 
@@ -178,12 +188,15 @@ def main():
         check("a rule author can draft", r.status_code == 201)
         draft_id = (body.get("draft") or {}).get("id")
         check("...and gets a draft id back", bool(draft_id))
+        drafted = body.get("rules") or []
         check("...with the canonical expression to preview",
-              body.get("condition_text") == "disk.min_free_gb < 10")
+              len(drafted) == 1 and drafted[0]["condition_text"] == "disk.min_free_gb < 10")
         check("...and a summary built from it, not from the model",
-              "disk.min_free_gb < 10" in body.get("summary", ""))
+              "disk.min_free_gb < 10" in drafted[0]["summary"])
         check("...naming how many machines it would reach",
-              "2 machine(s)" in body.get("summary", ""))
+              "2 machine(s)" in drafted[0]["summary"])
+        check("...and the target, because the console previews against it",
+              drafted[0]["target"] == {"include": [{"kind": "all"}], "exclude": []})
 
         print("\n== A draft belongs to the person who wrote it ==")
         CURRENT_USER = "scoped@x.com"
@@ -200,7 +213,7 @@ def main():
         check("a scoped author can draft", r.status_code == 201)
         scoped_id = r.get_json()["draft"]["id"]
         check("...and the summary counts only what they can see",
-              "1 machine(s)" in r.get_json()["summary"])
+              "1 machine(s)" in r.get_json()["rules"][0]["summary"])
         r = c.post(f"/api/ai/rules/drafts/{scoped_id}/commit", json={})
         body = r.get_json()
         check("committing a target that reaches outside their scope is refused",
@@ -229,6 +242,52 @@ def main():
               body.get("source_text") == "PC-01 only, under 10 GB")
         check("...and the draft consumed", ai.get_draft(db_path, in_scope_id) is None)
 
+        before_rules = len(rules.list_rules(db_path))
+        print("\n== An escalation commits one stage at a time ==")
+        # The failure: committing the warning stage threw the enforcement stage away with the
+        # draft row, so an operator who created the gentle rule lost the one that acts and had
+        # nothing in the console to say a second rule had ever been drafted.
+        CURRENT_USER = "super@x.com"
+        ai.complete = answer_stages(("sys.uptime_days > 5",),
+                                    ("sys.uptime_days > 10", None,
+                                     [{"type": "command",
+                                       "params": {"command_type": "restart", "params": {}}}]))
+        r = c.post("/api/ai/rules/draft", json={"text": "warn at 5 days, restart at 10"})
+        body = r.get_json()
+        staged_id = body["draft"]["id"]
+        check("one sentence drafts both stages", len(body["rules"]) == 2)
+        check("...each numbered so the escalation reads in order",
+              body["rules"][0]["summary"].startswith("Stage 1 of 2"))
+        check("...and each carrying the index commit takes",
+              [entry["index"] for entry in body["rules"]] == [0, 1])
+
+        r = c.post(f"/api/ai/rules/drafts/{staged_id}/commit", json={"index": 99})
+        check("an index the draft does not have is a 400, not a stray commit",
+              r.status_code == 400)
+        check("...and nothing was created", len(rules.list_rules(db_path)) == before_rules)
+
+        r = c.post(f"/api/ai/rules/drafts/{staged_id}/commit", json={"index": 1})
+        body = r.get_json()
+        check("the stage an operator picked is the one created", r.status_code == 201
+              and body["rule"]["condition_text"] == "sys.uptime_days > 10")
+        check("...arriving DISABLED like any drafted rule",
+              body["rule"]["enabled"] in (0, False))
+        check("...described by the whole sentence, not half of it",
+              body["rule"]["description"].startswith("Drafted from: warn at 5 days"))
+        check("...and the other stage survives the commit",
+              [entry["condition_text"] for entry in body["remaining"]]
+              == ["sys.uptime_days > 5"])
+        check("...still readable as a draft", ai.get_draft(db_path, staged_id) is not None)
+        check("...renumbered from what is actually left",
+              [entry["index"] for entry in body["remaining"]] == [0])
+
+        r = c.post(f"/api/ai/rules/drafts/{staged_id}/commit", json={"index": 0})
+        body = r.get_json()
+        check("committing the last stage creates it too", r.status_code == 201
+              and body["rule"]["condition_text"] == "sys.uptime_days > 5")
+        check("...and only then is the draft consumed",
+              body["remaining"] == [] and ai.get_draft(db_path, staged_id) is None)
+
         print("\n== A model's invented variable is refused with the parser's words ==")
         ai.complete = answer("cpu.temp_c > 90")
         r = c.post("/api/ai/rules/draft", json={"text": "hot CPUs"})
@@ -248,8 +307,8 @@ def main():
         r = c.post(f"/api/ai/rules/drafts/{rid}/refine", json={"text": "make it 5"})
         body = r.get_json()
         check("a refinement keeps the same draft id", body["draft"]["id"] == rid)
-        check("...and carries the change through", body["condition_text"]
-              == "disk.min_free_gb < 5")
+        check("...and carries the change through",
+              body["rules"][0]["condition_text"] == "disk.min_free_gb < 5")
         check("...accumulating the English rather than replacing it",
               body["draft"]["source_text"].startswith("under 10 GB")
               and "make it 5" in body["draft"]["source_text"])
