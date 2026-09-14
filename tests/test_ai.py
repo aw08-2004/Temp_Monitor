@@ -410,6 +410,43 @@ def main():
             check("...and the previous list survives the failure",
                   ai.model_choices(db_path, "openrouter") == ["a-model"])
 
+            # The regression that prompted MAX_MODELS_BYTES: OpenRouter's catalogue was
+            # 718 KB, which the chat-reply cap refused, so every refresh failed with "too
+            # large to read". A list bigger than a reply but ordinary for a catalogue must be
+            # read; a genuinely unbounded one must still be refused.
+            def catalogue_of(size):
+                entry = {"id": "", "description": "x" * 1500}
+                entries, total = [], 0
+                while total < size:
+                    entries.append(dict(entry, id="vendor/model-%d" % len(entries)))
+                    total += 1600
+                return json.dumps({"data": entries}).encode()
+
+            big = catalogue_of(ai.MAX_RESPONSE_BYTES * 3)
+            check("the test catalogue really is past the chat-reply cap",
+                  len(big) > ai.MAX_RESPONSE_BYTES)
+            ai.requests.get = lambda *a, **k: FakeResponse(
+                [big[i:i + 8192] for i in range(0, len(big), 8192)])
+            error, listing = ai.refresh_models(
+                db_path, dict(CONFIG, provider="openrouter"), api_key="k")
+            check("a catalogue the size of OpenRouter's is read, not refused", error is None)
+            check("...and every model in it is cached",
+                  listing is not None and len(listing["models"]) > 100)
+
+            huge = b"x" * (ai.MAX_MODELS_BYTES + 8192 * 4)
+            ai.requests.get = lambda *a, **k: FakeResponse(
+                [huge[i:i + 8192] for i in range(0, len(huge), 8192)])
+            error, _ = ai.refresh_models(db_path, dict(CONFIG, provider="openrouter"))
+            check("a list past the catalogue cap is still refused",
+                  error and "too large" in error)
+            check("...and leaves the good list cached",
+                  len(ai.model_choices(db_path, "openrouter")) > 100)
+
+            # Back to the one-model list the assertions below expect.
+            ai.requests.get = lambda *a, **k: FakeResponse(
+                [json.dumps({"data": [{"id": "a-model"}]}).encode()])
+            ai.refresh_models(db_path, dict(CONFIG, provider="openrouter"), api_key="k")
+
             ai.requests.get = lambda *a, **k: FakeResponse([b"<html>proxy</html>"])
             error, _ = ai.refresh_models(db_path, dict(CONFIG, provider="openrouter"))
             check("a proxy page is refused rather than parsed",

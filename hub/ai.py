@@ -144,6 +144,14 @@ MAX_RESPONSE_CHARS = 20000
 # few hundred bytes, small next to what an unbounded read costs: this is the number standing
 # between a misbehaving endpoint on the LAN and the hub's memory.
 MAX_RESPONSE_BYTES = 256 * 1024
+# The same bound for a provider's MODEL LIST, which is a different kind of answer and needs a
+# different number. A chat reply is a few hundred bytes of rule; a catalogue carries a
+# description, pricing and architecture block for every model it serves. OpenRouter's was
+# 718 KB for 445 models when this was measured (2026-09-14), so reusing the reply cap refused
+# every refresh with "too large to read" -- the cap was doing its job against the wrong
+# document. Eight megabytes is ten times that, room for the catalogue to keep growing, and
+# still a bound on what a misbehaving endpoint on the LAN can make the hub hold.
+MAX_MODELS_BYTES = 8 * 1024 * 1024
 MAX_DRAFTS_PER_ACTOR = 25
 MAX_REFUSAL_CHARS = 400
 
@@ -560,7 +568,7 @@ def refresh_models(db_path, config, *, api_key="", now=None):
             raw = bytearray()
             for chunk in response.iter_content(chunk_size=8192):
                 raw.extend(chunk)
-                if len(raw) > MAX_RESPONSE_BYTES:
+                if len(raw) > MAX_MODELS_BYTES:
                     return "the AI provider's model list was too large to read", None
     except requests.Timeout:
         return "the AI provider did not answer in time", None
