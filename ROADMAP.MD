@@ -3847,6 +3847,73 @@ one word that either hides the Terminal button fleet-wide or shows a Wipe button
 
 ---
 
+## ✅ Agent re-enrollment after a machine is deleted · hub 1.112.0 · agent unreleased
+
+Delete a machine from the console, reinstall the agent on that PC with the same enrollment
+secret, and the console kept saying **not enrolled, telemetry only** — permanently, with
+nothing in any log to explain it. Reported from the field, and it is worth writing down
+because every part of it was working as designed.
+
+The enrollment identity is a file (`agent.json`) in `%ProgramData%`, not in the install
+directory, and the uninstaller deliberately leaves that tree alone so logs survive a
+reinstall. `FleetClient.EnsureEnrolledAsync` short-circuits on "I have an agent_id and a
+token" and never asks the hub whether either still means anything. `fleet.delete_machine`
+does `DELETE FROM agents`. So the PC kept presenting a credential for a row that no longer
+existed, got a 401 on every heartbeat, and dropped it on the floor — `HeartbeatAsync`
+returned `false`, which is also what a network blip returns, logged at debug. Meanwhile
+`/api/report` is unauthenticated **by design** (it is the open telemetry ingress), so
+temperatures kept arriving and the machine stayed visible the whole time. Uninstalling and
+reinstalling changed nothing, because the file it needed to lose was never in scope.
+
+**The fix is that a 401 now says why.** `fleet_web.agent_auth` includes a `reason`, and the
+agent throws its identity away on `unknown` and keeps it on `revoked`. Both halves are
+needed: without the first, an agent cannot recover from a deletion; without the second, an
+agent would re-enroll itself the moment somebody revoked it, which would make
+`fleet.revoke_agent` decorative.
+
+### Decisions
+
+- **Only a caller holding the real token is ever told "revoked".** Every other refusal reads
+  `unknown`, including a wrong token for an agent that genuinely exists. An `agent_id` is the
+  non-secret half of the credential — it is printed in the audit trail — so answering
+  honestly on a bad token would turn the endpoint into an oracle for which ids exist. The
+  price is that a revoked agent that has *also* lost its token file re-enrolls instead of
+  staying down; that machine is one an operator would re-image anyway.
+- **A 401 with no reason means re-enroll**, which is what a hub older than 1.112.0 sends.
+  Deploy order is hub first, then agent, but a self-updated agent can still lead its hub by
+  minutes. Defaulting the other way would silently reproduce the exact bug this entry is
+  about, and the cost of defaulting this way is one extra enrollment for an agent revoked on
+  a hub that cannot say so.
+- **Only the heartbeat acts on a 401.** The other authenticated routes answer 403/404 for
+  ordinary reasons — a command that is already finished, one belonging to another machine —
+  and teaching each of them to distrust the credential would turn a routine refusal into a
+  fleet-wide re-enrollment.
+- **The identity is cleared only if it is still the one that was refused.** The command loop
+  can enroll while a heartbeat is in flight, and acting on the stale reply would discard the
+  credential just paid for, in a loop.
+- **The uninstaller now deletes `agent.json`** (from both the FleetHub path and the
+  pre-rename one it migrates from) and keeps leaving the logs. That is the smaller half of
+  the fix, but it is the half that makes "uninstall, reinstall" do what everyone already
+  assumes it does, and it works against a hub that has not been updated yet.
+
+### Rejected alternatives
+
+- **Re-enroll on a bare 401, with no reason field.** One file instead of four, and it would
+  have fixed the reported symptom. Rejected because it cannot tell a deleted agent from a
+  revoked one, so it quietly deletes revocation as a control.
+- **Have the hub keep the agents row and mark it deleted**, so the token stays resolvable.
+  Rejected: it makes deletion not-a-deletion, and `delete_machine` exists precisely so a
+  decommissioned machine leaves no rows behind. The audit trail is what remembers it.
+- **Have the agent re-enroll on a timer regardless of refusals.** Rejected as an enrollment
+  storm with no upper bound and no diagnosis: it would have hidden this bug rather than
+  ended it.
+
+### Not done
+
+No agent release is cut for this. The agent half is on `main` unreleased, so a machine in
+the field gets the hub half now — which is what makes the *uninstall* path work — and the
+in-service recovery when the next agent release ships.
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and

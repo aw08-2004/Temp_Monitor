@@ -45,6 +45,11 @@ $ExePath        = Join-Path $InstallDir $ExeName
 $RegPath        = "HKLM:\SOFTWARE\FleetHub\Agent"
 $LegacyRegPath  = "HKLM:\SOFTWARE\TempMonitorAgent"
 $LegacyInstall  = "C:\Program Files\TempMonitorAgent"
+# Agent state, as AgentConfig.ProgramDataDir resolves it: the FleetHub path, and the
+# pre-rename one it migrates from. Named here so the uninstall can drop the enrollment
+# identity -- everything else under them is logs and is deliberately kept.
+$StateDir       = Join-Path $env:ProgramData "FleetHub\Agent"
+$LegacyStateDir = Join-Path $env:ProgramData "TempMonitorAgent"
 $PawnIoUrl   = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/refs/heads/master/LibreHardwareMonitor.Windows.Forms/Resources/PawnIO_setup.exe"
 
 function Say($msg)  { Write-Host "  $msg" }
@@ -96,7 +101,21 @@ if ($Uninstall) {
         Ok "Deleted $InstallDir"
     }
 
-    Warn "Left PawnIO driver and %ProgramData%\TempMonitorAgent (state/logs) in place."
+    # The enrollment identity is the one piece of state that must NOT survive, and it is not
+    # in $InstallDir -- it lives in %ProgramData% alongside the logs. Leaving it is what makes
+    # "uninstall, then reinstall with the same secret" silently do nothing on a machine the
+    # hub has since deleted: the agent finds agent.json, decides it is already enrolled, and
+    # never asks the hub again. Both paths, because the agent migrates its state dir from the
+    # pre-rename location and would otherwise copy a stale identity forward.
+    foreach ($stateDir in @($StateDir, $LegacyStateDir)) {
+        $identity = Join-Path $stateDir "agent.json"
+        if (Test-Path $identity) {
+            Remove-Item $identity -Force -ErrorAction SilentlyContinue
+            Ok "Removed enrollment identity $identity"
+        }
+    }
+
+    Warn "Left PawnIO driver and the rest of %ProgramData%\FleetHub\Agent (logs) in place."
     Write-Host "`nDone.`n" -ForegroundColor Green
     exit
 }
