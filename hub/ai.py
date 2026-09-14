@@ -561,8 +561,8 @@ def refresh_models(db_path, config, *, api_key="", now=None):
             if response.status_code == 401 or response.status_code == 403:
                 # Named separately because it is the one failure with an obvious fix, and
                 # "HTTP 401" sends an operator to the wrong place.
-                return ("the AI provider rejected the credentials -- check AI_API_KEY in "
-                        ".env"), None
+                return ("the AI provider rejected the credentials -- check the API key in "
+                        "Settings -> AI (AI_API_KEY)"), None
             if response.status_code >= 400:
                 return f"the AI provider returned HTTP {response.status_code}", None
             raw = bytearray()

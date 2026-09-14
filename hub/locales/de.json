@@ -1037,9 +1037,19 @@
       "count": "{count} Modelle, gelesen {age}",
       "never": "Noch nicht gelesen. Aktualisieren Sie, um das Modellfeld unten mit einer durchsuchbaren Liste zu füllen.",
       "stale": "{count} Modelle, gelesen {age} -- alt genug, um eine Aktualisierung zu lohnen.",
-      "needs_key": "Dieser Anbieter braucht einen Schlüssel. Setzen Sie AI_API_KEY in .env und starten Sie den Hub neu.",
+      "needs_key": "Dieser Anbieter braucht einen API-Schlüssel. Tragen Sie ihn unten ein.",
       "custom_hint": "Wählen Sie oben einen Anbieter, oder lassen Sie es bei einer eigenen Adresse und tragen Sie sie unten ein.",
-      "failed": "{error}"
+      "failed": "{error}",
+      "key_label": "API-Schlüssel",
+      "key_set": "Ein Schlüssel ist gesetzt. Er wird hier nie angezeigt; speichern Sie einen neuen, um ihn zu ersetzen.",
+      "key_unset": "Kein Schlüssel gesetzt. Lokale Anbieter wie Ollama brauchen keinen.",
+      "key_placeholder": "API-Schlüssel des Anbieters einfügen",
+      "key_save": "Schlüssel speichern",
+      "key_remove": "Schlüssel entfernen",
+      "key_remove_confirm": "API-Schlüssel entfernen? Gehostete Anbieter antworten erst wieder, wenn ein neuer gespeichert ist.",
+      "key_saved": "Schlüssel gespeichert. Er gilt sofort.",
+      "key_removed": "Schlüssel entfernt.",
+      "key_cannot_write": "Dieser Hub kann seine .env-Datei nicht schreiben, der Schlüssel muss daher als AI_API_KEY auf dem Server gesetzt werden."
     },
     "choice": {
       "ai.provider": {

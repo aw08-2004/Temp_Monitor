@@ -73,7 +73,14 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
         if not changed:
             return jsonify(dict(authconfig.redacted(after), changed=[])), 200
 
-        authconfig.save(env_path, after)
+        try:
+            authconfig.save(env_path, after)
+        except ValueError:
+            # A line break in a client id, secret or issuer url. envfile refuses it before
+            # writing anything -- a second line in .env is a change to ALLOWED_EMAILS made
+            # through a sign-in form -- so nothing was saved and there is nothing to roll back.
+            return jsonify({"error": "Sign-in settings cannot contain line breaks or other "
+                                     "control characters."}), 400
         try:
             reconfigure(after)
         except Exception as e:

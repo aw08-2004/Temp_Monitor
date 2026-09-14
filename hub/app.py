@@ -129,7 +129,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.110.1"
+HUB_VERSION = "1.111.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1824,7 +1824,10 @@ if not AGENT_ENROLLMENT_SECRET:
 # ================================
 # The provider's API key, and the only piece of AI configuration that is NOT a setting: the
 # rest (whether the feature is on, which base url, which model) lives in settings.REGISTRY
-# where an admin can edit it, and settings.py says no secrets live there.
+# where an admin can edit it, and settings.py says no secrets live there. It can be set from
+# Settings -> AI all the same (POST /api/ai/key), which writes .env and the live environment
+# the way the TURN secret control does -- so the value read here is only what the hub booted
+# with, and the AI blueprint reads os.environ on every request rather than trusting it.
 #
 # Unset is NOT a failure. A provider on this network -- Ollama or vLLM on the hub itself, the
 # deployment with no data-egress question attached at all -- needs no key, so an empty value
@@ -2380,14 +2383,17 @@ app.register_blueprint(create_rules_blueprint(
 # is a front end onto that engine rather than a second one -- a draft is validated by
 # rules.py's own parser and committed through rules.save_rule. No new capability: reading is
 # `view`, drafting and committing are `manage_rules`, and a drafted COMMAND still needs
-# `issue_commands` down in rules.validate_actions. The key is passed once here rather than
-# read inside ai.py, so the module stays testable and settings.py stays free of secrets.
+# `issue_commands` down in rules.validate_actions. The key is handed in rather than read inside
+# ai.py, so the module stays testable and settings.py stays free of secrets -- and as a LOOKUP,
+# not the boot-time value, because a key saved from Settings has to take effect on the next
+# request rather than at the next restart. env_path is where that save writes it.
 app.register_blueprint(create_ai_blueprint(
     DB_PATH, login_required, access,
     lambda machine: resolve_rule_vars(machine),
     lambda: _rules_config(),
     lambda: _ai_config(),
-    api_key=AI_API_KEY,
+    api_key=lambda: os.environ.get("AI_API_KEY", ""),
+    env_path=ENV_PATH,
 ))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any

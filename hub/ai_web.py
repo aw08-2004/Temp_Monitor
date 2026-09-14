@@ -36,6 +36,7 @@ import traceback
 from flask import Blueprint, jsonify, request
 
 import ai
+import envfile
 import fleet
 import permissions
 import rules
@@ -43,6 +44,12 @@ import rules
 # The one sentence any unexpected failure in this module answers with. Fixed text, so no
 # caller can learn anything about the hub's internals from the shape of a failure.
 GENERIC_ERROR = "the hub could not complete that request; see the hub log for details"
+
+# Where the provider key lives, named once so the route, its audit row and app.py's lookup
+# cannot disagree. And a bound on it: no provider issues a key anywhere near this long, and the
+# value is written into a file that holds the hub's perimeter.
+KEY_ENV = "AI_API_KEY"
+MAX_KEY_CHARS = 512
 
 
 def _log_generic(context):
@@ -57,7 +64,7 @@ def _log_generic(context):
 
 
 def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_config,
-                        ai_config, api_key=""):
+                        ai_config, api_key="", env_path=None):
     """Build the AI Blueprint.
 
     `resolve_vars(machine)`, `rules_config()` and `ai_config()` come from app.py for the same
@@ -70,8 +77,14 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
     which is the entire point of having an off switch -- the same reasoning `_rules_config`
     carries in app.py.
 
-    `api_key` is read from the environment once at boot and passed in, never re-read -- the
-    discipline AGENT_ENROLLMENT_SECRET follows, because settings.py is not a secret store.
+    `api_key` is a string, or a zero-argument callable returning one. app.py passes a callable
+    that reads os.environ on every request, because the key can be set from Settings (POST
+    /api/ai/key) and a key captured at boot would ignore that until the next restart -- the
+    same move the TURN secret control made, for the same reason. A plain string still works,
+    which keeps a caller with nothing to look up simple.
+
+    `env_path` is the `.env` a key set from the console is written to. None means this
+    deployment cannot write it, and the route says so rather than pretending to save.
     """
     bp = Blueprint("ai", __name__)
     can_view = access.require(permissions.VIEW)
@@ -81,6 +94,11 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
     # asked a question, and the field it fills in lives on the Settings page. So it is gated
     # with the rest of that page rather than with the drafter.
     can_configure = access.require(permissions.MANAGE_SETTINGS)
+
+    def _api_key():
+        """The provider key as of THIS request. Never cached -- see the docstring above."""
+        value = api_key() if callable(api_key) else api_key
+        return str(value or "")
 
     def _extra():
         return rules.all_extra_variables(db_path)
@@ -151,12 +169,13 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         default for a config that holds a credential must be "not exposed".
         """
         config = ai_config()
-        error, resolved = ai.provider_config(config, api_key)
+        error, resolved = ai.provider_config(config, _api_key())
         if error:
             return jsonify({"enabled": ai.is_enabled(config), "ready": False,
                             "error": error, "providers": list(ai.PROVIDERS),
                             "provider": ai.preset_for(config.get("provider")).name,
-                            "has_api_key": bool(api_key)}), 200
+                            "has_api_key": bool(_api_key()),
+                            "can_write_key": bool(env_path)}), 200
         return jsonify({
             "enabled": True,
             "ready": True,
@@ -167,9 +186,58 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
             "providers": list(ai.PROVIDERS),
             # Whether a key EXISTS, never the key. An operator debugging a 401 needs to know
             # that .env was read; nobody needs the value back out of the hub that holds it.
-            "has_api_key": bool(api_key),
+            "has_api_key": bool(_api_key()),
+            "can_write_key": bool(env_path),
             "can_manage": access.can(permissions.MANAGE_RULES),
         }), 200
+
+    # ---------------- The provider key ----------------
+
+    @bp.route("/api/ai/key", methods=["POST"])
+    @login_required
+    @can_configure
+    def set_ai_key():
+        """Set or remove the provider key from the console. **It is never echoed back.**
+
+        Written to .env AND to the live environment -- the pair envfile.apply_to_environ exists
+        for -- so it takes effect on the next request with no restart, and survives the next
+        restart because the file is what python-dotenv reads at boot. The shape of the TURN
+        secret control, with one deliberate difference: that route returns the secret once so it
+        can be pasted into coturn, and nothing needs a copy of this one, so the answer says only
+        whether a key is now set.
+
+        An empty value REMOVES the key rather than storing an empty one: envfile.set_vars deletes
+        on None, and a file reading `AI_API_KEY=` claims a configuration that is not there.
+
+        **A control character is refused, not stripped.** The value becomes one line of a dotenv
+        file that also holds ALLOWED_EMAILS and the enrollment secret. A line break in it would
+        write a second line, and a second line in that file is a change to the hub's perimeter
+        made through an API-key box. Refusing says so; stripping would save something the admin
+        did not type.
+        """
+        if not env_path:
+            return jsonify({"error": "this hub cannot write its .env file in this deployment; "
+                                     "set AI_API_KEY on the server instead"}), 400
+        body = request.get_json(silent=True) or {}
+        value = str(body.get("key") or "").strip()
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            return jsonify({"error": "an API key cannot contain line breaks or other control "
+                                     "characters"}), 400
+        if len(value) > MAX_KEY_CHARS:
+            return jsonify({"error": f"that key is too long (limit {MAX_KEY_CHARS} "
+                                     "characters)"}), 400
+        update = {KEY_ENV: value or None}
+        try:
+            envfile.set_vars(env_path, update)
+        except OSError:
+            # The exception text carries the file path, and this answer goes to a browser.
+            return jsonify({"error": _log_generic("writing the AI key to .env")}), 500
+        envfile.apply_to_environ(update)
+        # Never the key, and not its length either: a length narrows a guess and helps nobody.
+        fleet.audit(db_path, actor=_actor(),
+                    action="ai_api_key_set" if value else "ai_api_key_cleared",
+                    level=fleet.LEVEL_SECURITY, target="hub")
+        return jsonify({"has_api_key": bool(_api_key())}), 200
 
     # ---------------- The model list ----------------
 
@@ -196,7 +264,7 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         draws for a peer that will not answer.
         """
         config = ai_config()
-        error, listing = ai.refresh_models(db_path, config, api_key=api_key)
+        error, listing = ai.refresh_models(db_path, config, api_key=_api_key())
         if error:
             unconfigured = ("switched off" in error or "no AI provider" in error)
             return jsonify({"error": error}), (400 if unconfigured else 502)
@@ -220,7 +288,7 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         """
         body = request.get_json(silent=True) or {}
         error, draft = ai.draft_rule(db_path, ai_config(), body.get("text"), extra=_extra(),
-                                     api_key=api_key, actor=_actor(),
+                                     api_key=_api_key(), actor=_actor(),
                                      allow_command=_may_issue_commands())
         if error:
             return jsonify({"error": error}), 400
@@ -260,7 +328,7 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
             return jsonify({"error": "no such draft"}), 404
         body = request.get_json(silent=True) or {}
         error, refined = ai.refine_draft(db_path, ai_config(), draft, body.get("text"),
-                                         extra=_extra(), api_key=api_key, actor=_actor(),
+                                         extra=_extra(), api_key=_api_key(), actor=_actor(),
                                          allow_command=_may_issue_commands())
         if error:
             return jsonify({"error": error}), 400

@@ -243,6 +243,20 @@ def main():
               r.get_json()["secret"] == "explicit-match"
               and os.environ.get("REMOTE_TURN_SECRET") == "explicit-match")
 
+        # The line-break injection. The secret is one line of a .env that also holds
+        # ALLOWED_EMAILS, so an embedded newline used to write a second line -- a way for a
+        # manage_settings holder to add themselves to the break-glass list at the next restart.
+        injected = "match" + chr(10) + "ALLOWED_EMAILS=attacker@evil.example"
+        r = c.post("/api/remote/turn/secret", json={"secret": injected})
+        check("a TURN secret containing a line break is refused -> 400", r.status_code == 400)
+        with open(env_path, encoding="utf-8") as handle:
+            check("...and .env gained no injected line",
+                  "attacker@evil.example" not in handle.read())
+        check("...and the live secret is still the previous one",
+              os.environ.get("REMOTE_TURN_SECRET") == "explicit-match")
+        check("...and the refusal does not echo what was submitted",
+              "attacker@evil.example" not in r.get_data(as_text=True))
+
         CURRENT_USER = "tech@x.com"     # remote_control but NOT manage_settings
         check("status blocked without manage_settings -> 403",
               c.get("/api/remote/turn/status").status_code == 403)

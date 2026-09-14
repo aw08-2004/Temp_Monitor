@@ -3032,7 +3032,7 @@ finds a tablet's battery at the top.
 
 ---
 
-## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0
+## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3102,6 +3102,13 @@ on request — read from the cache to draw the page, never over the network, bec
 page that reaches a third party to render is one that hangs when the third party does. The box
 stays FREE TEXT with the list as suggestions: a gateway can serve a model this hub has never
 heard of, and an enum would make that unconfigurable.
+
+The provider's API key is set from the same tab and written to `.env`, never to the settings
+table — `settings.py` holds no secrets, and a provider key is exactly the value that rule exists
+for. The console never reads it back: the hub reports whether a key is set and nothing else,
+and the audit row records that it changed without recording what to. A key containing a line
+break is refused outright, because it is written as one line of a file that also holds
+`ALLOWED_EMAILS`.
 
 The console half is on the Rules page, above the rule list, and hidden unless the feature is
 both switched on and configured. Describe, adjust, preview through the existing
