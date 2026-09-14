@@ -33,7 +33,7 @@
 <div class="card" id="ai-drafter" hidden style="margin-bottom: var(--space-4);">
     <h2 class="section-title">{{ t('ai.drafter_title') }}</h2>
     <p class="stat-card__meta" style="margin-bottom: var(--space-3);">{{ t('ai.drafter_intro') }}</p>
-    <textarea class="input" id="ai-text" rows="2" spellcheck="false"
+    <textarea class="input" id="ai-text" rows="2" spellcheck="false" autocomplete="off"
               placeholder="{{ t('ai.placeholder') }}" style="width: 100%;"></textarea>
     <div class="toolbar" style="margin-top: var(--space-3);">
         <button type="button" class="btn btn--primary" id="ai-draft">{{ t('ai.draft') }}</button>
@@ -46,7 +46,7 @@
            what /api/rules/preview will evaluate. #}
         <p id="ai-expression" style="font-family: var(--font-mono, monospace); margin: 0 0 var(--space-3);"></p>
         <div class="toolbar">
-            <input class="input" id="ai-refine-text" type="text"
+            <input class="input" id="ai-refine-text" type="text" autocomplete="off"
                    placeholder="{{ t('ai.refine_placeholder') }}" style="min-width: 260px;">
             <button type="button" class="btn btn--ghost" id="ai-refine">{{ t('ai.refine') }}</button>
         </div>
