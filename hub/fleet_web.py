@@ -109,6 +109,11 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         def wrapped(*args, **kwargs):
             agent_id, machine = _bearer_agent(db_path)
             if agent_id is None:
+                # Parses the header a second time, on the refusal path only. Deliberate:
+                # `bearer_agent` reports a failure as (None, None) and is called from twenty
+                # places across six blueprints, so widening its return to carry the claimed
+                # id would touch every one of them to serve this single route. A string
+                # split on a request that is already being refused is the cheaper side.
                 claimed, token = auth_helpers.bearer_parts()
                 return jsonify({
                     "error": "agent authentication required",

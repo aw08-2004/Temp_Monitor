@@ -11,10 +11,10 @@ import fleet
 def bearer_parts():
     """Split the Authorization header into its (agent_id, token) halves, or (None, None).
 
-    Split out of `bearer_agent` so the refusal path can name WHICH agent was claimed
-    without parsing the header a second time -- fleet_web.agent_auth needs the claimed id
-    to answer "revoked" or "unknown". Purely a parse: it asserts nothing about whether
-    either half is real.
+    Split out of `bearer_agent` so a refusal path can recover WHICH agent was claimed:
+    `bearer_agent` collapses every failure to (None, None), and fleet_web.agent_auth needs
+    the claimed id to answer "revoked" or "unknown". Purely a parse -- it asserts nothing
+    about whether either half is real, which is exactly why the refusal path may call it.
     """
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
