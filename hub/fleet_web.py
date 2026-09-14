@@ -93,11 +93,27 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         return wrapped
 
     def agent_auth(view):
+        """Bearer gate for the agent-facing routes.
+
+        **A 401 here carries a `reason`, and the agent acts on it.** An agent holds one
+        credential for the life of its install, so "the hub refused me" used to be a dead
+        end: a machine an operator deleted and re-imaged kept presenting a token for a row
+        that no longer existed, got 401 forever, and stayed visible only through the
+        unauthenticated telemetry ingress -- "enrolled: no, telemetry: yes" with nothing in
+        any log saying why. `reason: unknown` is what lets it throw that credential away and
+        enroll again; `reason: revoked` is what stops it doing so when the refusal was
+        deliberate. See fleet.auth_failure_reason for why only a caller holding the real
+        token is ever told "revoked".
+        """
         @functools.wraps(view)
         def wrapped(*args, **kwargs):
             agent_id, machine = _bearer_agent(db_path)
             if agent_id is None:
-                return jsonify({"error": "agent authentication required"}), 401
+                claimed, token = auth_helpers.bearer_parts()
+                return jsonify({
+                    "error": "agent authentication required",
+                    "reason": fleet.auth_failure_reason(db_path, claimed, token),
+                }), 401
             return view(agent_id, machine, *args, **kwargs)
         return wrapped
 

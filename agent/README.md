@@ -108,6 +108,14 @@ State lives in `%ProgramData%\FleetHub\Agent` (`agent.json`, `config.json`,
 `%ProgramData%\TempMonitorAgent` is migrated on first touch, and kept if the migration
 fails rather than starting from a blank identity.
 
+`agent.json` is the enrollment identity, and it outlives the install -- the uninstaller
+keeps the rest of this tree for its logs. It is **dropped in two cases**: the uninstaller
+deletes it (both paths), and the agent deletes it itself when the hub answers a heartbeat
+with `401 {"reason": "unknown"}`, meaning the hub has no row for this agent and the machine
+should enroll again. `{"reason": "revoked"}` is the opposite instruction and the identity is
+kept, so a revoked agent stays down instead of re-enrolling itself. A 401 with no reason at
+all -- a hub older than 1.112.0 -- is treated as `unknown`; see `ShouldReenrollAfter401`.
+
 ## Build / test / publish
 ```powershell
 dotnet test  agent/TempMonitorAgent.slnx

@@ -40,6 +40,25 @@ public sealed class AgentState
         AtomicWrite(AgentConfig.AgentIdentityPath, json);
     }
 
+    /// <summary>Throw the enrollment identity away, so the next tick enrolls from scratch.
+    ///
+    /// **Deleting the file is the point, not blanking the field in memory.** The identity
+    /// outlives the process AND the install -- the uninstaller deliberately leaves
+    /// %ProgramData% alone -- so an identity the hub no longer recognises would otherwise
+    /// survive a stop, a self-update and a full reinstall, and keep this machine on the
+    /// unauthenticated telemetry path forever. Fails soft like everything else here: a file
+    /// we could not delete leaves the old identity in place and the caller simply refuses
+    /// again next tick, which is where we already were.</summary>
+    public void ClearIdentity()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.AgentIdentityPath))
+                File.Delete(AgentConfig.AgentIdentityPath);
+        }
+        catch { /* ignore -- see the docstring */ }
+    }
+
     // --- Restart guard -----------------------------------------------------
     public RestartState? LoadRestartState()
     {

@@ -72,6 +72,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     // explicitly asked the hub to sit on until it has something is not that.
     private readonly HttpClient _commandHttp;
     private AgentIdentity _identity;
+    // One line per service lifetime, not one per heartbeat -- see ForgetIdentityIfRefused.
+    private bool _revocationLogged;
 
     public FleetClient(ILogger<FleetClient> log, AgentState state)
     {
@@ -152,6 +154,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         try
         {
             using var req = Authorized(HttpMethod.Post, AgentConfig.HeartbeatUrl);
+            // Which identity this particular request went out with. Checked again before we
+            // throw anything away -- see ForgetIdentityIfRefused.
+            var sentAs = _identity.AgentId;
             var known = RuntimeConfigStore.Current.ConfigVersion;
             var body = new JsonObject { ["config_version"] = known };
             // Only when it has actually changed -- see BackupProfileReporter. Sending a
@@ -194,6 +199,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                                             "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
+            if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                var why = await resp.Content.ReadAsStringAsync(ct);
+                ForgetIdentityIfRefused(sentAs, why);
+                return false;
+            }
             if (!resp.IsSuccessStatusCode) return false;
 
             var text = await resp.Content.ReadAsStringAsync(ct);
@@ -208,6 +219,69 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             _log.LogDebug("Heartbeat failed: {Msg}", e.Message);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Should a 401 body make us throw our enrollment identity away and enroll again?
+    ///
+    /// **A deleted agent must re-enroll; a revoked one must not**, and the hub tells the two
+    /// apart with a `reason` field (see fleet_web.agent_auth). So this says yes to everything
+    /// EXCEPT an explicit "revoked" -- including a body with no reason at all, which is what a
+    /// hub older than this change sends. That default is deliberate: hub-then-agent is the
+    /// deploy order, so an agent on a new build talking to an old hub is a window that really
+    /// happens, and the failure it produces if we defaulted the other way is exactly the one
+    /// this whole change exists to end -- a machine that stays telemetry-only forever with
+    /// nothing saying why. Defaulting to "re-enroll" costs, in that window, one extra
+    /// enrollment for an agent that was revoked on a hub that has no way to say so.
+    ///
+    /// Static and string-in/bool-out so the decision can be tested without a hub.
+    /// </summary>
+    public static bool ShouldReenrollAfter401(string? body)
+    {
+        try
+        {
+            var reason = JsonNode.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body)
+                ?["reason"]?.GetValue<string>();
+            return !string.Equals(reason, "revoked", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException
+                                       or FormatException)
+        {
+            // Unparseable, or a `reason` that is not a string at all: neither is "revoked",
+            // for the same reason a missing one is not. A body we cannot read must never be
+            // what pins an agent down.
+            return true;
+        }
+    }
+
+    /// <summary>Throw away an identity the hub has refused, so the next tick enrolls fresh.
+    ///
+    /// <paramref name="sentAs"/> is the agent id the refused request actually carried, and
+    /// re-checking it is what makes this safe to call from a loop: the command loop can
+    /// enroll us while a heartbeat is in flight, and wiping the identity on the stale reply
+    /// would drop the credential we just paid for and re-enroll in a cycle. Clearing only
+    /// when the refused identity is still the current one closes that.</summary>
+    private void ForgetIdentityIfRefused(string sentAs, string body)
+    {
+        if (!ShouldReenrollAfter401(body))
+        {
+            // Revoked is a decision somebody made. Say so once per service lifetime and stay
+            // down -- re-enrolling here would hand the machine back the access that was
+            // deliberately taken away.
+            if (!_revocationLogged)
+            {
+                _revocationLogged = true;
+                _log.LogWarning("Hub has revoked agent {AgentId}; staying telemetry-only", sentAs);
+            }
+            return;
+        }
+        if (!string.Equals(sentAs, _identity.AgentId, StringComparison.Ordinal)) return;
+
+        _log.LogWarning(
+            "Hub does not recognise agent {AgentId} (machine deleted?); discarding the local "
+            + "enrollment and enrolling again", sentAs);
+        _identity = new AgentIdentity();
+        _state.ClearIdentity();
     }
 
     /// <summary>Apply a config payload if the heartbeat carried one. Fails soft: a
