@@ -522,6 +522,17 @@ def test_every_registry_type_has_a_control():
     check("...and shows the placeholder the catalog carries for these fields",
           "field.placeholder" in script)
 
+    # The follow-on to that fix. Every text input on this page must opt out of autofill, or a
+    # browser's password manager pairs it with the Sign-in tab's secret fields -- which share
+    # this DOM -- and offers saved logins over a tile URL or a model id. Checked by COUNT, so
+    # a third text input added later without the opt-out fails here rather than in somebody's
+    # browser.
+    text_inputs = script.count("type = 'text'")
+    opted_out = script.count("autocomplete = 'off'")
+    check(f"every text input in settings.js opts out of autofill "
+          f"({opted_out} opt-outs for {text_inputs} text inputs)",
+          text_inputs > 0 and opted_out >= text_inputs)
+
 
 def test_a_str_setting_cannot_be_erased_to_null():
     """Clearing a `str` field stores "", never null.

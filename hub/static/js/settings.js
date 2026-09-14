@@ -189,6 +189,13 @@ function buildTextControl(field) {
     input.className = 'input setting__input';
     input.id = controlId(field.key);
     input.type = 'text';
+    // Off, the convention every other text input in this hub already follows. The Sign-in
+    // tab renders password inputs for client secrets and every tab lives in one DOM, so a
+    // browser's password manager pairs the nearest plain text box with them and offers saved
+    // logins over a tile URL or a model id. Number inputs were never offered anything, which
+    // is why this only surfaced once str settings stopped being number inputs.
+    input.autocomplete = 'off';
+    input.spellcheck = false;
     if (field.placeholder) input.placeholder = field.placeholder;
     input.value = field.value === null || field.value === undefined ? '' : String(field.value);
     // Empty means empty, never null: "" is a string a str field can hold, and null is what
@@ -362,6 +369,9 @@ function buildListControl(field) {
     const custom = document.createElement('input');
     custom.className = 'input';
     custom.type = 'text';
+    // Same reason as buildTextControl: without it the "add an entry" box is a username field
+    // as far as a password manager is concerned.
+    custom.autocomplete = 'off';
     custom.placeholder = field.placeholder
         || (isVocabulary ? t('settings.custom_entry') : t('settings.add_entry'));
     if (!isVocabulary) custom.style.flexGrow = '1';
