@@ -1037,9 +1037,19 @@
       "count": "{count} modelos, leídos {age}",
       "never": "Aún no se ha leído. Actualiza para llenar el campo de modelo de abajo con una lista que puedes buscar.",
       "stale": "{count} modelos, leídos {age}: lo bastante antiguos como para actualizar.",
-      "needs_key": "Este proveedor necesita una clave. Define AI_API_KEY en .env y reinicia el concentrador.",
+      "needs_key": "Este proveedor necesita una clave de API. Añádela abajo.",
       "custom_hint": "Elige un proveedor arriba, o déjalo en una dirección propia y escríbela abajo.",
-      "failed": "{error}"
+      "failed": "{error}",
+      "key_label": "Clave de API",
+      "key_set": "Hay una clave configurada. Nunca se muestra aquí; guarda una nueva para reemplazarla.",
+      "key_unset": "No hay clave configurada. Los proveedores locales como Ollama no la necesitan.",
+      "key_placeholder": "Pega la clave de API del proveedor",
+      "key_save": "Guardar clave",
+      "key_remove": "Quitar clave",
+      "key_remove_confirm": "¿Quitar la clave de API? Los proveedores alojados dejarán de responder hasta que se guarde una nueva.",
+      "key_saved": "Clave guardada. Surte efecto de inmediato.",
+      "key_removed": "Clave quitada.",
+      "key_cannot_write": "Este concentrador no puede escribir su archivo .env, así que la clave debe definirse como AI_API_KEY en el servidor."
     },
     "choice": {
       "ai.provider": {

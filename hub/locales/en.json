@@ -1114,9 +1114,19 @@
       "count": "{count} models, read {age}",
       "never": "Not read yet. Refresh to fill the model box below with a list you can search.",
       "stale": "{count} models, read {age} -- old enough to be worth refreshing.",
-      "needs_key": "This provider needs a key. Set AI_API_KEY in .env and restart the hub.",
+      "needs_key": "This provider needs an API key. Add it below.",
       "custom_hint": "Pick a provider above, or leave it on a custom address and type one below.",
-      "failed": "{error}"
+      "failed": "{error}",
+      "key_label": "API key",
+      "key_set": "A key is set. It is never shown here; save a new one to replace it.",
+      "key_unset": "No key is set. Local providers such as Ollama do not need one.",
+      "key_placeholder": "Paste the provider's API key",
+      "key_save": "Save key",
+      "key_remove": "Remove key",
+      "key_remove_confirm": "Remove the API key? Hosted providers will stop answering until a new one is saved.",
+      "key_saved": "Key saved. It takes effect immediately.",
+      "key_removed": "Key removed.",
+      "key_cannot_write": "This hub cannot write its .env file, so the key has to be set as AI_API_KEY on the server."
     },
     "choice": {
       "ai.provider": {

@@ -95,6 +95,7 @@ def main():
     real_complete = ai.complete
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(db_fd)
+    env_path, saved_key = None, None
     try:
         # fleet first: permissions.create_group writes an audit row, and audit_log is
         # fleet's table.
@@ -115,6 +116,13 @@ def main():
         conn.commit()
         conn.close()
 
+        # The .env a key saved from the console is written to, and the key this hub "booted"
+        # with. Both belong to this test and are put back in the finally below.
+        env_fd, env_path = tempfile.mkstemp(suffix=".env")
+        os.close(env_fd)
+        saved_key = os.environ.get("AI_API_KEY")
+        os.environ["AI_API_KEY"] = API_KEY
+
         app = Flask(__name__)
         app.secret_key = "test"
         access = create_access(db_path, {"super@x.com"})
@@ -134,7 +142,10 @@ def main():
             lambda machine: {},
             lambda: {"max_targets_per_tick": 50, "command_cooldown_floor_seconds": 3600},
             lambda: dict(CONFIG),
-            api_key=API_KEY))
+            # A lookup, the way app.py passes it: a key saved through /api/ai/key has to be
+            # visible to the very next request, which a string captured here never would be.
+            api_key=lambda: os.environ.get("AI_API_KEY", ""),
+            env_path=env_path))
 
         @app.before_request
         def _seed_session():
@@ -289,6 +300,63 @@ def main():
         finally:
             ai.requests.get = real_get
 
+        def env_text():
+            with open(env_path, encoding="utf-8") as handle:
+                return handle.read()
+
+        print()
+        print("== The API key is set from Settings, and never comes back out ==")
+        CURRENT_USER = "scoped@x.com"
+        r = c.post("/api/ai/key", json={"key": "sk-scoped-attempt"})
+        check("setting the key is manage_settings, not manage_rules", r.status_code == 403)
+        check("...and nothing was written", "sk-scoped-attempt" not in env_text())
+
+        CURRENT_USER = "super@x.com"
+        r = c.get("/api/ai/status")
+        check("status says this hub can write the key",
+              r.get_json().get("can_write_key") is True)
+
+        r = c.post("/api/ai/key", json={"key": "  sk-new-key-123  "})
+        body = r.get_json()
+        check("an admin can set the key", r.status_code == 200)
+        check("...and the answer says a key is set", body.get("has_api_key") is True)
+        check("...without the key in it", "sk-new-key-123" not in json.dumps(body))
+        check("the key is written to .env, trimmed",
+              "AI_API_KEY=sk-new-key-123" in env_text())
+        check("...and to the live environment, so no restart is needed",
+              os.environ.get("AI_API_KEY") == "sk-new-key-123")
+        r = c.get("/api/ai/status")
+        check("status still never carries it",
+              "sk-new-key-123" not in r.get_data(as_text=True))
+        rows = fleet.list_audit(db_path, action="ai_api_key_set", limit=5)["entries"]
+        check("setting the key is audited", bool(rows))
+        check("...and the audit row does not contain the key",
+              "sk-new-key-123" not in json.dumps(rows))
+
+        # The injection this route exists to refuse. The key is one line of a file that also
+        # holds ALLOWED_EMAILS, so a line break would write a second line into the perimeter.
+        injected = "sk-x" + chr(10) + "ALLOWED_EMAILS=attacker@evil.example"
+        r = c.post("/api/ai/key", json={"key": injected})
+        check("a key containing a line break is refused", r.status_code == 400)
+        check("...and .env gained no second line",
+              "attacker@evil.example" not in env_text())
+        check("...and the previous key is untouched",
+              os.environ.get("AI_API_KEY") == "sk-new-key-123")
+        r = c.post("/api/ai/key", json={"key": "k" * 600})
+        check("an absurdly long key is refused", r.status_code == 400)
+
+        r = c.post("/api/ai/key", json={"key": ""})
+        check("an empty key removes it",
+              r.status_code == 200 and r.get_json().get("has_api_key") is False)
+        check("...from .env entirely, not left as an empty assignment",
+              "AI_API_KEY" not in env_text())
+        check("...and from the live environment", "AI_API_KEY" not in os.environ)
+        rows = fleet.list_audit(db_path, action="ai_api_key_cleared", limit=5)["entries"]
+        check("removing the key is audited too", bool(rows))
+
+        # Back the way the rest of this file expects the hub to be.
+        os.environ["AI_API_KEY"] = API_KEY
+
         print("\n== With the feature switched off ==")
         CURRENT_USER = "super@x.com"
         ai.complete = real_complete
@@ -309,6 +377,15 @@ def main():
         return 1 if FAIL else 0
     finally:
         ai.complete = real_complete
+        if env_path:
+            try:
+                os.remove(env_path)
+            except OSError:
+                pass
+        if saved_key is None:
+            os.environ.pop("AI_API_KEY", None)
+        else:
+            os.environ["AI_API_KEY"] = saved_key
         for suffix in ("", "-wal", "-shm"):
             try:
                 os.remove(db_path + suffix)
