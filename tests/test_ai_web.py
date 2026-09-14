@@ -288,6 +288,32 @@ def main():
         check("...and only then is the draft consumed",
               body["remaining"] == [] and ai.get_draft(db_path, staged_id) is None)
 
+        print("\n== A draft written before staging still commits ==")
+        # A row already in `ai_drafts` when the hub was upgraded: the rule at the top level,
+        # no `rules` key, and no index in the request either. Both defaults have to hold or
+        # somebody's unfinished sentence turns into a 400 the morning after an upgrade.
+        CURRENT_USER = "super@x.com"
+        _err, legacy_condition = rules.parse_expression("disk.min_free_gb < 10", {})
+        legacy = ai.save_draft(db_path, {
+            "name": "Old draft", "condition": legacy_condition,
+            "condition_text": "disk.min_free_gb < 10",
+            "target": {"include": [{"kind": "all"}], "exclude": []},
+            "actions": [{"type": "alert", "params": {"text": "hi"}}],
+            "for_seconds": 0, "cooldown_seconds": 0, "source_text": "an old sentence",
+        }, actor="super@x.com")
+        r = c.get(f"/api/ai/rules/drafts/{legacy['id']}")
+        check("an old draft still renders as one rule",
+              r.status_code == 200 and len(r.get_json()["rules"]) == 1)
+        before_legacy = len(rules.list_rules(db_path))
+        r = c.post(f"/api/ai/rules/drafts/{legacy['id']}/commit", json={})
+        body = r.get_json()
+        check("...and commits with no index given", r.status_code == 201
+              and body["rule"]["condition_text"] == "disk.min_free_gb < 10")
+        check("...creating exactly one rule",
+              len(rules.list_rules(db_path)) == before_legacy + 1)
+        check("...and consuming the draft", body["remaining"] == []
+              and ai.get_draft(db_path, legacy["id"]) is None)
+
         print("\n== A model's invented variable is refused with the parser's words ==")
         ai.complete = answer("cpu.temp_c > 90")
         r = c.post("/api/ai/rules/draft", json={"text": "hot CPUs"})

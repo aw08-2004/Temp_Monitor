@@ -762,6 +762,11 @@ def _parse_envelope(text):
 
     A refusal travels as a one-element list whose single entry carries only `refusal`, so the
     caller has one thing to iterate and validated_draft keeps its existing contract.
+
+    **The stage CAP is not enforced here.** This function answers one question -- is this a
+    readable envelope -- and the cap is a policy of this hub's, checked in validated_rules
+    where both callers already go. Keeping it out of the parse is also what lets draft_rule
+    see how many stages the model actually asked for and aim the repair round at that.
     """
     raw = str(text or "").strip()
     match = _FENCE_RE.match(raw)
@@ -789,9 +794,6 @@ def _parse_envelope(text):
         return UNREADABLE, None
     if not all(isinstance(entry, dict) for entry in entries):
         return UNREADABLE, None
-    if len(entries) > MAX_RULES_PER_DRAFT:
-        return (f"that would need {len(entries)} rules; this hub drafts at most "
-                f"{MAX_RULES_PER_DRAFT} at a time"), None
     return None, entries
 
 
@@ -869,8 +871,12 @@ def validated_rules(db_path, entries, extra, *, allow_command=True):
     and a set missing its warning stage reboots people without asking -- which is the exact
     behaviour this feature was changed to stop.
     """
+    entries = entries or []
+    if len(entries) > MAX_RULES_PER_DRAFT:
+        return (f"that would need {len(entries)} rules; this hub drafts at most "
+                f"{MAX_RULES_PER_DRAFT} at a time"), None
     drafted = []
-    for index, entry in enumerate(entries or []):
+    for index, entry in enumerate(entries):
         error, draft = validated_draft(db_path, entry, extra, allow_command=allow_command)
         if error:
             # The index is only worth saying when there is more than one, otherwise it reads
@@ -941,13 +947,21 @@ def draft_rule(db_path, config, text, *, extra=None, api_key="", actor="", now=N
                 return None, draft
         last_error = error
         if attempt < MAX_REPAIR_ATTEMPTS:
+            # A model that answered with too many stages cannot fix that by keeping every
+            # stage it had, and there is only one repair round to spend: told the usual
+            # thing, it re-sends the same over-cap set and the retry buys nothing for the one
+            # case it could have saved. So the instruction follows the actual failure.
+            if entries and len(entries) > MAX_RULES_PER_DRAFT:
+                fix = (f"Answer again with FEWER rules -- merge or drop stages until there"
+                       f" are at most {MAX_RULES_PER_DRAFT}.")
+            else:
+                fix = ("Answer again with the same JSON object, corrected, keeping every"
+                       " stage you already had.")
             messages.append({"role": "assistant", "content": answer})
             messages.append({"role": "user", "content":
-                             "The rules engine rejected that: " + str(error)
-                             + "\nAnswer again with the same JSON object, corrected, keeping"
-                               " every stage you already had. If the request cannot be"
-                               " expressed with the listed variables and actions, set"
-                               " `refusal` instead."})
+                             "The rules engine rejected that: " + str(error) + "\n" + fix
+                             + " If the request cannot be expressed with the listed variables"
+                               " and actions, set `refusal` instead."})
     record_request(db_path, actor=actor, kind=KIND_DRAFT_RULE, **_stamp(config),
                    prompt_chars=len(request), outcome=OUTCOME_REFUSED,
                    error=str(last_error), now=now)

@@ -273,13 +273,24 @@ def main():
               error.startswith("rule 2:"))
 
         print("\n== The number of stages is bounded ==")
-        fake_provider(json.dumps({"rules": [json.loads(envelope(condition_text="sys.online"))]
-                                  * (ai.MAX_RULES_PER_DRAFT + 1)}),
-                      json.dumps({"rules": [json.loads(envelope(condition_text="sys.online"))]
-                                  * (ai.MAX_RULES_PER_DRAFT + 1)}))
+        over_cap = json.dumps({"rules": [json.loads(envelope(condition_text="sys.online"))]
+                               * (ai.MAX_RULES_PER_DRAFT + 1)})
+        provider = fake_provider(over_cap, over_cap)
         error, draft = ai.draft_rule(db_path, CONFIG, "a policy document", extra=extra)
         check("more stages than this hub drafts is refused", draft is None and error)
         check("...saying how many it will do", str(ai.MAX_RULES_PER_DRAFT) in error)
+        # The one repair round has to aim at the actual failure. Told the usual "keep every
+        # stage you already had", a model that over-generated re-sends the same set and the
+        # retry buys nothing -- for the one case where a retry could have recovered.
+        retry = provider.calls[1][-1]["content"]
+        check("...and the retry asks for FEWER rules, not for every stage back",
+              "FEWER rules" in retry and "keeping every stage" not in retry)
+
+        provider = fake_provider(envelope(condition_text="cpu.temp_c > 90"),
+                                 envelope(condition_text="cpu.temp_c > 90"))
+        ai.draft_rule(db_path, CONFIG, "hot CPUs again", extra=extra)
+        check("an ordinary rejection still asks for every stage back",
+              "keeping every stage" in provider.calls[1][-1]["content"])
 
         print("\n== The old single-rule envelope is still read ==")
         # Every small local model has seen a thousand examples of the bare object, and the one
@@ -596,6 +607,36 @@ def main():
 
         check("a draft can be deleted", ai.delete_draft(db_path, stored["id"]))
         check("...and is gone", ai.get_draft(db_path, stored["id"]) is None)
+
+        print("\n== A draft written before staging is still readable ==")
+        # The rows already sitting in `ai_drafts` on every hub that had this feature on: one
+        # rule at the TOP LEVEL of payload_json, no `rules` key. They are read in place rather
+        # than migrated, so this is the only thing standing between an operator's unfinished
+        # sentence and a KeyError after the upgrade -- and it is the branch no other test here
+        # reaches, because draft_rule has not written that shape since 1.113.0.
+        _err, legacy_condition = rules.parse_expression("disk.min_free_gb < 10", extra)
+        legacy = {"name": "Old draft", "condition": legacy_condition,
+                  "condition_text": "disk.min_free_gb < 10",
+                  "target": {"include": [{"kind": "all"}], "exclude": []},
+                  "actions": [{"type": "alert", "params": {"text": "hello"}}],
+                  "for_seconds": 0, "cooldown_seconds": 0,
+                  "source_text": "any drive under 10 GB"}
+        old_row = ai.save_draft(db_path, legacy, actor="d@x.com")
+        check("an old row has no `rules` key to read", "rules" not in old_row)
+        # The DECODED row, not the dict as written: it carries id, actor and provider beside
+        # the rule fields, and that is what every caller actually hands to draft_rules.
+        stages = ai.draft_rules(old_row)
+        check("...and still reads as exactly one stage", len(stages) == 1)
+        check("...keeping its expression",
+              stages[0]["condition_text"] == "disk.min_free_gb < 10")
+        summaries = ai.summarise_rules(db_path, old_row)
+        check("...summarised without a stage number", len(summaries) == 1
+              and "Stage" not in summaries[0])
+        error, saved = rules.save_rule(
+            db_path, ai.rule_payload(stages[0], source_text=old_row["source_text"]),
+            actor="d@x.com", extra=extra)
+        check("...and commits to a rule the engine accepts", error is None and saved)
+        ai.delete_draft(db_path, old_row["id"])
 
         print("\n== The per-actor draft cap ==")
         for i in range(ai.MAX_DRAFTS_PER_ACTOR + 5):
