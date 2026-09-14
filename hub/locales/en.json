@@ -1022,16 +1022,16 @@
         },
         "provider": {
           "label": "Provider API",
-          "help": "The request format, not a company. The one listed is spoken by Ollama, vLLM, LM Studio, OpenRouter and OpenAI alike, so the address below is what decides where prompts actually go."
+          "help": "Which provider to use. Picking one fills in its address for you; pick Custom address to type your own. They all speak the same API, so this is a choice of where prompts go, not of how they are sent."
         },
         "base_url": {
           "label": "Provider address",
-          "help": "Where to send a prompt, without the path. A model running on this machine needs no key and nothing leaves the building.",
+          "help": "Only used with Custom address. Where to send a prompt, without the path. A model running on this machine needs no key and nothing leaves the building.",
           "placeholder": "http://127.0.0.1:11434"
         },
         "model": {
           "label": "Model",
-          "help": "Exactly as the provider names it.",
+          "help": "Exactly as the provider names it. Refresh the model list above and this box will suggest what the provider serves.",
           "placeholder": "llama3.1:8b"
         },
         "max_tokens": {
@@ -1107,9 +1107,25 @@
       "choices come from data (a backup destination id) are shown verbatim and have no",
       "entries here -- an operator's own name for a bucket is not ours to translate."
     ],
+    "ai": {
+      "models_title": "Models this provider serves",
+      "refresh": "Refresh the list",
+      "refreshing": "Asking the provider...",
+      "count": "{count} models, read {age}",
+      "never": "Not read yet. Refresh to fill the model box below with a list you can search.",
+      "stale": "{count} models, read {age} -- old enough to be worth refreshing.",
+      "needs_key": "This provider needs a key. Set AI_API_KEY in .env and restart the hub.",
+      "custom_hint": "Pick a provider above, or leave it on a custom address and type one below.",
+      "failed": "{error}"
+    },
     "choice": {
       "ai.provider": {
-        "openai_chat": "OpenAI-compatible chat completions"
+        "custom": "Custom address",
+        "ollama": "Ollama (this machine)",
+        "lm_studio": "LM Studio (this machine)",
+        "vllm": "vLLM (this machine)",
+        "openai": "OpenAI",
+        "openrouter": "OpenRouter"
       },
       "hub.default_language": {
         "auto": "Automatic (each person's browser)",

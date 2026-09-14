@@ -3032,7 +3032,7 @@ finds a tablet's battery at the top.
 
 ---
 
-## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0
+## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3093,6 +3093,15 @@ half-finished rule to a refresh, and the stored English is what makes a drafted 
 six months later. A refinement re-sends **only the current draft's canonical expression**, not
 the conversation: a refinement edits a rule that already parsed, and replaying the model's
 earlier prose invites it to re-open a decision the operator has already accepted.
+
+Configuration is a provider by NAME, not a url: Ollama, LM Studio, vLLM, OpenAI, OpenRouter,
+or a custom address. They all speak one wire shape, so the choice picks where prompts go
+rather than how they are sent, and the url a preset carries cannot drift from the choice above
+it. The model box is fed by the provider's own `/v1/models`, cached per provider and refreshed
+on request — read from the cache to draw the page, never over the network, because a Settings
+page that reaches a third party to render is one that hangs when the third party does. The box
+stays FREE TEXT with the list as suggestions: a gateway can serve a model this hub has never
+heard of, and an enum would make that unconfigurable.
 
 The console half is on the Rules page, above the rule list, and hidden unless the feature is
 both switched on and configured. Describe, adjust, preview through the existing
