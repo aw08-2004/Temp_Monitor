@@ -5,6 +5,7 @@
     "({name}) must match en.json exactly; tests/test_i18n.py fails if one is dropped."
   ],
   "nav": {
+    "device_groups": "Grupos de dispositivos",
     "dashboard": "Panel",
     "inventory": "Dispositivos",
     "alerts": "Alertas",
@@ -66,6 +67,39 @@
     "loading": "Cargando dispositivos…",
     "hint": "↑↓ moverse · ←→ elegir pestaña · Intro abrir · Esc cerrar",
     "action_overview": "Resumen"
+  },
+  "device_groups": {
+    "heading": "Grupos de dispositivos",
+    "intro": "Filtros guardados para PCs. Un grupo se vuelve a calcular cada vez que se usa: un PC que pasa a la OU o recibe el valor del campo forma parte del grupo desde ese momento. Las reglas, las implementaciones de paquetes y la lista de dispositivos pueden apuntar a un grupo.",
+    "new": "Nuevo grupo",
+    "empty": "Todavía no hay grupos de dispositivos.",
+    "load_failed": "No se pudieron cargar los grupos de dispositivos.",
+    "col": {
+      "name": "Nombre",
+      "members": "PCs",
+      "definition": "Definición",
+      "used_by": "Usado por reglas"
+    },
+    "editor_new": "Nuevo grupo de dispositivos",
+    "editor_edit": "Editar {name}",
+    "name": "Nombre",
+    "description": "Descripción",
+    "include": "Incluir",
+    "exclude": "Excepto",
+    "add": "Añadir",
+    "members": {
+      "one": "{count} PC ahora",
+      "other": "{count} PCs ahora"
+    },
+    "save": "Guardar",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "confirm_delete": "¿Eliminar el grupo de dispositivos «{name}»?\n\nLas implementaciones ya creadas no se ven afectadas y no cambia nada en ningún PC.",
+    "no_permission": "Solo quien tenga el permiso Gestionar grupos de dispositivos puede crear o cambiar grupos.",
+    "pick": "Elige un grupo…",
+    "none_defined": "Todavía no hay grupos de dispositivos.",
+    "children": "Incluir sub-OU",
+    "except": "excepto"
   },
   "toast": {
     "dismiss": "Cerrar"
@@ -171,6 +205,8 @@
     "reset_zoom": "Restablecer zoom"
   },
   "inventory": {
+    "group_filter": "Grupo de dispositivos",
+    "group_all": "Todos los dispositivos",
     "heading": "Dispositivos",
     "select_all": "Seleccionar todos los dispositivos mostrados",
     "select_row": "Seleccionar {machine}",
@@ -550,6 +586,10 @@
       "manage_rules": {
         "label": "Gestionar reglas",
         "description": "Crear y editar reglas: condiciones sobre los datos de los equipos y qué ocurre cuando se cumplen. Una regla que envía comandos a los PC necesita además Emitir comandos."
+      },
+      "manage_device_groups": {
+        "label": "Gestionar grupos de dispositivos",
+        "description": "Crear, editar y eliminar grupos de dispositivos: filtros guardados (PCs concretos, una OU de AD, un valor de campo personalizado o todos los PCs) a los que pueden apuntar las reglas, las implementaciones de paquetes y la lista de dispositivos. Es un permiso propio porque editar un grupo cambia a qué llega cada regla e implementación que apunta a él, incluidas las reglas de otras personas. Ver y usar grupos solo requiere permiso de lectura, y cada PC al que se resuelve un grupo debe seguir dentro del ámbito de quien lo usa."
       },
       "locate_device": {
         "label": "Localizar un dispositivo",
@@ -1424,6 +1464,7 @@
       "save": "Guardar el paquete"
     },
     "deploy_editor": {
+      "add_group": "Añadir un grupo",
       "title": "Desplegar el paquete",
       "title_for": "Desplegar {package}",
       "machines": "Equipos",
@@ -2727,7 +2768,8 @@
       "all": "Todos los PC",
       "machines": "PC concretos",
       "ad_ou": "Unidad organizativa de AD",
-      "field": "Por campo personalizado"
+      "field": "Por campo personalizado",
+      "group": "Grupo de dispositivos"
     },
     "variable": {
       "sys.machine": {

@@ -124,6 +124,15 @@
             <span class="sidebar__link-label">{{ t('nav.rules') }}</span>
         </a>
         {% endif %}
+        {# Device groups (hub 1.114.0): the saved filters Rules, Packages and Devices aim at.
+           Beside Rules, because a group is a rule's target spec with a name. Gated on VIEW,
+           matching the route; the page hides its editor without manage_device_groups. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'device_groups.device_groups_page' else '' }}" data-nav-prefix="/device-groups" href="{{ url_for('device_groups.device_groups_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7"/><path d="M17.5 14v7"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.device_groups') }}</span>
+        </a>
+        {% endif %}
         {# Device policy (roadmap #23). Gated on `view` like the route: a reader who cannot
            author one can still see which policies exist and why an app on a device they
            administer will not open. The page hides its own write controls. #}

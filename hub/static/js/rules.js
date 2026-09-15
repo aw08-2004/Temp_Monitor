@@ -309,6 +309,20 @@ function selectorRow(side, selector, index) {
         label.appendChild(box);
         label.appendChild(document.createTextNode(' ' + t('rules.include_children')));
         row.appendChild(label);
+    } else if (selector.kind === 'group') {
+        if (!deviceGroups.length) {
+            row.appendChild(el('span', 'stat-card__meta', t('device_groups.none_defined')));
+        } else {
+            const select = el('select', 'input');
+            deviceGroups.forEach((group) => select.appendChild(opt(String(group.id), group.name)));
+            if (selector.group_id == null) selector.group_id = deviceGroups[0].id;
+            select.value = String(selector.group_id);
+            select.addEventListener('change', () => {
+                selector.group_id = Number(select.value);
+                refreshTargetCount();
+            });
+            row.appendChild(select);
+        }
     } else if (selector.kind === 'field') {
         const name = el('input', 'input');
         name.type = 'text';
@@ -871,11 +885,26 @@ async function saveRule() {
 
 // ---------------------------------------------------------------- wiring
 
+// Device groups for the `group` selector (hub 1.114.0). Loaded with the kind selects: the
+// list is short, and a selector stores the group's id, so a list gone stale while the page
+// is open can only be missing a new group -- it can never point a rule somewhere else.
+let deviceGroups = [];
+async function loadDeviceGroups() {
+    try {
+        const data = await api('/api/device-groups');
+        deviceGroups = data.groups || [];
+        if (draft) renderTargets();
+    } catch (e) {
+        deviceGroups = [];
+    }
+}
+
 function fillKindSelects() {
+    loadDeviceGroups();
     ['rule-target-kind', 'rule-exclude-kind'].forEach((id) => {
         const select = document.getElementById(id);
         select.textContent = '';
-        ['all', 'machines', 'ad_ou', 'field'].forEach((kind) => {
+        ['all', 'machines', 'ad_ou', 'field', 'group'].forEach((kind) => {
             // "Every PC" as an EXCLUSION would exclude everything, which is never what
             // anybody means; leave it out rather than let a rule be built that targets none.
             if (id === 'rule-exclude-kind' && kind === 'all') return;
@@ -915,6 +944,7 @@ document.getElementById('rule-add-clause').addEventListener('click', () => {
         const selector = { kind };
         if (kind === 'machines') selector.machines = [];
         if (kind === 'ad_ou') { selector.ou = ''; selector.include_children = true; }
+        if (kind === 'group') selector.group_id = deviceGroups.length ? deviceGroups[0].id : null;
         if (kind === 'field') { selector.field = ''; selector.value = ''; }
         draft.target[side].push(selector);
         renderTargets();

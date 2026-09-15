@@ -15,6 +15,7 @@
     "text that genuinely appears on several pages, not a dumping ground."
   ],
   "nav": {
+    "device_groups": "Device groups",
     "dashboard": "Dashboard",
     "inventory": "Devices",
     "alerts": "Alerts",
@@ -91,6 +92,39 @@
     "loading": "Loading devices…",
     "hint": "↑↓ move · ←→ choose a tab · Enter open · Esc close",
     "action_overview": "Overview"
+  },
+  "device_groups": {
+    "heading": "Device groups",
+    "intro": "Saved filters for PCs. A group is worked out again every time it is used, so a PC that moves into the OU or gets the field value is in the group from then on. Rules, package deployments and the Devices list can all aim at a group.",
+    "new": "New group",
+    "empty": "No device groups yet.",
+    "load_failed": "Could not load device groups.",
+    "col": {
+      "name": "Name",
+      "members": "PCs",
+      "definition": "Definition",
+      "used_by": "Used by rules"
+    },
+    "editor_new": "New device group",
+    "editor_edit": "Edit {name}",
+    "name": "Name",
+    "description": "Description",
+    "include": "Include",
+    "exclude": "Except",
+    "add": "Add",
+    "members": {
+      "one": "{count} PC right now",
+      "other": "{count} PCs right now"
+    },
+    "save": "Save",
+    "edit": "Edit",
+    "delete": "Delete",
+    "confirm_delete": "Delete the device group \"{name}\"?\n\nDeployments already created are not affected, and nothing changes on any PC.",
+    "no_permission": "Only operators with Manage device groups can create or change groups.",
+    "pick": "Choose a group…",
+    "none_defined": "No device groups defined yet.",
+    "children": "Include sub-OUs",
+    "except": "except"
   },
   "toast": {
     "dismiss": "Dismiss"
@@ -202,6 +236,8 @@
     "reset_zoom": "Reset Zoom"
   },
   "inventory": {
+    "group_filter": "Device group",
+    "group_all": "All devices",
     "heading": "Devices",
     "select_all": "Select every device shown",
     "select_row": "Select {machine}",
@@ -609,6 +645,10 @@
       "manage_rules": {
         "label": "Manage rules",
         "description": "Create and edit rules: conditions over machine data, and what happens when they match. A rule that sends commands to PCs also needs Issue commands."
+      },
+      "manage_device_groups": {
+        "label": "Manage device groups",
+        "description": "Create, edit and delete device groups: saved filters (named PCs, an AD OU, a custom field value, or every PC) that rules, package deployments and the Devices list can aim at. Its own capability because editing a group changes what every rule and deployment aimed at it reaches, including rules other people wrote. Seeing and using groups only needs 'View', and every PC a group resolves to must still be in scope for whoever uses it."
       },
       "locate_device": {
         "label": "Locate a device",
@@ -1510,6 +1550,7 @@
       "save": "Save package"
     },
     "deploy_editor": {
+      "add_group": "Add a group",
       "title": "Deploy package",
       "title_for": "Deploy {package}",
       "machines": "Machines",
@@ -2845,7 +2886,8 @@
       "all": "Every PC",
       "machines": "Named PCs",
       "ad_ou": "AD organisational unit",
-      "field": "By custom field"
+      "field": "By custom field",
+      "group": "Device group"
     },
     "variable": {
       "sys.machine": {

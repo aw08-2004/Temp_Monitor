@@ -90,6 +90,8 @@ from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from ai_web import create_ai_blueprint
 from rules_web import create_rules_blueprint
+import device_groups
+from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -129,7 +131,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.113.0"
+HUB_VERSION = "1.114.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2343,6 +2345,11 @@ app.register_blueprint(create_usage_blueprint(DB_PATH, login_required, access))
 # validator and the rules engine each refuse these two command types by name.
 app.register_blueprint(create_wipe_blueprint(DB_PATH, login_required, access))
 
+# Device groups (hub 1.114.0): saved target filters that Rules, Packages and Devices aim at.
+# `view` reads and uses a group; `manage_device_groups` writes one, and only when the writer's
+# scope covers every PC it resolves to -- see device_groups_web.py.
+app.register_blueprint(create_device_groups_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -4358,6 +4365,7 @@ apitokens.init_apitokens_db(DB_PATH)
 sharing.init_sharing_db(DB_PATH)
 scripts.init_scripts_db(DB_PATH)
 rules.init_rules_db(DB_PATH)
+device_groups.init_device_groups_db(DB_PATH)
 ai.init_ai_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must

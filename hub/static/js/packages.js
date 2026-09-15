@@ -941,8 +941,45 @@ function openDeploy(pkg) {
     document.getElementById('deploy-note').value = '';
     document.getElementById('deploy-attempts').value = vocab.defaults.max_attempts || 3;
     document.getElementById('deploy-backoff').value = vocab.defaults.retry_backoff_seconds || 900;
+    loadDeployGroups();
     deployModal.showModal();
 }
+
+// ---- device groups in the deploy dialog (hub 1.114.0) ----
+// Adds a group's current members as chips. The members come from the hub already narrowed
+// to this operator's scope, and /api/deployments re-checks every one of them anyway.
+async function loadDeployGroups() {
+    const row = document.getElementById('deploy-group-row');
+    const select = document.getElementById('deploy-group-select');
+    try {
+        const data = await api('/api/device-groups');
+        const groups = data.groups || [];
+        select.replaceChildren(...groups.map((group) => {
+            const option = document.createElement('option');
+            option.value = String(group.id);
+            option.textContent = group.name;
+            return option;
+        }));
+        row.style.display = groups.length ? '' : 'none';
+    } catch (e) {
+        row.style.display = 'none';
+    }
+}
+
+document.getElementById('deploy-group-add').addEventListener('click', async () => {
+    const select = document.getElementById('deploy-group-select');
+    if (!select.value) return;
+    deployError.textContent = '';
+    try {
+        const data = await api(`/api/device-groups/${encodeURIComponent(select.value)}/members`);
+        for (const machine of data.machines || []) {
+            if (!draftMachines.includes(machine)) draftMachines.push(machine);
+        }
+        renderMachineChips();
+    } catch (e) {
+        deployError.textContent = e.message;
+    }
+});
 
 document.getElementById('deploy-cancel').addEventListener('click', () => deployModal.close());
 

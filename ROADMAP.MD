@@ -47,7 +47,21 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > already takes a `machines` list and applies scope); passing the selection in the url (host
 > lists do not belong in bookmarks or history — it goes through `sessionStorage`).
 >
-> *Still open from this redesign:* saved device groups/tags as Packages and Rules targets.
+> **Hub 1.114.0, same redesign — device groups.** A **device group** is a saved, named
+> target filter: the include/exclude spec a rule already uses (named PCs, AD OU, custom field
+> value, every PC), stored once under a name (`device_groups.py`, page at `/device-groups` in
+> Operate). A rule can aim at a group (`group` selector, expanded at resolve time), the
+> Packages deploy dialog can **Add a group** (a snapshot of its current in-scope members), and
+> Devices can be filtered to a group. Writing needs the new **`manage_device_groups`**
+> capability, and the writer's scope must cover every PC the group resolves to on create, edit
+> *and* delete; reading and using a group is `view`, with definitions and member lists
+> redacted to the caller's scope. A group a rule aims at cannot be deleted (409, naming the
+> rules).
+> *Rejected:* hand-picked member lists (they go stale the week a laptop is replaced — a
+> `machines` selector still covers that case); groups inside groups (cycle detection and a
+> recursive resolver on every rule tick, for what two include selectors already express);
+> reusing `manage_rules` (editing a group changes what other people's rules reach); resolving
+> a deployment's group live (a deployment must not change targets after it was confirmed).
 
 > **Note on where things live (hub 1.87.0).** The console was reorganised around what you
 > are doing rather than which PC you are doing it to. **Terminal, Backup, Firmware and

@@ -23,6 +23,11 @@
 <div class="toolbar" style="margin-bottom: var(--space-4);">
     <input class="input" id="inventory-search" type="search" autocomplete="off"
            placeholder="{{ t('inventory.search_placeholder') }}" style="min-width: 320px; max-width: 100%;">
+    {# Narrow the list to a device group (hub 1.114.0), so "select all" then means that
+       group. Filled by inventory.js, and left hidden while no group exists. #}
+    <select class="input" id="inventory-group" aria-label="{{ t('inventory.group_filter') }}" style="display: none;">
+        <option value="">{{ t('inventory.group_all') }}</option>
+    </select>
     <span class="stat-card__meta" id="inventory-count"></span>
     {# Fleet-wide wake (roadmap #10) lives here rather than on the Dashboard because this
        is the page that shows offline machines -- the ones the button is about. Each PC is

@@ -5,6 +5,7 @@
     "({name}) must match en.json exactly; tests/test_i18n.py fails if one is dropped."
   ],
   "nav": {
+    "device_groups": "Gerätegruppen",
     "dashboard": "Übersicht",
     "inventory": "Geräte",
     "alerts": "Warnungen",
@@ -66,6 +67,39 @@
     "loading": "Geräte werden geladen…",
     "hint": "↑↓ bewegen · ←→ Tab wählen · Enter öffnen · Esc schließen",
     "action_overview": "Übersicht"
+  },
+  "device_groups": {
+    "heading": "Gerätegruppen",
+    "intro": "Gespeicherte Filter für PCs. Eine Gruppe wird bei jeder Verwendung neu ermittelt: Ein PC, der in die OU wechselt oder den Feldwert erhält, gehört ab dann zur Gruppe. Regeln, Paketverteilungen und die Geräteliste können auf eine Gruppe zielen.",
+    "new": "Neue Gruppe",
+    "empty": "Noch keine Gerätegruppen.",
+    "load_failed": "Gerätegruppen konnten nicht geladen werden.",
+    "col": {
+      "name": "Name",
+      "members": "PCs",
+      "definition": "Definition",
+      "used_by": "Verwendet von Regeln"
+    },
+    "editor_new": "Neue Gerätegruppe",
+    "editor_edit": "{name} bearbeiten",
+    "name": "Name",
+    "description": "Beschreibung",
+    "include": "Einschließen",
+    "exclude": "Außer",
+    "add": "Hinzufügen",
+    "members": {
+      "one": "Derzeit {count} PC",
+      "other": "Derzeit {count} PCs"
+    },
+    "save": "Speichern",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "confirm_delete": "Gerätegruppe „{name}“ löschen?\n\nBereits angelegte Verteilungen sind nicht betroffen, und an keinem PC ändert sich etwas.",
+    "no_permission": "Nur Personen mit der Berechtigung „Gerätegruppen verwalten“ können Gruppen anlegen oder ändern.",
+    "pick": "Gruppe wählen…",
+    "none_defined": "Noch keine Gerätegruppen angelegt.",
+    "children": "Unter-OUs einschließen",
+    "except": "außer"
   },
   "toast": {
     "dismiss": "Schließen"
@@ -171,6 +205,8 @@
     "reset_zoom": "Zoom zurücksetzen"
   },
   "inventory": {
+    "group_filter": "Gerätegruppe",
+    "group_all": "Alle Geräte",
     "heading": "Geräte",
     "select_all": "Alle angezeigten Geräte auswählen",
     "select_row": "{machine} auswählen",
@@ -550,6 +586,10 @@
       "manage_rules": {
         "label": "Regeln verwalten",
         "description": "Regeln erstellen und bearbeiten: Bedingungen über Maschinendaten und was bei Zutreffen geschieht. Eine Regel, die Befehle an PCs sendet, benötigt zusätzlich Befehle erteilen."
+      },
+      "manage_device_groups": {
+        "label": "Gerätegruppen verwalten",
+        "description": "Gerätegruppen anlegen, bearbeiten und löschen: gespeicherte Filter (benannte PCs, eine AD-OU, ein Wert eines benutzerdefinierten Felds oder alle PCs), auf die Regeln, Paketverteilungen und die Geräteliste zielen können. Eine eigene Berechtigung, weil das Bearbeiten einer Gruppe verändert, was jede darauf zielende Regel und Verteilung erreicht – auch Regeln anderer Personen. Gruppen sehen und verwenden erfordert nur die Leseberechtigung, und jeder PC, zu dem eine Gruppe aufgelöst wird, muss für die verwendende Person weiterhin im Geltungsbereich liegen."
       },
       "locate_device": {
         "label": "Gerät orten",
@@ -1424,6 +1464,7 @@
       "save": "Paket speichern"
     },
     "deploy_editor": {
+      "add_group": "Gruppe hinzufügen",
       "title": "Paket verteilen",
       "title_for": "{package} verteilen",
       "machines": "Computer",
@@ -2727,7 +2768,8 @@
       "all": "Alle PCs",
       "machines": "Bestimmte PCs",
       "ad_ou": "AD-Organisationseinheit",
-      "field": "Nach eigenem Feld"
+      "field": "Nach eigenem Feld",
+      "group": "Gerätegruppe"
     },
     "variable": {
       "sys.machine": {

@@ -64,6 +64,13 @@ let visibleRows = [];      // what render() last put on screen, in order
 let searchQuery = '';
 let sort = loadSort();     // { key, dir: 'asc' | 'desc' }
 const selected = new Set();
+// The device group the list is narrowed to (hub 1.114.0): its id, and the lowercased names it
+// resolved to on the last refresh. Resolved by the hub and scoped to this operator, and
+// re-fetched with every roster refresh, so a PC that joins the group shows up without a
+// reload. null = no group filter.
+const GROUP_STORAGE_KEY = 'fleethub.inventory.group';
+let groupId = null;
+let groupMembers = null;
 
 function loadSort() {
     try {
@@ -156,6 +163,8 @@ function onHeaderClick(key) {
 
 // ---- filtering ----------------------------------------------------------------
 function matchesSearch(row) {
+    // The group filter first: a search inside a group narrows the group, never widens it.
+    if (groupMembers && !groupMembers.has(String(row.machine).toLowerCase())) return false;
     if (!searchQuery) return true;
     return SEARCH_FIELDS.some((field) => {
         const value = row[field];
@@ -432,6 +441,7 @@ async function loadInventory() {
         const resp = await fetch('/api/machines');
         if (!resp.ok) return;
         allRows = await resp.json();
+        await loadGroupMembers();
         // A ticked PC that has since been deleted or left this operator's scope must not stay
         // in a selection the bulk bar is about to act on.
         const present = new Set(allRows.map((r) => r.machine));
@@ -575,6 +585,60 @@ if (wakeAllBtn) {
     });
 }
 
+// ---- device group filter ----------------------------------------------------
+const groupSelect = document.getElementById('inventory-group');
+
+async function loadGroupMembers() {
+    if (!groupId) { groupMembers = null; return; }
+    try {
+        const resp = await fetch(`/api/device-groups/${encodeURIComponent(groupId)}/members`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        groupMembers = new Set((data.machines || []).map((m) => String(m).toLowerCase()));
+    } catch (e) {
+        // A group deleted while it was selected: drop the filter rather than show an empty
+        // list, which would read as a fleet with no machines in it.
+        groupId = null;
+        groupMembers = null;
+        groupSelect.value = '';
+        try { localStorage.removeItem(GROUP_STORAGE_KEY); } catch (err) { /* private mode */ }
+    }
+}
+
+async function loadGroups() {
+    try {
+        const resp = await fetch('/api/device-groups');
+        if (!resp.ok) return;
+        const groups = (await resp.json()).groups || [];
+        for (const group of groups) {
+            const option = document.createElement('option');
+            option.value = String(group.id);
+            option.textContent = group.name;
+            groupSelect.appendChild(option);
+        }
+        groupSelect.style.display = groups.length ? '' : 'none';
+        let saved = null;
+        try { saved = localStorage.getItem(GROUP_STORAGE_KEY); } catch (e) { /* private mode */ }
+        if (saved && groups.some((g) => String(g.id) === saved)) {
+            groupSelect.value = saved;
+            groupId = saved;
+            await loadGroupMembers();
+            render();
+        }
+    } catch (e) { /* the filter is optional; the list works without it */ }
+}
+
+groupSelect.addEventListener('change', async () => {
+    groupId = groupSelect.value || null;
+    try {
+        if (groupId) localStorage.setItem(GROUP_STORAGE_KEY, groupId);
+        else localStorage.removeItem(GROUP_STORAGE_KEY);
+    } catch (e) { /* private mode */ }
+    await loadGroupMembers();
+    render();
+});
+
+loadGroups();
 loadInventory();
 // Keep status fresh without a manual reload. Search box, sort and selection are preserved
 // because render() reads them from module state, not the DOM rows.
