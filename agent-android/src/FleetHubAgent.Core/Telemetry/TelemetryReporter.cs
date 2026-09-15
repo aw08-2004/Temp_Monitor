@@ -44,7 +44,6 @@ public sealed class TelemetryReporter : IDisposable
     private readonly SystemIdentity _identity;
     private readonly MachineNameProvider _names;
     private readonly Queue<Dictionary<string, object?>> _offline = new();
-    private static readonly TelemetryJsonContext JsonContext = new(TelemetryJsonContext.Default);
 
     public TelemetryReporter(
         ILogger<TelemetryReporter> log, SystemIdentity identity, MachineNameProvider names)
@@ -120,9 +119,10 @@ public sealed class TelemetryReporter : IDisposable
         return payload;
     }
 
-    private async Task PostAsync(Dictionary<string, object> payload, CancellationToken ct)
+    private async Task<HttpResponseMessage> PostAsync(
+        Dictionary<string, object?> payload, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(payload, JsonContext.DictionaryStringObject);
+        var json = JsonSerializer.Serialize(payload, TelemetryJsonContext.Default.DictionaryStringObject);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         return await _http.PostAsync(AgentConfig.ReportUrl, content, ct);
     }
