@@ -73,7 +73,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     private readonly HttpClient _commandHttp;
     private AgentIdentity _identity;
     // One line per service lifetime, not one per heartbeat -- see ForgetIdentityIfRefused.
-    private bool _revocationLogged;
+    // An int through Interlocked rather than a bool, because HeartbeatAsync genuinely runs
+    // concurrently: the heartbeat loop sends on its own tick and ProcessLoopAsync sends its
+    // own (Worker.cs, which documents why). Two refusals landing together would otherwise
+    // both read false and log twice, which is the one thing this field exists to prevent.
+    private int _revocationLogged;
 
     public FleetClient(ILogger<FleetClient> log, AgentState state)
     {
@@ -268,11 +272,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // Revoked is a decision somebody made. Say so once per service lifetime and stay
             // down -- re-enrolling here would hand the machine back the access that was
             // deliberately taken away.
-            if (!_revocationLogged)
-            {
-                _revocationLogged = true;
+            if (Interlocked.Exchange(ref _revocationLogged, 1) == 0)
                 _log.LogWarning("Hub has revoked agent {AgentId}; staying telemetry-only", sentAs);
-            }
             return;
         }
         if (!string.Equals(sentAs, _identity.AgentId, StringComparison.Ordinal)) return;
