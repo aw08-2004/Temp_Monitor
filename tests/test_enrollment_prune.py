@@ -1,7 +1,7 @@
 """An enrollment prune that deletes a live agent, or that quietly stops matching anything.
 
-**Two silent failures, pulling in opposite directions** (roadmap #23). Android agent 0.2.1
-threw away every token it was issued and enrolled again every 30 seconds, so a device left
+**Two silent failures, pulling in opposite directions** (roadmap #23). Android agents 0.2.1
+and 0.2.2 threw away every token they were issued and enrolled again every 30 seconds, so a device left
 running for a day left thousands of never-used credential rows under one machine name.
 fleet.prune_unauthenticated_enrollments removes them, and can go wrong either way without a
 sound:
@@ -57,7 +57,7 @@ def _ids(db_path, machine):
 
 
 def _loop(db_path, machine, count, start):
-    """What a 0.2.1 device does: enroll, lose the token, enroll 30 seconds later."""
+    """What a 0.2.1 or 0.2.2 device does: enroll, lose the token, enroll 30 seconds later."""
     ids = []
     for i in range(count):
         agent_id, _ = fleet.enroll_agent(db_path, machine, SECRET, SECRET)
@@ -91,8 +91,8 @@ def main():
         check("a second pass finds nothing", fleet.prune_unauthenticated_enrollments(db_path, now=now) == 0)
 
         print("\n== orphans that telemetry has touched ==")
-        # The case `last_seen = enrolled_at` would have missed. A 0.2.2 device reports, and
-        # every report rewrites last_seen on all of its machine's rows.
+        # The case `last_seen = enrolled_at` would have missed. A 0.2.2 beta device reports while
+        # it loops, and every report rewrites last_seen on all of its machine's rows.
         loop = _loop(db_path, "PHONE-02", 4, old)
         fleet.touch_last_seen(db_path, "PHONE-02")
         with fleet.get_conn(db_path) as conn:

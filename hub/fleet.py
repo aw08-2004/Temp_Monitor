@@ -1163,8 +1163,8 @@ def prune_unauthenticated_enrollments(db_path, now=None, grace=ENROLLMENT_PRUNE_
     """Delete agent rows whose token was never used, and that a newer enrollment supersedes.
 
     **The silent failure this bounds is an agent that enrolls and cannot keep what it was
-    given** (roadmap #23). Android agent 0.2.1 could not persist its identity on a trimmed
-    build, so it discarded each token and enrolled again every 30 seconds -- and every one
+    given** (roadmap #23). Android agents 0.2.1 and 0.2.2 could not persist their identity on
+    a trimmed build, so each discarded every token and enrolled again every 30 seconds -- and every one
     of those enrollments succeeded, leaving ~2,900 rows a day under one machine name. None
     of them is visible (every console read is DISTINCT / GROUP BY / MAX), but each is a
     live, unrevoked credential row, every /api/report rewrites all of them through

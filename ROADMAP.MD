@@ -3096,8 +3096,8 @@ Rejected:
   four typed models into string keys spelled out at each call site, and the telemetry offline
   buffer would have to change shape to carry them.
 
-**Not done:** the hub keeps the orphan `agents` rows from every failed retry. They hold no
-usable credential; cleaning them up is a hub change of its own.
+**Hub side:** the orphan `agents` rows from every failed retry are pruned from hub 1.115.0 --
+see *Orphaned enrollments from the 0.2.1 and 0.2.2 loop* below.
 
 ### Scheduled commands reach an Android device regardless of the version gates
 
@@ -3129,13 +3129,14 @@ all, or wants a view of its own. It reports the same shape and costs nothing to 
 is; the question becomes live the first time somebody sorts the fleet by CPU temperature and
 finds a tablet's battery at the top.
 
-### Orphaned enrollments from the 0.2.1 loop · hub 1.115.0
+### Orphaned enrollments from the 0.2.1 and 0.2.2 loop · hub 1.115.0
 
-**0.2.1 could not keep its identity, and the hub let it enroll forever.** On a fully trimmed build
-`AgentState.SaveIdentity` failed (reflection JSON disabled), so `FleetClient` discarded each token
-and enrolled again 30 seconds later. Every attempt succeeded: a new `agents` row and a
-security-level `enroll` audit row, ~2,900 of each per device per day. The agent is fixed on
-`fix/android-agent-json-trimming`; this entry is the hub side.
+**0.2.1 and the 0.2.2 beta could not keep their identity, and the hub let them enroll forever.**
+On a fully trimmed build `AgentState.SaveIdentity` failed (reflection JSON disabled), so
+`FleetClient` discarded each token and enrolled again 30 seconds later. Every attempt succeeded: a
+new `agents` row and a security-level `enroll` audit row, ~2,900 of each per device per day. The
+agent is fixed in 0.2.3 (*Full trimming switched off System.Text.Json reflection*, above); this
+entry is the hub side.
 
 **What they cost.** Nothing an operator sees: every console read of `agents` is `DISTINCT`,
 `GROUP BY machine` or `MAX(last_seen)`, so counts, enrolled badges, online status and the backup
@@ -3156,12 +3157,13 @@ after enrolling, which errs toward keeping rows.
 
 **Rejected:**
 
-- **`last_seen = enrolled_at` as the orphan test**, the first sketch. It is true of every
-  0.2.1 orphan today, because 0.2.1's telemetry failed the same way and never reached
-  `touch_last_seen`. It stops being true within one report of the device running 0.2.2,
-  because that call rewrites `last_seen` on every row for the machine. After that the prune
-  matches nothing and says nothing. The same happens for any future loop on a Windows or Linux
-  agent, which always report.
+- **`last_seen = enrolled_at` as the orphan test**, the first sketch. It holds for a 0.2.1
+  device's orphans, because 0.2.1's telemetry failed the same way and never reached
+  `touch_last_seen`. It is already false for every 0.2.2 beta device: that build's reports
+  worked while it kept looping, and each report rewrites `last_seen` on every row for the
+  machine. It also breaks one report after a 0.2.1 device moves to a later build. The prune
+  would match nothing on those devices and say nothing. The same goes for any future loop on a
+  Windows or Linux agent, which always report.
 - **Pruning every superseded row regardless of authentication.** Two PCs sharing a hostname,
   or an agent whose row is older than a stray re-enroll, would be deleted. Each would re-enroll
   on the next heartbeat and push its twin into the older slot. That is a daily churn, and the
@@ -3178,10 +3180,12 @@ after enrolling, which errs toward keeping rows.
 - **Auditing each prune.** The rows' creation is already audited at security level, and a
   credential that never authenticated granted nothing whose removal needs a record.
 
-**Not done.** Orphans on a device that was already upgraded to 0.2.2 **before** hub 1.115.0 is deployed are
-backfilled as authenticated and kept, because by then the report path has made them
-indistinguishable from real rows. They are harmless, and `delete_machine` clears them if one
-device's pile ever matters.
+**Not done.** Orphans that a report touched **before** hub 1.115.0 is deployed are backfilled as
+authenticated and kept, because the report path has already made them indistinguishable from real
+rows. That is **every 0.2.2 beta device's pile**, and any 0.2.1 device's pile once it has
+reported on a later build. They are harmless and hold no usable credential. `delete_machine`
+clears them if one device's pile ever matters, and the device re-enrolls cleanly on 0.2.3.
+Orphans a loop creates after the deploy are pruned whether or not a report touches them.
 
 ---
 

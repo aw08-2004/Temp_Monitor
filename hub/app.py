@@ -3563,7 +3563,7 @@ def retention_pruner():
             except Exception as e:
                 print(f"[retention] Command-output prune failed: {e}")
             # Enrollments whose token was never used, behind a newer one for the same machine
-            # (roadmap #23 -- Android agent 0.2.1 minted one every 30 seconds). Housekeeping:
+            # (roadmap #23 -- Android agents 0.2.1 and 0.2.2 minted one every 30 seconds). Housekeeping:
             # no console read counts them, and fleet.prune_unauthenticated_enrollments keeps
             # the newest row so nothing visible changes. Its own try, as its neighbours.
             try:
