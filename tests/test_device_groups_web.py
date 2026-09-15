@@ -125,6 +125,17 @@ def test_scope_on_write():
 def test_redaction(both):
     print("\n-- what a scoped viewer can learn from a group --")
     viewer = client_for("viewer@example.com")
+    # The write gates, against a group that EXISTS. test_gates can only check create, because
+    # no group exists yet at that point -- and every other PUT and DELETE in this file goes
+    # through a caller who holds manage_device_groups, so a route that had its gate swapped to
+    # `view` would pass all of them. A 403 here, not a 404 or a scope 400: the capability gate
+    # has to run before the route looks anything up.
+    r = viewer.put(f"/api/device-groups/{both['id']}", json={"name": "Both", "target": machines_target("PC-1")})
+    check("a viewer cannot edit a group", r.status_code == 403)
+    r = viewer.delete(f"/api/device-groups/{both['id']}")
+    check("a viewer cannot delete a group", r.status_code == 403)
+    r = viewer.put("/api/device-groups/999999", json={"name": "Ghost", "target": machines_target("PC-1")})
+    check("...nor learn from the status whether an id exists", r.status_code == 403)
     listed = next(g for g in viewer.get("/api/device-groups").get_json()["groups"] if g["id"] == both["id"])
     body = str(listed)
     check("the definition hides machines outside the viewer's scope", "PC-2" not in body)
