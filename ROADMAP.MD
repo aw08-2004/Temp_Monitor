@@ -3129,6 +3129,60 @@ all, or wants a view of its own. It reports the same shape and costs nothing to 
 is; the question becomes live the first time somebody sorts the fleet by CPU temperature and
 finds a tablet's battery at the top.
 
+### Orphaned enrollments from the 0.2.1 loop · hub 1.115.0
+
+**0.2.1 could not keep its identity, and the hub let it enroll forever.** On a fully trimmed build
+`AgentState.SaveIdentity` failed (reflection JSON disabled), so `FleetClient` discarded each token
+and enrolled again 30 seconds later. Every attempt succeeded: a new `agents` row and a
+security-level `enroll` audit row, ~2,900 of each per device per day. The agent is fixed on
+`fix/android-agent-json-trimming`; this entry is the hub side.
+
+**What they cost.** Nothing an operator sees: every console read of `agents` is `DISTINCT`,
+`GROUP BY machine` or `MAX(last_seen)`, so counts, enrolled badges, online status and the backup
+roster are all correct, and `delete_machine` removes every row. The real costs are below the
+surface. Each orphan is a live, unrevoked credential row. Every `/api/report` rewrites all of them
+through `touch_last_seen`. And revoking the device's real `agent_id` would leave it reading as
+enrolled through its orphans.
+
+**Decision:** `fleet.prune_unauthenticated_enrollments`, run from the retention pruner. It deletes
+a row only if its token never authenticated, it is over an hour old, it is not revoked, and a
+strictly newer non-revoked row exists for the same machine. The newest enrollment always
+survives, so `is_enrolled`, `enrolled_machines` and `list_agent_status` answer exactly as before.
+`test_enrollment_prune.py` asserts that, not just the row count.
+
+**"Never authenticated" needed a column of its own: `agents.last_auth`**, written only by
+`authenticate_agent`. The migration backfills it from `last_seen` on any row that was ever seen
+after enrolling, which errs toward keeping rows.
+
+**Rejected:**
+
+- **`last_seen = enrolled_at` as the orphan test**, the first sketch. It is true of every
+  0.2.1 orphan today, because 0.2.1's telemetry failed the same way and never reached
+  `touch_last_seen`. It stops being true within one report of the device running 0.2.2,
+  because that call rewrites `last_seen` on every row for the machine. After that the prune
+  matches nothing and says nothing. The same happens for any future loop on a Windows or Linux
+  agent, which always report.
+- **Pruning every superseded row regardless of authentication.** Two PCs sharing a hostname,
+  or an agent whose row is older than a stray re-enroll, would be deleted. Each would re-enroll
+  on the next heartbeat and push its twin into the older slot. That is a daily churn, and the
+  console would explain none of it.
+- **Deleting the newest orphan too.** The machine would flip to "not enrolled" until the next
+  attempt, and the duplicate-serial merge would lose its corroboration for a device that really
+  does hold the secret.
+- **Refusing re-enrollment hub-side** (for example, one enrollment per machine per minute). That
+  is the endpoint a deleted machine must be able to reach (see *Agent re-enrollment* below), and
+  the existing `10/minute` limiter already bounds abuse. A hub-side cap would also have hidden the
+  0.2.1 bug instead of surfacing it.
+- **Pruning the `enroll` audit rows.** `audit_log` is append-only by design, and bounding it is a
+  `data.audit_retention_days` question for the whole trail, not a special case for one action.
+- **Auditing each prune.** The rows' creation is already audited at security level, and a
+  credential that never authenticated granted nothing whose removal needs a record.
+
+**Not done.** Orphans on a device that was already upgraded to 0.2.2 **before** hub 1.115.0 is deployed are
+backfilled as authenticated and kept, because by then the report path has made them
+indistinguishable from real rows. They are harmless, and `delete_machine` clears them if one
+device's pile ever matters.
+
 ---
 
 ## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0

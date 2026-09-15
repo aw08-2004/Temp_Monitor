@@ -734,6 +734,22 @@ def init_fleet_db(db_path):
         # One machine can re-enroll (reinstall) and supersede its old agent row;
         # we look agents up by agent_id, but also want fast machine lookups.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine)")
+        # `last_auth`: when this row's token last actually authenticated. Written ONLY by
+        # authenticate_agent, which is the point -- `last_seen` cannot answer "was this
+        # credential ever used?", because touch_last_seen bumps every non-revoked row for a
+        # machine on each unauthenticated /api/report. See prune_unauthenticated_enrollments.
+        #
+        # Backfill on migration is deliberately generous: a pre-existing row whose last_seen
+        # ever moved past enrolled_at is assumed to have authenticated, since the two causes
+        # cannot be told apart after the fact. That errs toward KEEPING a row -- a missed
+        # orphan is a few bytes; a wrongly deleted live credential is a forced re-enroll.
+        agent_columns = {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}
+        if "last_auth" not in agent_columns:
+            conn.execute("ALTER TABLE agents ADD COLUMN last_auth INTEGER")
+            conn.execute(
+                "UPDATE agents SET last_auth = last_seen "
+                "WHERE last_seen IS NOT NULL AND last_seen > enrolled_at"
+            )
         # NOTE: databases created before command signing was removed also carry
         # `requires_signature INTEGER NOT NULL DEFAULT 0` and `signature TEXT`
         # here. They are deliberately left in place rather than migrated away:
@@ -1067,7 +1083,9 @@ def enroll_agent(db_path, machine, provided_secret, expected_secret):
 def authenticate_agent(db_path, agent_id, token, touch=True):
     """Return the agent's machine name if (agent_id, token) is valid and not
     revoked, else None. Constant-time token comparison. When `touch`, refreshes
-    last_seen so status derivation and heartbeating share one code path."""
+    last_seen so status derivation and heartbeating share one code path, and records
+    last_auth -- the only proof prune_unauthenticated_enrollments accepts that a row's
+    credential is held by something alive. Same statement, so no extra write."""
     if not agent_id or not token:
         return None
     with get_conn(db_path) as conn:
@@ -1080,9 +1098,10 @@ def authenticate_agent(db_path, agent_id, token, touch=True):
         if not hmac.compare_digest(row["token_hash"], _hash_token(token)):
             return None
         if touch:
+            now = int(time.time())
             conn.execute(
-                "UPDATE agents SET last_seen = ? WHERE agent_id = ?",
-                (int(time.time()), str(agent_id)),
+                "UPDATE agents SET last_seen = ?, last_auth = ? WHERE agent_id = ?",
+                (now, now, str(agent_id)),
             )
     return row["machine"]
 
@@ -1131,6 +1150,57 @@ def revoke_agent(db_path, agent_id, actor="system"):
         conn.execute("UPDATE agents SET revoked = 1 WHERE agent_id = ?", (str(agent_id),))
     audit(db_path, actor=actor, action="revoke_agent",
           level=LEVEL_SECURITY, target=agent_id)
+
+
+#: How old a never-authenticated enrollment must be before it may be pruned. An agent
+#: heartbeats within seconds of enrolling, so an hour is two orders of magnitude of slack;
+#: it exists so a prune can never race an agent that has its token and simply has not used
+#: it yet.
+ENROLLMENT_PRUNE_GRACE_SECONDS = 3600
+
+
+def prune_unauthenticated_enrollments(db_path, now=None, grace=ENROLLMENT_PRUNE_GRACE_SECONDS):
+    """Delete agent rows whose token was never used, and that a newer enrollment supersedes.
+
+    **The silent failure this bounds is an agent that enrolls and cannot keep what it was
+    given** (roadmap #23). Android agent 0.2.1 could not persist its identity on a trimmed
+    build, so it discarded each token and enrolled again every 30 seconds -- and every one
+    of those enrollments succeeded, leaving ~2,900 rows a day under one machine name. None
+    of them is visible (every console read is DISTINCT / GROUP BY / MAX), but each is a
+    live, unrevoked credential row, every /api/report rewrites all of them through
+    touch_last_seen, and revoking the real agent_id would leave the machine reading as
+    enrolled through its orphans.
+
+    A row is removed only when ALL of these hold, and each clause is what keeps a real
+    agent safe:
+
+      * `last_auth IS NULL` -- its token never authenticated. Not `last_seen = enrolled_at`,
+        which is what this was first sketched as: touch_last_seen moves last_seen on every
+        orphan the moment the device's telemetry works, so that test stops matching exactly
+        the rows it was written for.
+      * older than `grace` -- never race an agent that has not heartbeated yet.
+      * `revoked = 0` -- a revoked row is the record that makes its holder hear "revoked"
+        and stay down; deleting it would turn that into "unknown" and invite a re-enroll.
+      * a STRICTLY newer non-revoked row exists for the same machine -- so the newest
+        enrollment always survives, and is_enrolled / enrolled_machines / list_agent_status
+        answer exactly as they did before the prune. The machine's visible state never
+        changes; only dead rows behind it go.
+
+    Not audited, deliberately: each row's creation is already a security-level `enroll`
+    row, and a credential that never authenticated granted nothing whose removal needs a
+    record. Returns the number of rows removed.
+    """
+    if now is None:
+        now = time.time()
+    cutoff = int(now) - int(grace)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM agents WHERE revoked = 0 AND last_auth IS NULL AND enrolled_at < ? "
+            "AND EXISTS (SELECT 1 FROM agents n WHERE n.machine = agents.machine "
+            "            AND n.revoked = 0 AND n.enrolled_at > agents.enrolled_at)",
+            (cutoff,),
+        )
+        return cur.rowcount or 0
 
 
 def touch_last_seen(db_path, machine):

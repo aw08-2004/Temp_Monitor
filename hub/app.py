@@ -131,7 +131,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.114.0"
+HUB_VERSION = "1.115.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3562,6 +3562,16 @@ def retention_pruner():
                 prune_command_output_once()
             except Exception as e:
                 print(f"[retention] Command-output prune failed: {e}")
+            # Enrollments whose token was never used, behind a newer one for the same machine
+            # (roadmap #23 -- Android agent 0.2.1 minted one every 30 seconds). Housekeeping:
+            # no console read counts them, and fleet.prune_unauthenticated_enrollments keeps
+            # the newest row so nothing visible changes. Its own try, as its neighbours.
+            try:
+                dropped = fleet.prune_unauthenticated_enrollments(DB_PATH)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} never-authenticated enrollment(s).")
+            except Exception as e:
+                print(f"[retention] Enrollment prune failed: {e}")
             # Location fixes (roadmap #23). Its own try, like its neighbours, and the one
             # prune here that is a PRIVACY control rather than a disk-space one: the table is
             # tiny and would never need pruning for size. What expires is the record of where
