@@ -3032,7 +3032,7 @@ finds a tablet's battery at the top.
 
 ---
 
-## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0
+## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3087,12 +3087,33 @@ because the drafter's refusals should read as *not yet* rather than as *never*:
 - **History is pruned at thirty days** by `data.retention_days`, so anything that learns from it
   needs rollups written before the pruner runs. That is #17's problem and is noted there.
 
+**A draft is a SET of rules, one per stage** (1.113.0). The first version asked the model for
+one rule and got what it asked for: "warn after five days of uptime and force a restart after
+ten" came back as `sys.uptime_days > 10` with a reboot and the warning half silently gone. That
+is the worst possible shape of the answer — the surviving rule looks correct, nothing in the
+console says a stage was dropped, and the stage that was dropped is the one that would have
+told somebody before their machine restarted. The engine has no schedule and no escalation
+timer, so two thresholds are genuinely two rules; the prompt now says so, the envelope carries
+a list, and the drafter teaches `show_message` with its `on_response` map so "ask first, reboot
+if they agree" is expressible at all. A set is validated all-or-nothing and **committed one
+stage at a time**: the gentle rule and the one that reboots somebody are not the same decision,
+and a single button creating both would put a forced restart behind a click aimed elsewhere.
+
+**Rejected: an escalating rule type in the engine.** A second timer next to `for_seconds`,
+`cooldown_seconds` and `snoozed_until` — "after 5 days do this, after 10 do that" as one row —
+is where staged alerting products go to die: four interacting time semantics per rule, none of
+them visible in the one-line expression an operator reads, and a preview that can no longer
+answer "what happens now". Two rules with two conditions are already the feature, they preview
+and fire through code that exists, and each can be disabled on its own.
+
 Two of the open parameters below are now decided. A draft **is** a stored row, keyed to its
 author, capped per author and pruned after a week — the browser holding it would have lost a
 half-finished rule to a refresh, and the stored English is what makes a drafted rule auditable
-six months later. A refinement re-sends **only the current draft's canonical expression**, not
-the conversation: a refinement edits a rule that already parsed, and replaying the model's
-earlier prose invites it to re-open a decision the operator has already accepted.
+six months later. A refinement re-sends **only the current draft's canonical expressions**, not
+the conversation: a refinement edits rules that already parsed, and replaying the model's
+earlier prose invites it to re-open a decision the operator has already accepted. Every stage
+goes back, not the one on screen — "make it 7 days" shown one rule of two is answered with one
+rule, and the other quietly disappears.
 
 Configuration is a provider by NAME, not a url: Ollama, LM Studio, vLLM, OpenAI, OpenRouter,
 or a custom address. They all speak one wire shape, so the choice picks where prompts go
@@ -3111,10 +3132,10 @@ break is refused outright, because it is written as one line of a file that also
 `ALLOWED_EMAILS`.
 
 The console half is on the Rules page, above the rule list, and hidden unless the feature is
-both switched on and configured. Describe, adjust, preview through the existing
-`/api/rules/preview`, then create — which stores the rule **disabled** and opens it in the
+both switched on and configured. Describe, adjust, then per stage: preview through the existing
+`/api/rules/preview` and create — which stores that rule **disabled** and opens it in the
 ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
-the normal form and pressing Enable.
+the normal form and pressing Enable. The stages not yet created stay on the card.
 
 **Partial, and the line is the drafter.** Describe, adjust, preview and create are built and
 tested at 1.109.0, off until somebody configures a provider. **The machine chat panel, the

@@ -74,12 +74,29 @@ def fake_provider(*answers):
 
 
 def envelope(**fields):
+    """The OLD single-rule envelope, deliberately kept.
+
+    It is what every answer in this file used before staging landed, and it is what a small
+    local model still answers with -- ai._parse_envelope wraps it rather than spending the one
+    repair round teaching it to use a list. These calls are that contract's test.
+    """
     body = {"name": "Test rule", "condition_text": "",
             "target": {"include": [{"kind": "all"}]},
             "actions": [{"type": "alert", "params": {"text": "hello"}}],
             "for_seconds": 0, "cooldown_seconds": 0, "refusal": ""}
     body.update(fields)
     return json.dumps(body)
+
+
+def staged(*rules_in, refusal=""):
+    """The envelope a staged answer arrives in: one rule object per stage."""
+    return json.dumps({"rules": [json.loads(envelope(**fields)) for fields in rules_in],
+                       "refusal": refusal})
+
+
+def only(draft):
+    """The single stage of a one-rule draft. Most assertions here are about one rule."""
+    return ai.draft_rules(draft)[0]
 
 
 def main():
@@ -121,6 +138,10 @@ def main():
               error is None)
         check("the prompt says there are no tags", "NO TAGS" in prompt)
         check("the prompt says a rule has no schedule", "no schedule" in prompt)
+        check("the prompt says an escalation is one rule per stage",
+              "One rule is one stage" in prompt)
+        check("...and teaches the dialog that asks before acting",
+              "on_response" in prompt and "show_message" in prompt)
         check("the prompt names the two actions that do not exist yet",
               "disabling USB" in prompt and "locking an account" in prompt)
         for forbidden in ("kill_process", "locate_device", "wipe_device", "shutdown_at"):
@@ -192,14 +213,108 @@ def main():
                                      "alert me when any drive drops below 10 GB free",
                                      extra=extra)
         check("a valid draft is produced", error is None and draft is not None)
+        rule = only(draft)
         check("...with the canonical expression, not the model's spelling",
-              draft["condition_text"] == rules.format_expression(draft["condition"]))
+              rule["condition_text"] == rules.format_expression(rule["condition"]))
         check("...whose text parses again unchanged",
-              rules.parse_expression(draft["condition_text"], extra)[0] is None)
+              rules.parse_expression(rule["condition_text"], extra)[0] is None)
         check("...and the variable it depends on is reported",
-              draft["variables"] == ["disk.min_free_gb"])
+              rule["variables"] == ["disk.min_free_gb"])
         check("...keeping the English that produced it",
               draft["source_text"].startswith("alert me when"))
+
+        print("\n== An escalation is drafted as STAGES, not collapsed into one rule ==")
+        # The failure this section exists for: "warn after 5 days, force a restart after 10"
+        # came back as `sys.uptime_days > 10` + restart, with the warning silently gone,
+        # because the envelope had room for one rule and the prompt asked for one rule. The
+        # warning half vanishing is invisible -- the rule that remains looks correct.
+        fake_provider(staged(
+            dict(name="Ask for a restart", condition_text="sys.uptime_days > 5",
+                 actions=[{"type": "show_message",
+                           "params": {"title": "Restart needed", "body": "Restart now?",
+                                      "buttons": [{"id": "yes"}, {"id": "later"}]},
+                           "on_response": {
+                               "yes": [{"type": "command",
+                                        "params": {"command_type": "restart", "params": {}}}],
+                               "later": [{"type": "snooze", "params": {"seconds": 14400}}]}}]),
+            dict(name="Force a restart", condition_text="sys.uptime_days > 10",
+                 actions=[{"type": "command",
+                           "params": {"command_type": "restart", "params": {}}}])))
+        error, escalation = ai.draft_rule(
+            db_path, CONFIG,
+            "ask for a restart after 5 days up, force one after 10", extra=extra)
+        stages = ai.draft_rules(escalation)
+        check("both stages survive", error is None and len(stages) == 2)
+        check("...the gentle one keeping its own threshold",
+              stages[0]["condition_text"] == "sys.uptime_days > 5")
+        check("...and the enforcing one keeping its",
+              stages[1]["condition_text"] == "sys.uptime_days > 10")
+        check("...with the message's follow-up actions intact",
+              stages[0]["actions"][0]["on_response"]["yes"][0]["params"]["command_type"]
+              == "restart")
+        summaries = ai.summarise_rules(db_path, escalation)
+        check("each stage is summarised, numbered in escalation order",
+              summaries[0].startswith("Stage 1 of 2")
+              and summaries[1].startswith("Stage 2 of 2"))
+        check("...and a message's follow-up is named, not hidden behind 'show_message'",
+              "yes -> command" in summaries[0])
+
+        print("\n== One bad stage rejects the whole answer ==")
+        # Half an escalation is worse than none: committed alone, the enforcing stage reboots
+        # people with no warning, and the warning stage alone never acts.
+        fake_provider(staged(dict(condition_text="sys.uptime_days > 5"),
+                             dict(condition_text="cpu.temp_c > 90")),
+                      staged(dict(condition_text="sys.uptime_days > 5"),
+                             dict(condition_text="cpu.temp_c > 90")))
+        error, draft = ai.draft_rule(db_path, CONFIG, "two stages, one invented variable",
+                                     extra=extra)
+        check("a set with one unusable stage is refused whole", draft is None and error)
+        check("...naming which stage, so the repair round has somewhere to aim",
+              error.startswith("rule 2:"))
+
+        print("\n== The number of stages is bounded ==")
+        over_cap = json.dumps({"rules": [json.loads(envelope(condition_text="sys.online"))]
+                               * (ai.MAX_RULES_PER_DRAFT + 1)})
+        provider = fake_provider(over_cap, over_cap)
+        error, draft = ai.draft_rule(db_path, CONFIG, "a policy document", extra=extra)
+        check("more stages than this hub drafts is refused", draft is None and error)
+        check("...saying how many it will do", str(ai.MAX_RULES_PER_DRAFT) in error)
+        # The one repair round has to aim at the actual failure. Told the usual "keep every
+        # stage you already had", a model that over-generated re-sends the same set and the
+        # retry buys nothing -- for the one case where a retry could have recovered.
+        retry = provider.calls[1][-1]["content"]
+        check("...and the retry asks for FEWER rules, not for every stage back",
+              "FEWER rules" in retry and "keeping every stage" not in retry)
+
+        provider = fake_provider(envelope(condition_text="cpu.temp_c > 90"),
+                                 envelope(condition_text="cpu.temp_c > 90"))
+        ai.draft_rule(db_path, CONFIG, "hot CPUs again", extra=extra)
+        check("an ordinary rejection still asks for every stage back",
+              "keeping every stage" in provider.calls[1][-1]["content"])
+
+        print("\n== The old single-rule envelope is still read ==")
+        # Every small local model has seen a thousand examples of the bare object, and the one
+        # repair attempt is for a real validator complaint rather than for a shape this hub
+        # can read perfectly well.
+        provider = fake_provider(envelope(condition_text="disk.min_free_gb < 3"))
+        error, draft = ai.draft_rule(db_path, CONFIG, "under 3 GB", extra=extra)
+        check("a bare rule object is wrapped rather than repaired",
+              error is None and len(ai.draft_rules(draft)) == 1)
+        check("...without spending a repair round", len(provider.calls) == 1)
+
+        print("\n== A refinement carries every stage back to the model ==")
+        fake_provider(staged(dict(condition_text="sys.uptime_days > 7"),
+                             dict(condition_text="sys.uptime_days > 10")))
+        provider = ai.complete
+        error, refined = ai.refine_draft(db_path, CONFIG, escalation, "make the warning 7 days",
+                                         extra=extra)
+        sent = provider.calls[0][-1]["content"]
+        check("the model is shown both stages, not the one on screen",
+              "sys.uptime_days > 5" in sent and "sys.uptime_days > 10" in sent)
+        check("...and the refinement keeps both", error is None
+              and len(ai.draft_rules(refined)) == 2)
+        check("...accumulating the English that produced it",
+              refined["source_text"].endswith("| make the warning 7 days"))
 
         print("\n== A fenced or chatty answer is still read ==")
         fake_provider("Sure! Here you go:\n```json\n"
@@ -469,27 +584,59 @@ def main():
         stored = ai.save_draft(db_path, draft, actor="a@x.com", provider="openai_chat",
                                model="test-model")
         check("a draft can be stored and read back", stored and stored.get("id"))
-        check("...keeping its expression", stored["condition_text"] == "disk.min_free_gb < 10")
+        check("...keeping its expression",
+              only(stored)["condition_text"] == "disk.min_free_gb < 10")
         check("...and the English", stored["source_text"] == "any drive under 10 GB")
         check("a draft is listed for its own author",
               [d["id"] for d in ai.list_drafts(db_path, actor="a@x.com")] == [stored["id"]])
         check("...and not for anybody else",
               ai.list_drafts(db_path, actor="b@x.com") == [])
 
-        payload = ai.rule_payload(stored)
+        payload = ai.rule_payload(only(stored), source_text=stored["source_text"])
         check("a committed draft arrives DISABLED", payload["enabled"] is False)
         check("...and records where it came from",
               payload["description"].startswith("Drafted from: any drive under 10 GB"))
-        error, rule = rules.save_rule(db_path, payload, actor="a@x.com", extra=extra)
-        check("the payload is one rules.save_rule accepts", error is None and rule)
+        error, saved = rules.save_rule(db_path, payload, actor="a@x.com", extra=extra)
+        check("the payload is one rules.save_rule accepts", error is None and saved)
 
-        summary = ai.summarise_draft(db_path, stored)
+        summary = ai.summarise_rules(db_path, stored)[0]
         check("the summary is built from the expression, not from the model",
               "disk.min_free_gb < 10" in summary)
         check("...and says how many machines it reaches", "on 2 machine(s)" in summary)
+        check("...and a lone rule is not numbered as a stage", "Stage" not in summary)
 
         check("a draft can be deleted", ai.delete_draft(db_path, stored["id"]))
         check("...and is gone", ai.get_draft(db_path, stored["id"]) is None)
+
+        print("\n== A draft written before staging is still readable ==")
+        # The rows already sitting in `ai_drafts` on every hub that had this feature on: one
+        # rule at the TOP LEVEL of payload_json, no `rules` key. They are read in place rather
+        # than migrated, so this is the only thing standing between an operator's unfinished
+        # sentence and a KeyError after the upgrade -- and it is the branch no other test here
+        # reaches, because draft_rule has not written that shape since 1.113.0.
+        _err, legacy_condition = rules.parse_expression("disk.min_free_gb < 10", extra)
+        legacy = {"name": "Old draft", "condition": legacy_condition,
+                  "condition_text": "disk.min_free_gb < 10",
+                  "target": {"include": [{"kind": "all"}], "exclude": []},
+                  "actions": [{"type": "alert", "params": {"text": "hello"}}],
+                  "for_seconds": 0, "cooldown_seconds": 0,
+                  "source_text": "any drive under 10 GB"}
+        old_row = ai.save_draft(db_path, legacy, actor="d@x.com")
+        check("an old row has no `rules` key to read", "rules" not in old_row)
+        # The DECODED row, not the dict as written: it carries id, actor and provider beside
+        # the rule fields, and that is what every caller actually hands to draft_rules.
+        stages = ai.draft_rules(old_row)
+        check("...and still reads as exactly one stage", len(stages) == 1)
+        check("...keeping its expression",
+              stages[0]["condition_text"] == "disk.min_free_gb < 10")
+        summaries = ai.summarise_rules(db_path, old_row)
+        check("...summarised without a stage number", len(summaries) == 1
+              and "Stage" not in summaries[0])
+        error, saved = rules.save_rule(
+            db_path, ai.rule_payload(stages[0], source_text=old_row["source_text"]),
+            actor="d@x.com", extra=extra)
+        check("...and commits to a rule the engine accepts", error is None and saved)
+        ai.delete_draft(db_path, old_row["id"])
 
         print("\n== The per-actor draft cap ==")
         for i in range(ai.MAX_DRAFTS_PER_ACTOR + 5):

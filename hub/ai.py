@@ -154,6 +154,13 @@ MAX_RESPONSE_BYTES = 256 * 1024
 MAX_MODELS_BYTES = 8 * 1024 * 1024
 MAX_DRAFTS_PER_ACTOR = 25
 MAX_REFUSAL_CHARS = 400
+# How many rules one sentence may draft. An escalation is a SET of rules -- the engine has no
+# schedule, so "warn after five days, restart after ten" is two conditions over the same
+# variable and cannot be one rule -- and a drafter that could only answer with one silently
+# dropped a stage, which is the failure this number exists alongside. Five, because a request
+# needing six stages is a policy document rather than a rule, and an unbounded list is an
+# unbounded number of validator runs and of rows somebody has to read before committing.
+MAX_RULES_PER_DRAFT = 5
 
 KIND_DRAFT_RULE = "draft_rule"
 KIND_REFINE_RULE = "refine_rule"
@@ -653,31 +660,60 @@ def action_prompt(db_path):
 # failed on every well-formed request and the failure looked like a bad model. A prompt that
 # teaches an invalid shape is a prompt that spends one repair round per request and then gives
 # up, so the examples are tested rather than trusted.
+#
+# The `show_message` entry is here for a second reason. Without it the drafter's whole
+# vocabulary for "get the machine restarted" was a bare `command`, so every request that said
+# *ask the user first* came back as an unannounced reboot -- the engine has had the round trip
+# since #14 and the prompt was the only thing that did not know. `on_response` is a SIBLING of
+# `params`, not a key inside it, which is exactly the kind of detail a model gets wrong from
+# memory and the reason these shapes are asserted rather than described.
 ACTION_EXAMPLES = (
     {"type": "alert", "params": {"text": "Only {{disk.min_free_gb}} GB free"}},
     {"type": "command", "params": {"command_type": "restart", "params": {}}},
     {"type": "snooze", "params": {"seconds": 3600}},
+    {"type": "show_message",
+     "params": {"title": "Restart needed",
+                "body": "This PC has been on for {{sys.uptime_days}} days. Restart now?",
+                "style": "dialog", "buttons": [{"id": "yes"}, {"id": "later"}],
+                "default_button": "yes", "timeout_seconds": 3600},
+     "on_response": {"yes": [{"type": "command",
+                              "params": {"command_type": "restart", "params": {}}}],
+                     "later": [{"type": "snooze", "params": {"seconds": 14400}}]}},
 )
 
 # The envelope. Strict, and short on purpose: every field maps onto something
 # rules.validate_rule already checks, so there is nowhere for the model to put anything else.
 _ENVELOPE = """Answer with one JSON object and nothing else:
 
+{"rules": [<one or more rule objects>], "refusal": ""}
+
+A rule object:
+
 {"name": "<short rule name>",
  "condition_text": "<one-line expression>",
  "target": {"include": [{"kind": "all"}]},
  "actions": [<one or more of the action shapes below>],
  "for_seconds": 0,
- "cooldown_seconds": 0,
- "refusal": ""}
+ "cooldown_seconds": 0}
 
-Action shapes, exactly as written -- an alert carries `text`, not a message or a severity:
+**One rule is one stage.** A rule has no schedule and no escalation timer, so a request with
+two thresholds is two rules with different conditions -- "warn after 5 days of uptime and
+restart after 10" is `sys.uptime_days > 5` with a message and `sys.uptime_days > 10` with a
+restart, never one rule. Order them gentlest first. At most %d rules, and only as many as the
+request actually asked for: one threshold is one rule.
+
+A stage that asks the person at the machine before acting is `show_message` with an
+`on_response` map from the button they pressed to what happens next. A stage that acts without
+asking is a bare `command`.
+
+Action shapes, exactly as written -- an alert carries `text`, not a message or a severity, and
+`on_response` sits beside `params` rather than inside it:
 %s
 
-Set `refusal` to one plain sentence and leave the other fields empty when the request cannot
-be expressed with the variables and actions listed above. A refusal is the correct answer more
-often than an approximation is.""" % "\n".join(
-    " " + json.dumps(example) for example in ACTION_EXAMPLES)
+Set `refusal` to one plain sentence and leave `rules` empty when the request cannot be
+expressed with the variables and actions listed above. A refusal is the correct answer more
+often than an approximation is.""" % (MAX_RULES_PER_DRAFT, "\n".join(
+    " " + json.dumps(example) for example in ACTION_EXAMPLES))
 
 
 def system_prompt(db_path, disks=None):
@@ -690,7 +726,7 @@ def system_prompt(db_path, disks=None):
     writing the rule about, and the failure would look like a model that cannot count.
     """
     return "\n\n".join([
-        "You translate an IT operator's sentence into ONE rule for the FleetHub rules engine.",
+        "You translate an IT operator's sentence into rules for the FleetHub rules engine. One\nrule per stage: a request that escalates is a set of rules, not one rule with the\nharshest action.",
         "Variables you may reference. Use these names EXACTLY; there are no others:\n"
         + catalog_prompt(db_path, disks),
         "Expression syntax: and, or, not, parentheses, comparisons (>, >=, <, <=, ==, !=), "
@@ -716,7 +752,22 @@ UNREADABLE = "the AI provider did not answer with a rule this hub could read"
 
 
 def _parse_envelope(text):
-    """The model's text -> (error, dict). Tolerant about wrapping, strict about shape."""
+    """The model's text -> (error, [rule payload, ...]). Tolerant about wrapping, strict about
+    shape.
+
+    **A bare single-rule object is accepted and wrapped**, rather than corrected in a repair
+    round. The old envelope asked for exactly that shape, every small local model has seen a
+    thousand examples of it, and spending the one repair attempt teaching a model to put its
+    one rule in a list would leave nothing for the error the attempt is actually for.
+
+    A refusal travels as a one-element list whose single entry carries only `refusal`, so the
+    caller has one thing to iterate and validated_draft keeps its existing contract.
+
+    **The stage CAP is not enforced here.** This function answers one question -- is this a
+    readable envelope -- and the cap is a policy of this hub's, checked in validated_rules
+    where both callers already go. Keeping it out of the parse is also what lets draft_rule
+    see how many stages the model actually asked for and aim the repair round at that.
+    """
     raw = str(text or "").strip()
     match = _FENCE_RE.match(raw)
     if match:
@@ -730,7 +781,20 @@ def _parse_envelope(text):
         return UNREADABLE, None
     if not isinstance(payload, dict):
         return UNREADABLE, None
-    return None, payload
+
+    refusal = str(payload.get("refusal") or "").strip()
+    if refusal:
+        return None, [{"refusal": refusal}]
+
+    entries = payload.get("rules")
+    if entries is None:
+        # The old shape: the rule fields sit at the top level.
+        entries = [payload]
+    if not isinstance(entries, list) or not entries:
+        return UNREADABLE, None
+    if not all(isinstance(entry, dict) for entry in entries):
+        return UNREADABLE, None
+    return None, entries
 
 
 def _int_field(payload, key, cap):
@@ -798,6 +862,34 @@ def validated_draft(db_path, payload, extra, *, allow_command=True):
     }
 
 
+def validated_rules(db_path, entries, extra, *, allow_command=True):
+    """A parsed envelope -> (error, [draft rule, ...]). The set form of validated_draft.
+
+    **All or nothing.** One rejected stage fails the whole answer, and the error names which
+    stage it was so the repair round has somewhere to aim. Half an escalation is worse than
+    none: a set committed with its enforcement stage missing looks configured and never acts,
+    and a set missing its warning stage reboots people without asking -- which is the exact
+    behaviour this feature was changed to stop.
+    """
+    entries = entries or []
+    if len(entries) > MAX_RULES_PER_DRAFT:
+        return (f"that would need {len(entries)} rules; this hub drafts at most "
+                f"{MAX_RULES_PER_DRAFT} at a time"), None
+    drafted = []
+    for index, entry in enumerate(entries):
+        error, draft = validated_draft(db_path, entry, extra, allow_command=allow_command)
+        if error:
+            # The index is only worth saying when there is more than one, otherwise it reads
+            # as machine noise on top of a sentence an operator was meant to act on.
+            if len(entries) > 1:
+                return f"rule {index + 1}: {error}", None
+            return error, None
+        drafted.append(draft)
+    if not drafted:
+        return UNREADABLE, None
+    return None, drafted
+
+
 def _stamp(config):
     """The provider and model to stamp on an audit row. One helper so a call site cannot
     record half of the pair -- a row naming a model but not the endpoint it went to answers
@@ -844,23 +936,32 @@ def draft_rule(db_path, config, text, *, extra=None, api_key="", actor="", now=N
                                     else OUTCOME_PROVIDER_ERROR),
                            error=error, now=now)
             return error, None
-        error, payload = _parse_envelope(answer)
+        error, entries = _parse_envelope(answer)
         if not error:
-            error, draft = validated_draft(db_path, payload, extra,
-                                           allow_command=allow_command)
+            error, drafted = validated_rules(db_path, entries, extra,
+                                             allow_command=allow_command)
             if not error:
-                draft["source_text"] = request
+                draft = {"rules": drafted, "source_text": request}
                 record_request(db_path, actor=actor, kind=KIND_DRAFT_RULE, **_stamp(config),
                                prompt_chars=len(request), outcome=OUTCOME_OK, now=now)
                 return None, draft
         last_error = error
         if attempt < MAX_REPAIR_ATTEMPTS:
+            # A model that answered with too many stages cannot fix that by keeping every
+            # stage it had, and there is only one repair round to spend: told the usual
+            # thing, it re-sends the same over-cap set and the retry buys nothing for the one
+            # case it could have saved. So the instruction follows the actual failure.
+            if entries and len(entries) > MAX_RULES_PER_DRAFT:
+                fix = (f"Answer again with FEWER rules -- merge or drop stages until there"
+                       f" are at most {MAX_RULES_PER_DRAFT}.")
+            else:
+                fix = ("Answer again with the same JSON object, corrected, keeping every"
+                       " stage you already had.")
             messages.append({"role": "assistant", "content": answer})
             messages.append({"role": "user", "content":
-                             "The rules engine rejected that: " + str(error)
-                             + "\nAnswer again with the same JSON object, corrected. If the"
-                               " request cannot be expressed with the listed variables and"
-                               " actions, set `refusal` instead."})
+                             "The rules engine rejected that: " + str(error) + "\n" + fix
+                             + " If the request cannot be expressed with the listed variables"
+                               " and actions, set `refusal` instead."})
     record_request(db_path, actor=actor, kind=KIND_DRAFT_RULE, **_stamp(config),
                    prompt_chars=len(request), outcome=OUTCOME_REFUSED,
                    error=str(last_error), now=now)
@@ -885,14 +986,17 @@ def refine_draft(db_path, config, draft, text, *, extra=None, api_key="", actor=
         extra = rules.all_extra_variables(db_path)
 
     current = draft or {}
-    previous = json.dumps({
-        "name": current.get("name", ""),
-        "condition_text": current.get("condition_text", ""),
-        "target": current.get("target"),
-        "actions": current.get("actions"),
-        "for_seconds": current.get("for_seconds", 0),
-        "cooldown_seconds": current.get("cooldown_seconds", 0),
-    }, indent=1, sort_keys=True)
+    # Every stage goes back, not just the one somebody is looking at: "make it 7 days" after a
+    # two-stage escalation means the warning stage, and a model shown one rule would answer
+    # with one rule and quietly drop the other.
+    previous = json.dumps({"rules": [{
+        "name": rule.get("name", ""),
+        "condition_text": rule.get("condition_text", ""),
+        "target": rule.get("target"),
+        "actions": rule.get("actions"),
+        "for_seconds": rule.get("for_seconds", 0),
+        "cooldown_seconds": rule.get("cooldown_seconds", 0),
+    } for rule in draft_rules(current)]}, indent=1, sort_keys=True)
     messages = [{"role": "system", "content": system_prompt(db_path, disks)},
                 {"role": "user", "content":
                  "The current draft is:\n" + previous + "\n\nChange it: " + request}]
@@ -903,11 +1007,13 @@ def refine_draft(db_path, config, draft, text, *, extra=None, api_key="", actor=
                        prompt_chars=len(request), outcome=OUTCOME_PROVIDER_ERROR,
                        error=error, now=now)
         return error, None
-    error, payload = _parse_envelope(answer)
+    error, entries = _parse_envelope(answer)
     refined = None
     if not error:
-        error, refined = validated_draft(db_path, payload, extra,
+        error, drafted = validated_rules(db_path, entries, extra,
                                          allow_command=allow_command)
+        if not error:
+            refined = {"rules": drafted}
     if error:
         record_request(db_path, actor=actor, kind=KIND_REFINE_RULE, **_stamp(config),
                        prompt_chars=len(request), outcome=OUTCOME_REFUSED,
@@ -925,8 +1031,24 @@ def refine_draft(db_path, config, draft, text, *, extra=None, api_key="", actor=
     return None, refined
 
 
-def rule_payload(draft):
-    """A draft -> the payload rules.save_rule expects. Pure, and deliberately narrow.
+def draft_rules(draft):
+    """The stages of a draft, as a list. One reader for both shapes.
+
+    Drafts written before staging landed are a single rule at the top level of
+    `payload_json`, and they are still sitting in `ai_drafts` on every hub that had this
+    feature on. Reading them here rather than migrating the table keeps the old row readable
+    with no schema change and no upgrade step -- and there is exactly one place that has to
+    know both shapes.
+    """
+    draft = draft or {}
+    staged = draft.get("rules")
+    if isinstance(staged, list):
+        return [rule for rule in staged if isinstance(rule, dict)]
+    return [draft] if draft.get("condition") else []
+
+
+def rule_payload(rule, source_text=""):
+    """One drafted stage -> the payload rules.save_rule expects. Pure, and deliberately narrow.
 
     Nothing from the model reaches a stored rule except through this function, so what a draft
     can turn into is auditable by reading ten lines rather than by tracing the drafter.
@@ -937,14 +1059,18 @@ def rule_payload(draft):
     safety argument is the human in the middle.
     """
     return {
-        "name": draft.get("name") or "Drafted rule",
-        "condition": draft.get("condition"),
-        "target": draft.get("target"),
-        "actions": draft.get("actions"),
-        "for_seconds": draft.get("for_seconds") or 0,
-        "cooldown_seconds": draft.get("cooldown_seconds") or 0,
+        "name": rule.get("name") or "Drafted rule",
+        "condition": rule.get("condition"),
+        "target": rule.get("target"),
+        "actions": rule.get("actions"),
+        "for_seconds": rule.get("for_seconds") or 0,
+        "cooldown_seconds": rule.get("cooldown_seconds") or 0,
         "enabled": False,
-        "description": ("Drafted from: " + str(draft.get("source_text") or ""))[:500],
+        # The English is the DRAFT's, not the stage's: a stage of an escalation only makes
+        # sense read against the sentence that asked for the whole escalation, and that is
+        # what somebody finding this rule in six months needs on it.
+        "description": ("Drafted from: " + str(
+            source_text or rule.get("source_text") or ""))[:500],
     }
 
 
@@ -965,18 +1091,41 @@ def summarise_draft(db_path, draft, in_scope=None):
     asked to approve. Defaulted to None only so this stays callable with no access layer to
     hand; every HTTP caller passes `access.in_scope`, the way preview_targets does.
     """
-    parts = ["When " + rules.format_expression(draft.get("condition"))]
-    if draft.get("for_seconds"):
-        parts.append(f"has held for {int(draft['for_seconds'])}s")
-    machines = rules.resolve_targets(db_path, draft.get("target"))
+    rule = draft or {}
+    parts = ["When " + rules.format_expression(rule.get("condition"))]
+    if rule.get("for_seconds"):
+        parts.append(f"has held for {int(rule['for_seconds'])}s")
+    machines = rules.resolve_targets(db_path, rule.get("target"))
     if in_scope is not None:
         machines = [m for m in machines if in_scope(m)]
     parts.append(f"on {len(machines)} machine(s)")
-    kinds = [str(a.get("type")) for a in (draft.get("actions") or [])]
+    kinds = [str(a.get("type")) for a in (rule.get("actions") or [])]
+    # A message's follow-ups are named too. "then show_message" reads as though nothing
+    # happens to the machine, when the whole point of the stage is what the Yes button does.
+    for action in rule.get("actions") or []:
+        for outcome, followups in sorted((action.get("on_response") or {}).items()):
+            kinds.append(f"{outcome} -> " + ", ".join(
+                str(f.get("type")) for f in followups))
     parts.append("then " + (", ".join(kinds) if kinds else "nothing"))
-    if draft.get("cooldown_seconds"):
-        parts.append(f"at most once every {int(draft['cooldown_seconds'])}s")
+    if rule.get("cooldown_seconds"):
+        parts.append(f"at most once every {int(rule['cooldown_seconds'])}s")
     return ", ".join(parts) + "."
+
+
+def summarise_rules(db_path, draft, in_scope=None):
+    """Every stage of a draft, summarised in order. Still no model call.
+
+    The stage numbering is part of the sentence rather than left to the browser, because the
+    order is the escalation: reading "stage 2 of 2" next to a forced restart is what tells an
+    operator the gentle one exists and is meant to be created too.
+    """
+    staged = draft_rules(draft)
+    total = len(staged)
+    summaries = []
+    for index, rule in enumerate(staged):
+        text = summarise_draft(db_path, rule, in_scope=in_scope)
+        summaries.append(text if total == 1 else f"Stage {index + 1} of {total}: {text}")
+    return summaries
 
 
 # ---------------------------------------------------------------------------------------

@@ -135,24 +135,38 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         return None
 
     def _rendered(draft):
-        """A draft plus the deterministic summary, as the console reads it.
+        """A draft plus a deterministic summary PER STAGE, as the console reads it.
 
-        The summary is computed here rather than in the browser because it is the sentence an
-        operator confirms, and `condition_text` is echoed because the console posts it
-        straight to `/api/rules/preview` -- there is no dry-run route in this file for exactly
-        that reason.
+        The summaries are computed here rather than in the browser because they are the
+        sentences an operator confirms, and each stage's `condition_text` is echoed because
+        the console posts it straight to `/api/rules/preview` -- there is no dry-run route in
+        this file for exactly that reason.
 
-        `access.in_scope` goes in with it so the machine count is the caller's own, not the
+        `access.in_scope` goes in with them so the machine count is the caller's own, not the
         fleet's -- the same filter preview_targets applies, and for the stronger reason here:
         this count is what somebody reads before pressing commit.
+
+        **The stage's INDEX is in the payload, and it is what commit takes.** The browser
+        could count rows itself, but then the number identifying a rule on the way back would
+        be one the browser invented, and a stale card would commit whichever stage happens to
+        sit at that position now.
         """
+        staged = ai.draft_rules(draft)
         try:
-            summary = ai.summarise_draft(db_path, draft, in_scope=access.in_scope)
+            summaries = ai.summarise_rules(db_path, draft, in_scope=access.in_scope)
         except Exception:                             # noqa: BLE001
-            summary = ""
+            summaries = [""] * len(staged)
             _log_generic("summarising a draft")
-        return {"draft": draft, "summary": summary,
-                "condition_text": draft.get("condition_text", ""),
+        return {"draft": draft,
+                "rules": [{"index": index,
+                           "name": rule.get("name", ""),
+                           "condition_text": rule.get("condition_text", ""),
+                           # The target travels because the console posts it straight back to
+                           # /api/rules/preview -- a preview run against `all` when the stage
+                           # names an OU answers a question nobody asked.
+                           "target": rule.get("target"),
+                           "summary": summaries[index] if index < len(summaries) else ""}
+                          for index, rule in enumerate(staged)],
                 "can_issue_commands": _may_issue_commands()}
 
     # ---------------- Status ----------------
@@ -339,8 +353,19 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
     @login_required
     @can_manage
     def commit_draft(draft_id):
-        """Turn a draft into a real rule. The one route here that changes the fleet's standing
-        instructions, and the only one an operator has to press deliberately.
+        """Turn ONE stage of a draft into a real rule. The one route here that changes the
+        fleet's standing instructions, and the only one an operator has to press deliberately.
+
+        **One stage per press, not the whole set.** An escalation is two rules an operator
+        should read separately -- the gentle one and the one that reboots somebody's machine
+        are not the same decision -- and a single button that created both would put the
+        forced restart on the other side of a click nobody aimed at it. `index` says which;
+        omitted it is the first stage, which keeps this callable from a script with a body
+        of `{}`.
+
+        The committed stage is removed from the draft and the rest are kept, so creating the
+        warning does not throw the enforcement away. The draft row goes when its last stage
+        does.
 
         Everything about the save is the ordinary path: rules.save_rule, the caller's
         `author_scope` stamped on, the fleet-wide target cap and the command cooldown floor
@@ -352,7 +377,16 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         if not draft or draft.get("actor") != _actor():
             return jsonify({"error": "no such draft"}), 404
 
-        payload = ai.rule_payload(draft)
+        staged = ai.draft_rules(draft)
+        body = request.get_json(silent=True) or {}
+        try:
+            index = int(body.get("index") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "which rule to create must be a number"}), 400
+        if not 0 <= index < len(staged):
+            return jsonify({"error": "that draft has no such rule"}), 400
+
+        payload = ai.rule_payload(staged[index], source_text=draft.get("source_text", ""))
         config = rules_config()
         error, target = rules.validate_target(payload.get("target"), _extra())
         if not error:
@@ -368,8 +402,18 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         )
         if error:
             return jsonify({"error": error}), 400
-        ai.delete_draft(db_path, draft_id)
-        return jsonify({"rule": rule, "source_text": draft.get("source_text", "")}), 201
+
+        remaining = [r for i, r in enumerate(staged) if i != index]
+        if remaining:
+            draft["rules"] = remaining
+            stored = ai.save_draft(db_path, draft, draft_id=draft_id, actor=_actor())
+            rendered = _rendered(stored)
+        else:
+            ai.delete_draft(db_path, draft_id)
+            rendered = {"draft": None, "rules": []}
+        return jsonify({"rule": rule, "source_text": draft.get("source_text", ""),
+                        "remaining": rendered["rules"],
+                        "draft": rendered["draft"]}), 201
 
     @bp.route("/api/ai/rules/drafts/<draft_id>", methods=["DELETE"])
     @login_required
