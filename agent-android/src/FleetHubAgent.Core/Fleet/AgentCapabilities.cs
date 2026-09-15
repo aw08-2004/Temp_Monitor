@@ -103,12 +103,18 @@ public sealed class AgentCapabilities
     /// <summary>The heartbeat block. Field names are the hub's, and changing one here silently
     /// stops the report being understood -- capabilities.clean_report reads `platform`,
     /// `commands` and `features` and quietly drops anything else.</summary>
+    ///
+    /// **Each name is cast to JsonNode before it is added, and the cast is the fix.**
+    /// `JsonArray.Add(name)` binds to the generic `Add&lt;T&gt;`, which resolves T's type info by
+    /// reflection and throws on the trimmed APK. The heartbeat catches that and sends no
+    /// capability block, so on 0.2.1 the hub never learned what an Android device could do and
+    /// gated nothing -- a failure with no symptom until a backup job lands on a phone.
     public JsonObject ToJson()
     {
         var commands = new JsonArray();
-        foreach (var name in Commands) commands.Add(name);
+        foreach (var name in Commands) commands.Add((JsonNode)name);
         var features = new JsonArray();
-        foreach (var name in Features) features.Add(name);
+        foreach (var name in Features) features.Add((JsonNode)name);
         return new JsonObject
         {
             ["platform"] = Platform,

@@ -144,10 +144,12 @@ public sealed class DevicePolicy
     /// tie this object's lifetime to the reply it came in.</summary>
     private JsonObject ScheduleJson()
     {
+        // Each Add casts to JsonNode. A bare JsonObject argument binds to the generic Add<T>,
+        // which is reflective, trim-unsafe, and refused by the Release build. See AgentJson.
         var windows = new JsonArray();
         foreach (var window in Schedule.Windows)
         {
-            windows.Add(new JsonObject
+            windows.Add((JsonNode)new JsonObject
             {
                 ["days"] = new JsonArray(window.Days.Select(d => (JsonNode)d).ToArray()),
                 ["start"] = window.Start,
@@ -159,7 +161,7 @@ public sealed class DevicePolicy
         var budgets = new JsonArray();
         foreach (var budget in Schedule.Budgets)
         {
-            budgets.Add(new JsonObject
+            budgets.Add((JsonNode)new JsonObject
             {
                 ["package"] = budget.Package,
                 ["minutes"] = budget.Minutes,

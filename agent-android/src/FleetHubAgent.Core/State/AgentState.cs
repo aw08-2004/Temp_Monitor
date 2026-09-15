@@ -26,7 +26,9 @@ public sealed class AgentState(IStateStore store)
             var json = _store.Get(StateKeys.Identity);
             if (!string.IsNullOrEmpty(json))
             {
-                var id = JsonSerializer.Deserialize<AgentIdentity>(json);
+                // Type info from AgentJson, never reflection: on a trimmed build the reflection
+                // call throws, and the catch below turns that into "never enrolled".
+                var id = JsonSerializer.Deserialize(json, AgentJson.Default.AgentIdentity);
                 if (id is not null) return id;
             }
         }
@@ -40,12 +42,18 @@ public sealed class AgentState(IStateStore store)
     /// token exactly once; an agent running on a token that was never committed works
     /// perfectly until the process is killed, and then re-enrolls and appears in the console
     /// as a second machine with the same name. Failing the enrollment attempt instead means
-    /// it is simply retried in thirty seconds.</summary>
+    /// it is simply retried in thirty seconds.
+    ///
+    /// **That retry is also what hid the worst bug this agent has shipped.** 0.2.1 serialized the
+    /// identity by reflection, which throws on a trimmed build; the catch below reported it as a
+    /// failed write, and a failed write is retried rather than logged as a fault. Every device
+    /// enrolled, discarded the token, and enrolled again, forever. See AgentJson.</summary>
     public bool SaveIdentity(AgentIdentity identity)
     {
         try
         {
-            return _store.Set(StateKeys.Identity, JsonSerializer.Serialize(identity));
+            return _store.Set(StateKeys.Identity,
+                JsonSerializer.Serialize(identity, AgentJson.Default.AgentIdentity));
         }
         catch { return false; }
     }
@@ -100,12 +108,13 @@ public sealed class AgentState(IStateStore store)
     {
         var raw = _store.Get(StateKeys.RestartState);
         if (string.IsNullOrWhiteSpace(raw)) return null;
-        try { return JsonSerializer.Deserialize<RestartState>(raw); }
+        try { return JsonSerializer.Deserialize(raw, AgentJson.Default.RestartState); }
         catch { return null; }
     }
 
     public bool SaveRestartState(RestartState restart) =>
-        _store.Set(StateKeys.RestartState, JsonSerializer.Serialize(restart));
+        _store.Set(StateKeys.RestartState,
+            JsonSerializer.Serialize(restart, AgentJson.Default.RestartState));
 
     /// <summary>Forget the update in flight, once this build has done real work.</summary>
     public bool ClearRestartState() => _store.Set(StateKeys.RestartState, null);

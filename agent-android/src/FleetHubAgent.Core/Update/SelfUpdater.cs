@@ -119,7 +119,10 @@ public sealed class SelfUpdater
                 return false;
             }
 
-            var manifest = JsonSerializer.Deserialize<UpdateManifest>(manifestBytes);
+            // AgentJson, not reflection. A reflection read throws on the trimmed APK, which is
+            // how 0.2.1 could not read its own manifest and so could never update itself out of
+            // the bug that broke it.
+            var manifest = JsonSerializer.Deserialize(manifestBytes, AgentJson.Default.UpdateManifest);
             if (manifest is null || string.IsNullOrEmpty(manifest.Version)
                 || string.IsNullOrEmpty(manifest.Sha256) || string.IsNullOrEmpty(manifest.Url))
             {
