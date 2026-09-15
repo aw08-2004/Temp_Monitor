@@ -93,7 +93,7 @@ public sealed class TelemetryReporter : IDisposable
     /// AGENT_TRAIN_MIN_VERSION, so the hub deliberately sends nothing -- and there is no
     /// self-updater here to act on it if it did. See AgentConfig.Version.
     /// </summary>
-    private Dictionary<string, object?> BuildPayload(
+    internal Dictionary<string, object?> BuildPayload(
         double temp, IReadOnlyList<SensorReading>? sensors, long? uptime)
     {
         var payload = new Dictionary<string, object?>
@@ -114,15 +114,28 @@ public sealed class TelemetryReporter : IDisposable
             ["os_build"] = _identity.OsBuild,
             ["os_arch"] = _identity.OsArchitecture,
         };
-        if (sensors is not null) payload["sensors"] = sensors;
+        // Always a List, whatever the caller handed in. A source-generated `object` value is
+        // written by its RUNTIME type, and AgentJson knows List<SensorReading> -- an array or a
+        // ReadOnlyCollection here would throw on the device and serialize fine in any test
+        // that happened to pass a List.
+        if (sensors is not null) payload["sensors"] = sensors as List<SensorReading> ?? sensors.ToList();
         if (uptime is not null) payload["uptime_seconds"] = uptime;
         return payload;
     }
 
+    /// <summary>The report body as it goes on the wire. Through AgentJson rather than
+    /// reflection, which throws on the trimmed APK: 0.2.1 sent no report at all, so a device
+    /// never appeared in the console even before the question of enrollment arose.</summary>
+    internal static string Serialize(Dictionary<string, object?> payload) =>
+        // The non-generic overload, because the generated info is for Dictionary<string, object>
+        // (typeof cannot carry the nullable annotation) and the payload's values may be null.
+        JsonSerializer.Serialize(payload, (System.Text.Json.Serialization.Metadata.JsonTypeInfo)
+            AgentJson.Default.DictionaryStringObject);
+
     private async Task<HttpResponseMessage> PostAsync(
         Dictionary<string, object?> payload, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(payload, TelemetryJsonContext.Default.DictionaryStringObject);
+        var json = Serialize(payload);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         return await _http.PostAsync(AgentConfig.ReportUrl, content, ct);
     }

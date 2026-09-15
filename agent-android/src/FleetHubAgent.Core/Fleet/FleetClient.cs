@@ -253,13 +253,7 @@ public sealed class FleetClient : IDisposable
             using var resp = await (holding ? _commandHttp : _http).SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode) return CommandPollResult.Empty;
 
-            var text = await resp.Content.ReadAsStringAsync(ct);
-            var parsed = JsonSerializer.Deserialize<CommandsResponse>(text);
-            return new CommandPollResult(
-                parsed?.Commands ?? new List<FleetCommand>(),
-                // Absent on a hub too old to know about push, which deserializes to false --
-                // exactly right, since such a hub never held anything.
-                parsed?.Waited ?? false);
+            return ParseCommands(await resp.Content.ReadAsStringAsync(ct));
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
@@ -306,9 +300,24 @@ public sealed class FleetClient : IDisposable
         return req;
     }
 
-    /// <summary>The command endpoint's envelope. Private because nothing outside this class
-    /// should care that the list arrives wrapped.</summary>
-    private sealed class CommandsResponse
+    /// <summary>The command endpoint's body, read through AgentJson's generated type info.
+    ///
+    /// Its own method so a test can reach it without a hub: this line threw on every poll of the
+    /// trimmed 0.2.1 build, and nothing that needs a network to exercise would have shown it.</summary>
+    internal static CommandPollResult ParseCommands(string text)
+    {
+        var parsed = JsonSerializer.Deserialize(text, AgentJson.Default.CommandsResponse);
+        return new CommandPollResult(
+            parsed?.Commands ?? new List<FleetCommand>(),
+            // Absent on a hub too old to know about push, which deserializes to false --
+            // exactly right, since such a hub never held anything.
+            parsed?.Waited ?? false);
+    }
+
+    /// <summary>The command endpoint's envelope. Internal rather than private only because
+    /// AgentJson has to name it; nothing outside this class should care that the list arrives
+    /// wrapped.</summary>
+    internal sealed class CommandsResponse
     {
         [JsonPropertyName("commands")] public List<FleetCommand> Commands { get; set; } = new();
         [JsonPropertyName("waited")] public bool Waited { get; set; }
