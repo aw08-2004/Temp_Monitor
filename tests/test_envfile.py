@@ -172,12 +172,67 @@ def test_protect_never_raises():
     check("an unreachable path returns rather than raising", note is None or isinstance(note, str))
 
 
+def test_set_vars_refuses_a_line_break():
+    """A value or key that could split a line is refused, and the file is left untouched.
+
+    **The silent failure is a second line.** set_vars writes `key=value`, so a line break
+    inside a value used to write another KEY=value into .env -- and .env holds ALLOWED_EMAILS.
+    The TURN secret box passed an admin's text straight through, so a manage_settings holder
+    could add themselves to the break-glass list at the next restart, and nothing would look
+    wrong until somebody read the file.
+    """
+    print()
+    print("-- a line break or a bad key name is refused before anything is written --")
+    fd, path = tempfile.mkstemp(dir=_TMPDIR, suffix=".env")
+    os.close(fd)
+    with open(path, "w", encoding="utf-8", newline=chr(10)) as handle:
+        handle.write("FLASK_SECRET_KEY=hunter2" + chr(10))
+    with open(path, encoding="utf-8") as handle:
+        before = handle.read()
+
+    def text():
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    injected = "s3cr3t" + chr(10) + "ALLOWED_EMAILS=attacker@evil.example"
+    try:
+        envfile.set_vars(path, {"REMOTE_TURN_SECRET": injected})
+        refused = False
+    except ValueError:
+        refused = True
+    check("a value with a line break raises", refused)
+    check("...and the file is exactly as it was", text() == before)
+    check("...with no second line smuggled in", "attacker@evil.example" not in text())
+
+    for code in (13, 0, 9, 127):
+        try:
+            envfile.set_var(path, "AI_API_KEY", "s" + chr(code) + "x")
+            check(f"control character {code} is refused", False)
+        except ValueError:
+            check(f"control character {code} is refused", True)
+
+    for bad_key in ("GOOD=1", "SPLIT" + chr(10) + "EVIL", "", "1STARTS_WITH_DIGIT"):
+        try:
+            envfile.set_vars(path, {bad_key: "x"})
+            check(f"key {bad_key!r} is refused", False)
+        except ValueError:
+            check(f"key {bad_key!r} is refused", True)
+    check("...and none of them touched the file", text() == before)
+
+    envfile.set_vars(path, {"AI_API_KEY": "sk-or-v1-ordinary_key.123"})
+    check("an ordinary key and value still write",
+          "AI_API_KEY=sk-or-v1-ordinary_key.123" in text())
+    envfile.set_vars(path, {"AI_API_KEY": None})
+    check("...and None still deletes, validation notwithstanding", "AI_API_KEY" not in text())
+
+
 if __name__ == "__main__":
     test_read_all()
     test_read_all_tolerates_a_bom()
     test_set_vars_preserves_everything_else()
     test_set_vars_none_deletes()
     test_set_vars_no_op_reports_nothing()
+    test_set_vars_refuses_a_line_break()
     test_protect_removes_inherited_access()
     test_protect_keeps_the_account_the_hub_runs_as()
     test_protect_is_idempotent()

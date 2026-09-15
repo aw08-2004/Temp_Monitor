@@ -222,6 +222,18 @@ def main():
         reconfigure.fail_on = None
 
         print("\n== A no-op save is honest about changing nothing ==")
+        # A line break in a sign-in value. authconfig.validate has no opinion on control
+        # characters, so this reaches envfile, which refuses it before writing anything: a second
+        # line in .env is a change to ALLOWED_EMAILS made through the sign-in form.
+        env_before_injection = dict(envfile.read_all(env_path))
+        injected = "Entra" + chr(10) + "ALLOWED_EMAILS=attacker@evil.example"
+        r = c.put("/api/auth/providers", json={"oidc_display_name": injected})
+        check("a sign-in value containing a line break is refused -> 400", r.status_code == 400)
+        check("...and .env is exactly as it was",
+              envfile.read_all(env_path) == env_before_injection)
+        check("...with no injected line",
+              "attacker@evil.example" not in str(envfile.read_all(env_path)))
+
         r = c.put("/api/auth/providers", json={"oidc_display_name": "Entra"})
         check("200", r.status_code == 200)
         check("no fields reported changed", r.get_json()["changed"] == [])

@@ -637,6 +637,17 @@ never did — it was telemetry-only, which is why it was replaced.
   > status pill with it: *Online, not enrolled* / *Offline, not enrolled*, with the
   > explanation on hover. Enrolled machines read exactly as before. A **revoked** agent
   > reads as not enrolled, which is the point of revoking it.
+
+  > **Deleting a machine and reinstalling its agent re-enrolls it by itself** (hub 1.112.0).
+  > The enrollment identity is a file under `%ProgramData%`, not in the install directory, so
+  > it used to survive both the uninstall and the reinstall — and an agent holding a token for
+  > a machine you deleted got a 401 on every heartbeat and kept the token anyway, leaving the
+  > console saying *not enrolled* forever while telemetry kept arriving. The hub now says
+  > **why** it refused (`reason: unknown` for an agent it has no row for, `reason: revoked`
+  > for one that was revoked), and the agent discards its identity and enrolls again only on
+  > the first. A revoked agent still stays down — that is the whole reason the hub
+  > distinguishes them. The agent uninstaller also removes `agent.json` now, which fixes the
+  > same thing for a machine whose agent predates this.
 - **Issuing a command requires a signed-in session holding `issue_commands`, plus the
   target machine in that operator's scope** — no offline signature. Every type,
   including `run_script`, which runs arbitrary PowerShell **as SYSTEM**, dispatches on

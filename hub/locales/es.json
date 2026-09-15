@@ -1116,9 +1116,19 @@
       "count": "{count} modelos, leídos {age}",
       "never": "Aún no se ha leído. Actualiza para llenar el campo de modelo de abajo con una lista que puedes buscar.",
       "stale": "{count} modelos, leídos {age}: lo bastante antiguos como para actualizar.",
-      "needs_key": "Este proveedor necesita una clave. Define AI_API_KEY en .env y reinicia el concentrador.",
+      "needs_key": "Este proveedor necesita una clave de API. Añádela abajo.",
       "custom_hint": "Elige un proveedor arriba, o déjalo en una dirección propia y escríbela abajo.",
-      "failed": "{error}"
+      "failed": "{error}",
+      "key_label": "Clave de API",
+      "key_set": "Hay una clave configurada. Nunca se muestra aquí; guarda una nueva para reemplazarla.",
+      "key_unset": "No hay clave configurada. Los proveedores locales como Ollama no la necesitan.",
+      "key_placeholder": "Pega la clave de API del proveedor",
+      "key_save": "Guardar clave",
+      "key_remove": "Quitar clave",
+      "key_remove_confirm": "¿Quitar la clave de API? Los proveedores alojados dejarán de responder hasta que se guarde una nueva.",
+      "key_saved": "Clave guardada. Surte efecto de inmediato.",
+      "key_removed": "Clave quitada.",
+      "key_cannot_write": "Este concentrador no puede escribir su archivo .env, así que la clave debe definirse como AI_API_KEY en el servidor."
     },
     "choice": {
       "ai.provider": {
@@ -2944,12 +2954,13 @@
   },
   "ai": {
     "drafter_title": "Describe una regla",
-    "drafter_intro": "Di lo que quieres en lenguaje normal. Lo que vuelve es un borrador, comprobado contra las variables y acciones que este concentrador tiene de verdad. No se guarda nada hasta que la crees, y una regla creada arranca desactivada.",
-    "placeholder": "Av\u00edsame cuando alg\u00fan disco baje de 10 GB libres",
+    "drafter_intro": "Di lo que quieres en lenguaje normal. Lo que vuelve es un borrador, comprobado contra las variables y acciones que este concentrador tiene de verdad. Una petici\u00f3n que escala produce una regla por etapa -- el motor no tiene programaci\u00f3n, as\u00ed que dos umbrales son dos reglas -- y cada una se crea por separado. No se guarda nada hasta que la crees, y una regla creada arranca desactivada.",
+    "placeholder": "Avisa tras 5 d\u00edas encendido y fuerza un reinicio tras 10",
     "draft": "Redactar",
     "drafting": "Un momento...",
     "creating": "Creando...",
     "created": "Creada y desactivada. L\u00e9ela abajo antes de activarla.",
+    "created_more": "Creada y desactivada. Quedan {left} en el borrador.",
     "refine_placeholder": "Mejor que sean 5 GB",
     "refine": "Ajustar",
     "preview": "Qu\u00e9 equipos coinciden ahora",

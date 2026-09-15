@@ -155,6 +155,11 @@ def read_all(env_path):
     return values
 
 
+# What a key may look like. Keys come from code rather than from an operator, so this is a
+# backstop -- but a key holding "=" or a line break would split a line the same way a value can.
+_SAFE_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def set_vars(env_path, updates):
     """Upsert several KEY=value pairs at once, preserving every other line.
 
@@ -172,6 +177,22 @@ def set_vars(env_path, updates):
     updates = {str(k): v for k, v in (updates or {}).items()}
     if not updates:
         return set()
+
+    # **Refused before a single byte is written, and refused rather than cleaned.** Every line
+    # this function writes is `key=value`, so a value holding a line break writes a SECOND line
+    # -- and this file holds ALLOWED_EMAILS, the whole of the hub's perimeter. The TURN secret
+    # box passed an admin's text straight through, which made "set the relay secret" a way for
+    # a manage_settings holder to add themselves to the break-glass list at the next restart,
+    # with nothing looking wrong until somebody read the file.
+    #
+    # Checked here, once, because every console route that writes .env arrives through this
+    # function; a check in each route is a check the next route forgets. Cleaning instead of
+    # refusing would save something the admin did not type, and they would never know.
+    for key, value in updates.items():
+        if not _SAFE_KEY_RE.fullmatch(key):
+            raise ValueError(f"{key!r} is not a name a .env file can hold")
+        if value is not None and any(ord(ch) < 32 or ord(ch) == 127 for ch in str(value)):
+            raise ValueError(f"{key} cannot contain line breaks or other control characters")
 
     before = read_all(env_path)
     lines, seen = [], set()

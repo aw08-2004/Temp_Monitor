@@ -24,7 +24,7 @@
        path. Space-separated: Dashboard owns "/" and every "/machine/..." under it, exactly
        as its endpoint tuple does. tests/test_shell.py pins each one against its own href so
        the two cannot drift apart. #}
-    {# Three sections (hub 1.112.0): Fleet is what the fleet IS, Operate is what you do to
+    {# Three sections (hub 1.114.0): Fleet is what the fleet IS, Operate is what you do to
        it, Administration is the hub itself and who may use it. Eighteen flat entries in the
        order they happened to ship had no shape to scan.
 
@@ -103,7 +103,7 @@
         </a>
         {% endif %}
         {# Fleet tasks: the fleet halves of Backup and Firmware (the old /backups and /firmware
-           pages). Until hub 1.111.0 this entry was "Tools" and also held Terminal, Network,
+           pages). Until hub 1.114.0 this entry was "Tools" and also held Terminal, Network,
            Files and each PC's own backup and BIOS -- those are tabs on the machine page now.
            Gated on the two capabilities the page has anything for: the route stays open to
            VIEW so old bookmarks do not 403, but a link to a page that is empty for you is

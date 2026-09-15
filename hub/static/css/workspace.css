@@ -1,5 +1,5 @@
 /* Machine page header: the name, the machine switcher, and the tab strip under them.
-   Replaces tools.css (hub 1.111.0) -- the tools came back to the machine page as tabs, and
+   Replaces tools.css (hub 1.114.0) -- the tools came back to the machine page as tabs, and
    the permanent machine column became the switcher's popover. The rows are still
    .picker-list from components.css, shared with the Remote page's picker. */
 

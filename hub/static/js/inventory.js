@@ -1,5 +1,5 @@
 // Devices (formerly Asset Inventory): the full roster of every machine the hub has ever seen,
-// with online/offline status, and -- since hub 1.113.0 -- the place to act on them. Reads the
+// with online/offline status, and -- since hub 1.114.0 -- the place to act on them. Reads the
 // same /api/machines the Dashboard uses (which carries a `status` field), but shows offline
 // machines too.
 //
@@ -10,7 +10,7 @@
 // otherwise). Sort state persists in localStorage so it survives the 30 s auto-refresh
 // and a page reload.
 //
-// What 1.113.0 added, and the decision behind each:
+// What 1.114.0 added, and the decision behind each:
 //   * A row menu (Open, Terminal, Files, Network, Wake now, Delete). The name link was the only
 //     way into a PC, and every job then cost a second navigation to the right tab. Delete moved
 //     into the menu: a red button on every row, one misclick from an irreversible action, was

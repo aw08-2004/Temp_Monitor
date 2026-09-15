@@ -3,7 +3,7 @@
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/workspace.css') }}">
-{# The tool tabs came back to this page (hub 1.111.0), and their stylesheets with them. #}
+{# The tool tabs came back to this page (hub 1.114.0), and their stylesheets with them. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
 {% if cap.ISSUE_COMMANDS in user_capabilities %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/files.css') }}">
@@ -39,7 +39,7 @@
    got this wrong would be offering a 403, not a way past one. #}
 <div id="machine-config" data-machine="{{ machine }}" data-low-load-threshold="{{ low_load_threshold }}" data-live-window-seconds="{{ live_window_seconds }}" data-live-poll-seconds="{{ live_poll_seconds }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
 
-    {# The device workspace (hub 1.111.0).
+    {# The device workspace (hub 1.114.0).
        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
        Everything about one PC on one page again: what it IS (Overview) and what you do TO it
        (Terminal, Backup, Firmware, Network, Files), as tabs.
@@ -87,7 +87,7 @@
                embedded here would be two sessions for one screen.
                No ?machine= yet: remote.js does not read one, and a parameter it ignores would
                promise a screen that never opens. Pre-selecting this PC there is part of the
-               Devices phase of this redesign (ROADMAP note, hub 1.111.0). #}
+               Devices phase of this redesign (ROADMAP note, hub 1.114.0). #}
             {% if cap.REMOTE_CONTROL in user_capabilities %}
             <a class="btn btn--ghost" id="machine-open-remote" href="{{ url_for('remote_page') }}">{{ t('machine.open_remote') }}</a>
             {% endif %}

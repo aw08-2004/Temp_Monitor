@@ -20,11 +20,15 @@
     const PANEL_ID = 'tab-ai';
     const CARD_ID = 'ai-models-card';
     const MODEL_INPUT_ID = 'set-ai-model';
+    const KEY_INPUT_ID = 'ai-api-key';
     let listing = null;      // the last /api/ai/models answer
     let status = null;       // the last /api/ai/status answer
     let busy = false;
     let message = '';        // the outcome of a refresh pressed this session
     let messageIsError = false;
+    let keyBusy = false;
+    let keyMessage = '';     // the outcome of a key save pressed this session
+    let keyIsError = false;
 
     function el(tag, props, children) {
         const node = document.createElement(tag);
@@ -75,6 +79,80 @@
         return listing.stale ? t('settings.ai.stale', params) : t('settings.ai.count', params);
     }
 
+    // The provider key, for the hosted presets. A PASSWORD input with autocomplete set to
+    // new-password: on a password field that is the value password managers honour as "do not
+    // offer a saved login here", where "off" is widely ignored.
+    //
+    // It never shows the stored key. The hub does not send it, and a key box that could display
+    // its value would be one screenshot away from a leaked credential. What it shows instead is
+    // whether one is set, which is the question somebody actually has.
+    function keyControls() {
+        const wrap = el('div', { style: 'margin: var(--space-3) 0;' });
+        wrap.appendChild(el('label', { class: 'setting__label', for: KEY_INPUT_ID,
+            text: t('settings.ai.key_label') }));
+        wrap.appendChild(el('p', { class: 'setting__help',
+            text: status && status.has_api_key ? t('settings.ai.key_set')
+                                               : t('settings.ai.key_unset') }));
+        if (!status || !status.can_write_key) {
+            wrap.appendChild(el('p', { class: 'setting__help',
+                text: t('settings.ai.key_cannot_write') }));
+            return wrap;
+        }
+        const input = el('input', { type: 'password', class: 'input', id: KEY_INPUT_ID,
+            autocomplete: 'new-password', spellcheck: 'false',
+            placeholder: t('settings.ai.key_placeholder') });
+        const save = el('button', { type: 'button', class: 'btn btn--primary',
+            text: t('settings.ai.key_save') });
+        const remove = el('button', { type: 'button', class: 'btn btn--ghost',
+            text: t('settings.ai.key_remove') });
+        if (keyBusy) {
+            save.setAttribute('disabled', 'disabled');
+            remove.setAttribute('disabled', 'disabled');
+        }
+        if (!status.has_api_key) remove.setAttribute('disabled', 'disabled');
+        save.addEventListener('click', () => {
+            const value = input.value.trim();
+            if (value) saveKey(value);
+        });
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && input.value.trim()) saveKey(input.value.trim());
+        });
+        remove.addEventListener('click', () => {
+            if (window.confirm(t('settings.ai.key_remove_confirm'))) saveKey('');
+        });
+        wrap.appendChild(el('div', { class: 'toolbar', style: 'margin-top: var(--space-2);' },
+            [input, save, remove]));
+        if (keyMessage) {
+            const line = el('p', { class: 'setting__help', text: keyMessage });
+            if (keyIsError) line.style.color = 'var(--color-danger, #f85149)';
+            wrap.appendChild(line);
+        }
+        return wrap;
+    }
+
+    async function saveKey(value) {
+        keyBusy = true;
+        keyMessage = '';
+        inject();
+        try {
+            const body = await api('/api/ai/key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: value }),
+            });
+            status = Object.assign({}, status, { has_api_key: body.has_api_key });
+            keyMessage = value ? t('settings.ai.key_saved') : t('settings.ai.key_removed');
+            keyIsError = false;
+        } catch (e) {
+            // The server's sentence: a refused line break, an unwritable .env and a missing
+            // permission each need a different response from whoever pressed the button.
+            keyMessage = t('settings.ai.failed', { error: e.message });
+            keyIsError = true;
+        }
+        keyBusy = false;
+        inject();
+    }
+
     function buildCard() {
         const card = el('div', { class: 'card', id: CARD_ID,
             style: 'margin-bottom: var(--space-4);' }, [
@@ -93,6 +171,10 @@
             card.appendChild(el('p', { class: 'setting__help',
                 text: t('settings.ai.custom_hint') }));
         }
+
+        // Above the Refresh button, because a hosted provider will not list its models without
+        // a key -- so the order on the card is the order somebody needs to do things in.
+        if (listing && listing.can_refresh) card.appendChild(keyControls());
 
         if (listing && listing.can_refresh) {
             const button = el('button', { class: 'btn btn--ghost', type: 'button',

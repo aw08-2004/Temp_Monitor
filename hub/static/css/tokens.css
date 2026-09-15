@@ -36,7 +36,7 @@
     --sidebar-width-collapsed: 64px;
 }
 
-/* The palette moved to cooler, less saturated neutrals in hub 1.112.0 (the redesign in the
+/* The palette moved to cooler, less saturated neutrals in hub 1.114.0 (the redesign in the
    ROADMAP note at the top of ROADMAP.MD). What changed and why, so it is not "tidied" back:
 
    - Borders are hairlines of the text colour rather than a separate grey. A fixed grey that

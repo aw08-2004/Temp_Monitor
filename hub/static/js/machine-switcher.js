@@ -1,6 +1,6 @@
 // Machine page: the switcher beside the name, and keeping your tab when you use it.
 //
-// This is what is left of the Tools page's machine column (hub 1.111.0). The tools moved back
+// This is what is left of the Tools page's machine column (hub 1.114.0). The tools moved back
 // onto /machine/<name> as tabs, and the one thing the column was genuinely good at -- doing
 // the same job on the next PC without hunting for it -- lives here: every row links to that
 // PC's page WITH the tab you are on, so Terminal on PC-1 -> Terminal on PC-2 is two clicks.

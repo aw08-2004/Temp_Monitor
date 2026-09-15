@@ -126,7 +126,7 @@
     gap: var(--space-4);
 }
 
-/* One labelled group of links -- Fleet, Operate, Administration (hub 1.112.0). Eighteen flat
+/* One labelled group of links -- Fleet, Operate, Administration (hub 1.114.0). Eighteen flat
    entries had no shape to scan; three short lists do. A plain group, not a <details>: a folded
    group would take its icons off the collapsed rail with it, and the rail is where a fold
    would matter most. */

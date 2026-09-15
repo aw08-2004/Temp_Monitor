@@ -1,4 +1,4 @@
-"""The sidebar sections and the Ctrl+K palette (hub 1.112.0).
+"""The sidebar sections and the Ctrl+K palette (hub 1.114.0).
 
 The silent failures this file exists to catch:
 

@@ -693,6 +693,13 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         value = provided or remote.generate_turn_secret()
         try:
             remote.set_env_var(env_path, TURN_SECRET_ENV, value)
+        except ValueError:
+            # A line break or control character in the pasted secret. envfile refuses it before
+            # writing anything, because a second line in .env is a change to ALLOWED_EMAILS made
+            # through the relay-secret box. A fixed sentence rather than the exception's text,
+            # so no internal wording reaches the browser.
+            return jsonify({"error": "The TURN secret cannot contain line breaks or other "
+                                     "control characters."}), 400
         except OSError as e:
             return jsonify({"error": f"Could not write .env: {e}"}), 500
         os.environ[TURN_SECRET_ENV] = value

@@ -2,7 +2,7 @@
 
 Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
-> **Note on where things live (hub 1.111.0) — supersedes the 1.87.0 note below.** The tools
+> **Note on where things live (hub 1.114.0) — supersedes the 1.87.0 note below.** The tools
 > went back to the machine page. **`/machine/<name>` is a device workspace**: Overview,
 > Terminal, Backup, Firmware, Network and Files as tabs (`?tab=` slugs), a machine switcher
 > beside the name that keeps the current tab, and a link to Remote. The Tools page kept only
@@ -22,7 +22,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > viewer would be a second session); folding Fleet tasks into Patches/Packages (backups and
 > BIOS images are neither).
 >
-> **Hub 1.112.0, same redesign.** The sidebar is three sections — **Fleet** (Dashboard,
+> **Hub 1.114.0, same redesign.** The sidebar is three sections — **Fleet** (Dashboard,
 > Inventory, Map, Alerts), **Operate** (Remote, Packages, Patches, Fleet tasks, Rules, Device
 > policy), **Administration** (Audit log, Sharing, Settings, Provisioning, Permission groups,
 > Invites, Users, Download client) — each rendered only when it has a link for you. **Ctrl+K**
@@ -34,7 +34,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > collapsed rail); server-side search (the roster is already filtered client-side, roadmap #6);
 > page shortcuts kept in a second list (they are read off the capability-gated sidebar).
 >
-> **Hub 1.113.0, same redesign.** Asset Inventory is **Devices**. Each row has a menu (Open,
+> **Hub 1.114.0, same redesign.** Asset Inventory is **Devices**. Each row has a menu (Open,
 > Terminal, Files, Network, Wake now for an offline PC, Delete — which left its always-visible
 > red button) and a checkbox; ticking rows brings up a bar to **wake the selection**, **deploy a
 > package** to it (the Packages page opens with the dialog pre-filled; you still pick the package
@@ -3093,7 +3093,7 @@ finds a tablet's battery at the top.
 
 ---
 
-## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0
+## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3148,12 +3148,33 @@ because the drafter's refusals should read as *not yet* rather than as *never*:
 - **History is pruned at thirty days** by `data.retention_days`, so anything that learns from it
   needs rollups written before the pruner runs. That is #17's problem and is noted there.
 
+**A draft is a SET of rules, one per stage** (1.113.0). The first version asked the model for
+one rule and got what it asked for: "warn after five days of uptime and force a restart after
+ten" came back as `sys.uptime_days > 10` with a reboot and the warning half silently gone. That
+is the worst possible shape of the answer — the surviving rule looks correct, nothing in the
+console says a stage was dropped, and the stage that was dropped is the one that would have
+told somebody before their machine restarted. The engine has no schedule and no escalation
+timer, so two thresholds are genuinely two rules; the prompt now says so, the envelope carries
+a list, and the drafter teaches `show_message` with its `on_response` map so "ask first, reboot
+if they agree" is expressible at all. A set is validated all-or-nothing and **committed one
+stage at a time**: the gentle rule and the one that reboots somebody are not the same decision,
+and a single button creating both would put a forced restart behind a click aimed elsewhere.
+
+**Rejected: an escalating rule type in the engine.** A second timer next to `for_seconds`,
+`cooldown_seconds` and `snoozed_until` — "after 5 days do this, after 10 do that" as one row —
+is where staged alerting products go to die: four interacting time semantics per rule, none of
+them visible in the one-line expression an operator reads, and a preview that can no longer
+answer "what happens now". Two rules with two conditions are already the feature, they preview
+and fire through code that exists, and each can be disabled on its own.
+
 Two of the open parameters below are now decided. A draft **is** a stored row, keyed to its
 author, capped per author and pruned after a week — the browser holding it would have lost a
 half-finished rule to a refresh, and the stored English is what makes a drafted rule auditable
-six months later. A refinement re-sends **only the current draft's canonical expression**, not
-the conversation: a refinement edits a rule that already parsed, and replaying the model's
-earlier prose invites it to re-open a decision the operator has already accepted.
+six months later. A refinement re-sends **only the current draft's canonical expressions**, not
+the conversation: a refinement edits rules that already parsed, and replaying the model's
+earlier prose invites it to re-open a decision the operator has already accepted. Every stage
+goes back, not the one on screen — "make it 7 days" shown one rule of two is answered with one
+rule, and the other quietly disappears.
 
 Configuration is a provider by NAME, not a url: Ollama, LM Studio, vLLM, OpenAI, OpenRouter,
 or a custom address. They all speak one wire shape, so the choice picks where prompts go
@@ -3164,11 +3185,18 @@ page that reaches a third party to render is one that hangs when the third party
 stays FREE TEXT with the list as suggestions: a gateway can serve a model this hub has never
 heard of, and an enum would make that unconfigurable.
 
+The provider's API key is set from the same tab and written to `.env`, never to the settings
+table — `settings.py` holds no secrets, and a provider key is exactly the value that rule exists
+for. The console never reads it back: the hub reports whether a key is set and nothing else,
+and the audit row records that it changed without recording what to. A key containing a line
+break is refused outright, because it is written as one line of a file that also holds
+`ALLOWED_EMAILS`.
+
 The console half is on the Rules page, above the rule list, and hidden unless the feature is
-both switched on and configured. Describe, adjust, preview through the existing
-`/api/rules/preview`, then create — which stores the rule **disabled** and opens it in the
+both switched on and configured. Describe, adjust, then per stage: preview through the existing
+`/api/rules/preview` and create — which stores that rule **disabled** and opens it in the
 ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
-the normal form and pressing Enable.
+the normal form and pressing Enable. The stages not yet created stay on the card.
 
 **Partial, and the line is the drafter.** Describe, adjust, preview and create are built and
 tested at 1.109.0, off until somebody configures a provider. **The machine chat panel, the
@@ -3900,6 +3928,73 @@ which on a Windows PC looks exactly like correct behaviour; and swapping `can` f
 one word that either hides the Terminal button fleet-wide or shows a Wipe button fleet-wide.
 
 ---
+
+## ✅ Agent re-enrollment after a machine is deleted · hub 1.112.0 · agent unreleased
+
+Delete a machine from the console, reinstall the agent on that PC with the same enrollment
+secret, and the console kept saying **not enrolled, telemetry only** — permanently, with
+nothing in any log to explain it. Reported from the field, and it is worth writing down
+because every part of it was working as designed.
+
+The enrollment identity is a file (`agent.json`) in `%ProgramData%`, not in the install
+directory, and the uninstaller deliberately leaves that tree alone so logs survive a
+reinstall. `FleetClient.EnsureEnrolledAsync` short-circuits on "I have an agent_id and a
+token" and never asks the hub whether either still means anything. `fleet.delete_machine`
+does `DELETE FROM agents`. So the PC kept presenting a credential for a row that no longer
+existed, got a 401 on every heartbeat, and dropped it on the floor — `HeartbeatAsync`
+returned `false`, which is also what a network blip returns, logged at debug. Meanwhile
+`/api/report` is unauthenticated **by design** (it is the open telemetry ingress), so
+temperatures kept arriving and the machine stayed visible the whole time. Uninstalling and
+reinstalling changed nothing, because the file it needed to lose was never in scope.
+
+**The fix is that a 401 now says why.** `fleet_web.agent_auth` includes a `reason`, and the
+agent throws its identity away on `unknown` and keeps it on `revoked`. Both halves are
+needed: without the first, an agent cannot recover from a deletion; without the second, an
+agent would re-enroll itself the moment somebody revoked it, which would make
+`fleet.revoke_agent` decorative.
+
+### Decisions
+
+- **Only a caller holding the real token is ever told "revoked".** Every other refusal reads
+  `unknown`, including a wrong token for an agent that genuinely exists. An `agent_id` is the
+  non-secret half of the credential — it is printed in the audit trail — so answering
+  honestly on a bad token would turn the endpoint into an oracle for which ids exist. The
+  price is that a revoked agent that has *also* lost its token file re-enrolls instead of
+  staying down; that machine is one an operator would re-image anyway.
+- **A 401 with no reason means re-enroll**, which is what a hub older than 1.112.0 sends.
+  Deploy order is hub first, then agent, but a self-updated agent can still lead its hub by
+  minutes. Defaulting the other way would silently reproduce the exact bug this entry is
+  about, and the cost of defaulting this way is one extra enrollment for an agent revoked on
+  a hub that cannot say so.
+- **Only the heartbeat acts on a 401.** The other authenticated routes answer 403/404 for
+  ordinary reasons — a command that is already finished, one belonging to another machine —
+  and teaching each of them to distrust the credential would turn a routine refusal into a
+  fleet-wide re-enrollment.
+- **The identity is cleared only if it is still the one that was refused.** The command loop
+  can enroll while a heartbeat is in flight, and acting on the stale reply would discard the
+  credential just paid for, in a loop.
+- **The uninstaller now deletes `agent.json`** (from both the FleetHub path and the
+  pre-rename one it migrates from) and keeps leaving the logs. That is the smaller half of
+  the fix, but it is the half that makes "uninstall, reinstall" do what everyone already
+  assumes it does, and it works against a hub that has not been updated yet.
+
+### Rejected alternatives
+
+- **Re-enroll on a bare 401, with no reason field.** One file instead of four, and it would
+  have fixed the reported symptom. Rejected because it cannot tell a deleted agent from a
+  revoked one, so it quietly deletes revocation as a control.
+- **Have the hub keep the agents row and mark it deleted**, so the token stays resolvable.
+  Rejected: it makes deletion not-a-deletion, and `delete_machine` exists precisely so a
+  decommissioned machine leaves no rows behind. The audit trail is what remembers it.
+- **Have the agent re-enroll on a timer regardless of refusals.** Rejected as an enrollment
+  storm with no upper bound and no diagnosis: it would have hidden this bug rather than
+  ended it.
+
+### Not done
+
+No agent release is cut for this. The agent half is on `main` unreleased, so a machine in
+the field gets the hub half now — which is what makes the *uninstall* path work — and the
+in-service recovery when the next agent release ships.
 
 ## 📋 Hardware validation still owed (roadmap #23)
 

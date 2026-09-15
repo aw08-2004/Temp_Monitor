@@ -887,7 +887,7 @@ document.getElementById('deploy-machine-input').addEventListener('keydown', (e) 
     if (e.key === 'Enter') { e.preventDefault(); addMachine(); }
 });
 
-// ---- machines handed over from Devices (hub 1.113.0) ----
+// ---- machines handed over from Devices (hub 1.114.0) ----
 // The Devices page's "Deploy a package…" writes the ticked PCs here and navigates to this
 // page; the operator still picks the package and confirms in the dialog below, which starts
 // pre-filled with them. Same key as inventory.js. sessionStorage rather than the url: a list

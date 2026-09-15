@@ -1,4 +1,4 @@
-"""The Devices page (hub 1.113.0): row actions, bulk selection, the deploy hand-off, export.
+"""The Devices page (hub 1.114.0): row actions, bulk selection, the deploy hand-off, export.
 
 The silent failures this file exists to catch:
 

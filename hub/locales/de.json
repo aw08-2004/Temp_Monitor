@@ -1116,9 +1116,19 @@
       "count": "{count} Modelle, gelesen {age}",
       "never": "Noch nicht gelesen. Aktualisieren Sie, um das Modellfeld unten mit einer durchsuchbaren Liste zu füllen.",
       "stale": "{count} Modelle, gelesen {age} -- alt genug, um eine Aktualisierung zu lohnen.",
-      "needs_key": "Dieser Anbieter braucht einen Schlüssel. Setzen Sie AI_API_KEY in .env und starten Sie den Hub neu.",
+      "needs_key": "Dieser Anbieter braucht einen API-Schlüssel. Tragen Sie ihn unten ein.",
       "custom_hint": "Wählen Sie oben einen Anbieter, oder lassen Sie es bei einer eigenen Adresse und tragen Sie sie unten ein.",
-      "failed": "{error}"
+      "failed": "{error}",
+      "key_label": "API-Schlüssel",
+      "key_set": "Ein Schlüssel ist gesetzt. Er wird hier nie angezeigt; speichern Sie einen neuen, um ihn zu ersetzen.",
+      "key_unset": "Kein Schlüssel gesetzt. Lokale Anbieter wie Ollama brauchen keinen.",
+      "key_placeholder": "API-Schlüssel des Anbieters einfügen",
+      "key_save": "Schlüssel speichern",
+      "key_remove": "Schlüssel entfernen",
+      "key_remove_confirm": "API-Schlüssel entfernen? Gehostete Anbieter antworten erst wieder, wenn ein neuer gespeichert ist.",
+      "key_saved": "Schlüssel gespeichert. Er gilt sofort.",
+      "key_removed": "Schlüssel entfernt.",
+      "key_cannot_write": "Dieser Hub kann seine .env-Datei nicht schreiben, der Schlüssel muss daher als AI_API_KEY auf dem Server gesetzt werden."
     },
     "choice": {
       "ai.provider": {
@@ -2944,12 +2954,13 @@
   },
   "ai": {
     "drafter_title": "Eine Regel beschreiben",
-    "drafter_intro": "Sagen Sie in normalem Deutsch, was Sie wollen. Zur\u00fcck kommt ein Entwurf, gepr\u00fcft gegen die Variablen und Aktionen, die dieser Hub tats\u00e4chlich hat. Nichts wird gespeichert, bis Sie die Regel anlegen, und eine angelegte Regel startet ausgeschaltet.",
-    "placeholder": "Melde dich, wenn auf einem Laufwerk weniger als 10 GB frei sind",
+    "drafter_intro": "Sagen Sie in normalem Deutsch, was Sie wollen. Zur\u00fcck kommt ein Entwurf, gepr\u00fcft gegen die Variablen und Aktionen, die dieser Hub tats\u00e4chlich hat. Eine Anfrage mit Eskalation ergibt eine Regel je Stufe -- die Engine kennt keinen Zeitplan, zwei Schwellen sind also zwei Regeln -- und jede wird einzeln angelegt. Nichts wird gespeichert, bis Sie die Regel anlegen, und eine angelegte Regel startet ausgeschaltet.",
+    "placeholder": "Nach 5 Tagen Laufzeit warnen und nach 10 Tagen Neustart erzwingen",
     "draft": "Entwerfen",
     "drafting": "Einen Moment...",
     "creating": "Wird angelegt...",
     "created": "Angelegt und ausgeschaltet. Lesen Sie sie unten, bevor Sie sie einschalten.",
+    "created_more": "Angelegt und ausgeschaltet. {left} weitere stehen noch im Entwurf.",
     "refine_placeholder": "Mach lieber 5 GB daraus",
     "refine": "Anpassen",
     "preview": "Welche PCs passen jetzt",

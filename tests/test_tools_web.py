@@ -1,7 +1,7 @@
 """The device workspace and Fleet tasks: the joins the tool panels hang off, the redirects that
 keep old links alive, and the gates on both pages.
 
-WHY THIS SHAPE. Until hub 1.111.0 Terminal, Backup, Firmware, Network and Files were tabs on a
+WHY THIS SHAPE. Until hub 1.114.0 Terminal, Backup, Firmware, Network and Files were tabs on a
 Tools page with the machine picked from a column beside them (hub 1.87.0). They are tabs on
 /machine/<name> again, beside Overview, and the Tools url became Fleet tasks: only the fleet
 halves of Backup and Firmware, which were never about one PC.

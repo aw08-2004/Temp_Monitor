@@ -1826,7 +1826,10 @@ if not AGENT_ENROLLMENT_SECRET:
 # ================================
 # The provider's API key, and the only piece of AI configuration that is NOT a setting: the
 # rest (whether the feature is on, which base url, which model) lives in settings.REGISTRY
-# where an admin can edit it, and settings.py says no secrets live there.
+# where an admin can edit it, and settings.py says no secrets live there. It can be set from
+# Settings -> AI all the same (POST /api/ai/key), which writes .env and the live environment
+# the way the TURN secret control does -- so the value read here is only what the hub booted
+# with, and the AI blueprint reads os.environ on every request rather than trusting it.
 #
 # Unset is NOT a failure. A provider on this network -- Ollama or vLLM on the hub itself, the
 # deployment with no data-egress question attached at all -- needs no key, so an empty value
@@ -2387,14 +2390,17 @@ app.register_blueprint(create_rules_blueprint(
 # is a front end onto that engine rather than a second one -- a draft is validated by
 # rules.py's own parser and committed through rules.save_rule. No new capability: reading is
 # `view`, drafting and committing are `manage_rules`, and a drafted COMMAND still needs
-# `issue_commands` down in rules.validate_actions. The key is passed once here rather than
-# read inside ai.py, so the module stays testable and settings.py stays free of secrets.
+# `issue_commands` down in rules.validate_actions. The key is handed in rather than read inside
+# ai.py, so the module stays testable and settings.py stays free of secrets -- and as a LOOKUP,
+# not the boot-time value, because a key saved from Settings has to take effect on the next
+# request rather than at the next restart. env_path is where that save writes it.
 app.register_blueprint(create_ai_blueprint(
     DB_PATH, login_required, access,
     lambda machine: resolve_rule_vars(machine),
     lambda: _rules_config(),
     lambda: _ai_config(),
-    api_key=AI_API_KEY,
+    api_key=lambda: os.environ.get("AI_API_KEY", ""),
+    env_path=ENV_PATH,
 ))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
@@ -5877,7 +5883,7 @@ def remote_page():
                            latest_agent_version=get_latest_agent_version())
 
 # The machine page's tab slugs (machine.html). A /tools link naming one of these AND a machine
-# is a per-PC deep link from before hub 1.111.0, when these tools lived on the Tools page.
+# is a per-PC deep link from before hub 1.114.0, when these tools lived on the Tools page.
 MACHINE_PAGE_TABS = ("overview", "terminal", "backup", "firmware", "network", "files")
 # The per-machine tools that have no fleet half at all, so a /tools link naming one WITHOUT a
 # machine has nothing on Fleet tasks to land on.
@@ -5891,7 +5897,7 @@ def tools_page():
     """Fleet tasks: the fleet halves of Backup and Firmware -- and the forwarding address
     for every per-PC link into the Tools page this used to be.
 
-    **The tools themselves went back to /machine/<name> as tabs in hub 1.111.0** (see the
+    **The tools themselves went back to /machine/<name> as tabs in hub 1.114.0** (see the
     comment at the top of machine.html for why the 1.87.0 layout was reversed). What stayed is
     what was never about one PC. The url, the endpoint name and the ?tab= slugs are unchanged
     so /backups, /firmware, bookmarks, tickets and url_for() callers all still land somewhere.

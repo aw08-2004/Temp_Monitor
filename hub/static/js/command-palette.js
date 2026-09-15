@@ -1,4 +1,4 @@
-// Ctrl+K: find a device or a page, from anywhere in the console (hub 1.112.0).
+// Ctrl+K: find a device or a page, from anywhere in the console (hub 1.114.0).
 //
 // WHY. Every route to one PC used to go through Asset Inventory: open Inventory, type, click
 // the name, click the tab. An operator answering a call knows the PC's name or its asset tag

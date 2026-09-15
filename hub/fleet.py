@@ -1087,6 +1087,45 @@ def authenticate_agent(db_path, agent_id, token, touch=True):
     return row["machine"]
 
 
+#: Why an agent's bearer token was refused, sent in the 401 body so the agent can tell the
+#: two cases apart. **The distinction is the whole point:** an agent whose row was DELETED
+#: (an operator decommissioned the machine) should enroll again on its next tick, while an
+#: agent that was REVOKED must stay down -- and both look identical from the agent's side
+#: without this. See fleet_web.agent_auth.
+AUTH_UNKNOWN = "unknown"
+AUTH_REVOKED = "revoked"
+
+
+def auth_failure_reason(db_path, agent_id, token):
+    """Why `authenticate_agent` said no: AUTH_REVOKED or AUTH_UNKNOWN.
+
+    **Only a caller that presents the row's real token is told "revoked."** Any other
+    failure -- no such agent_id, or the wrong token for a real one -- reads as "unknown",
+    deliberately. Answering truthfully for a wrong token would turn this into an oracle for
+    which agent_ids exist, and an agent_id is the non-secret half of the credential; it is
+    printed in the audit trail and in the hub's own logs. Requiring the token first means
+    the answer only ever reaches somebody who already holds it, so it discloses nothing they
+    could not already have learned by being refused.
+
+    Consequence worth naming: a revoked agent that has ALSO lost its token file re-enrolls
+    rather than staying down. That is the same machine an operator would have to re-image
+    anyway, and the alternative -- an existence oracle open to anyone who can reach the
+    hub -- buys less than it costs.
+    """
+    if not agent_id or not token:
+        return AUTH_UNKNOWN
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT token_hash, revoked FROM agents WHERE agent_id = ?",
+            (str(agent_id),),
+        ).fetchone()
+    if row is None:
+        return AUTH_UNKNOWN
+    if not hmac.compare_digest(row["token_hash"], _hash_token(token)):
+        return AUTH_UNKNOWN
+    return AUTH_REVOKED if row["revoked"] else AUTH_UNKNOWN
+
+
 def revoke_agent(db_path, agent_id, actor="system"):
     with get_conn(db_path) as conn:
         conn.execute("UPDATE agents SET revoked = 1 WHERE agent_id = ?", (str(agent_id),))

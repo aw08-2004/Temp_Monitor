@@ -1168,17 +1168,23 @@ document.getElementById('script-input-add').addEventListener('click', () => {
 //
 // Three things it deliberately does NOT do:
 //
-//  * It does not render the model's prose. `summary` is built server-side from the AST by
-//    ai.summarise_draft, so the sentence an operator reads describes the rule that will run
+//  * It does not render the model's prose. Every `summary` is built server-side from the AST
+//    by ai.summarise_rules, so the sentence an operator reads describes the rule that will run
 //    rather than the one the model says it wrote.
-//  * It does not have its own preview. The Preview button posts the draft's canonical
-//    expression to the SAME /api/rules/preview every hand-written rule uses, so "which
-//    machines match" is answered by the evaluator that will actually run it.
+//  * It does not have its own preview. The Preview button posts a stage's canonical expression
+//    to the SAME /api/rules/preview every hand-written rule uses, so "which machines match" is
+//    answered by the evaluator that will actually run it.
 //  * It does not save. Create posts to the commit endpoint, which stores the rule DISABLED
 //    and then opens it in the editor below -- so the last thing between a sentence and the
 //    fleet is somebody reading the ordinary rule form and pressing Enable.
+//
+// A draft holds one rule per STAGE. "Warn after five days of uptime and restart after ten" is
+// two rules, because the engine has no schedule -- and each gets its own row, its own preview
+// and its own Create button. One button creating the whole set would put a forced restart on
+// the other side of a click aimed at the warning.
 
 let aiDraft = null;
+let aiRules = [];
 
 function aiSetStatus(text, isError) {
     const node = document.getElementById('ai-status');
@@ -1188,12 +1194,59 @@ function aiSetStatus(text, isError) {
 
 function aiShowDraft(payload) {
     aiDraft = payload && payload.draft ? payload.draft : null;
+    aiRules = (payload && payload.rules) || [];
     const result = document.getElementById('ai-result');
-    if (!aiDraft) { result.hidden = true; return; }
-    document.getElementById('ai-summary').textContent = payload.summary || '';
-    document.getElementById('ai-expression').textContent = aiDraft.condition_text || '';
-    document.getElementById('ai-preview-result').textContent = '';
+    if (!aiDraft || !aiRules.length) { aiClearDraft(); return; }
+    aiRenderRules();
     result.hidden = false;
+}
+
+function aiRenderRules() {
+    // Rebuilt wholesale on every change rather than patched: a stage's `index` is the
+    // server's, and a row that kept a stale one would preview one rule and create another.
+    const host = document.getElementById('ai-rules');
+    host.textContent = '';
+    aiRules.forEach((rule) => {
+        const block = document.createElement('div');
+        block.style.marginBottom = 'var(--space-4)';
+
+        const summary = document.createElement('p');
+        summary.className = 'stat-card__meta';
+        summary.style.marginBottom = 'var(--space-2)';
+        summary.textContent = rule.summary || '';
+        block.appendChild(summary);
+
+        // The canonical expression, not what the model typed: it is what parsed, and it is
+        // what /api/rules/preview will evaluate.
+        const expression = document.createElement('p');
+        expression.style.fontFamily = 'var(--font-mono, monospace)';
+        expression.style.margin = '0 0 var(--space-3)';
+        expression.textContent = rule.condition_text || '';
+        block.appendChild(expression);
+
+        const bar = document.createElement('div');
+        bar.className = 'toolbar';
+        const tally = document.createElement('span');
+        tally.className = 'stat-card__meta';
+
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.className = 'btn btn--ghost';
+        preview.textContent = t('ai.preview');
+        preview.addEventListener('click', () => aiPreviewRule(rule, tally));
+
+        const create = document.createElement('button');
+        create.type = 'button';
+        create.className = 'btn btn--primary';
+        create.textContent = t('ai.create');
+        create.addEventListener('click', () => aiCreateRule(rule));
+
+        bar.appendChild(preview);
+        bar.appendChild(create);
+        bar.appendChild(tally);
+        block.appendChild(bar);
+        host.appendChild(block);
+    });
 }
 
 async function aiSubmit(path, payload, busyKey) {
@@ -1223,20 +1276,20 @@ async function aiRefineRule() {
     const box = document.getElementById('ai-refine-text');
     const text = box.value.trim();
     if (!text) return;
+    // Refining is on the whole set, not one stage: "make it 7 days" after a two-stage
+    // escalation is a change to the escalation, and the server sends every stage back.
     const data = await aiSubmit(
         `/api/ai/rules/drafts/${encodeURIComponent(aiDraft.id)}/refine`, { text }, 'ai.drafting');
     if (data) box.value = '';
 }
 
-async function aiPreviewDraft() {
-    if (!aiDraft) return;
-    const result = document.getElementById('ai-preview-result');
-    result.textContent = '';
+async function aiPreviewRule(rule, tally) {
+    tally.textContent = '';
     try {
         const data = await api('/api/rules/preview', json('POST', {
-            condition_text: aiDraft.condition_text, target: aiDraft.target, limit: 25,
+            condition_text: rule.condition_text, target: rule.target, limit: 25,
         }));
-        result.textContent = t('rules.preview_result', {
+        tally.textContent = t('rules.preview_result', {
             true: data.tally.true, false: data.tally.false, unknown: data.tally.unknown,
         });
     } catch (e) {
@@ -1244,17 +1297,26 @@ async function aiPreviewDraft() {
     }
 }
 
-async function aiCreateRule() {
+async function aiCreateRule(rule) {
     if (!aiDraft) return;
     aiSetStatus(t('ai.creating'), false);
     try {
         const data = await api(
-            `/api/ai/rules/drafts/${encodeURIComponent(aiDraft.id)}/commit`, json('POST', {}));
-        // Clear, not discard: committing already consumed the draft server-side, and a
-        // DELETE for a row that is gone is a 404 nobody reads.
-        aiClearDraft();
-        document.getElementById('ai-text').value = '';
-        aiSetStatus(t('ai.created'), false);
+            `/api/ai/rules/drafts/${encodeURIComponent(aiDraft.id)}/commit`,
+            json('POST', { index: rule.index }));
+        // The server says what is left. Committing the last stage consumed the draft row
+        // server-side, so this clears rather than deleting -- a DELETE for a row that is
+        // gone is a 404 nobody reads.
+        aiRules = (data && data.remaining) || [];
+        if (!aiRules.length) {
+            aiClearDraft();
+            document.getElementById('ai-text').value = '';
+            aiSetStatus(t('ai.created'), false);
+        } else {
+            aiDraft = data.draft || aiDraft;
+            aiRenderRules();
+            aiSetStatus(t('ai.created_more', { left: aiRules.length }), false);
+        }
         await loadRules();
         // Straight into the ordinary editor. The rule is stored disabled, so this is where
         // somebody reads what was actually written before it can fire once.
@@ -1266,6 +1328,8 @@ async function aiCreateRule() {
 
 function aiClearDraft() {
     aiDraft = null;
+    aiRules = [];
+    document.getElementById('ai-rules').textContent = '';
     document.getElementById('ai-result').hidden = true;
     document.getElementById('ai-refine-text').value = '';
 }
@@ -1294,8 +1358,6 @@ async function loadAiDrafter() {
     document.getElementById('ai-drafter').hidden = false;
     document.getElementById('ai-draft').addEventListener('click', aiDraftRule);
     document.getElementById('ai-refine').addEventListener('click', aiRefineRule);
-    document.getElementById('ai-preview').addEventListener('click', aiPreviewDraft);
-    document.getElementById('ai-create').addEventListener('click', aiCreateRule);
     document.getElementById('ai-discard').addEventListener('click', aiDiscardDraft);
 }
 

@@ -542,7 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ============ Toasts ============
 // A short message that does not need its own place on the page: "asked for PC-7 to be
-// woken", "could not delete X". Added in hub 1.113.0 for the Devices page, whose row menu and
+// woken", "could not delete X". Added in hub 1.114.0 for the Devices page, whose row menu and
 // bulk bar act on PCs that may have scrolled out of view by the time the answer arrives --
 // there is no status line near the thing that was clicked.
 //
