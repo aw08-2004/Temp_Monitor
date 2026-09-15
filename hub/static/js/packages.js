@@ -887,9 +887,51 @@ document.getElementById('deploy-machine-input').addEventListener('keydown', (e) 
     if (e.key === 'Enter') { e.preventDefault(); addMachine(); }
 });
 
+// ---- machines handed over from Devices (hub 1.114.0) ----
+// The Devices page's "Deploy a package…" writes the ticked PCs here and navigates to this
+// page; the operator still picks the package and confirms in the dialog below, which starts
+// pre-filled with them. Same key as inventory.js. sessionStorage rather than the url: a list
+// of hostnames does not belong in a bookmark or in the browser history.
+//
+// Kept until a deploy is actually created or the operator clears it, not consumed on first
+// read: opening the wrong package's dialog and cancelling must not throw the selection away.
+// Server-side nothing is trusted from it -- /api/deployments re-checks scope per machine.
+const DEPLOY_PRESET_KEY = 'fleethub:deploy-preset';
+
+function readDeployPreset() {
+    try {
+        const value = JSON.parse(sessionStorage.getItem(DEPLOY_PRESET_KEY));
+        return Array.isArray(value) ? value.filter((m) => typeof m === 'string' && m) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function renderDeployPreset() {
+    const banner = document.getElementById('deploy-preset');
+    if (!banner) return;
+    const machines = readDeployPreset();
+    // Classes, not the hidden attribute: `flex` is a Tailwind display utility and outranks
+    // the UA's [hidden] rule.
+    banner.classList.toggle('hidden', !machines.length);
+    banner.classList.toggle('flex', machines.length > 0);
+    if (machines.length) {
+        document.getElementById('deploy-preset-text').textContent =
+            tPlural('packages.preset.banner', machines.length);
+    }
+}
+
+function clearDeployPreset() {
+    try { sessionStorage.removeItem(DEPLOY_PRESET_KEY); } catch (e) { /* private mode */ }
+    renderDeployPreset();
+}
+
+document.getElementById('deploy-preset-clear').addEventListener('click', clearDeployPreset);
+renderDeployPreset();
+
 function openDeploy(pkg) {
     deployPackageId = pkg.id;
-    draftMachines = [];
+    draftMachines = readDeployPreset();
     deployError.textContent = '';
     renderMachineChips();
     document.getElementById('deploy-modal-title').textContent =
@@ -899,8 +941,45 @@ function openDeploy(pkg) {
     document.getElementById('deploy-note').value = '';
     document.getElementById('deploy-attempts').value = vocab.defaults.max_attempts || 3;
     document.getElementById('deploy-backoff').value = vocab.defaults.retry_backoff_seconds || 900;
+    loadDeployGroups();
     deployModal.showModal();
 }
+
+// ---- device groups in the deploy dialog (hub 1.114.0) ----
+// Adds a group's current members as chips. The members come from the hub already narrowed
+// to this operator's scope, and /api/deployments re-checks every one of them anyway.
+async function loadDeployGroups() {
+    const row = document.getElementById('deploy-group-row');
+    const select = document.getElementById('deploy-group-select');
+    try {
+        const data = await api('/api/device-groups');
+        const groups = data.groups || [];
+        select.replaceChildren(...groups.map((group) => {
+            const option = document.createElement('option');
+            option.value = String(group.id);
+            option.textContent = group.name;
+            return option;
+        }));
+        row.style.display = groups.length ? '' : 'none';
+    } catch (e) {
+        row.style.display = 'none';
+    }
+}
+
+document.getElementById('deploy-group-add').addEventListener('click', async () => {
+    const select = document.getElementById('deploy-group-select');
+    if (!select.value) return;
+    deployError.textContent = '';
+    try {
+        const data = await api(`/api/device-groups/${encodeURIComponent(select.value)}/members`);
+        for (const machine of data.machines || []) {
+            if (!draftMachines.includes(machine)) draftMachines.push(machine);
+        }
+        renderMachineChips();
+    } catch (e) {
+        deployError.textContent = e.message;
+    }
+});
 
 document.getElementById('deploy-cancel').addEventListener('click', () => deployModal.close());
 
@@ -917,6 +996,9 @@ document.getElementById('deploy-save').addEventListener('click', async () => {
             retry_backoff_seconds: Number(document.getElementById('deploy-backoff').value),
         }));
         deployModal.close();
+        // The hand-off from Devices has been used; a second deploy starting from the same PCs
+        // unasked would be the surprising outcome.
+        clearDeployPreset();
         // Click the real tab rather than toggling classes: tabs.js is the single owner of
         // which tab is selected, and a second writer is how the underline ends up on one
         // tab while the other's panel is showing. The tab:shown handler reloads the list.

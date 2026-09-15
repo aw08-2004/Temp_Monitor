@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ t('nav.inventory') }} - FleetHub{% endblock %}
 {% block content %}
+{# Devices (hub 1.114.0) -- the page that was Asset Inventory, and still the one route to every
+   PC. What it gained is the part the redesign was about (ROADMAP note at the top of
+   ROADMAP.MD): acting on a PC from its row, and on several PCs at once.
+
+   The url stays /inventory and the endpoint stays inventory_page. Bookmarks, links in
+   tickets, url_for() calls and a dozen test stubs all name it, and renaming a url to match a
+   label buys nothing an operator sees. Rejected: /devices with a redirect -- two names for one
+   page is how the sidebar's data-nav-prefix and the address bar start disagreeing.
+
+   data-can-issue-commands only decides which row-menu entries inventory.js DRAWS; the bulk
+   Wake and Deploy buttons are rendered or not right here. Every action behind either is gated
+   on the server again (wake on issue_commands and scope, deploy on deploy_packages and scope). #}
+<div id="devices-root"
+     data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
 <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('inventory.heading') }}</h1>
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">
     {{ t('inventory.intro') }}
@@ -9,6 +23,11 @@
 <div class="toolbar" style="margin-bottom: var(--space-4);">
     <input class="input" id="inventory-search" type="search" autocomplete="off"
            placeholder="{{ t('inventory.search_placeholder') }}" style="min-width: 320px; max-width: 100%;">
+    {# Narrow the list to a device group (hub 1.114.0), so "select all" then means that
+       group. Filled by inventory.js, and left hidden while no group exists. #}
+    <select class="input" id="inventory-group" aria-label="{{ t('inventory.group_filter') }}" style="display: none;">
+        <option value="">{{ t('inventory.group_all') }}</option>
+    </select>
     <span class="stat-card__meta" id="inventory-count"></span>
     {# Fleet-wide wake (roadmap #10) lives here rather than on the Dashboard because this
        is the page that shows offline machines -- the ones the button is about. Each PC is
@@ -19,6 +38,9 @@
             title="{{ t('inventory.wake_all_title') }}">{{ t('inventory.wake_all') }}</button>
     <span class="stat-card__meta" id="inventory-wake-status"></span>
     {% endif %}
+    {# Exports the rows on screen -- the search applied, in the sort shown. What you see is
+       what you get, rather than the whole roster behind a filter you forgot was set. #}
+    <button id="inventory-export" type="button" class="btn btn--ghost">{{ t('inventory.export_csv') }}</button>
 </div>
 
 <div class="card">
@@ -27,6 +49,13 @@
     <table class="data-table data-table--sortable">
         <thead>
             <tr id="inventory-head">
+                {# Not sortable, so no data-sort: onHeaderClick is only bound to th[data-sort].
+                   Selects the VISIBLE rows -- ticking "all" under a search for "lab-" means the
+                   lab PCs, not the fleet. #}
+                <th class="w-8">
+                    <input type="checkbox" class="checkbox" id="inventory-select-all"
+                           aria-label="{{ t('inventory.select_all') }}">
+                </th>
                 <th data-sort="machine">{{ t('inventory.col.machine') }}</th>
                 <th data-sort="status">{{ t('inventory.col.status') }}</th>
                 <th data-sort="manufacturer">{{ t('inventory.col.manufacturer') }}</th>
@@ -43,12 +72,35 @@
             </tr>
         </thead>
         <tbody id="inventory-body">
-            <tr><td colspan="11" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+            <tr><td colspan="12" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
         </tbody>
     </table>
 </div>
 <div class="empty-state" id="inventory-empty" style="display:none;">{{ t('inventory.empty') }}</div>
 <div class="empty-state" id="inventory-no-match" style="display:none;">{{ t('inventory.no_match') }}</div>
+
+{# What to do with the ticked rows. Sticky to the bottom of the frame so it stays in reach at
+   any scroll depth -- the selection is usually made further down the list than the toolbar.
+   Toggled between `hidden` and `flex` as classes, never with the hidden attribute: a Tailwind
+   display utility outranks the UA's [hidden] rule, and the bar would never go away. #}
+<div id="inventory-bulk" role="region" aria-label="{{ t('inventory.bulk.clear') }}"
+     class="sticky bottom-4 z-20 mt-4 hidden flex-wrap items-center gap-3 rounded-xl border border-card-border bg-card px-4 py-3 shadow-lg">
+    <span id="inventory-bulk-count" class="font-medium text-text"></span>
+    {% if cap.ISSUE_COMMANDS in user_capabilities %}
+    <button id="inventory-bulk-wake" type="button" class="btn">{{ t('inventory.bulk.wake') }}</button>
+    {% endif %}
+    {% if cap.DEPLOY_PACKAGES in user_capabilities %}
+    <button id="inventory-bulk-deploy" type="button" class="btn">{{ t('inventory.bulk.deploy') }}</button>
+    {% endif %}
+    <button id="inventory-bulk-export" type="button" class="btn btn--ghost">{{ t('inventory.bulk.export') }}</button>
+    <button id="inventory-bulk-clear" type="button" class="btn btn--ghost ml-auto">{{ t('inventory.bulk.clear') }}</button>
+</div>
+{% if cap.DEPLOY_PACKAGES in user_capabilities %}
+{# A real link for the deploy hand-off, clicked from script, so shell.js routes it through the
+   frame like any other navigation. #}
+<a id="inventory-deploy-link" href="{{ url_for('packages.packages_page') }}" hidden></a>
+{% endif %}
+</div>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/inventory.js') }}"></script>

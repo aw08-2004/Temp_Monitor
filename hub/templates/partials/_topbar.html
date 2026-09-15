@@ -5,6 +5,18 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <span class="topbar__brand">FleetHub</span>
+    {# Device and page search (hub 1.114.0, command-palette.js). Only with a session: the
+       palette's device half is /api/machines, which a login page cannot call, and its page
+       half is the sidebar, which the login page does not have. #}
+    {% if session.user %}
+    <button type="button" id="palette-open" class="topbar__search"
+            aria-haspopup="dialog" aria-controls="palette" aria-keyshortcuts="Control+K Meta+K"
+            aria-label="{{ t('palette.label') }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <span class="topbar__search-label">{{ t('palette.button') }}</span>
+        <kbd class="topbar__search-kbd">{{ t('palette.shortcut') }}</kbd>
+    </button>
+    {% endif %}
     {# The live-data pill belongs to the page, but the topbar it sits in is the shell's, and
        the shell has no idea which page is in the frame. So in shell mode it is rendered once
        and starts hidden: common.js's connectSocketWithStatus() writes into it through the
@@ -59,3 +71,28 @@
         <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
     </button>
 </header>
+{% if session.user %}
+{# The palette itself. Outside the <header>: showModal() puts it in the top layer wherever it
+   sits, but the header is sticky with a z-index and the mobile overflow panel hangs off it,
+   and a dialog nested in that stacking context is one CSS change away from being clipped.
+
+   The first Tailwind-built component in the console (see CLAUDE.md, tailwind.input.css):
+   every class here is a utility, and app.css must be rebuilt when they change. The margin
+   is explicit because base.css's `* { margin: 0 }` removes the UA centring a <dialog> gets.
+   The results are built by command-palette.js with textContent -- machine names are
+   whatever a host reported to the unauthenticated /api/report. #}
+<dialog id="palette" aria-label="{{ t('palette.label') }}"
+        class="mx-auto mt-[12vh] w-[min(640px,calc(100vw-2rem))] max-w-none overflow-hidden rounded-xl border border-card-border bg-card p-0 text-text shadow-2xl backdrop:bg-black/50">
+    <div class="flex items-center gap-3 border-b border-card-border px-4 py-3">
+        <svg class="size-4 shrink-0 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="palette-input" type="text" role="combobox" aria-expanded="true"
+               aria-controls="palette-results" aria-autocomplete="list" autocomplete="off" spellcheck="false"
+               placeholder="{{ t('palette.placeholder') }}" aria-label="{{ t('palette.label') }}"
+               class="min-w-0 flex-1 border-0 bg-transparent text-base text-text outline-none placeholder:text-muted">
+        <kbd class="shrink-0 rounded-md border border-card-border px-1.5 py-0.5 font-sans text-xs text-muted">Esc</kbd>
+    </div>
+    <div id="palette-results" role="listbox" aria-label="{{ t('palette.label') }}"
+         class="max-h-[60vh] overflow-y-auto p-2"></div>
+    <div class="border-t border-card-border px-4 py-2 text-xs text-muted">{{ t('palette.hint') }}</div>
+</dialog>
+{% endif %}

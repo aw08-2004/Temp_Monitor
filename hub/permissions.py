@@ -139,6 +139,15 @@ MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
 # raise alerts on a condition has not thereby been handed a fleet-wide reboot button.
 # READING rules, and the custom fields they use, is VIEW.
 MANAGE_RULES = "manage_rules"
+# Writing device groups: saved, named target filters that rules, package deployments and the
+# Devices list aim at (device_groups.py). Its own capability rather than a reuse of
+# MANAGE_RULES, because editing a group silently changes what every rule AND every deployment
+# aimed at it reaches -- including rules somebody else wrote. Folding it into "may write rules"
+# would have handed that, on the day it shipped, to everyone who could already write one.
+#
+# READING a group, and USING one, is deliberately NOT gated here -- that is VIEW, and whoever
+# uses a group still needs every machine it resolves to in their own scope.
+MANAGE_DEVICE_GROUPS = "manage_device_groups"
 
 CAPABILITIES = (
     VIEW,
@@ -154,6 +163,7 @@ CAPABILITIES = (
     MANAGE_DEVICE_POLICY,
     WIPE_DEVICE,
     MANAGE_RULES,
+    MANAGE_DEVICE_GROUPS,
     MANAGE_SETTINGS,
     MANAGE_USERS,
     MANAGE_PERMISSION_GROUPS,

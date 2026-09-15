@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ t('device_groups.heading') }} - FleetHub{% endblock %}
+{% block content %}
+{# Device groups (hub 1.114.0) -- saved target filters. Structure only; device-groups.js builds
+   the list and the selector rows from /api/device-groups.
+
+   The editor is rendered only for manage_device_groups, like every other write control in the
+   console, and the API refuses without it regardless. data-can-manage tells the script whether
+   to draw Edit and Delete on each row. #}
+<div id="device-groups-root" data-can-manage="{{ 1 if cap.MANAGE_DEVICE_GROUPS in user_capabilities else 0 }}">
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+        <div>
+            <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('device_groups.heading') }}</h1>
+            <p class="stat-card__meta" style="max-width: 80ch;">{{ t('device_groups.intro') }}</p>
+        </div>
+        {% if cap.MANAGE_DEVICE_GROUPS in user_capabilities %}
+        <button class="btn btn--primary" type="button" id="device-group-new">{{ t('device_groups.new') }}</button>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>{{ t('device_groups.col.name') }}</th>
+                    <th>{{ t('device_groups.col.definition') }}</th>
+                    <th>{{ t('device_groups.col.members') }}</th>
+                    <th>{{ t('device_groups.col.used_by') }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="device-groups-body">
+                <tr><td colspan="5" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="empty-state" id="device-groups-empty" style="display: none;">{{ t('device_groups.empty') }}</div>
+</div>
+
+{% if cap.MANAGE_DEVICE_GROUPS in user_capabilities %}
+<dialog class="modal" id="device-group-dialog" aria-labelledby="device-group-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="device-group-title"></h2>
+    </div>
+    <div class="modal__body">
+        <label class="setting__label" for="device-group-name">{{ t('device_groups.name') }}</label>
+        <input class="input" id="device-group-name" maxlength="80" autocomplete="off" style="width: 100%;">
+        <label class="setting__label" for="device-group-description" style="margin-top: var(--space-3);">{{ t('device_groups.description') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+        <input class="input" id="device-group-description" maxlength="500" autocomplete="off" style="width: 100%;">
+
+        {# The same selector vocabulary as a rule's target, minus "group": a group cannot contain
+           a group (device_groups.py says why). #}
+        <h3 class="perm-subhead">{{ t('device_groups.include') }}</h3>
+        <div id="device-group-include"></div>
+        <div class="toolbar" style="margin: var(--space-2) 0;">
+            <select class="input" id="device-group-include-kind"></select>
+            <button type="button" class="btn btn--ghost" id="device-group-include-add">{{ t('device_groups.add') }}</button>
+        </div>
+        <h3 class="perm-subhead">{{ t('device_groups.exclude') }}</h3>
+        <div id="device-group-exclude"></div>
+        <div class="toolbar" style="margin: var(--space-2) 0;">
+            <select class="input" id="device-group-exclude-kind"></select>
+            <button type="button" class="btn btn--ghost" id="device-group-exclude-add">{{ t('device_groups.add') }}</button>
+        </div>
+        <p class="stat-card__meta" id="device-group-count"></p>
+        <p class="setting__error" id="device-group-error"></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" class="btn btn--ghost" id="device-group-cancel">{{ t('common.cancel') }}</button>
+        <button type="button" class="btn btn--primary" id="device-group-save">{{ t('device_groups.save') }}</button>
+    </div>
+</dialog>
+{% endif %}
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/device-groups.js') }}"></script>
+{% endblock %}

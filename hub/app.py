@@ -90,6 +90,8 @@ from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from ai_web import create_ai_blueprint
 from rules_web import create_rules_blueprint
+import device_groups
+from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -129,7 +131,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.113.0"
+HUB_VERSION = "1.114.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2346,6 +2348,11 @@ app.register_blueprint(create_usage_blueprint(DB_PATH, login_required, access))
 # validator and the rules engine each refuse these two command types by name.
 app.register_blueprint(create_wipe_blueprint(DB_PATH, login_required, access))
 
+# Device groups (hub 1.114.0): saved target filters that Rules, Packages and Devices aim at.
+# `view` reads and uses a group; `manage_device_groups` writes one, and only when the writer's
+# scope covers every PC it resolves to -- see device_groups_web.py.
+app.register_blueprint(create_device_groups_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -4364,6 +4371,7 @@ apitokens.init_apitokens_db(DB_PATH)
 sharing.init_sharing_db(DB_PATH)
 scripts.init_scripts_db(DB_PATH)
 rules.init_rules_db(DB_PATH)
+device_groups.init_device_groups_db(DB_PATH)
 ai.init_ai_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
@@ -5874,22 +5882,43 @@ def remote_page():
     return render_template("remote.html", hub_version=HUB_VERSION,
                            latest_agent_version=get_latest_agent_version())
 
+# The machine page's tab slugs (machine.html). A /tools link naming one of these AND a machine
+# is a per-PC deep link from before hub 1.114.0, when these tools lived on the Tools page.
+MACHINE_PAGE_TABS = ("overview", "terminal", "backup", "firmware", "network", "files")
+# The per-machine tools that have no fleet half at all, so a /tools link naming one WITHOUT a
+# machine has nothing on Fleet tasks to land on.
+_MACHINE_ONLY_TOOLS = ("terminal", "network", "files")
+
+
 @app.route("/tools")
 @login_required
 @access.require(permissions.VIEW)
 def tools_page():
-    """Terminal, Backup, Firmware and Network, with the machine picked second.
+    """Fleet tasks: the fleet halves of Backup and Firmware -- and the forwarding address
+    for every per-PC link into the Tools page this used to be.
 
-    Gated on VIEW rather than on anything narrower, because that is what the four panels
-    together require: Terminal, Firmware and Network were never capability-gated on the
-    machine page (what a PC's BIOS is set to, and whether it can be woken, is inventory in
-    the sense its model is), and the Backup tab hides itself without manage_backups. Every
-    endpoint behind every panel re-checks its own capability AND the machine's scope, so
-    this route decides who sees the page, not what they can do from it.
+    **The tools themselves went back to /machine/<name> as tabs in hub 1.114.0** (see the
+    comment at the top of machine.html for why the 1.87.0 layout was reversed). What stayed is
+    what was never about one PC. The url, the endpoint name and the ?tab= slugs are unchanged
+    so /backups, /firmware, bookmarks, tickets and url_for() callers all still land somewhere.
 
-    The machine is a query parameter, not part of the path: it is page state that travels
-    with ?tab=, and both are written by the page itself with replaceState.
+    A link naming a machine is redirected to that machine's page with the same tab, and the
+    machine page's own require_machine(VIEW) gate decides from there -- this redirect echoes
+    back only what the caller sent, so it discloses nothing about scope. A machine-less link
+    to a tool that has no fleet half goes to Inventory, where machines are picked from.
+
+    Gated on VIEW, matching the old route: plain viewers hold bookmarks to it too, and the
+    template says why it is empty for them rather than 403ing a link that used to work.
     """
+    machine = request.args.get("machine")
+    tab = request.args.get("tab")
+    if machine:
+        target = url_for("machine_page", machine=machine)
+        if tab in MACHINE_PAGE_TABS:
+            target += "?tab=" + tab
+        return redirect(target)
+    if tab in _MACHINE_ONLY_TOOLS:
+        return redirect(url_for("inventory_page"))
     return render_template("tools.html", hub_version=HUB_VERSION,
                            # The firmware image editor shows the cap before an upload is
                            # attempted; the endpoint enforces the same number itself.

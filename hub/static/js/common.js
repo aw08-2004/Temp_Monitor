@@ -540,6 +540,49 @@ document.addEventListener('DOMContentLoaded', () => {
     initHubUpdate();
 });
 
+// ============ Toasts ============
+// A short message that does not need its own place on the page: "asked for PC-7 to be
+// woken", "could not delete X". Added in hub 1.114.0 for the Devices page, whose row menu and
+// bulk bar act on PCs that may have scrolled out of view by the time the answer arrives --
+// there is no status line near the thing that was clicked.
+//
+// Deliberately NOT for results an operator must not miss. The Processes card keeps its own
+// line above the table (see machine.html) because a message that disappears is a message that
+// gets missed; the same reasoning is why an ERROR toast here stays until it is dismissed.
+//
+// Rendered into the document that calls it, framed page or not: the page that did the work is
+// the one on screen, and reaching into the shell for a container would be a second owner of
+// a page's feedback. Built with textContent -- messages routinely quote machine names.
+function toast(message, { kind = 'info', timeout = 6000 } = {}) {
+    let host = document.getElementById('toast-host');
+    if (!host) {
+        host = document.createElement('div');
+        host.id = 'toast-host';
+        host.setAttribute('role', 'status');
+        host.setAttribute('aria-live', 'polite');
+        host.className = 'pointer-events-none fixed right-4 bottom-4 z-[70] flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2';
+        document.body.appendChild(host);
+    }
+    const item = document.createElement('div');
+    item.className = 'pointer-events-auto flex w-80 max-w-full items-start gap-3 rounded-lg border border-card-border bg-card px-4 py-3 text-sm text-text shadow-lg';
+    const dot = document.createElement('span');
+    dot.className = 'mt-1.5 size-2 shrink-0 rounded-full '
+        + (kind === 'error' ? 'bg-danger' : kind === 'success' ? 'bg-success' : 'bg-accent');
+    const text = document.createElement('span');
+    text.className = 'min-w-0 flex-1 break-words';
+    text.textContent = message;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'shrink-0 cursor-pointer border-0 bg-transparent p-0 text-base leading-none text-muted hover:text-text';
+    close.setAttribute('aria-label', t('toast.dismiss'));
+    close.textContent = '×';
+    close.addEventListener('click', () => item.remove());
+    item.append(dot, text, close);
+    host.appendChild(item);
+    if (kind !== 'error' && timeout) setTimeout(() => item.remove(), timeout);
+    return item;
+}
+
 // ---- Tiny per-element builders shared by the pages ----
 //
 // These two were once copied into a dozen page scripts. They live here now; the per-page

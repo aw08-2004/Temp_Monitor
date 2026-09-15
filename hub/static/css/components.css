@@ -123,15 +123,26 @@
 .sidebar__nav {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: var(--space-4);
+}
+
+/* One labelled group of links -- Fleet, Operate, Administration (hub 1.114.0). Eighteen flat
+   entries had no shape to scan; three short lists do. A plain group, not a <details>: a folded
+   group would take its icons off the collapsed rail with it, and the rail is where a fold
+   would matter most. */
+.sidebar__section {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .sidebar__section-label {
-    font-size: var(--text-xs);
+    font-size: 11px;
+    font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: var(--space-2) var(--space-3) var(--space-1);
+    letter-spacing: 0.08em;
+    padding: 0 var(--space-3) var(--space-1);
 }
 
 .sidebar__link {
@@ -144,7 +155,14 @@
     color: var(--muted);
     font-size: var(--text-base);
     font-weight: 500;
-    border-left: 2px solid transparent;
+    /* Anchors the active bar (::before below). The bar used to be a border-left, which
+       shifted the label 2px right of every inactive link. */
+    position: relative;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sidebar__link { transition: none; }
 }
 
 /* :not(--active) for the same reason as .tabs__tab: a BEM modifier is ONE class, so
@@ -152,13 +170,31 @@
    (0,2,0) -- hovering the page you're already on dropped it from --accent to --text. */
 .sidebar__link:not(.sidebar__link--active):hover {
     color: var(--text);
-    background: var(--card);
+    background: var(--control-bg);
 }
 
+/* Tinted pill plus a short accent bar. The text is --text, not --accent: a blue label on a
+   blue tint is the lowest-contrast thing in the sidebar, and it is the one word that says
+   where you are. */
 .sidebar__link--active {
+    color: var(--text);
+    background: var(--accent-soft);
+}
+
+.sidebar__link--active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 25%;
+    bottom: 25%;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+}
+
+.sidebar__link--active .sidebar__link-icon {
     color: var(--accent);
-    background: var(--card);
-    border-left-color: var(--accent);
+    opacity: 1;
 }
 
 .sidebar__link-icon {
@@ -351,6 +387,17 @@
         display: none;
     }
 
+    /* A section heading has no room on the rail, but the grouping still helps -- so the
+       words go and a hairline stays. font-size 0 rather than display:none keeps the element
+       as the group's aria-labelledby target for a screen reader. */
+    :root[data-sidebar="collapsed"] .sidebar__section-label {
+        font-size: 0;
+        height: 1px;
+        padding: 0;
+        margin: 0 var(--space-2) var(--space-1);
+        background: var(--card-border);
+    }
+
     :root[data-sidebar="collapsed"] .sidebar__link {
         justify-content: center;
         /* position: relative so the alert badge can hang off the corner below -- with no label
@@ -465,6 +512,66 @@
     /* Long endonyms would otherwise stretch the topbar and push the sign-out button off
        a narrow desktop window. */
     max-width: 10rem;
+}
+
+/* The search trigger (command-palette.js). A button that LOOKS like a field, because that is
+   what people reach for -- but it opens the palette rather than taking typing itself, so the
+   one search box works the same from every page, framed or not. margin-right:auto pins it
+   left and pushes the rest of the chrome right, which is where it always was. */
+.topbar__search {
+    margin-right: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 260px;
+    padding: 6px var(--space-2) 6px var(--space-3);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.topbar__search:hover {
+    color: var(--text);
+    border-color: var(--muted);
+}
+
+.topbar__search svg {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+}
+
+.topbar__search-label {
+    flex: 1;
+    text-align: left;
+}
+
+.topbar__search-kbd {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    padding: 1px 6px;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    background: var(--card);
+}
+
+@media (max-width: 900px) {
+    /* A phone gets the magnifier alone: the topbar is one row, and the brand and hamburger
+       are already on it. */
+    .topbar__search {
+        min-width: 0;
+        margin-right: 0;
+        margin-left: auto;
+        padding: 6px;
+    }
+    .topbar__search-label,
+    .topbar__search-kbd {
+        display: none;
+    }
 }
 
 /* The mobile-only topbar controls (.nav-toggle, .topbar__more, .topbar__brand) and the

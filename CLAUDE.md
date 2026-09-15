@@ -100,9 +100,18 @@ object built in `hub/permissions_web.py`: `access.require(cap)` for a capability
 `access.in_scope()` / `filter_rows()` / `filter_machines()` for scoping reads. `hub/wake_web.py`
 is the canonical example — copy the gate from a sibling `*_web.py` rather than inventing one.
 
-**Frontend.** Vanilla JS, IIFE + `'use strict'`, **no framework and no build step**. Scripts in
-`hub/static/js/`, templates in `hub/templates/` and `templates/partials/`, CSS custom properties
-in `hub/static/css/tokens.css`. Don't introduce a bundler, a framework, or npm.
+**Frontend.** Vanilla JS, IIFE + `'use strict'`. Scripts in `hub/static/js/`, templates in
+`hub/templates/` and `templates/partials/`, CSS custom properties in `hub/static/css/tokens.css`.
+**No framework and no build step by default** -- a framework is allowed only when the user has
+explicitly approved that specific one. Approved so far:
+
+- **Tailwind CSS**, built with the pinned *standalone CLI* (`tools/build_css.ps1`), never npm.
+  The compiled `hub/static/css/app.css` is **committed**, because hub self-update ships `hub/`
+  as plain files and a deployed hub never runs a build. Rebuild after changing classes in a
+  template or script, or the class silently has no CSS behind it. Preflight stays off while
+  `components.css` still styles the older pages; theme colours map onto `tokens.css` variables.
+
+Still not allowed without asking: a JS framework, a bundler, npm/`node_modules` for the hub.
 
 **Agent.** `net10.0-windows`, published self-contained single-file win-x64, runs as a Windows
 Service under LocalSystem. `Worker.cs` is six independent concurrent loops. Class suffixes are
@@ -160,6 +169,7 @@ lie.
 ```
 [ ] Touched hub/?           -> bump HUB_VERSION in hub/app.py
 [ ] New user-facing string? -> en.json + de.json + es.json, same change
+[ ] Changed Tailwind classes? -> tools/build_css.ps1, commit app.css
 [ ] python tests/run_all.py -q      (+ dotnet test if agent/ changed)
 [ ] Ran agent tests?        -> git status for rewritten tests/fixtures/*.fhb
 [ ] New machine route?      -> access.require_machine(), not just access.require()

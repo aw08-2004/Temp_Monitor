@@ -15,8 +15,9 @@
     "text that genuinely appears on several pages, not a dumping ground."
   ],
   "nav": {
+    "device_groups": "Device groups",
     "dashboard": "Dashboard",
-    "inventory": "Asset Inventory",
+    "inventory": "Devices",
     "alerts": "Alerts",
     "remote": "Remote",
     "audit_log": "Audit Log",
@@ -38,7 +39,12 @@
     "sharing": "Sharing",
     "provisioning": "Device provisioning",
     "map": "Map",
-    "policy": "Device policy"
+    "policy": "Device policy",
+    "section": {
+      "fleet": "Fleet",
+      "operate": "Operate",
+      "admin": "Administration"
+    }
   },
   "hub_update": {
     "_note": [
@@ -75,6 +81,54 @@
   "shell": {
     "frame_title": "Page content"
   },
+  "palette": {
+    "button": "Search devices…",
+    "shortcut": "Ctrl K",
+    "label": "Search devices and pages",
+    "placeholder": "Search by name, serial, asset tag or OS — or type a page name",
+    "devices": "Devices",
+    "pages": "Pages",
+    "empty": "Nothing matches “{query}”.",
+    "loading": "Loading devices…",
+    "hint": "↑↓ move · ←→ choose a tab · Enter open · Esc close",
+    "action_overview": "Overview"
+  },
+  "device_groups": {
+    "heading": "Device groups",
+    "intro": "Saved filters for PCs. A group is worked out again every time it is used, so a PC that moves into the OU or gets the field value is in the group from then on. Rules, package deployments and the Devices list can all aim at a group.",
+    "new": "New group",
+    "empty": "No device groups yet.",
+    "load_failed": "Could not load device groups.",
+    "col": {
+      "name": "Name",
+      "members": "PCs",
+      "definition": "Definition",
+      "used_by": "Used by rules"
+    },
+    "editor_new": "New device group",
+    "editor_edit": "Edit {name}",
+    "name": "Name",
+    "description": "Description",
+    "include": "Include",
+    "exclude": "Except",
+    "add": "Add",
+    "members": {
+      "one": "{count} PC right now",
+      "other": "{count} PCs right now"
+    },
+    "save": "Save",
+    "edit": "Edit",
+    "delete": "Delete",
+    "confirm_delete": "Delete the device group \"{name}\"?\n\nDeployments already created are not affected, and nothing changes on any PC.",
+    "no_permission": "Only operators with Manage device groups can create or change groups.",
+    "pick": "Choose a group…",
+    "none_defined": "No device groups defined yet.",
+    "children": "Include sub-OUs",
+    "except": "except"
+  },
+  "toast": {
+    "dismiss": "Dismiss"
+  },
   "login": {
     "title": "Sign in",
     "prompt": "Sign in with an authorized account to view the dashboard.",
@@ -91,7 +145,7 @@
     "heading": "Fleet overview",
     "empty": "No machines have reported in yet.",
     "intro": "Everything below is about the whole fleet. To look at one machine, open the",
-    "intro_link": "Asset Inventory",
+    "intro_link": "Devices list",
     "generated_at": "as of {time}",
     "health": {
       "title": "Fleet health",
@@ -182,7 +236,28 @@
     "reset_zoom": "Reset Zoom"
   },
   "inventory": {
-    "heading": "Asset Inventory",
+    "group_filter": "Device group",
+    "group_all": "All devices",
+    "heading": "Devices",
+    "select_all": "Select every device shown",
+    "select_row": "Select {machine}",
+    "actions_label": "Actions for {machine}",
+    "action_open": "Open",
+    "action_wake": "Wake now",
+    "wake_one_result": "Asked for {machine} to be woken.",
+    "wake_one_failed": "Could not wake {machine}: {error}",
+    "wake_selected_none": "Every selected PC is already awake.",
+    "export_csv": "Export CSV",
+    "bulk": {
+      "count": {
+        "one": "{count} selected",
+        "other": "{count} selected"
+      },
+      "wake": "Wake selected",
+      "deploy": "Deploy a package…",
+      "export": "Export selected",
+      "clear": "Clear selection"
+    },
     "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
     "search_placeholder": "Search name, manufacturer, asset tag, serial, service tag…",
     "col": {
@@ -571,6 +646,10 @@
         "label": "Manage rules",
         "description": "Create and edit rules: conditions over machine data, and what happens when they match. A rule that sends commands to PCs also needs Issue commands."
       },
+      "manage_device_groups": {
+        "label": "Manage device groups",
+        "description": "Create, edit and delete device groups: saved filters (named PCs, an AD OU, a custom field value, or every PC) that rules, package deployments and the Devices list can aim at. Its own capability because editing a group changes what every rule and deployment aimed at it reaches, including rules other people wrote. Seeing and using groups only needs 'View', and every PC a group resolves to must still be in scope for whoever uses it."
+      },
       "locate_device": {
         "label": "Locate a device",
         "description": "Ask a device where it is, on demand. Its own capability rather than part of 'Issue commands', deliberately: being able to reboot a PC must not silently mean being able to find out where an employee is. Reading a device's last known position only needs 'View' plus the machine being in scope. Every request is recorded in the audit trail with the operator's name, and the device shows a notification naming them too."
@@ -712,7 +791,7 @@
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Drop a machine off the Dashboard after",
-        "help": "A machine that hasn't reported a temperature within this window leaves the live Dashboard and reads as offline in Asset Inventory. Agents report every few seconds, so this tolerates a couple of missed reports without flapping."
+        "help": "A machine that hasn't reported a temperature within this window leaves the live Dashboard and reads as offline in Devices. Agents report every few seconds, so this tolerates a couple of missed reports without flapping."
       },
       "fleet.offline_after_seconds": {
         "label": "Mark an agent offline after",
@@ -1343,6 +1422,13 @@
     "request_failed": "{url} returned {status}"
   },
   "packages": {
+    "preset": {
+      "banner": {
+        "one": "Choose a package to deploy to the {count} device you selected.",
+        "other": "Choose a package to deploy to the {count} devices you selected."
+      },
+      "clear": "Clear"
+    },
     "heading": "Packages",
     "intro": "Describe an installer once -- payload, silent command line, and what proves it worked -- then deploy it to machines and watch it land.",
     "new_package": "New package",
@@ -1474,6 +1560,7 @@
       "save": "Save package"
     },
     "deploy_editor": {
+      "add_group": "Add a group",
       "title": "Deploy package",
       "title_for": "Deploy {package}",
       "machines": "Machines",
@@ -2374,6 +2461,15 @@
       "network": "Network",
       "files": "Files"
     },
+    "tabs_label": "Views for this machine",
+    "tab_overview": "Overview",
+    "open_remote": "Remote",
+    "switcher": {
+      "label": "Switch to another machine",
+      "search": "Search machines",
+      "loading": "Loading machines…",
+      "none": "No machines match your search."
+    },
     "os": "OS: {value}",
     "os_build": " (build {build})",
     "channel": "Channel: {value}",
@@ -2800,7 +2896,8 @@
       "all": "Every PC",
       "machines": "Named PCs",
       "ad_ou": "AD organisational unit",
-      "field": "By custom field"
+      "field": "By custom field",
+      "group": "Device group"
     },
     "variable": {
       "sys.machine": {
@@ -3021,8 +3118,10 @@
     "used_by": "Used by {rules}"
   },
   "tools": {
-    "heading": "Tools",
-    "intro": "Pick a tool, then the machine to use it on. Everything here acts on one PC at a time.",
+    "heading": "Fleet tasks",
+    "intro": "Backup and firmware work for the whole fleet. Anything you do to one PC — its terminal, files, its own backup and BIOS, waking it — is on that PC's page; open it from Devices.",
+    "nav": "Fleet tasks",
+    "nothing": "There is nothing here for your permissions. Fleet tasks need permission to manage backups or firmware.",
     "views_nav": "Tools",
     "tab": {
       "terminal": "Terminal",

@@ -150,6 +150,9 @@
             const doc = frameDoc(frame);
             if (doc) {
                 interceptLinks(doc);
+                // Ctrl+K pressed inside a page never reaches this document, so the palette
+                // listens on each framed document too (command-palette.js).
+                if (window.FleetPalette) window.FleetPalette.listen(doc);
                 frame.title = doc.title || frame.title;
             }
             if (frame !== visible) return;

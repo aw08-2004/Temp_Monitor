@@ -52,7 +52,8 @@ def _register_sidebar_stubs(app):
                            ("sharing", "sharing_page"),
                            ("provisioning", "provisioning_page"),
                            ("location", "fleet_map_page"),
-                           ("policy", "policy_page")):
+                           ("policy", "policy_page"),
+                           ("device_groups", "device_groups_page")):
         bp = Blueprint(name, __name__)
         bp.add_url_rule(f"/_stub/{name}", endpoint, lambda: "", methods=["GET"])
         app.register_blueprint(bp)
@@ -128,7 +129,7 @@ def test_nav_still_intact():
     body = build_app().test_client().get("/_shell").get_data(as_text=True)
 
     check("only one nav element is rendered", body.count("sidebar__nav") == 1)
-    for label in ("Dashboard", "History", "Asset Inventory", "Alerts", "Audit Log",
+    for label in ("Dashboard", "History", "Devices", "Alerts", "Audit Log",
                   "Packages", "Backups", "Settings", "Permission Groups", "Users"):
         check(f"{label} is reachable", label in body)
     check("the open-alert badge still renders", "sidebar__badge" in body)

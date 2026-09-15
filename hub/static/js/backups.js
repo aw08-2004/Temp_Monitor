@@ -958,9 +958,9 @@ async function loadExceptions() {
         const row = el('tr');
         const nameCell = el('td');
         const link = el('a', null, m.machine);
-        // Straight to this machine's policy in the half below, rather than to its page --
-        // the per-PC backup view left /machine/<name> when the tools did.
-        link.href = `/tools?tab=backup&machine=${encodeURIComponent(m.machine)}`;
+        // Straight to this machine's Backup tab. The per-PC policy moved back onto
+        // /machine/<name> in hub 1.114.0; the fleet policy stayed here on Fleet tasks.
+        link.href = `/machine/${encodeURIComponent(m.machine)}?tab=backup`;
         nameCell.appendChild(link);
         row.appendChild(nameCell);
         row.appendChild(el('td', null, m.overridden.enabled

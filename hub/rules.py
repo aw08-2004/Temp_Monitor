@@ -2662,7 +2662,12 @@ TARGET_ALL = "all"
 TARGET_MACHINES = "machines"
 TARGET_AD_OU = "ad_ou"
 TARGET_FIELD = "field"
-TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD)
+# A saved device group (device_groups.py): a stored include/exclude spec of the four kinds
+# above, referenced by id. Expanded through device_groups.member_sets at resolve time, so a
+# rule aimed at a group follows the group's edits -- and still goes through the save-time
+# scope check and the evaluation-time scoped_targets exactly like any other selector.
+TARGET_GROUP = "group"
+TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD, TARGET_GROUP)
 TARGET_TEXT_KEY = "rules.target"
 
 MAX_TARGET_SELECTORS = 25
@@ -2725,6 +2730,17 @@ def _validate_selector(selector, extra=None):
             return "OU is too long", None
         return None, {"kind": TARGET_AD_OU, "ou": ou,
                       "include_children": bool(selector.get("include_children", True))}
+    if kind == TARGET_GROUP:
+        try:
+            group_id = int(selector.get("group_id"))
+        except (TypeError, ValueError):
+            return "a group selector needs a group", None
+        if group_id <= 0:
+            return "a group selector needs a group", None
+        # Existence is NOT checked here: this validator is pure, like the rest of it. A
+        # selector naming a deleted group matches nothing, and deleting a group that a rule
+        # aims at is refused upstream (rules_using_group).
+        return None, {"kind": TARGET_GROUP, "group_id": group_id}
     # TARGET_FIELD
     name = str(selector.get("field") or "").strip()
     var = lookup_variable(f"field.{name}", extra)
@@ -2744,7 +2760,7 @@ def _all_machines(db_path):
     return [dict(r) for r in rows]
 
 
-def _selector_matches(selector, machine_row, field_values):
+def _selector_matches(selector, machine_row, field_values, group_members=None):
     kind = selector.get("kind")
     if kind == TARGET_ALL:
         return True
@@ -2763,6 +2779,9 @@ def _selector_matches(selector, machine_row, field_values):
             return bool((have_ou and have_ou.endswith(want))
                         or (have_dn and have_dn.endswith(want)))
         return have_ou == want
+    if kind == TARGET_GROUP:
+        members = (group_members or {}).get(selector.get("group_id")) or set()
+        return str(name or "").lower() in members
     if kind == TARGET_FIELD:
         have = (field_values.get(name) or {}).get(selector.get("field"))
         if have is None:
@@ -2785,14 +2804,23 @@ def resolve_targets(db_path, target, machines=None):
     needs_fields = any(s.get("kind") == TARGET_FIELD for s in include + exclude)
     field_values = _all_field_values(db_path) if needs_fields else {}
 
+    group_ids = [s.get("group_id") for s in include + exclude if s.get("kind") == TARGET_GROUP]
+    if group_ids:
+        # Imported here rather than at the top: device_groups imports this module for the
+        # target grammar, and a top-level import in both directions is a circular import.
+        import device_groups
+        group_members = device_groups.member_sets(db_path, group_ids, rows)
+    else:
+        group_members = {}
+
     selected = []
     for row in rows:
         name = row.get("machine")
         if not name:
             continue
-        if not any(_selector_matches(s, row, field_values) for s in include):
+        if not any(_selector_matches(s, row, field_values, group_members) for s in include):
             continue
-        if any(_selector_matches(s, row, field_values) for s in exclude):
+        if any(_selector_matches(s, row, field_values, group_members) for s in exclude):
             continue
         selected.append(name)
     return sorted(selected)
@@ -3296,6 +3324,25 @@ def actions_include_command(actions):
     """Does this rule (including any message follow-up) issue a command? Drives the
     cooldown floor and the extra capability check."""
     return any(action.get("type") in MUTATING_ACTIONS for action in iter_actions(actions))
+
+
+def rules_using_group(db_path, group_id):
+    """Every rule whose target includes or excludes device group `group_id`, as [{id, name}].
+
+    Used to refuse the group's deletion. A rule aimed at a group that no longer exists targets
+    nothing, silently -- which looks exactly like a rule that works and never matches.
+    """
+    try:
+        wanted = int(group_id)
+    except (TypeError, ValueError):
+        return []
+    using = []
+    for rule in list_rules(db_path):
+        target = rule.get("target") or {}
+        if any(s.get("kind") == TARGET_GROUP and s.get("group_id") == wanted
+               for side in ("include", "exclude") for s in target.get(side) or []):
+            using.append({"id": rule["id"], "name": rule["name"]})
+    return using
 
 
 def rules_using_script(db_path, script_name):

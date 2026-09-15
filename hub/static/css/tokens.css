@@ -34,21 +34,33 @@
     /* The collapsed rail: one 16px icon plus the link's own padding, rounded to a
        comfortable target. Wide enough that a centred icon still reads as a button. */
     --sidebar-width-collapsed: 64px;
-
-    --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.25);
 }
 
+/* The palette moved to cooler, less saturated neutrals in hub 1.114.0 (the redesign in the
+   ROADMAP note at the top of ROADMAP.MD). What changed and why, so it is not "tidied" back:
+
+   - Borders are hairlines of the text colour rather than a separate grey. A fixed grey that
+     reads on #0b0e14 is too loud on a card one step lighter; an alpha of the foreground stays
+     the same weight on every surface it sits on.
+   - --accent-soft is new: the tint behind a selected row, the active nav link and the palette's
+     highlighted result. Before it, "selected" borrowed --card, which on a card is invisible.
+   - --shadow-card is per theme and much lighter. The old 0.25-alpha 30px blur was drawn for a
+     dark page and turned every light-theme card into a floating slab.
+
+   Status colours are unchanged on purpose -- operators read green/amber/red at a glance, and
+   that is not the place for a refresh. */
 :root[data-theme="dark"] {
-    --bg: #0b0e14;
-    --surface: #12151c;
-    --card: #171b24;
-    --card-border: #262b38;
-    --text: #e6e8ec;
-    --muted: #8a90a0;
+    --bg: #09090b;
+    --surface: #0f0f12;
+    --card: #151519;
+    --card-border: rgb(255 255 255 / 0.08);
+    --text: #ececef;
+    --muted: #8b8b95;
 
     --accent: #3b82f6;
     --accent-hover: #5b93f5;
     --accent-contrast: #ffffff;
+    --accent-soft: rgb(59 130 246 / 0.14);
 
     --success: #22c55e;
     --success-bg: #123321;
@@ -58,8 +70,10 @@
     --danger-bg: #3a1418;
 
     --focus-ring: rgba(59, 130, 246, 0.5);
-    --control-bg: #0b1220;
-    --scrollbar: #262b38;
+    --control-bg: #1b1b20;
+    --scrollbar: #2a2a31;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
 
     /* Dimmer behind a modal. Separate from --control-bg because it must read as
        "the page is inert", not "this is a surface". */
@@ -67,16 +81,17 @@
 }
 
 :root[data-theme="light"] {
-    --bg: #f7f8fa;
+    --bg: #fafafa;
     --surface: #ffffff;
     --card: #ffffff;
-    --card-border: #e4e7ec;
-    --text: #14161a;
-    --muted: #6b7280;
+    --card-border: rgb(24 24 27 / 0.1);
+    --text: #18181b;
+    --muted: #6b6b76;
 
     --accent: #2563eb;
     --accent-hover: #1d4ed8;
     --accent-contrast: #ffffff;
+    --accent-soft: rgb(37 99 235 / 0.1);
 
     --success: #16a34a;
     --success-bg: #e8f8ee;
@@ -86,8 +101,10 @@
     --danger-bg: #fee2e2;
 
     --focus-ring: rgba(37, 99, 235, 0.35);
-    --control-bg: #f2f3f5;
-    --scrollbar: #e4e7ec;
+    --control-bg: #f4f4f5;
+    --scrollbar: #e4e4e7;
+
+    --shadow-card: 0 1px 2px rgb(24 24 27 / 0.06), 0 6px 20px rgb(24 24 27 / 0.08);
 
     /* Lighter than the dark theme's, but still a real dimmer: it was missing here
        entirely, which left the mobile nav scrim (components.css .nav-scrim, no fallback)
