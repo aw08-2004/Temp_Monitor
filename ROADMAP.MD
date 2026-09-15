@@ -3061,9 +3061,9 @@ agent said.
 the `push_*` columns already on `api_tokens` is what would let the command loop stop holding a
 request every 25 seconds.
 
-### Full trimming switched off System.Text.Json reflection · agent 0.2.2
+### Full trimming switched off System.Text.Json reflection · agent 0.2.3
 
-**No Android device could enroll on 0.2.1, by QR or by setup screen.** Reported from a factory-reset
+**No Android device could enroll on 0.2.1 or the 0.2.2 beta, by QR or by setup screen.** Reported from a factory-reset
 phone. The hardware validation above ran on 2026-09-07; `AndroidLinkMode=full` landed on
 2026-09-09, and the csproj comment beside it said System.Text.Json was covered by the SDK's
 trimming annotations. It was not: a fully trimmed app ships
@@ -3075,8 +3075,9 @@ identity it could not persist, by design, and retries in 30 seconds. So the hub 
 row every half-minute and the device never kept one. The same throw stopped every
 `/api/report` (the device never appeared in the console), every command poll and the update
 manifest read -- which is why 0.2.1 cannot self-update out of it -- and `JsonArray.Add<T>` in
-the capability report, which the heartbeat swallowed. A hand-written `TelemetryJsonContext` had
-been started against the telemetry symptom and left `main` not compiling.
+the capability report, which the heartbeat swallowed. The 0.2.2 beta (PR #60) fixed the
+telemetry half alone with a `TelemetryJsonContext`, so a 0.2.2 device appeared in the console and
+still never enrolled; `AgentJson` replaces that context and covers the rest.
 
 **Fixed with one source-generated context (`AgentJson`)** that every typed read and write passes,
 and **the test project now runs with reflection off**, which is what reproduced it: ten existing

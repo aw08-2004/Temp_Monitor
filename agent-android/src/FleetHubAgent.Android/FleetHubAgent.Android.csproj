@@ -60,7 +60,7 @@
     <!-- The trimmer's own warnings for "this will not survive trimming" are errors here. The
          Core tests run with reflection off and catch Core; nothing tests this project, so the
          trimmer is the only thing that can see a reflective JSON call in the Android half.
-         Before 0.2.2 these were warnings, and nobody reads warnings on a build that succeeds. -->
+         Before 0.2.3 these were warnings, and nobody reads warnings on a build that succeeds. -->
     <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL3050</WarningsAsErrors>
   </PropertyGroup>
 
