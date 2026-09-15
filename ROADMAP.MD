@@ -2,6 +2,53 @@
 
 Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
+> **Note on where things live (hub 1.111.0) — supersedes the 1.87.0 note below.** The tools
+> went back to the machine page. **`/machine/<name>` is a device workspace**: Overview,
+> Terminal, Backup, Firmware, Network and Files as tabs (`?tab=` slugs), a machine switcher
+> beside the name that keeps the current tab, and a link to Remote. The Tools page kept only
+> what was never about one PC and is now **Fleet tasks** (`/tools`): the fleet halves of Backup
+> and Firmware. Old `/tools?tab=X&machine=Y` links redirect to that machine's tab; `/backups`
+> and `/firmware` still land on Fleet tasks.
+>
+> *Why reverse 1.87.0.* Its reason — doing one tool to twenty PCs was a navigation each — was
+> real, but one PC ended up in four places (health on its page, terminal in Tools, remote on
+> Remote, delete in Inventory), the Tools column searched by name only and showed no health,
+> and nothing in Tools linked back to the PC. Operators start from a PC far more often than
+> from a tool. The switcher keeps the twenty-PCs case at two clicks per PC.
+>
+> *Rejected:* tools in a drawer over Inventory (a terminal needs the full width); keeping both
+> Tools and the tabs (two consoles for one PC is how two viewers end up open on it); Remote as
+> a tab (the Remote page keeps several sessions alive side by side, and an embedded second
+> viewer would be a second session); folding Fleet tasks into Patches/Packages (backups and
+> BIOS images are neither).
+>
+> **Hub 1.112.0, same redesign.** The sidebar is three sections — **Fleet** (Dashboard,
+> Inventory, Map, Alerts), **Operate** (Remote, Packages, Patches, Fleet tasks, Rules, Device
+> policy), **Administration** (Audit log, Sharing, Settings, Provisioning, Permission groups,
+> Invites, Users, Download client) — each rendered only when it has a link for you. **Ctrl+K**
+> (or the search field in the topbar) finds a device by name, serial, asset tag or OS, or a
+> page by name; ←/→ picks Overview, Terminal, Files or Network before Enter. Neutrals, borders,
+> shadows and the active-link style were refreshed in `tokens.css`; the palette is the first
+> component built with Tailwind utilities.
+> *Rejected:* a collapsible Administration group (a folded `<details>` takes its icons off the
+> collapsed rail); server-side search (the roster is already filtered client-side, roadmap #6);
+> page shortcuts kept in a second list (they are read off the capability-gated sidebar).
+>
+> **Hub 1.113.0, same redesign.** Asset Inventory is **Devices**. Each row has a menu (Open,
+> Terminal, Files, Network, Wake now for an offline PC, Delete — which left its always-visible
+> red button) and a checkbox; ticking rows brings up a bar to **wake the selection**, **deploy a
+> package** to it (the Packages page opens with the dialog pre-filled; you still pick the package
+> and confirm), or **export** it. **Export CSV** in the toolbar writes the rows on screen, with
+> formula-looking cells neutralised because every field comes from the unauthenticated
+> `/api/report`. Short results arrive as toasts; errors stay until dismissed.
+> *Rejected:* renaming the url to `/devices` (bookmarks, tickets and `url_for` all name
+> `/inventory`, and two names for one page is how the sidebar highlight drifts); a package
+> picker on Devices (a second deploy dialog); a new bulk-wake endpoint (`/api/wake/fleet`
+> already takes a `machines` list and applies scope); passing the selection in the url (host
+> lists do not belong in bookmarks or history — it goes through `sessionStorage`).
+>
+> *Still open from this redesign:* saved device groups/tags as Packages and Rules targets.
+
 > **Note on where things live (hub 1.87.0).** The console was reorganised around what you
 > are doing rather than which PC you are doing it to. **Terminal, Backup, Firmware and
 > Network left the machine page** for a **Tools** page, one tool per tab with the machine

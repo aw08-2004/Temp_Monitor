@@ -27,5 +27,8 @@ agent-linux/dist/
 agent-android/**/bin/
 agent-android/**/obj/
 agent-android/dist/
+# The Tailwind standalone CLI binary that tools/build_css.ps1 downloads. The OUTPUT,
+# hub/static/css/app.css, is committed on purpose -- deployed hubs never run a build.
+tools/.bin/
 # Agent Zero project metadata
 .a0proj/

@@ -16,7 +16,7 @@
   ],
   "nav": {
     "dashboard": "Dashboard",
-    "inventory": "Asset Inventory",
+    "inventory": "Devices",
     "alerts": "Alerts",
     "remote": "Remote",
     "audit_log": "Audit Log",
@@ -38,7 +38,12 @@
     "sharing": "Sharing",
     "provisioning": "Device provisioning",
     "map": "Map",
-    "policy": "Device policy"
+    "policy": "Device policy",
+    "section": {
+      "fleet": "Fleet",
+      "operate": "Operate",
+      "admin": "Administration"
+    }
   },
   "hub_update": {
     "_note": [
@@ -75,6 +80,21 @@
   "shell": {
     "frame_title": "Page content"
   },
+  "palette": {
+    "button": "Search devices…",
+    "shortcut": "Ctrl K",
+    "label": "Search devices and pages",
+    "placeholder": "Search by name, serial, asset tag or OS — or type a page name",
+    "devices": "Devices",
+    "pages": "Pages",
+    "empty": "Nothing matches “{query}”.",
+    "loading": "Loading devices…",
+    "hint": "↑↓ move · ←→ choose a tab · Enter open · Esc close",
+    "action_overview": "Overview"
+  },
+  "toast": {
+    "dismiss": "Dismiss"
+  },
   "login": {
     "title": "Sign in",
     "prompt": "Sign in with an authorized account to view the dashboard.",
@@ -91,7 +111,7 @@
     "heading": "Fleet overview",
     "empty": "No machines have reported in yet.",
     "intro": "Everything below is about the whole fleet. To look at one machine, open the",
-    "intro_link": "Asset Inventory",
+    "intro_link": "Devices list",
     "generated_at": "as of {time}",
     "health": {
       "title": "Fleet health",
@@ -182,7 +202,26 @@
     "reset_zoom": "Reset Zoom"
   },
   "inventory": {
-    "heading": "Asset Inventory",
+    "heading": "Devices",
+    "select_all": "Select every device shown",
+    "select_row": "Select {machine}",
+    "actions_label": "Actions for {machine}",
+    "action_open": "Open",
+    "action_wake": "Wake now",
+    "wake_one_result": "Asked for {machine} to be woken.",
+    "wake_one_failed": "Could not wake {machine}: {error}",
+    "wake_selected_none": "Every selected PC is already awake.",
+    "export_csv": "Export CSV",
+    "bulk": {
+      "count": {
+        "one": "{count} selected",
+        "other": "{count} selected"
+      },
+      "wake": "Wake selected",
+      "deploy": "Deploy a package…",
+      "export": "Export selected",
+      "clear": "Clear selection"
+    },
     "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
     "search_placeholder": "Search name, manufacturer, asset tag, serial, service tag…",
     "col": {
@@ -712,7 +751,7 @@
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Drop a machine off the Dashboard after",
-        "help": "A machine that hasn't reported a temperature within this window leaves the live Dashboard and reads as offline in Asset Inventory. Agents report every few seconds, so this tolerates a couple of missed reports without flapping."
+        "help": "A machine that hasn't reported a temperature within this window leaves the live Dashboard and reads as offline in Devices. Agents report every few seconds, so this tolerates a couple of missed reports without flapping."
       },
       "fleet.offline_after_seconds": {
         "label": "Mark an agent offline after",
@@ -1333,6 +1372,13 @@
     "request_failed": "{url} returned {status}"
   },
   "packages": {
+    "preset": {
+      "banner": {
+        "one": "Choose a package to deploy to the {count} device you selected.",
+        "other": "Choose a package to deploy to the {count} devices you selected."
+      },
+      "clear": "Clear"
+    },
     "heading": "Packages",
     "intro": "Describe an installer once -- payload, silent command line, and what proves it worked -- then deploy it to machines and watch it land.",
     "new_package": "New package",
@@ -2364,6 +2410,15 @@
       "network": "Network",
       "files": "Files"
     },
+    "tabs_label": "Views for this machine",
+    "tab_overview": "Overview",
+    "open_remote": "Remote",
+    "switcher": {
+      "label": "Switch to another machine",
+      "search": "Search machines",
+      "loading": "Loading machines…",
+      "none": "No machines match your search."
+    },
     "os": "OS: {value}",
     "os_build": " (build {build})",
     "channel": "Channel: {value}",
@@ -3010,8 +3065,10 @@
     "used_by": "Used by {rules}"
   },
   "tools": {
-    "heading": "Tools",
-    "intro": "Pick a tool, then the machine to use it on. Everything here acts on one PC at a time.",
+    "heading": "Fleet tasks",
+    "intro": "Backup and firmware work for the whole fleet. Anything you do to one PC — its terminal, files, its own backup and BIOS, waking it — is on that PC's page; open it from Devices.",
+    "nav": "Fleet tasks",
+    "nothing": "There is nothing here for your permissions. Fleet tasks need permission to manage backups or firmware.",
     "views_nav": "Tools",
     "tab": {
       "terminal": "Terminal",

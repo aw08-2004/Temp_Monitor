@@ -629,7 +629,7 @@ never did — it was telemetry-only, which is why it was replaced.
   <agent_id>:<token>`. With the secret unset, no agent can enroll (fail closed).
 
   > **A machine that never enrolled still posts telemetry**, because `/api/report` is open
-  > by design — so it appears on the Dashboard and in the Asset Inventory with a name, a
+  > by design — so it appears on the Dashboard and in Devices with a name, a
   > model and a live temperature, and reads as perfectly healthy while every command,
   > terminal session, package deployment, backup and process report on it silently does
   > nothing. That is why `/api/machines` carries an **`enrolled`** flag
@@ -1305,7 +1305,7 @@ the operator's scope; every session start/stop is in the audit log.
 Power a sleeping machine on from the console, so an out-of-hours patch window or a remote
 session doesn't depend on somebody being at the desk to press a button.
 [wake.py](hub/wake.py) (model) + [wake_web.py](hub/wake_web.py) (HTTP), a **Network** tab on
-the machine page, a **Wake offline PCs** button on Asset Inventory, and `wake.*` settings.
+the machine page, a **Wake offline PCs** button on Devices, and `wake.*` settings.
 
 **Delivery is agent peer-relay, and that is the whole design.** The hub picks an *online*
 machine whose reported IPv4/prefix puts it on the same subnet as the target, and issues

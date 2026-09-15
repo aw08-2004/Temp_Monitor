@@ -6,7 +6,7 @@
   ],
   "nav": {
     "dashboard": "Panel",
-    "inventory": "Inventario de activos",
+    "inventory": "Dispositivos",
     "alerts": "Alertas",
     "remote": "Remoto",
     "audit_log": "Registro de auditoría",
@@ -28,7 +28,12 @@
     "sharing": "Compartir",
     "provisioning": "Aprovisionamiento de dispositivos",
     "map": "Mapa",
-    "policy": "Política del dispositivo"
+    "policy": "Política del dispositivo",
+    "section": {
+      "fleet": "Flota",
+      "operate": "Operación",
+      "admin": "Administración"
+    }
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -50,6 +55,21 @@
   "shell": {
     "frame_title": "Contenido de la página"
   },
+  "palette": {
+    "button": "Buscar dispositivos…",
+    "shortcut": "Ctrl K",
+    "label": "Buscar dispositivos y páginas",
+    "placeholder": "Busca por nombre, número de serie, etiqueta de activo o SO, o escribe el nombre de una página",
+    "devices": "Dispositivos",
+    "pages": "Páginas",
+    "empty": "Nada coincide con «{query}».",
+    "loading": "Cargando dispositivos…",
+    "hint": "↑↓ moverse · ←→ elegir pestaña · Intro abrir · Esc cerrar",
+    "action_overview": "Resumen"
+  },
+  "toast": {
+    "dismiss": "Cerrar"
+  },
   "login": {
     "title": "Iniciar sesión",
     "prompt": "Inicia sesión con una cuenta autorizada para ver el panel.",
@@ -66,7 +86,7 @@
     "heading": "Resumen de la flota",
     "empty": "Todavía no se ha reportado ninguna máquina.",
     "intro": "Todo lo de abajo trata sobre la flota entera. Para ver una máquina, abre el",
-    "intro_link": "Inventario de activos",
+    "intro_link": "listado de dispositivos",
     "generated_at": "a las {time}",
     "health": {
       "title": "Estado de la flota",
@@ -151,7 +171,26 @@
     "reset_zoom": "Restablecer zoom"
   },
   "inventory": {
-    "heading": "Inventario de activos",
+    "heading": "Dispositivos",
+    "select_all": "Seleccionar todos los dispositivos mostrados",
+    "select_row": "Seleccionar {machine}",
+    "actions_label": "Acciones para {machine}",
+    "action_open": "Abrir",
+    "action_wake": "Despertar ahora",
+    "wake_one_result": "Se pidió despertar {machine}.",
+    "wake_one_failed": "No se pudo despertar {machine}: {error}",
+    "wake_selected_none": "Todos los PCs seleccionados ya están despiertos.",
+    "export_csv": "Exportar CSV",
+    "bulk": {
+      "count": {
+        "one": "{count} seleccionado",
+        "other": "{count} seleccionados"
+      },
+      "wake": "Despertar seleccionados",
+      "deploy": "Implementar un paquete…",
+      "export": "Exportar selección",
+      "clear": "Quitar selección"
+    },
     "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos en línea también aparecen en el panel en vivo; los que están sin conexión permanecen aquí hasta que se eliminen. Eliminar un equipo borra de forma permanente su identidad, su historial de temperatura y su inscripción en la flota.",
     "search_placeholder": "Buscar por nombre, fabricante, etiqueta de activo, n.º de serie o service tag…",
     "col": {
@@ -640,7 +679,7 @@
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Quitar un equipo del panel tras",
-        "help": "Un equipo que no haya informado una temperatura dentro de esta ventana desaparece del panel en vivo y aparece como sin conexión en el Inventario de activos. Los agentes informan cada pocos segundos, así que esto tolera un par de informes perdidos sin oscilaciones."
+        "help": "Un equipo que no haya informado una temperatura dentro de esta ventana desaparece del panel en vivo y aparece como sin conexión en Dispositivos. Los agentes informan cada pocos segundos, así que esto tolera un par de informes perdidos sin oscilaciones."
       },
       "fleet.offline_after_seconds": {
         "label": "Marcar un agente como sin conexión tras",
@@ -1251,6 +1290,13 @@
     "request_failed": "{url} devolvió {status}"
   },
   "packages": {
+    "preset": {
+      "banner": {
+        "one": "Elige un paquete para implementarlo en el {count} dispositivo seleccionado.",
+        "other": "Elige un paquete para implementarlo en los {count} dispositivos seleccionados."
+      },
+      "clear": "Descartar"
+    },
     "heading": "Paquetes",
     "intro": "Describe un instalador una sola vez —el archivo, la línea de comandos silenciosa y qué demuestra que funcionó— y después despliégalo en los equipos y observa cómo llega.",
     "new_package": "Nuevo paquete",
@@ -2251,6 +2297,15 @@
       "network": "Red",
       "files": "Archivos"
     },
+    "tabs_label": "Vistas de esta máquina",
+    "tab_overview": "Resumen",
+    "open_remote": "Remoto",
+    "switcher": {
+      "label": "Cambiar a otra máquina",
+      "search": "Buscar máquinas",
+      "loading": "Cargando máquinas…",
+      "none": "Ninguna máquina coincide con tu búsqueda."
+    },
     "os": "SO: {value}",
     "os_build": " (compilación {build})",
     "channel": "Canal: {value}",
@@ -2892,8 +2947,10 @@
     "used_by": "Usado por {rules}"
   },
   "tools": {
-    "heading": "Herramientas",
-    "intro": "Elige una herramienta y luego la máquina. Todo aquí actúa sobre un PC a la vez.",
+    "heading": "Tareas de flota",
+    "intro": "Copias de seguridad y firmware para toda la flota. Todo lo que haces en un solo PC — su terminal, sus archivos, su propia copia y su BIOS, despertarlo — está en la página de ese PC; ábrela desde Dispositivos.",
+    "nav": "Tareas de flota",
+    "nothing": "No hay nada aquí para tus permisos. Las tareas de flota requieren permiso para gestionar copias de seguridad o firmware.",
     "views_nav": "Herramientas",
     "tab": {
       "terminal": "Terminal",

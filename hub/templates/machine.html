@@ -1,8 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ machine }} - FleetHub{% endblock %}
 {% block extra_head %}
-{# xterm, permissions and backups left with the panels that used them; see tools.html. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/workspace.css') }}">
+{# The tool tabs came back to this page (hub 1.111.0), and their stylesheets with them. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+{% if cap.ISSUE_COMMANDS in user_capabilities %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/files.css') }}">
+{% endif %}
+{# permissions.css and packages.css carry the chip and .pkg-row rules the per-machine backup
+   editor was written against. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/packages.css') }}">
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backups.css') }}">
+{% endif %}
 {# The map, for the Location fold. Loaded on every machine page even though the fold is hidden
    on most of them: 163 KB from our own origin, cached after the first page, against the
    alternative of injecting a stylesheet and a script at runtime from JavaScript -- which is a
@@ -26,48 +38,111 @@
    Restart buttons. The endpoints enforce the same capability themselves, so a console that
    got this wrong would be offering a 403, not a way past one. #}
 <div id="machine-config" data-machine="{{ machine }}" data-low-load-threshold="{{ low_load_threshold }}" data-live-window-seconds="{{ live_window_seconds }}" data-live-poll-seconds="{{ live_poll_seconds }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
-    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ machine }}</h1>
 
-    {# The tools this PC used to carry as tabs -- Terminal, Backup, Firmware, Network --
-       live on the Tools page now, one tool per tab with the machine picked from a column
-       beside it. This page is what the PC IS; those are things you do TO a PC, and doing
-       one of them to twenty PCs was a navigation each.
+    {# The device workspace (hub 1.111.0).
+       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+       Everything about one PC on one page again: what it IS (Overview) and what you do TO it
+       (Terminal, Backup, Firmware, Network, Files), as tabs.
 
-       Kept as links so the PC-first route still works when you are already looking at one.
-       Plain <a>s, so shell.js's click interceptor routes them through the frame; ?tab= and
-       ?machine= are read by tabs.js and tools.js respectively.
+       This reverses hub 1.87.0, which moved the tools to a Tools page with the machine picked
+       from a column beside them. The reason then was real -- "doing one of them to twenty
+       PCs was a navigation each" -- but the price turned out higher than the saving: one PC
+       lived in four places (health here, terminal in Tools, remote on Remote, delete in
+       Inventory), the Tools column searched by name only and showed no health, and nothing
+       in Tools linked back here. Operators start from a PC far more often than from a tool.
 
-       No Remote link: remote view/control lives on the Remote page, which can hold several
-       PCs side by side. A second entry point meant two viewers for the same machine. #}
-    {# `data-needs-command` is roadmap #23 phase F.2: the machine's own capability report
-       decides whether a link is drawn at all. A machine that has reported NOTHING keeps every
-       link, which is every Windows PC in the field -- see machine-capabilities.js on why
-       silence has to mean yes here and no on the newer cards. The routes behind each tab
-       re-decide either way; this only stops an operator clicking Terminal on a phone to be
-       told there is no shell for an app to run a script in. #}
-    <div class="toolbar" style="margin-bottom: var(--space-5);" id="machine-tools">
-        <span class="stat-card__meta">{{ t('machine.open.label') }}</span>
-        <a class="btn btn--ghost" data-needs-command="run_script" href="{{ url_for('tools_page') }}?tab=terminal&amp;machine={{ machine|urlencode }}">{{ t('machine.open.terminal') }}</a>
-        {% if cap.MANAGE_BACKUPS in user_capabilities %}
-        <a class="btn btn--ghost" data-needs-command="backup_files" href="{{ url_for('tools_page') }}?tab=backup&amp;machine={{ machine|urlencode }}">{{ t('machine.open.backup') }}</a>
-        {% endif %}
-        {# Firmware and Network are NOT capability-gated, matching the Tools page and the
-           tabs these replaced: what a PC's BIOS is set to, and whether it can be woken at
-           all, is inventory in the sense its model and its disks are. #}
-        <a class="btn btn--ghost" data-needs-command="refresh_bios_inventory" href="{{ url_for('tools_page') }}?tab=firmware&amp;machine={{ machine|urlencode }}">{{ t('machine.open.firmware') }}</a>
-        <a class="btn btn--ghost" data-needs-command="prepare_wake" href="{{ url_for('tools_page') }}?tab=network&amp;machine={{ machine|urlencode }}">{{ t('machine.open.network') }}</a>
-        {# Files IS gated, and it is the only one of these that is. A folder listing is not
-           inventory the way a BIOS setting is -- those are the names of somebody's
-           documents -- and every route behind that tab needs issue_commands. #}
-        {% if cap.ISSUE_COMMANDS in user_capabilities %}
-        <a class="btn btn--ghost" data-needs-command="list_directory" href="{{ url_for('tools_page') }}?tab=files&amp;machine={{ machine|urlencode }}">{{ t('machine.open.files') }}</a>
-        {% endif %}
-        {# Said rather than left as an absence. A row of buttons that is shorter than it was on
-           the last machine reads as a broken page; one sentence turns it into a fact about the
-           device. Only rendered when something was actually hidden. #}
-        <span class="stat-card__meta" id="machine-tools-note" hidden></span>
+       The twenty-PCs case is kept by the switcher beside the name: it keeps ?tab=, so
+       Terminal on PC-1 -> Terminal on PC-2 is two clicks and lands on the same tab. It IS a
+       frame navigation now rather than an in-page swap; that was the rejected cost of keeping
+       #machine-config as the one answer to "which machine" (machine.js, processes.js and the
+       charts all read it once, at parse time).
+
+       Rejected: tools as a drawer over Inventory (a terminal wants the whole width), and
+       keeping both the Tools page and these tabs (two consoles for one PC is how two viewers
+       end up open on it -- the reason Remote has no second entry point either).
+
+       The FLEET halves of Backup and Firmware did not come back: an image library and a
+       destination list are not about one PC. They are Fleet tasks (/tools) now. #}
+    <div class="machine-head">
+        <h1 class="section-title machine-head__title">{{ machine }}</h1>
+        {# <details> for the disclosure semantics and Esc/outside-click handling in
+           machine-switcher.js. The rows are plain <a>s so shell.js routes them through the
+           frame exactly like any other link. #}
+        <details class="machine-switcher" id="machine-switcher">
+            <summary class="btn btn--ghost" aria-label="{{ t('machine.switcher.label') }}"
+                     title="{{ t('machine.switcher.label') }}">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+            </summary>
+            <div class="machine-switcher__panel">
+                <label for="machine-switcher-search" class="sr-only">{{ t('machine.switcher.search') }}</label>
+                <input type="search" id="machine-switcher-search" class="input"
+                       placeholder="{{ t('machine.switcher.search') }}" autocomplete="off">
+                <div id="machine-switcher-list" class="picker-list" role="list"></div>
+                <p id="machine-switcher-empty" class="stat-card__meta">{{ t('machine.switcher.loading') }}</p>
+            </div>
+        </details>
+        <div class="machine-head__actions">
+            {# A LINK to the Remote page, not a tab. The Remote page holds several PCs side by
+               side and keeps each session alive while you work elsewhere; a second viewer
+               embedded here would be two sessions for one screen.
+               No ?machine= yet: remote.js does not read one, and a parameter it ignores would
+               promise a screen that never opens. Pre-selecting this PC there is part of the
+               Devices phase of this redesign (ROADMAP note, hub 1.111.0). #}
+            {% if cap.REMOTE_CONTROL in user_capabilities %}
+            <a class="btn btn--ghost" id="machine-open-remote" href="{{ url_for('remote_page') }}">{{ t('machine.open_remote') }}</a>
+            {% endif %}
+        </div>
     </div>
 
+    {# `data-needs-command` is roadmap #23 phase F.2: the machine's own capability report
+       decides whether a tab is drawn at all. A machine that has reported NOTHING keeps every
+       tab, which is every Windows PC in the field -- see machine-capabilities.js on why
+       silence has to mean yes here. The routes behind each tab re-decide either way.
+
+       #machine-tools is the id machine-tools-gate.js counts hidden entries in, so its
+       "some tools are hidden" sentence still fires. The slugs are the link vocabulary: old
+       /tools?tab=X&machine=Y links redirect here with the same X. #}
+    <div id="machine-tools">
+        <div class="tabs machine-tabs" role="tablist" aria-label="{{ t('machine.tabs_label') }}"
+             data-tabs-key="machine" data-tabs-param="tab" id="machine-tabs">
+            <button class="tabs__tab tabs__tab--active" type="button" role="tab"
+                    id="tab-btn-overview" data-tab-slug="overview"
+                    aria-controls="machine-overview" aria-selected="true">{{ t('machine.tab_overview') }}</button>
+            <button class="tabs__tab" type="button" role="tab" data-needs-command="run_script"
+                    id="tab-btn-terminal" data-tab-slug="terminal"
+                    aria-controls="tool-terminal" aria-selected="false" tabindex="-1">{{ t('tools.tab.terminal') }}</button>
+            {# Presentation only -- every route behind it is gated on manage_backups AND on
+               this machine being in scope. #}
+            {% if cap.MANAGE_BACKUPS in user_capabilities %}
+            <button class="tabs__tab" type="button" role="tab" data-needs-command="backup_files"
+                    id="tab-btn-backup" data-tab-slug="backup"
+                    aria-controls="tool-backup" aria-selected="false" tabindex="-1">{{ t('tools.tab.backup') }}</button>
+            {% endif %}
+            {# Firmware and Network are NOT capability-gated: what a PC's BIOS is set to, and
+               whether it can be woken at all, is inventory in the sense its model and its
+               disks are. The buttons inside are the parts that need issue_commands. #}
+            <button class="tabs__tab" type="button" role="tab" data-needs-command="refresh_bios_inventory"
+                    id="tab-btn-firmware" data-tab-slug="firmware"
+                    aria-controls="tool-firmware" aria-selected="false" tabindex="-1">{{ t('tools.tab.firmware') }}</button>
+            <button class="tabs__tab" type="button" role="tab" data-needs-command="prepare_wake"
+                    id="tab-btn-network" data-tab-slug="network"
+                    aria-controls="tool-network" aria-selected="false" tabindex="-1">{{ t('tools.tab.network') }}</button>
+            {# Files IS gated: a folder listing is not inventory -- those are the names of
+               somebody's documents, and the same door reads the bytes in them. Every route
+               behind it needs issue_commands (files_web.py). #}
+            {% if cap.ISSUE_COMMANDS in user_capabilities %}
+            <button class="tabs__tab" type="button" role="tab" data-needs-command="list_directory"
+                    id="tab-btn-files" data-tab-slug="files"
+                    aria-controls="tool-files" aria-selected="false" tabindex="-1">{{ t('tools.tab.files') }}</button>
+            {% endif %}
+        </div>
+        {# Said rather than left as an absence. A tab strip that is shorter than it was on the
+           last machine reads as a broken page; one sentence turns it into a fact about the
+           device. Only rendered when something was actually hidden. #}
+        <p class="stat-card__meta" id="machine-tools-note" hidden></p>
+    </div>
+
+    <div class="tab-panel" id="machine-overview" role="tabpanel" aria-labelledby="tab-btn-overview">
     {# Every section on this page folds and remembers being folded (collapse.js). Native
        <details>, matching the sensor and process browsers that already did -- see the
        .fold rules in components.css. Sections that were always visible ship `open`, so
@@ -383,7 +458,9 @@
     </details>
 
     {# machine.js listens for this one's `toggle`: Chart.js measures a canvas when it is
-       built, and one built inside a folded section comes back zero pixels tall. #}
+       built, and one built inside a folded section comes back zero pixels tall. The same is
+       true of a hidden TAB, so machine-switcher.js re-sends that toggle when Overview is
+       shown after the page opened on another tab. #}
     <details class="card chart-card fold" data-fold-key="machine:overview:history"
              id="history-card" open>
         <summary class="fold__summary">
@@ -416,6 +493,39 @@
         <div class="metric-grid" id="metric-grid"></div>
         <div id="no-data" class="stat-card__meta" style="margin-top: 12px; display: none;">{{ t('machine.history.no_readings') }}</div>
     </details>
+    </div>{# /#machine-overview #}
+
+    {# The tool panels. The partials and the modules behind them are the ones the Tools page
+       used, unchanged: each registers with ToolPanels by panel id and asks MachineContext which
+       machine, which on this page is seeded from #machine-config and never changes. #}
+    <div class="tab-panel" id="tool-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal" hidden>
+{% include "partials/_tool_terminal.html" %}
+    </div>
+
+    {% if cap.MANAGE_BACKUPS in user_capabilities %}
+    <div class="tab-panel" id="tool-backup" role="tabpanel" aria-labelledby="tab-btn-backup" hidden>
+        {# Structure only -- backup-tab.js builds this from GET /api/backups/machines/<machine>.
+           Its own container rather than the panel itself, because it replaceChildren()s
+           whatever it is given on every state change. The fleet policy it overrides is on
+           Fleet tasks, and the pane links there. #}
+        <div id="backup-machine-pane"></div>
+    </div>
+    {% endif %}
+
+    <div class="tab-panel" id="tool-firmware" role="tabpanel" aria-labelledby="tab-btn-firmware" hidden>
+{% include "partials/_tool_firmware.html" %}
+    </div>
+
+    <div class="tab-panel" id="tool-network" role="tabpanel" aria-labelledby="tab-btn-network" hidden>
+{% include "partials/_tool_network.html" %}
+    </div>
+
+    {% if cap.ISSUE_COMMANDS in user_capabilities %}
+    <div class="tab-panel" id="tool-files" role="tabpanel" aria-labelledby="tab-btn-files" hidden>
+{% include "partials/_tool_files.html" %}
+    </div>
+    {% endif %}
+</div>{# /#machine-config #}
 
 
 {# Ending or restarting a process on somebody else's PC destroys their unsaved work, and the
@@ -459,29 +569,54 @@
 </div>
 {% endif %}
 
+{% include "partials/_tool_dialogs.html" %}
+{% if cap.ISSUE_COMMANDS in user_capabilities %}
+{% include "partials/_tool_files_dialogs.html" %}
+{% endif %}
+
 {% endblock %}
 {% block page_scripts %}
-{# Order matters. machine-context.js answers "which machine is this page about", and
-   processes.js reads the rest of #machine-config's data-*. collapse.js goes LAST -- it
-   restores folded sections by setting the `open` attribute, and the modules that poll only
-   while their section is open have to have registered their `toggle` listeners by then.
-
-   The terminal, backup, firmware, network and favorites scripts left with their panels; see
-   tools.html. xterm is no longer loaded here either, which is most of this page's weight. #}
+{# Order matters.
+   - machine-context.js answers "which machine is this page about"; processes.js reads the
+     rest of #machine-config's data-*.
+   - tool-panels.js before every tool module, which registers with it.
+   - tabs.js after the modules, so each panel's tab:shown listener exists before the restored
+     tab fires it.
+   - machine-tools-gate.js before machine-switcher.js: both wait on the capability report,
+     and the switcher's "the tab you landed on was just hidden" check must run second.
+   - collapse.js LAST -- it restores folded sections by setting the `open` attribute, and the
+     modules that poll only while their section is open have to be listening by then. #}
 <script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
 {# Before every module that asks what this machine can do: it holds the one request they
    share, so three cards asking the same question cost one answer. #}
 <script src="{{ url_for('static', filename='js/machine-capabilities.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/processes.js') }}"></script>
-{# Before collapse.js, like every other module that hangs off a fold's `toggle`: collapse.js
-   restores a section by setting `open`, and a listener registered after that has already run
-   never hears about it. #}
 <script src="{{ url_for('static', filename='js/location-map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-location.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
+{# Vendored, not a CDN: the Terminal tab must work on an isolated LAN, and a third party
+   must not be able to inject script into a page that runs code as SYSTEM.
+   See static/vendor/README.md for versions and checksums. #}
+<script src="{{ url_for('static', filename='vendor/xterm.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/xterm-addon-fit.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-pty.js') }}"></script>
+<script src="{{ url_for('static', filename='js/fleet-terminal.js') }}"></script>
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<script src="{{ url_for('static', filename='js/backup-tab.js') }}"></script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
+<script src="{{ url_for('static', filename='js/wake.js') }}"></script>
+{% if cap.ISSUE_COMMANDS in user_capabilities %}
+<script src="{{ url_for('static', filename='js/files.js') }}"></script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-tools-gate.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-switcher.js') }}"></script>
 <script src="{{ url_for('static', filename='js/collapse.js') }}"></script>
 {% endblock %}

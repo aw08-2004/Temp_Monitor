@@ -1,0 +1,47 @@
+/* Tailwind source for hub/static/css/app.css. Build with tools/build_css.ps1, never by hand.
+
+   **app.css is committed and this file is not read at runtime.** Hub self-update ships hub/
+   as plain files, so a deployed hub never runs a build: a class used in a template but absent
+   from app.css simply has no CSS, silently. Rebuild after touching classes.
+
+   Theme and utilities only -- NO preflight. components.css still styles every older page, and
+   preflight's reset (headings unstyled, buttons stripped, borders zeroed) would restyle all of
+   them at once. Preflight comes in when the last of components.css is gone, not before.
+
+   Colours are not Tailwind's palette. They map onto tokens.css, so the [data-theme] switch
+   keeps working with no dark: variants and a token change reaches both stylesheets at once.
+   `inline` makes each utility reference the var() itself rather than a copy resolved at
+   build time, which is what lets the theme change at runtime. */
+
+@layer theme, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Where class names are found. Explicit, because the CLI's automatic detection keys off a
+   git root and a package.json this repo does not have for the hub. */
+@source "../../templates";
+@source "../js";
+
+@theme inline {
+    --color-bg: var(--bg);
+    --color-surface: var(--surface);
+    --color-card: var(--card);
+    --color-card-border: var(--card-border);
+    --color-text: var(--text);
+    --color-muted: var(--muted);
+    --color-accent: var(--accent);
+    --color-accent-hover: var(--accent-hover);
+    --color-accent-contrast: var(--accent-contrast);
+    --color-accent-soft: var(--accent-soft);
+    --color-success: var(--success);
+    --color-success-bg: var(--success-bg);
+    --color-warning: var(--warning);
+    --color-warning-bg: var(--warning-bg);
+    --color-danger: var(--danger);
+    --color-danger-bg: var(--danger-bg);
+    --color-control: var(--control-bg);
+
+    --radius-sm: var(--radius-sm);
+    --radius-md: var(--radius-md);
+    --radius-lg: var(--radius-lg);
+}

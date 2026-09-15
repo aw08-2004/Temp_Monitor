@@ -33,6 +33,11 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+{# Tailwind utilities, built by tools/build_css.ps1 and committed (see CLAUDE.md). After
+   components.css so a utility written on an element wins over the component rule it is
+   adjusting -- that is the only reason to write one there. No preflight inside, so it restyles
+   nothing that does not ask for it. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 {# The shell renders no page content, so it needs no page stylesheet either -- and pulling
    in, say, remote.css around an empty frame host is how the chrome starts inheriting rules
    meant for a page. #}
@@ -110,6 +115,12 @@
 <script type="application/json" id="i18n-catalog">{{ i18n_catalog_json | safe }}</script>
 <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+{# The Ctrl+K palette lives with the topbar, so wherever there is a topbar: the shell and a
+   classic page, never a framed one (the shell's copy hears framed keystrokes through
+   FleetPalette.listen). Before shell.js, which calls that on every frame load. #}
+{% if shell_mode != 'framed' %}
+<script src="{{ url_for('static', filename='js/command-palette.js') }}"></script>
+{% endif %}
 {% if shell_mode == 'shell' %}
 <script src="{{ url_for('static', filename='js/shell.js') }}"></script>
 {% else %}

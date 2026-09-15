@@ -1,0 +1,115 @@
+/* Machine page header: the name, the machine switcher, and the tab strip under them.
+   Replaces tools.css (hub 1.111.0) -- the tools came back to the machine page as tabs, and
+   the permanent machine column became the switcher's popover. The rows are still
+   .picker-list from components.css, shared with the Remote page's picker. */
+
+.machine-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+}
+
+.machine-head__title {
+    font-size: var(--text-xl);
+    margin-bottom: 0;
+    /* A machine name is arbitrary reported text; a 60-character one must wrap rather than
+       push the switcher and the Remote button off the right edge. */
+    overflow-wrap: anywhere;
+}
+
+.machine-head__actions {
+    margin-left: auto;
+    display: flex;
+    gap: var(--space-2);
+}
+
+/* ---- The switcher ---- */
+.machine-switcher {
+    position: relative;
+}
+
+.machine-switcher > summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+.machine-switcher > summary::-webkit-details-marker {
+    display: none;
+}
+
+.machine-switcher[open] > summary svg {
+    transform: rotate(180deg);
+}
+
+/* Positioned against the switcher, not the viewport: the frame scrolls, and a fixed popover
+   would stay put while the name it belongs to scrolled away. */
+.machine-switcher__panel {
+    position: absolute;
+    z-index: 40;
+    top: calc(100% + var(--space-2));
+    left: 0;
+    width: min(340px, calc(100vw - var(--space-8)));
+    padding: var(--space-3);
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+}
+
+.machine-switcher__panel .input {
+    width: 100%;
+    margin-bottom: var(--space-2);
+}
+
+.machine-switcher__panel .picker-list {
+    max-height: min(420px, 55vh);
+}
+
+/* The rows are links here (see machine-switcher.js for why), and a link inherits the
+   underline and accent colour a button row never had. */
+a.picker-list__item {
+    text-decoration: none;
+    color: inherit;
+}
+
+/* The machine you are already on. Distinct from :hover and :focus-visible, which say "you
+   are pointing at this" -- this one says "this is the page you are looking at". */
+.picker-list__item--active,
+.picker-list__item--active:hover {
+    background: var(--control-bg);
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+/* ---- The tab strip ---- */
+/* Sticky, so the tabs stay reachable from the bottom of a long Overview. The background is
+   load-bearing: without it the cards scroll visibly underneath the strip. */
+.machine-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: var(--bg);
+}
+
+#machine-tools-note {
+    margin: calc(-1 * var(--space-3)) 0 var(--space-4);
+}
+
+@media (max-width: 900px) {
+    .machine-head__actions {
+        margin-left: 0;
+    }
+
+    /* Six tabs do not fit a phone; scroll the strip sideways rather than wrapping it into a
+       second row that the sticky background then has to cover. */
+    .machine-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+    }
+
+    .machine-tabs .tabs__tab {
+        flex: 0 0 auto;
+    }
+}

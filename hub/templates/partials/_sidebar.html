@@ -24,7 +24,25 @@
        path. Space-separated: Dashboard owns "/" and every "/machine/..." under it, exactly
        as its endpoint tuple does. tests/test_shell.py pins each one against its own href so
        the two cannot drift apart. #}
+    {# Three sections (hub 1.112.0): Fleet is what the fleet IS, Operate is what you do to
+       it, Administration is the hub itself and who may use it. Eighteen flat entries in the
+       order they happened to ship had no shape to scan.
+
+       A section renders only when at least one link in it will -- a heading over nothing is
+       a promise the operator's permissions cannot keep. The has_* sets below mirror the
+       gates on the links inside, so when a link's gate changes, change its section's too.
+
+       Rejected: a collapsible Administration group. A folded <details> takes its icons off
+       the collapsed rail with it, and the rail is exactly where a fold would be used. #}
+    {% set has_operate = cap.VIEW in user_capabilities or cap.REMOTE_CONTROL in user_capabilities
+                         or cap.DEPLOY_PACKAGES in user_capabilities
+                         or cap.MANAGE_BACKUPS in user_capabilities or cap.MANAGE_FIRMWARE in user_capabilities %}
+    {% set has_admin = cap.VIEW in user_capabilities or cap.VIEW_AUDIT_LOG in user_capabilities
+                       or cap.MANAGE_SETTINGS in user_capabilities
+                       or cap.MANAGE_PERMISSION_GROUPS in user_capabilities or cap.MANAGE_USERS in user_capabilities %}
     <nav class="sidebar__nav">
+        <div class="sidebar__section" role="group" aria-labelledby="nav-section-fleet">
+        <div class="sidebar__section-label" id="nav-section-fleet">{{ t('nav.section.fleet') }}</div>
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" data-nav-prefix="/ /machine" href="{{ url_for('index') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
             <span class="sidebar__link-label">{{ t('nav.dashboard') }}</span>
@@ -52,16 +70,11 @@
                dismiss -- rendering it conditionally would leave nothing for the script to find. #}
             <span class="sidebar__badge" id="alerts-badge" {% if not open_alert_count %}hidden{% endif %}>{{ open_alert_count or '' }}</span>
         </a>
-        {# The native client (roadmap #11). Gated on VIEW rather than on a capability of
-           its own: anyone allowed into the console may install the app, because the app
-           can do nothing on its own -- the device token it is later paired with is what
-           decides that. The gate matches the route's, so this link never 403s. #}
-        {% if cap.VIEW in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'apitokens.download_page' else '' }}" data-nav-prefix="/download" href="{{ url_for('apitokens.download_page') }}">
-            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
-            <span class="sidebar__link-label">{{ t('nav.download') }}</span>
-        </a>
-        {% endif %}
+        </div>
+
+        {% if has_operate %}
+        <div class="sidebar__section" role="group" aria-labelledby="nav-section-operate">
+        <div class="sidebar__section-label" id="nav-section-operate">{{ t('nav.section.operate') }}</div>
         {# Links are hidden when the caller lacks the capability behind them. This is
            presentation only -- every route is gated server-side regardless (see
            permissions_web.Access) -- but a sidebar of links that all 403 is worse than
@@ -70,35 +83,6 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'remote_page' else '' }}" data-nav-prefix="/remote" href="{{ url_for('remote_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 20h10"/><path d="M11 14v6"/><rect x="17" y="10" width="5" height="10" rx="1.5"/></svg>
             <span class="sidebar__link-label">{{ t('nav.remote') }}</span>
-        </a>
-        {% endif %}
-        {# Terminal, Backup, Firmware and Network -- including what used to be the Firmware
-           and Backups entries of their own. Those were the fleet halves of two subjects
-           whose other half was a tab on the machine page, so the console had one home for
-           "this PC's BIOS" and another for "the BIOS images", a navigation apart. One
-           entry, two halves of each tab.
-           Gated on VIEW, matching the route: the
-           four panels behind it were between them never gated on more than that, and each
-           endpoint re-checks its own capability and the machine's scope anyway. #}
-        {% if cap.VIEW in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'tools_page' else '' }}" data-nav-prefix="/tools" href="{{ url_for('tools_page') }}">
-            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 1 5.3 5.2l-8.4 8.4a2 2 0 0 1-2.8-2.8l8.4-8.4"/><path d="M6 12L3.5 9.5a3.5 3.5 0 0 1 4.9-4.9L11 7"/></svg>
-            <span class="sidebar__link-label">{{ t('nav.tools') }}</span>
-        </a>
-        {% endif %}
-        {# Device policy (roadmap #23). Gated on `view` like the route: a reader who cannot
-           author one can still see which policies exist and why an app on a device they
-           administer will not open. The page hides its own write controls. #}
-        {% if cap.VIEW in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'policy.policy_page' else '' }}" data-nav-prefix="/policy" href="{{ url_for('policy.policy_page') }}">
-            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>
-            <span class="sidebar__link-label">{{ t('nav.policy') }}</span>
-        </a>
-        {% endif %}
-        {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" data-nav-prefix="/audit" href="{{ url_for('audit.audit_page') }}">
-            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
-            <span class="sidebar__link-label">{{ t('nav.audit_log') }}</span>
         </a>
         {% endif %}
         {% if cap.DEPLOY_PACKAGES in user_capabilities %}
@@ -118,6 +102,18 @@
             <span class="sidebar__link-label">{{ t('nav.patches') }}</span>
         </a>
         {% endif %}
+        {# Fleet tasks: the fleet halves of Backup and Firmware (the old /backups and /firmware
+           pages). Until hub 1.111.0 this entry was "Tools" and also held Terminal, Network,
+           Files and each PC's own backup and BIOS -- those are tabs on the machine page now.
+           Gated on the two capabilities the page has anything for: the route stays open to
+           VIEW so old bookmarks do not 403, but a link to a page that is empty for you is
+           worse than no link. #}
+        {% if cap.MANAGE_BACKUPS in user_capabilities or cap.MANAGE_FIRMWARE in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'tools_page' else '' }}" data-nav-prefix="/tools" href="{{ url_for('tools_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 1 5.3 5.2l-8.4 8.4a2 2 0 0 1-2.8-2.8l8.4-8.4"/><path d="M6 12L3.5 9.5a3.5 3.5 0 0 1 4.9-4.9L11 7"/></svg>
+            <span class="sidebar__link-label">{{ t('tools.nav') }}</span>
+        </a>
+        {% endif %}
         {# Gated on VIEW, which is what the page route itself requires: a standing
            instruction that acts on a PC is something anyone who can see that PC should be
            able to read. Writing one additionally needs MANAGE_RULES, and the page enforces
@@ -128,11 +124,32 @@
             <span class="sidebar__link-label">{{ t('nav.rules') }}</span>
         </a>
         {% endif %}
+        {# Device policy (roadmap #23). Gated on `view` like the route: a reader who cannot
+           author one can still see which policies exist and why an app on a device they
+           administer will not open. The page hides its own write controls. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'policy.policy_page' else '' }}" data-nav-prefix="/policy" href="{{ url_for('policy.policy_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.policy') }}</span>
+        </a>
+        {% endif %}
+        </div>
+        {% endif %}
+
+        {% if has_admin %}
+        <div class="sidebar__section" role="group" aria-labelledby="nav-section-admin">
+        <div class="sidebar__section-label" id="nav-section-admin">{{ t('nav.section.admin') }}</div>
+        {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" data-nav-prefix="/audit" href="{{ url_for('audit.audit_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.audit_log') }}</span>
+        </a>
+        {% endif %}
         {# Cross-hub sharing (roadmap #15). Gated on VIEW, matching the route: lending a
            machine you already administer is delegation rather than administration, and the
            page additionally hides its Paired hubs tab from anyone without
-           MANAGE_PERMISSION_GROUPS. It sits here rather than beside Permission Groups
-           because two of its three tabs are about machines, not about people. #}
+           MANAGE_PERMISSION_GROUPS. In Administration anyway, because what it changes is who
+           may reach this hub's machines -- the same question the rest of this section asks. #}
         {% if cap.VIEW in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'sharing.sharing_page' else '' }}" data-nav-prefix="/sharing" href="{{ url_for('sharing.sharing_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4"/><path d="M15.4 6.5l-6.8 4"/></svg>
@@ -169,6 +186,19 @@
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             <span class="sidebar__link-label">{{ t('nav.users') }}</span>
         </a>
+        {% endif %}
+        {# The native client (roadmap #11). Gated on VIEW rather than on a capability of
+           its own: anyone allowed into the console may install the app, because the app
+           can do nothing on its own -- the device token it is later paired with is what
+           decides that. The gate matches the route's, so this link never 403s. Last, because
+           it is visited once per operator rather than once per day. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'apitokens.download_page' else '' }}" data-nav-prefix="/download" href="{{ url_for('apitokens.download_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.download') }}</span>
+        </a>
+        {% endif %}
+        </div>
         {% endif %}
     </nav>
     {# Pinned to the bottom of the sidebar (.sidebar is a flex column, so margin-top:auto

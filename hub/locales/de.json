@@ -6,7 +6,7 @@
   ],
   "nav": {
     "dashboard": "Übersicht",
-    "inventory": "Anlageninventar",
+    "inventory": "Geräte",
     "alerts": "Warnungen",
     "remote": "Remote",
     "audit_log": "Auditprotokoll",
@@ -28,7 +28,12 @@
     "sharing": "Freigabe",
     "provisioning": "Geräte-Provisionierung",
     "map": "Karte",
-    "policy": "Geräterichtlinie"
+    "policy": "Geräterichtlinie",
+    "section": {
+      "fleet": "Flotte",
+      "operate": "Betrieb",
+      "admin": "Verwaltung"
+    }
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -50,6 +55,21 @@
   "shell": {
     "frame_title": "Seiteninhalt"
   },
+  "palette": {
+    "button": "Geräte suchen…",
+    "shortcut": "Strg K",
+    "label": "Geräte und Seiten suchen",
+    "placeholder": "Nach Name, Seriennummer, Inventarnummer oder Betriebssystem suchen — oder einen Seitennamen eingeben",
+    "devices": "Geräte",
+    "pages": "Seiten",
+    "empty": "Keine Treffer für „{query}“.",
+    "loading": "Geräte werden geladen…",
+    "hint": "↑↓ bewegen · ←→ Tab wählen · Enter öffnen · Esc schließen",
+    "action_overview": "Übersicht"
+  },
+  "toast": {
+    "dismiss": "Schließen"
+  },
   "login": {
     "title": "Anmelden",
     "prompt": "Melden Sie sich mit einem autorisierten Konto an, um die Übersicht zu sehen.",
@@ -65,8 +85,8 @@
   "dashboard": {
     "heading": "Flottenübersicht",
     "empty": "Bisher hat sich kein Rechner gemeldet.",
-    "intro": "Alles unten bezieht sich auf die gesamte Flotte. Für einen einzelnen Rechner öffne das",
-    "intro_link": "Anlagenverzeichnis",
+    "intro": "Alles unten bezieht sich auf die gesamte Flotte. Für einen einzelnen Rechner öffne die",
+    "intro_link": "Geräteliste",
     "generated_at": "Stand {time}",
     "health": {
       "title": "Flottenzustand",
@@ -151,7 +171,26 @@
     "reset_zoom": "Zoom zurücksetzen"
   },
   "inventory": {
-    "heading": "Anlageninventar",
+    "heading": "Geräte",
+    "select_all": "Alle angezeigten Geräte auswählen",
+    "select_row": "{machine} auswählen",
+    "actions_label": "Aktionen für {machine}",
+    "action_open": "Öffnen",
+    "action_wake": "Jetzt aufwecken",
+    "wake_one_result": "{machine} wird aufgeweckt.",
+    "wake_one_failed": "{machine} konnte nicht aufgeweckt werden: {error}",
+    "wake_selected_none": "Alle ausgewählten PCs sind bereits wach.",
+    "export_csv": "Als CSV exportieren",
+    "bulk": {
+      "count": {
+        "one": "{count} ausgewählt",
+        "other": "{count} ausgewählt"
+      },
+      "wake": "Ausgewählte aufwecken",
+      "deploy": "Paket verteilen…",
+      "export": "Auswahl exportieren",
+      "clear": "Auswahl aufheben"
+    },
     "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Online-Computer erscheinen zusätzlich in der Live-Übersicht; Offline-Computer bleiben hier, bis sie gelöscht werden. Beim Löschen werden Identität, Temperaturverlauf und Flottenregistrierung dauerhaft entfernt.",
     "search_placeholder": "Nach Name, Hersteller, Anlagenkennzeichen, Seriennummer oder Service-Tag suchen…",
     "col": {
@@ -640,7 +679,7 @@
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Computer aus der Übersicht nehmen nach",
-        "help": "Ein Computer, der innerhalb dieses Fensters keine Temperatur gemeldet hat, verschwindet aus der Live-Übersicht und gilt im Anlageninventar als offline. Agenten melden alle paar Sekunden, das verkraftet also ein paar ausgefallene Meldungen ohne Flattern."
+        "help": "Ein Computer, der innerhalb dieses Fensters keine Temperatur gemeldet hat, verschwindet aus der Live-Übersicht und gilt in der Geräteliste als offline. Agenten melden alle paar Sekunden, das verkraftet also ein paar ausgefallene Meldungen ohne Flattern."
       },
       "fleet.offline_after_seconds": {
         "label": "Agent als offline markieren nach",
@@ -1251,6 +1290,13 @@
     "request_failed": "{url} lieferte {status}"
   },
   "packages": {
+    "preset": {
+      "banner": {
+        "one": "Wähle ein Paket, das auf das {count} ausgewählte Gerät verteilt wird.",
+        "other": "Wähle ein Paket, das auf die {count} ausgewählten Geräte verteilt wird."
+      },
+      "clear": "Verwerfen"
+    },
     "heading": "Pakete",
     "intro": "Beschreibe einen Installer einmal – Datei, stille Befehlszeile und was seinen Erfolg belegt – und verteile ihn dann an Computer und sieh zu, wie er ankommt.",
     "new_package": "Neues Paket",
@@ -2251,6 +2297,15 @@
       "network": "Netzwerk",
       "files": "Dateien"
     },
+    "tabs_label": "Ansichten für diesen Rechner",
+    "tab_overview": "Übersicht",
+    "open_remote": "Fernzugriff",
+    "switcher": {
+      "label": "Zu einem anderen Rechner wechseln",
+      "search": "Rechner suchen",
+      "loading": "Rechner werden geladen…",
+      "none": "Keine Rechner passen zu deiner Suche."
+    },
     "os": "Betriebssystem: {value}",
     "os_build": " (Build {build})",
     "channel": "Kanal: {value}",
@@ -2892,8 +2947,10 @@
     "used_by": "Verwendet von {rules}"
   },
   "tools": {
-    "heading": "Werkzeuge",
-    "intro": "Erst das Werkzeug wählen, dann den Rechner. Alles hier wirkt auf jeweils einen PC.",
+    "heading": "Flottenaufgaben",
+    "intro": "Sicherungs- und Firmware-Arbeit für die ganze Flotte. Alles, was du an einem einzelnen PC tust — Terminal, Dateien, seine eigene Sicherung und sein BIOS, Aufwecken — steht auf der Seite dieses PCs; öffne sie über die Geräteliste.",
+    "nav": "Flottenaufgaben",
+    "nothing": "Für deine Berechtigungen gibt es hier nichts. Flottenaufgaben brauchen die Berechtigung, Sicherungen oder Firmware zu verwalten.",
     "views_nav": "Werkzeuge",
     "tab": {
       "terminal": "Terminal",

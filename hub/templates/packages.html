@@ -21,6 +21,15 @@
     <button class="btn btn--primary" type="button" id="new-package">{{ t('packages.new_package') }}</button>
 </div>
 
+{# Machines handed over from the Devices page's bulk bar (hub 1.113.0). packages.js shows this
+   while a hand-off is waiting and pre-fills the deploy dialog with it. Starts `hidden` as a
+   CLASS: `flex` is a Tailwind display utility, and the hidden attribute would lose to it. #}
+<div id="deploy-preset" role="status"
+     class="mb-4 hidden flex-wrap items-center gap-3 rounded-lg border border-accent bg-accent-soft px-4 py-3 text-sm text-text">
+    <span id="deploy-preset-text" class="flex-1"></span>
+    <button class="btn btn--ghost" type="button" id="deploy-preset-clear">{{ t('packages.preset.clear') }}</button>
+</div>
+
 {# Driven by the shared tabs.js (ARIA roles, roving tabindex, arrow keys, #hash
    linkability, last-tab persistence). Rolling a switcher by hand here would lose all of
    that and, worse, would be a second implementation to drift out of sync. #}
