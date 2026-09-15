@@ -93,7 +93,9 @@ public sealed class AppInventoryReader(Context context, ILogger log) : IInventor
         {
             var app = Describe(manager, package);
             if (app is null) continue;
-            apps.Add(app);
+            // Cast so this binds to Add(JsonNode), not the reflective generic Add<T> -- which the
+            // trimmer flags and the Release build now refuses. See AgentJson.
+            apps.Add((JsonNode)app);
             if (package.PackageName is { Length: > 0 } name) names.Add(name);
         }
         // Published only on a SUCCESSFUL read, so a failed enumeration leaves the previous list

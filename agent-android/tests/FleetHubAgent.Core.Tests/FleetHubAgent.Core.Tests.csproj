@@ -16,6 +16,17 @@
          a test on, so referencing it would turn `dotnet test` from something anyone in this
          shop can run into something only a machine with the SDK can. What that costs is
          stated plainly in agent-android/README.md rather than hidden. -->
+
+    <!-- **Reflection-based System.Text.Json is OFF in this test run, because it is off on the
+         phone.** The Release APK is trimmed fully (AndroidLinkMode=full), and a trimmed app
+         ships System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault=false: every
+         JsonSerializer call without a source-generated JsonTypeInfo throws
+         InvalidOperationException on the device and works perfectly here. That gap let 0.2.1
+         ship an agent that could not store its own enrollment token: SaveIdentity caught the
+         throw and returned false, so every enrollment was discarded and retried forever, on
+         QR and setup screen alike, while all 93 tests passed. Turning it off here is what
+         makes a workstation run fail the way a device does. See JsonTrimmingTests. -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
 
   <ItemGroup>

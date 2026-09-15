@@ -43,14 +43,25 @@
        resolved by name and removes it, and the failure lands at runtime rather than at build
        time. Two things make it acceptable here. The .NET Android SDK preserves the types the
        platform resolves reflectively (activities, services, receivers) through its own
-       linker descriptors, and nothing in this app resolves a type by name itself. The only
-       reflective surface is System.Text.Json, which the source generator is not used for but
-       which the SDK's own trimming annotations cover.
+       linker descriptors, and nothing in this app resolves a type by name itself.
+
+       **System.Text.Json is the exception, and this comment used to say it was covered.** It
+       was not. A fully trimmed app runs with reflection-based serialization DISABLED, so every
+       JsonSerializer call without generated type info throws at runtime. 0.2.1 shipped that
+       way: it could not store its enrollment token, send a report, read a command or read its
+       own update manifest, while every workstation test passed. Every typed JSON call now goes
+       through FleetHubAgent.Core's AgentJson context, and the test project runs with reflection
+       off so a new reflective call fails there instead of on a phone.
 
        If a release ever crashes on startup with a MissingMethodException from a type nobody
        calls directly, this is the first thing to turn off. -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <AndroidLinkMode>full</AndroidLinkMode>
+    <!-- The trimmer's own warnings for "this will not survive trimming" are errors here. The
+         Core tests run with reflection off and catch Core; nothing tests this project, so the
+         trimmer is the only thing that can see a reflective JSON call in the Android half.
+         Before 0.2.2 these were warnings, and nobody reads warnings on a build that succeeds. -->
+    <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL3050</WarningsAsErrors>
   </PropertyGroup>
 
   <!-- Release signing, when this machine has been given the keystore.

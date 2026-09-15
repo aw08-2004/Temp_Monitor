@@ -3061,6 +3061,43 @@ agent said.
 the `push_*` columns already on `api_tokens` is what would let the command loop stop holding a
 request every 25 seconds.
 
+### Full trimming switched off System.Text.Json reflection · agent 0.2.2
+
+**No Android device could enroll on 0.2.1, by QR or by setup screen.** Reported from a factory-reset
+phone. The hardware validation above ran on 2026-09-07; `AndroidLinkMode=full` landed on
+2026-09-09, and the csproj comment beside it said System.Text.Json was covered by the SDK's
+trimming annotations. It was not: a fully trimmed app ships
+`JsonSerializer.IsReflectionEnabledByDefault=false`, so every `JsonSerializer` call without
+generated type info **throws** on the device and works on a workstation.
+
+`AgentState.SaveIdentity` caught that throw and returned false; `FleetClient` discards an
+identity it could not persist, by design, and retries in 30 seconds. So the hub minted an agent
+row every half-minute and the device never kept one. The same throw stopped every
+`/api/report` (the device never appeared in the console), every command poll and the update
+manifest read -- which is why 0.2.1 cannot self-update out of it -- and `JsonArray.Add<T>` in
+the capability report, which the heartbeat swallowed. A hand-written `TelemetryJsonContext` had
+been started against the telemetry symptom and left `main` not compiling.
+
+**Fixed with one source-generated context (`AgentJson`)** that every typed read and write passes,
+and **the test project now runs with reflection off**, which is what reproduced it: ten existing
+and new tests failed with the device's exception before the fix. `JsonTrimmingTests` asserts the
+switch is still off, so deleting the property cannot quietly restore the gap.
+
+Rejected:
+
+- **`JsonSerializerIsReflectionEnabledByDefault=true` in the app.** It compiles and is worse:
+  the linker still strips the property metadata reflection reads, so an identity serializes as
+  `{}` with no exception at all.
+- **Dropping back to the default link mode.** Fixes it and puts five megabytes of BouncyCastle
+  back into an APK every managed phone downloads on every release. Source generation costs one
+  file.
+- **Building the JSON by hand with `JsonObject` everywhere.** Reflection-free, but it turns
+  four typed models into string keys spelled out at each call site, and the telemetry offline
+  buffer would have to change shape to carry them.
+
+**Not done:** the hub keeps the orphan `agents` rows from every failed retry. They hold no
+usable credential; cleaning them up is a hub change of its own.
+
 ### Scheduled commands reach an Android device regardless of the version gates
 
 **The assumption that `MIN_*_AGENT` keeps unsupported commands away from this agent was
