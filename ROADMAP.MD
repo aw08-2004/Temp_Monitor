@@ -2779,10 +2779,14 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, unreleased (0.1.0)
+## 🚧 22. Linux agent   ·   `agent-linux/`, tagged 0.1.0 and 0.2.0 · self-update not live
 
 A Linux counterpart to the Windows agent, in `agent-linux/`. Started 2026-09-05 on
-`feat/linux-agent`; **nothing is released and nothing in the field runs it**. It reports
+`feat/linux-agent`. Two releases are tagged — `linux-agent-v0.1.0` ("First cut. Unsigned,
+untested on real hardware.") and `linux-agent-v0.2.0`, both published 2026-09-06 — so
+`install.sh` installs 0.2.0 on a new box, but **a machine that already has the agent cannot
+take either one**: the manifest an installed agent updates from is not in the repo, and the
+source on `main` is still `0.1.0`. See *The manifest is not in the repo* below. It reports
 telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`.
 Full detail in `agent-linux/README.md`.
 
@@ -2825,6 +2829,32 @@ components" is a plausible change that would silently start offering features th
 
 **Rejected:** starting at 3.35.0 to match the Windows agent. Every gate above would then pass
 on a lie, and the machine would be measured against somebody else's release train.
+
+### The manifest is not in the repo, so nothing self-updates
+
+Everything below describes an updater that works and is not reachable. `hub/channels.py`
+advertises `agent-linux/agent-linux.manifest.json` (and the beta file beside it) off `main`,
+`.gitattributes` pins all four against line-ending rewrites, and `release.ps1` writes and
+commits them — but **none of the four has ever been committed**. The only commit that adds
+them sits unmerged on `fix/linux-agent-web-installer`.
+
+**It fails as silence, which is why it survived two releases.** `GetByteArrayAsync` on a
+missing manifest raises `HttpRequestException`, which `SelfUpdater` catches as the offline
+case and logs at **Debug** as `check failed (offline?)`. A box that can reach GitHub perfectly
+well therefore looks exactly like one that cannot, forever, at Debug level. The hub's own
+version hint for the platform is missing for the same reason, so the dashboard has nothing to
+call a Linux machine outdated against.
+
+`AgentConfig.Version` says the same thing from the other end: still `0.1.0` with
+`linux-agent-v0.2.0` tagged. The two-file pair moves only through `release.ps1`
+(`VERSIONING.md`), and that tag was cut without it.
+
+**The fix is a release, not an edit.** The manifest is signed with the fleet's offline Ed25519
+key, so it has to come out of `agent-linux/release.ps1 -Version x.y.z` on the machine holding
+that key; a hand-written json is a file every agent correctly refuses, and committing one would
+turn a silent no-op into a fleet-wide `manifest signature invalid`. Until that release is cut,
+a Linux box is upgraded by re-running `install.sh`, and the `#22 self-update` row of the
+hardware-validation table cannot be exercised.
 
 ### Signed self-update
 
@@ -2918,11 +2948,19 @@ sibling of the Windows agent's, not a fourth thing.
 
 ---
 
-## 🚧 23. Android agent   ·   `agent-android/`, unreleased (0.1.0)
+## 🚧 23. Android agent   ·   `agent-android/`, released 0.2.3 (stable)
 
 An Android counterpart to the Windows agent, in `agent-android/`. Started 2026-09-06 on
-`feat/android-agent`; **nothing is released and no fleet runs it**, but it has now been
-validated on real hardware: a Samsung Galaxy A15 on Android 16 enrolled, reported telemetry
+`feat/android-agent`, and **released**: `0.2.0` (beta, 2026-09-09) is the release where it
+stopped being a thermometer — locate, app inventory and policy, time restrictions, lock,
+wipe, self-update — then `0.2.1` (beta, 2026-09-10), `0.2.2` (beta, 2026-09-15) and
+**`0.2.3` (stable, 2026-09-15)**, which is what `agent-android.manifest.json` points at.
+0.2.1 and 0.2.2 could not enroll at all — release shrinking switched off the serializer the
+agent writes its credential with — so a device on either needs a hand install; 0.2.3 is the
+fix, and 0.1.0 predates self-update and cannot pull anything on its own either. Per-release
+detail in `agent-android/release-notes/`.
+
+Validated on real hardware: a Samsung Galaxy A15 on Android 16 enrolled, reported telemetry
 the hub accepted, and answered a command. Release-signed with the fleet's own Android
 keystore; the protocol half has 93 tests. Full detail in `agent-android/README.md`.
 
@@ -2938,11 +2976,14 @@ The two share a platform and nothing else.
 
 ### The version number used to do the gating; the platform does now
 
-`AgentConfig.Version` is `0.1.0`. It was pinned below `AGENT_TRAIN_MIN_VERSION` (`3.0.0`) for
-the same three reasons the Linux agent was, and the same two are fixed: the hub picks a release
-manifest by the platform a device reports, and the `agents_outdated` tally compares each
-machine against its own train. What is left is the `MIN_*_AGENT` gates, which still read a
-version number — and that is the only reason this is still `0.1.0`.
+`AgentConfig.Version` is `0.2.3`, and the number is free to move because nothing gates on it
+any more. It was pinned below `AGENT_TRAIN_MIN_VERSION` (`3.0.0`) for three reasons, and all
+three are now answered: the hub picks a release manifest by the platform a device reports, the
+`agents_outdated` tally compares each machine against its own train, and the console's
+`MIN_*_AGENT` gates gave way to the capability report (*Console gating*, hub 1.106.0) — which
+is what the paragraph below always said would release the number. An agent's version is a
+sentence about time; what a phone can never do is a fact about the platform, and the two are
+now asked separately.
 
 That remaining one matters more here than on Linux. There, the console withholding a terminal or a
 file browser hides something merely *unimplemented*. Here it hides something **impossible**:
