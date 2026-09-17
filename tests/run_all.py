@@ -41,7 +41,20 @@ def main():
     # version numbers over whatever a test seeded -- a race that made one version assertion
     # pass or fail depending on how fast GitHub answered. Declared once here rather than in
     # each module; a module run on its own sets it for itself (see test_versions.py).
-    env = dict(os.environ, HUB_SKIP_REMOTE_CHECKS="1")
+    #
+    # The four below are seeded for the same reason, and answer a different failure. app.py
+    # refuses to import without a session key, one login provider and one break-glass email,
+    # which is right for a hub and wrong for a test run: every module that imports app then
+    # passed only where a real .env happens to sit beside the checkout, and failed everywhere
+    # else -- a fresh clone, a Linux box, CI -- with a RuntimeError that reads like broken
+    # config rather than a missing fixture. A module that cares about these sets its own at
+    # module scope, which runs after this and wins (test_auth.py, test_devices_web.py).
+    env = dict(os.environ,
+               HUB_SKIP_REMOTE_CHECKS="1",
+               FLASK_SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or "test-secret-key",
+               GOOGLE_CLIENT_ID=os.environ.get("GOOGLE_CLIENT_ID") or "test-client-id",
+               GOOGLE_CLIENT_SECRET=os.environ.get("GOOGLE_CLIENT_SECRET") or "test-secret",
+               ALLOWED_EMAILS=os.environ.get("ALLOWED_EMAILS") or "root@example.com")
 
     failures = []
     for path in files:
