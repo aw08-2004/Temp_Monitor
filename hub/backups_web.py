@@ -200,13 +200,25 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             return "No backup encryption key exists yet. Create one first."
         return None
 
+    # What `_key_state` says when BACKUP_MASTER_KEY is present but unusable -- truncated,
+    # re-wrapped by an editor, pasted with a character missing. **Authored here rather than
+    # passed through from the exception**, unlike every refusal in this file: this dict is
+    # embedded in other routes' success responses rather than returned by refusals.refuse(),
+    # so the one place a refusal becomes a response does not cover it and CodeQL's
+    # py/stack-trace-exposure has nothing to read but `str(e)` reaching a 200. The detail it
+    # replaces ("not valid base64" vs "must decode to 32 bytes") was never rendered by the
+    # console anyway, and this sentence names the file to look in and the way out, which is
+    # what an operator in this state actually needs.
+    KEY_UNUSABLE = ("The backup encryption key configured on this hub is not usable. Check "
+                    "BACKUP_MASTER_KEY in .env, or use an existing key to replace it.")
+
     def _key_state():
         """Everything the console needs to nag correctly, and nothing that reveals the
         key itself."""
         try:
             key = backups.load_master_key()
-        except ValueError as e:
-            return {"configured": False, "error": str(e), "escrowed_at": None,
+        except ValueError:
+            return {"configured": False, "error": KEY_UNUSABLE, "escrowed_at": None,
                     "key_id": None}
         escrowed = backups.get_state(db_path, backups.KEY_ESCROW_STATE_KEY)
         return {

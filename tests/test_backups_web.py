@@ -793,6 +793,20 @@ def main():
         check("and reports nothing was replaced beyond itself",
               r.get_json()["replaced_key_id"] == body["state"]["key_id"])
 
+        # The key state is embedded in several 200 responses, so the sentence it carries
+        # when BACKUP_MASTER_KEY is unusable has to be one this file authored -- not
+        # whatever the parser happened to raise. CodeQL reads a passed-through exception
+        # message reaching a 200 as stack-trace exposure, and it is right about the shape
+        # even when it is wrong about the risk (see refusals.py).
+        os.environ[backups.MASTER_KEY_ENV] = "not-a-key"
+        broken = c.get("/api/backups").get_json()["key"]
+        check("an unusable key reports itself as not configured",
+              broken["configured"] is False)
+        check("and says where to look rather than echoing the parser",
+              "BACKUP_MASTER_KEY in .env" in broken["error"]
+              and "base64" not in broken["error"])
+        os.environ[backups.MASTER_KEY_ENV] = incoming
+
         print("\n== Superuser break-glass ==")
         CURRENT_USER = "root@x.com"
         check("a break-glass superuser reaches the overview",
