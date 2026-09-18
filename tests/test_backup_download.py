@@ -417,6 +417,35 @@ def main():
         check("...still running", backups.get_restore(db_path, running_id)["status"]
               == backups.RUN_RUNNING)
 
+        print("\n== A machine cannot write headers through its own file listing ==")
+        # A manifest path is the AGENT's report of what it backed up, and
+        # backup_paths.normalize() reshapes separators and whitespace while leaving
+        # control characters exactly where they were. That name is what a single-file
+        # download is saved as, which means it reaches a Content-Disposition header -- so
+        # without this, a compromised machine appends headers to an operator's download by
+        # naming a file. hub/apkhost.py declined to echo even an OPERATOR-supplied name
+        # into that header; a machine's own listing is the less trusted of the two.
+        CURRENT_USER = "root@x.com"
+        poisoned = "C:\\Users\\bob\\Desktop\\notes.txt\r\nX-Injected: 1"
+        backups.record_file_set(
+            db_path, run_id="run-poison", machine="PC-1", chain_id=plan["chain_id"],
+            sequence=1, object_key=OBJECT_KEY, stored_bytes=900,
+            files=[{"path": poisoned, "size": 4, "mtime": 1_700_000_100,
+                    "sha256": "bb"}])
+        r = c.post("/api/backups/machines/PC-1/download/preview",
+                   json={"paths": [poisoned]})
+        saved_as = (r.get_json() or {}).get("filename", "")
+        check("the poisoned path is still a file the hub will plan",
+              r.status_code == 200 and (r.get_json() or {}).get("file_count") == 1)
+        check("...but a CR or LF in it never reaches the saved name",
+              "\r" not in saved_as and "\n" not in saved_as)
+        check("...and the name still says which file it was",
+              saved_as.startswith("notes.txt"))
+        check("a quote cannot close the header's own quoted string",
+              '"' not in backups.safe_name('a".txt'))
+        check("an accented name survives, because that is the normal case here",
+              backups.safe_name("informe a\u00f1o.pdf") == "informe a\u00f1o.pdf")
+
     finally:
         backups.build_client = real_build
         if saved_env is None:

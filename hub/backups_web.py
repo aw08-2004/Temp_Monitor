@@ -718,7 +718,9 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             mimetype="application/octet-stream")
         # ASCII filename plus the RFC 5987 form: a machine or a file named in Spanish is
         # the normal case here, and a bare `filename=` with accents in it is mangled
-        # differently by every browser.
+        # differently by every browser. `download_filename` has already stripped the
+        # control characters an AGENT could have put in a manifest path -- the quote
+        # replacement below is the belt to that pair of braces, not the check itself.
         response.headers["Content-Disposition"] = (
             "attachment; filename=\"{}\"; filename*=UTF-8''{}".format(
                 filename.encode("ascii", "replace").decode("ascii").replace('"', "_"),

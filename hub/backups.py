@@ -3484,6 +3484,16 @@ MAX_DOWNLOAD_SELECTIONS = 50
 MAX_DOWNLOAD_FILES = 20_000
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024 * 1024
 
+#: What a downloaded name may not carry. Control characters are the whole point -- the name
+#: is echoed into a `Content-Disposition` header, and a CR or LF reaching it is a header
+#: injection. The quote and the backslash would end that header's quoted string; the
+#: separators would make the name a path. Accented letters deliberately survive: a file named
+#: in Spanish is the normal case here and the RFC 5987 form carries it intact.
+UNSAFE_NAME_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f"\\/]')
+
+#: Long enough for any real filename, short enough that the header stays a header.
+MAX_NAME_CHARS = 200
+
 
 class ChunkReader(io.RawIOBase):
     """A read-only file object over an iterator of byte blocks.
@@ -3632,13 +3642,34 @@ def iter_download(db_path, log_dir, destination_id, plan):
 def download_filename(machine, plan, now=None):
     """What the browser saves it as. One file keeps its own name; anything else is a zip
     named for the machine and the moment, because `Desktop.zip` from three PCs in a
-    downloads folder is three files nobody can tell apart."""
+    downloads folder is three files nobody can tell apart.
+
+    The one file's name is **sanitised, not trusted**. It is the tail of a manifest path,
+    and a manifest path is the agent's own report of what it backed up, normalised by
+    `backup_paths.normalize()` -- which reshapes separators and whitespace and leaves
+    control characters alone. The name then lands in a `Content-Disposition` header, so a
+    machine that reports a name with a CR LF and a header of its own in it is writing
+    headers on the hub's behalf. `hub/apkhost.py` declined to echo even an OPERATOR-supplied name into that
+    header for this reason; an enrolled machine's file listing is the less trusted of the
+    two. Sanitised here rather than at the header, so the preview's `filename` and the
+    saved file agree and there is one place to get it right.
+    """
     if plan["file_count"] == 1:
-        name = plan["archives"][0]["files"][0]["path"].split("\\")[-1]
+        name = safe_name(plan["archives"][0]["files"][0]["path"].split("\\")[-1])
         if name:
             return name
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(time.time() if now is None else now))
     return f"{_safe_component(machine)}-{stamp}.zip"
+
+
+def safe_name(text):
+    """One file's own name, reduced to what is safe to echo into a header.
+
+    Substitutes rather than deletes: `report_2.pdf` out of a name that held a control
+    character still says which file it was, where a deletion would quietly produce a
+    different filename than the operator ticked.
+    """
+    return UNSAFE_NAME_CHARS.sub("_", str(text or "")).strip()[:MAX_NAME_CHARS]
 
 
 def _safe_component(text):
