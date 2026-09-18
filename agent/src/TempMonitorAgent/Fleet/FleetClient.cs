@@ -913,8 +913,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// cannot see from the console: the restore row is closed from this command's output
     /// (see the hub's reconcile_restores), so "the hub said no" without a status code left
     /// somebody guessing between a restore aimed at a machine name this agent is not
-    /// enrolled under (404), one that already finished (409) and a hub that could not
-    /// reach the backup destination (502). Each needs a different thing done about it.
+    /// enrolled under (404), one that already finished (409) and one the hub itself
+    /// refused -- a destination that no longer exists, a missing master key -- which
+    /// agent_restore_plan answers as a 400 carrying the hub's own sentence. Each needs a
+    /// different thing done about it, and only the last one is terminal.
     /// </summary>
     public async Task<(JsonObject? Plan, string? Error)> FetchRestorePlanAsync(
         string restoreId, CancellationToken ct)
