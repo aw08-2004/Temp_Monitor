@@ -87,6 +87,36 @@
     </form>
 </dialog>
 
+<!-- ------------------------------------------------------ importing a key you already have -->
+{# Separate from the reveal dialog rather than a mode of it: one shows a key and the other
+   takes one, and a dialog that does both is a dialog that can show a key to somebody who
+   only meant to paste one. #}
+<dialog class="modal" id="key-import-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('backups.key.import_modal_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <p class="setting__help">
+                {{ t('backups.key.import_modal_intro') }}
+            </p>
+            <label class="setting__label" for="key-import-value">{{ t('backups.key.import_label') }}</label>
+            {# type=password, and autocomplete off: this is the one secret in the console
+               that no password manager should be invited to remember for the wrong site,
+               and a key left legible on a shared helpdesk screen is a key shared. #}
+            <input class="input" id="key-import-value" type="password" autocomplete="off"
+                   spellcheck="false" autocapitalize="off" style="width: 100%;">
+            <p class="setting__default">{{ t('backups.key.import_where') }}</p>
+            <p class="setting__error" id="key-import-warning"></p>
+            <p class="setting__error" id="key-import-error"></p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="key-import-cancel">{{ t('common.cancel') }}</button>
+            <button class="btn btn--primary" type="button" id="key-import-save">{{ t('backups.key.import_save') }}</button>
+        </div>
+    </form>
+</dialog>
+
 <!-- ------------------------------------------------------ the master key -->
 <dialog class="modal" id="key-modal">
     <form method="dialog">

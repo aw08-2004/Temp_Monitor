@@ -30,6 +30,10 @@ const destinationStatus = document.getElementById('destination-status');
 const keyModal = document.getElementById('key-modal');
 const keyError = document.getElementById('key-error');
 const keyValue = document.getElementById('key-value');
+const keyImportModal = document.getElementById('key-import-modal');
+const keyImportValue = document.getElementById('key-import-value');
+const keyImportWarning = document.getElementById('key-import-warning');
+const keyImportError = document.getElementById('key-import-error');
 
 let state = { destinations: [], runs: [], schedule: {}, key: {}, destination_kinds: [],
               files: {}, path_tokens: [] };
@@ -143,6 +147,11 @@ function renderKeyBanner() {
         const create = el('button', 'btn btn--primary', t('backups.key.create'));
         create.addEventListener('click', createKey);
         actions.push(create);
+        // Offered beside Create, not behind it. A hub reinstalled somewhere else reaches
+        // this banner holding archives it can already decrypt — and if the only button
+        // says "Create", the operator presses it, and that is the moment the old archives
+        // become unreadable by this hub.
+        actions.push(importButton('btn'));
     } else if (!key.escrowed_at) {
         modifier = 'bk-banner--danger';
         title = t('backups.key.unescrowed_title');
@@ -150,6 +159,7 @@ function renderKeyBanner() {
         const reveal = el('button', 'btn btn--primary', t('backups.key.reveal'));
         reveal.addEventListener('click', revealKey);
         actions.push(reveal);
+        actions.push(importButton('btn'));
     } else {
         modifier = '';
         title = t('backups.key.ok_title');
@@ -158,6 +168,7 @@ function renderKeyBanner() {
         const reveal = el('button', 'btn', t('backups.key.reveal'));
         reveal.addEventListener('click', revealKey);
         actions.push(reveal);
+        actions.push(importButton('btn'));
     }
 
     const banner = el('div', `bk-banner ${modifier}`.trim());
@@ -198,6 +209,66 @@ function showKey(key) {
     keyValue.textContent = key;
     keyModal.showModal();
 }
+
+// ---------------------------------------------------------------- importing a key
+
+function importButton(className) {
+    const button = el('button', className, t('backups.key.import'));
+    button.addEventListener('click', openKeyImport);
+    return button;
+}
+
+function openKeyImport() {
+    keyImportValue.value = '';
+    keyImportError.textContent = '';
+    // The replacement warning names the key being replaced, so it is rendered from the
+    // banner state rather than only after the server refuses — an operator should see
+    // what they are about to lose before typing, not after.
+    keyImportWarning.textContent = (state.key && state.key.configured)
+        ? t('backups.key.import_replace_warning', { id: state.key.key_id || '' })
+        : '';
+    keyImportModal.showModal();
+    keyImportValue.focus();
+}
+
+async function saveImportedKey() {
+    const key = keyImportValue.value.trim();
+    if (!key) {
+        keyImportError.textContent = t('backups.key.import_empty');
+        return;
+    }
+    // `replace` is sent only when the console already knows a key is configured, so the
+    // 409 the server answers with is a real disagreement — this page's state being stale —
+    // rather than something confirmed away by a checkbox nobody read.
+    const replace = !!(state.key && state.key.configured);
+    let result;
+    try {
+        result = await api('/api/backups/key/import', json('POST', { key, replace }));
+    } catch (e) {
+        keyImportError.textContent = e.message;
+        return;
+    }
+    // Cleared before the dialog closes, so the key does not sit in a DOM node behind it.
+    keyImportValue.value = '';
+    keyImportModal.close();
+    state.key = result.state;
+    renderKeyBanner();
+    // Loud, because it is the one part of this that fails later rather than now: a
+    // destination whose credentials could not be carried across keeps its schedule and
+    // fails at its next upload, and an operator who was not told reads that as the import
+    // having broken their backups.
+    if (result.credentials_stranded) {
+        alert(t('backups.key.import_stranded', { count: result.credentials_stranded }));
+    }
+    load().catch(() => { /* the banner is already right; the next action resyncs the rest */ });
+}
+
+document.getElementById('key-import-save').addEventListener('click', saveImportedKey);
+document.getElementById('key-import-cancel').addEventListener('click', () => {
+    keyImportValue.value = '';
+    keyImportModal.close();
+});
+keyImportModal.addEventListener('close', () => { keyImportValue.value = ''; });
 
 document.getElementById('key-copy').addEventListener('click', async () => {
     try {

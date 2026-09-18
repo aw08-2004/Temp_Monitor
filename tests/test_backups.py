@@ -282,6 +282,85 @@ def main():
               "base64" in error_of(backups.decode_master_key, "not!base64!"))
 
         # ============================================================
+        print("\n== Importing a key you already have ==")
+        # ============================================================
+        # The silent failure this guards: a hub reinstalled anywhere else generates its
+        # own key, and every archive the old installation wrote becomes unreadable BY THIS
+        # HUB while the operator is holding the key that opens them. The second silent
+        # failure is one layer down -- swapping the key without re-wrapping the credential
+        # store leaves every destination failing at its next upload with an error that
+        # reads like a storage fault.
+        outsider = backups.generate_master_key()
+        check("a key from elsewhere is adopted",
+              backups.import_master_key(env_path, outsider)[0] == outsider)
+        check("it is what load_master_key now returns",
+              backups.load_master_key() == backups.decode_master_key(outsider))
+        with open(env_path, "r", encoding="utf-8") as fh:
+            env_text = fh.read()
+        check("the .env line was REPLACED, not appended -- two would let dotenv pick",
+              env_text.count(f"{backups.MASTER_KEY_ENV}=") == 1)
+        check("the imported key is the one in .env",
+              f"{backups.MASTER_KEY_ENV}={outsider}" in env_text)
+        check("the unrelated .env line still survives",
+              env_text.startswith("HUB_URL=https://hub.example.com\n"))
+
+        _, previous_id, _, _ = backups.import_master_key(env_path, outsider)
+        check("importing the key already configured is a no-op, not a refusal",
+              previous_id == backups.key_id(backups.decode_master_key(outsider)))
+        check("surrounding whitespace is tolerated, and normalised away",
+              backups.import_master_key(env_path, f"  {outsider}  ")[0] == outsider)
+
+        check("a key that is not base64 is refused before anything is written",
+              raises(ValueError, backups.import_master_key, env_path, "not!base64!"))
+        check("a key of the wrong length is refused too",
+              raises(ValueError, backups.import_master_key, env_path, "aGVsbG8="))
+        check("and the refusal left the configured key alone",
+              backups.master_key_b64() == outsider)
+
+        # A BACKUP_MASTER_KEY somebody truncated by hand. Nothing was ever encrypted with
+        # it, so importing over it is repair -- refusing would trap the hub in exactly the
+        # state this function exists to undo.
+        os.environ[backups.MASTER_KEY_ENV] = "not-a-key"
+        recovered = backups.generate_master_key()
+        adopted, replaced_id, _, _ = backups.import_master_key(env_path, recovered)
+        check("an unusable configured key does not block an import",
+              adopted == recovered)
+        check("and it is reported as replacing nothing, because it decrypted nothing",
+              replaced_id is None)
+
+        # ---- the credential store moves across with the key ----
+        secret_dir = os.path.join(workdir, "secrets")
+        os.makedirs(secret_dir, exist_ok=True)
+        old_key = backups.decode_master_key(backups.generate_master_key())
+        new_key = backups.decode_master_key(backups.generate_master_key())
+        backups.store_secret(secret_dir, old_key, "dest-a",
+                             {"access_key_id": "AKID", "secret_access_key": "S3CRET"})
+        backups.store_secret(secret_dir, old_key, "dest-b", {"password": "hunter2"})
+        # A row left behind by an earlier key change -- unreadable before this import and
+        # unreadable after it, which is the point: it must not take the import down.
+        backups.store_secret(secret_dir, new_key, "dest-stale", {"password": "gone"})
+
+        rewrapped, stranded = backups.rewrap_secrets(secret_dir, old_key, new_key)
+        check("both readable credentials moved to the new key", rewrapped == 2)
+        check("the one that could not be read is counted, not lost", stranded == 1)
+        check("an S3 credential still decrypts afterwards",
+              backups.load_secret(secret_dir, new_key, "dest-a")["secret_access_key"]
+              == "S3CRET")
+        check("a WebDAV credential still decrypts afterwards",
+              backups.load_secret(secret_dir, new_key, "dest-b")["password"] == "hunter2")
+        check("the stranded row is still THERE, not dropped",
+              backups.has_secret(secret_dir, "dest-stale"))
+        check("the old key no longer opens what moved",
+              raises(ValueError, backups.load_secret, secret_dir, old_key, "dest-a"))
+        check("re-wrapping an empty store is not an error",
+              backups.rewrap_secrets(os.path.join(workdir, "nothing-here"),
+                                     old_key, new_key) == (0, 0))
+
+        # Back to a key of this test's own making, since everything below encrypts with it.
+        backups.import_master_key(env_path, outsider)
+        master_key = backups.load_master_key()
+
+        # ============================================================
         print("\n== Envelope ==")
         # ============================================================
         plaintext = b"".join(struct.pack(">I", i) for i in range(120_000))

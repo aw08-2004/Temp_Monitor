@@ -27,7 +27,10 @@ Five ideas carry the design, and each exists because the naive version is wrong:
     acknowledge that they have stored it offline (see `KEY_ESCROW_STATE_KEY`).
     `restore_backup.py` at the repo root decrypts with the key and the artifact ALONE --
     no hub, no database, no this module -- which is the only form of "we can restore"
-    that survives losing the server.
+    that survives losing the server. A key can also be **imported** (see
+    import_master_key), because a hub reinstalled anywhere else generates a fresh one and
+    would otherwise be permanently unable to read archives the operator still has the key
+    for.
 
   * **Destination credentials are never in the `settings` table.** Settings are dumped
     into the hub database, rendered in a form, and shipped around in `agent_config`;
@@ -77,6 +80,7 @@ import requests
 
 import backup_paths
 import capabilities
+import envfile
 import fleet
 
 # AES-GCM comes from `cryptography`, which Authlib already pulls in -- so this is not a
@@ -522,6 +526,68 @@ def ensure_master_key(env_path):
     return key_b64, True
 
 
+def import_master_key(env_path, raw, log_dir=None):
+    """Adopt a master key the operator already holds. Returns
+    (key_b64, previous_key_id, rewrapped, stranded).
+
+    **The counterpart to ensure_master_key, and what makes a reinstall survivable.** A hub
+    brought up on a new server, in a new folder, or from a VM image without its `.env`
+    generates its own key the first time anything needs one -- and from that moment every
+    archive the previous installation ever wrote is undecryptable BY THIS HUB, while the
+    operator is standing there holding the key that opens them. Generating was the only
+    path the console offered, so the answer used to be "run restore_backup.py by hand,
+    every time, forever". This is that answer put back in the console.
+
+    `previous_key_id` names the key being replaced, or None when there was none. Returned
+    rather than logged here because backups.py does not own the audit trail -- and the
+    key_id is the only form of "which key did this hub stop being able to read" that is
+    safe to write down.
+
+    Rewrites the `.env` line in place through envfile rather than appending the way
+    ensure_master_key does. A second BACKUP_MASTER_KEY line leaves python-dotenv to pick a
+    winner; it picks the last, which works right up until somebody reads the file and
+    believes the first one.
+
+    **The `.env` write happens before the secret store is re-wrapped, on purpose.** It is
+    the write that actually fails -- `.env` lives under STATE_ROOT, is ACL'd to SYSTEM and
+    Administrators by envfile.protect(), and on a Program Files install is the one file a
+    wrong service account cannot touch. Failing there leaves nothing changed at all. The
+    other order would leave every destination credential sealed under a key this hub does
+    not have.
+    """
+    new_key = decode_master_key(raw)      # raises with text an operator can act on
+    # Re-encoded rather than stored as typed: `decode_master_key` tolerates surrounding
+    # whitespace, and what lands in `.env` has to be exactly what reads back out of it.
+    new_b64 = base64.b64encode(new_key).decode("ascii")
+
+    previous_b64 = master_key_b64()
+    try:
+        previous = decode_master_key(previous_b64) if previous_b64 else None
+    except ValueError:
+        # A hand-edited or truncated BACKUP_MASTER_KEY. There is nothing to re-wrap and
+        # nothing that can be decrypted with it, so replacing it is pure repair -- and
+        # refusing here would trap the hub in the exact state this function exists to fix.
+        previous = None
+
+    if previous is not None and hmac.compare_digest(previous, new_key):
+        # Idempotent rather than a refusal: an operator pasting the key the hub already
+        # has is asking for the state it is already in, and there is no harm to report.
+        return new_b64, key_id(previous), 0, 0
+
+    try:
+        envfile.set_vars(env_path, {MASTER_KEY_ENV: new_b64})
+    except OSError as e:
+        raise ValueError(
+            f"Could not write the backup master key to {env_path}: {e}. Set the line "
+            f"'{MASTER_KEY_ENV}=<key>' yourself and restart the hub.")
+    envfile.apply_to_environ({MASTER_KEY_ENV: new_b64})
+
+    rewrapped = stranded = 0
+    if previous is not None and log_dir and CRYPTO_AVAILABLE:
+        rewrapped, stranded = rewrap_secrets(log_dir, previous, new_key)
+    return new_b64, (key_id(previous) if previous is not None else None), rewrapped, stranded
+
+
 # ================================
 # SECRET STORE
 # ================================
@@ -563,6 +629,20 @@ def _write_secret_file(log_dir, data):
         pass
 
 
+def _seal_secret(master_key, destination_id, secret):
+    """One store entry, encrypted and ready to write. Split out of store_secret so
+    rewrap_secrets can build a whole replacement store in memory before touching disk."""
+    _require_crypto()
+    plaintext = json.dumps(secret, sort_keys=True).encode("utf-8")
+    nonce = os.urandom(12)
+    ct = AESGCM(master_key).encrypt(nonce, plaintext, destination_id.encode("utf-8"))
+    return {
+        "key_id": key_id(master_key),
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+        "ciphertext": base64.b64encode(ct).decode("ascii"),
+    }
+
+
 def store_secret(log_dir, master_key, destination_id, secret):
     """Encrypt and persist one destination's credentials.
 
@@ -570,17 +650,48 @@ def store_secret(log_dir, master_key, destination_id, secret):
     another fails to decrypt rather than silently authenticating against the wrong
     endpoint.
     """
-    _require_crypto()
-    plaintext = json.dumps(secret, sort_keys=True).encode("utf-8")
-    nonce = os.urandom(12)
-    ct = AESGCM(master_key).encrypt(nonce, plaintext, destination_id.encode("utf-8"))
     data = _read_secret_file(log_dir)
-    data[destination_id] = {
-        "key_id": key_id(master_key),
-        "nonce": base64.b64encode(nonce).decode("ascii"),
-        "ciphertext": base64.b64encode(ct).decode("ascii"),
-    }
+    data[destination_id] = _seal_secret(master_key, destination_id, secret)
     _write_secret_file(log_dir, data)
+
+
+def rewrap_secrets(log_dir, old_key, new_key):
+    """Re-encrypt every destination credential from `old_key` to `new_key`. Returns
+    (rewrapped, stranded).
+
+    **Without this, adopting a key silently breaks every destination.** Each credential is
+    sealed under whatever master key was current when it was typed, and load_secret()
+    refuses an entry whose key_id no longer matches -- so a hub that swapped its key would
+    keep running its schedules and fail at the first upload with "these credentials were
+    encrypted with a different master key", which reads like a storage fault rather than
+    like the thing the operator did two minutes ago.
+
+    Everything is decrypted before anything is written. A store with half its rows under
+    the new key and half under the old is a state nothing else here knows how to reason
+    about, and the tmp+os.replace in _write_secret_file only buys atomicity for the write.
+
+    `stranded` counts entries `old_key` could not open -- credentials left behind by an
+    earlier key change, or a corrupt row. They are carried across untouched rather than
+    dropped: they are exactly as unreadable as they were, dropping them would lose a row
+    nothing can reconstruct, and failing the whole import over one dead destination would
+    block an operator on something they may not even use any more. The count exists so the
+    console can say how many need re-entering instead of letting them fail at 3 a.m.
+    """
+    data = _read_secret_file(log_dir)
+    if not data:
+        return 0, 0
+
+    plain, stranded = {}, 0
+    for destination_id in data:
+        try:
+            plain[destination_id] = load_secret(log_dir, old_key, destination_id)
+        except ValueError:
+            stranded += 1
+
+    for destination_id, secret in plain.items():
+        data[destination_id] = _seal_secret(new_key, destination_id, secret)
+    _write_secret_file(log_dir, data)
+    return len(plain), stranded
 
 
 def load_secret(log_dir, master_key, destination_id):

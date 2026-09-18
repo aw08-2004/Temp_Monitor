@@ -359,7 +359,7 @@ running step one and reporting success — is the one outcome that would lie.
 
 ---
 
-## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0, manual runs + offline catch-up hub 1.32.0, cancel hub 1.33.0
+## ✅ 1. Backups via HTTPS   ·   1a hub 1.28.0, 1b hub 1.30.0 + agent 3.9.0, manual runs + offline catch-up hub 1.32.0, cancel hub 1.33.0, **import an existing master key hub 1.117.0**
 
 **1a. Hub database** — ✅ built. `backups.py` (envelope, destinations, snapshot/rotate
 scheduler — flask-free) + `backups_web.py` (console API), a Backups page, `backup.*`
@@ -400,6 +400,62 @@ edge, so it is not left implicit):
 - The console **nags until a human confirms the key is stored off the machine**
   (`master_key.escrowed_at`), because a hub happily uploading backups nobody can decrypt
   looks identical to a hub that is working. Every reveal is audited.
+- **A key can be imported, not only generated** — `POST /api/backups/key/import`, added
+  hub 1.117.0. See the subsection below; it is the half of key custody that was missing.
+
+### Importing an existing key · hub 1.117.0
+
+Generation was the only way a key ever got into a hub, and that turned out to be a hole
+rather than a simplification. A hub reinstalled in a new folder, moved to a new server, or
+restored from a VM image without its `.env` comes up with no key, generates a fresh one at
+the first backup, and from that moment cannot read a single archive the previous
+installation wrote — while the operator is standing there holding the key that opens them.
+The console's answer was "run `restore_backup.py` by hand, every time, forever", which is
+the escape hatch working as designed and the console failing at its job. This happened in
+the field, which is why it is here.
+
+So: **Tools → Backup → Use an existing key**, offered beside *Create* rather than behind
+it, because an operator whose only button says "Create" presses it, and pressing it is the
+irreversible half.
+
+Decisions worth carrying:
+
+- **Replacing needs `replace: true`, and the refusal names the key_id being discarded.**
+  Consent lives in `backups_web.py`, not in `backups.py` — the model half does what it is
+  told, and "are you sure" is an HTTP-layer concern. The key_id is on screen at the moment
+  of deciding because "which archives am I about to stop being able to read" is the only
+  question that matters and the key_id is the only safe form of the answer.
+- **The credential store is re-wrapped in the same step** (`rewrap_secrets`). Destination
+  credentials are sealed with whatever master key was current when they were typed, so a
+  hub that swapped keys without this would keep running its schedules and fail at the next
+  upload with "encrypted with a different master key" — which reads like a storage fault,
+  days later, rather than like the thing the operator just did. Rows the old key cannot
+  open are carried across untouched and *counted*, not dropped and not fatal: a single dead
+  destination must not block the import, and an operator who is not told will read the
+  eventual failure as the import having broken their backups.
+- **Importing satisfies the escrow acknowledgement.** The nag asks whether the key exists
+  anywhere other than this server; a key an operator typed in demonstrably does, since that
+  is where it came from. Leaving the banner red would have it calling a safely-held key
+  unsafe, which is how a warning stops being read.
+- **Ordering: `.env` first, then the secret store.** `.env` is the write that actually
+  fails — ACL'd to SYSTEM by `envfile.protect()`, under `Program Files` on a real install —
+  so failing there leaves nothing changed at all. The reverse order would leave every
+  credential sealed under a key the hub does not have.
+- **Rewritten in place through `envfile.set_vars`, not appended** the way
+  `ensure_master_key` does. A second `BACKUP_MASTER_KEY` line leaves python-dotenv to pick
+  a winner — it picks the last — which works right up until somebody reads the file and
+  believes the first.
+- **Rejected: rotation** (keep both keys, re-encrypt existing archives in the background).
+  It is a different feature with a different risk: it means holding two keys, rewriting
+  every generation at every destination, and a half-finished pass leaving a bucket whose
+  archives need whichever key each happened to get. Import is a *correction* — this hub is
+  adopting the key its archives were always encrypted with — and correction needs none of
+  that. Revisit only if "this key may be compromised" ever becomes a real request.
+- **Rejected: reading the old `.env` off disk for them.** Tempting after a reinstall, since
+  the previous install directory is usually still there, but it means the console guessing
+  at paths outside its own state root and reading secrets out of them, and it does nothing
+  for the operator whose old server is gone. Pasting the key is one step and works in every
+  case.
 
 Two implementation-level notes worth carrying forward:
 
