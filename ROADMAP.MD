@@ -642,8 +642,9 @@ alone".
 - **`FetchRestorePlanAsync` returns why, not just null.** The refusal is the one failure an
   operator cannot see from the console, so the status code and the hub's sentence go into
   the command output the restore row is now reconciled from — 404 (aimed at a machine name
-  this agent is not enrolled under), 409 (already finished) and 502 (the hub cannot reach
-  the destination) need three different things done about them.
+  this agent is not enrolled under), 409 (already finished) and the hub's own 400 (a
+  destination that no longer exists, a missing master key) need three different things done
+  about them, and only the 400 is terminal.
 - **Download the files instead of pushing them onto a PC.** `restore_backup.py --extract`
   already served "somebody wants one file without pushing it onto a machine", but only for
   whoever holds the master key and a shell on the hub. The hub does the unpacking itself
@@ -666,6 +667,20 @@ alone".
   machine, and a `backup_download` row at security level on every single call — this is the
   one place in the product where a user's actual documents leave the fleet. Audited with
   the SHAPE and never the file list, for the same reason a restore is.
+- **A machine's own file listing is not trusted to name the download.** The one file's name
+  is the tail of a manifest path, which is the agent's report of what it backed up, and
+  `backup_paths.normalize()` leaves control characters where it found them — so a name
+  ending in a CR LF would have reached the `Content-Disposition` header and let an enrolled
+  machine write headers on the hub's behalf. `download_filename()` sanitises, and it does so
+  where the name is built rather than at the header, so the preview's `filename` and the
+  saved file agree. Accented letters survive deliberately: a file named in Spanish is the
+  normal case here. `hub/apkhost.py` had already declined to echo even an *operator*-supplied
+  name into that header, and a machine's listing is the less trusted of the two.
+- **The preview refuses whatever the download would.** The download is a navigation, so its
+  error body lands in place of the whole console — which is the entire reason the preview
+  exists. A preview that reads only the manifest would happily price up a machine whose
+  destination has been deleted, so both go through one `_readable_destination()` rather than
+  a check repeated twice: what matters is that the two answers agree.
 - **Row actions, reachable with a left click.** The browser offered one gesture per row —
   tick the checkbox — and every verb was a form below the table, so "get me that one file"
   meant a tick, a scroll, a target machine, a folder and an overwrite decision. Rows now
