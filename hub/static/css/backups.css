@@ -237,3 +237,64 @@
     font-size: var(--text-xs);
     word-break: break-all;
 }
+
+/* The restore browser's row menu. A copy of the Files tab's look on purpose -- the same
+   operator uses both, and a second visual language for "the verbs that act on this row"
+   would teach nothing. Fixed rather than absolute because the listing scrolls inside the
+   card: an absolutely-positioned menu would be clipped by .bk-browser's overflow. */
+.bk-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 12rem;
+    max-width: 22rem;
+    padding: var(--space-1);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    box-shadow: var(--shadow-card);
+}
+
+.bk-menu[hidden] { display: none; }
+
+/* What the menu is about. A folder listing is hundreds of rows of near-identical names,
+   and "Download" over an unnamed menu is how the wrong folder gets pulled. */
+.bk-menu__target {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: var(--space-1);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+}
+
+.bk-menu__item {
+    display: block;
+    width: 100%;
+    padding: var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.bk-menu__item:hover,
+.bk-menu__item:focus-visible {
+    background: var(--control-bg);
+    outline: none;
+}
+
+/* The left-click way in, and it is deliberately always visible rather than revealed on
+   hover: a control that only exists once the pointer is over it is one a touch user and a
+   keyboard user never find. */
+.bk-menu__trigger {
+    padding: 0 var(--space-2);
+    line-height: 1.6;
+}
+
+.bk-browser__actions {
+    width: 3rem;
+    text-align: right;
+}
