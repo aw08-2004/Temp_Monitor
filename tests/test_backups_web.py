@@ -760,7 +760,22 @@ def main():
         check("nothing was written on the refusal",
               backups.master_key_b64() == old_key_b64)
 
-        r = c.post("/api/backups/key/import", json={"key": incoming, "replace": True})
+        # The confirmation names the key it discards, so a stale one -- from a page that
+        # rendered its warning before somebody else changed the key -- is refused instead
+        # of quietly discarding a key that operator never saw. A bare flag could not tell
+        # the two apart; this is wipe.confirm_wipe's rule applied to a key.
+        r = c.post("/api/backups/key/import",
+                   json={"key": incoming, "replace_key_id": "0000000000000000"})
+        check("a confirmation naming the WRONG key is refused, not honoured",
+              r.status_code == 409 and r.get_json()["confirm_required"] is True)
+        check("a bare replace flag no longer confirms anything",
+              c.post("/api/backups/key/import",
+                     json={"key": incoming, "replace": True}).status_code == 409)
+        check("still nothing written",
+              backups.master_key_b64() == old_key_b64)
+
+        r = c.post("/api/backups/key/import",
+                   json={"key": incoming, "replace_key_id": before})
         check("a confirmed import succeeds", r.status_code == 200)
         body = r.get_json()
         check("the key is NOT echoed back", incoming not in r.get_data(as_text=True))
@@ -781,6 +796,8 @@ def main():
         check("existing destination credentials moved across with the key",
               body["credentials_rewrapped"] == 1)
         check("none were left behind", body["credentials_stranded"] == 0)
+        check("and the store was writable, so nothing is reported as half-done",
+              body["credentials_error"] is None)
         check("and they still decrypt with the imported key",
               backups.load_secret(log_dir, backups.decode_master_key(incoming),
                                   moved_id)["password"] == "DAVSECRET")

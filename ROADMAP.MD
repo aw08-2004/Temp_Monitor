@@ -420,11 +420,25 @@ irreversible half.
 
 Decisions worth carrying:
 
-- **Replacing needs `replace: true`, and the refusal names the key_id being discarded.**
+- **Replacing needs the caller to send back the key_id it is discarding**
+  (`replace_key_id`), not a bare `replace: true`, and the refusal names that key_id.
   Consent lives in `backups_web.py`, not in `backups.py` — the model half does what it is
   told, and "are you sure" is an HTTP-layer concern. The key_id is on screen at the moment
   of deciding because "which archives am I about to stop being able to read" is the only
-  question that matters and the key_id is the only safe form of the answer.
+  question that matters and the key_id is the only safe form of the answer — and naming it
+  is what makes the confirmation mean something. A flag confirms the act, a value confirms
+  the target: with a flag, a key that changed between the page rendering its warning and
+  the operator clicking Save (a second tab, a second admin, a retried request) would be
+  discarded by a confirmation that named a different key, and nobody would ever see which
+  one went. Same rule as `wipe.confirm_wipe`, checked against the machine name rather than
+  a checkbox, for the same reason.
+- **A credential store that cannot be written after the key changed is reported, not
+  raised.** The `.env`-first ordering below rules out the other half of that window, not
+  this one. By then `.env` already says the import happened and the next restart will
+  agree, so a refusal would tell the operator it did not and send them round to import
+  again while the real problem sits in `log_dir`. It comes back as `credentials_error` in
+  the 200, with the exception's detail logged rather than returned — a filesystem path in
+  a success response is the same flow CodeQL was right about in `_key_state`.
 - **The credential store is re-wrapped in the same step** (`rewrap_secrets`). Destination
   credentials are sealed with whatever master key was current when they were typed, so a
   hub that swapped keys without this would keep running its schedules and fail at the next

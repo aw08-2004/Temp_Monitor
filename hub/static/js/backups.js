@@ -237,15 +237,20 @@ async function saveImportedKey() {
         keyImportError.textContent = t('backups.key.import_empty');
         return;
     }
-    // `replace` is sent only when the console already knows a key is configured, so the
-    // 409 the server answers with is a real disagreement — this page's state being stale —
-    // rather than something confirmed away by a checkbox nobody read.
-    const replace = !!(state.key && state.key.configured);
+    // The confirmation names the key it replaces, and the value sent is the very one the
+    // warning above displayed — so if the key changed under this page (a second tab, a
+    // second admin), the server answers 409 and the operator re-reads a warning that is
+    // true, rather than discarding a key nobody ever showed them.
+    const replaceKeyId = (state.key && state.key.configured && state.key.key_id) || '';
     let result;
     try {
-        result = await api('/api/backups/key/import', json('POST', { key, replace }));
+        result = await api('/api/backups/key/import',
+                           json('POST', { key, replace_key_id: replaceKeyId }));
     } catch (e) {
         keyImportError.textContent = e.message;
+        // A stale confirmation: reload so the banner and the next attempt name the key
+        // that is actually configured now.
+        load().catch(() => { /* the message above already says what happened */ });
         return;
     }
     // Cleared before the dialog closes, so the key does not sit in a DOM node behind it.
@@ -257,7 +262,9 @@ async function saveImportedKey() {
     // destination whose credentials could not be carried across keeps its schedule and
     // fails at its next upload, and an operator who was not told reads that as the import
     // having broken their backups.
-    if (result.credentials_stranded) {
+    if (result.credentials_error) {
+        alert(result.credentials_error);
+    } else if (result.credentials_stranded) {
         alert(t('backups.key.import_stranded', { count: result.credentials_stranded }));
     }
     load().catch(() => { /* the banner is already right; the next action resyncs the rest */ });

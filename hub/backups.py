@@ -527,8 +527,8 @@ def ensure_master_key(env_path):
 
 
 def import_master_key(env_path, raw, log_dir=None):
-    """Adopt a master key the operator already holds. Returns
-    (key_b64, previous_key_id, rewrapped, stranded).
+    """Adopt a master key the operator already holds. Returns a dict:
+    `key_b64`, `previous_key_id`, `rewrapped`, `stranded`, `credentials_error`.
 
     **The counterpart to ensure_master_key, and what makes a reinstall survivable.** A hub
     brought up on a new server, in a new folder, or from a VM image without its `.env`
@@ -554,6 +554,13 @@ def import_master_key(env_path, raw, log_dir=None):
     wrong service account cannot touch. Failing there leaves nothing changed at all. The
     other order would leave every destination credential sealed under a key this hub does
     not have.
+
+    That guarantee covers the `.env` write and nothing else, so the smaller window on the
+    other side is **reported rather than raised**: if the credential store cannot be written
+    after the key has already changed, the import has happened -- `.env` says so and the
+    next restart will agree -- and a refusal would tell the operator it did not, sending
+    them round to import again while the real problem sits in `log_dir`. It comes back as
+    `credentials_error` for the caller to show, with the detail logged rather than returned.
     """
     new_key = decode_master_key(raw)      # raises with text an operator can act on
     # Re-encoded rather than stored as typed: `decode_master_key` tolerates surrounding
@@ -569,10 +576,14 @@ def import_master_key(env_path, raw, log_dir=None):
         # refusing here would trap the hub in the exact state this function exists to fix.
         previous = None
 
+    result = {"key_b64": new_b64,
+              "previous_key_id": key_id(previous) if previous is not None else None,
+              "rewrapped": 0, "stranded": 0, "credentials_error": None}
+
     if previous is not None and hmac.compare_digest(previous, new_key):
         # Idempotent rather than a refusal: an operator pasting the key the hub already
         # has is asking for the state it is already in, and there is no harm to report.
-        return new_b64, key_id(previous), 0, 0
+        return result
 
     try:
         envfile.set_vars(env_path, {MASTER_KEY_ENV: new_b64})
@@ -582,10 +593,23 @@ def import_master_key(env_path, raw, log_dir=None):
             f"'{MASTER_KEY_ENV}=<key>' yourself and restart the hub.")
     envfile.apply_to_environ({MASTER_KEY_ENV: new_b64})
 
-    rewrapped = stranded = 0
     if previous is not None and log_dir and CRYPTO_AVAILABLE:
-        rewrapped, stranded = rewrap_secrets(log_dir, previous, new_key)
-    return new_b64, (key_id(previous) if previous is not None else None), rewrapped, stranded
+        try:
+            result["rewrapped"], result["stranded"] = rewrap_secrets(
+                log_dir, previous, new_key)
+        except OSError as e:
+            # The key is already adopted, so this is a partial success and is described as
+            # one. The exception text is logged and NOT returned: it carries a filesystem
+            # path, and a caller embedding it in a 200 is the flow that made CodeQL right
+            # about `_key_state` (see backups_web.py). What the operator has to do is the
+            # same either way.
+            print(f"[backup] Could not re-encrypt destination credentials after a key "
+                  f"import: {e}")
+            result["credentials_error"] = (
+                "The key was adopted, but the stored destination credentials could not be "
+                "re-encrypted with it. Open each destination and enter its credentials "
+                "again, or its next backup will fail.")
+    return result
 
 
 # ================================

@@ -347,11 +347,19 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         wrote decrypts with a key the console has no way to accept. The operator is holding
         that key; there was simply nowhere to put it.
 
-        Replacing a key that already exists needs `replace: true` in the body, and the
-        refusal names the key_id being replaced so the answer to "which one am I about to
-        stop being able to read" is on screen at the moment of deciding. That check is
-        here rather than in backups.py for the same reason the capability gate is: the
-        model half does what it is told, and consent is an HTTP-layer concern.
+        Replacing a key that already exists needs the caller to send back the `key_id` it
+        is replacing, in `replace_key_id`, and the refusal names that key_id so the answer
+        to "which one am I about to stop being able to read" is on screen at the moment of
+        deciding. **Naming the key rather than sending a bare `replace: true` is the whole
+        point**, and it is the lesson wipe.confirm_wipe already wrote down: a flag confirms
+        the act, a value confirms the target. With a flag, a key that changed between the
+        page rendering the warning and the operator clicking Save -- a second tab, a second
+        admin, a retried request -- would be discarded by a confirmation that named a
+        different key, and nobody would ever see which one went. With the key_id, that
+        request gets the 409 instead and the operator re-reads a warning that is true.
+
+        That check is here rather than in backups.py for the same reason the capability
+        gate is: the model half does what it is told, and consent is an HTTP-layer concern.
 
         The key is NOT echoed back. It arrived from the operator, the reveal route exists
         for reading it later, and a response body is one more place it would sit.
@@ -384,7 +392,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                 current_b64 = ""
 
         replacing = bool(current_b64) and current_id != backups.key_id(candidate)
-        if replacing and data.get("replace") is not True:
+        if replacing and str(data.get("replace_key_id") or "") != current_id:
             return jsonify({
                 "error": "This hub already has a different backup encryption key. "
                          "Confirm the replacement to continue -- backups taken with the "
@@ -394,10 +402,10 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             }), 409
 
         try:
-            key_b64, previous_id, rewrapped, stranded = backups.import_master_key(
-                env_path, raw, log_dir=log_dir)
+            imported = backups.import_master_key(env_path, raw, log_dir=log_dir)
         except ValueError as e:
             return refusals.refuse(e)
+        key_b64 = imported["key_b64"]
 
         # Escrow is satisfied by the import itself, and that is not a shortcut. The nag
         # asks whether the key exists anywhere other than this server; a key an operator
@@ -408,18 +416,22 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         fleet.audit(db_path, actor=_current_email(), action="backup_key_import",
                     level=fleet.LEVEL_SECURITY,
                     detail={"key_id": backups.key_id(backups.decode_master_key(key_b64)),
-                            "replaced_key_id": previous_id,
-                            "credentials_rewrapped": rewrapped,
-                            "credentials_stranded": stranded})
+                            "replaced_key_id": imported["previous_key_id"],
+                            "credentials_rewrapped": imported["rewrapped"],
+                            "credentials_stranded": imported["stranded"],
+                            "credentials_error": bool(imported["credentials_error"])})
         return jsonify({
             "state": _key_state(),
-            "replaced_key_id": previous_id,
+            "replaced_key_id": imported["previous_key_id"],
             # What happened to the destination credentials, which are encrypted with the
             # key that just changed. The console says so out loud: a destination whose
             # credentials could not be carried across fails at its next upload, and an
             # operator who was not told will read that as the import having broken it.
-            "credentials_rewrapped": rewrapped,
-            "credentials_stranded": stranded,
+            "credentials_rewrapped": imported["rewrapped"],
+            "credentials_stranded": imported["stranded"],
+            # Set only when the store could not be written AFTER the key changed, which is
+            # a partial success rather than a refusal -- the key is adopted either way.
+            "credentials_error": imported["credentials_error"],
         }), 200
 
     @bp.route("/api/backups/key/escrowed", methods=["POST"])

@@ -292,7 +292,7 @@ def main():
         # reads like a storage fault.
         outsider = backups.generate_master_key()
         check("a key from elsewhere is adopted",
-              backups.import_master_key(env_path, outsider)[0] == outsider)
+              backups.import_master_key(env_path, outsider)["key_b64"] == outsider)
         check("it is what load_master_key now returns",
               backups.load_master_key() == backups.decode_master_key(outsider))
         with open(env_path, "r", encoding="utf-8") as fh:
@@ -304,11 +304,12 @@ def main():
         check("the unrelated .env line still survives",
               env_text.startswith("HUB_URL=https://hub.example.com\n"))
 
-        _, previous_id, _, _ = backups.import_master_key(env_path, outsider)
+        again = backups.import_master_key(env_path, outsider)
         check("importing the key already configured is a no-op, not a refusal",
-              previous_id == backups.key_id(backups.decode_master_key(outsider)))
+              again["previous_key_id"] ==
+              backups.key_id(backups.decode_master_key(outsider)))
         check("surrounding whitespace is tolerated, and normalised away",
-              backups.import_master_key(env_path, f"  {outsider}  ")[0] == outsider)
+              backups.import_master_key(env_path, f"  {outsider}  ")["key_b64"] == outsider)
 
         check("a key that is not base64 is refused before anything is written",
               raises(ValueError, backups.import_master_key, env_path, "not!base64!"))
@@ -322,11 +323,11 @@ def main():
         # state this function exists to undo.
         os.environ[backups.MASTER_KEY_ENV] = "not-a-key"
         recovered = backups.generate_master_key()
-        adopted, replaced_id, _, _ = backups.import_master_key(env_path, recovered)
+        repaired = backups.import_master_key(env_path, recovered)
         check("an unusable configured key does not block an import",
-              adopted == recovered)
+              repaired["key_b64"] == recovered)
         check("and it is reported as replacing nothing, because it decrypted nothing",
-              replaced_id is None)
+              repaired["previous_key_id"] is None)
 
         # ---- the credential store moves across with the key ----
         secret_dir = os.path.join(workdir, "secrets")
@@ -355,6 +356,27 @@ def main():
         check("re-wrapping an empty store is not an error",
               backups.rewrap_secrets(os.path.join(workdir, "nothing-here"),
                                      old_key, new_key) == (0, 0))
+
+        # ---- the key still changes when the credential store cannot be written ----
+        # The half-changed state the .env-first ordering cannot rule out. Reported as a
+        # partial success rather than raised: `.env` already says the import happened, so a
+        # refusal would send the operator round to import again while the real problem sits
+        # in log_dir. Forced by making the store's directory unwritable -- a file where
+        # _write_secret_file wants to put its .tmp.
+        backups.store_secret(secret_dir, new_key, "dest-c", {"password": "still-here"})
+        backups.import_master_key(env_path, base64.b64encode(new_key).decode("ascii"))
+        blocked = os.path.join(workdir, "blocked-store")
+        os.makedirs(blocked, exist_ok=True)
+        shutil.copy(backups.secrets_path(secret_dir), backups.secrets_path(blocked))
+        os.makedirs(backups.secrets_path(blocked) + ".tmp", exist_ok=True)   # open() will fail
+        partial = backups.import_master_key(env_path, outsider, log_dir=blocked)
+        check("the key is adopted even though the credential store could not be written",
+              partial["key_b64"] == outsider and backups.master_key_b64() == outsider)
+        check("and the caller is told so rather than being handed an exception",
+              partial["credentials_error"] and
+              "enter its credentials again" in partial["credentials_error"])
+        check("the failure names no path back to the caller",
+              blocked not in partial["credentials_error"])
 
         # Back to a key of this test's own making, since everything below encrypts with it.
         backups.import_master_key(env_path, outsider)
