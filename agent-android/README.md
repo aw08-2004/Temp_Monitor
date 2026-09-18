@@ -248,6 +248,26 @@ wait early; otherwise the budget runs out and whatever was collected is the answ
 position is returned rather than nothing, flagged `stale` and carrying the time it was actually
 taken.
 
+**The permission is obtained, which until now nothing did.** Declaring `ACCESS_FINE_LOCATION`
+in the manifest grants nothing -- since Android 6 a dangerous permission is withheld until
+somebody says yes at runtime -- and no code in the app ever asked. Every locate on every device
+would have come back `unavailable`, truthfully and permanently. There are two doors and the
+agent takes whichever one a device has:
+
+- A **fully managed** device grants itself, on the first locate, through
+  `setPermissionGrantState`. There is nobody at a QR-provisioned phone to answer a dialog. The
+  grant lands with the locate rather than at startup, because a power taken before anything
+  reads it is a change to somebody's device that buys nothing. From Android 12 a device owner
+  may do this only if provisioning did not opt out of sensor-permission control; this hub's QR
+  does not opt out, and the agent asks `canAdminGrantSensorsPermissions` first so a device that
+  did gets a log line rather than a `SecurityException`.
+- **Every other** device is asked on the setup screen, by whoever is holding it: a **Grant
+  location** button and a status line saying whether it took. It is not prompted automatically
+  on launch, unlike the notification permission -- a reflexive "Don't allow" on notifications
+  costs a status display, while on location it costs the feature and is close to irreversible
+  without a walk through Settings. Once Android stops offering the dialog the button opens the
+  app's own settings page instead, so it never becomes a button that silently does nothing.
+
 **Background access comes from the foreground service, not from a background permission.**
 Android 10+ blocks location while an app is not visible unless it holds
 `ACCESS_BACKGROUND_LOCATION` -- a standing grant to follow a device -- or is running a

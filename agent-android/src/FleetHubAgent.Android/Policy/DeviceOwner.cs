@@ -159,6 +159,126 @@ public static class DeviceOwner
         }
     }
 
+    /// <summary>
+    /// Grant this app location on a fully managed device -- roadmap #23 phase B.
+    ///
+    /// **Declaring a dangerous permission in the manifest grants nothing**, and phase B shipped
+    /// as though it did. Since API 23 the platform withholds ACCESS_FINE_LOCATION and
+    /// ACCESS_COARSE_LOCATION until somebody says yes at runtime, and nothing in this app ever
+    /// asked. The manifest looked complete, AndroidLocationReader checked the permission
+    /// correctly, every workstation test passed, and every locate on every device would have
+    /// answered "the location permission has not been granted on this device" -- a true
+    /// sentence that reads, in the console, like a device somebody deliberately locked down
+    /// rather than a feature that was never wired up. Nothing would have said otherwise until
+    /// the hardware pass.
+    ///
+    /// **setPermissionGrantState is the only way to grant it with nobody at the device.** A
+    /// managed phone is provisioned by QR and then put in a drawer or a van; there is no one to
+    /// answer a dialog, and a permission dialog is the whole of the ordinary path. A Device
+    /// Owner decides instead, the platform records the grant, and nothing appears on screen.
+    /// An UNMANAGED device has a technician holding it, and MainActivity asks them.
+    ///
+    /// **Called from the locate rather than from <see cref="ApplyBaseline"/>**, which is the
+    /// promise ApplyBaseline's own docstring makes: a power taken before anything reads it is a
+    /// change to somebody's device that buys nothing and that nobody later remembers asking
+    /// for. A fleet that never locates a device never grants itself location on one.
+    ///
+    /// **Both permissions, and the coarse one is not redundant.** The reader accepts either,
+    /// because a device findable to the nearest block is most of the value of finding a lost
+    /// phone, and from API 31 the platform models approximate location as a grant of its own
+    /// rather than as a weaker form of the precise one.
+    ///
+    /// **ACCESS_BACKGROUND_LOCATION is not granted here, and could not be.** From Android 11
+    /// the platform refuses to auto-grant it whatever a Device Owner says -- and this app does
+    /// not request it at all, which is the older and more important half of that sentence.
+    /// Background reach comes from promoting the foreground service for the length of one
+    /// request. See AndroidLocationReader and the manifest.
+    ///
+    /// **A Device Owner's right to grant location is not unconditional, and the check is asked
+    /// for rather than discovered by throwing.** From Android 12 location joins the
+    /// sensors-related permissions, which a device owner may grant only if the provisioning
+    /// flow did not opt out of that control with
+    /// EXTRA_PROVISIONING_SENSORS_PERMISSION_GRANT_OPT_OUT. This hub's QR does not set that
+    /// extra (hub/provisioning.py), so a device provisioned the intended way keeps the right --
+    /// but a device provisioned by hand, or by an earlier tool, may not, and on a target SDK of
+    /// 35 or later the platform answers that by THROWING rather than by returning false.
+    /// canAdminGrantSensorsPermissions is the question asked directly, and asking it is what
+    /// turns "executor error: SecurityException" into a log line naming what is wrong.
+    ///
+    /// Returns whether the platform accepted at least one grant. The caller re-asks
+    /// CheckSelfPermission rather than trusting this, because "the admin was allowed to set
+    /// it" and "this process now holds it" are different questions and only the second one
+    /// decides whether a fix can be taken.
+    /// </summary>
+    public static bool GrantLocation(Context? context, ILogger log)
+    {
+        if (!IsManaged(context)) return false;
+        var dpm = Manager(context);
+        if (dpm is null || context is null) return false;
+        var package = context.PackageName;
+        if (string.IsNullOrEmpty(package)) return false;
+        var admin = Component(context);
+
+        // API 31+ only; below it there is no sensors restriction and nothing to ask about.
+        if (OperatingSystem.IsAndroidVersionAtLeast(31))
+        {
+            try
+            {
+                if (!dpm.CanAdminGrantSensorsPermissions())
+                {
+                    // Recorded rather than attempted. The grant below would throw on a modern
+                    // target SDK, and the resulting SecurityException carries none of this.
+                    log.LogWarning("Device Owner: this device was provisioned without the " +
+                                   "right to grant sensor permissions, so location must be " +
+                                   "granted by hand on the agent's setup screen");
+                    return false;
+                }
+            }
+            catch (Exception e)
+            {
+                // The question itself failed, which says nothing about the answer. Fall
+                // through and let the grant below report what the platform actually does.
+                log.LogDebug("Device Owner: could not ask about sensor grants: {Msg}", e.Message);
+            }
+        }
+
+        var accepted = false;
+        foreach (var permission in new[]
+                 {
+                     global::Android.Manifest.Permission.AccessFineLocation,
+                     global::Android.Manifest.Permission.AccessCoarseLocation,
+                 })
+        {
+            try
+            {
+                if (dpm.SetPermissionGrantState(admin, package, permission,
+                                                PermissionGrantState.Granted))
+                {
+                    accepted = true;
+                }
+                else
+                {
+                    // The API says no by returning false rather than by throwing, and a
+                    // swallowed false here is the same invisible failure this whole method
+                    // exists to end. A device can refuse: a permission policy set by another
+                    // admin, or an OEM build that does not honour the call.
+                    log.LogWarning("Device Owner: the platform would not grant {Permission}",
+                        permission);
+                }
+            }
+            catch (Exception e)
+            {
+                // Never fatal. The locate that called this goes on to ask the platform what it
+                // actually holds, and answers "unavailable" with a reason if the answer is no.
+                log.LogWarning("Device Owner: could not grant {Permission}: {Msg}",
+                    permission, e.Message);
+            }
+        }
+
+        if (accepted) log.LogInformation("Device Owner: location granted to {Package}", package);
+        return accepted;
+    }
+
     /// <summary>One line for the setup screen. Phrased for the person holding the device, who
     /// is usually the helpdesk technician provisioning it and needs to know whether the QR
     /// actually took -- the difference between "fully managed" and "installed like any other

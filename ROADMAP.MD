@@ -3689,14 +3689,46 @@ somebody notices a technician has been locating phones — so both are asserted 
 why, where, for how long and who can see it — plus the explicit note that FleetHub cannot supply
 workforce notice on a deploying organisation's behalf.
 
+### The permission was never asked for, and that is now fixed
+
+Phase B shipped a manifest that declares `ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION`, a
+reader that checks them correctly, and nothing anywhere that ever **requested** them. A
+dangerous permission is withheld until somebody says yes at runtime, so every locate in the
+fleet would have answered `unavailable` with "the location permission has not been granted on
+this device" -- a true sentence, filed as an ordinary status, that reads in the console like a
+device somebody deliberately locked down rather than a feature nobody finished. Nothing would
+have caught it before the hardware pass: there is no assertion a workstation can make about a
+grant that only a device performs.
+
+Two doors, because the fleet has two kinds of device:
+
+- **Fully managed**: the agent grants itself through `setPermissionGrantState` on the first
+  locate. Rejected alternative: granting it in `DeviceOwner.ApplyBaseline` at every service
+  start, which would take a location permission on devices nobody ever locates -- the same
+  reason that method takes only one power today.
+- **Everything else**: a **Grant location** button and a permission line on the setup screen.
+  Rejected alternative: prompting automatically on launch, the way the notification permission
+  is. A refused notification costs a status display; a refused location costs the feature, and
+  Android makes the second refusal final.
+
+Rejected in both cases: gating the `locate` capability on the permission, so the console's
+Locate button would disappear on a device that has not granted it. The button would then appear
+and vanish as somebody toggles a system setting, which reads as a broken console -- and the
+device answering "here is why not" is the design this phase already committed to.
+
+`ACCESS_BACKGROUND_LOCATION` is still not requested, and is now asserted absent by a test
+(`AndroidManifestPermissionTests`), because it is the permission a well-meaning fix reaches for
+the first time a locate comes back empty from a phone in a pocket.
+
 ### Not done
 
 No console UI yet: that is phase C (a fold on the machine page and a fleet map over
 `GET /api/location/fleet`). Today this is an API, a capability and storage, with 56 model tests
 and 41 route tests. **Nothing here has been run against a real device**, so the parts that can
 only fail on hardware are untested: whether the foreground-service promotion is accepted, what
-the OEM's location settings actually report, and how long a cold fix really takes on the pilot
-phone.
+the OEM's location settings actually report, how long a cold fix really takes on the pilot
+phone, and whether either half of the permission grant above works -- neither the device-owner
+grant nor the setup screen's dialog can be exercised without a device.
 
 ---
 

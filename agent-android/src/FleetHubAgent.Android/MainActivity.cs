@@ -9,6 +9,7 @@ using FleetHubAgent;
 using FleetHubAgent.State;
 using FleetHubAgent.Android.Platform;
 using FleetHubAgent.Android.Policy;
+using Microsoft.Extensions.Logging;
 
 namespace FleetHubAgent.Android;
 
@@ -38,6 +39,7 @@ namespace FleetHubAgent.Android;
 public sealed class MainActivity : Activity
 {
     private const int RequestPostNotifications = 1001;
+    private const int RequestLocation = 1002;
 
     private AgentState _state = null!;
     private TextView _status = null!;
@@ -115,6 +117,10 @@ public sealed class MainActivity : Activity
         usage.Click += (_, _) => OpenUsageAccessSettings();
         root.AddView(usage);
 
+        var location = new Button(this) { Text = "Grant location" };
+        location.Click += (_, _) => GrantLocation();
+        root.AddView(location);
+
         var hint = new TextView(this)
         {
             Text =
@@ -122,7 +128,10 @@ public sealed class MainActivity : Activity
                 "and several manufacturers' own power managers will freeze a background app " +
                 "after a few hours idle; the device then reads offline in the console until " +
                 "somebody picks it up. Excluding the agent is the fix, and it has to be granted " +
-                "here -- an app cannot grant it to itself.",
+                "here -- an app cannot grant it to itself.\n\n" +
+                "Location is what the console's Locate button needs. A fully managed device " +
+                "grants it to itself the first time somebody asks where it is; every other " +
+                "device has to be granted it here, by somebody holding it.",
         };
         hint.SetPadding(0, 32, 0, 0);
         root.AddView(hint);
@@ -249,6 +258,114 @@ public sealed class MainActivity : Activity
         Toast.MakeText(this, "No usage access screen on this device", ToastLength.Long)?.Show();
     }
 
+    /// <summary>Get this device the location permission -- roadmap #23 phase B.
+    ///
+    /// **Not shaped like the two buttons above it, because location is not that kind of
+    /// permission.** Battery optimisation and usage access are special-access switches an app
+    /// can only point somebody at; location is an ordinary runtime permission, so on an
+    /// unmanaged device the platform puts the question directly in front of the person holding
+    /// it, and on a managed one the Device Owner answers it without a dialog at all. Both paths
+    /// end in the same place and this button takes whichever one this device has.
+    ///
+    /// **Both permissions are asked for together, because asking for FINE alone is a request
+    /// Android 12 and later may ignore.** From API 31 approximate location is its own grant
+    /// with its own button in the system dialog, and the pair is the documented way to reach
+    /// either. AndroidLocationReader accepts whichever comes back.
+    ///
+    /// **The second refusal is final, so there is a fallback.** Once somebody has said no
+    /// twice, requestPermissions returns immediately with no dialog -- a button that silently
+    /// does nothing, on the one screen whose whole job is to make invisible states visible. See
+    /// OnRequestPermissionsResult, which sends them to the app's own settings page instead.
+    ///
+    /// **Not asked automatically on launch, unlike the notification permission**, and the
+    /// difference is what a refusal costs. A reflexive "Don't allow" on notifications loses a
+    /// status display; on location it loses the feature, and it is close to irreversible
+    /// without a walk through Settings. A technician who presses this button has read the line
+    /// above it and decided. A device where nobody pressed it answers a locate with
+    /// "unavailable" and the reason, which is the state this screen now shows.</summary>
+    private void GrantLocation()
+    {
+        if (AndroidLocationReader.IsGranted(this))
+        {
+            Toast.MakeText(this, "Location is already granted on this device", ToastLength.Short)?.Show();
+            return;
+        }
+
+        // A fully managed device does not need the dialog and must not be sent to Settings:
+        // it can simply take the permission. Tried first so a technician provisioning a phone
+        // by QR sees the status line flip to granted while they are still holding it, rather
+        // than finding out at the first locate weeks later.
+        if (DeviceOwner.GrantLocation(this, Logger()) && AndroidLocationReader.IsGranted(this))
+        {
+            Toast.MakeText(this, "Location granted -- this device can be located",
+                ToastLength.Long)?.Show();
+            RefreshStatus();
+            return;
+        }
+
+        RequestPermissions(
+            [
+                global::Android.Manifest.Permission.AccessFineLocation,
+                global::Android.Manifest.Permission.AccessCoarseLocation,
+            ],
+            RequestLocation);
+    }
+
+    /// <summary>What the system said to a runtime permission request.
+    ///
+    /// Only location is handled. The notification permission is asked on every launch and
+    /// nothing on this screen depends on the answer, so it has nothing to report; this one is
+    /// asked by a person pressing a button and expecting the screen to change.</summary>
+    public override void OnRequestPermissionsResult(
+        int requestCode, string[] permissions, Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != RequestLocation) return;
+
+        RefreshStatus();
+        if (AndroidLocationReader.IsGranted(this)) return;
+
+        // ShouldShowRequestPermissionRationale is false both before the first ask and after the
+        // last one, which is normally the trap in this API. Here it cannot be: the request that
+        // just returned WAS an ask, so false at this point means the only one it can mean --
+        // the platform will not raise the dialog again, and the switch has moved to Settings.
+        var permanent = !ShouldShowRequestPermissionRationale(
+            global::Android.Manifest.Permission.AccessFineLocation);
+        if (!permanent)
+        {
+            Toast.MakeText(this, "Location was not granted. This device cannot be located.",
+                ToastLength.Long)?.Show();
+            return;
+        }
+
+        Toast.MakeText(this, "Android will not ask again. Turn Location on for FleetHub Agent "
+                             + "under Permissions.", ToastLength.Long)?.Show();
+        OpenAppSettings();
+    }
+
+    /// <summary>This app's own row in Settings. Shared by the paths above, each of which has
+    /// already tried the thing that would have been better and been refused.</summary>
+    private void OpenAppSettings()
+    {
+        try
+        {
+            var intent = new Intent(
+                global::Android.Provider.Settings.ActionApplicationDetailsSettings);
+            intent.SetData(global::Android.Net.Uri.Parse("package:" + PackageName));
+            StartActivity(intent);
+        }
+        catch (Exception)
+        {
+            Toast.MakeText(this, "No app settings screen on this device", ToastLength.Long)?.Show();
+        }
+    }
+
+    /// <summary>A logger for the one call on this screen that takes one. The service builds its
+    /// own factory and this activity has no business sharing it -- a logger held across the two
+    /// would outlive whichever of them stopped first.</summary>
+    private static ILogger Logger() =>
+        new LogcatLoggerProvider(LogLevel.Information).CreateLogger("DeviceOwner");
+
     private void RequestNotificationPermissionIfNeeded()
     {
         // OperatingSystem.IsAndroidVersionAtLeast rather than a Build.VERSION.SdkInt
@@ -288,6 +405,14 @@ public sealed class MainActivity : Activity
                 ? "Usage access granted -- screen-time budgets can be enforced."
                 : "Usage access NOT granted. Blocked hours still work; screen-time budgets " +
                   "will never fire, because this device cannot see how long an app was used.",
+            // The permission the console's Locate button rests on, and one nothing used to
+            // ask for. Stated here for the same reason as the line above: it is granted per
+            // device, by a person, and its absence is otherwise visible only to whoever
+            // presses Locate and reads the reason that comes back.
+            AndroidLocationReader.IsGranted(this)
+                ? "Location granted -- this device can be located from the console."
+                : "Location NOT granted. A locate from the console will answer \"unavailable\" " +
+                  "instead of a position. Use the Grant location button below.",
         };
 
         if (identity.IsEnrolled)

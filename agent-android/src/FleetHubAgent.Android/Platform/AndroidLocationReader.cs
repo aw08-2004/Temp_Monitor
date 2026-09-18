@@ -4,6 +4,7 @@ using Android.Locations;
 using Android.OS;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.Fleet.Executors;
+using FleetHubAgent.Android.Policy;
 
 namespace FleetHubAgent.Android.Platform;
 
@@ -30,6 +31,14 @@ namespace FleetHubAgent.Android.Platform;
 /// this feature exists for that is enormously useful. It is only useful if it is LABELLED --
 /// see LocateDeviceExecutor.Describe, where `stale` is called the most important field in the
 /// payload.
+///
+/// **The permission is GRANTED here too, on a device that can grant it to itself.** Declaring
+/// ACCESS_FINE_LOCATION in the manifest grants nothing since API 23, and until this was written
+/// nothing in the app ever asked for it -- so every locate on every device answered "the
+/// location permission has not been granted", which reads in the console like a device somebody
+/// locked down rather than a feature nobody finished. A fully managed device now grants itself
+/// on the first locate (DeviceOwner.GrantLocation); an unmanaged one is asked on the setup
+/// screen, by the technician holding it (MainActivity), because there is no other door.
 ///
 /// **Background access comes from the foreground service, not from a background permission.**
 /// Android 10+ blocks location while an app is not visible unless it holds
@@ -71,7 +80,24 @@ public sealed class AndroidLocationReader(Context context, ILogger log) : ILocat
         // crime of being asked where it is on a device where somebody said no.
         if (!HasLocationPermission())
         {
-            _reason = "the location permission has not been granted on this device";
+            // A fully managed device takes the permission for itself, here rather than at
+            // startup -- see DeviceOwner.GrantLocation and ApplyBaseline's rule that a power
+            // lands with the phase that reads it. A no-op on an unmanaged device, where the
+            // reason below is the honest answer and names the one place it can be fixed.
+            DeviceOwner.GrantLocation(context, log);
+        }
+
+        if (!HasLocationPermission())
+        {
+            // Two clauses because they mean different things to whoever reads the console: an
+            // unmanaged device was always going to need a person, while a managed one that
+            // refuses has a provisioning problem behind it -- see DeviceOwner.GrantLocation on
+            // the sensors opt-out. Both end at the same screen, so both say where to go. A
+            // reason an operator cannot act on is the failure this whole feature avoids.
+            var why = DeviceOwner.IsManaged(context)
+                ? "this device is fully managed but would not grant itself location"
+                : "the location permission has not been granted on this device";
+            _reason = why + " -- open the FleetHub Agent app on the device and grant location";
             return null;
         }
 
@@ -101,11 +127,24 @@ public sealed class AndroidLocationReader(Context context, ILogger log) : ILocat
         return null;
     }
 
-    private bool HasLocationPermission()
-        => context.CheckSelfPermission(global::Android.Manifest.Permission.AccessFineLocation)
-               == Permission.Granted
-           || context.CheckSelfPermission(global::Android.Manifest.Permission.AccessCoarseLocation)
-               == Permission.Granted;
+    private bool HasLocationPermission() => IsGranted(context);
+
+    /// <summary>The same question without a reader, for the setup screen -- which asks it to
+    /// tell a technician holding the device whether the permission they just granted took, and
+    /// to say so plainly when nobody ever granted one. Deliberately the same method the locate
+    /// itself uses: a second copy of this check that drifted would put a screen saying
+    /// "granted" in front of somebody whose locates come back unavailable.
+    ///
+    /// **Either permission counts.** A device located to the nearest block is most of the value
+    /// of finding a lost phone, and the answer carries its own accuracy radius, so the console
+    /// never implies more precision than there was.</summary>
+    public static bool IsGranted(Context? context)
+        => context is not null
+           && (context.CheckSelfPermission(global::Android.Manifest.Permission.AccessFineLocation)
+                   == Permission.Granted
+               || context.CheckSelfPermission(
+                      global::Android.Manifest.Permission.AccessCoarseLocation)
+                   == Permission.Granted);
 
     private static List<string> EnabledProviders(LocationManager manager)
     {
