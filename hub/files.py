@@ -796,7 +796,14 @@ def spool_path(spool_dir, spool):
     database restored from somewhere else.
     """
     name = str(spool or "").strip()
-    if not name or name != os.path.basename(name) or name in (".", ".."):
+    # Both separators are asked about by name, not left to os.path.basename(). On POSIX that
+    # function does not treat a backslash as one, so the Windows-shaped `..\..\.env` comes
+    # back unchanged and reads as a bare filename -- the guard would wave through exactly the
+    # traversal it exists to stop, on the platform this hub does not run on today and so the
+    # one where nobody would be looking. A restored database or a ported hub is where that
+    # meets a real disk. The names this module writes contain neither character.
+    if (not name or name != os.path.basename(name) or name in (".", "..")
+            or "/" in name or "\\" in name):
         raise ValueError("invalid spool name")
     return os.path.join(spool_dir, name)
 

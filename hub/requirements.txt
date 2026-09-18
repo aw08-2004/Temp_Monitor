@@ -3,8 +3,12 @@ Authlib
 python-dotenv
 Flask
 Flask-SocketIO
-wmi
-pywin32
+# Windows-only, and imported lazily by the two places that need it -- envfile.py's ACL
+# tightening and the local temperature thread's COM init. The marker keeps `pip install -r`
+# working off Windows, which is what lets tests/ run somewhere other than a hub machine.
+# `wmi` used to sit beside this and was dropped: nothing in hub/ ever imported it, but the
+# import at module scope made every module that imports app.py Windows-only.
+pywin32; sys_platform == "win32"
 waitress
 # Backup encryption (AES-256-GCM). Authlib already depends on it, so this is a newly
 # explicit requirement rather than a new download -- but backups.py must not be at the

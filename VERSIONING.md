@@ -82,8 +82,11 @@ and Android agents were never preceded by a Python companion, so measuring them 
 is why both were pinned at `0.1.0`: reporting anything higher would have had the hub offer
 them the Windows agent's signed manifest, a `win-x64` executable. Since the hub reads a
 machine's reported `platform` before it reads its version, that workaround is retired and
-each agent is free to number its own line. Both still sit at `0.1.0` because neither has a
-release worth numbering yet, not because they may not move.
+each agent is free to number its own line. **Android has moved**: `0.2.0` through `0.2.3`,
+the last of them stable and pointed at by `agent-android.manifest.json`. Linux has not —
+its source still reads `0.1.0` while `linux-agent-v0.2.0` is tagged, which is drift rather
+than a decision: the pair moves through `release.ps1`, and that tag was cut without it
+(roadmap #22).
 
 ### MINOR — new capability, or a user-visible change in behaviour
 

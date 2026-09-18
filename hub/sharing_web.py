@@ -209,7 +209,12 @@ def _default_peer_call(method, url, token=None, payload=None,
         print(f"[sharing] peer call failed: {type(exc).__name__}: {exc}")
         if isinstance(exc, requests.Timeout):
             return 502, {"error": "The peer hub did not answer in time."}
-        if isinstance(exc, requests.SSLError):
+        # requests.exceptions, not the top-level module: `requests` re-exports Timeout and
+        # ConnectionError but NOT SSLError, so `requests.SSLError` was an AttributeError
+        # raised inside the handler -- turning every non-timeout transport failure into the
+        # 500 this function exists to prevent. It stays ABOVE the ConnectionError branch,
+        # because SSLError is a subclass of it and the certificate sentence is the useful one.
+        if isinstance(exc, requests.exceptions.SSLError):
             return 502, {"error": "The peer hub's certificate could not be verified."}
         if isinstance(exc, requests.ConnectionError):
             return 502, {"error": "The peer hub could not be reached."}

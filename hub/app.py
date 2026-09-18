@@ -19,8 +19,6 @@ import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import wraps
-import wmi
-import pythoncom
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for, g
 from flask_socketio import SocketIO, join_room
@@ -131,7 +129,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.115.0"
+HUB_VERSION = "1.115.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4456,10 +4454,19 @@ logger_lock = threading.Lock()
 
 def local_logger():
     global last_temp
-    
-    # 2. Initialize COM for this specific background thread
-    pythoncom.CoInitialize() 
-    
+
+    # COM is imported HERE, not at module scope, so that `import app` does not require
+    # pywin32. This thread is the hub's only Windows-only code path and it is not even
+    # started -- the call is commented out in both __main__ and wsgi.py, because a hub that
+    # also reports its own hostname double-counts itself on the dashboard. Paying for it at
+    # import time made every module that imports `app` unimportable off Windows, which is
+    # why most of tests/ could only run on a hub machine. Same pattern, same reason, as
+    # envfile.py's win32security and directory.py's ldap3.
+    import pythoncom
+
+    # Initialize COM for this specific background thread
+    pythoncom.CoInitialize()
+
     try:
         while True:
             temp = get_cpu_temp() 

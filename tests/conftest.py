@@ -35,6 +35,15 @@ import pytest
 os.environ.setdefault("HUB_LOG_DIR", os.path.join(
     tempfile.mkdtemp(prefix="hub-pytest-session-"), "logs"))
 
+# Same safety net for the settings app.py refuses to import without: a session key, a login
+# provider and a break-glass email. run_all.py seeds these for the child processes it spawns;
+# this is the pytest half, so `pytest tests/test_x.py` works on a checkout with no .env beside
+# it. setdefault, so a module or a real environment that sets its own still wins.
+os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-secret")
+os.environ.setdefault("ALLOWED_EMAILS", "root@example.com")
+
 
 @pytest.fixture(autouse=True)
 def module_db(request):
