@@ -314,6 +314,14 @@ def main():
               len(backups.list_restores(db_path, machine="PC-1")) == 0)
         check("the download refuses it too",
               c.get("/api/backups/machines/PC-1/download?path=C:").status_code == 400)
+        # And the PREVIEW has to refuse it as well, not merely the download. The preview
+        # reads the manifest, which is still perfectly intact, so without the same check it
+        # answers "3 files, 1.2 GB" and the console navigates straight into the download's
+        # 400 -- whose body a navigation renders in place of the whole console.
+        r = c.post("/api/backups/machines/PC-1/download/preview", json={"paths": ["C:"]})
+        check("the preview refuses it before the browser navigates", r.status_code == 400)
+        check("...with the same sentence the download would have given",
+              "no longer exists" in r.get_json()["error"])
         c.put("/api/backups/machines/PC-1", json={"destination_id": ""})
 
         print("\n== A refused plan closes the restore with the HUB's reason ==")

@@ -691,16 +691,30 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     # A GET that ships a user's documents off the fleet is the one read here that is not
     # merely reconnaissance, so it is gated exactly like a restore -- `manage_backups` plus
     # scope on the source machine -- and audited every single time.
+    def _readable_destination(machine):
+        """The destination a download would read from, or the refusal to answer with.
+
+        Shared by the download and its preview because they have to agree. A preview that
+        says "3 files, 1.2 GB" for a machine whose destination is gone sends the browser
+        straight into a navigation that 400s -- and a navigation's error body replaces the
+        whole console with raw JSON, which is the exact failure the preview exists to
+        prevent.
+        """
+        destination_id = backups.effective_file_config(
+            db_path, machine, **_fleet_file_defaults())["destination_id"]
+        if not destination_id or backups.get_destination(db_path, destination_id) is None:
+            return None, (jsonify({"error": "This machine's backup destination is missing "
+                                            "or no longer exists, so its archives cannot "
+                                            "be read."}), 400)
+        return destination_id, None
+
     @bp.route("/api/backups/machines/<machine>/download", methods=["GET"])
     @login_required
     @access.require_machine(permissions.MANAGE_BACKUPS)
     def download_files(machine):
-        source_config = backups.effective_file_config(db_path, machine,
-                                                      **_fleet_file_defaults())
-        destination_id = source_config["destination_id"]
-        if not destination_id or backups.get_destination(db_path, destination_id) is None:
-            return jsonify({"error": "This machine's backup destination is missing or no "
-                                     "longer exists, so its archives cannot be read."}), 400
+        destination_id, refusal = _readable_destination(machine)
+        if refusal is not None:
+            return refusal
         try:
             plan = backups.plan_download(db_path, machine, request.args.getlist("path"))
         except ValueError as e:
@@ -741,6 +755,9 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         refuse a selection the hub would refuse anyway, name the folders that matched
         nothing, and say "1.2 GB" before an operator commits to it.
         """
+        _, refusal = _readable_destination(machine)
+        if refusal is not None:
+            return refusal
         data = request.get_json(silent=True) or {}
         try:
             plan = backups.plan_download(db_path, machine, data.get("paths") or [])
