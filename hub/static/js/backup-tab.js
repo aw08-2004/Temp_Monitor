@@ -55,6 +55,14 @@
     let restoreTarget = null;       // null = "this machine", resolved at first render
     let restoreDir = '';
     let restoreOverwrite = false;
+    // What the row menu is currently about, and where it was opened from. Held here
+    // rather than read off the DOM, because every state change rebuilds the whole pane
+    // and a <tr> captured before that is a node nobody can see any more.
+    let menuItem = null;
+    let downloadBusy = false;
+    // Whether restoreStatus is a refusal rather than a receipt. Kept apart from the text
+    // so the line can be coloured without parsing it back.
+    let restoreFailed = false;
 
     // ---- "Back up now" state ----
     // The button reports three outcomes, not two: started, queued-because-offline, and
@@ -141,6 +149,9 @@
         restoreTarget = null;
         restoreDir = '';
         restoreOverwrite = false;
+        downloadBusy = false;
+        restoreFailed = false;
+        closeMenu();
         runBusy = false;
         runMessage = '';
         runError = '';
@@ -458,6 +469,18 @@
             card.appendChild(browserTable());
         }
         card.appendChild(selectionBar());
+        // Above the history, and OUTSIDE the selection bar. It used to live inside it,
+        // which meant a restore that started successfully cleared the selection, the bar
+        // fell back to its "tick something" branch, and the line saying what had been
+        // queued -- including the folders that matched nothing -- was written into a node
+        // that was never rendered. The one message an operator needs was the one message
+        // that could not be shown.
+        if (restoreStatus) {
+            const status = el('p', restoreFailed ? 'setting__error' : 'stat-card__meta',
+                              restoreStatus);
+            status.id = 'restore-status';
+            card.appendChild(status);
+        }
         card.appendChild(restoreHistory());
         return card;
     }
@@ -568,13 +591,14 @@
         const head = el('thead');
         const headRow = el('tr');
         ['', t('backups.col.name'), t('backups.col.size'),
-         t('backups.col.modified')].forEach((l) => headRow.appendChild(el('th', null, l)));
+         t('backups.col.modified'), ''].forEach((l) => headRow.appendChild(el('th', null, l)));
         head.appendChild(headRow);
         table.appendChild(head);
 
         const body = el('tbody');
         dirs.forEach((dir) => {
-            const row = el('tr');
+            const item = { path: dir.path, name: dir.name, dir: true };
+            const row = actionRow(item);
             row.appendChild(tickCell(dir.path, true));
             const nameCell = el('td');
             const link = el('button', 'bk-link');
@@ -588,16 +612,19 @@
             row.appendChild(nameCell);
             row.appendChild(el('td', null, fmtBytes(dir.total_bytes)));
             row.appendChild(el('td', null, t('backups.unknown')));
+            row.appendChild(actionCell(item));
             body.appendChild(row);
         });
         files.forEach((file) => {
-            const row = el('tr');
+            const item = { path: file.path, name: file.name, dir: false };
+            const row = actionRow(item);
             row.appendChild(tickCell(file.path, false));
             // In search mode the bare filename is useless -- three `report.docx` rows tell
             // you nothing about which is which -- so the whole path is shown there.
             row.appendChild(el('td', null, manifestSearch ? file.path : file.name));
             row.appendChild(el('td', null, fmtBytes(file.size)));
             row.appendChild(el('td', null, fmtTime(file.mtime)));
+            row.appendChild(actionCell(item));
             body.appendChild(row);
         });
         table.appendChild(body);
@@ -608,6 +635,181 @@
                 t('backups.tab.folder_truncated')));
         }
         return wrap;
+    }
+
+    // ================================
+    // ROW ACTIONS
+    // ================================
+    // **The verbs live on the rows, and a left click reaches them.** The browser used to
+    // offer exactly one gesture per row -- tick the checkbox -- and every verb was a form
+    // below the table; "get me that one file" therefore meant a tick, a scroll, a target
+    // machine, a folder and an overwrite decision. The Files tab already solved this shape
+    // with a per-row menu, so this is that menu, opened by the row's own button (and by a
+    // right-click anywhere on the row, which is what a Files-tab user will reach for).
+    //
+    // Built here rather than in the template because this whole pane is JS-built, and it
+    // is parented to <body> once: everything inside `pane` is replaceChildren()'d on every
+    // state change, and a menu living in there would be torn out from under the pointer
+    // the moment it opened.
+    const menu = el('div', 'bk-menu');
+    menu.hidden = true;
+    menu.setAttribute('role', 'menu');
+    menu.tabIndex = -1;
+    const menuTarget = el('p', 'bk-menu__target');
+    menu.appendChild(menuTarget);
+    document.body.appendChild(menu);
+
+    function menuEntry(label, handler) {
+        const entry = el('button', 'bk-menu__item', label);
+        entry.type = 'button';
+        entry.setAttribute('role', 'menuitem');
+        entry.addEventListener('click', () => {
+            const item = menuItem;
+            closeMenu();
+            if (item) handler(item);
+        });
+        return entry;
+    }
+
+    function openMenu(item, at) {
+        menuItem = item;
+        menuTarget.textContent = item.path;
+        // Rebuilt per open rather than shown-and-disabled: this menu has three entries and
+        // one of them (Open) is meaningless on a file, so there is no "why is that grey"
+        // question to answer -- the Files tab greys its entries because its selection can
+        // make any of nine verbs inapplicable, which is a different problem.
+        menu.replaceChildren(menuTarget);
+        if (item.dir) menu.appendChild(menuEntry(t('backups.tab.menu_open'), (i) => goTo(i.path)));
+        menu.appendChild(menuEntry(t('backups.tab.menu_download'),
+                                   (i) => downloadPaths([i.path])));
+        const ticked = selected.has(item.path.toLowerCase());
+        menu.appendChild(menuEntry(
+            ticked ? t('backups.tab.menu_untick') : t('backups.tab.menu_tick'),
+            (i) => {
+                const key = i.path.toLowerCase();
+                if (selected.has(key)) selected.delete(key);
+                else selected.set(key, { path: i.path, dir: i.dir });
+                render();
+            }));
+
+        // Shown before it is measured, because a hidden element has no size to position by,
+        // then flipped rather than clamped at the near edge -- a menu that ran off the
+        // bottom would otherwise open with its entries shifted up under the cursor.
+        menu.hidden = false;
+        const box = menu.getBoundingClientRect();
+        const pad = 8;
+        const left = at.x + box.width + pad > window.innerWidth
+            ? Math.max(pad, at.x - box.width) : at.x;
+        const top = at.y + box.height + pad > window.innerHeight
+            ? Math.max(pad, at.y - box.height) : at.y;
+        menu.style.left = Math.round(left) + 'px';
+        menu.style.top = Math.round(top) + 'px';
+        const first = menu.querySelector('.bk-menu__item');
+        (first || menu).focus({ preventScroll: true });
+    }
+
+    function closeMenu() {
+        menuItem = null;
+        menu.hidden = true;
+    }
+
+    /** A row that opens the menu on right-click, the way the Files tab's rows do. */
+    function actionRow(item) {
+        const row = el('tr');
+        row.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            closeMenu();
+            // The Menu key fires this with no coordinates, so an absent point anchors the
+            // menu to the row instead of opening it in the corner.
+            const box = row.getBoundingClientRect();
+            openMenu(item, (event.clientX > 0 && event.clientY > 0)
+                ? { x: event.clientX, y: event.clientY }
+                : { x: box.left + 16, y: box.bottom });
+        });
+        return row;
+    }
+
+    /** The left-click way in. A discoverable button, because a right-click menu nobody
+     *  knows is there is a menu that does not exist. */
+    function actionCell(item) {
+        const cell = el('td', 'bk-browser__actions');
+        const open = el('button', 'btn btn--ghost bk-menu__trigger', '⋯');
+        open.type = 'button';
+        open.setAttribute('aria-haspopup', 'menu');
+        open.setAttribute('aria-label', t('backups.tab.actions_for', { path: item.path }));
+        open.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const box = open.getBoundingClientRect();
+            const reopen = menuItem && menuItem.path === item.path;
+            closeMenu();
+            if (!reopen) openMenu(item, { x: box.left, y: box.bottom + 4 });
+        });
+        cell.appendChild(open);
+        return cell;
+    }
+
+    // Everything that ends the menu. `pointerdown` in the capture phase so it closes on
+    // the press like every other menu on the platform, and scroll is included because the
+    // menu is positioned against the viewport -- the row would slide out from under it.
+    document.addEventListener('pointerdown', (event) => {
+        if (!menu.hidden && !menu.contains(event.target)
+            && !(event.target.closest && event.target.closest('.bk-menu__trigger'))) {
+            closeMenu();
+        }
+    }, true);
+    document.addEventListener('keydown', (event) => {
+        if (!menu.hidden && event.key === 'Escape') {
+            event.stopPropagation();    // and not a dialog underneath as well
+            closeMenu();
+        }
+    }, true);
+    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('resize', closeMenu);
+
+    // ================================
+    // DOWNLOAD
+    // ================================
+    /**
+     * Pull the selection into THIS browser instead of pushing it onto a PC.
+     *
+     * Two requests, and the first one is the point: the download itself is a navigation,
+     * so its answer never reaches this page -- a refusal would arrive as a browser error
+     * page or, worse, as a saved file containing a JSON error. The preview asks the hub the
+     * same question over fetch first, so a selection that is too big, matches nothing, or
+     * names a folder that rotated away is reported HERE, in the panel, before anything is
+     * saved.
+     *
+     * The navigation is deliberate too, rather than fetching the bytes and handing back a
+     * blob: an archive can be gigabytes, and a blob is the whole thing in the tab's memory
+     * with no progress, no resume and nothing left if the tab is closed.
+     */
+    async function downloadPaths(paths) {
+        if (downloadBusy || !paths.length) return;
+        downloadBusy = true;
+        restoreStatus = '';
+        restoreFailed = false;
+        render();
+        try {
+            const preview = await api(
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}`
+                + '/download/preview', json('POST', { paths }));
+            const query = paths.map((p) => `path=${encodeURIComponent(p)}`).join('&');
+            window.location.assign(
+                `/api/backups/machines/${encodeURIComponent(currentMachine())}`
+                + `/download?${query}`);
+            restoreStatus = t('backups.tab.downloading', {
+                files: preview.file_count.toLocaleString(),
+                size: fmtBytes(preview.total_bytes),
+                name: preview.filename,
+            }) + (preview.missing && preview.missing.length
+                  ? t('backups.tab.queued_missing', { missing: preview.missing.join(', ') })
+                  : '');
+        } catch (e) {
+            restoreStatus = e.message;
+            restoreFailed = true;
+        }
+        downloadBusy = false;
+        render();
     }
 
     function tickCell(path, isDir) {
@@ -713,16 +915,23 @@
         const start = el('button', 'btn btn--primary',
                          restoreBusy ? t('backups.tab.starting')
                                      : t('backups.tab.restore_selected'));
+        start.id = 'restore-start';
         start.disabled = restoreBusy;
         start.addEventListener('click', startRestore);
         actions.appendChild(start);
+        // Beside Restore rather than hidden in the row menu, because for a multi-file
+        // selection this is the verb people actually want: getting a folder back onto
+        // YOUR machine needs no agent, no target PC and no overwrite decision.
+        const download = el('button', 'btn',
+                            downloadBusy ? t('backups.tab.preparing')
+                                         : t('backups.tab.download_selected'));
+        download.id = 'restore-download';
+        download.disabled = downloadBusy;
+        download.addEventListener('click', () => downloadPaths(chosen.map((i) => i.path)));
+        actions.appendChild(download);
         const clear = el('button', 'btn', t('backups.tab.clear_selection'));
         clear.addEventListener('click', () => { selected = new Map(); render(); });
         actions.appendChild(clear);
-        const status = el('span', 'settings-actions__status');
-        status.id = 'restore-status';
-        status.textContent = restoreStatus;
-        actions.appendChild(status);
         wrap.appendChild(actions);
         return wrap;
     }
@@ -748,6 +957,7 @@
 
         restoreBusy = true;
         restoreStatus = '';
+        restoreFailed = false;
         render();
         try {
             const body = await api(
@@ -768,6 +978,7 @@
                   : '');
         } catch (e) {
             restoreStatus = e.message;
+            restoreFailed = true;
         }
         restoreBusy = false;
         await load();       // picks the new restore row up in the history table

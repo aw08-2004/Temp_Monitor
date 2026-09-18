@@ -617,6 +617,65 @@ alone".
   right archive, matches nothing, and reports every file missing. Both sides are tested
   against the `"members"` vectors in `tests/backup_path_vectors.json`.
 
+**Download, and the end of the silent restore (hub 1.116.0):**
+
+- **A restore that never reported left a row saying `running` — for a day.** The row is
+  opened before the command is queued and closed only when the agent POSTs a result, so
+  every path that ends without that POST was invisible: a command that expired unclaimed,
+  one the agent failed outright, and — the one that actually bit — one whose plan the hub
+  refused, which `RestoreFilesExecutor` deliberately reports against the COMMAND and not
+  the restore. Three different failures, one indistinguishable spinner, and
+  `expire_stale_restores` only noticing 24 hours later with "never reported a result",
+  which is true and tells nobody anything. `reconcile_restores` closes a restore from its
+  command's terminal status and the agent's own log, on the same `files_tick` pass as the
+  other sweeps and **before** the 24-hour one, so the real reason wins over the timeout's.
+  It works against agents already in the field, which is the point of putting it hub-side.
+- **A destination that no longer exists is refused at the console, not at the agent.** A
+  per-machine `destination_id` outlives the destination it names — `delete_destination`
+  clears the hub schedule and keeps run history, and nothing walks the per-machine
+  overrides — and `start_restore` only checked that the field was *set*. So the restore was
+  created, the command queued, and the hub refused the agent's plan into a command result
+  no operator reads. Existence is now checked where a 400 lands in front of the person who
+  pressed the button. Deleting a destination still deliberately leaves the overrides alone:
+  they are the record of where a machine's archives actually went, and silently repointing
+  a machine at nothing is how a fleet stops being backed up without anyone being told.
+- **`FetchRestorePlanAsync` returns why, not just null.** The refusal is the one failure an
+  operator cannot see from the console, so the status code and the hub's sentence go into
+  the command output the restore row is now reconciled from — 404 (aimed at a machine name
+  this agent is not enrolled under), 409 (already finished) and 502 (the hub cannot reach
+  the destination) need three different things done about them.
+- **Download the files instead of pushing them onto a PC.** `restore_backup.py --extract`
+  already served "somebody wants one file without pushing it onto a machine", but only for
+  whoever holds the master key and a shell on the hub. The hub does the unpacking itself
+  now: it already holds the master key and already brokers every upload, so the only new
+  part is a tar walk — and the answer arrives on a machine that is not the one in trouble.
+  No agent, no online PC, no overwrite decision. One file comes back as itself; anything
+  more comes back as a zip.
+- **Streamed end to end, never spooled.** Destination response → envelope reader → gunzip →
+  `tarfile` in stream mode → the socket, one pass and a buffer's worth of memory. An
+  archive is routinely gigabytes and the hub's disk holds the database everything else
+  depends on, so buffering here would make "recover a folder" a way to fill the volume.
+  The zip is written to a deliberately **unseekable** sink so Python emits data descriptors
+  instead of seeking back to patch local headers — which is also the regression to watch
+  for, because it produces a file that downloads perfectly and will not open.
+- **The selection is resolved by `plan_restore`, the same function the restore uses.** A
+  ticked folder has to mean the same set of files whether it is pushed onto a PC or pulled
+  into a browser; a second matcher would be a second set of rules to learn and to keep in
+  step. Only the caps differ, and they bound the transfer rather than what is recoverable.
+- **Gated and audited exactly like a restore.** `manage_backups` plus scope on the source
+  machine, and a `backup_download` row at security level on every single call — this is the
+  one place in the product where a user's actual documents leave the fleet. Audited with
+  the SHAPE and never the file list, for the same reason a restore is.
+- **Row actions, reachable with a left click.** The browser offered one gesture per row —
+  tick the checkbox — and every verb was a form below the table, so "get me that one file"
+  meant a tick, a scroll, a target machine, a folder and an overwrite decision. Rows now
+  carry the Files tab's menu, opened by the row's own button *and* by a right-click, since
+  an operator who lives in the Files tab will reach for the second and everyone else needs
+  the first. The status line moved out of the selection bar at the same time: a restore that
+  started successfully cleared the selection, the bar fell back to its "tick something"
+  branch, and the line saying what had been queued — including the folders that matched
+  nothing — was written into a node that was never rendered.
+
 **Fixed here** — `rotate_chains()`'s non-atomic deletes. The old code deleted every object
 in a doomed chain and then every DB row, so a `client.delete()` failure in between left
 archives gone from storage while the manifest still listed the whole chain as restorable.

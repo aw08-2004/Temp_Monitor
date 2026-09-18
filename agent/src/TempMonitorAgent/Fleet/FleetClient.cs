@@ -907,10 +907,17 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     ///
     /// A separate request rather than command params, and deliberately so — the hub audits
     /// command params verbatim, and a plan is tens of thousands of file names plus a
-    /// decryption key. Returns null if the hub will not hand it over (a finished restore,
-    /// or one belonging to another machine), which the caller reports as a failed run.
+    /// decryption key.
+    ///
+    /// **Returns WHY, not just null.** A refusal here is the one failure the operator
+    /// cannot see from the console: the restore row is closed from this command's output
+    /// (see the hub's reconcile_restores), so "the hub said no" without a status code left
+    /// somebody guessing between a restore aimed at a machine name this agent is not
+    /// enrolled under (404), one that already finished (409) and a hub that could not
+    /// reach the backup destination (502). Each needs a different thing done about it.
     /// </summary>
-    public async Task<JsonObject?> FetchRestorePlanAsync(string restoreId, CancellationToken ct)
+    public async Task<(JsonObject? Plan, string? Error)> FetchRestorePlanAsync(
+        string restoreId, CancellationToken ct)
     {
         var url = $"{AgentConfig.HubBase}/api/agent/backups/restore/"
                   + $"{Uri.EscapeDataString(restoreId)}/plan";
@@ -921,14 +928,19 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             if (!resp.IsSuccessStatusCode)
             {
                 _log.LogWarning("Hub refused the restore plan ({Status})", (int)resp.StatusCode);
-                return null;
+                var body = (await resp.Content.ReadAsStringAsync(ct)).Trim();
+                var detail = $"the hub answered HTTP {(int)resp.StatusCode}"
+                             + (body.Length > 0 ? $": {body[..Math.Min(200, body.Length)]}" : "");
+                return (null, detail);
             }
-            return JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))?.AsObject();
+            var plan = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))?.AsObject();
+            if (plan is null) return (null, "the hub's reply was not a restore plan");
+            return (plan, null);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
         {
             _log.LogWarning("Could not fetch the restore plan: {Msg}", e.Message);
-            return null;
+            return (null, $"the hub could not be reached: {e.Message}");
         }
     }
 

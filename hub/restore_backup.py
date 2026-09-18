@@ -41,7 +41,6 @@ before you trust it, which is worth the seconds it costs.
 import argparse
 import fnmatch
 import getpass
-import io
 import os
 import sqlite3
 import sys
@@ -105,41 +104,12 @@ def is_archive(header):
     return header.get("kind") == "machine_files"
 
 
-class ChunkReader(io.RawIOBase):
-    """A read-only file object over an iterator of byte blocks.
-
-    `tarfile` wants something with `read()`; `read_envelope` gives a generator. Adapting
-    rather than joining the blocks is the whole point -- a machine archive is allowed to
-    be bigger than RAM, which is why the format is chunked in the first place.
-    """
-
-    def __init__(self, chunks):
-        self._chunks = iter(chunks)
-        self._buffer = b""
-
-    def readable(self):
-        return True
-
-    def readinto(self, target):
-        while not self._buffer:
-            try:
-                self._buffer = next(self._chunks)
-            except StopIteration:
-                return 0
-        count = min(len(target), len(self._buffer))
-        target[:count] = self._buffer[:count]
-        self._buffer = self._buffer[count:]
-        return count
-
-
-def open_archive(header, chunks):
-    """A streaming tarfile over a decrypted archive.
-
-    `r|` (stream mode), not `r`: the plaintext arrives as a one-pass generator and cannot
-    be seeked, and asking tarfile for random access would make it buffer the whole thing.
-    """
-    stream = backups.iter_gunzip(chunks) if header.get("compression") == "gzip" else chunks
-    return tarfile.open(fileobj=io.BufferedReader(ChunkReader(stream)), mode="r|")
+# The chunk-iterator adapter and the streaming tar opener used to live here and now live
+# in backups.py, because the hub's own "download these files" path needs exactly the same
+# two. One implementation, for the same reason the envelope has one: the failure a second
+# copy produces is a short read on a chunk boundary, which no test on either side would
+# notice until an archive would not open.
+open_archive = backups.open_archive_tar
 
 
 def matches(name, patterns):

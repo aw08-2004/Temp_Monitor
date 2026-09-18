@@ -65,15 +65,23 @@ public sealed class RestoreFilesExecutor : ICommandExecutor
             onOutput?.Invoke(line + "\n");
         }
 
-        var plan = await _fleet.FetchRestorePlanAsync(restoreId, ct);
+        var (plan, planError) = await _fleet.FetchRestorePlanAsync(restoreId, ct);
         if (plan is null)
         {
-            // No ReportRestoreAsync here: either the hub does not believe this restore is
-            // ours, or it is already finished. Reporting against it would be shouting at a
-            // row that is not listening; the command result is where this belongs.
-            return CommandResult.Fail(
-                "The hub would not supply the plan for this restore. It may have already "
-                + "finished, or been superseded.");
+            // Reported against the restore row AS WELL as the command, and the order
+            // matters. The report usually fails here — the hub turns the plan and the
+            // result away for the same reasons — but when it lands it closes a row that
+            // would otherwise spin until a sweeper noticed it. When it does not, the
+            // command result carries the reason and the hub reconciles the row from it,
+            // which is why the status code above is in the sentence rather than in a log
+            // file on the machine nobody is looking at.
+            var reason = "The hub would not supply the plan for this restore: "
+                         + (planError ?? "no reason given")
+                         + ". It may have already finished, been superseded, or been "
+                         + "aimed at a different machine name than this agent enrolled under.";
+            Say($"[restore] FAILED: {reason}");
+            await _fleet.ReportRestoreAsync(restoreId, new JsonObject { ["error"] = reason }, ct);
+            return new CommandResult(false, log.ToString());
         }
 
         var keyB64 = plan.GetObject("encryption").GetString("key");

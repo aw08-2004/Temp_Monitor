@@ -32,6 +32,7 @@ page polls the run list, exactly as the packages page polls a deployment.
 """
 import threading
 import time
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, redirect, request, url_for
 
@@ -628,6 +629,18 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         if not destination_id:
             return jsonify({"error": "This machine has no backup destination "
                                      "configured, so its archives cannot be read."}), 400
+        # That it is SET is not that it EXISTS. A per-machine override survives the
+        # destination it names being deleted, and truthiness was the only check here --
+        # so the restore was created, the command was queued, and the agent found out
+        # when the hub refused its plan. That refusal reaches the agent's command result
+        # and nowhere an operator looks, which is exactly how a restore ends up saying
+        # "running" for six hours. Checked here, where a 400 lands in front of the person
+        # who pressed the button.
+        if backups.get_destination(db_path, destination_id) is None:
+            return jsonify({"error": "The backup destination this machine is configured "
+                                     "for no longer exists, so its archives cannot be "
+                                     "read. Point it at the destination its backups were "
+                                     "actually written to."}), 400
 
         try:
             target_dir = backups.validate_target_dir(data.get("target_dir"))
@@ -666,6 +679,78 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             # end of a two-hour restore is too late.
             "missing": plan["missing"],
         }), 202
+
+    # ---------------- Console: downloading backed-up files ----------------
+    #
+    # The third direction, and deliberately not a restore -- see the DOWNLOAD section in
+    # backups.py. A GET rather than a POST because the browser has to do the saving: the
+    # selection rides in repeated `path=` parameters and the response is an attachment, so
+    # the download lands in the download manager (resumable, visible, survives the tab)
+    # instead of in a blob the page has to hold in memory.
+    #
+    # A GET that ships a user's documents off the fleet is the one read here that is not
+    # merely reconnaissance, so it is gated exactly like a restore -- `manage_backups` plus
+    # scope on the source machine -- and audited every single time.
+    @bp.route("/api/backups/machines/<machine>/download", methods=["GET"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def download_files(machine):
+        source_config = backups.effective_file_config(db_path, machine,
+                                                      **_fleet_file_defaults())
+        destination_id = source_config["destination_id"]
+        if not destination_id or backups.get_destination(db_path, destination_id) is None:
+            return jsonify({"error": "This machine's backup destination is missing or no "
+                                     "longer exists, so its archives cannot be read."}), 400
+        try:
+            plan = backups.plan_download(db_path, machine, request.args.getlist("path"))
+        except ValueError as e:
+            return refusals.refuse(e)
+
+        backups.audit_download(db_path, actor=_current_email(), machine=machine, plan=plan)
+        filename = backups.download_filename(machine, plan)
+        # Streamed, so the generator starts running after the headers are out. A failure
+        # inside it (the destination went away mid-read, a corrupt tail) therefore cannot
+        # become a 500 -- the client sees a short file. That is why the plan is resolved
+        # and the destination opened BEFORE this point: everything that can be checked
+        # cheaply is checked while a status code can still say so.
+        response = Response(
+            backups.iter_download(db_path, log_dir, destination_id, plan),
+            mimetype="application/octet-stream")
+        # ASCII filename plus the RFC 5987 form: a machine or a file named in Spanish is
+        # the normal case here, and a bare `filename=` with accents in it is mangled
+        # differently by every browser.
+        response.headers["Content-Disposition"] = (
+            "attachment; filename=\"{}\"; filename*=UTF-8''{}".format(
+                filename.encode("ascii", "replace").decode("ascii").replace('"', "_"),
+                quote(filename, safe="")))
+        # What the operator is about to download, so a mis-click on a 4 GB folder is
+        # visible in the browser's own download list rather than half an hour later.
+        response.headers["X-Backup-Files"] = str(plan["file_count"])
+        return response
+
+    @bp.route("/api/backups/machines/<machine>/download/preview", methods=["POST"])
+    @login_required
+    @access.require_machine(permissions.MANAGE_BACKUPS)
+    def preview_download(machine):
+        """What a download WOULD be: how many files, how big, what matched nothing.
+
+        Separate from the download itself because the answer has to reach the page, and
+        the download does not -- it is a navigation. The console asks this first so it can
+        refuse a selection the hub would refuse anyway, name the folders that matched
+        nothing, and say "1.2 GB" before an operator commits to it.
+        """
+        data = request.get_json(silent=True) or {}
+        try:
+            plan = backups.plan_download(db_path, machine, data.get("paths") or [])
+        except ValueError as e:
+            return refusals.refuse(e)
+        return jsonify({
+            "file_count": plan["file_count"],
+            "total_bytes": plan["total_bytes"],
+            "archives": len(plan["archives"]),
+            "missing": plan["missing"],
+            "filename": backups.download_filename(machine, plan),
+        }), 200
 
     @bp.route("/api/backups/machines/<machine>/restores", methods=["GET"])
     @login_required
@@ -998,6 +1083,18 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             payload = backups.restore_plan_payload(db_path, log_dir, restore_id,
                                                    hub_url=hub_url)
         except ValueError as e:
+            # **The restore is closed here, with the HUB's reason.** This refusal is
+            # terminal -- a destination that is gone or a missing master key will not fix
+            # itself before the agent gives up -- and the agent cannot report it usefully:
+            # all it knows is that it was told no, so its command result says "the hub
+            # would not supply the plan" and the row spins until a sweeper retires it a
+            # day later. The sentence that explains it exists exactly here and nowhere
+            # else, so it is written onto the row rather than thrown away with the 400.
+            #
+            # Only for THIS failure. A 404 above is a restore that is not this agent's to
+            # touch, and a 409 is one that already finished -- closing either from here
+            # would let one machine end another's restore.
+            backups.complete_restore(db_path, restore_id, actor="hub", error=str(e))
             return refusals.refuse(e)
         return jsonify(payload), 200
 

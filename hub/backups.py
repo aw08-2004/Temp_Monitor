@@ -64,9 +64,11 @@ import os
 import re
 import sqlite3
 import struct
+import tarfile
 import threading
 import time
 import uuid
+import zipfile
 import zlib
 import xml.etree.ElementTree as ET
 from urllib.parse import quote, unquote, urlsplit
@@ -2890,6 +2892,10 @@ def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_incl
     must stop occupying a slot before the pass decides who else may start.
     """
     expired = expire_stale_file_runs(db_path, now=now)
+    # Before the 24-hour sweep, not after: reconcile_restores has the command's own
+    # reason, and expire_stale_restores would otherwise get there first on anything older
+    # than a day and replace it with "never reported a result".
+    expired += reconcile_restores(db_path, now=now)
     expired += expire_stale_restores(db_path, now=now)
     dispatched = files_dispatch_once(
         db_path, log_dir, fleet_enabled=fleet_enabled,
@@ -3358,6 +3364,333 @@ def expire_stale_restores(db_path, now=None, max_seconds=24 * 60 * 60):
         complete_restore(db_path, restore_id, actor="scheduler",
                          error="The machine never reported a result for this restore.")
     return len(stale)
+
+
+#: How long a command must have been settled before its restore row is closed from it.
+#:
+#: The agent reports the restore result BEFORE it reports the command result, so the two
+#: normally land in that order -- but they are two separate HTTP requests, and closing a
+#: restore the instant its command lands would race a report already in flight and replace
+#: a real count with "the machine gave up".
+RESTORE_RECONCILE_GRACE_SECONDS = 2 * 60
+
+
+def _restore_command_error(command):
+    """Why a restore ended, taken from its command. Never a bare status word.
+
+    The agent's own log is preferred and read from the END, because that is where the
+    reason is: `[restore] FAILED: <what happened>` is the last line it writes, and the
+    hundred lines above it are archive-by-archive progress nobody needs once it failed.
+    """
+    status = command.get("status")
+    if status == fleet.STATUS_EXPIRED:
+        return ("This machine never picked the restore up before the request expired -- "
+                "it was most likely offline the whole time. Start it again once the "
+                "machine is back.")
+    output = ((command.get("result") or {}).get("output") or "").strip()
+    if output:
+        tail = output[-MAX_ERROR_CHARS:].strip()
+        return f"The machine stopped without reporting a result. It said: {tail}"
+    return ("The machine finished this restore's command without reporting a result, "
+            "and said nothing about why.")
+
+
+def reconcile_restores(db_path, now=None, grace_seconds=RESTORE_RECONCILE_GRACE_SECONDS):
+    """Close restores whose command is already dead. Returns how many were retired.
+
+    **This is the one that was missing, and it is why a broken restore looked like a slow
+    one.** A restore row is opened before the command is queued and closed only when the
+    agent POSTs a result -- so every path that ends without that POST left the row
+    `running` forever: a command that expired unclaimed, a command the agent failed on,
+    and (the one that actually bit) an agent that could not fetch the plan, which
+    deliberately reports against the COMMAND and not the restore. Three different
+    failures, one indistinguishable spinner, and `expire_stale_restores` only noticing a
+    day later with "never reported a result" -- which is true and tells nobody anything.
+
+    The command already knows. It carries a terminal status and the agent's own log, so
+    the answer is a join away, and doing it here means it works against every agent
+    already in the field rather than only the ones that take the next release.
+
+    Runs on the same pass as the expiry sweep, which is also why the 24-hour sweep stays:
+    a restore whose command row was pruned, or which never got one, still needs an end.
+    """
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, command_id FROM backup_restores "
+            "WHERE status = ? AND command_id IS NOT NULL AND command_id != ''",
+            (RUN_RUNNING,))]
+
+    closed = 0
+    for row in rows:
+        command = fleet.get_command(db_path, row["command_id"])
+        if command is None:
+            continue
+        if command["status"] not in (fleet.STATUS_DONE, fleet.STATUS_FAILED,
+                                     fleet.STATUS_EXPIRED):
+            continue
+        settled_at = int((command.get("result") or {}).get("completed_at")
+                         or command.get("expires_at") or 0)
+        if settled_at and now - settled_at < int(grace_seconds):
+            continue
+        # `restored` stays None rather than 0: the agent may well have written files and
+        # lost only the report, and a confident "0 of 5" would send somebody looking for
+        # files that are already back.
+        complete_restore(db_path, row["id"], actor="scheduler",
+                         error=_restore_command_error(command))
+        closed += 1
+    return closed
+
+
+# ================================
+# DOWNLOAD
+# ================================
+# Pulling files OUT of an archive and into the operator's browser, without touching the
+# machine they came from. Roadmap #1b.
+#
+# **This is a third direction, and it is deliberately not a restore.** A restore is the
+# hub telling a PC to write files onto its own disk: it needs an agent, it needs that PC
+# to be online, and on the common case -- the file is still there but wrong -- it needs
+# somebody to have thought about overwriting. None of that is what "the finance folder
+# got encrypted, send me last Tuesday's copy" asks for. `restore_backup.py --extract`
+# already served that case, but only for whoever has the master key and a shell on the
+# hub, which is exactly one person on a bad afternoon.
+#
+# So the hub does the unpacking itself. It already holds the master key (it minted every
+# derived one) and it already reaches the destination (it brokers every upload), so the
+# only new thing here is a tar walk -- and the answer arrives on a machine that is not
+# the one in trouble.
+#
+# **Streamed end to end, never spooled.** An archive is routinely gigabytes and the hub's
+# disk is the one holding the database everything else depends on; buffering a download
+# there would make "recover a folder" a way to fill the volume. The destination's
+# response feeds the envelope reader, which feeds gunzip, which feeds `tarfile` in stream
+# mode, which feeds the socket -- one pass, a buffer's worth of memory, and a client that
+# hangs up costs us the generator rather than a temp file nobody deletes.
+#
+# **The selection is resolved by plan_restore, the same function the restore path uses.**
+# A folder means "everything under it, as of the newest surviving version", and that has
+# to mean the same thing in both places or the operator learns two rules. It also buys
+# the ancestor matching, the selection cap and the `missing` report for free.
+
+#: How many separate ticks one download may name. Far below MAX_RESTORE_SELECTIONS
+#: because these arrive in a query string -- a folder is one selection and covers
+#: everything under it, so this is a bound on clicking, not on what can be recovered.
+MAX_DOWNLOAD_SELECTIONS = 50
+
+#: A ceiling on what the hub will assemble into one zip. Not a storage limit (nothing is
+#: stored) but a patience limit: past this the operator wants a restore onto a machine,
+#: not a browser download that takes an hour and dies on a proxy timeout.
+MAX_DOWNLOAD_FILES = 20_000
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024 * 1024
+
+
+class ChunkReader(io.RawIOBase):
+    """A read-only file object over an iterator of byte blocks.
+
+    `tarfile` and `read_envelope` want something with `read()`; the destination client
+    and the envelope reader both hand back generators. Adapting rather than joining the
+    blocks is the whole point -- an archive is allowed to be bigger than RAM, which is
+    why the format is chunked in the first place.
+
+    Lives here rather than in restore_backup.py, which is where it was written: the
+    download path below needs exactly the same adapter, and two copies of it would be
+    free to drift in the one direction nobody tests (a short read on a chunk boundary).
+    """
+
+    def __init__(self, chunks):
+        self._chunks = iter(chunks)
+        self._buffer = b""
+
+    def readable(self):
+        return True
+
+    def readinto(self, target):
+        while not self._buffer:
+            try:
+                self._buffer = next(self._chunks)
+            except StopIteration:
+                return 0
+        count = min(len(target), len(self._buffer))
+        target[:count] = self._buffer[:count]
+        self._buffer = self._buffer[count:]
+        return count
+
+
+def open_archive_tar(header, chunks):
+    """A streaming `tarfile` over one decrypted machine archive.
+
+    `r|` (stream mode), not `r`: the plaintext arrives as a one-pass generator and cannot
+    be seeked, and asking tarfile for random access would make it buffer the whole thing.
+    """
+    stream = iter_gunzip(chunks) if header.get("compression") == "gzip" else chunks
+    return tarfile.open(fileobj=io.BufferedReader(ChunkReader(stream)), mode="r|")
+
+
+def plan_download(db_path, machine, paths):
+    """Resolve a download selection -- plan_restore, with tighter caps.
+
+    Deliberately the same resolver: a ticked folder has to mean the same set of files
+    whether it is pushed back onto a PC or pulled into a browser, and a second matcher
+    here is a second set of rules for an operator to learn and for us to keep in step.
+
+    The caps are the only difference, and they are about the shape of the transfer rather
+    than about what is recoverable -- see MAX_DOWNLOAD_FILES.
+    """
+    if len(paths or []) > MAX_DOWNLOAD_SELECTIONS:
+        raise ValueError(f"A download names at most {MAX_DOWNLOAD_SELECTIONS} items. "
+                         f"Tick the folder that holds them instead.")
+    plan = plan_restore(db_path, machine, paths, max_files=MAX_DOWNLOAD_FILES)
+    if plan["total_bytes"] > MAX_DOWNLOAD_BYTES:
+        raise ValueError(
+            f"That selection is {plan['total_bytes'] / 1024 ** 3:.1f} GB. A browser "
+            f"download is capped at {MAX_DOWNLOAD_BYTES // 1024 ** 3} GB -- restore it "
+            f"onto a machine instead, or pick less of it.")
+    return plan
+
+
+def iter_download(db_path, log_dir, destination_id, plan):
+    """Yield the selected files as bytes: the file itself when there is one, else a zip.
+
+    `destination_id` is resolved by the caller from the SOURCE machine's effective policy
+    -- the same value start_restore resolves -- and never from the request, because that
+    is where the run that wrote these archives uploaded to.
+
+    One archive is opened at a time and walked ONCE, in the order plan_restore grouped
+    them (oldest first), because a stream-mode tar cannot be rewound -- a member asked
+    for out of order would mean decrypting and re-walking the whole archive.
+
+    The zip is written straight into the response with no central-directory seek: Python
+    writes data descriptors when the underlying object is not seekable, which every
+    unpacker in use reads. Deflate is used even though the archive was already gzipped,
+    because what comes out of the tar is the ORIGINAL file -- documents and logs
+    compress, and the operator is often on a link the hub does not control.
+
+    `_ArchiveSink` is drained between writes rather than at the end; that is what makes
+    this a stream rather than a very well-commented way to build the whole zip in memory.
+    """
+    master_key = load_master_key()
+    if master_key is None:
+        raise ValueError("No backup master key is configured on this hub.")
+    client, _ = open_client(db_path, log_dir, destination_id)
+
+    def members():
+        """(member name, data stream) for every wanted file, in archive order."""
+        for archive in plan["archives"]:
+            wanted = {f["member"] for f in archive["files"]}
+            upstream = client.open(archive["object_key"])
+            try:
+                reader = io.BufferedReader(
+                    ChunkReader(upstream.iter_content(chunk_size=CHUNK_BYTES)))
+                header, chunks = read_envelope(reader, master_key)
+                with open_archive_tar(header, chunks) as tar:
+                    for entry in tar:
+                        if not wanted:
+                            break
+                        if not entry.isfile() or entry.name not in wanted:
+                            continue
+                        wanted.discard(entry.name)
+                        source = tar.extractfile(entry)
+                        if source is not None:
+                            yield entry.name, source
+            finally:
+                upstream.close()
+
+    if plan["file_count"] == 1:
+        # One file goes out as itself, not as a zip of one. An operator who asked for
+        # `report.docx` wants to open `report.docx`, and a wrapper is a second step on
+        # every single-file recovery, which is most of them.
+        for _member, source in members():
+            while True:
+                block = source.read(CHUNK_BYTES)
+                if not block:
+                    return
+                yield block
+        return
+
+    sink = _ArchiveSink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for member, source in members():
+            # The tar member name (`C/Users/bob/Desktop/x.txt`) is kept as the zip entry
+            # name, so an operator who unpacks two machines' downloads side by side still
+            # sees which drive and which profile each file came from -- and two files
+            # with the same name from different folders cannot collide.
+            with bundle.open(member, "w") as target:
+                while True:
+                    block = source.read(CHUNK_BYTES)
+                    if not block:
+                        break
+                    target.write(block)
+                    if sink.pending:
+                        yield sink.drain()
+            if sink.pending:
+                yield sink.drain()
+    if sink.pending:
+        yield sink.drain()
+
+
+def download_filename(machine, plan, now=None):
+    """What the browser saves it as. One file keeps its own name; anything else is a zip
+    named for the machine and the moment, because `Desktop.zip` from three PCs in a
+    downloads folder is three files nobody can tell apart."""
+    if plan["file_count"] == 1:
+        name = plan["archives"][0]["files"][0]["path"].split("\\")[-1]
+        if name:
+            return name
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(time.time() if now is None else now))
+    return f"{_safe_component(machine)}-{stamp}.zip"
+
+
+def _safe_component(text):
+    """A machine name reduced to what is safe in a filename header."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(text or "machine")).strip("-") or "machine"
+
+
+class _ArchiveSink(io.RawIOBase):
+    """A write-only file object that buffers what zipfile writes until it is drained.
+
+    Deliberately NOT seekable: zipfile then emits data descriptors instead of going back
+    to patch each local header, which is what lets the whole zip be produced in one
+    forward pass. `tell()` inherits RawIOBase's "raise OSError when not seekable", which
+    is the signal zipfile checks for.
+    """
+
+    def __init__(self):
+        self._buffer = bytearray()
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+    def write(self, data):
+        self._buffer.extend(data)
+        return len(data)
+
+    @property
+    def pending(self):
+        return bool(self._buffer)
+
+    def drain(self):
+        out = bytes(self._buffer)
+        self._buffer.clear()
+        return out
+
+
+def audit_download(db_path, *, actor, machine, plan):
+    """Record who pulled whose files onto their own PC.
+
+    Audited at LEVEL_SECURITY and with the same SHAPE-not-contents rule as a restore: the
+    record that matters is "this operator took 400 files off PC-3", and a 400-path row
+    would bury exactly that. This is the one place in the product where a user's actual
+    documents leave the fleet, so it is never unlogged.
+    """
+    fleet.audit(db_path, actor=actor, action="backup_download",
+                level=fleet.LEVEL_SECURITY, target=machine,
+                detail={"files": plan.get("file_count"),
+                        "bytes": plan.get("total_bytes"),
+                        "archives": len(plan.get("archives") or [])})
 
 
 def tick(db_path, log_dir, *, enabled, destination_id, interval_hours, keep,
