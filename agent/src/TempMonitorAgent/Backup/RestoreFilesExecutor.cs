@@ -68,20 +68,20 @@ public sealed class RestoreFilesExecutor : ICommandExecutor
         var (plan, planError) = await _fleet.FetchRestorePlanAsync(restoreId, ct);
         if (plan is null)
         {
-            // Reported against the restore row AS WELL as the command, and the order
-            // matters. The report usually fails here — the hub turns the plan and the
-            // result away for the same reasons — but when it lands it closes a row that
-            // would otherwise spin until a sweeper noticed it. When it does not, the
-            // command result carries the reason and the hub reconciles the row from it,
-            // which is why the status code above is in the sentence rather than in a log
-            // file on the machine nobody is looking at.
+            // Reported against the restore row AS WELL as the command, through the same
+            // FailAsync every other refusal here uses -- three steps that have to stay
+            // together. The report is rarely what closes the row on this path: a hub that
+            // refuses the plan outright (a destination that is gone, no master key) has
+            // already closed the restore with its own sentence, so the result POST is
+            // accepted and ignored, and a 404 or a 409 turns it away. The command result
+            // is what the hub reconciles the row from either way, which is why the status
+            // code is in the sentence rather than in a log file on a machine nobody is
+            // looking at.
             var reason = "The hub would not supply the plan for this restore: "
                          + (planError ?? "no reason given")
                          + ". It may have already finished, been superseded, or been "
                          + "aimed at a different machine name than this agent enrolled under.";
-            Say($"[restore] FAILED: {reason}");
-            await _fleet.ReportRestoreAsync(restoreId, new JsonObject { ["error"] = reason }, ct);
-            return new CommandResult(false, log.ToString());
+            return await FailAsync(restoreId, reason, log, Say, ct);
         }
 
         var keyB64 = plan.GetObject("encryption").GetString("key");
