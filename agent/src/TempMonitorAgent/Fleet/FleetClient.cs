@@ -163,6 +163,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             var sentAs = _identity.AgentId;
             var known = RuntimeConfigStore.Current.ConfigVersion;
             var body = new JsonObject { ["config_version"] = known };
+            // Which event log subscription document this machine holds (roadmap #16). Sent on
+            // EVERY heartbeat, like config_version above and for the same reason: it is what
+            // lets the hub stay silent while it matches, so the steady-state tick stays two
+            // fields wide. Empty until the first document arrives, which no hub document
+            // hashes to -- so a restarted agent is always re-told what to collect.
+            body["event_subscriptions_version"] = TempMonitorAgent.Events.EventSubscriptionStore.Version;
             // Only when it has actually changed -- see BackupProfileReporter. Sending a
             // profile block on every 10-second heartbeat would be pure noise.
             var profiles = BackupProfileReporter.TakeIfChanged();
@@ -199,6 +205,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // has open contributes nothing to this body at all.
             var procs = TempMonitorAgent.Telemetry.ProcessReporter.TakeLatest();
             if (procs is not null) body["processes"] = procs;
+            // Matching event log records (roadmap #16). Neither change-only nor demand-driven,
+            // which makes it the odd one out here: while any subscription exists this carries a
+            // payload on every scan, INCLUDING an empty one. That empty report is the feature --
+            // it is the only thing separating "your fleet is quiet" from "your collector
+            // stopped". A machine with nothing subscribed contributes nothing at all.
+            var eventRecords = TempMonitorAgent.Events.EventLogReporter.TakeIfReady();
+            if (eventRecords is not null) body["events"] = eventRecords;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 
@@ -216,6 +229,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             ApplyProcessWatchFromHeartbeat(text);
             ApplyLiveWatchFromHeartbeat(text);
             ApplyChannelFromHeartbeat(text);
+            ApplyEventSubscriptionsFromHeartbeat(text);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -354,6 +368,43 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e)
         {
             _log.LogWarning("Ignoring malformed channel from the hub: {Msg}", e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Apply the hub's event log subscription document (roadmap #16), if the reply carried
+    /// one.
+    ///
+    /// Its own method with its own try/catch, like the two watches and the channel above and
+    /// for the same reason: one malformed block on a shared reply must not be able to cost an
+    /// unrelated one.
+    ///
+    /// **An ABSENT block changes nothing, and an EMPTY one stops collection.** Those are
+    /// different answers and the parse keeps them apart -- see EventSubscriptionStore.
+    /// FromHeartbeat. Absent is a hub with nothing to say (the version matched) or a hub too
+    /// old to know about this feature; empty is an operator having deleted the last
+    /// subscription, and that has to reach the machine as an instruction rather than as
+    /// silence.
+    /// </summary>
+    private void ApplyEventSubscriptionsFromHeartbeat(string body)
+    {
+        try
+        {
+            var document = TempMonitorAgent.Events.EventSubscriptionStore.FromHeartbeat(body);
+            if (document is null) return;
+            var applied = TempMonitorAgent.Events.EventSubscriptionStore.Apply(
+                document.Value.Version, document.Value.Subscriptions,
+                document.Value.MaxPerReport);
+            if (applied)
+            {
+                _log.LogInformation("Collecting {Count} event log subscription(s)",
+                                    document.Value.Subscriptions.Count);
+            }
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed event subscriptions from the hub: {Msg}",
+                            e.Message);
         }
     }
 

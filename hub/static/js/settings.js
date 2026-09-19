@@ -31,6 +31,7 @@ const panels = {
     policy: document.getElementById('tab-policy'),
     rules: document.getElementById('tab-rules'),
     sharing: document.getElementById('tab-sharing'),
+    events: document.getElementById('tab-events'),
     ai: document.getElementById('tab-ai'),
 };
 

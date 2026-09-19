@@ -44,7 +44,8 @@
       "fleet": "Fleet",
       "operate": "Operate",
       "admin": "Administration"
-    }
+    },
+    "events": "Events"
   },
   "hub_update": {
     "_note": [
@@ -687,7 +688,8 @@
       "location": "Location",
       "map": "Map",
       "policy": "Policy",
-      "ai": "AI Assistance"
+      "ai": "AI Assistance",
+      "events": "Event Logs"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1158,6 +1160,10 @@
         "usage_retention_days": {
           "label": "Keep app usage for",
           "help": "How long per-app foreground time is kept before being deleted. A record of what somebody did with their evenings, so it is shorter than the location window by default and is meant to come down further. Deleting a machine erases its usage immediately, regardless of this."
+        },
+        "event_retention_days": {
+          "label": "Keep collected events for",
+          "help": "How long collected Windows event records are kept before being deleted. Both a privacy control and a disk-space one: a Security-channel record names the account somebody typed a password for, and this is the only table one over-broad subscription can grow by thousands of rows an hour. Deleting a machine erases its events immediately, regardless of this."
         }
       },
       "map": {
@@ -1178,6 +1184,12 @@
         "max_age_seconds": {
           "label": "Lift restrictions after",
           "help": "How long a device keeps enforcing its app policy after it stops hearing from this hub. Past this, the device lifts every restriction on its own. This is a release valve rather than a timeout: a phone whose hub is gone must not be a device somebody has to factory reset in order to use."
+        }
+      },
+      "events": {
+        "summary_window_seconds": {
+          "label": "Count events over",
+          "help": "How far back the counters above the event list look. Separate from the retention window on purpose -- shortening how long records are kept must not silently change what the page claims happened today."
         }
       }
     },
@@ -3392,6 +3404,75 @@
       "cancel": "Cancel",
       "cancelled": "Cancelled. {recalled} machine(s) were recalled; any already restarting were left alone, because the patches are on them.",
       "retry": "Retry failures"
+    }
+  },
+  "events": {
+    "heading": "Event logs",
+    "intro": "Windows event records matched on the machine and sent here. Only what a subscription asks for is read, and repeats within five minutes are counted on one row rather than stored separately.",
+    "views_nav": "Event views",
+    "tab_records": "Events",
+    "tab_subscriptions": "Collecting",
+    "search_placeholder": "Search messages and sources",
+    "any_level": "Any level",
+    "any_log": "Any log",
+    "refresh": "Refresh",
+    "request_failed": "The hub could not answer that request.",
+    "none_matched": "Nothing matched. Your machines have reported no events fitting these filters.",
+    "none_subscribed": "Nothing is being collected yet. Add a subscription to say which event records the fleet should send.",
+    "since": "since {when}",
+    "times": "{count} times",
+    "level": {
+      "critical": "Critical",
+      "error": "Error",
+      "warning": "Warning",
+      "information": "Information",
+      "verbose": "Verbose"
+    },
+    "summary": {
+      "occurrences": "Occurrences",
+      "distinct": "Distinct events",
+      "machines": "Machines reporting",
+      "errors": "Errors and criticals",
+      "window": "Counted over the last {hours} hours."
+    },
+    "col": {
+      "when": "Last seen",
+      "machine": "Machine",
+      "level": "Level",
+      "source": "Log and provider",
+      "event": "Event",
+      "message": "Message"
+    },
+    "sub": {
+      "add": "New subscription",
+      "new_title": "New subscription",
+      "edit_title": "Edit subscription",
+      "name": "Name",
+      "name_placeholder": "Failed logons",
+      "log": "Log channel",
+      "log_placeholder": "Security",
+      "log_help": "The channel as Windows names it. The four every PC has are suggested, and a provider channel such as Microsoft-Windows-TaskScheduler/Operational can be typed in full.",
+      "event_ids": "Event IDs",
+      "event_ids_help": "Separate them however you like. Leave this empty to collect every event on the channel that matches the levels below.",
+      "levels": "Levels",
+      "levels_help": "Leave every box clear to collect any level.",
+      "provider": "Provider contains",
+      "provider_help": "Narrows the subscription to records written by a provider whose name contains this text.",
+      "volume_warning": "A subscription with no event IDs and no levels collects the whole channel. On a busy machine that is thousands of records a day, and the oldest are dropped once a machine reaches its cap.",
+      "any_id": "any ID",
+      "any_level": "any level",
+      "summary": "IDs: {ids} · Levels: {levels}",
+      "col_name": "Name",
+      "col_log": "Log",
+      "col_filter": "Matching",
+      "col_state": "State",
+      "enabled": "Collecting",
+      "disabled": "Off",
+      "enable": "Turn on",
+      "disable": "Turn off",
+      "none": "Nothing is being collected on this hub.",
+      "none_manage": "Nothing is being collected yet. Add a subscription to say which event records the fleet should send.",
+      "confirm_delete": "Stop collecting \"{name}\"? Events already collected are kept."
     }
   },
   "channels": {
