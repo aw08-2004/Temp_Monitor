@@ -72,12 +72,13 @@ on, and it survived contact with Android intact.
 | **Identity** | `Build.MODEL` / `MANUFACTURER` for model and vendor, `Build.VERSION.RELEASE` for the OS caption, `Build.DISPLAY` as `os_build`, the primary ABI as `os_arch`, and the SSAID as `serial_number` — see below |
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or typed once on the setup screen |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
-| **Commands** | `rename`, `locate_device`, `lock_device`, `wipe_device` |
+| **Commands** | `rename`, `locate_device`, `lock_device`, `wipe_device`, `show_message` |
 | **App inventory** | Every installed package, with its label, version, and whether the framework says it is enabled or suspended. Change-only, on its own loop |
 | **App policy** | Suspends the packages the hub says to, un-suspends what it suspended before, and reports the ones it could not. Lifts everything on its own if the hub goes silent |
 | **Schedules** | Blocked hours and daily budgets, evaluated on the device against its own clock and its own usage -- so a curfew holds with the hub unreachable |
 | **App usage** | Foreground seconds per app, per local day, where usage access has been granted. What a budget is checked against, and what the console charts |
 | **Lock and wipe** | `lock_device` locks the screen; `wipe_device` erases the device after answering, because a wipe that answered afterwards would never answer at all |
+| **Messages** | `show_message` puts an operator's notice in front of whoever is holding the device and reports which button they pressed, so the hub's rules engine can route the answer. The one command where a phone beats a PC |
 | **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed. The install is a Device Owner power rather than a file swap, and the agent comes back through ACTION_MY_PACKAGE_REPLACED |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops queueing work it can never perform. Derived from the dispatcher, not written out -- see below |
 
@@ -158,20 +159,20 @@ returns, because "not implemented" sends an operator looking for a version that 
 
 **Could be done, and is not yet** — in rough order of what would be worth doing next:
 
-1. **`show_message`.** The one command where a phone is *better* than a PC, and the obvious next
-   one. It needs the full contract, not a notification: buttons with hub-supplied ids, a JSON
-   result carrying `outcome`/`shown_at`/`responded_at`, and the `no_session` case. The hub's
-   `rules.py` routes on that outcome, so a half-implementation strands the routing.
-2. **Push instead of polling.** FCM against the `push_*` columns already on `api_tokens` would
+1. **Push instead of polling.** FCM against the `push_*` columns already on `api_tokens` would
    let the command loop idle instead of holding a request every 25 seconds, which is most of
    this agent's battery cost. Roadmap #11 scopes the same work for the client.
-3. **Patch inventory** — the installed-app list and their versions. A Play policy problem
-   (`QUERY_ALL_PACKAGES`) before it is a technical one.
-4. **Signed self-update.** The Windows agent's Ed25519 manifest verification does *not* port:
-   Android installs APKs through the package installer, and an app cannot silently update
-   itself unless it is a device owner. For a managed fleet the honest answer is that the MDM
-   ships the APK.
-5. Network throughput and per-app data; GPU sensors.
+2. **`wake_machine`.** Roadmap #10's delivery is an agent peer relay -- the hub picks an awake
+   machine on the sleeping one's subnet and asks *it* to broadcast the magic packet -- and a
+   phone sitting in the building is exactly that. Nothing about it needs a permission this
+   agent does not already hold.
+3. Network throughput and per-app data; GPU sensors.
+
+`show_message`, `patch inventory` and `signed self-update` used to head this list and have all
+since shipped. The self-update note is worth keeping because its conclusion changed: the
+Windows agent's Ed25519 manifest verification *does* port, but the install does not -- an APK
+goes through the package installer, and an app cannot replace itself silently unless it is a
+device owner, so a sideloaded device declines rather than raising the system installer.
 
 ### Scheduled commands arrive anyway
 
@@ -431,6 +432,70 @@ anybody set the device up again; leaving it on means the device needs the accoun
 signed in on it. Which is right depends on whether the device was stolen or merely returned, so
 this agent does not choose -- it reports which it did in the result it sends before erasing.
 
+## Asking the person holding the device
+
+`show_message` is the one command in the hub's catalog where a phone is **better** than a PC.
+Every other thing this agent does is a smaller version of what the Windows agent does; a notice
+on a desktop waits for somebody to come back to their desk, and the same notice on the phone in
+their pocket gets answered in a corridor.
+
+**It is the full contract or it is nothing.** The hub does not treat this as fire-and-forget:
+`rules.py` remembers the command id, waits for the answer, and routes the outcome onto follow-up
+actions (`handle_message_result`). An agent that posted a notice and reported success would
+leave every rule holding a message nobody ever answers, and the symptom is a rule that silently
+never reaches its second half. So the result is a JSON object carrying one of the hub's own
+outcome strings -- a button id, or `timeout` / `dismissed` / `no_session` / `failed` -- and the
+agent is never told what any button *means*. Ids go down, an id comes back, and what "Later"
+does stays a hub decision that can change without shipping an APK to a fleet.
+
+**A notification with its buttons as notification actions, not a dialog.** Android 10 and later
+refuse to let a background app start an activity at all; the sanctioned way round it is a
+full-screen-intent notification, whose permission Android 14 restricts to calling and alarm
+apps. A dialog would therefore buy a worse failure mode -- showing on some devices and silently
+not on others -- in exchange for looking more like Windows. A heads-up notification with two
+buttons is also what a phone user expects an answerable message to look like.
+
+**Its own channel, at High importance.** The service's permanent status notification is Low and
+silent because nobody should ever look at it. Sharing that channel would let somebody silence
+the agent's noise and, with it, every message an operator ever sends -- and the console would
+show a fleet that simply never answers.
+
+Four decisions inside it are worth keeping:
+
+- **`no_session` is a SUCCESS**, exactly as on Windows. There it means nobody is signed in;
+  here it means notifications are switched off for the agent, so there is no way to put
+  anything in front of anybody. A failure would be indistinguishable from a network problem and
+  would strand the hub's `no_session` route, which is how an operator says "then ask again in
+  half an hour".
+- **Swiping it away is an answer.** The notification is deliberately *not* `setOngoing`, which
+  would make it undismissable. The hub has a `dismissed` outcome and rules route on it, so
+  making dismissal impossible would delete a branch operators can configure and turn those
+  messages into timeouts an hour later.
+- **A fourth button is refused, not truncated.** Android draws at most three notification
+  actions. A fourth would be added, never drawn, and its route in the hub would be one nobody
+  could ever reach -- a rule branch that looks configured and can only time out. The result
+  comes back `failed` naming the limit, because the operator is the one who has to send a
+  shorter message. The hub's own presets all fit.
+- **The wait is never indefinite**, which is where this parts company with the Windows
+  executor. A `timeout_seconds` of zero means "wait forever" there, bounded by the command's
+  TTL. A waiting message holds one of `AgentConfig.MaxConcurrentCommands` slots, so on a phone
+  that would be a device that shows online and accepts nothing. An unbounded message gets an
+  hour; a bounded one is clamped to the same 30 s -- 12 h range `rules.py` enforces. The slot
+  count went from 2 to 4 in the same change, because the comment justifying 2 said nothing
+  here could occupy a slot for ten minutes, and that stopped being true.
+
+**Button words are English, in the agent.** The hub's three locale catalogs cover the console;
+this agent has never had an i18n layer and does not grow one for seven words (`LocationNotifier`
+is the precedent). An operator who writes their own label gets their words verbatim, which is
+the case that matters -- the fallbacks only cover the presets, which carry ids and no labels
+precisely so the wording stays changeable at the hub end.
+
+**An outstanding message does not survive the process.** A message waiting when Android kills
+this process is never answered and the hub shows the command running until its TTL expires.
+That is true of every in-flight command here and is not worth a persistence layer: the rule
+gets its answer from the next fire, and a message re-posted from disk hours after its moment
+had passed would be worse than none.
+
 ## Fully managed (device owner)
 
 The agent can hold **device owner** on a device provisioned by QR at its setup wizard, which is
@@ -537,11 +602,12 @@ Setting `ANDROID_HOME` and `JAVA_HOME` in the environment is the per-machine ans
 
 | | |
 |---|---|
-| `FleetHubAgent.Core` | **Tested.** 88 xunit tests, no SDK required |
+| `FleetHubAgent.Core` | **Tested.** 248 xunit tests, no SDK required |
 | `FleetHubAgent.Android` | **Compiles**, Debug and Release, no warnings. Produces a signed 9.7 MB APK |
 | The merged manifest | **Checked** with `aapt2 dump`: `minSdk` 26 / `target` 36, `allowBackup=false`, the service's `foregroundServiceType` carrying both `specialUse` and `dataSync`, and all four boot actions on the receiver |
 | On real hardware | **Enrollment, telemetry ingest and the foreground service, on a Galaxy A15 / Android 16.** Battery temperature reads; all 26 thermal zones are denied even to `adb shell`; the service runs as `specialUse`; identity and machine name survive a reinstall |
 | Still unverified | Anything time-dependent: whether the service survives an OEM power manager overnight, whether the boot receiver fires on this vendor's skin, and every command except `rename` |
+| `show_message` | **Neither compiled into an APK nor seen on a device.** Its Core half is under test like everything else, and its Android half was type-checked against the `Mono.Android` reference assembly rather than built -- the platform SDK downloads from `dl.google.com`, which the session it was written in could not reach. What that leaves unproven is everything a reference assembly cannot answer: that the heads-up banner appears, that a pressed action reaches the receiver, and that a swipe reports `dismissed` |
 
 **The first real device changed the design twice**, which is the argument for doing this before
 a fleet rollout rather than after. It showed that the notification status line could not
