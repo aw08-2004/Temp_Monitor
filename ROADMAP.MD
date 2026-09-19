@@ -3529,7 +3529,7 @@ a helpdesk actually hits them:
    first column of every product named above and the one that answers licence audits, "who
    still has the old VPN client", and "what did that user install". The reader is half
    written: `DeployPackageExecutor.FindInstalledVersion` already walks all three Uninstall
-   views (`agent/src/TempMonitorAgent/Fleet/Executors/DeployPackageExecutor.cs:417`), it just
+   views (`agent/src/TempMonitorAgent/Fleet/Executors/DeployPackageExecutor.cs:415`), it just
    answers one product at a time.
 2. **Hardware below the identity line.** CPU model, cores and base clock; installed memory and
    the DIMMs making it up (slot, size, speed, part number); disks (model, serial, size, bus,
