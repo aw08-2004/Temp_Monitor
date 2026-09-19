@@ -985,6 +985,15 @@ than restoring as a plausible-looking corrupt database.
 > The hub generates it once, shows it once, and nags on the Backups page until an operator
 > confirms it is stored somewhere else. Every reveal is written to the audit log.
 >
+> **Moved or reinstalled the hub?** A hub that comes up without its `.env` generates a new
+> key, and from that moment it cannot read a single archive the old installation wrote —
+> even though you still have the key that opens them. Tools → Backup → **Use an existing
+> key** takes that key and adopts it, replacing the generated one (it asks first, and names
+> the key it is about to discard). Destination credentials are re-encrypted under the
+> imported key in the same step, so the schedules keep working; any it could not read are
+> counted back to you so you know which ones to re-enter. The key goes in and is never
+> echoed back, and the import is written to the audit log like every other key event.
+>
 > To restore, you need the key and the file — **nothing else**. No hub, no database, no
 > network:
 >

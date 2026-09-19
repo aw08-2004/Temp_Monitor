@@ -8,7 +8,8 @@ What this file is really guarding is the boundary, not the plumbing:
     names object keys and destinations, which is reconnaissance for anyone who
     shouldn't have it.
   * The master key comes back from exactly two routes, both POST (so a link or an
-    <img> cannot trigger them), and both audited every single time.
+    <img> cannot trigger them), and both audited every single time. The import route
+    takes a key and answers with none, which is the same rule seen from the other side.
   * A destination's credentials go in and never come out -- not in the create response,
     not in the list, not masked.
   * The schedule route writes `backup.*` settings and NOTHING else, so a
@@ -208,6 +209,9 @@ def main():
               c.post("/api/backups/key", json={}).status_code == 403)
         check("a viewer cannot reveal the encryption key",
               c.post("/api/backups/key/reveal", json={}).status_code == 403)
+        check("a viewer cannot import an encryption key either",
+              c.post("/api/backups/key/import",
+                     json={"key": backups.generate_master_key()}).status_code == 403)
         check("a viewer cannot add a destination",
               c.post("/api/backups/destinations", json={}).status_code == 403)
         check("a viewer cannot start a backup",
@@ -721,6 +725,104 @@ def main():
               settings.get_bool(db_path, "backup.hub_enabled") is False)
         check("run history survives the destination being deleted",
               len(backups.list_runs(db_path, limit=5)) > 0)
+
+        print("\n== Adopting a key from a previous installation ==")
+        # The failure this section exists to catch is the one that put the feature here:
+        # a hub reinstalled in a new folder generates a fresh key, and every archive the
+        # old installation wrote stops being readable by the console even though the
+        # operator still has the key. The route must therefore accept a key, replace the
+        # generated one, and carry the destination credentials across -- and it must not
+        # do the replacing silently, since the key it discards is the only way back to
+        # anything encrypted with it.
+        CURRENT_USER = "backup@x.com"
+        moved = {"name": "Re-added", "kind": "webdav",
+                 "config": {"base_url": "https://dav.example.com/backups"},
+                 "secret": {"username": "hub", "password": "DAVSECRET"}}
+        moved_id = c.post("/api/backups/destinations", json=moved).get_json()["id"]
+
+        before = c.get("/api/backups").get_json()["key"]["key_id"]
+        old_key_b64 = backups.master_key_b64()
+        incoming = backups.generate_master_key()
+
+        check("a key that is not base64 is a 400 saying so, not a 500",
+              "base64" in c.post("/api/backups/key/import",
+                                 json={"key": "not!base64!"}).get_json()["error"])
+        check("an empty body is refused",
+              c.post("/api/backups/key/import", json={}).status_code == 400)
+
+        r = c.post("/api/backups/key/import", json={"key": incoming})
+        check("replacing an existing key without confirming is a 409",
+              r.status_code == 409)
+        check("the refusal says confirmation is what is missing",
+              r.get_json()["confirm_required"] is True)
+        check("and it names the key about to be replaced, so the choice is informed",
+              r.get_json()["current_key_id"] == before)
+        check("nothing was written on the refusal",
+              backups.master_key_b64() == old_key_b64)
+
+        # The confirmation names the key it discards, so a stale one -- from a page that
+        # rendered its warning before somebody else changed the key -- is refused instead
+        # of quietly discarding a key that operator never saw. A bare flag could not tell
+        # the two apart; this is wipe.confirm_wipe's rule applied to a key.
+        r = c.post("/api/backups/key/import",
+                   json={"key": incoming, "replace_key_id": "0000000000000000"})
+        check("a confirmation naming the WRONG key is refused, not honoured",
+              r.status_code == 409 and r.get_json()["confirm_required"] is True)
+        check("a bare replace flag no longer confirms anything",
+              c.post("/api/backups/key/import",
+                     json={"key": incoming, "replace": True}).status_code == 409)
+        check("still nothing written",
+              backups.master_key_b64() == old_key_b64)
+
+        r = c.post("/api/backups/key/import",
+                   json={"key": incoming, "replace_key_id": before})
+        check("a confirmed import succeeds", r.status_code == 200)
+        body = r.get_json()
+        check("the key is NOT echoed back", incoming not in r.get_data(as_text=True))
+        check("it reports which key it replaced", body["replaced_key_id"] == before)
+        check("the hub now holds the imported key", backups.master_key_b64() == incoming)
+        check("the new key reached .env",
+              f"{backups.MASTER_KEY_ENV}={incoming}"
+              in open(env_path, encoding="utf-8").read())
+        check("the console reports the new key id",
+              body["state"]["key_id"] ==
+              backups.key_id(backups.decode_master_key(incoming)))
+        check("the import is audited as a security event",
+              "backup_key_import" in audit_actions(db_path))
+
+        # The half that fails silently if it is forgotten: credentials are sealed with the
+        # key that just changed, so without a re-wrap this destination keeps its schedule
+        # and dies at its next upload.
+        check("existing destination credentials moved across with the key",
+              body["credentials_rewrapped"] == 1)
+        check("none were left behind", body["credentials_stranded"] == 0)
+        check("and the store was writable, so nothing is reported as half-done",
+              body["credentials_error"] is None)
+        check("and they still decrypt with the imported key",
+              backups.load_secret(log_dir, backups.decode_master_key(incoming),
+                                  moved_id)["password"] == "DAVSECRET")
+
+        check("the escrow nag does not fire for a key that came from somewhere else",
+              body["state"]["escrowed_at"] is not None)
+        r = c.post("/api/backups/key/import", json={"key": incoming})
+        check("importing the key already in use needs no confirmation",
+              r.status_code == 200)
+        check("and reports nothing was replaced beyond itself",
+              r.get_json()["replaced_key_id"] == body["state"]["key_id"])
+
+        # The key state is embedded in several 200 responses, so the sentence it carries
+        # when BACKUP_MASTER_KEY is unusable has to be one this file authored -- not
+        # whatever the parser happened to raise. CodeQL reads a passed-through exception
+        # message reaching a 200 as stack-trace exposure, and it is right about the shape
+        # even when it is wrong about the risk (see refusals.py).
+        os.environ[backups.MASTER_KEY_ENV] = "not-a-key"
+        broken = c.get("/api/backups").get_json()["key"]
+        check("an unusable key reports itself as not configured",
+              broken["configured"] is False)
+        check("and says where to look rather than echoing the parser",
+              "BACKUP_MASTER_KEY in .env" in broken["error"]
+              and "base64" not in broken["error"])
+        os.environ[backups.MASTER_KEY_ENV] = incoming
 
         print("\n== Superuser break-glass ==")
         CURRENT_USER = "root@x.com"

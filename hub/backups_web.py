@@ -22,7 +22,8 @@ Two rules inherited from the rest of the codebase, both load-bearing:
     stray `<img src>` or a link in an email cannot cause a browser to fetch it.
   * **Secrets travel in one direction.** A destination's credentials go in and are never
     returned, not even masked -- the edit form shows an empty credential field meaning
-    "unchanged". The single exception is the master key reveal, which is the whole point
+    "unchanged". An imported master key travels the same way -- in, and never back out in
+    the response. The single exception is the master key reveal, which is the whole point
     of that route, and which is audited every time.
 
 Manual backups run on a background thread. A hub database of any size takes longer than a
@@ -199,13 +200,25 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             return "No backup encryption key exists yet. Create one first."
         return None
 
+    # What `_key_state` says when BACKUP_MASTER_KEY is present but unusable -- truncated,
+    # re-wrapped by an editor, pasted with a character missing. **Authored here rather than
+    # passed through from the exception**, unlike every refusal in this file: this dict is
+    # embedded in other routes' success responses rather than returned by refusals.refuse(),
+    # so the one place a refusal becomes a response does not cover it and CodeQL's
+    # py/stack-trace-exposure has nothing to read but `str(e)` reaching a 200. The detail it
+    # replaces ("not valid base64" vs "must decode to 32 bytes") was never rendered by the
+    # console anyway, and this sentence names the file to look in and the way out, which is
+    # what an operator in this state actually needs.
+    KEY_UNUSABLE = ("The backup encryption key configured on this hub is not usable. Check "
+                    "BACKUP_MASTER_KEY in .env, or use an existing key to replace it.")
+
     def _key_state():
         """Everything the console needs to nag correctly, and nothing that reveals the
         key itself."""
         try:
             key = backups.load_master_key()
-        except ValueError as e:
-            return {"configured": False, "error": str(e), "escrowed_at": None,
+        except ValueError:
+            return {"configured": False, "error": KEY_UNUSABLE, "escrowed_at": None,
                     "key_id": None}
         escrowed = backups.get_state(db_path, backups.KEY_ESCROW_STATE_KEY)
         return {
@@ -321,6 +334,105 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                     detail={"key_id": backups.key_id(
                         backups.decode_master_key(key_b64))})
         return jsonify({"key": key_b64}), 200
+
+    @bp.route("/api/backups/key/import", methods=["POST"])
+    @login_required
+    @can_manage
+    def import_key():
+        """Adopt a master key the operator already has, instead of generating a new one.
+
+        **This is the route that makes a reinstalled hub able to read its own history.**
+        A hub brought up in a new folder or on a new server has no `.env`, generates a
+        fresh key at the first backup, and from then on every archive the old installation
+        wrote decrypts with a key the console has no way to accept. The operator is holding
+        that key; there was simply nowhere to put it.
+
+        Replacing a key that already exists needs the caller to send back the `key_id` it
+        is replacing, in `replace_key_id`, and the refusal names that key_id so the answer
+        to "which one am I about to stop being able to read" is on screen at the moment of
+        deciding. **Naming the key rather than sending a bare `replace: true` is the whole
+        point**, and it is the lesson wipe.confirm_wipe already wrote down: a flag confirms
+        the act, a value confirms the target. With a flag, a key that changed between the
+        page rendering the warning and the operator clicking Save -- a second tab, a second
+        admin, a retried request -- would be discarded by a confirmation that named a
+        different key, and nobody would ever see which one went. With the key_id, that
+        request gets the 409 instead and the operator re-reads a warning that is true.
+
+        That check is here rather than in backups.py for the same reason the capability
+        gate is: the model half does what it is told, and consent is an HTTP-layer concern.
+
+        The key is NOT echoed back. It arrived from the operator, the reveal route exists
+        for reading it later, and a response body is one more place it would sit.
+        """
+        data = request.get_json(silent=True) or {}
+        raw = str(data.get("key") or "")
+        current_b64 = backups.master_key_b64()
+
+        if not raw.strip():
+            # decode_master_key's own empty-input message is "No backup master key is
+            # configured", which is true of the hub and wrong about the request -- the
+            # operator submitted an empty box, and should be told that.
+            return jsonify({"error": "Paste the backup encryption key to import."}), 400
+
+        # Validated before the confirmation gate, so pasting a mistyped key into a hub that
+        # already has one is answered with "that is not a valid key" rather than with a
+        # replace-this-key warning about something that could never have been written.
+        try:
+            candidate = backups.decode_master_key(raw)
+        except ValueError as e:
+            return refusals.refuse(e)
+
+        current_id = None
+        if current_b64:
+            try:
+                current_id = backups.key_id(backups.decode_master_key(current_b64))
+            except ValueError:
+                # An unusable BACKUP_MASTER_KEY. Nothing was ever encrypted with it, so
+                # there is nothing to warn about and no confirmation to ask for.
+                current_b64 = ""
+
+        replacing = bool(current_b64) and current_id != backups.key_id(candidate)
+        if replacing and str(data.get("replace_key_id") or "") != current_id:
+            return jsonify({
+                "error": "This hub already has a different backup encryption key. "
+                         "Confirm the replacement to continue -- backups taken with the "
+                         "current key can only be read again by importing it back.",
+                "confirm_required": True,
+                "current_key_id": current_id,
+            }), 409
+
+        try:
+            imported = backups.import_master_key(env_path, raw, log_dir=log_dir)
+        except ValueError as e:
+            return refusals.refuse(e)
+        key_b64 = imported["key_b64"]
+
+        # Escrow is satisfied by the import itself, and that is not a shortcut. The nag
+        # asks whether the key exists anywhere other than this server; a key an operator
+        # typed in demonstrably does, because that is where it came from. Leaving the
+        # banner red would have it calling a key safely held elsewhere unsafe, which is how
+        # a warning stops being read.
+        backups.set_state(db_path, backups.KEY_ESCROW_STATE_KEY, int(time.time()))
+        fleet.audit(db_path, actor=_current_email(), action="backup_key_import",
+                    level=fleet.LEVEL_SECURITY,
+                    detail={"key_id": backups.key_id(backups.decode_master_key(key_b64)),
+                            "replaced_key_id": imported["previous_key_id"],
+                            "credentials_rewrapped": imported["rewrapped"],
+                            "credentials_stranded": imported["stranded"],
+                            "credentials_error": bool(imported["credentials_error"])})
+        return jsonify({
+            "state": _key_state(),
+            "replaced_key_id": imported["previous_key_id"],
+            # What happened to the destination credentials, which are encrypted with the
+            # key that just changed. The console says so out loud: a destination whose
+            # credentials could not be carried across fails at its next upload, and an
+            # operator who was not told will read that as the import having broken it.
+            "credentials_rewrapped": imported["rewrapped"],
+            "credentials_stranded": imported["stranded"],
+            # Set only when the store could not be written AFTER the key changed, which is
+            # a partial success rather than a refusal -- the key is adopted either way.
+            "credentials_error": imported["credentials_error"],
+        }), 200
 
     @bp.route("/api/backups/key/escrowed", methods=["POST"])
     @login_required
