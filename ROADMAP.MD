@@ -3492,6 +3492,154 @@ Whether the drafter belongs anywhere other than the Rules page once #17's wordin
 
 ---
 
+## 📋 25. Inventory report — one device sheet, and the collection it still needs
+
+Everything the hub knows about one PC, on one page, printable and exportable: what a Kaspersky
+export, a LOGINventory sheet or a PDQ Inventory report hands a helpdesk when somebody asks
+"what is this machine, and what is on it". Asked for directly, not from the PRD triage.
+
+**The hub already holds most of a device sheet and has nowhere to print it.** Nine tables carry
+per-machine facts, each behind the page that needed it, and no route joins them:
+
+| What | Where it already lives |
+|---|---|
+| Name, manufacturer, model, serial, service tag, asset tag | `machine_info` (`app.py`) |
+| OS caption/version/build/arch, boot time, uptime, channel | `machine_info` |
+| AD DN, OU, owner, `operatingSystem`, last logon, disabled | `machine_info`, synced by `directory.py` |
+| Operator-defined fields (owner, site, cost centre) | `custom_fields` (`rules.py`) |
+| Per-adapter MAC, IP, prefix, kind, link, WoL; fast startup | `machine_nics` / `machine_network` (`wake.py`) |
+| BIOS vendor, version, interface, password set, every attribute | `machine_bios` (`bios.py`) |
+| Available OS and winget updates | `machine_patches` (`patches.py`) |
+| Logon sessions and display outputs | `remote_inventory` (`remote.py`) |
+| What this platform can be asked to do | `machine_capabilities` (`capabilities.py`) |
+| Volume used/total, CPU/GPU/memory load, temps, fans, watts | `readings.sensors_json` + the metric columns |
+| Backup profiles, last location, group membership | `backups.py`, `location.py`, `device_groups.py` |
+
+So the first phase of this feature collects nothing. It is a join and a template, which is why
+it is built first — but **A and B ship together, as one release pair**, rather than the sheet
+going out alone. A sheet whose Software section is empty on every machine is the sheet nobody
+prints twice, and the fleet would learn that before the section ever filled.
+
+**What the reference products have that this one cannot yet answer.** Four gaps, in the order
+a helpdesk actually hits them:
+
+1. **Installed software. There is none for Windows.** `machine_apps` is the Android inventory
+   (roadmap #23 phase D), and `winget upgrade` in `PatchScanner` names only what is
+   *upgradable* — a machine with a fully patched Acrobat 2017 is invisible to it. This is the
+   first column of every product named above and the one that answers licence audits, "who
+   still has the old VPN client", and "what did that user install". The reader is half
+   written: `DeployPackageExecutor.FindInstalledVersion` already walks all three Uninstall
+   views (`agent/src/TempMonitorAgent/Fleet/Executors/DeployPackageExecutor.cs:415`), it just
+   answers one product at a time.
+2. **Hardware below the identity line.** CPU model, cores and base clock; installed memory and
+   the DIMMs making it up (slot, size, speed, part number); disks (model, serial, size, bus,
+   media type); GPU and VRAM; monitors by EDID (vendor, model, serial, year); motherboard,
+   chassis type, TPM, battery health. The sensor block *names* a CPU and a GPU and gives volume
+   used/total, but it is a telemetry stream, not an inventory — nothing in this repo stores a
+   DIMM, and "can this PC take more RAM" is the question a report gets asked most.
+3. **Security posture.** BitLocker per volume, the registered antivirus and its state
+   (SecurityCenter2), firewall profiles, local administrators, TPM state. Secure Boot is
+   reachable today only as a BIOS attribute, and only on the vendors that expose one.
+4. **Licensing and the small stuff.** Windows edition and activation channel, Office edition,
+   installed printers, mapped drives, shares, services, scheduled tasks, timezone and locale.
+
+### Phases
+
+**A and B ship as one release**, hub first and then agent 3.37.0, and are built in that order
+within one branch: the sheet is what proves the shape of the software section, and the section
+is what makes the sheet worth printing. Nothing goes to the fleet until both halves exist.
+
+**A — the sheet.** A `reports.py` / `reports_web.py` pair on the house split: pure functions
+that assemble one machine's sheet out of the tables above, and a blueprint factory exposing
+it. A **Report tab** on the device workspace, a fleet view at `/reports` that renders the
+selection (a device group, a search, or ticked rows on Devices),
+**Export** as JSON (the whole sheet) and CSV (one row per machine, one file per repeating
+section), and printing left to the browser. Sections that have no data say which agent version
+or which feature would fill them, rather than being absent. That is no longer a stand-in for
+B, but it is still load-bearing: an agent release reaches the fleet over about fifteen
+minutes, the Linux and Android agents answer none of these questions, and a machine that has
+been offline for a week reports nothing when it returns. A Software section reading "waiting
+for agent 3.37.0 on this machine" is the difference between a rollout in progress and a PC
+with nothing installed on it.
+
+**B — installed software.** `SoftwareInventoryReporter` on the agent (hub + **agent 3.37.0**),
+walking both HKLM registry views plus per-user hives for name, version, publisher, install
+date, install location and the uninstall string; change-only behind a content hash, on the
+inventory loop, never on the heartbeat path. Hub side is a `software.py` / `software_web.py`
+pair over a `machine_software` table keyed `(machine, id)`, and a **fleet software catalog** —
+one row per product and version with the machine count behind it, which is the view that
+answers a licence question and the one `machine_apps` already proves the shape of
+(`apps.py:232`). The console gates on `MIN_SOFTWARE_AGENT = '3.37.0'`.
+
+Shipping B with A is what makes that gate constant honest on day one. **Deploy order is hub
+first, then the agent** (VERSIONING.md), so there is a window on every release where the
+console offers a Software section and no machine has answered yet — which is precisely the
+state A's "waiting for" wording was written for.
+
+**C — hardware detail.** `HardwareInventoryReporter` (hub + **agent 3.38.0**), one WMI sweep
+per component class, stored as a single change-only blob in `machine_hardware` on the
+`machine_bios` precedent — components are read together, replaced together, and never written
+individually. Fills the report's Hardware section and, incidentally, gives the rules engine
+"machines with less than 8 GB" without a script.
+
+**D — security posture and licensing.** Gaps 3 and 4. **This overlaps roadmap #19**, which
+already claims BitLocker; the split proposed here is that #25 owns *reporting* a posture and
+#19 owns *acting* on one (escrowing a recovery key is #19's, showing that a volume is
+unencrypted is this feature's).
+
+### Decisions
+
+- **The report renders stored facts. It never collects on demand.** A sheet for an offline PC
+  is exactly the case a helpdesk needs it for, and a fleet report that collected live would be
+  a command issued to every machine at once. Each section carries the time its facts were
+  reported, so a stale section is visibly stale rather than quietly wrong.
+- **A new table per area, never a column on `machine_info`.** The `wake.py` and `apps.py`
+  precedent: a module owns the whole of its storage so `forget_machine` can drop all of it.
+- **The agent wire shape is an object (`{"software": [...]}`), change-only, and an empty list
+  is still a report.** This is the trap `PatchInventoryReporter` documents at length: "this
+  machine now has nothing installed from that publisher" is a real and important transition,
+  and a bare `[]` is dropped by any truthiness check anywhere along the path.
+- **No new capability.** The sheet shows only what its reader could already open page by page,
+  so it is `access.require_machine(VIEW)` per machine and `filter_machines()` for the fleet
+  view, with each section additionally omitted when its own capability is missing. Export is
+  the same gate as the page it exports.
+- **Every cell that reaches a CSV is neutralised** the way the Devices export already
+  neutralises formula-looking values: software names are attacker-influenced in a way a model
+  number is not.
+
+### Rejected alternatives
+
+- **One wide `machine_inventory` table.** Eighty nullable columns, an ALTER for every new fact,
+  and one table that four modules would write to.
+- **A "Collect now" button as the primary path.** Kept as a per-machine refresh at most; as the
+  way a report is produced it is a fleet-wide command storm that still cannot answer for an
+  offline PC.
+- **`Win32_Product` for installed software.** It enumerates by validating every MSI, which
+  triggers repairs and rewrites the machine being inventoried. The registry Uninstall keys are
+  what every product named above actually reads.
+- **A history table of software versions.** An inventory is current state; what changed is the
+  audit log's and patch management's job. A snapshot diff is an open parameter below, not the
+  storage model.
+- **A query builder or reporting engine.** The ask is a sheet, and device groups plus the
+  Ctrl+K search already narrow a fleet. A BI surface over SQLite is a different product.
+- **Server-side PDF rendering.** A new dependency in a hub that self-updates by copying plain
+  files, to replace a browser feature every operator already has.
+- **Growing the Devices CSV export into this.** That export is deliberately the flat roster on
+  screen; a device sheet is nested and would ruin it for the spreadsheet it feeds.
+
+### Open parameters
+
+- Whether per-user installed software covers every profile on disk (loading each `NTUSER.DAT`)
+  or only the hives already loaded. The second is cheap and misses software installed by a user
+  who is logged off.
+- Whether a sheet is snapshotted so two dates can be diffed. Not in A; it is the only part of
+  this feature with an unbounded storage cost.
+- Whether the Linux and Android agents fill the same sections or declare their own. Their
+  capability rows already say what they can answer, so the sheet can be driven off
+  `machine_capabilities` rather than off a platform check.
+
+---
+
 ## ✅ Vendored browser dependencies   ·   hub 1.97.0
 
 `hub/static/vendor/README.md` opens by saying the hub's pages "must work on an isolated LAN
@@ -4472,6 +4620,13 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     admin already did by typing an address into one. It is the first console route that is
     reachable without a session, which is why its entry above spends more words on what that
     page may not say than on what it does.
+23. **#25 Inventory report** — no prerequisite. Its sheet is a join over tables that already
+    exist and has no agent half, so it can be built the day anybody wants it, but **it does not
+    ship alone**: A and B go out as one release pair, hub then agent 3.37.0, built in that order
+    on one branch. Its later phases are the reverse of everything above them — the hub work is
+    small and the *collection* is the feature, which is why they are split by agent release
+    (software in 3.37.0, hardware in 3.38.0) rather than by console surface. Pulled forward of
+    #16–#20 in practice: it is the only item on this board a helpdesk asks for by name.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
