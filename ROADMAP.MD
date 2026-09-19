@@ -3515,9 +3515,10 @@ per-machine facts, each behind the page that needed it, and no route joins them:
 | Volume used/total, CPU/GPU/memory load, temps, fans, watts | `readings.sensors_json` + the metric columns |
 | Backup profiles, last location, group membership | `backups.py`, `location.py`, `device_groups.py` |
 
-So the first phase of this feature collects nothing. It is a join and a template, and it is
-worth shipping on its own — a sheet an operator can print today is more use than a better sheet
-in three agent releases.
+So the first phase of this feature collects nothing. It is a join and a template, which is why
+it is built first — but **A and B ship together, as one release pair**, rather than the sheet
+going out alone. A sheet whose Software section is empty on every machine is the sheet nobody
+prints twice, and the fleet would learn that before the section ever filled.
 
 **What the reference products have that this one cannot yet answer.** Four gaps, in the order
 a helpdesk actually hits them:
@@ -3544,15 +3545,22 @@ a helpdesk actually hits them:
 
 ### Phases
 
-**A — the sheet, hub only, no agent release.** A `reports.py` / `reports_web.py` pair on the
-house split: pure functions that assemble one machine's sheet out of the tables above, and a
-blueprint factory exposing it. A **Report tab** on the device workspace, a fleet view at
-`/reports` that renders the selection (a device group, a search, or ticked rows on Devices),
+**A and B ship as one release**, hub first and then agent 3.37.0, and are built in that order
+within one branch: the sheet is what proves the shape of the software section, and the section
+is what makes the sheet worth printing. Nothing goes to the fleet until both halves exist.
+
+**A — the sheet.** A `reports.py` / `reports_web.py` pair on the house split: pure functions
+that assemble one machine's sheet out of the tables above, and a blueprint factory exposing
+it. A **Report tab** on the device workspace, a fleet view at `/reports` that renders the
+selection (a device group, a search, or ticked rows on Devices),
 **Export** as JSON (the whole sheet) and CSV (one row per machine, one file per repeating
 section), and printing left to the browser. Sections that have no data say which agent version
-or which feature would fill them, rather than being absent — the gaps above are most of the
-feature's value until B and C land, and an empty Software section that explains itself is how
-an operator learns the difference.
+or which feature would fill them, rather than being absent. That is no longer a stand-in for
+B, but it is still load-bearing: an agent release reaches the fleet over about fifteen
+minutes, the Linux and Android agents answer none of these questions, and a machine that has
+been offline for a week reports nothing when it returns. A Software section reading "waiting
+for agent 3.37.0 on this machine" is the difference between a rollout in progress and a PC
+with nothing installed on it.
 
 **B — installed software.** `SoftwareInventoryReporter` on the agent (hub + **agent 3.37.0**),
 walking both HKLM registry views plus per-user hives for name, version, publisher, install
@@ -3562,6 +3570,11 @@ pair over a `machine_software` table keyed `(machine, id)`, and a **fleet softwa
 one row per product and version with the machine count behind it, which is the view that
 answers a licence question and the one `machine_apps` already proves the shape of
 (`apps.py:232`). The console gates on `MIN_SOFTWARE_AGENT = '3.37.0'`.
+
+Shipping B with A is what makes that gate constant honest on day one. **Deploy order is hub
+first, then the agent** (VERSIONING.md), so there is a window on every release where the
+console offers a Software section and no machine has answered yet — which is precisely the
+state A's "waiting for" wording was written for.
 
 **C — hardware detail.** `HardwareInventoryReporter` (hub + **agent 3.38.0**), one WMI sweep
 per component class, stored as a single change-only blob in `machine_hardware` on the
@@ -4607,10 +4620,11 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     admin already did by typing an address into one. It is the first console route that is
     reachable without a session, which is why its entry above spends more words on what that
     page may not say than on what it does.
-23. **#25 Inventory report** — no prerequisite, and its first phase has no agent half at all:
-    the device sheet is a join over tables that already exist, so it can be built the day
-    anybody wants it. Its later phases are the reverse of everything above them — the hub work
-    is small and the *collection* is the feature, which is why they are split by agent release
+23. **#25 Inventory report** — no prerequisite. Its sheet is a join over tables that already
+    exist and has no agent half, so it can be built the day anybody wants it, but **it does not
+    ship alone**: A and B go out as one release pair, hub then agent 3.37.0, built in that order
+    on one branch. Its later phases are the reverse of everything above them — the hub work is
+    small and the *collection* is the feature, which is why they are split by agent release
     (software in 3.37.0, hardware in 3.38.0) rather than by console surface. Pulled forward of
     #16–#20 in practice: it is the only item on this board a helpdesk asks for by name.
 
