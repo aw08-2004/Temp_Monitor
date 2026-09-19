@@ -34,7 +34,8 @@
       "fleet": "Flotte",
       "operate": "Betrieb",
       "admin": "Verwaltung"
-    }
+    },
+    "events": "Ereignisse"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -628,7 +629,8 @@
       "location": "Standort",
       "map": "Karte",
       "policy": "Richtlinie",
-      "ai": "KI-Unterstützung"
+      "ai": "KI-Unterstützung",
+      "events": "Ereignisprotokolle"
     },
     "unit": {
       "celsius": "°C",
@@ -1086,6 +1088,10 @@
         "usage_retention_days": {
           "label": "App-Nutzung aufbewahren für",
           "help": "Wie lange die Vordergrundzeit je App aufbewahrt wird, bevor sie gelöscht wird. Eine Aufzeichnung dessen, was jemand mit seinen Abenden gemacht hat, daher standardmäßig kürzer als der Standortzeitraum und zum weiteren Herunterdrehen gedacht. Das Löschen eines Rechners entfernt seine Nutzung unabhängig davon sofort."
+        },
+        "event_retention_days": {
+          "label": "Erfasste Ereignisse aufbewahren für",
+          "help": "Wie lange erfasste Windows-Ereignisdatensätze aufbewahrt werden, bevor sie gelöscht werden. Sowohl eine Datenschutz- als auch eine Speicherplatzeinstellung: ein Datensatz aus dem Sicherheitskanal nennt das Konto, für das jemand ein Kennwort eingegeben hat, und dies ist die einzige Tabelle, die ein zu weit gefasstes Abonnement um Tausende Zeilen pro Stunde wachsen lassen kann. Beim Löschen eines Geräts werden dessen Ereignisse sofort entfernt, unabhängig hiervon."
         }
       },
       "map": {
@@ -1106,6 +1112,12 @@
         "max_age_seconds": {
           "label": "Einschränkungen aufheben nach",
           "help": "Wie lange ein Gerät seine App-Richtlinie weiter durchsetzt, nachdem es nichts mehr von diesem Hub gehört hat. Danach hebt das Gerät alle Einschränkungen von selbst auf. Das ist ein Sicherheitsventil und keine Zeitüberschreitung: ein Telefon, dessen Hub verschwunden ist, darf kein Gerät sein, das jemand zurücksetzen muss."
+        }
+      },
+      "events": {
+        "summary_window_seconds": {
+          "label": "Ereignisse zählen über",
+          "help": "Wie weit die Zähler über der Ereignisliste zurückblicken. Bewusst getrennt vom Aufbewahrungsfenster -- eine kürzere Aufbewahrung darf nicht stillschweigend ändern, was die Seite über den heutigen Tag behauptet."
         }
       }
     },
@@ -3274,6 +3286,75 @@
       "cancel": "Abbrechen",
       "cancelled": "Abgebrochen. {recalled} Rechner wurden zurückgerufen; bereits neu startende blieben unberührt, weil die Patches auf ihnen sind.",
       "retry": "Fehler wiederholen"
+    }
+  },
+  "events": {
+    "heading": "Ereignisprotokolle",
+    "intro": "Windows-Ereignisdatensätze, die auf dem Gerät gefiltert und hierher gesendet wurden. Gelesen wird nur, wonach ein Abonnement fragt, und Wiederholungen innerhalb von fünf Minuten werden in einer Zeile gezählt statt einzeln gespeichert.",
+    "views_nav": "Ereignisansichten",
+    "tab_records": "Ereignisse",
+    "tab_subscriptions": "Erfassung",
+    "search_placeholder": "Meldungen und Quellen durchsuchen",
+    "any_level": "Beliebige Stufe",
+    "any_log": "Beliebiges Protokoll",
+    "refresh": "Aktualisieren",
+    "request_failed": "Der Hub konnte diese Anfrage nicht beantworten.",
+    "none_matched": "Keine Treffer. Ihre Geräte haben keine Ereignisse gemeldet, die zu diesen Filtern passen.",
+    "none_subscribed": "Es wird noch nichts erfasst. Legen Sie ein Abonnement an, um festzulegen, welche Ereignisdatensätze die Flotte senden soll.",
+    "since": "seit {when}",
+    "times": "{count} mal",
+    "level": {
+      "critical": "Kritisch",
+      "error": "Fehler",
+      "warning": "Warnung",
+      "information": "Information",
+      "verbose": "Ausführlich"
+    },
+    "summary": {
+      "occurrences": "Vorkommen",
+      "distinct": "Verschiedene Ereignisse",
+      "machines": "Meldende Geräte",
+      "errors": "Fehler und kritische",
+      "window": "Gezählt über die letzten {hours} Stunden."
+    },
+    "col": {
+      "when": "Zuletzt gesehen",
+      "machine": "Gerät",
+      "level": "Stufe",
+      "source": "Protokoll und Anbieter",
+      "event": "Ereignis",
+      "message": "Meldung"
+    },
+    "sub": {
+      "add": "Neues Abonnement",
+      "new_title": "Neues Abonnement",
+      "edit_title": "Abonnement bearbeiten",
+      "name": "Name",
+      "name_placeholder": "Fehlgeschlagene Anmeldungen",
+      "log": "Protokollkanal",
+      "log_placeholder": "Security",
+      "log_help": "Der Kanal, wie Windows ihn benennt. Die vier, die jeder PC hat, werden vorgeschlagen; ein Anbieterkanal wie Microsoft-Windows-TaskScheduler/Operational kann vollständig eingegeben werden.",
+      "event_ids": "Ereignis-IDs",
+      "event_ids_help": "Trennen Sie sie beliebig. Leer lassen, um jedes Ereignis des Kanals zu erfassen, das zu den Stufen unten passt.",
+      "levels": "Stufen",
+      "levels_help": "Alle Felder leer lassen, um jede Stufe zu erfassen.",
+      "provider": "Anbieter enthält",
+      "provider_help": "Begrenzt das Abonnement auf Datensätze eines Anbieters, dessen Name diesen Text enthält.",
+      "volume_warning": "Ein Abonnement ohne Ereignis-IDs und ohne Stufen erfasst den gesamten Kanal. Auf einem stark genutzten Gerät sind das Tausende Datensätze pro Tag, und die ältesten werden verworfen, sobald ein Gerät seine Obergrenze erreicht.",
+      "any_id": "beliebige ID",
+      "any_level": "beliebige Stufe",
+      "summary": "IDs: {ids} · Stufen: {levels}",
+      "col_name": "Name",
+      "col_log": "Protokoll",
+      "col_filter": "Trifft auf",
+      "col_state": "Status",
+      "enabled": "Erfasst",
+      "disabled": "Aus",
+      "enable": "Einschalten",
+      "disable": "Ausschalten",
+      "none": "Auf diesem Hub wird nichts erfasst.",
+      "none_manage": "Es wird noch nichts erfasst. Legen Sie ein Abonnement an, um festzulegen, welche Ereignisdatensätze die Flotte senden soll.",
+      "confirm_delete": "Die Erfassung von \"{name}\" beenden? Bereits erfasste Ereignisse bleiben erhalten."
     }
   },
   "channels": {

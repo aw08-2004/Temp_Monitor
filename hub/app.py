@@ -44,6 +44,7 @@ import channels
 import firmware
 import patches
 import wake
+import events
 import apps
 import capabilities
 import policy
@@ -77,6 +78,7 @@ from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
+from events_web import create_events_blueprint
 from capabilities_web import create_capabilities_blueprint
 from provisioning_web import create_provisioning_blueprint
 from location_web import create_location_blueprint
@@ -129,7 +131,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.117.0"
+HUB_VERSION = "1.118.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2357,6 +2359,14 @@ app.register_blueprint(create_device_groups_blueprint(DB_PATH, login_required, a
 # only update ids.
 app.register_blueprint(create_patches_blueprint(DB_PATH, login_required, access))
 
+# Windows event log mining (roadmap #16). Reading what a machine's log said is `view` plus
+# machine scope, like its disks or its available updates; deciding what the fleet COLLECTS is
+# `manage_settings`, because a subscription is collection configuration in exactly the sense
+# metrics.collect_gpu is -- it names no machine and issues nothing. No LOG_DIR and no HUB_URL:
+# the records are filtered on the machine and arrive on the heartbeat, so this feature stores
+# no blobs and hands the agent no URL.
+app.register_blueprint(create_events_blueprint(DB_PATH, login_required, access))
+
 # The machine Processes card: reading the live process list behind `view` (it is inventory,
 # like the sensor tree the same page already shows in full), and ending or restarting a
 # process behind `issue_commands` -- no new capability, because this is strictly less
@@ -3599,6 +3609,21 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} usage row(s) before {cutoff_day}.")
             except Exception as e:
                 print(f"[retention] Usage prune failed: {e}")
+            # Collected Windows event records (roadmap #16). Its own try, like its
+            # neighbours, and the THIRD prune here that is a privacy control as well as a
+            # disk-space one: a Security-channel record names the account somebody typed a
+            # password for. It is also the only table in this hub that one misconfigured
+            # subscription can grow by thousands of rows an hour, which is why events.py
+            # additionally caps per machine on ingest rather than leaving it all to this
+            # daily tick -- see events.enforce_machine_cap.
+            try:
+                cutoff = int(time.time()) - (
+                    settings.get_int(DB_PATH, "data.event_retention_days") * 86400)
+                dropped = events.prune(DB_PATH, cutoff)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} event record(s).")
+            except Exception as e:
+                print(f"[retention] Event prune failed: {e}")
             # ...and file a "no answer" row for any locate whose command expired or failed
             # without one. Separate try, and not really retention -- but this is the only tick
             # that runs for a feature with no scheduler of its own, and without it a locate
@@ -4363,6 +4388,7 @@ remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
+events.init_events_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
