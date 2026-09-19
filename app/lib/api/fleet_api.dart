@@ -112,4 +112,43 @@ class FleetApi {
   /// of both -- nobody can see it, and it can still act.
   Future<void> revokeSelf(String tokenId) =>
       client.delete('/api/tokens/${Uri.encodeComponent(tokenId)}');
+
+  // ---------------------------------------------------------------- push
+  /// Whether this hub can push at all, and whether this device is registered.
+  ///
+  /// **Ask this BEFORE asking the operating system for a notification permission.** A
+  /// phone that prompts and then never notifies teaches its owner that the prompt was
+  /// pointless, and the reason -- the hub has no Firebase credentials -- is one only the
+  /// hub can report. `configured` is about the hub and `registered` about this device;
+  /// they fail separately and are reported separately.
+  Future<PushStatus> pushStatus() async {
+    final body = await client.get('/api/push/status');
+    return PushStatus.fromJson(body is Map<String, dynamic> ? body : const {});
+  }
+
+  /// Register this install's FCM (or, one day, APNs) token with the hub.
+  ///
+  /// Called on EVERY launch rather than once at pairing, because FCM issues a new
+  /// registration token whenever the app is reinstalled, its data is cleared, or it is
+  /// restored onto a new phone -- and a registration the hub still believes in is a
+  /// registration that pushes into the void. The hub upserts, and deliberately leaves
+  /// this device's alert cursor alone, so re-registering never delivers a backlog.
+  ///
+  /// The device is never named in the body: the hub reads it off the bearer token, which
+  /// is what makes it impossible to register a push address against somebody else's
+  /// device.
+  Future<void> registerPush({required String kind, required String token}) =>
+      client.post('/api/push/register', body: {'kind': kind, 'token': token});
+
+  /// Stop pushing to this device. Not a sign-out -- the token stays valid and the desktop
+  /// half keeps polling.
+  Future<void> unregisterPush() => client.delete('/api/push/register');
+
+  /// Tell the hub the alert list has actually been LOOKED AT on this device.
+  ///
+  /// Delivery is not readership. The hub counts unseen alerts against a per-device cursor
+  /// that only this call moves forward, so skipping it means the next notification says
+  /// "1" when the operator has four waiting -- the count being wrong at exactly the moment
+  /// the count is the entire message.
+  Future<void> pushSeen() => client.post('/api/push/seen');
 }
