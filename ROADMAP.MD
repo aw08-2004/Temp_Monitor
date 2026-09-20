@@ -1987,7 +1987,7 @@ comes online.
 
 ---
 
-## 🚧 11. Desktop & mobile app   ·   hub 1.69.0 + 1.118.0   ·   client 1.1.0
+## 🚧 11. Desktop & mobile app   ·   hub 1.69.0 + 1.119.0   ·   client 1.1.0
 
 **The hub half is built (1.69.0), 1.0.0 is published on stable, and 1.1.0 is signed and
 published on the BETA channel** (roadmap #21) — one version sequence, so promoting it is
@@ -2261,10 +2261,10 @@ warning, the same shape as its existing version-agreement check.
   which is also what would let toasts stop depending on `local_notifier`'s Start Menu
   shortcut for an application identity.
 - **Phase 2**: the Android/iOS builds and the bundled localization described above. The
-  hub half of push now exists (hub 1.118.0, below); what remains is the Android project
+  hub half of push now exists (hub 1.119.0, below); what remains is the Android project
   itself, which is where the FCM plugin and the two localization keys live.
 
-### Built (hub side) — push, phase 2's prerequisite   ·   hub 1.118.0
+### Built (hub side) — push, phase 2's prerequisite   ·   hub 1.119.0
 
 **The gap named below is closed on the hub side.** `push.py` (model, flask-free) +
 `push_web.py` (three device-only routes), a `push` transport in `notify.py`, and
@@ -2385,7 +2385,7 @@ token, and **content-free payloads** ("3 alerts", tap to open) so no machine nam
 temperature transits Google. iOS is the same shape with APNs, plus an Apple Developer
 account, and would appear on the Download page as a `link`-kind build rather than a file.
 
-**Everything in that sentence except the Firebase project now exists** -- see the hub 1.118.0
+**Everything in that sentence except the Firebase project now exists** -- see the hub 1.119.0
 section above, which also records why APNs is a refusal rather than a gap. What is left on
 the app side is the Android project itself: the FCM plugin that produces a registration
 token, the two calls to `/api/push/register` and `/api/push/seen` (already written, as
