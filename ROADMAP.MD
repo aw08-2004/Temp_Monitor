@@ -121,7 +121,7 @@ block — no new `/api/report` field, and an older hub ignores them. A machine t
 sending them (an agent below 3.10.0) falls back to LHM's per-device
 percentage and shows the bar without the GB line.
 
-## ✅ 3. Settings: which sensors to read, data retention, etc.   ·   per-metric retention, cadence and the GPU/disk/network picks — **hub 1.118.0 + agent (next release)**
+## ✅ 3. Settings: which sensors to read, data retention, etc.   ·   per-metric retention, cadence and the GPU/disk/network picks — **hub 1.120.0 + agent (next release)**
 
 Done:
 - `computer.primary_sensor_preference` — ordered CPU-temp sensor preference (+ per-machine
@@ -152,7 +152,7 @@ Upgrading hubs get a **disabled** rule named "High temperature", seeded by
 Both settings are gone from the registry. `alerts.KIND_HIGH_TEMP` survives as a read-only kind
 so alerts raised before the upgrade still render and can still be dismissed.
 
-### The three gaps, closed · hub 1.118.0 + agent (next release)
+### The three gaps, closed · hub 1.120.0 + agent (next release)
 
 This entry used to end "fold these in opportunistically". All three are now in.
 
