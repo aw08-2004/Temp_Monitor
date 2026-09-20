@@ -612,6 +612,9 @@
 {% endif %}
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/wake.js') }}"></script>
+{# After wake.js: both draw into the Network panel, and the discovery card is below the
+   adapter card it reads its subnets from. #}
+<script src="{{ url_for('static', filename='js/discovery.js') }}"></script>
 {% if cap.ISSUE_COMMANDS in user_capabilities %}
 <script src="{{ url_for('static', filename='js/files.js') }}"></script>
 {% endif %}

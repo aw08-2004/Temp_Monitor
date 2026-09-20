@@ -2537,7 +2537,7 @@ what survived, and why the rest did not. The two decisions that framed the triag
 
 | PRD item | Verdict |
 |---|---|
-| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
+| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
 | FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
@@ -2866,7 +2866,7 @@ number, not a target). Whether a bundle is a first-class row or a view over aler
 
 ---
 
-## 📋 18. Network discovery and shadow IT
+## 🚧 18. Network discovery and shadow IT   ·   sweep + classification hub 1.125.0 (agent half unreleased)
 
 The half of FR-01 that #4 does not cover: an IP-range sweep from an agent already on that
 subnet — the same peer-relay trick #10 uses for Wake-on-LAN, since the hub is usually not on
@@ -2874,10 +2874,77 @@ the network it is being asked about — plus an Intune/Azure device cross-refere
 for anything on the wire that no hub knows about.
 
 Lower priority than it looks. On a fleet where enrollment is driven by MDM the answer is
-usually "nothing", and a discovery sweep is a scanner pointed at a colleague's network.
+usually "nothing", and a discovery sweep is a scanner pointed at a colleague's network. That
+sentence is why the first slice is shaped the way it is rather than why it was deferred
+again: everything below narrows the feature until it cannot be pointed anywhere.
 
-**Open parameters.** Whether discovery is scheduled or on demand. What a discovered-but-not-
-managed device is allowed to become without someone approving it.
+**Built: the sweep and the classification.** `discovery.py` (model, Flask-free) +
+`discovery_web.py` (console and agent API), a `discovery_scans` / `discovery_hosts` schema,
+a Discovery card on the machine page's Network tab, one `discovery.*` setting, and one new
+command type — `network_sweep`, issued to a machine that is already on the subnet. Agent
+half: `Network/NetworkSweepExecutor.cs` and `FleetClient.ReportSweepAsync`. **The agent half
+is on `main` unreleased** — the hub ships first, as always, and the sweep starts working on a
+machine when its agent is next cut and propagates.
+
+**Both open parameters resolved, and both resolved narrowly:**
+
+- **Discovery is ON DEMAND, and there is no schedule.** A subnet list plus a timer is exactly
+  what would turn this into the thing the paragraph above is uneasy about — a scanner
+  running against a network on its own, aimed at a range somebody typed once. A sweep has a
+  named operator, a `LEVEL_NOTICE` audit row and one target chosen from the machine's own
+  adapters. The scheduled version is worth revisiting only once somebody has wanted the
+  manual one twice.
+- **A discovered device is allowed to become NOTHING.** No enrollment, no naming, no
+  grouping, no alert, no command. It is a row and a count. The reason is not caution for its
+  own sake: the classification is a MAC match, and a MAC is a claim a device makes about
+  itself, so an automatic action on one lets anything on the segment decide what the fleet
+  does about it.
+
+**Three decisions worth carrying forward:**
+
+- **ARP, not ping, and the choice is the feature.** A Windows PC at default firewall settings
+  does not answer ICMP from an unknown host, so a ping sweep of an office subnet finds the
+  printers and misses the PCs — the exact inverse of what a shadow-IT hunt is for. A host
+  cannot decline to answer ARP and stay reachable on the segment, so ARP is the one probe
+  whose silence really means nothing is there. `SendARP` also needs no raw socket, which
+  keeps a packet crafter out of the agent.
+- **A sweep can only look at a subnet the relay is itself on, and that bound is doing two
+  jobs.** ARP does not cross a router, so it is first a statement of fact. But it is also why
+  this cannot be aimed: the target is not a range an operator types, it is one of the subnets
+  the chosen machine has already reported living on, and `request_scan` refuses anything
+  else. The console offers a picker rather than a text field for the same reason.
+- **Classification is computed at READ time, against `machine_nics` as it stands now.** A
+  machine enrolled an hour after a sweep turns that scan's "unknown device" into itself,
+  because it IS itself; a machine deleted from the fleet turns back into a finding. Storing
+  the verdict at ingest would freeze the fleet as it was when the packets went out, and one
+  stale false alarm is what teaches a helpdesk to stop reading a shadow-IT list.
+
+**Deliberately NOT in this slice**, each with the reason rather than as a to-do list:
+
+- **The Intune/Azure cross-reference.** It needs a Graph credential in the hub's secret
+  store, a token refresh path and a device-matching rule of its own — a feature the size of
+  #4, not a column on this card. It is also the half with the least to say on a fleet whose
+  enrollment is already MDM-driven: a device in Intune and not in the hub is a hub gap, which
+  is #4's subject.
+- **A fleet-wide sweep verb.** #10 has one, so its absence here needs saying: a wake is one
+  UDP frame per target, a sweep is a few hundred ARP probes per subnet, and one click that
+  does that across every site at once is the shape of the worry at the top of this entry.
+- **MAC vendor (OUI) lookup.** It would make the unmanaged column far more readable — most
+  of it is printers and access points — but it needs a vendor table to carry and keep
+  current, and a stale one mislabels rather than fails. Worth doing; worth doing on purpose.
+- **An agent-version gate on the card.** Every other version-sensitive surface has a `MIN_*`
+  constant in `hub/static/js/`; this one has none, because an agent too old for the executor
+  fails the command with `unknown command type: network_sweep`, which the card renders
+  verbatim. Telling the operator what is actually wrong beats a button that is absent for
+  reasons the console cannot explain — and the constant would have had to name a release
+  that has not been cut.
+
+**Not covered by tests, and worth saying:** the hub half is exercised against literal
+payloads with no network at all. What that cannot cover is `SendARP` against real hardware --
+how long an unanswered address actually blocks for, whether 32 probes in flight is polite on
+a busy segment, what a VPN or Hyper-V virtual switch does to the interface Windows picks, and
+whether reverse DNS on a Windows domain is fast enough to be worth the ten-second budget.
+Expect the same shape of finding #10's `NicReader` produced on first contact.
 
 ---
 
@@ -4686,8 +4753,11 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     since 1.118.0. The deterministic half can be built the day both land; the language layer
     above it is gated on a pluggable AI provider that does not exist yet, and that provider
     is the one piece of new plumbing this item introduces.
-18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
-    MDM-driven fleet. Sequenced late for that reason rather than for difficulty.
+18. **#18 Network discovery and shadow IT** — first slice built: an ARP sweep run by a
+    machine already on the subnet, and every answer classified against the NIC inventory #10
+    already collects. No prerequisite, low expected yield on an MDM-driven fleet, sequenced
+    late for that reason rather than for difficulty. The Intune cross-reference and a
+    scheduled sweep were both left out on purpose — see the entry above.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
     forward on its own if a need appears. BitLocker escrow reuses the `backups.py` secret
     store and is the smallest genuinely useful thing on this list.

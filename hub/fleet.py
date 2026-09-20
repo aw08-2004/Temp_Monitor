@@ -191,6 +191,25 @@ UNSAVEABLE_WAKE_COMMANDS = frozenset({
     "wake_machine",
 })
 
+# Network discovery (roadmap #18). One command, run by a machine that is already on the
+# subnet in question -- the same peer-relay reasoning as `wake_machine`, because the hub is
+# almost never on the network it is being asked about.
+#
+# **It is NOT favoritable, and for a sharper reason than `wake_machine`'s.** Its params
+# carry a `scan_id`, which names one row that is already finished by the time anybody could
+# replay it, so a saved copy would sweep and have nowhere to put the answer. But the subnet
+# is the real objection: a saved "sweep 10.4.7.0/24" replayed against a machine at another
+# site asks it to ARP a range it is not on, which returns nothing and reads as an empty
+# network rather than as a question that could not be asked. discovery.request_scan refuses
+# an off-segment subnet for exactly that reason, and a favorite would be a way around it.
+DISCOVERY_COMMANDS = frozenset({
+    "network_sweep",
+})
+
+UNSAVEABLE_DISCOVERY_COMMANDS = frozenset({
+    "network_sweep",
+})
+
 # The machine Processes card -- the console's task manager (see processes.py).
 #
 # Both carry a PID, which is what makes them the least reusable params in this whole
@@ -312,7 +331,8 @@ ALL_COMMANDS = frozenset({
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
-      | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS)
+      | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS
+      | DISCOVERY_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS
@@ -385,6 +405,11 @@ COMMAND_PARAMS = {
     "lock_device": (),
     "gpupdate": (),
     "prepare_wake": (),
+    # Network/NetworkSweepExecutor.cs: the scan row to report against, and the subnet to
+    # sweep. Both are resolved hub-side -- the subnet is one the machine has already told
+    # the hub it is on, never a range an operator typed (see discovery.request_scan).
+    "network_sweep": (_p("scan_id", "str", required=True, max_chars=64),
+                      _p("subnet", "str", required=True, max_chars=64)),
     "refresh_bios_inventory": (),
     "uninstall_virtual_display": (),
     "set_virtual_display_mode": (),
@@ -1897,6 +1922,14 @@ def _validate_favorite(name, command_type, params):
         raise ValueError(f"{command_type!r} commands carry another machine's address and "
                          f"cannot be saved as a favorite; wake machines from the console "
                          f"instead")
+    if command_type in UNSAVEABLE_DISCOVERY_COMMANDS:
+        # Carries a scan id that is finished before anybody could replay it, and a subnet
+        # that belongs to the machine it was issued to. Replayed elsewhere it would ARP a
+        # range that machine is not on -- which answers with nothing and reads as an empty
+        # network rather than as a question that could not be asked.
+        raise ValueError(f"{command_type!r} commands name one subnet the target machine is "
+                         f"on and cannot be saved as a favorite; sweep from the machine's "
+                         f"Network card instead")
     if command_type in PROCESS_COMMANDS:
         # Carries a PID, and Windows recycles those within minutes. A favorite replayed
         # tomorrow would not end the process the operator saved it for -- it would end

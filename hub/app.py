@@ -43,6 +43,7 @@ import bios
 import channels
 import firmware
 import patches
+import discovery
 import wake
 import events
 import apps
@@ -77,6 +78,7 @@ from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from patches_web import create_patches_blueprint
+from discovery_web import create_discovery_blueprint
 from wake_web import create_wake_blueprint
 from events_web import create_events_blueprint
 from capabilities_web import create_capabilities_blueprint
@@ -131,7 +133,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.118.0"
+HUB_VERSION = "1.125.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2288,6 +2290,14 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 app.register_blueprint(create_wake_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
 
+# Network discovery and shadow IT (roadmap #18): what is on the subnet a managed machine is
+# sitting on, swept BY that machine because the hub is almost never on the network it is
+# being asked about. Reading behind `view` and sweeping behind `issue_commands`, with no new
+# capability -- an operator who can open a SYSTEM shell on that PC can already run `arp -a`
+# on it. Shares wake's roster for the same reason wake takes it: one definition of online.
+app.register_blueprint(create_discovery_blueprint(
+    DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
+
 # What each machine can actually do (roadmap #23). Read-only and gated on `view` + machine
 # scope, because a machine's abilities are inventory in the same sense its disks are -- and
 # because this is what the console reads to decide which tabs to render at all, so a narrower
@@ -3275,6 +3285,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Sweep history follows the same name (roadmap #18). The HOSTS inside those scans are
+    # deliberately untouched: they record what was on the wire, and a merge does not change
+    # that. They reclassify themselves on the next read, against the merged machine's
+    # adapters, which is the point of classifying at read time rather than at ingest.
+    discovery.rename_machine(DB_PATH, dropped, survivor)
     # Capabilities follow too, and the survivor's own row wins a collision (roadmap #23) --
     # both rows describe one physical machine, and the survivor is the one still reporting.
     # Not merged: a union of two command lists would claim an ability neither agent reported.
@@ -4390,6 +4405,7 @@ firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 events.init_events_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
+discovery.init_discovery_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
@@ -5317,6 +5333,11 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And its sweep history (roadmap #18). Its rows inside OTHER machines' scans stay, and
+    # quietly change verdict from 'managed' to 'unmanaged' on the next read -- which is the
+    # truth about an address the hub no longer manages, and the one thing a shadow-IT list
+    # has to get right.
+    discovery.forget_machine(DB_PATH, machine_name)
     # And what it reported it could do (roadmap #23). Unlike most of the rows above this one
     # is an ENFORCEMENT input, so leaving it behind is worse than leaving stale display data:
     # a different box reusing this hostname would silently have commands REFUSED that it can
