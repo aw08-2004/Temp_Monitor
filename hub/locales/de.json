@@ -2397,6 +2397,9 @@
     "tools": {
       "hidden": "Einige Werkzeuge sind ausgeblendet: Dieser Rechner hat gemeldet, dass er sie nicht beantworten kann.",
       "hidden_android": "Einige Werkzeuge sind ausgeblendet: Das ist ein Android-Gerät, und es gibt dafür weder eine Shell noch ein BIOS noch ein Dateisystem."
+    },
+    "ask": {
+      "title": "Diesen Rechner fragen"
     }
   },
   "remote": {
@@ -2983,7 +2986,41 @@
     "preview": "Welche PCs passen jetzt",
     "create": "Regel anlegen",
     "discard": "Verwerfen",
-    "failed": "{error}"
+    "failed": "{error}",
+    "ask": "Fragen",
+    "ask_placeholder": "Warum ist dieser PC langsam?",
+    "asking": "Frage läuft...",
+    "ask_readings": "Die Messwerte, auf denen diese Antwort beruht",
+    "unknown_value": "unbekannt",
+    "sends_names": "Dieser Hub sendet den Namen dieses Rechners und seine identifizierenden Angaben mit der Frage. Zu ändern in den Einstellungen unter KI.",
+    "withholds_names": "Dieser Hub hält Rechnernamen und andere identifizierende Werte zurück. Gesendet werden nur Messwerte wie Temperaturen und freier Speicherplatz.",
+    "sent_with_names": "Mit dem Namen dieses Rechners und seinen identifizierenden Werten gesendet.",
+    "sent_without_names": "Ohne Rechnernamen gesendet. {withheld} identifizierende Werte wurden zurückgehalten.",
+    "age_seconds": "vor {seconds}s",
+    "age_minutes": "vor {minutes} Min.",
+    "age_hours": "vor {hours} Std.",
+    "column": {
+      "variable": "Variable",
+      "value": "Wert",
+      "age": "Gelesen",
+      "machine": "Rechner",
+      "why": "Warum"
+    },
+    "query_title": "Die Flotte fragen",
+    "query_intro": "Eine Frage in normaler Sprache, übersetzt in einen der Ausdrücke, in denen auch Regeln geschrieben werden, und von derselben Auswertung beantwortet. Beantwortet wird immer nur über Rechner, auf die Sie Zugriff haben.",
+    "query_placeholder": "Welche Rechner haben weniger als 10 GB frei?",
+    "query_run": "Fragen",
+    "query_running": "Läuft...",
+    "query_tally": "{matched} von {targeted} Rechnern treffen zu, {unknown} konnten nicht beantwortet werden",
+    "query_truncated": "{shown} von {matched} Treffern angezeigt.",
+    "summary_title": "Flottenbericht",
+    "summary_window": "Berichtszeitraum",
+    "summary_window_1": "Letzte 24 Stunden",
+    "summary_window_7": "Letzte 7 Tage",
+    "summary_window_30": "Letzte 30 Tage",
+    "summary_run": "Bericht erstellen",
+    "summary_running": "Läuft...",
+    "summary_no_prose": "Die Zahlen unten sind vollständig. Der begleitende Text fehlt: {error}"
   },
   "scripts": {
     "body": "Skript",

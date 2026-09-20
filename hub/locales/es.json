@@ -2397,6 +2397,9 @@
     "tools": {
       "hidden": "Algunas herramientas están ocultas: esta máquina ha informado de que no puede responderlas.",
       "hidden_android": "Algunas herramientas están ocultas: es un dispositivo Android, y no hay shell, ni BIOS, ni sistema de archivos sobre el que actúen."
+    },
+    "ask": {
+      "title": "Preguntar por esta máquina"
     }
   },
   "remote": {
@@ -2983,7 +2986,41 @@
     "preview": "Qué equipos coinciden ahora",
     "create": "Crear la regla",
     "discard": "Descartar",
-    "failed": "{error}"
+    "failed": "{error}",
+    "ask": "Preguntar",
+    "ask_placeholder": "¿Por qué está lento este PC?",
+    "asking": "Preguntando...",
+    "ask_readings": "Las lecturas en las que se basa esta respuesta",
+    "unknown_value": "desconocido",
+    "sends_names": "Este hub envía el nombre de esta máquina y sus datos identificativos junto con la pregunta. Se cambia en Ajustes, apartado IA.",
+    "withholds_names": "Este hub retiene los nombres de máquina y otros valores identificativos. Solo se envían lecturas como temperaturas y espacio libre en disco.",
+    "sent_with_names": "Enviado con el nombre de esta máquina y sus valores identificativos.",
+    "sent_without_names": "Enviado sin nombres de máquina. Se retuvieron {withheld} valores identificativos.",
+    "age_seconds": "hace {seconds}s",
+    "age_minutes": "hace {minutes} min",
+    "age_hours": "hace {hours} h",
+    "column": {
+      "variable": "Variable",
+      "value": "Valor",
+      "age": "Leído",
+      "machine": "Máquina",
+      "why": "Por qué"
+    },
+    "query_title": "Preguntar por la flota",
+    "query_intro": "Una pregunta en lenguaje corriente, convertida en una de las mismas expresiones con las que se escriben las reglas y respondida por el mismo evaluador. Solo se le responde sobre las máquinas a las que tiene acceso.",
+    "query_placeholder": "¿Qué máquinas tienen menos de 10 GB libres?",
+    "query_run": "Preguntar",
+    "query_running": "Trabajando...",
+    "query_tally": "{matched} de {targeted} máquinas coinciden, {unknown} no se pudieron responder",
+    "query_truncated": "Mostrando {shown} de {matched} coincidencias.",
+    "summary_title": "Resumen de la flota",
+    "summary_window": "Periodo del informe",
+    "summary_window_1": "Últimas 24 horas",
+    "summary_window_7": "Últimos 7 días",
+    "summary_window_30": "Últimos 30 días",
+    "summary_run": "Generar el informe",
+    "summary_running": "Trabajando...",
+    "summary_no_prose": "Las cifras de abajo están completas. Falta la nota de presentación: {error}"
   },
   "scripts": {
     "body": "Script",

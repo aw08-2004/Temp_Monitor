@@ -1345,16 +1345,134 @@ function aiDiscardDraft() {
     aiClearDraft();
 }
 
-async function loadAiDrafter() {
-    // A failure here must not take the Rules page with it: the drafter is an extra, and a
-    // hub with no AI configured is the normal case rather than a broken one.
+// ---------------------------------------------------------------- AI fleet query (#24)
+//
+// "Which machines are over 90 degrees?" -- a question, not a rule. The sentence becomes one of
+// the same one-line expressions a rule is written in, and the SAME evaluator answers it.
+//
+// **The expression is shown above the answer, and that is not decoration.** Text-to-SQL was
+// rejected for this feature because generated SQL cannot be scoped (see ROADMAP.MD #24), and
+// the replacement has a second property worth showing: the question the hub actually asked is
+// a line an operator can read and disagree with. An answer with no visible question is one
+// nobody can check, whichever engine produced it.
+//
+// Scoping is entirely server-side and deliberately not mirrored here. `access.in_scope` filters
+// the machine list BEFORE evaluation, so a machine outside somebody's reach is never resolved
+// and never counted -- a console-side filter would leave the count as a statement about how
+// many machines exist.
+
+function aiQueryStatus(text, isError) {
+    const node = document.getElementById('ai-query-status');
+    node.textContent = text || '';
+    node.style.color = isError ? 'var(--color-danger, #f85149)' : '';
+}
+
+function aiQueryCell(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+}
+
+function aiRenderQuery(data) {
+    document.getElementById('ai-query-expression').textContent = data.condition_text || '';
+    document.getElementById('ai-query-tally').textContent = t('ai.query_tally', {
+        matched: data.matched, targeted: data.targeted, unknown: data.tally.unknown,
+    });
+
+    const host = document.getElementById('ai-query-rows');
+    host.textContent = '';
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    [t('ai.column.machine'), t('ai.column.why')].forEach((label) =>
+        headRow.appendChild(aiQueryCell('th', null, label)));
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement('tbody');
+    (data.results || []).forEach((row) => {
+        const tr = document.createElement('tr');
+        const link = document.createElement('a');
+        link.href = `/machine/${encodeURIComponent(row.machine)}`;
+        link.textContent = row.machine;
+        const cell = aiQueryCell('td');
+        cell.appendChild(link);
+        tr.appendChild(cell);
+        // `explain` renders the operands the engine actually read, the same string the rule
+        // preview shows. It is the difference between "PC-07" and an answer somebody can act
+        // on without opening PC-07.
+        tr.appendChild(aiQueryCell('td', 'stat-card__meta', describeExplain(row.detail)));
+        body.appendChild(tr);
+    });
+    table.appendChild(body);
+    host.appendChild(table);
+    if (data.truncated) {
+        host.appendChild(aiQueryCell('p', 'stat-card__meta', t('ai.query_truncated', {
+            shown: (data.results || []).length, matched: data.matched,
+        })));
+    }
+    document.getElementById('ai-query-result').hidden = false;
+}
+
+/** One `rules.explain` tree as a line: the leaves that were read, with what they read.
+ *
+ *  The tree's shape (and/or/not nodes wrapping comparison leaves) is the evaluator's, so this
+ *  walks it rather than assuming a flat object -- "over 90 OR the fan stopped" is two leaves
+ *  under an `or`, and a renderer that only understood the flat case would print nothing for
+ *  exactly the conditions worth explaining.
+ *
+ *  Duplicates are dropped: a condition naming one variable twice ("between 80 and 90") would
+ *  otherwise print its reading twice on every row. */
+function describeExplain(detail) {
+    const leaves = [];
+    (function walk(node) {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node.nodes)) { node.nodes.forEach(walk); return; }
+        if (!node.var) return;
+        leaves.push(`${node.var} = ${node.known ? node.actual : t('ai.unknown_value')}`);
+    }(detail));
+    return leaves.filter((line, index) => leaves.indexOf(line) === index).join(', ');
+}
+
+async function aiRunQuery() {
+    const text = document.getElementById('ai-query-text').value.trim();
+    if (!text) return;
+    aiQueryStatus(t('ai.query_running'), false);
+    try {
+        const data = await api('/api/ai/query', json('POST', { text }));
+        aiRenderQuery(data);
+        aiQueryStatus('', false);
+    } catch (e) {
+        // A refusal arrives here too -- "a question about installed software cannot be asked
+        // with these variables" is the model's own sentence, written to the shape ai.py asked
+        // for, and it is a better answer than an approximation would have been.
+        document.getElementById('ai-query-result').hidden = true;
+        aiQueryStatus(t('ai.failed', { error: e.message }), true);
+    }
+}
+
+async function loadAiPanels() {
+    // A failure here must not take the Rules page with it: both cards are extras, and a hub
+    // with no AI configured is the normal case rather than a broken one.
     let status = null;
     try {
         status = await api('/api/ai/status');
     } catch (e) {
         return;
     }
-    if (!status || !status.ready || !canManage) return;
+    if (!status || !status.ready) return;
+
+    // The query is READING the fleet, so it needs no more than the view this page already
+    // required. The drafter authors rules and stays behind `manage_rules`.
+    document.getElementById('ai-query').hidden = false;
+    document.getElementById('ai-query-run').addEventListener('click', aiRunQuery);
+    document.getElementById('ai-query-text').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); aiRunQuery(); }
+    });
+
+    if (!canManage) return;
     document.getElementById('ai-drafter').hidden = false;
     document.getElementById('ai-draft').addEventListener('click', aiDraftRule);
     document.getElementById('ai-refine').addEventListener('click', aiRefineRule);
@@ -1368,5 +1486,5 @@ async function loadAiDrafter() {
     renderScripts();
     await loadRules();
     // Last, because it needs canManage -- which loadRules() is what sets.
-    await loadAiDrafter();
+    await loadAiPanels();
 })();

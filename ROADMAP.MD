@@ -3374,7 +3374,7 @@ Orphans a loop creates after the deploy are pruned whether or not a report touch
 
 ---
 
-## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0
+## ✅ 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0; **machine panel, fleet query and summary hub 1.118.0**
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3479,16 +3479,72 @@ both switched on and configured. Describe, adjust, then per stage: preview throu
 ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
 the normal form and pressing Enable. The stages not yet created stay on the card.
 
-**Partial, and the line is the drafter.** Describe, adjust, preview and create are built and
-tested at 1.109.0, off until somebody configures a provider. **The machine chat panel, the
-fleet query and the daily summary are not built** — each is a stub in `ai.py` with its seam
-named and nothing behind it. The first needs the redaction that `ai.send_machine_names`
-implies; the third wants #17's correlation under it, without which a summary is the alert list
-in longer words.
+### The three answering surfaces · hub 1.118.0
+
+Describe, adjust, preview and create were built at 1.109.0; the machine chat panel, the fleet
+query and the daily summary were stubs in `ai.py` until 1.118.0. All three are built now, and
+each draws the same line in a different place: **between what the hub computed and what the
+model said.**
+
+**The machine panel sends an allow-list, not a deny-list.** `ai.send_machine_names` is off by
+default, and the filter it drives lists the text variables that are safe to send
+(`ai.SHAREABLE_TEXT`: status, agent version, model, manufacturer, the BIOS strings, the AD OS)
+rather than listing the ones that are not. Numbers and booleans pass unconditionally — a
+temperature identifies nobody, and redacting it would leave the panel with a privacy setting
+and no feature. **Rejected: a deny-list of the identifying variables.** It has to be extended
+every time an operator adds a custom field, a probe or a derived variable, and the cost of
+forgetting once is an owner's name arriving at a hosted provider with nothing in the console
+to notice it by. The allow-list fails the other way, as a slightly thinner answer. **Also
+rejected: redacting by matching values against the machine list**, which misses every
+identifier the hub did not think of first.
+
+**The panel hands the snapshot BACK with the answer, and the card renders both.** Everything
+else the console shows a model's output for is checked by the engine before it arrives — an
+expression that did not parse never reaches the page. A paragraph cannot be checked that way,
+so the numbers it claims to be about sit underneath it. An answer citing
+`metric.cpu_load_pct = 96` beside a row reading 12 is caught in a glance, and nothing else
+would catch it. **Rejected: a second model call checking the first** — that is two guesses,
+not a check. **Rejected: a conversation thread.** The readings move and a transcript does not,
+so a refinement would be edited against values that were true four minutes ago.
+
+**The fleet query is answered by the evaluator.** The model writes one expression; the engine
+resolves the targets, applies `access.in_scope` BEFORE evaluation, and answers. A machine out
+of reach is never resolved, so it cannot appear in a tally either — the property text-to-SQL
+could not have had. The console shows the canonical expression above the answer, because an
+answer with no visible question is one nobody can disagree with.
+
+**The summary computes every figure and asks only for the sentence around them.** Alert
+episodes come from a new `alerts.episodes_between`, rule fires from a new
+`rules.fires_between`, both filtered by the same scope predicate, and `ai.summary_lines`
+renders them with no model anywhere near. Only the covering note is a completion. That
+ordering has a consequence worth stating: **a provider that is off, unreachable or out of
+credit costs the sentence and nothing else** — the report still arrives, and the console says
+what is missing. A summary that existed only as prose is the one that gets an invented figure
+quoted into a change ticket.
+
+Two details that were wrong on the first pass, kept written down. The fires query is its own
+function rather than `rules.list_fires` with a limit, because a count computed off a capped
+read is wrong exactly on the busiest day and arrives looking like every other number. And both
+window queries are **closed at both ends**: `end` is always "now", and a half-open window drops
+whatever was raised in the second the report was asked for, which is the event somebody is most
+likely reading the report because of.
+
+Where each one lives: the machine panel is a fold on the machine page's Overview; the fleet
+query is a card on the Rules page, because it answers over that namespace with that evaluator,
+and it is gated on `view` rather than `manage_rules` since asking is reading; the summary is a
+fold on the Alerts page, which is the page it is a reading of.
+
+**Correlation is still #17's, and is deliberately not faked here.** The summary counts what was
+raised, cleared, fired and left open; it does not say "these nine alerts are one switch". That
+grouping is a statistic over the history table rather than a model's opinion, and a made-up
+grouping is the one error in a report nobody can check. When #17 lands it becomes one more
+section of `ai.summary_figures`, computed the same way.
 
 **Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
 starts off, which is right for a hosted provider and probably wrong for one on the same LAN.
-Whether the drafter belongs anywhere other than the Rules page once #17's wording layer exists.
+Whether `SHAREABLE_TEXT` should become operator-editable rather than a constant, once somebody
+has a custom field they actively want sent. Whether the drafter belongs anywhere other than the
+Rules page once #17's wording layer exists.
 
 ---
 

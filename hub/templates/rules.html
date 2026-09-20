@@ -55,6 +55,35 @@
     </div>
 </div>
 
+{# Ask about the fleet -- roadmap #24.
+
+   On this page because it answers over THIS namespace: the question becomes one of the same
+   one-line expressions a rule is written in, and the same evaluator answers it. Somewhere
+   else it would be a second feature that happens to look like this one.
+
+   Shown to anyone who can view the fleet, unlike the drafter above -- asking which machines
+   are hot is reading, not authoring -- and scoped server-side, so what comes back is the
+   caller's own machines and not a statement about how many others exist. #}
+<div class="card" id="ai-query" hidden style="margin-bottom: var(--space-4);">
+    <h2 class="section-title">{{ t('ai.query_title') }}</h2>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-3);">{{ t('ai.query_intro') }}</p>
+    <div class="toolbar">
+        <label for="ai-query-text" class="sr-only">{{ t('ai.query_title') }}</label>
+        <input class="input" id="ai-query-text" type="text" autocomplete="off" spellcheck="false"
+               placeholder="{{ t('ai.query_placeholder') }}" style="min-width: 320px; flex: 1;">
+        <button type="button" class="btn btn--primary" id="ai-query-run">{{ t('ai.query_run') }}</button>
+        <span class="stat-card__meta" id="ai-query-status"></span>
+    </div>
+    <div id="ai-query-result" hidden style="margin-top: var(--space-4);">
+        {# The expression the question became, shown before the answer. It is what actually
+           ran, and an operator who disagrees with the answer needs to see the question the
+           hub asked rather than the one they typed. #}
+        <p id="ai-query-expression" style="font-family: var(--font-mono, monospace); margin: 0 0 var(--space-2);"></p>
+        <p class="stat-card__meta" id="ai-query-tally" style="margin: 0 0 var(--space-3);"></p>
+        <div class="table-scroll" id="ai-query-rows"></div>
+    </div>
+</div>
+
 <div class="toolbar" style="margin-bottom: var(--space-4);">
     <button id="rules-new" type="button" class="btn btn--primary" hidden>{{ t('rules.new') }}</button>
     <span class="stat-card__meta" id="rules-count"></span>
