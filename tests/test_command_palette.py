@@ -68,6 +68,7 @@ def _register_sidebar_stubs(app):
                            ("users", "users_page"), ("audit", "audit_page"),
                            ("bios", "firmware_page"), ("rules", "rules_page"),
                            ("patches", "patches_page"),
+                           ("events", "events_page"),
                            ("apitokens", "download_page"),
                            ("sharing", "sharing_page"),
                            ("provisioning", "provisioning_page"),
