@@ -221,7 +221,13 @@ def create_bitlocker_blueprint(db_path, log_dir, login_required, access):
             # A hub without `cryptography` installed. Nothing is indexed, so the heartbeat
             # goes on asking and the key arrives once somebody fixes the install -- which is
             # strictly better than recording an escrow that does not exist.
-            return jsonify({"stored": 0, "error": str(e)}), 500
+            #
+            # The reason goes to the hub's log, not to the agent: the caller here is a service
+            # that cannot act on it, and this is the one route in this module whose body would
+            # otherwise carry an internal failure string back out over the wire. Whoever fixes
+            # the install is reading the hub's console output anyway.
+            print(f"[bitlocker] Could not store escrowed keys for {machine}: {e}")
+            return jsonify({"stored": 0, "error": "escrow store unavailable"}), 500
         # Index rows only after the store write -- see bitlocker.record_escrowed.
         bitlocker.record_escrowed(db_path, machine, added)
         fleet.audit(db_path, actor=machine, action="bitlocker_key_escrow",

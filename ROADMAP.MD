@@ -2881,12 +2881,12 @@ managed device is allowed to become without someone approving it.
 
 ---
 
-## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.118.0**
+## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.121.0**
 
 Three small things from FR-06 and FR-07 that share no code but are each about a day. The
 first is built; the other two are not.
 
-- **BitLocker key escrow.** ✅ **Done, hub 1.118.0** — see below. Auto-enable is deliberately
+- **BitLocker key escrow.** ✅ **Done, hub 1.121.0** — see below. Auto-enable is deliberately
   NOT part of it; see *Rejected alternatives*.
 - **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
   inventory already collects, plus a policy list — no new channel, and worth being honest in
@@ -2896,7 +2896,7 @@ first is built; the other two are not.
   recording a colleague's screen is a decision to take deliberately, not a default to leave
   on.
 
-### BitLocker key escrow · hub 1.118.0 · `bitlocker.py` / `bitlocker_web.py`
+### BitLocker key escrow · hub 1.121.0 · `bitlocker.py` / `bitlocker_web.py`
 
 **The failure this closes is the one that costs a machine.** BitLocker locks a volume on its
 own — a firmware update that moves the TPM measurement, a disk moved into another chassis, a
@@ -4784,7 +4784,7 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
     MDM-driven fleet. Sequenced late for that reason rather than for difficulty.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
-    forward on its own if a need appears, and **BitLocker escrow was** (hub 1.118.0), on that
+    forward on its own if a need appears, and **BitLocker escrow was** (hub 1.121.0), on that
     line's own argument: it reuses the `backups.py` secret store and is the smallest genuinely
     useful thing on this list. Pulled ahead of #16–#18 because it needed none of them and
     because a fleet with no escrowed keys is losing machines today rather than later. Shadow-AI
