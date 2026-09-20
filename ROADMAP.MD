@@ -2588,7 +2588,7 @@ Hub side is `patches.py` (`machine_patches`, `patch_approvals`, `maintenance_win
 `patches_web.py` and a Patches page. Agent side is `Patch/PatchInventoryReporter.cs` and
 `Patch/InstallPatchesExecutor.cs`.
 
-**The Linux half reports and does not install** (hub 1.120.0, agent-linux on `main`; see #22).
+**The Linux half reports and does not install** (hub 1.123.0, agent-linux on `main`; see #22).
 `apt` and `dnf` joined `SOURCE_KINDS`, and `agent-linux/src/FleetHubAgent/Patch/` scans with
 `apt-get -s upgrade` or `dnf -C check-update` on its own inventory loop. A Linux machine's uid
 is a package NAME rather than a KB, which `normalize_uid` already accepted. No installer:
@@ -3126,7 +3126,7 @@ hub can move a machine between channels; it cannot point one at a binary of its 
   is `0400`, and that serial is how `resolve_serial_group` collapses the duplicate a `rename`
   creates.
 
-### Two hub-side gaps, now closed (hub 1.120.0)
+### Two hub-side gaps, now closed (hub 1.123.0)
 
 Both were worked around in the agent rather than in the hub, on the grounds that neither was
 urgent enough to justify a hub push on the agent's own branch. They were fixed together with

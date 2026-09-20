@@ -86,7 +86,7 @@ above). In rough order of what would be worth doing next:
 3. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
 4. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
-The two **hub**-side gaps this agent used to work around are closed in hub 1.120.0: the
+The two **hub**-side gaps this agent used to work around are closed in hub 1.123.0: the
 `shell` enum names `bash` and `sh` (the substitution stays, because an old rule still arrives
 saying "powershell"), and `_OS_MATCHES` recognises the distributions whose `PRETTY_NAME`
 never says "Linux". One caption is still wrong and is recorded in `ROADMAP.MD` #22: the
