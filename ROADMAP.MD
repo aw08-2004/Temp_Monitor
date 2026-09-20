@@ -2939,12 +2939,20 @@ machine when its agent is next cut and propagates.
   reasons the console cannot explain — and the constant would have had to name a release
   that has not been cut.
 
-**Not covered by tests, and worth saying:** the hub half is exercised against literal
-payloads with no network at all. What that cannot cover is `SendARP` against real hardware --
-how long an unanswered address actually blocks for, whether 32 probes in flight is polite on
-a busy segment, what a VPN or Hyper-V virtual switch does to the interface Windows picks, and
-whether reverse DNS on a Windows domain is fast enough to be worth the ten-second budget.
-Expect the same shape of finding #10's `NicReader` produced on first contact.
+**What is tested, stated precisely, because the two halves are not in the same state.** The
+hub half is exercised against literal payloads with no network at all -- `tests/
+test_discovery.py` and `tests/test_discovery_web.py`. **The agent half has no tests and has
+never been executed**; it was COMPILED (`dotnet build ... -p:EnableWindowsTargeting=true`,
+clean), which is worth doing and caught a `Dns.GetHostEntryAsync` overload that does not
+exist, but compiling is not running. The agent test host wants `Microsoft.WindowsDesktop.App`,
+which has no Linux build, so nothing here has executed a single line of
+`NetworkSweepExecutor`.
+
+What neither could cover is `SendARP` against real hardware -- how long an unanswered address
+actually blocks for, whether 32 probes in flight is polite on a busy segment, what a VPN or
+Hyper-V virtual switch does to the interface Windows picks, and whether reverse DNS on a
+Windows domain is fast enough to be worth the ten-second budget. Expect the same shape of
+finding #10's `NicReader` produced on first contact.
 
 ---
 

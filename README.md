@@ -1506,11 +1506,15 @@ console tell an empty subnet from a report that was lost.
 > **Not in this slice**: the Intune/Azure cross-reference, a fleet-wide sweep, scheduled
 > sweeps, and MAC vendor lookup. See roadmap #18 for why each was left out.
 >
+> **The agent half has no tests and has never been executed.** It compiles clean, which
+> caught a real error, but compiling is not running -- the agent test host needs
+> `Microsoft.WindowsDesktop.App`, which is Windows-only. The hub half is covered by tests
+> against literal payloads.
+>
 > **On-hardware validation outstanding**: how long `SendARP` actually blocks on an
 > unanswered address, whether 32 probes in flight is polite on a busy segment, what a VPN or
 > a Hyper-V virtual switch does to the interface Windows picks, and whether reverse DNS on a
-> Windows domain resolves inside the ten-second budget. Everything else is covered by tests
-> against literal payloads.
+> Windows domain resolves inside the ten-second budget.
 
 ## Machine capabilities
 
