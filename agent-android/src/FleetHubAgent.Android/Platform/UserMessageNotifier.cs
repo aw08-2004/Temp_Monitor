@@ -43,10 +43,17 @@ public sealed class UserMessageNotifier(Context context, ILogger log) : IUserMes
     /// that way: posting over AgentService's id would replace the foreground service's own
     /// notification, and the system then stops the service.
     ///
-    /// Fixed rather than per-message, so a second message replaces the first rather than
-    /// stacking. That is the honest rendering of a device that answers one at a time -- see
-    /// AgentConfig.MaxConcurrentCommands, which bounds how many can be outstanding at all.
-    /// </summary>
+    /// **The id is fixed and the TAG is what makes each message its own notification**, since
+    /// the platform identifies one by the (tag, id) pair. An earlier version of this file used
+    /// the bare id with no tag and argued that a second message replacing the first was "the
+    /// honest rendering of a device that answers one at a time". That was wrong the moment
+    /// AgentConfig.MaxConcurrentCommands went to 4 in the same change -- and the damage was
+    /// not the replacing, it was the cleanup. Two messages outstanding, A's wait ends first,
+    /// A's finally cancels the id, and the notification it takes down is B's. B is then
+    /// waiting on a banner nobody can see, and `cancel` does not fire a delete intent, so B is
+    /// not even reported `dismissed`: it sits until its own timeout, and the rule behind it
+    /// looks configured and never fires. That is precisely the failure this whole feature is
+    /// written to avoid, so each message posts and cancels under its own prompt id.</summary>
     private const int NotificationId = 3;
 
     /// <summary>The messages currently on screen, keyed by the id their buttons carry.
@@ -63,7 +70,7 @@ public sealed class UserMessageNotifier(Context context, ILogger log) : IUserMes
     /// extras are NOT compared. Built with one request code, every button on a message would
     /// hand back whichever outcome was registered first, so a fleet-wide "Yes / No" would
     /// record every answer as Yes, silently, with nothing in any log. Incremented per intent
-    /// rather than per message so a replaced message cannot collide with the one before it.
+    /// rather than per message, so two messages outstanding at once cannot collide either.
     /// </summary>
     private static int _requestCode;
 
@@ -115,7 +122,7 @@ public sealed class UserMessageNotifier(Context context, ILogger log) : IUserMes
         try
         {
             EnsureChannel(manager);
-            manager.Notify(NotificationId, Build(message, promptId));
+            manager.Notify(promptId, NotificationId, Build(message, promptId));
             log.LogInformation("Message posted, {Count} buttons, waiting {Seconds}s",
                 message.Buttons.Count, (int)message.Wait.TotalSeconds);
 
@@ -139,9 +146,10 @@ public sealed class UserMessageNotifier(Context context, ILogger log) : IUserMes
         finally
         {
             Waiting.TryRemove(promptId, out _);
-            // Taken down however this ended. A timed-out message left on screen is a button
+            // Taken down however this ended, and **by tag, so only this message's own banner
+            // goes** -- see NotificationId. A timed-out message left on screen is a button
             // somebody presses tomorrow, into a command the hub finished with hours ago.
-            try { manager.Cancel(NotificationId); } catch { /* best effort */ }
+            try { manager.Cancel(promptId, NotificationId); } catch { /* best effort */ }
         }
     }
 
