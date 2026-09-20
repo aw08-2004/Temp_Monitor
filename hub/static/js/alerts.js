@@ -386,6 +386,7 @@ const FACET_LABELS = {
     session: () => t('alerts.bundle.facet.session'),
     directory: () => t('alerts.bundle.facet.directory'),
     identity: () => t('alerts.bundle.facet.identity'),
+    event: () => t('alerts.bundle.facet.event'),
     other: () => t('alerts.bundle.facet.other'),
 };
 
@@ -443,6 +444,95 @@ async function draftSuggestedScript(bundle, btnEl, noteEl) {
         btnEl.disabled = false;
         noteEl.textContent = t('alerts.bundle.script_failed', { error: e.message });
     }
+}
+
+// What else the machine was saying while the bundle was open: metrics outside its own
+// trailing normal, and #16's event log rows inside the same window. Loaded on a click and
+// not with the list, deliberately -- a baseline is a scan of a fortnight of readings per
+// machine and the Alerts tab polls, so doing it per bundle per poll would make the alert
+// badge the most expensive query in the hub.
+async function loadBundleDetail(bundle, boxEl, btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = t('alerts.bundle.detail_working');
+    try {
+        const resp = await fetch(bundleUrl(bundle, ''));
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+        boxEl.replaceChildren(renderBundleDetail(body.facts || {}));
+    } catch (e) {
+        btnEl.disabled = false;
+        btnEl.textContent = t('alerts.bundle.detail');
+        const failed = document.createElement('p');
+        failed.className = 'stat-card__meta';
+        failed.textContent = t('alerts.bundle.detail_failed', { error: e.message });
+        boxEl.appendChild(failed);
+    }
+}
+
+// One decimal on a percentage or a temperature; a whole number on an RPM. toFixed(1) on
+// everything would report a fan at "1234.0 rpm", which reads as a precision nobody has.
+function formatMetric(value) {
+    if (typeof value !== 'number') return '?';
+    return Math.abs(value) >= 1000 ? String(Math.round(value)) : value.toFixed(1);
+}
+
+function renderBundleDetail(facts) {
+    const box = document.createElement('div');
+    box.style.marginTop = 'var(--space-3)';
+
+    const anomalies = facts.anomalies || [];
+    const events = facts.events || [];
+    // Absence, not an all-clear. A machine with three days of history has no baseline and no
+    // collected events, and this sentence says nothing stood out -- which is true -- rather
+    // than that everything is fine, which is not something the hub knows.
+    if (!anomalies.length && !events.length) {
+        const none = document.createElement('p');
+        none.className = 'stat-card__meta';
+        none.textContent = t('alerts.bundle.detail_none');
+        box.appendChild(none);
+        return box;
+    }
+
+    if (anomalies.length) {
+        box.appendChild(Object.assign(document.createElement('div'), {
+            className: 'section-title',
+            textContent: t('alerts.bundle.anomalies_title'),
+        }));
+        const list = document.createElement('ul');
+        list.className = 'stat-card__meta';
+        for (const anomaly of anomalies) {
+            const item = document.createElement('li');
+            item.textContent = t('alerts.bundle.anomaly_row', {
+                metric: anomaly.metric,
+                value: formatMetric(anomaly.value),
+                median: formatMetric(anomaly.median),
+            });
+            list.appendChild(item);
+        }
+        box.appendChild(list);
+    }
+
+    if (events.length) {
+        box.appendChild(Object.assign(document.createElement('div'), {
+            className: 'section-title',
+            textContent: t('alerts.bundle.events_title'),
+        }));
+        const list = document.createElement('ul');
+        list.className = 'stat-card__meta';
+        for (const event of events) {
+            const item = document.createElement('li');
+            item.textContent = t('alerts.bundle.event_row', {
+                log: event.log,
+                event_id: event.event_id,
+                level: event.level,
+                count: event.count,
+                message: event.message || '',
+            });
+            list.appendChild(item);
+        }
+        box.appendChild(list);
+    }
+    return box;
 }
 
 function renderRecommendation(bundle, recommendation) {
@@ -544,6 +634,17 @@ function renderBundleHeader(bundle) {
         });
     }
     header.appendChild(meta);
+
+    if (bundle.machine) {
+        const detailBox = document.createElement('div');
+        const detailBtn = document.createElement('button');
+        detailBtn.type = 'button';
+        detailBtn.className = 'btn btn--ghost';
+        detailBtn.textContent = t('alerts.bundle.detail');
+        detailBtn.addEventListener('click', () => loadBundleDetail(bundle, detailBox, detailBtn));
+        header.appendChild(detailBtn);
+        header.appendChild(detailBox);
+    }
 
     const box = document.createElement('div');
     if (bundle.recommendation) {

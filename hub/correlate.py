@@ -58,11 +58,18 @@ product whose alerting is otherwise entirely operator-authored. If a per-machine
 should alert, it belongs in `rules.py` as a variable an operator can write a rule against --
 which is a different change with a different blast radius.
 
-**Event log matches (#16) are not folded in yet.** The seam is `facet_for_variable` -- an
-event-derived rules variable maps to a facet like any other, and event rows join a bundle
-through the same window test -- but #16's store is being written in parallel and guessing its
-schema here would produce a join against columns that do not exist. Named, empty, and wired
-in a follow-up rather than invented.
+**Events are EVIDENCE inside a bundle, not members of one.** #16's rows join a bundle's
+window (see `events_in_window`) and ride along in `bundle_facts`, so the PRD's own example --
+four hundred 4625s on the machine whose disk filled -- is in front of the operator and in the
+facts the wording layer is handed. They are not bundled *as* alerts and they never open one:
+an event has no episode, nothing cleared when it stopped arriving, and treating a log line as
+an alert would put rows on the Alerts tab that no operator asked to be alerted about.
+
+**A rule condition over event counters is still #16's other half, and is not here.** That
+needs an `event.*` variable family in `rules.py` -- a change to the rules engine, with its own
+resolver, catalog entries and blast radius. When it lands, `facet_for_variable` already routes
+the family to a facet, so an event-driven alert will bundle with a metric one with no further
+work here. Noted in ROADMAP.MD #17 rather than half-built.
 
 Flask-free, like `alerts.py` and `rules.py` beside it: the caller passes the db path, the AI
 configuration dict and the actor in, so every function here is exercisable against a temp
@@ -75,6 +82,7 @@ import time
 
 import ai
 import alerts
+import events
 import rules
 import scripts
 
@@ -101,11 +109,12 @@ FACET_LIVENESS = "liveness"
 FACET_SESSION = "session"
 FACET_DIRECTORY = "directory"
 FACET_IDENTITY = "identity"
+FACET_EVENT = "event"
 FACET_OTHER = "other"
 
 FACETS = (FACET_DISK, FACET_MEMORY, FACET_CPU, FACET_THERMAL, FACET_NETWORK,
           FACET_PROCESS, FACET_LIVENESS, FACET_SESSION, FACET_DIRECTORY,
-          FACET_IDENTITY, FACET_OTHER)
+          FACET_IDENTITY, FACET_EVENT, FACET_OTHER)
 
 # i18n: a facet crosses the wire as a CODE and the console renders it, the same way wake.py's
 # diagnosis codes do -- a hub answering a German operator should not have to be told which
@@ -136,6 +145,10 @@ _FACET_BY_VARIABLE = {
 
 _FACET_BY_PREFIX = (
     ("disk.", FACET_DISK),
+    # #16's counters, for when rules.py grows the family. Listed now rather than when it
+    # lands, because the cost of being early is one unreachable tuple entry and the cost of
+    # being late is every event-driven alert silently bundling as `other`.
+    ("event.", FACET_EVENT),
     ("proc.", FACET_PROCESS),
     ("process.", FACET_PROCESS),
     ("net.", FACET_NETWORK),
@@ -634,6 +647,59 @@ def anomalies(db_path, machine, *, now=None, score_threshold=ANOMALY_SCORE,
 
 
 # ---------------------------------------------------------------------------------------
+# Event evidence (#16)
+# ---------------------------------------------------------------------------------------
+
+# Which of #16's levels are worth putting in front of somebody reading a bundle. Information
+# and verbose are excluded: a subscription an operator wrote to count successful logons is a
+# legitimate thing to collect and a terrible thing to volunteer beside a disk alert, and a
+# bundle that buries its two error rows under four hundred informational ones has reported
+# nothing.
+EVIDENCE_LEVELS = (events.LEVEL_CRITICAL, events.LEVEL_ERROR, events.LEVEL_WARNING)
+
+# A hard cap on rows per bundle. These go into a prompt as well as onto a page, and an
+# unbounded join would let one noisy machine decide how large every recommendation request is.
+MAX_EVIDENCE_ROWS = 10
+
+# How much of an event's message travels. Enough to identify it (an account name out of a
+# 4625, a service name out of a 7034) and not enough for one stack-trace-shaped row to
+# dominate a prompt.
+MAX_EVIDENCE_MESSAGE_CHARS = 300
+
+# The same slack the episode windows use, and for the same reason: the event a problem
+# produced does not land in the same second the rule matched.
+EVIDENCE_SLACK_SECONDS = JOIN_SLACK_SECONDS
+
+
+def events_in_window(db_path, machine, start, end, *, levels=EVIDENCE_LEVELS,
+                     limit=MAX_EVIDENCE_ROWS, slack=EVIDENCE_SLACK_SECONDS):
+    """#16 rows whose own occurrence window overlaps [start, end]. Loudest first.
+
+    **Overlap, not "since".** A rolled-up row carries `first_seen` and `last_seen`, so a run
+    of four hundred 4625s that began before the disk alert and was still going after it is
+    one row that straddles the window -- and `since=start` alone would keep it, while
+    `last_seen <= end` alone would drop it. Both ends are checked here rather than pushed
+    into `events.list_events`, which offers `since` and not a range; the row count after a
+    `since` filter on one machine is small enough that the second half costs nothing.
+
+    Ordered by occurrences rather than by time, because the cap is what decides what an
+    operator sees: four hundred failed logons matter more than the one stray warning that
+    happened to be newer.
+    """
+    rows = events.list_events(db_path, machine=str(machine or ""), levels=list(levels),
+                              since=int(start) - int(slack), limit=200)
+    end = int(end) + int(slack)
+    inside = [row for row in rows if int(row.get("first_seen") or 0) <= end]
+    inside.sort(key=lambda r: (-int(r.get("count") or 1), -int(r.get("last_seen") or 0)))
+    return [{"log": row.get("log"), "provider": row.get("provider"),
+             "event_id": row.get("event_id"), "level": row.get("level"),
+             "count": int(row.get("count") or 1),
+             "first_seen": row.get("first_seen"), "last_seen": row.get("last_seen"),
+             "message": str(row.get("message") or "")[:MAX_EVIDENCE_MESSAGE_CHARS]}
+            for row in inside[:limit]]
+
+
+# ---------------------------------------------------------------------------------------
 # The stored recommendation
 # ---------------------------------------------------------------------------------------
 
@@ -759,7 +825,7 @@ KIND_RECOMMEND_FIX = "recommend_fix"
 
 
 def bundle_facts(db_path, bundle, alert_rows, *, rules_by_id=None, include_anomalies=True,
-                 now=None):
+                 include_events=True, now=None):
     """Everything known about one bundle, computed here and only here.
 
     This is the seam the whole design rests on: the figures in a recommendation come out of
@@ -793,9 +859,18 @@ def bundle_facts(db_path, bundle, alert_rows, *, rules_by_id=None, include_anoma
         "active": bool(bundle.get("active")),
         "episodes": episodes,
         "anomalies": [],
+        "events": [],
     }
-    if include_anomalies and bundle.get("machine"):
-        facts["anomalies"] = anomalies(db_path, bundle["machine"], now=now)
+    if bundle.get("machine"):
+        if include_anomalies:
+            facts["anomalies"] = anomalies(db_path, bundle["machine"], now=now)
+        if include_events:
+            # The bundle's own span, not a fixed lookback: the question an operator has is
+            # "what else was this machine saying while THIS was happening", and a 24-hour
+            # window would answer a different one.
+            facts["events"] = events_in_window(
+                db_path, bundle["machine"], bundle.get("started_at") or 0,
+                bundle.get("last_activity_at") or int(time.time() if now is None else now))
     return facts
 
 
@@ -807,6 +882,7 @@ not measurement.
 
 Rules you must follow:
 - Never state a number, a drive letter, a service name or a hostname that is not in the facts.
+- `events` are Windows event log records collected from this machine during the same period. `count` is how many times that record repeated, not how serious it is.
 - If the facts name a likely cause, explain that cause. If they do not, say what the alerts \
 have in common and do not guess at a cause.
 - The steps are for a technician who can reach the machine remotely and run PowerShell as \

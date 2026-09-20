@@ -32,6 +32,7 @@ import alerts
 import app
 import console_session
 import correlate
+import events
 import rules
 import scripts
 
@@ -327,6 +328,79 @@ def test_nothing_in_correlate_raises_an_alert():
 
 
 # ---------------------------------------------------------------------------------------
+# Event evidence (#16)
+# ---------------------------------------------------------------------------------------
+def record_event(machine, *, event_id, level, first_seen, last_seen, count=1,
+                 log="Security", provider="Microsoft-Windows-Security-Auditing"):
+    """One machine_events row, written straight to the table.
+
+    Through the store rather than through `events.record_events` on purpose: that path
+    normalises timestamps against *now* and rolls up by window, and these tests need rows
+    sitting at chosen times relative to a fixed NOW.
+    """
+    with correlate.get_conn(app.DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO machine_events (id, machine, log, provider, event_id, level, "
+            "message, rollup_key, count, first_seen, last_seen, recorded_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f"{machine}-{event_id}-{first_seen}", machine, log, provider, event_id, level,
+             f"event {event_id}", f"{log}|{event_id}", count, first_seen, last_seen,
+             last_seen))
+
+
+def test_event_rows_join_a_bundle_by_overlap_not_by_recency():
+    """A rolled-up run that began before the window and was still going after it straddles
+    both ends. `since=start` alone keeps it and a `last_seen <= end` test alone drops it, so
+    the overlap has to be checked at both ends -- and a run of four hundred 4625s spanning a
+    disk alert is exactly the PRD's example."""
+    start, end = NOW - 3600, NOW - 1800
+    record_event("EV-01", event_id=4625, level=events.LEVEL_WARNING,
+                 first_seen=start - 600, last_seen=end + 600, count=400)
+    record_event("EV-01", event_id=7034, level=events.LEVEL_ERROR,
+                 first_seen=start + 60, last_seen=start + 120, count=1)
+    record_event("EV-01", event_id=1000, level=events.LEVEL_ERROR,
+                 first_seen=NOW - 10 * 86400, last_seen=NOW - 10 * 86400, count=99)
+    record_event("EV-01", event_id=4624, level=events.LEVEL_INFORMATION,
+                 first_seen=start + 60, last_seen=start + 120, count=5000)
+
+    found = correlate.events_in_window(app.DB_PATH, "EV-01", start, end)
+    ids = [row["event_id"] for row in found]
+    check("a run straddling both ends of the window is kept", 4625 in ids)
+    check("an event inside the window is kept", 7034 in ids)
+    check("an event ten days earlier is not", 1000 not in ids)
+    # Information and verbose are excluded: a bundle that buries its two error rows under
+    # five thousand informational ones has reported nothing.
+    check("informational noise is excluded", 4624 not in ids)
+    check("the loudest row comes first, not the newest", ids and ids[0] == 4625)
+    check("the count is the occurrences, not the row count",
+          found and found[0]["count"] == 400)
+
+
+def test_events_reach_the_facts_but_never_the_bundle_membership():
+    """An event has no episode -- nothing cleared when it stopped arriving -- so it is
+    evidence inside a bundle and never a member of one. A log line that opened an alert
+    nobody asked to be alerted about is the fastest way to make the Alerts tab unreadable."""
+    rows = [alert_row(41, "EV-02", NOW - 3600, rule_id=10),
+            alert_row(42, "EV-02", NOW - 3000, rule_id=11)]
+    record_event("EV-02", event_id=7034, level=events.LEVEL_ERROR,
+                 first_seen=NOW - 3500, last_seen=NOW - 3400, count=3)
+    bundle = correlate.bundle_alerts(
+        rows, rules_by_id={10: fake_rule(10, "disk.max_used_pct"),
+                           11: fake_rule(11, "proc.count")}, now=NOW)[0]
+    check("the bundle's membership is alerts only", bundle["alert_ids"] == [41, 42])
+
+    facts = correlate.bundle_facts(app.DB_PATH, bundle, rows, include_anomalies=False, now=NOW)
+    check("but the events ride along in the facts",
+          [e for e in facts["events"] if e["event_id"] == 7034])
+    check("and can be switched off for a caller that does not want them",
+          correlate.bundle_facts(app.DB_PATH, bundle, rows, include_anomalies=False,
+                                 include_events=False, now=NOW)["events"] == [])
+
+    check("the event facet is routed for when rules.py grows the family",
+          correlate.facet_for_variable("event.security_4625") == correlate.FACET_EVENT)
+
+
+# ---------------------------------------------------------------------------------------
 # The wording layer
 # ---------------------------------------------------------------------------------------
 def test_a_model_answer_is_parsed_and_bounded():
@@ -611,6 +685,8 @@ def main():
     test_a_flat_metric_never_becomes_an_anomaly()
     test_a_real_excursion_is_reported_with_its_figures()
     test_nothing_in_correlate_raises_an_alert()
+    test_event_rows_join_a_bundle_by_overlap_not_by_recency()
+    test_events_reach_the_facts_but_never_the_bundle_membership()
     test_a_model_answer_is_parsed_and_bounded()
     test_the_provider_being_off_is_an_answer_not_a_crash()
     test_facts_carry_the_figures_the_model_is_not_asked_to_find()

@@ -334,10 +334,16 @@ the model, and the card says which model wrote it. If the suggestion includes a 
 this script to the library** saves it to the script library **switched off** -- read it, then
 enable it before any rule can use it. Nothing is ever run from a suggestion.
 
-A machine's own metrics are also compared against **its own** trailing fortnight (median and
-MAD, not a fleet average), and anything well outside that normal is reported beside the
-bundle. A machine with less than an hour of history has no baseline yet, and the hub says
-nothing rather than guessing. Baselines never raise alerts of their own.
+**Show what else happened** opens the rest of the picture for that bundle: the machine's
+metrics that sit outside **its own** trailing fortnight (median and MAD, not a fleet
+average), and the Windows event log records collected by [event log mining](#event-logs)
+that fall inside the same window -- the four hundred failed logons beside the disk alert,
+rather than on a separate tab. It loads on the click rather than with the list, because a
+baseline is a scan of two weeks of readings and this page polls.
+
+A machine with less than an hour of history has no baseline yet, and the hub says nothing
+rather than guessing. Baselines never raise alerts of their own, and an event is evidence
+inside a bundle -- it is never itself an alert.
 
 ### Audit log
 
@@ -1424,6 +1430,52 @@ existing `POST /api/agent/heartbeat` under a `network` key.
 > `*WakeOnMagicPacket` value real drivers publish, whether a docked laptop reports the dock's
 > adapter, and whether `powercfg /deviceenablewake` matches on the description this reader
 > reports. Everything else is covered by tests against literal payloads.
+
+## Event logs
+
+Windows event records from across the fleet, in one list, on the **Events** page. The question
+it exists to answer is the one Event Viewer can only answer one PC at a time: *is somebody
+brute-forcing that account?* — 4625 on the Security channel, everywhere, with a count.
+
+**Only what you subscribe to is read.** A subscription names a log channel and, optionally,
+event ids, levels and a provider substring. The hub publishes the set to every agent on the
+heartbeat; the agent compiles all of one channel's subscriptions into a single event-log query
+and sends back the matches. A hub with no subscriptions costs the fleet nothing at all: no
+query runs and no payload is sent.
+
+**Repeats are counted, not listed.** Identical records within five minutes share one row with a
+`count`, a first and a last occurrence. Five hundred failed logons against one account is one
+row saying 500, which is both the readable answer and the only affordable one — the alternative
+puts six figures of rows into the same SQLite file that serves the live charts. Two records
+that differ in any way, including the message, stay separate, so "which account" is still
+answerable.
+
+**Nothing is back-filled.** A subscription added this afternoon collects from this afternoon;
+it does not walk back through last month's log.
+
+**What an empty list means.** The page distinguishes "nothing matched" from "nothing is being
+collected", and a machine's own view distinguishes both from "this machine has never reported"
+— which is what you see for a PC whose agent predates the feature. A collector that stopped and
+a fleet that is behaving must not look the same.
+
+**Retention.** `Settings → Data & Retention → Keep collected events for` (14 days by default),
+plus a per-machine row cap enforced as records arrive, because the daily prune is the wrong
+timescale for one over-broad subscription on a busy server. It is a privacy control as much as
+a disk one: a Security-channel record names the account somebody typed a password for.
+
+**Gating**: reading events is `view` + machine scope, like a machine's disks or its available
+updates. Creating, editing and deleting subscriptions is `manage_settings` — a subscription is
+collection configuration, not an instruction aimed at a machine. Deleting one stops the
+collection and keeps what it already collected.
+
+**Endpoints** (console-facing): `GET /api/events`, `GET /api/events/machines/<machine>`,
+`GET|POST /api/events/subscriptions`, `PATCH|DELETE /api/events/subscriptions/<id>`. Records
+arrive on the existing `POST /api/agent/heartbeat` under an `events` key, and the subscription
+document goes back on that same reply.
+
+> **Status:** collection built — hub 1.118.0. The agent half is in the source tree and reaches
+> the fleet with the next agent release, so nothing is collected until then. Correlating events
+> into alerts, and writing a rule against the counters, is roadmap #17.
 
 ## Machine capabilities
 
