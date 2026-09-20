@@ -40,6 +40,7 @@ import bitlocker
 import bitlocker_web
 import capabilities
 import channels
+import events
 import firmware
 import fleet
 import live
@@ -320,6 +321,23 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 processes.record_snapshot(db_path, machine, data["processes"])
             except Exception as e:
                 print(f"[processes] Could not record processes for {machine}: {e}")
+        # Windows event log matches (roadmap #16). Tested with `is not None` rather than for
+        # truthiness, for the reason `patches` is and with a sharper consequence: the payload
+        # from a HEALTHY machine is an empty list. A fleet where nothing is failing reports
+        # `{"events": []}` on every pass, and that report is the only thing separating "your
+        # machines are quiet" from "your collector stopped" -- which is the failure every log
+        # console gets wrong. A truthiness check here would discard exactly the report that
+        # keeps the console honest, and the symptom would be a page that looks reassuring.
+        #
+        # Only MATCHES arrive: the filtering happened on the machine, against the
+        # subscription document sent below. Never fatal like its neighbours -- a machine
+        # whose events could not be stored is still a machine that is online, and the next
+        # heartbeat is ten seconds away.
+        if data.get("events") is not None:
+            try:
+                events.record_events(db_path, machine, data["events"])
+            except Exception as e:
+                print(f"[events] Could not record events for {machine}: {e}")
         # Answered on EVERY heartbeat, including the ones carrying nothing: this is how an
         # agent learns to STOP sampling (and how a pre-1.71 agent learns to start). A machine
         # nobody is looking at reads `false` here and does no process work at all.
@@ -401,6 +419,27 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 payload["device_policy_version"] = document["version"]
         except Exception as e:
             print(f"[policy] Could not resolve the policy for {machine}: {e}")
+        # Which event log records this machine should collect (roadmap #16). Sent only when
+        # the version the agent holds differs from the current one -- the same shape `config`
+        # and `device_policy` use above, and for the same reason: this is a ten-second
+        # heartbeat and re-sending an unchanged document would be most of it.
+        #
+        # **An EMPTY document is still sent**, exactly as the device policy's is. Deleting or
+        # disabling the last subscription has to be able to STOP collection, and an absent
+        # block reads to the agent as "the hub had nothing to say" -- so it would go on
+        # reading the Security channel forever.
+        #
+        # Fleet-wide rather than per-machine, so this is one document for every agent. Its
+        # own try/except, like every block here: a subscription set that cannot be resolved
+        # must not cost the machine its heartbeat, and the agent keeps what it has.
+        try:
+            subscriptions = events.document(db_path)
+            if data.get("event_subscriptions_version") != subscriptions["version"]:
+                payload["event_subscriptions"] = subscriptions["subscriptions"]
+                payload["event_subscriptions_version"] = subscriptions["version"]
+                payload["event_max_per_report"] = subscriptions["max_events"]
+        except Exception as e:
+            print(f"[events] Could not resolve the subscriptions for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])

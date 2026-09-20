@@ -2755,7 +2755,7 @@ can be born into the ring.
 
 ---
 
-## 📋 16. Event log mining
+## 🚧 16. Event log mining   ·   hub 1.118.0 · agent unreleased
 
 Windows Event Log (Security, Application, System) ingested on the agent and correlated into
 alerts — the PRD's example, 4625 failed logons, is the right one. This is the first genuinely
@@ -2766,8 +2766,78 @@ before the first row is written, not after.
 
 Its real value is as an input to #17, which is why it comes first.
 
-**Open parameters.** Push on the heartbeat or a dedicated channel. Whether a rule can be
-written against an event directly, or only against a counter derived from one.
+**Collection — built (hub 1.118.0, agent source on `main`).** `events.py` (subscriptions,
+the versioned document agents receive, ingest, roll-up, caps, retention, counters) /
+`events_web.py`, an Events page in the console, and on the agent `Events/WindowsEventReader.cs`
+(the query), `Events/EventLogReporter.cs` (the payload) and `Events/EventSubscriptionStore.cs`
+(the document it holds). A subscription is a channel plus optional event ids, levels and a
+provider substring; the agent compiles all of a channel's subscriptions into **one XPath** and
+lets the Windows event service do the filtering, which is the difference between a query and
+reading every record on the machine every minute.
+
+**Both open parameters are resolved.**
+
+- **The heartbeat, not a dedicated channel.** It is already bearer-authenticated, already
+  per-machine and already polled; a second channel would need its own auth and its own
+  offline behaviour to answer the same question. What bounds the volume is not the transport
+  but the filter, the per-report cap and the roll-up. The subscription document travels back
+  on the same reply, versioned exactly like `config` and `device_policy` — and an **empty
+  document is still sent**, because deleting the last subscription has to be able to stop
+  collection rather than read as silence.
+- **A rule is written against a counter, not against an event** — and the counter is
+  `events.summary`, which ships here as the console's own summary rather than being invented
+  later by #17. The alternative, a rule condition matching a single record as it arrives, was
+  rejected twice over: it would make the rules engine evaluate per ingested row on a path that
+  runs on every heartbeat from every PC, and the questions anybody actually asks of an event
+  log are counts over a window ("more than ten 4625s on one machine in an hour"), not "this
+  record happened".
+
+### Two decisions that cost information, recorded because they did
+
+- **Repeats are rolled up, not stored.** Within `ROLLUP_WINDOW_SECONDS` (five minutes), an
+  identical record increments a `count` instead of inserting a row; what is lost is the
+  individual arrival times of repeats, and what is kept is the occurrence, the count and the
+  span. The rejected alternative — store every record, aggregate at read time — is strictly
+  more faithful and was turned down on arithmetic: one account being sprayed writes a 4625
+  every few hundred milliseconds, so one machine having a bad afternoon puts six figures of
+  rows into the file that is also serving the live charts, to produce a page whose only useful
+  content is a number. The identity includes the **message**, so two 4625s naming different
+  accounts stay separate rows and the page can still answer "which account".
+- **Nothing is back-filled.** A subscription added this afternoon does not walk back through
+  last month's Security log. The rejected alternative was an initial catch-up, turned down
+  because the first thing it does on a fleet of two hundred PCs is deliver a month of records
+  in one burst, at the exact moment somebody is checking whether the feature works.
+
+### The gate, and why it is not a new capability
+
+Reading collected events is **`view` plus machine scope**, like a machine's disks, its BIOS
+version or its available updates — the line this hub has now drawn six times. Deciding what
+the fleet *collects* is **`manage_settings`**: a subscription is collection configuration in
+exactly the sense `metrics.collect_gpu` is, it names no machine and it issues nothing.
+
+Two alternatives were weighed and rejected. `manage_rules`, because a rule is a standing
+instruction that acts on a machine and a subscription is not. A new `manage_event_logs`
+capability, because it would ship switched off for every existing permission group, and the
+first symptom would be a feature that appears to do nothing on a hub that has just installed
+it — the same trap `manage_firmware` avoided by shipping live.
+
+### Not done
+
+- **No rule condition over the counters yet.** `events.summary` is the shape one will read;
+  growing the rules engine a second condition kind is #17's change, not this one's, and doing
+  both in one commit would have made the collection half unreviewable.
+- **No per-group targeting.** The subscription set is fleet-wide: one document, one version,
+  every agent. Per-`device_groups` targeting is a real want and a real cost (a document and a
+  version per machine on a ten-second heartbeat), and nothing yet needs it.
+- **No agent release.** The agent half is source on `main` at 3.36.0; it reaches the fleet
+  with the next `agent/release.ps1` cut. The hub needs no gate for that: this feature has no
+  per-machine console control to hide, so a machine on an older agent simply never reports and
+  `machine_event_state` says "we have not been told" rather than "nothing happened". That
+  distinction is the reason that table exists.
+- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`), and
+  the agent half's pure parts are (`EventLogTests.cs`) — but the query has never been executed
+  against a Windows event service, and no record has ever made the trip. See the hardware
+  validation note.
 
 ---
 
@@ -4571,6 +4641,16 @@ This is that list, so nothing is quietly skipped:
 | **#22 self-update** | Cut a `0.2.0` of each agent and confirm each machine takes ITS OWN build: the Linux box updates from the Linux manifest, the phone from the Android one, and neither is ever offered the Windows exe. On the phone confirm the install is silent and the agent comes back on its own (ACTION_MY_PACKAGE_REPLACED) rather than sitting stopped. Confirm a device that is NOT a device owner declines rather than raising the system installer. Confirm the dashboard's outdated count is right per platform. Then break one on purpose: serve a manifest signed with the wrong key and confirm both agents refuse it |
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
+**Also owed, and not from #23: roadmap #16's event log query.** Nothing in the collection
+half has ever run against a Windows event service. On the first machine that gets the new
+agent, confirm that a Security subscription for 4625 returns records at all (the XPath, the
+`timediff` window and the level mapping are all unexercised); that Information on Security
+returns records rather than nothing, which is what the level-0 mapping exists for; that a
+channel LocalSystem cannot read comes back as `error` on the report instead of costing the
+whole pass; that a provider channel with a `/` in its name is queryable by that name; and that
+an idle machine's empty report reaches the hub, since that report is what tells the console a
+collector is alive rather than stopped.
+
 **A is no longer blocked** — the pilot Galaxy A15 has been factory reset, so it can be
 provisioned by QR and used for the whole table. The remaining blocker is the phone re-authorising
 USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
@@ -4687,11 +4767,18 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     accident but the security argument itself: the borrowing hub never speaks to an agent, so
     there was nothing to add to one. That also makes it the first feature since #7 that is
     fully live the moment the hub is deployed, with no fifteen-minute propagation to wait on.
-16. **#16 Event log mining** — before #17, because it is one of the two inputs that make
-    correlation worth doing. Its own risk is volume rather than mechanism, and that risk is
-    settled by filtering on the machine instead of shipping raw logs to a SQLite hub.
+16. **#16 Event log mining** — **collection built, hub 1.118.0**; the agent half is source
+    on `main` and reaches the fleet with the next agent cut. Taken before #17, because it is
+    one of the two inputs that make correlation worth doing. Its own risk was volume rather
+    than mechanism, and that risk is settled three times over: the filter runs on the machine
+    as one XPath per channel, identical repeats are rolled up into a count instead of a row,
+    and both the retention window and a per-machine row cap existed before the first row was
+    written. What is deliberately NOT here is a rule condition over the collected counters —
+    that is a change to the rules engine, which belongs to #17, and `events.summary` is the
+    counter it will read.
 17. **#17 Alert correlation and recommended fixes** — after #14 and #16 by dependency, not by
-    preference. The deterministic half can be built the day both land; the language layer
+    preference. **Both are now in place**: patch outcomes since 1.92.0, and event counters
+    since 1.118.0. The deterministic half can be built the day both land; the language layer
     above it is gated on a pluggable AI provider that does not exist yet, and that provider
     is the one piece of new plumbing this item introduces.
 18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
@@ -4736,8 +4823,8 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 > 1.63.0). #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0), which is an
 > extension of a done feature rather than a new board item.
 >
-> **#14 through #21 came from the PRD v2.0 triage above; #14, #15 and #21 are built, and
-> #16 through #20 are not.** #14 and #21 shipped as agent 3.35.0; **#15 needed no agent
+> **#14 through #21 came from the PRD v2.0 triage above; #14, #15 and #21 are built, #16's
+> collection half is built (hub 1.118.0), and #17 through #20 are not.** #14 and #21 shipped as agent 3.35.0; **#15 needed no agent
 > release** and is live with hub 1.94.0 alone. That
 > section is new as of 2026-08-31 and is the first time this board has grown by more than
 > one item at once; read it before the entries, because it records which PRD requirements

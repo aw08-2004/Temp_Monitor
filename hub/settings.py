@@ -241,6 +241,25 @@ REGISTRY = (
     # default and it is meant to come down further. Pruned by the DEVICE's own local day, never
     # by a hub timestamp -- see usage.prune.
     _s("data.usage_retention_days", "data", "int", 14, minimum=1, maximum=365, unit="days"),
+    # Collected Windows event records (roadmap #16). BOTH kinds of retention knob at once,
+    # which is why it is the shortest default on this list: the table is the only one in the
+    # hub that a single misconfigured subscription can grow by thousands of rows an hour, AND
+    # a Security-channel record names the person who typed the password. Fourteen days matches
+    # usage rather than readings on purpose -- this is a working window for "what happened
+    # overnight", not an archive, and anything that needs to outlive it belongs in whatever
+    # the helpdesk group keeps change tickets in.
+    _s("data.event_retention_days", "data", "int", 14, minimum=1, maximum=365, unit="days"),
+
+    # ---------------- Event log mining (roadmap #16) ----------------
+    # How far back the Events page's counters look. Not a retention knob: it decides what the
+    # summary above the list COUNTS, and it is separate from data.event_retention_days for the
+    # reason data.ingest_max_backdate_days is separate from data.retention_days -- shortening
+    # how long rows are kept must not silently change what the page claims happened today.
+    #
+    # It is also the window a #17 rule condition will read (see events.summary), which is why
+    # it is an operator knob rather than a constant in the query.
+    _s("events.summary_window_seconds", "events", "int", 86400, minimum=300,
+       maximum=2592000, unit="seconds"),
 
     # ---------------- History metrics: which sensors are recorded to history ----------------
     # One on/off toggle per chartable metric on the per-machine History dashboard. Off means
@@ -657,7 +676,7 @@ REGISTRY = (
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
             "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
-            "policy", "rules", "sharing", "ai", "security")
+            "policy", "rules", "sharing", "events", "ai", "security")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

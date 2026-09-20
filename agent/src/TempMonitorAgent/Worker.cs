@@ -372,6 +372,12 @@ public sealed class Worker : BackgroundService
                 // a Windows Update search contacts WSUS and winget refreshes its sources --
                 // which is exactly why it is here and not on the heartbeat path.
                 TempMonitorAgent.Patch.PatchInventoryReporter.RefreshIfDue();
+                // Matching event log records (roadmap #16). On this loop rather than the
+                // heartbeat's because an event log query is an IPC round trip to the Windows
+                // event service that can take a second on a busy channel, and the hub's
+                // offline window is 90 s. Self-throttles to a minute, and does nothing at all
+                // until the hub subscribes this fleet to something.
+                TempMonitorAgent.Events.EventLogReporter.RefreshIfDue();
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
 
