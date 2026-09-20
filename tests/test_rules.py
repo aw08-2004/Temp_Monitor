@@ -1087,7 +1087,15 @@ check("run_script without a script is refused",
           "command_type": "run_script", "params": {}}}])[0] is not None)
 check("an unknown shell is refused",
       val_actions([{"type": "command", "params": {"command_type": "run_script",
-          "params": {"script": "Get-Date", "shell": "bash"}}}])[0] is not None)
+          "params": {"script": "Get-Date", "shell": "fish"}}}])[0] is not None)
+# bash and sh joined the enum when the fleet gained Linux machines (roadmap #22). This check
+# used to assert that "bash" was refused, which was correct while every machine that could
+# receive a run_script was Windows -- and is exactly the refusal that made the action
+# unusable on a Linux box, since the console offers no choice this table does not name.
+for shell in ("powershell", "cmd", "bash", "sh"):
+    check(f"{shell} is a shell a rule may name",
+          val_actions([{"type": "command", "params": {"command_type": "run_script",
+              "params": {"script": "uptime", "shell": shell}}}])[0] is None)
 check("install_app with neither an id nor an msi is refused",
       val_actions([{"type": "command", "params": {
           "command_type": "install_app", "params": {}}}])[0] is not None)

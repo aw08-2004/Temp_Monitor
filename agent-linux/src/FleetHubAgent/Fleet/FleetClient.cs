@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -20,14 +21,14 @@ namespace FleetHubAgent.Fleet;
 /// answering with nonsense is a false return value here, never an exception.
 ///
 /// This is a deliberately SMALL subset of the Windows agent's FleetClient (which is ~1150
-/// lines): enroll, heartbeat, poll, result. The rest of that surface -- live output
-/// streaming, the ConPTY terminal endpoints, package downloads, backup and BIOS reporting --
+/// lines): enroll, heartbeat, poll, result, and streamed command output. The rest of that
+/// surface -- the ConPTY terminal endpoints, package downloads, backup and BIOS reporting --
 /// backs features this agent does not implement, and every one of them is gated in the
 /// console behind a MIN_*_AGENT version this agent deliberately sits below (see
 /// AgentConfig.Version). Porting an endpoint before its feature exists would be dead code
 /// carrying a bearer token.
 /// </summary>
-public sealed class FleetClient : IDisposable
+public sealed class FleetClient : IDisposable, IOutputSink
 {
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
@@ -127,15 +128,21 @@ public sealed class FleetClient : IDisposable
     /// Liveness ping.
     ///
     /// The Windows agent's heartbeat also carries the change-only inventory blocks (backup
-    /// profiles, network adapters, BIOS settings, available patches, the process list) and
-    /// applies the config the hub replies with. None of that is ported yet, so this sends the
-    /// minimum the endpoint accepts plus the capability report, and reads nothing back but the
-    /// status code.
+    /// profiles, network adapters, BIOS settings, the process list) and applies the config the
+    /// hub replies with. Of those only the patch inventory is ported, so this sends the
+    /// minimum the endpoint accepts plus the capability report and whatever
+    /// <paramref name="patches"/> carries, and reads nothing back but the status code.
+    ///
+    /// <paramref name="patches"/> is passed IN rather than pulled from a reporter held here,
+    /// which keeps this class ignorant of when a payload may be considered delivered. The
+    /// caller knows: it is the one that can see whether this call returned true. See
+    /// PatchInventoryReporter, where losing that distinction costs the hub the one report it
+    /// most needs.
     ///
     /// It still has to EXIST, and on the Windows cadence: this is what refreshes the hub's
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
     /// </summary>
-    public async Task<bool> HeartbeatAsync(CancellationToken ct)
+    public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null)
     {
         if (!_identity.IsEnrolled) return false;
         try
@@ -163,6 +170,12 @@ public sealed class FleetClient : IDisposable
                 // hint. Same discipline the hub applies at the other end of the wire.
                 _log.LogDebug("Could not build the capability report: {Msg}", e.Message);
             }
+            // What this machine is missing (roadmap #14). Sent only when the scan produced
+            // something the hub has not been told yet -- and DeepClone'd, because a JsonNode
+            // may have only one parent: attaching the reporter's own object here would
+            // re-parent it, and a heartbeat that then failed would leave the reporter holding
+            // a node it can no longer serialise for the retry.
+            if (patches is not null) body["patches"] = patches.DeepClone();
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
@@ -200,6 +213,50 @@ public sealed class FleetClient : IDisposable
         {
             _log.LogDebug("Command poll failed: {Msg}", e.Message);
             return CommandPollResult.Empty;
+        }
+    }
+
+    /// <summary>Post one chunk of a running command's output.
+    ///
+    /// **Every failure here is soft, and the two kinds are told apart deliberately.** A 403 or
+    /// a 404 means the hub will never accept another chunk for this command -- it completed,
+    /// or it was never ours -- so that is reported as Truncated, which stops the stream
+    /// rather than retrying into a wall. Anything else is a transport hiccup the caller may
+    /// retry with the SAME seq, which the hub's INSERT OR IGNORE makes free.
+    ///
+    /// Note the order of the two reads at the end: the hub answers 200 with
+    /// {"truncated": true} once it has stored all it will store for one command, and that is
+    /// a successful post which also ends the stream. Treating it as a failure would retry a
+    /// chunk the hub deliberately discarded.</summary>
+    public async Task<OutputPostResult> PostOutputAsync(
+        string commandId, int seq, string text, CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return new OutputPostResult(Ok: false, Truncated: false);
+
+        var body = new JsonObject { ["seq"] = seq, ["chunk"] = text };
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, AgentConfig.CommandOutputUrl(commandId));
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+
+            if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            {
+                _log.LogDebug("Output for {Id} not accepted ({Status}); stopping stream",
+                    commandId, (int)resp.StatusCode);
+                return new OutputPostResult(Ok: true, Truncated: true);
+            }
+            if (!resp.IsSuccessStatusCode)
+                return new OutputPostResult(Ok: false, Truncated: false);
+
+            var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var truncated = json?["truncated"]?.GetValue<bool>() ?? false;
+            return new OutputPostResult(Ok: true, Truncated: truncated);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Output post for {Id} seq {Seq} failed: {Msg}", commandId, seq, e.Message);
+            return new OutputPostResult(Ok: false, Truncated: false);
         }
     }
 

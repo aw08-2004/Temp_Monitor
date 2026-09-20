@@ -3188,6 +3188,14 @@
       "winget": {
         "label": "winget",
         "description": "Actualizaciones de aplicaciones, del gestor de paquetes winget del equipo."
+      },
+      "apt": {
+        "label": "apt",
+        "description": "Actualizaciones de paquetes en un equipo Debian o Ubuntu, leídas de las listas que apt ya tiene. Lo actualizadas que estén lo decide el temporizador de refresco del propio equipo."
+      },
+      "dnf": {
+        "label": "dnf",
+        "description": "Actualizaciones de paquetes en un equipo Fedora, RHEL o Rocky, leídas de los metadatos que dnf ya tiene. Lo actualizados que estén lo decide el temporizador de refresco del propio equipo."
       }
     },
     "heading": "Parches",

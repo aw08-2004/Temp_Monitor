@@ -64,44 +64,44 @@ works against an unmodified hub.
 | **Identity** | DMI (`/sys/class/dmi/id`) for serial, model, manufacturer, asset tag; `/etc/os-release` for the OS caption; kernel release as `os_build` |
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from `/etc/fleethub/agent.secret` (0600, permissions *checked*, not assumed) or the env var of the same name |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
-| **Commands** | `restart`, `shutdown`, `rename`, `run_script` |
+| **Commands** | `restart`, `shutdown`, `rename`, `run_script`, with a running command's output streamed to the console as it is produced |
+| **Patch inventory** | What `apt` or `dnf` says is available, change-only on the heartbeat, six-hourly on its own loop. Reporting only — nothing here installs a package, and the capability report is what stops the hub queueing one |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops measuring it against the Windows train and stops queueing work it can never perform. Derived from the dispatcher, not written out |
 | **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed before anything is written. systemd restarts the unit onto the new binary |
 
-Four concurrent loops — telemetry, heartbeat, commands, update — for the reason the Windows
-agent's six exist: in a serial loop the slowest step sets the latency of every other one.
+Five concurrent loops — telemetry, heartbeat, commands, update, inventory — for the reason
+the Windows agent's six exist: in a serial loop the slowest step sets the latency of every
+other one. The inventory loop is the clearest case: an `apt` dependency solve is seconds of
+work and the hub calls a machine offline after ninety.
 
 ## What it does not do
 
 Everything else, and none of it is reachable from the console anyway (see the version table
 above). In rough order of what would be worth doing next:
 
-1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0) — the endpoint and the
-   sequencing already exist on the hub; `onOutput` is threaded through the executors ready for
-   it.
-2. **Patch inventory** (`apt`/`dnf` — roadmap #14's Linux half).
-3. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
+1. **Installing patches.** The inventory half reports; nothing applies an update. The
+   executor and a call to `PatchInventoryReporter.Invalidate()` are what it needs.
+2. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
    one.
-4. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
-5. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
+3. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
+4. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
-Two things need a **hub** change and are recorded in `ROADMAP.MD` #22 rather than worked around
-here:
-
-- `run_script`'s `shell` enum is `("powershell", "cmd")`. This agent runs the script under
-  `bash`/`sh` regardless and says so in the first line of the result, because refusing would
-  make `run_script` permanently unusable. Adding `bash`/`sh` to the enum is the fix.
-- `_OS_MATCHES` buckets `ubuntu`/`debian`/`rhel`/`fedora`/`suse`/`alma`/`rocky` and the bare
-  word `linux`, so a `PRETTY_NAME` like `Pop!_OS 22.04 LTS` buckets as *unknown*. The agent
-  reports the caption honestly rather than smuggling the word "Linux" into it.
+The two **hub**-side gaps this agent used to work around are closed in hub 1.120.0: the
+`shell` enum names `bash` and `sh` (the substitution stays, because an old rule still arrives
+saying "powershell"), and `_OS_MATCHES` recognises the distributions whose `PRETTY_NAME`
+never says "Linux". One caption is still wrong and is recorded in `ROADMAP.MD` #22: the
+console's terminal shows this agent's streamed output under a `MIN_STREAMING_AGENT` warning
+saying the agent refuses `run_script`, which it does not. That gate moves onto the capability
+report rather than onto a version number.
 
 ## Layout
 
 ```
 src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
-  Worker.cs               the three loops
-  Fleet/                  hub client, dispatcher, executors, capability report
+  Worker.cs               the five loops
+  Fleet/                  hub client, dispatcher, executors, capability report, output streaming
+  Patch/                  what apt/dnf says is available, and the heartbeat payload for it
   Update/                 the signed self-update: manifest verification and the swap
   Telemetry/              /proc and /sys readers, the report builder
   State/                  agent.json, and keeping it root-only

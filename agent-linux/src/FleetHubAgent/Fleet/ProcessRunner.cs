@@ -91,7 +91,16 @@ public static class ProcessRunner
         {
             if (line is null) return;
             lock (sink) buffer.AppendLine(line);
-            onOutput?.Invoke(line);
+            // The newline is ours to add: OutputStreamer appends what it is given verbatim,
+            // because a producer that emits partial lines (a prompt with no newline) would
+            // have them corrupted by one added per call. This producer is line-oriented --
+            // OutputDataReceived strips the terminator -- so it puts one back.
+            //
+            // Never allowed to throw: this runs on the thread draining the child's stdout
+            // pipe, and an exception escaping here stops that drain. The child then blocks on
+            // a full pipe and the command times out looking like slow work.
+            try { onOutput?.Invoke(line + "\n"); }
+            catch { /* narration is not worth the command */ }
         }
 
         proc.OutputDataReceived += (_, e) => Collect(e.Data);
