@@ -315,6 +315,30 @@ alert beside it rather than overwriting the old one's numbers. Alerts are
 machine-scoped: an operator only sees, and is only badge-counted for, machines
 within their scope.
 
+### Grouped alerts and recommended fixes
+
+Alerts on one machine whose episodes overlap in time are shown as **one bundle** with its
+cards nested under a heading, rather than as three separate things to read in whatever order
+they were last refreshed. Grouping is structural -- same machine, overlapping windows, joined
+transitively -- and claims nothing by itself.
+
+When the bundle matches one of a short list of known causal pairs **and** the cause started
+first, the heading names it: "The drive filled first, and a process on the machine failed
+after that." When it does not, the heading says the alerts overlap and leaves the reading to
+you. The hub never guesses at a cause it cannot establish.
+
+**Suggest a fix** appears on a bundle when AI assistance is configured (Settings → AI, off by
+default; it uses the same provider and the same off switch as the rule drafter, and every
+request is in the AI audit trail). The figures come from the hub; only the wording comes from
+the model, and the card says which model wrote it. If the suggestion includes a script, **Add
+this script to the library** saves it to the script library **switched off** -- read it, then
+enable it before any rule can use it. Nothing is ever run from a suggestion.
+
+A machine's own metrics are also compared against **its own** trailing fortnight (median and
+MAD, not a fleet average), and anything well outside that normal is reported beside the
+bundle. A machine with less than an hour of history has no baseline yet, and the hub says
+nothing rather than guessing. Baselines never raise alerts of their own.
+
 ### Audit log
 
 Every command issued, machine merged or deleted, package deployed, account or

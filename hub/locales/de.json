@@ -315,7 +315,44 @@
       },
       "merge_failed": "Zusammenführen nicht möglich: {error}"
     },
-    "unknown_kind": "Alarm eines unbekannten Typs ({kind})"
+    "unknown_kind": "Alarm eines unbekannten Typs ({kind})",
+    "bundle": {
+      "title": {
+        "one": "{count} Meldung auf {machine}",
+        "other": "{count} zusammenhängende Meldungen auf {machine}"
+      },
+      "cause_line": "{cause} Erste Meldung um {since}.",
+      "together": "Diese begannen gemeinsam und überschneiden sich zeitlich ({facets}). Der Hub kennt keine Ursache, die sie verbindet. Erste Meldung um {since}.",
+      "facet": {
+        "disk": "Speicherplatz",
+        "memory": "Arbeitsspeicher",
+        "cpu": "Prozessorlast",
+        "thermal": "Temperatur",
+        "network": "Netzwerk",
+        "process": "Prozesse",
+        "liveness": "Rückmeldung",
+        "session": "angemeldeter Benutzer",
+        "directory": "Verzeichnis",
+        "identity": "Hardware-Identität",
+        "other": "Sonstiges"
+      },
+      "cause": {
+        "disk_starved_process": "Das Laufwerk lief zuerst voll, danach ist ein Prozess auf dem Rechner fehlgeschlagen.",
+        "disk_starved_agent": "Das Laufwerk lief zuerst voll, danach hat sich der Rechner nicht mehr gemeldet.",
+        "memory_paging": "Dem Rechner ging zuerst der Arbeitsspeicher aus, die Prozessorlast ist daher höchstwahrscheinlich Auslagerung.",
+        "memory_starved_process": "Dem Rechner ging zuerst der Arbeitsspeicher aus, danach ist ein Prozess fehlgeschlagen.",
+        "thermal_throttling": "Der Rechner wurde zuerst heiß, die Prozessorlast ist daher höchstwahrscheinlich Drosselung.",
+        "offline_unmatched": "Der Rechner meldete sich zuerst nicht mehr, danach hat ihn das Verzeichnis aus den Augen verloren."
+      },
+      "recommend": "Lösung vorschlagen",
+      "recommend_working": "Wird angefragt...",
+      "recommend_failed": "Vorschlag nicht erhalten: {error}",
+      "recommendation_title": "Vorgeschlagene Lösung",
+      "recommendation_source": "Von {model} bei {provider} aus den obigen Werten formuliert. Prüfen Sie den Text, bevor Sie danach handeln.",
+      "draft_script": "Dieses Skript in die Bibliothek aufnehmen",
+      "script_drafted": "Als '{name}' in der Skriptbibliothek gespeichert, deaktiviert. Lesen Sie es und aktivieren Sie es, bevor eine Regel es verwenden kann.",
+      "script_failed": "Skript konnte nicht gespeichert werden: {error}"
+    }
   },
   "audit": {
     "heading": "Auditprotokoll",

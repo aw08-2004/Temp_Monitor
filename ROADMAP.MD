@@ -2538,8 +2538,8 @@ what survived, and why the rest did not. The two decisions that framed the triag
 | PRD item | Verdict |
 |---|---|
 | FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
-| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
-| FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
+| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.118.0, `correlate.baselines`). |
+| FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining and the recommended-fix wording ship in hub 1.118.0 (**#17**, `correlate.py`). Still open there: folding #16's event rows into a bundle. |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
@@ -2771,10 +2771,10 @@ written against an event directly, or only against a counter derived from one.
 
 ---
 
-## 📋 17. Alert correlation and recommended fixes
+## 🚧 17. Alert correlation and recommended fixes   ·   hub 1.118.0   ·   `correlate.py` / `correlate_web.py`
 
 The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
-**one** bundle, not three alerts. The substrate is already here — `alerts.py` keeps episodes,
+**one** bundle, not three alerts. The substrate was already here — `alerts.py` keeps episodes,
 `rules.py` keeps `rule_fires` — so this is grouping over data that exists, plus the two new
 inputs from #14 and #16 that make the grouping worth doing.
 
@@ -2791,8 +2791,91 @@ asked anything, rather than a second one grown here.
 Anomaly baselining (FR-02) lands here too, and for the same reason: a per-machine baseline is
 a statistic over the history table, not a model.
 
-**Open parameters.** How much reduction is worth claiming (the PRD's 75% is a marketing
-number, not a target). Whether a bundle is a first-class row or a view over alerts.
+### Built · hub 1.118.0
+
+`correlate.py` is the model half, `correlate_web.py` the four routes, and the Alerts tab
+renders a bundle as a heading over its member cards — a bundle of one is still just an alert
+card, because wrapping it in chrome saying "1 alert on PC-04" makes the common case worse than
+it was.
+
+* **Grouping.** Same machine, episode windows overlapping within `JOIN_SLACK_SECONDS` (300 s),
+  transitively closed with a union-find so three alerts chained through a middle one are one
+  bundle rather than two pairs. An ACTIVE episode's window reaches forward to *now*, not to
+  its last evaluation, or a week-old ongoing problem could never group with the alert it
+  caused this morning.
+* **Facets, derived from the rule's condition.** "Is this a disk alert" is answered by "does
+  its condition read a `disk.*` variable". That survives an operator renaming the rule or
+  writing it in German, which a keyword list over rule names does not.
+* **The causal claim.** Six pairs in `CAUSAL_PAIRS`, each a mechanism statable in one
+  sentence, and the cause must have STARTED FIRST. Without a match the card says the alerts
+  overlap and stops. One claim per bundle, not a list: three competing causes is a bundle the
+  operator has to adjudicate, which is the work this was supposed to save.
+* **Anomaly baselining.** Median and MAD over a trailing fortnight of `readings`, per machine,
+  excluding the last hour so the excursion being judged is not in its own reference set.
+  Refuses to answer below 60 samples, and never on a metric whose MAD is zero.
+* **The wording layer.** `correlate.recommend()` calls `ai.complete()` with the deterministic
+  facts and asks for prose. Every outcome — including the provider being off — lands in
+  `ai_requests` under kind `recommend_fix`. The suggested script goes into the script library
+  through `scripts.validate_script` **switched off**, so `validate_reference` refuses it at
+  rule-save time and `rules.py` refuses it again at fire time.
+
+### Decisions
+
+* **A bundle is a VIEW, not a row** — the open parameter above, settled. There is no
+  `alert_bundles` table and no `bundle_id` column. A bundle is a pure function of the open
+  alert list the Alerts tab already loads, so it cannot drift from the list it groups.
+* **Anomalies do not raise alerts.** They are read by a bundle and by the machine page and
+  write nothing. A baseline that alerted would light up the fleet on the morning it shipped,
+  from a threshold nobody chose, in a product whose alerting is otherwise entirely
+  operator-authored. If a baseline should alert, it belongs in `rules.py` as a variable an
+  operator can write a rule against.
+* **No new capability.** Reading bundles is `view`; asking for a recommendation is
+  `manage_rules` (what ai_web.py already requires of every route that spends a provider call);
+  drafting the script is `issue_commands` (what `POST /api/rules/scripts` already requires).
+  Machine-named routes take `require_machine`, so scope is checked as well as capability.
+* **Scope is applied BEFORE bundling**, not to the finished bundles. Group a scoped
+  operator's alerts together with somebody else's and a hostname outside their reach turns up
+  in the membership, the causal claim and the recommendation written about it.
+* **A model-authored script body containing `{{` is dropped, not escaped.** Templating binds
+  a value at run time that nobody reviewed at read time, which reverses the entire safety
+  argument. The explanation, which was the useful part, is kept.
+* **A recommendation goes stale when its bundle's membership changes.** The row stays, keyed
+  on the bundle, carrying the exact alert ids it was written about; a bundle that has since
+  gained an alert shows nothing rather than prose about something else.
+
+### Rejected alternatives
+
+* **A stored bundle row with a `bundle_id` on `alerts`.** Rejected on mechanism, not taste.
+  Alerts are written from three unrelated code paths, so an id stamped at raise time is a
+  grouping computed before the rest of the bundle existed — the second alert of a causal pair
+  would never join the first one's bundle. The alternative is invalidating stored bundles on
+  every episode refresh, fleet-wide, on every rules tick.
+* **Matching facets on the rule's NAME or its alert text.** Works on the rules whoever wrote
+  the keyword list imagined, fails silently on the rest, and no test can tell the difference.
+* **Mean and standard deviation for the baseline.** Both are dragged by exactly the excursion
+  they are meant to detect, and the standard deviation harder because it squares the distance.
+* **`cpu → thermal` and `network → liveness` as causal pairs.** The first has an arrow
+  pointing both ways (heat throttles, throttling raises load); the second is usually the same
+  observation twice rather than a cause. A table that claims a direction it cannot establish
+  is the invented cause this feature exists to avoid.
+* **A second AI provider or an "ai" capability.** Both rejected upstream, in #24 and #8
+  respectively, and nothing here is a reason to revisit either.
+
+### Not done
+
+* **#16's event rows are not folded into a bundle yet.** The seam is `facet_for_variable` —
+  an event-derived rules variable maps to a facet like any other — but #16 was in flight in a
+  parallel branch while this was written, and guessing at its schema would produce a join
+  against columns that do not exist. Named and left empty rather than invented.
+* **A recommendation is never asked for on a timer**, only from an operator pressing the
+  button on one bundle. A feature that quietly bills a provider per alert episode is one an
+  operator discovers from an invoice.
+* **No hardware validation.** Everything above is hub-side and was exercised against the test
+  suite on Linux; nothing was run against the deployed Windows hub or a real fleet.
+
+**Open parameter still open.** How much reduction is worth claiming (the PRD's 75% is a
+marketing number, not a target) — the hub does not report a reduction figure anywhere, and
+will not until somebody has a month of real bundles to count.
 
 ---
 
@@ -4595,10 +4678,11 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 16. **#16 Event log mining** — before #17, because it is one of the two inputs that make
     correlation worth doing. Its own risk is volume rather than mechanism, and that risk is
     settled by filtering on the machine instead of shipping raw logs to a SQLite hub.
-17. **#17 Alert correlation and recommended fixes** — after #14 and #16 by dependency, not by
-    preference. The deterministic half can be built the day both land; the language layer
-    above it is gated on a pluggable AI provider that does not exist yet, and that provider
-    is the one piece of new plumbing this item introduces.
+17. ~~**#17 Alert correlation and recommended fixes**~~ — deterministic half, anomaly
+    baselining and the wording layer shipped in hub 1.118.0. The provider it was waiting on
+    arrived with #24, so the language layer needed no new plumbing after all; what it is
+    still waiting on is #16's event rows, which join a bundle through the same window test
+    once that store is merged.
 18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
     MDM-driven fleet. Sequenced late for that reason rather than for difficulty.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled

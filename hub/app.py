@@ -55,6 +55,7 @@ import provisioning
 import rules
 import scripts
 import ai
+import correlate
 import notify
 import processes
 import files
@@ -87,6 +88,7 @@ from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from ai_web import create_ai_blueprint
+from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
 import device_groups
 from device_groups_web import create_device_groups_blueprint
@@ -129,7 +131,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.117.0"
+HUB_VERSION = "1.118.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2401,6 +2403,17 @@ app.register_blueprint(create_ai_blueprint(
     env_path=ENV_PATH,
 ))
 
+# The Alert Brain (roadmap #17). Registered AFTER the AI drafter because it uses the same
+# provider seam -- `_ai_config()` read fresh per request, and the key as a lookup rather than
+# the boot-time value -- and for the reason ROADMAP.MD #17 gives: one configuration, one audit
+# trail and one off switch for every place this hub asks a language model anything. The
+# correlation half needs none of that and works with the provider switched off.
+app.register_blueprint(create_correlate_blueprint(
+    DB_PATH, login_required, access,
+    lambda: _ai_config(),
+    api_key=lambda: os.environ.get("AI_API_KEY", ""),
+))
+
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
 app.register_blueprint(create_auth_blueprint(
@@ -4353,6 +4366,7 @@ def start_directory_sync_scheduler():
 init_db()
 fleet.init_fleet_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
+correlate.init_correlate_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
 permissions.init_permissions_db(DB_PATH)
 users.init_users_db(DB_PATH)
