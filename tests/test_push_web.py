@@ -183,6 +183,26 @@ def test_the_bearer_path_is_csrf_exempt_but_still_needs_json(client, db_path):
     check("an unknown push kind is a 400 naming the problem",
           r.status_code == 400 and "fcm" in r.get_json()["error"])
 
+    # CodeQL's py/stack-trace-exposure, pinned: the refusal is a string push.py returns for
+    # a caller to read, never the `str()` of an exception that also carries filesystem
+    # paths when fcm_config is the one that raised.
+    saved = os.environ.get("FCM_SERVICE_ACCOUNT")
+    os.environ["FCM_SERVICE_ACCOUNT"] = "/etc/fleethub-secret-path/creds.json"
+    try:
+        r = client.post("/api/push/register", json={"kind": "gcm", "token": "tok"},
+                        headers=auth(token))
+        text = r.get_data(as_text=True)
+        check("...and no refusal leaks a hub-side path", "fleethub-secret-path" not in text)
+        r = client.get("/api/push/status", headers=auth(token))
+        check("a broken FCM config leaves status answering, not 500",
+              r.status_code == 200 and r.get_json()["configured"] is False)
+        check("...without naming the path it could not read",
+              "fleethub-secret-path" not in r.get_data(as_text=True))
+    finally:
+        os.environ.pop("FCM_SERVICE_ACCOUNT", None)
+        if saved is not None:
+            os.environ["FCM_SERVICE_ACCOUNT"] = saved
+
 
 def main():
     db_path = hub.DB_PATH

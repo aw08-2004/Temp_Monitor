@@ -101,11 +101,21 @@ def create_push_blueprint(db_path, login_required, access):
         if bad:
             return bad
         body = request.get_json(silent=True) or {}
+        # Validated BEFORE the call, against a function that returns a string, so nothing
+        # an exception carries reaches the response. push.PushError is also raised by
+        # fcm_config with a filesystem path and an OS error in it; a web layer that
+        # rendered `str(exc)` would decide which of those a stranger sees by accident.
+        refused = push.check_registration(body.get("kind"), body.get("token"))
+        if refused:
+            return jsonify({"error": refused}), 400
         try:
             landed = push.register(db_path, token_id,
                                    kind=body.get("kind"), push_token=body.get("token"))
-        except push.PushError as exc:
-            return jsonify({"error": str(exc)}), 400
+        except push.PushError:
+            # Unreachable while check_registration covers every raise above it, and kept
+            # so that a future validation rule added to push.register cannot turn into a
+            # 500. Says nothing about the exception on purpose.
+            return jsonify({"error": "that push registration was refused"}), 400
         if not landed:
             # The token authenticated a moment ago and the row is gone or revoked now --
             # an admin revoking the device mid-request. 409 rather than 404: the device is

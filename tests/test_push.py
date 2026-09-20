@@ -454,6 +454,26 @@ def test_registration_validates_its_input():
         check("an implausibly long push token is refused", True)
 
 
+def test_validation_answers_in_strings_the_web_layer_can_repeat():
+    """CodeQL caught `str(exc)` reaching an HTTP response here (py/stack-trace-exposure), and
+    was right to: `fcm_config` raises the same PushError type carrying a filesystem path and
+    an OS error. The refusals a stranger may read are therefore RETURNED, notify.py's
+    check_webhook_url shape, so a web layer never has to know which PushError it caught."""
+    for kind, token, expect in (
+        ("", "tok", "Push kind"),
+        ("gcm", "tok", "Push kind"),
+        (None, "tok", "Push kind"),
+        ("fcm", "", "needs a token"),
+        ("fcm", None, "needs a token"),
+        ("fcm", "x" * (push.MAX_PUSH_TOKEN_CHARS + 1), "implausibly long"),
+    ):
+        message = push.check_registration(kind, token)
+        check(f"({kind!r}, len {len(token or '')}) is refused with a caller-safe reason",
+              message is not None and expect in message)
+    check("a valid pair returns None", push.check_registration("fcm", "tok") is None)
+    check("...and so does the other kind", push.check_registration("APNS", "tok") is None)
+
+
 def test_the_outbox_carries_what_the_transport_needs():
     db_path = _db()
     token_id = pair(db_path, "op@x.com")
@@ -489,6 +509,7 @@ def main():
         test_apns_is_a_refusal_with_a_reason,
         test_push_is_off_until_it_is_configured,
         test_registration_validates_its_input,
+        test_validation_answers_in_strings_the_web_layer_can_repeat,
         test_the_outbox_carries_what_the_transport_needs,
     ]
     for test in tests:

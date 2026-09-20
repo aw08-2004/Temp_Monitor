@@ -195,6 +195,32 @@ def normalize_kind(kind):
     return value
 
 
+def check_registration(kind, push_token):
+    """Validate a registration request. Returns an error string for the caller, or None.
+
+    Deliberately a returned STRING rather than a raised exception, and the shape is
+    notify.check_webhook_url's on purpose. The reason is not style: push_web.py answers a
+    bad request with this text, and handing an exception's `str()` to an HTTP response is
+    how a message written for a log ends up on the wire. `fcm_config` raises PushError
+    carrying a filesystem path and an OS error -- correct for a hub operator reading a
+    console, wrong for a device that supplied a typo -- and nothing in a web layer should
+    have to know which PushError it caught. CodeQL flagged the original for exactly this
+    (`py/stack-trace-exposure`), and it was right to: the messages are safe TODAY, and the
+    next one added is one nobody re-checks.
+
+    Every string here is written for the app author who sent the request.
+    """
+    value = str(kind or "").strip().lower()
+    if value not in PUSH_KINDS:
+        return f"Push kind must be one of {', '.join(PUSH_KINDS)}."
+    token = str(push_token or "").strip()
+    if not token:
+        return "A push registration needs a token."
+    if len(token) > MAX_PUSH_TOKEN_CHARS:
+        return "That push token is implausibly long."
+    return None
+
+
 def register(db_path, token_id, kind, push_token, now=None):
     """Record where to push this device, and prime its cursor. Returns True if it landed.
 
