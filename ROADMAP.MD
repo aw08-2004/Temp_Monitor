@@ -3444,7 +3444,7 @@ Orphans a loop creates after the deploy are pruned whether or not a report touch
 
 ---
 
-## ✅ 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0; **machine panel, fleet query and summary hub 1.118.0**
+## ✅ 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0; **machine panel, fleet query and summary hub 1.120.0**
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3549,10 +3549,10 @@ both switched on and configured. Describe, adjust, then per stage: preview throu
 ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
 the normal form and pressing Enable. The stages not yet created stay on the card.
 
-### The three answering surfaces · hub 1.118.0
+### The three answering surfaces · hub 1.120.0
 
 Describe, adjust, preview and create were built at 1.109.0; the machine chat panel, the fleet
-query and the daily summary were stubs in `ai.py` until 1.118.0. All three are built now, and
+query and the daily summary were stubs in `ai.py` until 1.120.0. All three are built now, and
 each draws the same line in a different place: **between what the hub computed and what the
 model said.**
 
