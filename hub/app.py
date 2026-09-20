@@ -40,6 +40,7 @@ import backups
 import remote
 import directory
 import bios
+import bitlocker
 import channels
 import firmware
 import patches
@@ -75,6 +76,8 @@ from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
+import bitlocker_web
+from bitlocker_web import create_bitlocker_blueprint
 from patches_web import create_patches_blueprint
 from wake_web import create_wake_blueprint
 from capabilities_web import create_capabilities_blueprint
@@ -129,7 +132,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.117.0"
+HUB_VERSION = "1.118.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2276,6 +2279,13 @@ app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, acces
 app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, access,
                                              hub_url=HUB_URL))
 
+# BitLocker posture and recovery-key escrow (roadmap #19): the encryption state of every
+# volume behind `view`, and handing an operator one escrowed recovery password behind its own
+# `read_recovery_keys` capability. LOG_DIR is passed for the same reason bios needs it -- the
+# passwords live in the master-key-wrapped secret file, never in the database this hub backs
+# up to a bucket.
+app.register_blueprint(create_bitlocker_blueprint(DB_PATH, LOG_DIR, login_required, access))
+
 # Wake-on-LAN (roadmap #10): a machine's NIC inventory and wakeability diagnosis behind
 # `view`, and waking/preparing behind `issue_commands` -- no new capability, because waking
 # a PC is strictly less dangerous than the `shutdown` that gate already covers.
@@ -3257,6 +3267,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # (same hardware, so the same attributes), which is why bios.rename_machine keeps the
     # survivor's row rather than overwriting it with the dropped name's older reading.
     bios.rename_machine(DB_PATH, dropped, survivor)
+    # Encryption posture and the escrow index follow the hostname (roadmap #19), and the
+    # escrowed passwords with them -- the secret blob is keyed by machine name, so moving the
+    # index without it would leave the console listing keys the hub can no longer find.
+    bitlocker.rename_machine(DB_PATH, dropped, survivor)
+    bitlocker_web.move_escrow(LOG_DIR, dropped, survivor)
     # Firmware update targets follow too, and the survivor's own row wins a collision --
     # both rows describe one physical machine, and it only needs flashing once.
     firmware.rename_machine(DB_PATH, dropped, survivor)
@@ -4361,6 +4376,7 @@ packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
+bitlocker.init_bitlocker_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
@@ -5283,6 +5299,9 @@ def delete_machine(machine):
     # attribute list describing hardware it isn't -- which is exactly what an operator would
     # then be offered a "change this setting" button against.
     bios.forget_machine(DB_PATH, machine_name)
+    # Same for its encryption posture and escrow index (roadmap #19). The escrowed passwords
+    # themselves are deleted below with the BIOS password, for the same reason.
+    bitlocker.forget_machine(DB_PATH, machine_name)
     # Same for any queued or in-flight firmware flash: its targets go, so a fleet-wide
     # update is not left permanently at 39/40 waiting on a machine record that no longer
     # exists. The job's own history stays, because it happened.
@@ -5340,6 +5359,11 @@ def delete_machine(machine):
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.
     backups.delete_secret(LOG_DIR, bios.secret_id_for(machine_name))
+    # And its escrowed BitLocker recovery passwords (roadmap #19). This is the ONE place in
+    # the product that destroys a recovery key, and it is deliberately the one action that
+    # already means "this machine is gone": everything else in that module refuses to delete a
+    # key, because a key deleted early is discovered missing at the recovery screen.
+    backups.delete_secret(LOG_DIR, bitlocker.secret_id_for(machine_name))
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = permissions_web.current_actor()

@@ -602,6 +602,10 @@
       "wipe_device": {
         "label": "Gerät sperren und löschen",
         "description": "Den Bildschirm eines verwalteten Geräts sperren und das Gerät löschen. Eine eigene Berechtigung statt Teil von 'Befehle erteilen': Das Argument, das alle anderen Befehle unter jener Berechtigung hält -- weniger gefährlich als die SYSTEM-Shell, die sie ohnehin gewährt -- trifft auf einen Neustart zu und auf ein Zurücksetzen auf Werkseinstellungen nicht. Für das Löschen muss zusätzlich der Name des Rechners eingegeben werden; es wird im Audit-Protokoll festgehalten, bevor der Befehl gesendet wird, und es kann weder als Favorit gespeichert noch von einer Regel ausgelöst werden. Um zu sehen, dass ein Gerät gesperrt oder gelöscht wurde, genügt 'Ansehen' plus der Rechner im eigenen Bereich."
+      },
+      "read_recovery_keys": {
+        "label": "Wiederherstellungsschlüssel lesen",
+        "description": "Ein hinterlegtes BitLocker-Wiederherstellungskennwort für diese Maschinen angezeigt bekommen. Jeder Lesevorgang wird im Audit-Log festgehalten. Um zu sehen, ob eine Maschine verschlüsselt ist, genügt 'Ansehen'."
       }
     }
   },
@@ -628,7 +632,8 @@
       "location": "Standort",
       "map": "Karte",
       "policy": "Richtlinie",
-      "ai": "KI-Unterstützung"
+      "ai": "KI-Unterstützung",
+      "security": "Endgerätesicherheit"
     },
     "unit": {
       "celsius": "°C",
@@ -1107,6 +1112,10 @@
           "label": "Einschränkungen aufheben nach",
           "help": "Wie lange ein Gerät seine App-Richtlinie weiter durchsetzt, nachdem es nichts mehr von diesem Hub gehört hat. Danach hebt das Gerät alle Einschränkungen von selbst auf. Das ist ein Sicherheitsventil und keine Zeitüberschreitung: ein Telefon, dessen Hub verschwunden ist, darf kein Gerät sein, das jemand zurücksetzen muss."
         }
+      },
+      "security.escrow_bitlocker_keys": {
+        "label": "BitLocker-Wiederherstellungsschlüssel hinterlegen",
+        "help": "Die BitLocker-Wiederherstellungskennwörter jeder Maschine einsammeln und verschlüsselt neben diesem Hub aufbewahren, damit ein PC, der sich selbst aussperrt, wiederhergestellt werden kann. Benötigt einen Backup-Hauptschlüssel. Abschalten beendet das Einsammeln und löscht nie, was bereits hinterlegt ist."
       }
     },
     "ai": {
@@ -3658,5 +3667,49 @@
     "count": "{count} Aktion(en)",
     "failed": "Das wurde abgelehnt.",
     "unreachable": "Der Hub war nicht erreichbar."
+  },
+  "bitlocker": {
+    "title": "Laufwerksverschlüsselung",
+    "summary": "{encrypted} von {total} Volumes geschützt",
+    "unsupported": "Auf diesem Gerät gibt es keinen BitLocker-Anbieter, also nichts zu verschlüsseln oder zu hinterlegen. Das ist die normale, dauerhafte Antwort für Windows Home und für Agenten außerhalb von Windows.",
+    "read_failed": "Der Verschlüsselungszustand dieses Geräts konnte nicht gelesen werden: {error}",
+    "column": {
+      "volume": "Volume",
+      "protection": "Schutz",
+      "method": "Verfahren",
+      "key": "Wiederherstellungsschlüssel"
+    },
+    "protection": {
+      "on": "Geschützt",
+      "off": "Nicht geschützt",
+      "unknown": "Unbekannt"
+    },
+    "conversion": {
+      "fully_encrypted": "Vollständig verschlüsselt",
+      "fully_decrypted": "Nicht verschlüsselt",
+      "encrypting": "Wird verschlüsselt",
+      "decrypting": "Wird entschlüsselt",
+      "encryption_paused": "Verschlüsselung angehalten",
+      "decryption_paused": "Entschlüsselung angehalten"
+    },
+    "escrow": {
+      "no_recovery_protector": "Auf diesem Volume existiert kein Wiederherstellungskennwort, also gibt es nichts, was jemand am Wiederherstellungsbildschirm eingeben könnte.",
+      "pending": "Noch nicht hinterlegt. Das Gerät übergibt es bei der nächsten Meldung.",
+      "disabled": "Nicht hinterlegt. Die Schlüsselhinterlegung ist für diesen Hub abgeschaltet.",
+      "held": "Hinterlegt am {when}",
+      "read_before": {
+        "one": "Einmal gelesen, zuletzt am {when}.",
+        "other": "{count}-mal gelesen, zuletzt am {when}."
+      }
+    },
+    "orphaned": {
+      "one": "Dieser Hub hält außerdem 1 Wiederherstellungsschlüssel für ein Volume, das dieses Gerät nicht mehr meldet.",
+      "other": "Dieser Hub hält außerdem {count} Wiederherstellungsschlüssel für Volumes, die dieses Gerät nicht mehr meldet."
+    },
+    "reveal": "Wiederherstellungsschlüssel anzeigen",
+    "reveal_failed": "Dieser Wiederherstellungsschlüssel konnte nicht gelesen werden.",
+    "unreachable": "Der Hub war nicht erreichbar.",
+    "key_for": "Wiederherstellungsschlüssel für {volume}",
+    "key_warning": "Das Lesen dieses Schlüssels wurde im Audit-Log festgehalten. Er verschwindet, sobald Sie die Seite verlassen."
   }
 }

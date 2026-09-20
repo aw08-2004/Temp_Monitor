@@ -32,6 +32,7 @@ const panels = {
     rules: document.getElementById('tab-rules'),
     sharing: document.getElementById('tab-sharing'),
     ai: document.getElementById('tab-ai'),
+    security: document.getElementById('tab-security'),
 };
 
 // NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`
