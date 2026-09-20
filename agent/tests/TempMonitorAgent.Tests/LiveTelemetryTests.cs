@@ -1,4 +1,5 @@
 using TempMonitorAgent;
+using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using Xunit;
 
@@ -69,6 +70,29 @@ public class LiveTelemetryTests
         LiveTelemetry.SetWanted(true, AgentConfig.IntervalSeconds * 10);
         try { Assert.Equal(AgentConfig.IntervalSeconds, LiveTelemetry.IntervalSeconds); }
         finally { LiveTelemetry.SetWanted(false, AgentConfig.LiveIntervalSeconds); }
+    }
+
+    [Fact]
+    public void TheOrdinaryCadenceIsTheOperatorsSetting()
+    {
+        // roadmap #3: the ordinary cadence is metrics.report_interval_seconds now, not a
+        // compiled constant -- and the live clamp has to follow it, or a hub that slowed a
+        // metered fleet to 60s would still get 5s reports out of every machine somebody
+        // happened to have open.
+        RuntimeConfigStore.Set(RuntimeConfig.Default with { ReportIntervalSeconds = 60 });
+        try
+        {
+            LiveTelemetry.SetWanted(false);
+            Assert.Equal(60, LiveTelemetry.IntervalSeconds);
+
+            LiveTelemetry.SetWanted(true, 90);       // slower than ordinary: still clamped
+            Assert.Equal(60, LiveTelemetry.IntervalSeconds);
+        }
+        finally
+        {
+            LiveTelemetry.SetWanted(false, AgentConfig.LiveIntervalSeconds);
+            RuntimeConfigStore.Set(RuntimeConfig.Default);
+        }
     }
 
     [Fact]

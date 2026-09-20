@@ -154,6 +154,68 @@ def test_network_picks_the_busiest_adapter():
           d_idle["net_rx_bps"] == 0.0 and d_idle["net_tx_bps"] == 0.0)
 
 
+def test_sensor_preferences_steer_the_gpu_disk_and_network_picks():
+    """The four hub-side preference lists (roadmap #3).
+
+    What they exist for is the machine where the automatic pick is defensibly right and
+    factually wrong: a workstation with four drives, where "first in the block" charts an
+    arbitrary one, and a box with a Hyper-V switch bridged onto the office NIC, where the
+    busiest adapter is the virtual mirror of the real one. The silent failure is that
+    neither says which device it picked, so the chart looks fine and means something else.
+
+    Passed in explicitly rather than written to settings: these are the pure-function tests,
+    and a preference read from the DB here would make them depend on the order the modules
+    in this file run in.
+    """
+    print("\n-- the GPU, disk and network picks follow the operator's preference --")
+    multi_gpu_temp = [
+        s("GPU Core", 55.0, "Temperature", "/gpu-nvidia/0", "RTX 3060"),
+        s("GPU Hot Spot", 71.0, "Temperature", "/gpu-nvidia/0", "RTX 3060"),
+    ]
+    check("the default order prefers the core",
+          app.extract_diagnostics(multi_gpu_temp)["gpu_temp"] == 55.0)
+    check("...and an operator can chart the hot spot instead",
+          app.extract_diagnostics(
+              multi_gpu_temp,
+              prefs={"gpu_temp": ["gpu hot spot"]})["gpu_temp"] == 71.0)
+
+    two_disks = [
+        s("Used Space", 63.0, "Load", "/nvme/0", "Samsung SSD 980"),
+        s("Used Space", 91.0, "Load", "/hdd/1", "WDC WD40EZAZ"),
+    ]
+    check("with no preference, the first drive in the block is charted",
+          app.extract_diagnostics(two_disks, prefs={})["disk_load_pct"] == 63.0)
+    check("a named drive wins wherever it sits in the block",
+          app.extract_diagnostics(
+              two_disks, prefs={"disk": ["wd40"]})["disk_load_pct"] == 91.0)
+    check("a named drive that is not in this block falls back rather than charting nothing",
+          app.extract_diagnostics(
+              two_disks, prefs={"disk": ["seagate"]})["disk_load_pct"] == 63.0)
+
+    # The virtual switch is carrying more than the physical NIC it is bridged onto, so
+    # "busiest" picks it. This is the case the setting exists for.
+    bridged = [
+        s("Download Speed", 400.0, "Throughput", "/nic/{eth}", "Intel(R) Ethernet I219-LM"),
+        s("Upload Speed", 120.0, "Throughput", "/nic/{eth}", "Intel(R) Ethernet I219-LM"),
+        s("Download Speed", 900.0, "Throughput", "/nic/{vswitch}", "vEthernet (Default Switch)"),
+        s("Upload Speed", 700.0, "Throughput", "/nic/{vswitch}", "vEthernet (Default Switch)"),
+    ]
+    check("busiest picks the virtual switch",
+          app.extract_diagnostics(bridged, prefs={})["net_rx_bps"] == 900.0)
+    d = app.extract_diagnostics(bridged, prefs={"network": ["intel(r) ethernet"]})
+    check("the named adapter wins even though it is quieter", d["net_rx_bps"] == 400.0)
+    check("...and both directions come from that same adapter", d["net_tx_bps"] == 120.0)
+    check("an absent named adapter falls back to busiest",
+          app.extract_diagnostics(
+              bridged, prefs={"network": ["realtek"]})["net_rx_bps"] == 900.0)
+    # Order is the preference, not a set: an operator listing the dock first means the dock
+    # whenever it is plugged in.
+    check("the list is ordered, best first",
+          app.extract_diagnostics(
+              bridged,
+              prefs={"network": ["vethernet", "intel(r)"]})["net_rx_bps"] == 900.0)
+
+
 def test_disk_throughput_sums_every_disk():
     """Disk I/O is summed across drives, unlike network -- LHM reports each storage device
     once, with none of the NDIS filter mirrors that force the NIC matcher to pick a single
@@ -508,6 +570,7 @@ if __name__ == "__main__":
     test_diagnostics_extracts_all_metrics()
     test_network_matcher_ignores_disk()
     test_network_picks_the_busiest_adapter()
+    test_sensor_preferences_steer_the_gpu_disk_and_network_picks()
     test_disk_throughput_sums_every_disk()
     test_disk_volumes()
     test_volume_sensors_do_not_displace_disk_load_pct()

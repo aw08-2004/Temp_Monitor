@@ -270,8 +270,8 @@ OIDC sign-in plus permission groups, see below):
 
 ### The machine page reports at 1 Hz while you are watching it
 
-A machine reports every 5s, and only every other report carries the full sensor block the
-CPU/GPU/memory/fan/power panels are drawn from -- so a page whose window is sixty seconds
+A machine reports every 5s by default (**Settings -> History Metrics**, see below), and only
+every other report carries the full sensor block the CPU/GPU/memory/fan/power panels are drawn from -- so a page whose window is sixty seconds
 wide drew about six points a minute on most panels, and a three-second spike was one dot or
 none. **While an operator has a machine page open and in front, that machine reports every
 second with a sensor block on every report.** Nothing to enable.
@@ -297,6 +297,43 @@ bearer-authenticated request, because the alternative is doubling the only traff
 unwatched machine generates for either. `processes_wanted`/`live_wanted` also ride the
 heartbeat, which is how a machine learns to stop, and the only path for an agent older than
 v3.28.0 (which keeps polling `GET /api/agent/processes/wanted` and never speeds up).
+
+### Tuning what is sampled, which sensor, and for how long
+
+Three groups of knobs, all on the Settings page, all fleet-wide.
+
+**How often a machine samples** -- *History Metrics*. `metrics.report_interval_seconds` (5)
+is how often a machine sends a reading; `metrics.sensor_interval_seconds` (10) is how often
+one of those readings carries the full sensor block. Turn them down on a fleet over a metered
+link, or up for finer charts. Neither touches liveness: whether a machine reads online is the
+heartbeat's business and that is a separate 10-second loop, so a fleet reporting every five
+minutes is a coarser chart and nothing else. Neither touches the watched-machine path either
+-- a page you have open still gets 1 Hz. Both ride the agent config channel, so an agent
+older than these settings keeps its compiled 5/10 and nothing breaks.
+
+**Which sensor gets charted** -- *Computer*. `computer.primary_sensor_preference` has always
+picked the CPU temperature; `gpu_temp_preference`, `gpu_load_preference`, `disk_preference`
+and `network_preference` now do the same for the rest. The two GPU lists match part of a
+*sensor* name ("gpu hot spot"); the disk and network lists match part of a *hardware* name
+("Samsung SSD 980", "Intel(R) Ethernet"), because the question there is which of four drives
+or which of twenty-six adapters. Both of the latter ship **empty**, meaning the behaviour that
+predates them: the first drive the machine reports, and the busiest adapter. Empty is right
+until a Hyper-V switch or a dock mirrors the real NIC, or until the arbitrary drive is not the
+one you care about. A named device missing from a report falls back rather than charting a
+gap. These are re-derived by the hub from the reported block, so they apply to every agent in
+the field immediately -- and to **new readings only**: history keeps what was recorded at the
+time.
+
+**How long each metric is kept** -- *History Metrics*. `data.retention_days` (30) still bounds
+the whole readings table, and each metric now has its own window beside its collection toggle:
+`metrics.retention_days_network`, `..._disk_io`, `..._gpu` and so on. **0 means "follow the
+fleet-wide window"**, which is the default for all eight, so an untouched hub prunes exactly as
+it always did. A shorter window blanks that metric's columns on older readings while the
+reading itself -- and its temperature -- stays; a metric aged out is indistinguishable from one
+whose collection toggle is off, which is the point, because in both cases the honest answer is
+"not recorded". A window **longer** than `data.retention_days` is ignored: the whole row is
+deleted there, so there is nothing to keep. Like `data.retention_days` this deletes permanently
+and is audited.
 
 ### Temperature alerts
 

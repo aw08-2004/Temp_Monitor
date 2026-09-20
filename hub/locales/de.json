@@ -649,6 +649,22 @@
         "label": "Bevorzugte CPU-Temperatursensoren",
         "help": "Geordnet, bester zuerst. Der Hub leitet die Haupttemperatur jedes Computers aus dessen gemeldetem Sensorblock neu ab und nimmt den ersten passenden Namen. Passt keiner, bleibt die vom Agenten gewählte Temperatur bestehen. Gilt nur für neue Messwerte – der Verlauf behält den damals aufgezeichneten Wert."
       },
+      "computer.gpu_temp_preference": {
+        "label": "Bevorzugte GPU-Temperatursensoren",
+        "help": "Geordnet, bester zuerst. Welcher Temperatursensor einer GPU dargestellt wird, gesucht als Teil des Sensornamens. Gilt nur für neue Messwerte – der Verlauf behält den damals aufgezeichneten Wert."
+      },
+      "computer.gpu_load_preference": {
+        "label": "Bevorzugte GPU-Lastsensoren",
+        "help": "Geordnet, bester zuerst. Welcher Lastsensor einer GPU dargestellt wird, gesucht als Teil des Sensornamens. Gilt nur für neue Messwerte."
+      },
+      "computer.disk_preference": {
+        "label": "Bevorzugte Festplatte",
+        "help": "Geordnet, beste zuerst. Welches Laufwerk bei mehreren für die Belegung dargestellt wird, gesucht als Teil des Laufwerksnamens (\"Samsung SSD 980\"). Leer lassen, um das zuerst gemeldete Laufwerk zu nehmen. Die Speicherkacheln je Laufwerk zeigen weiterhin alle Laufwerke."
+      },
+      "computer.network_preference": {
+        "label": "Bevorzugter Netzwerkadapter",
+        "help": "Geordnet, bester zuerst. Welcher Adapter für den Durchsatz dargestellt wird, gesucht als Teil des Adapternamens (\"Intel(R) Ethernet\"). Leer lassen, um den meistbeschäftigten zu nehmen – das stimmt, bis ein virtueller Switch oder eine Dockingstation den echten Adapter spiegelt. Fehlt ein benannter Adapter in einer Meldung, gilt wieder der meistbeschäftigte."
+      },
       "hub.low_load_threshold": {
         "label": "Schwelle für niedrige Last",
         "help": "Eine hohe Temperatur unterhalb dieser CPU-Last liest sich als „nachsehen“ statt als „erwartet“ – heiß im Leerlauf ist der interessante Fall."
@@ -716,6 +732,46 @@
       "metrics.collect_power": {
         "label": "CPU- und GPU-Leistung aufzeichnen",
         "help": "Zeichnet die Leistungsaufnahme des Package in Watt auf. Ohne Wirkung auf Computern, deren Chips keinen Leistungssensor melden."
+      },
+      "metrics.report_interval_seconds": {
+        "label": "Messwerte melden alle",
+        "help": "Wie oft ein Computer einen Messwert sendet. Langsamer heißt gröbere Diagramme, nicht ein Computer, der offline erscheint – die Erreichbarkeit hängt am separaten Heartbeat. Ohne Wirkung, solange jemand die Seite eines Computers geöffnet hat. Agenten, die älter als diese Einstellung sind, melden weiterhin alle 5 Sekunden."
+      },
+      "metrics.sensor_interval_seconds": {
+        "label": "Vollständigen Sensorblock senden alle",
+        "help": "Wie oft ein Messwert alle Sensoren statt nur die Temperatur mitführt. Daraus entstehen die Diagramme für Last, Speicher, Festplatte, Netzwerk, Lüfter und Leistung. Nie schneller als das Melde-Intervall darüber. Agenten, die älter als diese Einstellung sind, senden ihn weiterhin alle 10 Sekunden."
+      },
+      "metrics.retention_days_cpu_load": {
+        "label": "CPU-Last-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_memory": {
+        "label": "Speicher-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_gpu": {
+        "label": "GPU-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_disk": {
+        "label": "Belegungs-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_disk_io": {
+        "label": "Lese-/Schreib-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_network": {
+        "label": "Netzwerk-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_fans": {
+        "label": "Lüfter-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_power": {
+        "label": "CPU-/GPU-Leistungs-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Computer aus der Übersicht nehmen nach",

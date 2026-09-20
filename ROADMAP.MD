@@ -121,9 +121,9 @@ block — no new `/api/report` field, and an older hub ignores them. A machine t
 sending them (an agent below 3.10.0) falls back to LHM's per-device
 percentage and shows the bar without the GB line.
 
-## 🚧 3. Settings: which sensors to read, data retention, etc.
+## ✅ 3. Settings: which sensors to read, data retention, etc.   ·   per-metric retention, cadence and the GPU/disk/network picks — **hub 1.118.0 + agent (next release)**
 
-Mostly done:
+Done:
 - `computer.primary_sensor_preference` — ordered CPU-temp sensor preference (+ per-machine
   override).
 - `metrics.collect_cpu_load` / `collect_memory` / `collect_gpu` / `collect_disk` /
@@ -152,10 +152,68 @@ Upgrading hubs get a **disabled** rule named "High temperature", seeded by
 Both settings are gone from the registry. `alerts.KIND_HIGH_TEMP` survives as a read-only kind
 so alerts raised before the upgrade still render and can still be dismissed.
 
-Remaining gaps: no per-metric retention (one global window for all readings), no
-sampling/reporting-cadence setting, no sensor *preference* list for GPU/disk/network (only CPU
-temp has one — the others are on/off only). Fold these in opportunistically; no dedicated
-feature push planned.
+### The three gaps, closed · hub 1.118.0 + agent (next release)
+
+This entry used to end "fold these in opportunistically". All three are now in.
+
+**Per-metric retention.** One window per collection toggle —
+`metrics.retention_days_cpu_load`, `..._memory`, `..._gpu`, `..._disk`, `..._disk_io`,
+`..._network`, `..._fans`, `..._power` — pruned by `app.prune_metric_columns_once`, on the
+same tick as the row prune and after it.
+
+The shape that made this possible is **NULL, not DELETE**. A `readings` row is one sample:
+temperature (the core metric, no toggle and no window of its own) plus twelve optional columns.
+"Keep network for 7 days and temperature for 30" can therefore only mean blanking
+`net_rx_bps`/`net_tx_bps` — and a NULL there is *already* what a metric whose collection
+toggle is off stores, so the bucketing, the charts and the history endpoint needed no change to
+read it. A metric turned off and a metric aged out look identical downstream, deliberately: in
+both cases the honest answer is "not recorded".
+
+0 means "follow `data.retention_days`" and is the default for all eight, so an untouched hub
+prunes exactly as before. A window longer than the fleet-wide one is **dropped rather than
+honoured** — the row is deleted there, so there is nothing to keep, and honouring it would
+mean reporting a prune that never happens.
+
+*Rejected:* one extra knob covering all non-temperature metrics. Cheaper, but it answers the
+wrong question — the reason to shorten a window is that *this* metric is noisy, and the
+grouping an operator already thinks in is the collection toggles'. *Also rejected:* deriving
+each retention key from its toggle key by string surgery. One source of truth, but a derivation
+that produced a key the registry lacks would fail in a background thread on the one hub that
+set the value; `app.METRIC_COLUMN_RETENTION` is explicit and `tests/test_metric_retention.py`
+pins it to the toggles instead.
+
+**Sampling/reporting cadence.** `metrics.report_interval_seconds` (5) and
+`metrics.sensor_interval_seconds` (10), both `agent=True`, replacing
+`AgentConfig.IntervalSeconds` and `.SensorIntervalSeconds` as the numbers the telemetry loop
+actually paces on. The sensor cadence is clamped up to the report cadence rather than refused:
+a sensor block can only ride on a report, and "put it on every one" is a sensible thing to ask
+for.
+
+Neither touches liveness — the heartbeat is its own 10-second loop and it is what `last_seen`
+and the offline window follow — and neither touches the watched-machine path, which stays at
+1 Hz because that cadence exists to make a three-second spike visible. **The one thing to know:
+an agent that predates these keys ignores them and keeps its compiled 5/10.** Nothing breaks,
+but the setting silently does nothing on that machine until the fleet is updated, which is why
+the help text says so.
+
+**Sensor preference lists for GPU, disk and network.** `computer.gpu_temp_preference`,
+`gpu_load_preference`, `disk_preference`, `network_preference`.
+
+These are **hub-side, unlike the CPU one**, and that is the whole reason they were cheap: the
+agent picks the CPU temperature, but GPU, disk and network are re-derived by the hub out of the
+full sensor block on every read (`app.extract_diagnostics`). So they apply immediately to every
+agent already in the field, including ones far too old to have heard of them.
+
+The two GPU lists match a sensor name, as the CPU one does. Disk and network match a *hardware*
+name, because the question there is which device: which of four drives, which of twenty-six
+adapters. Both ship empty, meaning the behaviour that predates them — the first "Used Space"
+in block order, and the busiest NIC. Busiest is a good heuristic and wrong exactly where it
+matters: a Hyper-V switch bridged onto the office NIC carries the same traffic, and a docked
+laptop has two adapters that trade places. A named device absent from a block falls back rather
+than charting a gap.
+
+*Rejected:* pushing these to the agent beside the CPU preference. It would have needed an agent
+release to reach anything, for a pick the hub already re-does itself on every read.
 
 ---
 

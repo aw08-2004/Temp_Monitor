@@ -649,6 +649,22 @@
         "label": "Preferencia de sensor de temperatura de CPU",
         "help": "Ordenada, la mejor primero. El hub vuelve a deducir la temperatura principal de cada equipo a partir del bloque de sensores que informa, usando el primer nombre que coincida. Si no coincide ninguno, se conserva la temperatura que eligió el agente. Se aplica solo a las lecturas nuevas: el historial mantiene el valor registrado en su momento."
       },
+      "computer.gpu_temp_preference": {
+        "label": "Preferencia de sensor de temperatura de GPU",
+        "help": "Ordenada, la mejor primero. Qué sensor de temperatura de la GPU se grafica, buscado como parte del nombre del sensor. Se aplica solo a las lecturas nuevas: el historial mantiene el valor registrado en su momento."
+      },
+      "computer.gpu_load_preference": {
+        "label": "Preferencia de sensor de carga de GPU",
+        "help": "Ordenada, la mejor primero. Qué sensor de carga de la GPU se grafica, buscado como parte del nombre del sensor. Se aplica solo a las lecturas nuevas."
+      },
+      "computer.disk_preference": {
+        "label": "Preferencia de disco",
+        "help": "Ordenada, el mejor primero. Qué unidad se grafica cuando el equipo tiene varias, buscada como parte del nombre de la unidad (\"Samsung SSD 980\"). Déjalo vacío para graficar la primera que informe el equipo. Las tarjetas de Almacenamiento por disco siguen mostrando todas las unidades."
+      },
+      "computer.network_preference": {
+        "label": "Preferencia de adaptador de red",
+        "help": "Ordenada, el mejor primero. Qué adaptador se grafica, buscado como parte del nombre del adaptador (\"Intel(R) Ethernet\"). Déjalo vacío para graficar el más ocupado, que es la respuesta correcta hasta que un conmutador virtual o una base de conexión duplican el adaptador real. Si un adaptador nombrado falta en una lectura, se vuelve al más ocupado."
+      },
       "hub.low_load_threshold": {
         "label": "Umbral de carga baja",
         "help": "Una temperatura alta registrada por debajo de esta carga de CPU se lee como «investigar» en vez de «esperado»: caliente estando inactivo es el caso interesante."
@@ -716,6 +732,46 @@
       "metrics.collect_power": {
         "label": "Registrar la potencia de CPU y GPU",
         "help": "Grafica el consumo del paquete en vatios. Sin efecto en equipos cuyos chips no informan de ningún sensor de potencia."
+      },
+      "metrics.report_interval_seconds": {
+        "label": "Enviar lecturas cada",
+        "help": "Con qué frecuencia cada equipo envía una lectura. Más lento significa un gráfico más grueso, no un equipo que aparece desconectado: la disponibilidad va por un latido aparte. Sin efecto mientras alguien tiene abierta la página de un equipo. Los agentes anteriores a esta opción siguen informando cada 5 segundos."
+      },
+      "metrics.sensor_interval_seconds": {
+        "label": "Enviar el bloque completo de sensores cada",
+        "help": "Con qué frecuencia una lectura lleva todos los sensores en lugar de solo la temperatura. De ahí salen los gráficos de carga, memoria, disco, red, ventiladores y potencia. Nunca más rápido que el intervalo de envío de arriba. Los agentes anteriores a esta opción siguen enviándolo cada 10 segundos."
+      },
+      "metrics.retention_days_cpu_load": {
+        "label": "Conservar el historial de carga de CPU durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_memory": {
+        "label": "Conservar el historial de memoria durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_gpu": {
+        "label": "Conservar el historial de GPU durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_disk": {
+        "label": "Conservar el historial de uso de disco durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_disk_io": {
+        "label": "Conservar el historial de lectura/escritura durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_network": {
+        "label": "Conservar el historial de red durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_fans": {
+        "label": "Conservar el historial de ventiladores durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_power": {
+        "label": "Conservar el historial de potencia durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Quitar un equipo del panel tras",

@@ -41,6 +41,52 @@ public sealed record RuntimeConfig
     /// reported at all. Default true.</summary>
     public bool CollectNetwork { get; init; } = true;
 
+    /// <summary>
+    /// How often to report (seconds), mirroring the hub's metrics.report_interval_seconds.
+    /// Defaults to this build's compiled cadence, which is what a machine keeps running at
+    /// when the hub is older than the setting (roadmap #3).
+    ///
+    /// <para>This is the ORDINARY cadence only. While an operator has this machine's page
+    /// open the loop runs at <see cref="LiveTelemetry"/>'s interval instead, because that
+    /// cadence exists to make a three-second spike visible and a fleet-wide default has no
+    /// business overriding somebody who is actually watching.</para>
+    ///
+    /// <para>It is not liveness either: the heartbeat is its own loop on its own
+    /// <see cref="AgentConfig.HeartbeatSeconds"/>, and that is what decides whether this
+    /// machine reads online. Slowing reporting right down costs chart resolution and
+    /// nothing else.</para>
+    /// </summary>
+    public int ReportIntervalSeconds { get; init; } = AgentConfig.IntervalSeconds;
+
+    /// <summary>How often a report carries the FULL sensor block (seconds), mirroring the
+    /// hub's metrics.sensor_interval_seconds. See
+    /// <see cref="EffectiveSensorIntervalSeconds"/> for why it is not used raw.</summary>
+    public int SensorIntervalSeconds { get; init; } = AgentConfig.SensorIntervalSeconds;
+
+    /// <summary>The sensor cadence actually applied: never faster than the report cadence,
+    /// because a sensor block can only ride on a report.
+    ///
+    /// <para>Clamped rather than refused. "Put the full block on every report" is a sensible
+    /// thing for an operator to want and the natural way to ask for it is a small number, so
+    /// 1 against a 5-second report cadence means every report -- not a broken setting.</para>
+    /// </summary>
+    [JsonIgnore]
+    public int EffectiveSensorIntervalSeconds =>
+        Math.Max(SensorIntervalSeconds, ReportIntervalSeconds);
+
+    /// <summary>Bounds on the two hub-supplied cadences, mirroring the registry's own
+    /// minimum/maximum in settings.py.
+    ///
+    /// <para>Enforced here as well as there on purpose, the same way
+    /// <see cref="LiveTelemetry"/> clamps the live interval: the hub validates what an
+    /// operator types, but this process decides what it is willing to do to its own CPU and
+    /// its own network, and a value that arrives out of range (a hub bug, a hand-edited
+    /// config.json) must not be able to put a fleet into a sensor read every 50 ms.</para>
+    /// </summary>
+    public const int MinIntervalSeconds = 1;
+    public const int MaxReportIntervalSeconds = 300;
+    public const int MaxSensorIntervalSeconds = 3600;
+
     /// <summary>Content hash of the config the hub last sent. Echoed back on each
     /// heartbeat so the hub can skip re-sending an unchanged payload. Empty means
     /// "never received any", which is what makes the first heartbeat fetch it.</summary>
@@ -104,8 +150,37 @@ public sealed record RuntimeConfig
         {
             PreferredSensors = preferred,
             CollectNetwork = collectNetwork,
+            ReportIntervalSeconds = Seconds(
+                payload, "metrics.report_interval_seconds", ReportIntervalSeconds,
+                MaxReportIntervalSeconds),
+            SensorIntervalSeconds = Seconds(
+                payload, "metrics.sensor_interval_seconds", SensorIntervalSeconds,
+                MaxSensorIntervalSeconds),
             ConfigVersion = version,
         };
+    }
+
+    /// <summary>One cadence off the payload, clamped, or <paramref name="fallback"/> when the
+    /// key is absent or unparseable.
+    ///
+    /// <para>Numbers arrive as STRINGS, like the booleans above and for the same reason: the
+    /// heartbeat payload ToString()s every non-array value. Parsed with the invariant culture
+    /// -- a machine on a German or Spanish locale must read "10" as ten either way, and this
+    /// is the class of bug that only shows up on the one PC in the fleet that has it.</para>
+    ///
+    /// <para>An unparseable value leaves the cadence alone rather than resetting it to the
+    /// compiled default, matching Apply's rule that a malformed push can never blank out
+    /// working settings.</para>
+    /// </summary>
+    private static int Seconds(IReadOnlyDictionary<string, object?> payload, string key,
+                              int fallback, int max)
+    {
+        if (!payload.TryGetValue(key, out var raw) || raw is null) return fallback;
+        var text = raw.ToString()?.Trim();
+        if (!int.TryParse(text, System.Globalization.NumberStyles.Integer,
+                          System.Globalization.CultureInfo.InvariantCulture, out var value))
+            return fallback;
+        return Math.Clamp(value, MinIntervalSeconds, max);
     }
 }
 

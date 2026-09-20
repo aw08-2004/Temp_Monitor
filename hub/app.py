@@ -129,7 +129,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.117.0"
+HUB_VERSION = "1.118.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -435,29 +435,28 @@ def resolve_primary_temp(machine, reported_temp, sensors):
     return rederived if rederived is not None else reported_temp
 
 
-def _find_sensor_strict(sensors, sensor_type, name_substrs):
-    """Like _find_sensor_value, but identifies a metric by its sensor NAME rather than
-    by hardware category, and returns None when no name matches -- never a blind
-    first-candidate fallback.
+def _hardware_rank(sensor, preference):
+    """Where this sensor's HARDWARE falls in an operator's preference list, best first, or
+    None when it matches nothing.
 
-    Used for disk usage, where the hardware identifier isn't a single stable substring
-    (storage is "/nvme/","/hdd/","/ssd/"...) but the sensor name is distinctive
-    ("Used Space"). First match wins. Network throughput does NOT go through here --
-    picking the first match is exactly the bug _network_throughput exists to avoid."""
-    for s in sensors:
-        if s.get("type") != sensor_type:
-            continue
-        value = s.get("value")
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            continue
-        name = str(s.get("name") or "").lower()
-        if any(w in name for w in name_substrs):
-            return value
+    Matched against the hardware name and identifier together, lowercased, as a substring --
+    the same shape as every other preference list here, and the one an operator can actually
+    write down: the console shows them "Intel(R) Ethernet Connection I219-LM", not "/nic/1".
+
+    Separate from _find_sensor_value's preferred_name_substrs because the question is a
+    different one. "Which reading of this chip" is answered by a sensor name; "which of this
+    machine's four disks, or its twenty-six adapters" is answered by the hardware.
+    """
+    haystack = f"{sensor.get('hardware_id') or ''} {sensor.get('hardware') or ''}".lower()
+    for rank, wanted in enumerate(preference or ()):
+        if wanted and wanted in haystack:
+            return rank
     return None
 
 
-def _network_throughput(sensors):
-    """(download_bps, upload_bps) for this machine's busiest network adapter.
+def _network_throughput(sensors, preference=()):
+    """(download_bps, upload_bps) for this machine's busiest network adapter -- or for the
+    first adapter matching `preference` (computer.network_preference), when one does.
 
     Windows exposes a LOT of NICs, and LHM reports every one of them: Bluetooth,
     disconnected Wi-Fi, Hyper-V/WSL virtual switches, and one pseudo-adapter per NDIS
@@ -476,9 +475,19 @@ def _network_throughput(sensors):
     (None, None) when the block carries no NIC throughput at all -- no NIC hardware, or an
     agent with network collection switched off. A genuinely idle machine reports (0.0, 0.0),
     which is a real reading and charts as such, not as a gap.
+
+    **The preference list beats busiest, and busiest remains the fallback** (roadmap #3).
+    Busiest is a good heuristic and a wrong one on the machines that need it most: a box with
+    a Hyper-V switch bridged onto the office NIC has a virtual adapter carrying the same
+    traffic, and a laptop docked over USB-C has two adapters that trade places as it moves.
+    An operator who knows which adapter is the real one can now say so -- and if the named
+    adapter is absent from a block (undocked, disabled) this falls back to busiest rather than
+    charting a gap, because the machine is still on the network through something.
     """
     # {hardware_id: [download, upload]} -- grouped per adapter so the pair stays coherent.
     per_nic = {}
+    # ...and {hardware_id: rank} for the preferred ones, built in the same pass.
+    ranked = {}
     for s in sensors:
         # Disk read/write rate shares SensorType.Throughput with network, so pin to NIC
         # hardware ("/nic/...") to avoid mixing them up.
@@ -502,9 +511,16 @@ def _network_throughput(sensors):
         # one, so a stray 0 can't displace a real reading.
         if pair[slot] is None or float(value) > pair[slot]:
             pair[slot] = float(value)
+        rank = _hardware_rank(s, preference)
+        if rank is not None and rank < ranked.get(hardware_id, rank + 1):
+            ranked[hardware_id] = rank
 
     if not per_nic:
         return None, None
+    if ranked:
+        best = min(ranked, key=lambda hid: ranked[hid])
+        rx, tx = per_nic[best]
+        return rx, tx
     rx, tx = max(per_nic.values(), key=lambda p: (p[0] or 0.0) + (p[1] or 0.0))
     return rx, tx
 
@@ -554,6 +570,45 @@ def _disk_throughput(sensors):
     read = sum(p[0] for p in per_disk.values() if p[0] is not None)
     write = sum(p[1] for p in per_disk.values() if p[1] is not None)
     return read, write
+
+
+def _disk_used_pct(sensors, preference=()):
+    """The one chartable disk-usage number: a "Used Space" Load percentage.
+
+    Which disk that is has always been decided by BLOCK ORDER -- the first such sensor the
+    agent happened to report -- and on a single-drive office PC that is the right answer by
+    construction. On a workstation with an OS NVMe and three data drives it is an arbitrary
+    one, and worse, a silently arbitrary one: the chart is captioned "Disk usage" with nothing
+    saying which disk, so a full D: and an empty C: are indistinguishable on the page.
+
+    `preference` (computer.disk_preference) is the operator's answer, matched against the
+    hardware name best-first -- "Samsung SSD 980", or just "980". It ships EMPTY, which keeps
+    the historical first-in-block behaviour exactly, and a named drive that is absent from a
+    block (unplugged, failed) falls back to it too rather than charting nothing (roadmap #3).
+
+    Identified by its sensor NAME rather than by hardware category, unlike
+    _find_sensor_value: storage identifiers vary ("/nvme/", "/hdd/", "/ssd/") while
+    "Used Space" is unique to storage devices. Network throughput does NOT work this way --
+    picking by name there is exactly the bug _network_throughput exists to avoid.
+    """
+    candidates = []
+    for s in sensors:
+        if s.get("type") != "Load":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        if "used space" not in str(s.get("name") or "").lower():
+            continue
+        # The value is kept as reported, not coerced: this is the number the charts and the
+        # diagnostics JSON have always carried for this metric.
+        candidates.append((_hardware_rank(s, preference), value))
+    if not candidates:
+        return None
+    ranked = [c for c in candidates if c[0] is not None]
+    if ranked:
+        return min(ranked, key=lambda c: c[0])[1]
+    return candidates[0][1]
 
 
 def _disk_volumes(sensors):
@@ -743,10 +798,35 @@ def _package_power(sensors, hardware_substr, preferred_name_substrs):
     return max(value for _, value in candidates)
 
 
-def extract_diagnostics(sensors):
+def sensor_preferences():
+    """The operator's four hub-side sensor preference lists, as one dict (roadmap #3).
+
+    Read here rather than inside extract_diagnostics's helpers so one ingest costs one
+    settings read per list instead of one per sensor, and so a test can hand in an explicit
+    dict without a settings table. settings.get_list is served from the copy-on-write cache,
+    so this is cheap on the 5-second ingest path.
+
+    The CPU temperature preference is deliberately NOT here: the agent picks that one and the
+    hub only re-derives it against the machine's own override (resolve_primary_temp).
+    """
+    return {
+        "gpu_temp": settings.get_list(DB_PATH, "computer.gpu_temp_preference"),
+        "gpu_load": settings.get_list(DB_PATH, "computer.gpu_load_preference"),
+        "disk": settings.get_list(DB_PATH, "computer.disk_preference"),
+        "network": settings.get_list(DB_PATH, "computer.network_preference"),
+    }
+
+
+def extract_diagnostics(sensors, prefs=None):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
     list (see the agent's SensorReader flattening). Every field is None when not
-    found -- e.g. no discrete GPU, or an older client that sent no sensors."""
+    found -- e.g. no discrete GPU, or an older client that sent no sensors.
+
+    `prefs` is sensor_preferences(), read once here when the caller doesn't supply it. It is
+    a parameter rather than a plain lookup so the pure-function tests in
+    tests/test_history_metrics.py can pin a preference without a settings table, and so a
+    caller looping over machines pays for one read rather than one per machine.
+    """
     if not sensors:
         return {
             # "we have never seen this machine's sensors" -- distinct from "it reported and
@@ -763,25 +843,34 @@ def extract_diagnostics(sensors):
             "fan_rpm": None, "fans": [],
             "cpu_power_w": None, "gpu_power_w": None,
         }
+    # Resolved after the empty-block return above, not before it: a machine the hub has
+    # never had sensors from is a common case on the fleet page, and it needs no preferences.
+    prefs = sensor_preferences() if prefs is None else prefs
     mem_used_gb, mem_total_gb = _memory_gb(sensors)
-    net_rx_bps, net_tx_bps = _network_throughput(sensors)
+    net_rx_bps, net_tx_bps = _network_throughput(sensors, prefs.get("network") or ())
     disk_read_bps, disk_write_bps = _disk_throughput(sensors)
     fans = _fans(sensors)
     return {
         "has_sensors": True,
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
-        "gpu_temp": _find_sensor_value(sensors, "gpu", "Temperature", ["gpu core", "gpu hot spot", "gpu package"]),
-        "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", ["gpu core", "d3d 3d"]),
+        # The two GPU picks an operator can steer (computer.gpu_temp_preference /
+        # gpu_load_preference, roadmap #3). Their defaults are the lists that used to be
+        # literals here -- settings.DEFAULT_GPU_*_PREFERENCE -- so an untouched hub picks
+        # exactly what it always picked. gpu_clock_mhz is deliberately not settable: it is
+        # not charted or stored, so a knob for it would be a knob with nothing behind it.
+        "gpu_temp": _find_sensor_value(sensors, "gpu", "Temperature", prefs.get("gpu_temp")),
+        "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", prefs.get("gpu_load")),
         "gpu_clock_mhz": _find_sensor_value(sensors, "gpu", "Clock", ["gpu core", "gpu shader"]),
         "memory_load_pct": _find_sensor_value(sensors, "ram", "Load", ["memory"]),
         # Absolute RAM (GB) so the Memory chart can say what 100% is and show GB-in-use on
         # hover. total is a machine constant; used is exact at report time.
         "mem_used_gb": mem_used_gb,
         "mem_total_gb": mem_total_gb,
-        # "Used Space" is unique to storage devices, so name alone identifies it.
-        "disk_load_pct": _find_sensor_strict(sensors, "Load", ["used space"]),
-        # Busiest NIC, not the first one listed -- see _network_throughput.
+        # "Used Space" is unique to storage devices, so name alone identifies it; WHICH
+        # drive is computer.disk_preference -- see _disk_used_pct.
+        "disk_load_pct": _disk_used_pct(sensors, prefs.get("disk") or ()),
+        # The preferred NIC, else the busiest -- see _network_throughput.
         "net_rx_bps": net_rx_bps,
         "net_tx_bps": net_tx_bps,
         # Summed across every disk, unlike network -- see _disk_throughput.
@@ -839,6 +928,29 @@ METRIC_COLUMN_TOGGLE = {
     # chips, and an operator who doesn't care about watts doesn't care about either.
     "cpu_power_w": "metrics.collect_power",
     "gpu_power_w": "metrics.collect_power",
+}
+
+# ...and which per-metric retention window (settings.py `metrics.retention_days_*`) governs
+# each column, one per collection toggle above so the two read as a pair on the Settings page
+# (roadmap #3). Spelled out rather than derived from the toggle key by string surgery: a
+# derivation that produced a key the registry doesn't have would fail at prune time, in a
+# background thread, on the one hub that had actually set the value.
+# tests/test_metric_retention.py asserts this map covers exactly READING_METRIC_COLUMNS, that
+# every key is in the registry, and that each pairs with the same group as its collection
+# toggle -- so the two cannot drift apart silently.
+METRIC_COLUMN_RETENTION = {
+    "cpu_load_pct": "metrics.retention_days_cpu_load",
+    "memory_load_pct": "metrics.retention_days_memory",
+    "gpu_temp": "metrics.retention_days_gpu",
+    "gpu_load_pct": "metrics.retention_days_gpu",
+    "disk_load_pct": "metrics.retention_days_disk",
+    "net_rx_bps": "metrics.retention_days_network",
+    "net_tx_bps": "metrics.retention_days_network",
+    "disk_read_bps": "metrics.retention_days_disk_io",
+    "disk_write_bps": "metrics.retention_days_disk_io",
+    "fan_rpm": "metrics.retention_days_fans",
+    "cpu_power_w": "metrics.retention_days_power",
+    "gpu_power_w": "metrics.retention_days_power",
 }
 
 # Friendly metric keys used by the per-machine history endpoint's `metrics` param, mapped
@@ -3524,6 +3636,76 @@ def prune_old_readings_once():
     return total
 
 
+def metric_column_cutoffs(now=None):
+    """{cutoff_epoch: [columns whose history ends there]} for every metric given a window
+    SHORTER than data.retention_days (roadmap #3). Empty on an untouched hub.
+
+    Pure apart from reading settings, and separate from the prune below so a test can assert
+    the arithmetic -- which is where the two traps are.
+
+    **A window at or above the global one is dropped, not honoured.** The row carrying the
+    metric is deleted at data.retention_days, so there is no such thing as keeping one column
+    longer; a hub that "honoured" 90 days against a global 30 would report pruning nothing
+    and look broken. 0 means "follow the global window" and lands in the same bucket, which
+    is why 0 is the shipped default for all eight.
+
+    Columns are grouped by cutoff so eight settings cost at most eight UPDATEs and usually
+    one: the common case is an operator dropping several noisy metrics to the same number.
+    """
+    now = int(time.time() if now is None else now)
+    global_days = settings.get_int(DB_PATH, "data.retention_days")
+    buckets = {}
+    for column in READING_METRIC_COLUMNS:
+        days = settings.get_int(DB_PATH, METRIC_COLUMN_RETENTION[column])
+        if not days or days >= global_days:
+            continue
+        buckets.setdefault(now - days * 86400, []).append(column)
+    return buckets
+
+
+def prune_metric_columns_once():
+    """Blank the metric columns whose own retention window has passed. Returns the number of
+    rows touched.
+
+    NULL rather than DELETE, because the row is not the metric's: one `readings` row carries
+    temperature (the core metric, which has no toggle and no window of its own) alongside
+    twelve optional columns. "Keep network history for 7 days but temperature for 30" can
+    therefore only mean "blank net_rx_bps/net_tx_bps at 7 days", and a NULL there is already
+    what a metric whose collection toggle is off stores -- so the charts, the bucketing and
+    the history endpoint need no change to read it. That equivalence is the point: a metric
+    turned off and a metric aged out look identical to everything downstream, because in both
+    cases the honest answer is "not recorded".
+
+    Batched like prune_old_readings_once and for the same reason -- the first pass after an
+    operator shortens a window can touch millions of rows, and one long write lock would
+    stall the reading writer.
+
+    Runs AFTER the row prune, which is not merely tidy: rows past the global window are gone
+    by then, so this only ever walks rows that are still being kept.
+    """
+    total = 0
+    for cutoff, columns in metric_column_cutoffs().items():
+        # Built from READING_METRIC_COLUMNS constants only, exactly like _READINGS_INSERT_SQL
+        # -- no user input reaches the column list.
+        assignments = ", ".join(f"{c} = NULL" for c in columns)
+        remaining = " OR ".join(f"{c} IS NOT NULL" for c in columns)
+        while True:
+            with get_db_conn() as conn:
+                cur = conn.execute(
+                    f"UPDATE readings SET {assignments} WHERE id IN "
+                    f"(SELECT id FROM readings WHERE ts_epoch < ? AND ({remaining}) LIMIT ?)",
+                    (cutoff, RETENTION_PRUNE_BATCH),
+                )
+                updated = cur.rowcount or 0
+            total += updated
+            if updated < RETENTION_PRUNE_BATCH:
+                break
+            time.sleep(0.2)  # let other writers/readers through between batches
+    if total:
+        print(f"[retention] Blanked aged-out metric columns in {total} reading(s).")
+    return total
+
+
 def prune_command_output_once():
     """Drop live-terminal scrollback for commands that finished long ago. The durable
     record (command_results.output) is untouched -- these rows only exist so an operator
@@ -3554,6 +3736,14 @@ def retention_pruner():
                 prune_old_readings_once()
             except Exception as e:
                 print(f"[retention] Prune failed: {e}")
+            # Per-metric windows, after the row prune so it only walks rows still being kept
+            # (roadmap #3). Its own try, like every other step here: a metric window failing
+            # must not stop the row prune's neighbours, and on an untouched hub -- every
+            # window at 0 -- this does no queries at all.
+            try:
+                prune_metric_columns_once()
+            except Exception as e:
+                print(f"[retention] Metric-column prune failed: {e}")
             # Separate try: a failure pruning chunks must not stop readings being pruned,
             # and vice versa -- the readings table is the one that grows unboundedly.
             try:
