@@ -2538,8 +2538,8 @@ what survived, and why the rest did not. The two decisions that framed the triag
 | PRD item | Verdict |
 |---|---|
 | FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
-| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.120.0, `correlate.baselines`). |
-| FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining and the recommended-fix wording ship in hub 1.120.0 (**#17**, `correlate.py`). Still open there: folding #16's event rows into a bundle. |
+| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.124.0, `correlate.baselines`). |
+| FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`). Still open there: an `event.*` rules variable, so a counter can be alerted on rather than only read. |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
@@ -2841,7 +2841,7 @@ it — the same trap `manage_firmware` avoided by shipping live.
 
 ---
 
-## 🚧 17. Alert correlation and recommended fixes   ·   hub 1.120.0   ·   `correlate.py` / `correlate_web.py`
+## 🚧 17. Alert correlation and recommended fixes   ·   hub 1.124.0   ·   `correlate.py` / `correlate_web.py`
 
 The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
 **one** bundle, not three alerts. The substrate was already here — `alerts.py` keeps episodes,
@@ -2861,7 +2861,7 @@ asked anything, rather than a second one grown here.
 Anomaly baselining (FR-02) lands here too, and for the same reason: a per-machine baseline is
 a statistic over the history table, not a model.
 
-### Built · hub 1.120.0
+### Built · hub 1.124.0
 
 `correlate.py` is the model half, `correlate_web.py` the four routes, and the Alerts tab
 renders a bundle as a heading over its member cards — a bundle of one is still just an alert
@@ -4765,7 +4765,7 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     that is a change to the rules engine, which belongs to #17, and `events.summary` is the
     counter it will read.
 17. **#17 Alert correlation and recommended fixes** — **grouping, the causal claim, anomaly
-    baselining and the wording layer shipped in hub 1.120.0**, and a bundle now carries the
+    baselining and the wording layer shipped in hub 1.124.0**, and a bundle now carries the
     #16 events that fall inside its own window. Both dependencies landed first as planned:
     patch outcomes since 1.92.0, event counters since 1.118.0. The provider the language
     layer was gated on turned out to be #24's, so this item introduced no new plumbing after
