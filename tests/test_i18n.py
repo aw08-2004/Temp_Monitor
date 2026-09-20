@@ -200,6 +200,17 @@ def test_server_supplied_ui_text_is_in_the_catalog():
                if f"{settings_module.CHOICE_TEXT_KEY}.{s.key}.{c}" not in english]
     check(f"every fixed enum choice has a label ({missing[:5]})", not missing)
 
+    # The watchdog status words (roadmap #20). Same argument again, and the same invisibility:
+    # watchdogs.js builds `watchdogs.status_name.<status>` from what a MACHINE reported, so no
+    # regex can see the key. A status with no catalog entry renders as the bare word `given_up`
+    # in the one column that says whether a PC is looking after itself.
+    import watchdogs as watchdogs_module
+
+    missing = [f"{watchdogs_module.STATUS_TEXT_KEY}.{status}"
+               for status in watchdogs_module.STATUSES
+               if f"{watchdogs_module.STATUS_TEXT_KEY}.{status}" not in english]
+    check(f"every watchdog status has catalog text ({missing[:5]})", not missing)
+
     # The package form's detection vocabulary, served the same way by packages_web.
     import packages as packages_module
 

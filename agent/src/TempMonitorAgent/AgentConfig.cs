@@ -428,6 +428,10 @@ public static class AgentConfig
     /// heartbeat.</summary>
     public static string AgentConfigPath => Path.Combine(ProgramDataDir, "config.json");
     public static string RestartStatePath => Path.Combine(ProgramDataDir, "restart_state.json");
+    /// <summary>The watchdog document and its restart history (roadmap #20). Not in the
+    /// pre-rename migration list above, and correctly so: no install that predates the
+    /// rename ever had one.</summary>
+    public static string WatchdogStatePath => Path.Combine(ProgramDataDir, "watchdogs.json");
     public static string LogPath => Path.Combine(ProgramDataDir, "companion.log");
     public static string UpdateStagingDir => Path.Combine(ProgramDataDir, "update");
 

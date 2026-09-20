@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.ServiceProcess;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using TempMonitorAgent.Telemetry;
@@ -274,72 +273,15 @@ public sealed class RestartProcessExecutor : ICommandExecutor
 
     /// <summary>Stop and start a service properly, taking its running dependents with it.
     ///
-    /// Dependents are restarted explicitly afterwards because Windows does not do it: a
-    /// plain stop/start of the print spooler would leave anything that depended on it
-    /// stopped, and an operator restarting one service would silently have turned two off.</summary>
+    /// The mechanics moved to <see cref="ServiceControl"/> when the agent-local watchdog loop
+    /// became a second caller (roadmap #20): a watchdog restarting a service is this same act
+    /// performed unattended, and two copies of the dependent handling would have drifted. What
+    /// stays here is the translation into a command result an operator reads.</summary>
     private CommandResult RestartService(string serviceName)
     {
-        try
-        {
-            using var service = new ServiceController(serviceName);
-            var display = string.IsNullOrEmpty(service.DisplayName)
-                ? serviceName : service.DisplayName;
-
-            if (!service.CanStop)
-                return CommandResult.Fail(
-                    $"the {display} service does not accept a stop request");
-
-            var dependents = new List<string>();
-            foreach (var dependent in service.DependentServices)
-            {
-                using (dependent)
-                {
-                    if (dependent.Status != ServiceControllerStatus.Stopped)
-                        dependents.Add(dependent.ServiceName);
-                }
-            }
-
-            if (service.Status != ServiceControllerStatus.Stopped)
-            {
-                service.Stop(stopDependentServices: true);
-                service.WaitForStatus(ServiceControllerStatus.Stopped, ServiceWait);
-            }
-            service.Start();
-            service.WaitForStatus(ServiceControllerStatus.Running, ServiceWait);
-
-            var restarted = new List<string>();
-            var failed = new List<string>();
-            foreach (var name in dependents)
-            {
-                try
-                {
-                    using var dependent = new ServiceController(name);
-                    if (dependent.Status == ServiceControllerStatus.Stopped) dependent.Start();
-                    dependent.WaitForStatus(ServiceControllerStatus.Running, ServiceWait);
-                    restarted.Add(name);
-                }
-                catch (Exception e)
-                {
-                    // The service the operator asked for IS running; a dependent that would
-                    // not come back is a real problem but a different one, and it must be
-                    // named rather than folded into a blanket failure.
-                    _log.LogWarning(e, "Dependent service {Name} did not restart", name);
-                    failed.Add($"{name} ({e.Message})");
-                }
-            }
-
-            var summary = $"restarted the {display} service";
-            if (restarted.Count > 0) summary += $"; also restarted {string.Join(", ", restarted)}";
-            if (failed.Count > 0)
-                return CommandResult.Fail(
-                    summary + $"; these dependents did NOT come back: {string.Join("; ", failed)}");
-            return CommandResult.Ok(summary);
-        }
-        catch (Exception e)
-        {
-            _log.LogWarning(e, "Could not restart service {Name}", serviceName);
-            return CommandResult.Fail($"could not restart the {serviceName} service: {e.Message}");
-        }
+        var result = ServiceControl.Restart(serviceName);
+        if (!result.Ok) _log.LogWarning("Could not restart service {Name}", serviceName);
+        return result.Ok ? CommandResult.Ok(result.Summary) : CommandResult.Fail(result.Summary);
     }
 
     private CommandResult Relaunch(string name, string imagePath, int session)

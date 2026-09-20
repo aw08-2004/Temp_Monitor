@@ -2540,7 +2540,7 @@ what survived, and why the rest did not. The two decisions that framed the triag
 | FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
 | FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
-| FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
+| FR-04 Automation | **Done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs shipped as **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
 | FR-07 Security | Encryption-key escrow → **#19**. Shadow-AI detection is cheap and lands there too: it is an inventory query, not a new channel. EDR integration is **deferred** — there is no EDR here to integrate with, and the requirement is an API shape rather than a feature. |
@@ -2898,24 +2898,78 @@ Three small things from FR-06 and FR-07 that share no code but are each about a 
 
 ---
 
-## 📋 20. Self-healing watchdogs
+## ✅ 20. Self-healing watchdogs   ·   hub 1.127.0 + the agent's next release
 
 FR-04's watchdogs: a service stops, the agent restarts it inside two minutes, and only an
-escalation reaches a human. A thin layer over the rules engine rather than a new one — a rule
-already has a condition and an action, and `validate_actions` already refuses to let someone
-who may raise an alert also issue a command.
+escalation reaches a human. Shipped as `hub/watchdogs.py` + `hub/watchdogs_web.py`, its own
+`/watchdogs` page, and an `agent/src/TempMonitorAgent/Watchdog/` loop running every 30 seconds
+as `Worker.cs`'s seventh concurrent loop.
 
-What it adds is **local evaluation**: today a rule is evaluated hub-side on reported data,
-which is the wrong latency for "restart this within two minutes" and useless if the machine is
-briefly offline. A watchdog is a small rule the agent holds and runs itself.
+**The agent is given desired state, never a condition, and that is the whole design.** The
+entry below sequenced this item last on the belief that the rules engine had to grow a second
+evaluation site. Building it established that it must not, for three reasons:
+
+- **Two evaluation sites drift silently.** The rules engine's third truth value is UNKNOWN,
+  and UNKNOWN exists precisely because a missing or stale reading must not read as healthy.
+  An agent-side copy of the engine would have its own idea of staleness, its own clock, and
+  no way to be told it had diverged — and the divergence presents as a fleet that looks fine.
+- **A condition is not stable under editing.** A rule's meaning depends on the fields it
+  reads, the `max_age` on each source, and the author scope pinned at save time. Ticking a
+  "evaluate this one locally" box would change what the same sentence means, which is the
+  kind of change nobody reads a diff for.
+- **`policy.py` already decided this.** Its docstring says the device is never given a rule
+  engine, for the same reason. A second answer in the same codebase is worse than either
+  answer alone.
+
+So a watchdog is a **separately authored object**, not a rule with a flag, which answers the
+second open parameter above. The hub resolves each machine's targets, pins the author's scope
+on the row, and hands the agent a flat list of `{id, service, grace_seconds, max_restarts,
+window_seconds}`. No condition crosses the wire. What the rules engine lends is its target
+grammar (`all` / `machines` / `ad_ou` / `field` / `group`) and `rules.scoped_targets`, re-
+intersected at resolution so a watchdog cannot reach a machine enrolled into scope after the
+fact.
+
+**Flap protection is a count in a window, not a backoff**, which answers the first open
+parameter. `max_restarts` attempts inside `window_seconds` and the watchdog stops trying and
+escalates. An exponential backoff was rejected: it never reaches a decision, so a service
+that will never start keeps being poked forever and nobody is told. A count reaches a
+terminal state (`given_up`) that a human can act on, and it **self-clears** — once the
+attempts age out of the window the watchdog resumes on its own, so a bad afternoon does not
+need an operator to re-arm it. A restart that *fails* counts toward the limit too; otherwise
+a service that cannot start would be retried forever without ever reaching the limit.
+
+**Writing a watchdog needs `manage_rules` AND `issue_commands`.** A watchdog restarts a
+service on every machine it reaches, unattended — `restart_process` by another name — and
+`MANAGE_RULES` is explicit that it does not carry that. Reusing the two existing capabilities
+rather than adding a third avoids a permissions migration; `tests/test_watchdogs_web.py`
+asserts the pair on create, edit, delete and the enable toggle, because a gate is only ever
+wrong on the route nobody tested.
+
+**There is deliberately no dead-man expiry on the document.** `policy.py` expires what it
+hands a device, so a machine cut off from the hub loses the policy. A watchdog does the
+opposite on purpose: a machine that cannot reach the hub is exactly when a stopped service
+has to come back, so the last document keeps running indefinitely. The cost is that
+deleting a watchdog does not disarm an offline machine until it checks in again, which is the
+right trade for this feature and the wrong one for policy.
+
+**The flap history is persisted to `watchdogs.json`**, so restarting the agent — or the hub
+editing the watchdog — does not hand a flapping service a fresh budget. Editing keeps
+per-id local state for the same reason.
+
+The document rides the authenticated heartbeat, content-hash versioned like the config
+document. **The presence of `watchdog_version` in the request body is the capability check**:
+an older agent never sends the key and is never handed a document it would ignore while the
+console reported the machine as covered. That deliberately avoids a `MIN_WATCHDOG_AGENT`
+constant, because agent versions move only when `release.ps1` cuts a release.
 
 A watchdog somebody describes in English is drafted through #24 and committed by hand like any
 other rule — the drafting path is shared, and the mitigation #17 records holds here too: a
-suggestion reaches the script library, never the machine.
+suggestion reaches the script library, never the machine. That drafting path is **not built
+here**; #24 owns it.
 
-**Open parameters.** Flap protection — how many restarts in what window before it stops and
-escalates instead. Whether a locally held watchdog is authored separately, or is an ordinary
-rule marked for local evaluation.
+**Deferred, deliberately.** Watchdog restart counts are not readable as rule fields (that
+would re-introduce the coupling this entry spent its length avoiding); escalation is an
+ordinary alert, with webhook and email routing left to whatever #16 settles on.
 
 ---
 
@@ -4691,9 +4745,11 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
     forward on its own if a need appears. BitLocker escrow reuses the `backups.py` secret
     store and is the smallest genuinely useful thing on this list.
-20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
-    engine to grow a second evaluation site (on the agent), and that is a bigger change to a
-    working feature than any of the above make.
+20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half on `main` as
+    unreleased source until the next agent release is cut. Sequenced last on the belief that it
+    needed the rules engine to grow a second evaluation site; building it established that it
+    must not, and the entry above records why. What it actually needed was the target grammar
+    and the `issue_commands` gate, both of which already existed.
 21. ~~**#21 Release channels**~~ — done, hub 1.93.0 + agent 3.35.0. Not from the PRD; asked
     for directly, and built alongside #14 rather than after it because the two shipped in one
     agent release. Its own prerequisite was nothing, but it makes every item above it safer to
@@ -4723,8 +4779,9 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 > 1.63.0). #5 has since grown multi-step packages (hub 1.64.0 + agent 3.22.0), which is an
 > extension of a done feature rather than a new board item.
 >
-> **#14 through #21 came from the PRD v2.0 triage above; #14, #15 and #21 are built, #16's
-> collection half is built (hub 1.118.0), and #17 through #20 are not.** #14 and #21 shipped as agent 3.35.0; **#15 needed no agent
+> **#14 through #21 came from the PRD v2.0 triage above; #14, #15, #20 and #21 are built,
+> #16's collection half is built (hub 1.118.0), and #17 through #19 are not.** #14 and #21
+> shipped as agent 3.35.0; **#15 needed no agent
 > release** and is live with hub 1.94.0 alone. That
 > section is new as of 2026-08-31 and is the first time this board has grown by more than
 > one item at once; read it before the entries, because it records which PRD requirements

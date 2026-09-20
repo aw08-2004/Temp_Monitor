@@ -16,6 +16,12 @@ Three kinds are raised today:
 * `rule` -- raised by an operator-written rule's `alert` action (rules.py). Keyed on the
   single `machine` PLUS the rule, because two different rules matching one machine are two
   separate alerts. `detail` carries the rule id, its name, and the rendered text.
+* `watchdog` -- a machine has told us its agent-local watchdog stopped coping (roadmap #20,
+  watchdogs.py). Keyed on the single `machine` PLUS the watchdog, for the same reason `rule`
+  is, and it shares the episode model with it verbatim: a machine that keeps reporting
+  `given_up` on every heartbeat is ONE alert, and the next failure after a recovery is a new
+  one beside it. `detail` carries the watchdog id, its name, the service, and which of
+  watchdogs.ESCALATING_STATUSES was reported.
 
 * `high_temperature` is a FOURTH kind that is no longer raised. The hub used to evaluate a
   rolling temperature average itself, from two global settings, on a 30 s thread. That is
@@ -53,6 +59,11 @@ KIND_AD_UNMATCHED = "ad_unmatched"
 # carries the rule id and name, and `rule_id` is a real column because two DIFFERENT rules
 # firing on ONE machine are two separate alerts, not one being overwritten.
 KIND_RULE = "rule"
+# A watchdog gave up, or a restart it attempted did not work (roadmap #20). Its own kind
+# rather than a reuse of KIND_RULE, and not because the two look different on the page -- they
+# barely do. It is because `resolve_for_rule` and `resolve_for_watchdog` each clear by id, and
+# one shared kind would mean rule 7 being deleted resolved watchdog 7's alerts as well.
+KIND_WATCHDOG = "watchdog"
 # RETIRED: no code path raises this any more (see the module docstring). Kept because rows
 # an operator has not dismissed are still in the table and still have to render.
 KIND_HIGH_TEMP = "high_temperature"
@@ -66,7 +77,8 @@ _LEGACY_KIND_HIGH_TEMP = "overheat"
 # each call site -- a kind missing from a hand-written check at one of those sites is how a
 # rule alert ended up both rendered as a duplicate-serial card and returned to operators
 # whose scope excluded its machine.
-PER_MACHINE_KINDS = frozenset({KIND_RULE, KIND_AD_UNMATCHED, KIND_HIGH_TEMP})
+PER_MACHINE_KINDS = frozenset({KIND_RULE, KIND_WATCHDOG, KIND_AD_UNMATCHED,
+                               KIND_HIGH_TEMP})
 
 STATUS_OPEN = "open"
 STATUS_RESOLVED = "resolved"
@@ -144,10 +156,18 @@ def init_alerts_db(db_path):
         # is a widening, not a change, for the three kinds that predate it.
         if "rule_id" not in alert_columns:
             conn.execute("ALTER TABLE alerts ADD COLUMN rule_id INTEGER")
+        # ...and `watchdog_id` widens it once more, for exactly the reason `rule_id` did
+        # (roadmap #20). Two different watchdogs failing on one PC are two alerts, and without
+        # this both would key on ('watchdog', machine, -1) and the second would silently never
+        # be raised. IFNULL(-1) again makes the key behave as it always has for every kind
+        # whose watchdog_id is NULL, so this is a widening rather than a change.
+        if "watchdog_id" not in alert_columns:
+            conn.execute("ALTER TABLE alerts ADD COLUMN watchdog_id INTEGER")
         conn.execute("DROP INDEX IF EXISTS idx_alerts_open_kind_machine_active")
+        conn.execute("DROP INDEX IF EXISTS idx_alerts_open_kind_machine_rule_active")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_machine_rule_active "
-            "ON alerts(kind, machine, IFNULL(rule_id, -1)) "
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_kind_machine_source_active "
+            "ON alerts(kind, machine, IFNULL(rule_id, -1), IFNULL(watchdog_id, -1)) "
             "WHERE status = 'open' AND machine IS NOT NULL AND episode_ended_at IS NULL"
         )
 
@@ -265,6 +285,76 @@ def resolve_for_rule(db_path, rule_id):
         conn.execute(
             "UPDATE alerts SET status=?, updated_at=? WHERE kind=? AND rule_id=? AND status=?",
             (STATUS_RESOLVED, int(time.time()), KIND_RULE, rule_id, STATUS_OPEN),
+        )
+
+
+def upsert_watchdog(db_path, machine, watchdog_id, watchdog_name, service, status,
+                    detail="", now=None):
+    """Raise or refresh the ACTIVE episode of watchdog `watchdog_id` on `machine`.
+
+    A near-copy of upsert_rule, deliberately, rather than a shared helper parameterised on the
+    id column. The two differ in the one place that matters -- which column keys the episode
+    -- and a helper taking a column NAME to interpolate into SQL is how an injection point
+    gets built for the sake of saving nine lines.
+
+    `count` records how many heartbeats the episode has been refreshed over, which is the
+    cheapest honest answer to "has that PC been giving up all morning or did it just start".
+    """
+    machine = str(machine).strip()
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, detail FROM alerts WHERE kind=? AND machine=? AND watchdog_id=? "
+            "AND status=? AND episode_ended_at IS NULL",
+            (KIND_WATCHDOG, machine, watchdog_id, STATUS_OPEN),
+        ).fetchone()
+        count = 1
+        if row:
+            try:
+                previous = json.loads(row["detail"]) if row["detail"] else {}
+            except (TypeError, ValueError):
+                previous = {}
+            count = int(previous.get("count") or 1) + 1
+        payload = json.dumps({"watchdog_id": watchdog_id,
+                              "watchdog_name": str(watchdog_name or ""),
+                              "service": str(service or ""),
+                              "status": str(status or ""),
+                              "text": str(detail or ""), "count": count})
+        if row:
+            conn.execute("UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
+                         (payload, now, row["id"]))
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO alerts(kind, machine, watchdog_id, detail, status, created_at, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (KIND_WATCHDOG, machine, watchdog_id, payload, STATUS_OPEN, now, now),
+        )
+        return cur.lastrowid
+
+
+def end_watchdog_episode(db_path, machine, watchdog_id, now=None):
+    """The machine is coping again: close the active episode, leave the alert open and
+    visible. The next failure raises a fresh one beside it."""
+    machine = str(machine).strip()
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE alerts SET episode_ended_at=? "
+            "WHERE kind=? AND machine=? AND watchdog_id=? AND status=? "
+            "AND episode_ended_at IS NULL",
+            (int(time.time() if now is None else now), KIND_WATCHDOG, machine, watchdog_id,
+             STATUS_OPEN),
+        )
+        return cur.rowcount > 0
+
+
+def resolve_for_watchdog(db_path, watchdog_id):
+    """Resolve every open alert a watchdog raised -- called when it is deleted or disabled,
+    because an alert nobody can act on any more is noise."""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE alerts SET status=?, updated_at=? "
+            "WHERE kind=? AND watchdog_id=? AND status=?",
+            (STATUS_RESOLVED, int(time.time()), KIND_WATCHDOG, watchdog_id, STATUS_OPEN),
         )
 
 

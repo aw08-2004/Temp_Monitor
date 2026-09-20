@@ -53,6 +53,7 @@ import settings
 import terminal
 import usage
 import wake
+import watchdogs
 from rate_limit import RateLimiter
 
 # Module-local rate limiter for the enrollment endpoint. Separate from the
@@ -160,6 +161,15 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         none of them ever fatal -- and
         `processes`, which is neither slow nor change-only but is only sent at all while an
         operator has that machine's Processes card open (see the `processes_wanted` reply).
+
+        It may also send `watchdog_version` and `watchdog` (roadmap #20). The VERSION is sent
+        on every heartbeat by an agent that holds watchdogs at all, exactly like
+        `config_version`, and its mere PRESENCE is what tells the hub this agent understands
+        them -- an older one never sends the key and is therefore never sent a document. That
+        is the capability check, and it is the key's presence rather than a version constant
+        or a capabilities entry on purpose: the agent half of #20 ships as unreleased source
+        (see VERSIONING.md), so there is no agent minor to hard-code, and a Windows agent has
+        never reported a capabilities block at all.
 
         `profiles` is the user profiles and resolved known folders on
         that machine. That is how the Backup Settings tab can show what `%Users%\\Desktop`
@@ -409,6 +419,35 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 payload["event_max_per_report"] = subscriptions["max_events"]
         except Exception as e:
             print(f"[events] Could not resolve the subscriptions for {machine}: {e}")
+        # What this machine's watchdogs have been doing (roadmap #20). Change-only and never
+        # fatal like its neighbours -- and the ingest goes FIRST, before the document below,
+        # so a heartbeat that both reports a give-up and picks up an edited document records
+        # the give-up against the watchdog the machine actually held when it happened.
+        if data.get("watchdog"):
+            try:
+                watchdogs.record_report(db_path, machine, data["watchdog"])
+            except Exception as e:
+                print(f"[watchdogs] Could not record watchdog state for {machine}: {e}")
+        # ...and the document it should hold, on the same version-compare shape `config` and
+        # `device_policy` use. Sent only to an agent that asked -- see the docstring: no
+        # `watchdog_version` key means an agent that would not know what to do with one.
+        #
+        # An EMPTY document is still sent, for the reason policy's is: removing a machine from
+        # a watchdog's target has to be able to STOP it watching, and an absent block reads to
+        # the agent as "the hub had nothing to say".
+        #
+        # There is no max_age_seconds here and that is deliberately the opposite of
+        # device_policy's dead-man switch. A watchdog earns its keep exactly when the hub is
+        # unreachable; one that expired after a week offline would switch itself off on the
+        # machines that needed it most. See watchdogs.py.
+        if "watchdog_version" in data:
+            try:
+                document = watchdogs.resolve_for(db_path, machine)
+                if data.get("watchdog_version") != document["version"]:
+                    payload["watchdog_document"] = {"watchdogs": document["watchdogs"]}
+                    payload["watchdog_version"] = document["version"]
+            except Exception as e:
+                print(f"[watchdogs] Could not resolve watchdogs for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])
