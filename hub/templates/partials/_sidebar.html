@@ -102,6 +102,17 @@
             <span class="sidebar__link-label">{{ t('nav.patches') }}</span>
         </a>
         {% endif %}
+        {# Gated on VIEW for the same reason Patches is: what a machine's event log said is
+           inventory, not a privilege, and the people most likely to recognise a burst of
+           4625s are the helpdesk rather than whoever holds MANAGE_SETTINGS. Deciding what
+           the fleet collects needs that capability, and the page hides those controls
+           itself. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'events.events_page' else '' }}" data-nav-prefix="/events" href="{{ url_for('events.events_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h12l4 4v12H4z"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.events') }}</span>
+        </a>
+        {% endif %}
         {# Fleet tasks: the fleet halves of Backup and Firmware (the old /backups and /firmware
            pages). Until hub 1.114.0 this entry was "Tools" and also held Terminal, Network,
            Files and each PC's own backup and BIOS -- those are tabs on the machine page now.

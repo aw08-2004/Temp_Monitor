@@ -34,7 +34,8 @@
       "fleet": "Flota",
       "operate": "Operación",
       "admin": "Administración"
-    }
+    },
+    "events": "Eventos"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -628,7 +629,8 @@
       "location": "Ubicación",
       "map": "Mapa",
       "policy": "Política",
-      "ai": "Asistencia con IA"
+      "ai": "Asistencia con IA",
+      "events": "Registros de eventos"
     },
     "unit": {
       "celsius": "°C",
@@ -1142,6 +1144,10 @@
         "usage_retention_days": {
           "label": "Conservar el uso de apps",
           "help": "Cuánto tiempo se conserva el tiempo en primer plano por app antes de borrarse. Es un registro de lo que alguien hizo con sus tardes, así que por defecto es más corto que el de ubicación y está pensado para bajarlo más. Borrar una máquina elimina su uso de inmediato, independientemente de esto."
+        },
+        "event_retention_days": {
+          "label": "Conservar los eventos recopilados durante",
+          "help": "Cuánto tiempo se conservan los registros de eventos de Windows recopilados antes de eliminarlos. Es a la vez un control de privacidad y de espacio en disco: un registro del canal de seguridad nombra la cuenta para la que alguien escribió una contraseña, y esta es la única tabla que una suscripción demasiado amplia puede hacer crecer en miles de filas por hora. Eliminar un equipo borra sus eventos de inmediato, independientemente de esto."
         }
       },
       "map": {
@@ -1162,6 +1168,12 @@
         "max_age_seconds": {
           "label": "Levantar las restricciones tras",
           "help": "Cuánto tiempo sigue un dispositivo aplicando su política de aplicaciones después de dejar de recibir noticias de este hub. Pasado ese plazo, el dispositivo levanta todas las restricciones por su cuenta. Es una válvula de escape, no un tiempo de espera: un teléfono cuyo hub ha desaparecido no debe ser un aparato que haya que restablecer."
+        }
+      },
+      "events": {
+        "summary_window_seconds": {
+          "label": "Contar eventos de los últimos",
+          "help": "Hasta dónde miran hacia atrás los contadores situados sobre la lista de eventos. Separado a propósito de la ventana de retención: acortar cuánto se conservan los registros no debe cambiar en silencio lo que la página afirma que ocurrió hoy."
         }
       }
     },
@@ -3330,6 +3342,75 @@
       "cancel": "Cancelar",
       "cancelled": "Cancelada. Se retiraron {recalled} equipo(s); los que ya se estaban reiniciando se dejaron en paz, porque los parches ya están en ellos.",
       "retry": "Reintentar los fallos"
+    }
+  },
+  "events": {
+    "heading": "Registros de eventos",
+    "intro": "Registros de eventos de Windows filtrados en el equipo y enviados aquí. Solo se lee lo que pide una suscripción, y las repeticiones dentro de cinco minutos se cuentan en una fila en lugar de guardarse por separado.",
+    "views_nav": "Vistas de eventos",
+    "tab_records": "Eventos",
+    "tab_subscriptions": "Recopilación",
+    "search_placeholder": "Buscar en mensajes y orígenes",
+    "any_level": "Cualquier nivel",
+    "any_log": "Cualquier registro",
+    "refresh": "Actualizar",
+    "request_failed": "El hub no pudo responder a esa solicitud.",
+    "none_matched": "Sin coincidencias. Sus equipos no han informado de eventos que encajen con estos filtros.",
+    "none_subscribed": "Todavía no se recopila nada. Añada una suscripción para indicar qué registros de eventos debe enviar la flota.",
+    "since": "desde {when}",
+    "times": "{count} veces",
+    "level": {
+      "critical": "Crítico",
+      "error": "Error",
+      "warning": "Advertencia",
+      "information": "Información",
+      "verbose": "Detallado"
+    },
+    "summary": {
+      "occurrences": "Ocurrencias",
+      "distinct": "Eventos distintos",
+      "machines": "Equipos que informan",
+      "errors": "Errores y críticos",
+      "window": "Contado durante las últimas {hours} horas."
+    },
+    "col": {
+      "when": "Visto por última vez",
+      "machine": "Equipo",
+      "level": "Nivel",
+      "source": "Registro y proveedor",
+      "event": "Evento",
+      "message": "Mensaje"
+    },
+    "sub": {
+      "add": "Nueva suscripción",
+      "new_title": "Nueva suscripción",
+      "edit_title": "Editar suscripción",
+      "name": "Nombre",
+      "name_placeholder": "Inicios de sesión fallidos",
+      "log": "Canal de registro",
+      "log_placeholder": "Security",
+      "log_help": "El canal tal como lo nombra Windows. Se sugieren los cuatro que tiene todo PC, y un canal de proveedor como Microsoft-Windows-TaskScheduler/Operational puede escribirse completo.",
+      "event_ids": "ID de evento",
+      "event_ids_help": "Sepárelos como prefiera. Déjelo vacío para recopilar todos los eventos del canal que coincidan con los niveles de abajo.",
+      "levels": "Niveles",
+      "levels_help": "Deje todas las casillas sin marcar para recopilar cualquier nivel.",
+      "provider": "El proveedor contiene",
+      "provider_help": "Limita la suscripción a registros escritos por un proveedor cuyo nombre contenga este texto.",
+      "volume_warning": "Una suscripción sin ID de evento y sin niveles recopila el canal entero. En un equipo con mucha actividad son miles de registros al día, y los más antiguos se descartan cuando un equipo alcanza su límite.",
+      "any_id": "cualquier ID",
+      "any_level": "cualquier nivel",
+      "summary": "ID: {ids} · Niveles: {levels}",
+      "col_name": "Nombre",
+      "col_log": "Registro",
+      "col_filter": "Coincide con",
+      "col_state": "Estado",
+      "enabled": "Recopilando",
+      "disabled": "Desactivada",
+      "enable": "Activar",
+      "disable": "Desactivar",
+      "none": "En este hub no se recopila nada.",
+      "none_manage": "Todavía no se recopila nada. Añada una suscripción para indicar qué registros de eventos debe enviar la flota.",
+      "confirm_delete": "¿Dejar de recopilar \"{name}\"? Los eventos ya recopilados se conservan."
     }
   },
   "channels": {

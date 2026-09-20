@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.events') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only. The counters, the event list, the level filter and the subscription
+   editor are all built by events.js from GET /api/events -- the level vocabulary in
+   particular comes from the server rather than being duplicated here, so adding a level to
+   events.LEVELS is one edit in Python plus its catalog entries.
+
+   The subscription controls are rendered by the JS behind `can_manage` from the same
+   response, NOT hidden with CSS: an operator holding only `view` should not receive a
+   Delete button they cannot use, and every endpoint re-checks the capability anyway. The
+   subscription LIST is shown to them regardless, because "why is this page empty" is
+   answered by that list far more often than by the event list.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('events.heading') }}</h1>
+        <p class="stat-card__meta">
+            {{ t('events.intro') }}
+        </p>
+    </div>
+    <div class="toolbar" id="events-actions"></div>
+</div>
+
+{# The counters. Occurrences rather than rows, because a rolled-up row holding four hundred
+   failed logons is the answer somebody came here for -- see events.summary. #}
+<div class="stat-grid" id="events-summary" style="margin-bottom: var(--space-5);"></div>
+
+{# Two panes, not more. What came back, and what is being collected -- the second exists
+   because an empty first pane is ambiguous until you can see whether anything is subscribed.
+   Driven by the shared tabs.js for the reason patches.html gives. #}
+<div class="tabs" role="tablist" aria-label="{{ t('events.views_nav') }}" data-tabs-key="events">
+    <button class="tabs__tab tabs__tab--active" type="button" role="tab" id="tab-btn-records"
+            aria-controls="records-pane" aria-selected="true">{{ t('events.tab_records') }}
+        <span class="badge" id="count-records"></span></button>
+    <button class="tabs__tab" type="button" role="tab" id="tab-btn-subs"
+            aria-controls="subs-pane" aria-selected="false" tabindex="-1">{{ t('events.tab_subscriptions') }}
+        <span class="badge" id="count-subs"></span></button>
+</div>
+
+<div class="tab-panel" id="records-pane" role="tabpanel" aria-labelledby="tab-btn-records">
+    <div class="toolbar" style="margin-bottom: var(--space-4); gap: var(--space-3);">
+        <input class="input" id="events-search" type="search" autocomplete="off"
+               placeholder="{{ t('events.search_placeholder') }}" style="min-width: 18rem;">
+        <select class="input" id="events-level"></select>
+        <select class="input" id="events-log"></select>
+    </div>
+    <div id="events-list"></div>
+</div>
+<div class="tab-panel" id="subs-pane" role="tabpanel" aria-labelledby="tab-btn-subs" hidden></div>
+
+<!-- ------------------------------------------------------ subscription editor -->
+<dialog class="modal" id="sub-modal">
+    <form method="dialog" id="sub-form">
+        <div class="modal__head">
+            <h2 class="modal__title" id="sub-modal-title">{{ t('events.sub.new_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="sub-name">{{ t('events.sub.name') }}</label>
+            <input class="input" id="sub-name" maxlength="120" autocomplete="off"
+                   placeholder="{{ t('events.sub.name_placeholder') }}" style="width: 100%;">
+
+            {# A free-text channel with a datalist of the four everybody has, rather than a
+               closed dropdown. Most of the genuinely useful events in a modern Windows live
+               on a provider channel ("Microsoft-Windows-TaskScheduler/Operational"), and a
+               closed list would make them unsubscribable. #}
+            <label class="setting__label" for="sub-log" style="margin-top: var(--space-4);">{{ t('events.sub.log') }}</label>
+            <input class="input" id="sub-log" maxlength="160" autocomplete="off"
+                   list="sub-log-options" placeholder="{{ t('events.sub.log_placeholder') }}"
+                   style="width: 100%;">
+            <datalist id="sub-log-options"></datalist>
+            <p class="setting__default">{{ t('events.sub.log_help') }}</p>
+
+            <label class="setting__label" for="sub-ids" style="margin-top: var(--space-4);">{{ t('events.sub.event_ids') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+            <input class="input" id="sub-ids" maxlength="400" autocomplete="off"
+                   placeholder="4625, 4740" style="width: 100%;">
+            <p class="setting__default">{{ t('events.sub.event_ids_help') }}</p>
+
+            <fieldset class="setting" style="border: 0; padding: 0; margin: var(--space-4) 0 0;">
+                <legend class="setting__label">{{ t('events.sub.levels') }} <span class="setting__default">{{ t('common.optional') }}</span></legend>
+                <div class="toolbar" id="sub-levels"></div>
+                <p class="setting__default">{{ t('events.sub.levels_help') }}</p>
+            </fieldset>
+
+            <label class="setting__label" for="sub-provider" style="margin-top: var(--space-4);">{{ t('events.sub.provider') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+            <input class="input" id="sub-provider" maxlength="160" autocomplete="off" style="width: 100%;">
+            <p class="setting__default">{{ t('events.sub.provider_help') }}</p>
+
+            {# The warning is rendered with the form rather than behind a confirmation,
+               because the mistake it guards against is not destructive and not reversible by
+               an undo -- it is a subscription that quietly fills the table, and the moment to
+               say so is while somebody is choosing the levels. #}
+            <p class="setting__default" style="margin-top: var(--space-4);">{{ t('events.sub.volume_warning') }}</p>
+        </div>
+        <div class="modal__foot">
+            <button class="btn" type="button" id="sub-cancel">{{ t('common.cancel') }}</button>
+            <button class="btn btn--primary" type="button" id="sub-save">{{ t('common.save') }}</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/events.js') }}"></script>
+{% endblock %}
