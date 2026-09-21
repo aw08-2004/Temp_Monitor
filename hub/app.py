@@ -3205,8 +3205,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     """Absorb `dropped` into `survivor` -- the same physical machine seen under an old
     hostname. Re-points the dropped host's readings onto the survivor so temperature
     history stays continuous, backfills any identity field the survivor is missing from
-    the dropped row, then removes the dropped identity row and its stale fleet
-    enrollment. Irreversible."""
+    the dropped row, then removes the dropped identity row and its stale fleet enrollment.
+    Module-owned history, including network sweeps, follows the survivor where meaningful;
+    transient process and file-browser state is dropped. Irreversible."""
     survivor = str(survivor or "").strip()
     dropped = str(dropped or "").strip()
     if not survivor or not dropped or survivor == dropped:
@@ -5294,10 +5295,14 @@ def put_machine_channel(machine):
 @login_required
 @access.require_machine(permissions.MANAGE_SETTINGS)
 def delete_machine(machine):
-    """Hard-delete a decommissioned machine: its identity row, all temperature history,
-    and its fleet agent enrollment. Irreversible. If the machine's agent is still
-    running it will re-enroll and reappear on its next report -- this is meant for
-    machines that are actually gone."""
+    """Hard-delete a decommissioned machine and its module-owned active state.
+
+    This removes its identity, temperature readings, fleet enrollment, discovery history,
+    and other live inventory and configuration. Historical records that remain useful after
+    decommissioning, such as patch outcomes and backup manifests, survive. Irreversible. If
+    the agent is still running it will re-enroll and reappear on its next report -- this is
+    meant for machines that are actually gone.
+    """
     machine_name = str(machine).strip()
     if not machine_name:
         return jsonify({"error": "Machine name required"}), 400

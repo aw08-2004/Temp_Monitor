@@ -1882,8 +1882,12 @@ def _favorite_row(row):
 
 
 def _validate_favorite(name, command_type, params):
-    """Shared by create/update. Mirrors create_command's type+params rules, so a
-    favorite can never store something the command endpoint would reject."""
+    """Validate a favorite's command contract and reject commands that are unsafe to replay.
+
+    Shared by create and update. The type and parameter checks mirror `create_command`; the
+    replay checks are intentionally stricter because one-shot and machine-specific commands
+    are valid to issue now but not to save for another target or time.
+    """
     name = str(name or "").strip()
     if not name:
         raise ValueError("name is required")

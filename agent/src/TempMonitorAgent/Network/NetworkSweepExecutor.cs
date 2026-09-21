@@ -143,7 +143,9 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
     }
 
     // ---------------------------------------------------------------- addressing
-    /// <summary>Split "10.4.7.0/24" into its network address and prefix length.</summary>
+    /// <summary>Parse an IPv4 CIDR string into its supplied address and prefix length.
+    /// Returns false for malformed input, non-IPv4 addresses, and prefixes outside
+    /// 1 through 31.</summary>
     public static bool TryParseCidr(string cidr, out IPAddress network, out int prefix)
     {
         network = IPAddress.None;
@@ -244,7 +246,8 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
         return hits;
     }
 
-    /// <summary>The MAC that answers for one address, or "" if nothing did.</summary>
+    /// <summary>The MAC that answers for one address, or "" when no response can be
+    /// obtained.</summary>
     public static string ArpFor(IPAddress address)
     {
         var mac = new byte[6];

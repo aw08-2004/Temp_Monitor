@@ -232,7 +232,11 @@ def managed_macs(db_path):
 
 
 def classify(mac, relay, index):
-    """The verdict for one observed MAC. Pure, so the table above can be tested directly."""
+    """Return `(classification, owner)` for one observed MAC.
+
+    `owner` is empty for an unmanaged address. Pure, so the table above can be tested
+    directly.
+    """
     normalized = wake.normalize_mac(mac)
     if not normalized:
         # An address that answered with no usable MAC. Counted as unmanaged rather than
@@ -333,7 +337,8 @@ def list_scans(db_path, machine=None, limit=50, open_only=False):
 
 
 def latest_scan(db_path, machine, subnet=None):
-    """The most recent scan for this machine, with its hosts. None if it has never swept."""
+    """The latest scan, optionally on one subnet, with hosts classified against the current
+    fleet."""
     scans = list_scans(db_path, machine=machine, limit=MAX_SCANS_PER_MACHINE)
     if subnet:
         scans = [s for s in scans if s["subnet"] == subnet]
@@ -363,9 +368,10 @@ def request_scan(db_path, machine, subnet, *, requested_by, online=False,
                  ttl_seconds=DEFAULT_SCAN_TTL_SECONDS, now=None):
     """Queue one sweep of `subnet`, run by `machine`. Returns the scan row.
 
-    Refuses rather than records in four cases, and each refusal is a sentence an operator
-    can act on:
+    Raises `DiscoveryRejected` rather than recording in five cases, and each refusal is a
+    sentence an operator can act on:
 
+      * no machine was supplied;
       * the machine is offline -- a sweep is a live probe with nothing to persist for,
         unlike a wake, which exists precisely because the target is off;
       * the machine has never reported its adapters, so the hub does not know what it is
