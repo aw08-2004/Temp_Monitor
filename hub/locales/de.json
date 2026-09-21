@@ -630,7 +630,8 @@
       "map": "Karte",
       "policy": "Richtlinie",
       "ai": "KI-Unterstützung",
-      "events": "Ereignisprotokolle"
+      "events": "Ereignisprotokolle",
+      "discovery": "Netzwerkerkennung"
     },
     "unit": {
       "celsius": "°C",
@@ -1118,6 +1119,12 @@
         "summary_window_seconds": {
           "label": "Ereignisse zählen über",
           "help": "Wie weit die Zähler über der Ereignisliste zurückblicken. Bewusst getrennt vom Aufbewahrungsfenster -- eine kürzere Aufbewahrung darf nicht stillschweigend ändern, was die Seite über den heutigen Tag behauptet."
+        }
+      },
+      "discovery": {
+        "scan_ttl_seconds": {
+          "label": "Durchlauf aufgeben nach",
+          "help": "Ein Durchlauf wird von einem PC ausgeführt, der wach ist und antwortet. Ein Bericht, der bis dahin nicht da ist, kommt nicht mehr."
         }
       }
     },
@@ -2409,6 +2416,44 @@
     "tools": {
       "hidden": "Einige Werkzeuge sind ausgeblendet: Dieser Rechner hat gemeldet, dass er sie nicht beantworten kann.",
       "hidden_android": "Einige Werkzeuge sind ausgeblendet: Das ist ein Android-Gerät, und es gibt dafür weder eine Shell noch ein BIOS noch ein Dateisystem."
+    },
+    "discovery": {
+      "title": "Subnetz-Erkennung",
+      "help": "Diesen PC bitten, sein Netzwerk zu durchsuchen und alles aufzulisten, was antwortet. Nur Subnetze, in denen dieser PC selbst ist, können durchsucht werden.",
+      "subnet_label": "Zu durchsuchendes Subnetz",
+      "sweep": "Dieses Subnetz durchsuchen",
+      "sweep_title": "Diesen PC bitten, jede Adresse im gewählten Subnetz per ARP abzufragen.",
+      "sweep_offline": "Dieser PC muss wach sein, um sein eigenes Netzwerk anzusehen.",
+      "load_failed": "Die Erkennungsergebnisse dieses Geräts konnten nicht geladen werden.",
+      "sweeping_on": "Dieser PC wird gebeten, {subnet} zu durchsuchen.",
+      "swept": "{subnet} am {when} durchsucht, {probed} Adressen abgefragt.",
+      "truncated": "Es haben mehr Hosts geantwortet, als der Hub speichert; es werden nur die ersten davon angezeigt.",
+      "nothing_found": "Sonst hat nichts in diesem Subnetz geantwortet.",
+      "no_subnets_help": "Dieser PC hat noch keine Adresse in einem Subnetz gemeldet, also gibt es nichts zu durchsuchen.",
+      "state": {
+        "scanning": "Wird durchsucht",
+        "done": "Durchsucht",
+        "failed": "Durchsuchen nicht möglich"
+      },
+      "status": {
+        "sweeping": "Wird durchsucht…",
+        "never": "Nie durchsucht",
+        "clean": "Nichts Unverwaltetes",
+        "unmanaged": "{count} unverwaltet",
+        "failed": "Letzter Durchlauf fehlgeschlagen",
+        "no_subnets": "Kein Subnetz gemeldet"
+      },
+      "class": {
+        "relay": "Dieser PC",
+        "managed": "Verwaltet",
+        "unmanaged": "Nicht verwaltet"
+      },
+      "col": {
+        "address": "Adresse",
+        "mac": "MAC",
+        "name": "Name",
+        "known": "Dem Hub bekannt"
+      }
     }
   },
   "remote": {
