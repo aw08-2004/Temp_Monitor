@@ -63,6 +63,7 @@ import files
 import live
 import authconfig
 import apitokens
+import push
 import sharing
 import envfile
 import i18n
@@ -97,6 +98,7 @@ from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
+from push_web import create_push_blueprint
 from sharing_web import create_sharing_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
@@ -2433,6 +2435,13 @@ app.register_blueprint(create_auth_blueprint(
 app.register_blueprint(create_apitokens_blueprint(
     DB_PATH, login_required, access, code_dir=HUB_CODE_DIR))
 
+# Push registration for paired devices (roadmap #11 phase 2). Separate from the pairing
+# blueprint above even though both are about devices, because the gates are opposites: those
+# routes are for a signed-in BROWSER pairing a device, these are for the DEVICE itself and
+# refuse a browser session outright. One blueprint would have had to carry both rules and
+# explain which applied where.
+app.register_blueprint(create_push_blueprint(DB_PATH, login_required, access))
+
 # Cross-hub machine sharing (roadmap #15). The one blueprint in this hub whose caller can be
 # ANOTHER HUB: `/api/peer/...` is gated on a peer token and nothing else, while
 # `/api/sharing/...` is the ordinary session gate. LOG_DIR is handed in because the peer
@@ -4428,6 +4437,12 @@ ai.init_ai_db(DB_PATH)
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
 # never block on a mail server that has stopped answering.
 notify.configure(DB_PATH)
+# Points push at the database and starts its alert-delta scan. After notify.configure
+# because it enqueues into notify's outbox, and separate from the init_* calls for the same
+# reason notify is: it owns a thread. ALLOWED_EMAILS is handed in because the scan asks what
+# each device's owner may see WITHOUT a request to read it off, and a superuser list it did
+# not have would make a break-glass operator's phone the one that never rings.
+push.configure(DB_PATH, superusers=ALLOWED_EMAILS)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.

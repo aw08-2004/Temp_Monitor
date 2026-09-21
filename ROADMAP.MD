@@ -1987,7 +1987,7 @@ comes online.
 
 ---
 
-## 🚧 11. Desktop & mobile app   ·   hub 1.69.0   ·   client 1.1.0
+## 🚧 11. Desktop & mobile app   ·   hub 1.69.0 + 1.119.0   ·   client 1.1.0
 
 **The hub half is built (1.69.0), 1.0.0 is published on stable, and 1.1.0 is signed and
 published on the BETA channel** (roadmap #21) — one version sequence, so promoting it is
@@ -2260,8 +2260,82 @@ warning, the same shape as its existing version-agreement check.
   an unsigned zip is a folder. Revisit as MSIX once there is a code-signing certificate,
   which is also what would let toasts stop depending on `local_notifier`'s Start Menu
   shortcut for an application identity.
-- **Phase 2**: the Android/iOS builds, FCM/APNs against the `push_*` columns already in
-  place, and the bundled localization described above. Scoped in detail below.
+- **Phase 2**: the Android/iOS builds and the bundled localization described above. The
+  hub half of push now exists (hub 1.119.0, below); what remains is the Android project
+  itself, which is where the FCM plugin and the two localization keys live.
+
+### Built (hub side) — push, phase 2's prerequisite   ·   hub 1.119.0
+
+**The gap named below is closed on the hub side.** `push.py` (model, flask-free) +
+`push_web.py` (three device-only routes), a `push` transport in `notify.py`, and
+`FleetApi`'s four calls in the Flutter client. The `push_kind` / `push_token` columns that
+have sat unused on `api_tokens` since the pairing work are now written by something.
+
+**The delta is computed by a scan, not signalled from the alert raise path**, and that is
+the decision the rest follows from. A callback would have had to live in
+`alerts.upsert_rule`, which cannot today tell a NEW episode from the refresh of a running
+one -- so a rule matched for a week would push on every evaluation tick, which is the
+notification storm the client's `_priming` exists to prevent, arriving at 02:00 every ten
+seconds. Instead each device carries a cursor and the scan works out what it has not been
+told about, which is the same shape as the client's own seen-set: the phone and the desktop
+agree about what "new" means rather than holding two definitions that drift.
+
+- **Priming, at registration.** A phone paired on a Monday is told about nothing that
+  already existed. The alternative -- deliver the open-alert backlog -- is what teaches
+  somebody to swipe FleetHub notifications away unread, and the one they eventually swipe
+  away unread is the one that mattered.
+- **Delivery is not readership.** The cursor moves forward only when the app says the list
+  was opened (`/api/push/seen`). Advancing it on delivery instead is how the fourth alert
+  of the night arrives announcing "1" -- the count being wrong at exactly the moment the
+  count is the whole message.
+- **Scope is intersected LIVE, exactly as `permissions_web._narrow_to_device` does it.**
+  This path runs with no request to read permissions off, so the intersection had to be
+  rebuilt here rather than inherited. Without it, a device paired while its owner was an
+  admin would go on being told about machines its own API calls now refuse to show it --
+  the credential outliving the grant, in the one place nobody would think to look. Tested
+  by demoting the owner AFTER pairing, which is the sequence that would otherwise pass.
+- **The payload carries a COUNT and no content.** Not the machine, not the rule, not a
+  temperature. Two reasons that agree: a push transits Google's servers and a helpdesk's
+  machine names are the inventory of somebody's estate; and a notification is a nudge to
+  open the app, where the list is already scoped and already correct.
+- **The words come from the DEVICE, via `title_loc_key` / `body_loc_key`.** FCM and APNs
+  both resolve a localization key against the app's own bundled catalog, which is a better
+  fit than rendering here even setting aside the hub not knowing the phone's language: this
+  entry chose bundled catalogs over fetched ones because the app gets opened in a car park
+  with no signal, and a hub-rendered body would be the one string left depending on a round
+  trip. `push_title` and `push_alerts` are therefore a compatibility API in the same sense
+  as the `MIN_*_AGENT` constants -- rename one and every phone shows its raw key.
+- **Delivery rides notify.py's outbox rather than a second queue.** Durability across a
+  restart, backoff, and not blocking the thread that noticed are all things that module
+  already does. A 404 or 403 from FCM is treated as PERMANENT and clears the registration:
+  it means the app was uninstalled, and retrying it five times per alert for a phone that
+  no longer exists fills the outbox with noise that hides the failures worth reading.
+- **APNs is refused, not omitted.** `apns` is a valid registration kind so the registry is
+  right the day an iOS build exists, but the transport raises with the reason. APNs is
+  HTTP/2 and `requests` is not, so building it means a second HTTP client in the hub's
+  requirements -- for a platform needing an Apple Developer account this project does not
+  have, against a build that has never been produced. It would be an untested dependency by
+  the time anyone could use it.
+- **`google-auth` was rejected** for the same shape of reason. The service-account
+  assertion is thirty lines of RS256 against `cryptography`, which backups.py already
+  depends on; the library brings a transport stack, a credentials-discovery chain and an
+  async half, and this hub's dependency list is read by whoever has to approve an install
+  on a helpdesk's server.
+- **Credentials go in .env** (`FCM_SERVICE_ACCOUNT`, a PATH to the JSON key file), never
+  the settings table -- the same rule that keeps SMTP credentials and the BIOS setup
+  password out of a database that is inside the nightly backup.
+
+**What this does NOT include, and deliberately:** there is no console indicator of which
+devices are registered. The Devices tab still shows what it showed. That is a Tailwind
+rebuild plus a locale sweep for a column nobody needs until a phone exists to appear in it,
+and `/api/push/status` already tells the app both halves of the answer -- whether the hub
+has credentials, and whether this install registered.
+
+**Untested against anything real**, and the honest boundary is the same one the rest of
+this entry draws: `scan`, the scoping, the priming and the message shape are covered by
+`tests/test_push.py` (46 checks) and `tests/test_push_web.py` (25), but no push has ever
+reached a phone, because that needs a Firebase project, an Android build and a device. The
+first-contact-with-hardware finding this entry keeps predicting is still ahead of it.
 
 ### Phase 2 — what an Android build actually costs
 
@@ -2310,6 +2384,13 @@ useful. That work is: a Firebase project, a hub-side sender against the `push_ki
 token, and **content-free payloads** ("3 alerts", tap to open) so no machine name or
 temperature transits Google. iOS is the same shape with APNs, plus an Apple Developer
 account, and would appear on the Download page as a `link`-kind build rather than a file.
+
+**Everything in that sentence except the Firebase project now exists** -- see the hub 1.119.0
+section above, which also records why APNs is a refusal rather than a gap. What is left on
+the app side is the Android project itself: the FCM plugin that produces a registration
+token, the two calls to `/api/push/register` and `/api/push/seen` (already written, as
+`FleetApi.registerPush` and `FleetApi.pushSeen`), and `push_title` / `push_alerts` in the
+Android string resources, without which every notification displays its own key.
 
 **Build prerequisites**, none of which are on the current build machine: the Android SDK
 and a JDK (`flutter doctor` currently reports "Unable to locate Android SDK"), plus the
