@@ -2913,7 +2913,8 @@ MAX_SNOOZE_SECONDS = 30 * 86400
 # Windows recycles within minutes.
 RULE_FORBIDDEN_COMMANDS = (fleet.SESSION_CONTROL_COMMANDS | fleet.SCHEDULED_COMMANDS
                            | fleet.REMOTE_CONTROL_COMMANDS | fleet.UNSAVEABLE_FIRMWARE_COMMANDS
-                           | fleet.UNSAVEABLE_WAKE_COMMANDS | fleet.PROCESS_COMMANDS
+                           | fleet.UNSAVEABLE_WAKE_COMMANDS | fleet.UNSAVEABLE_DISCOVERY_COMMANDS
+                           | fleet.PROCESS_COMMANDS
                            | fleet.PROBE_COMMANDS
                            # `update_bios` belongs with the one-shot params above and was only
                            # ever absent from that list because it sits in the base ALL_COMMANDS
@@ -3898,25 +3899,31 @@ def dispatch_actions(db_path, actions, machine, variables, *, rule, now, config,
             elif kind == ACTION_COMMAND:
                 command_params, missing = render_params_checked(params.get("params") or {},
                                                                 variables)
-                record["command_type"] = params["command_type"]
-                unsupported = capabilities.refusal_for(db_path, machine,
-                                                       params["command_type"])
-                if missing:
+                command_type = params["command_type"]
+                record["command_type"] = command_type
+                # Validation refuses newly saved rules, but a row written before that
+                # safeguard must not queue a sweep without discovery.request_scan creating
+                # its scan row and audit entry.
+                if command_type in fleet.UNSAVEABLE_DISCOVERY_COMMANDS:
+                    record["skipped"] = "network sweeps are started from the Discovery card"
+                elif missing:
                     record["skipped"] = _unresolved_reason(missing)
-                elif unsupported:
-                    # This machine has told us it cannot run this type (roadmap #23). SKIPPED
-                    # rather than left to create_command's refusal landing in `error` below:
-                    # a rule matching a phone and a hundred PCs is working exactly as written,
-                    # and a fire row that reads "error" for the phone every evening trains an
-                    # operator to ignore the column that means something.
-                    record["skipped"] = unsupported
                 else:
-                    record["command_id"] = fleet.create_command(
-                        db_path, machine, params["command_type"], command_params,
-                        issued_by=_issued_by(rule),
-                        ttl_seconds=int(config.get("command_ttl_seconds")
-                                        or fleet.DEFAULT_COMMAND_TTL_SECONDS),
-                    )
+                    unsupported = capabilities.refusal_for(db_path, machine, command_type)
+                    if unsupported:
+                        # This machine has told us it cannot run this type (roadmap #23). SKIPPED
+                        # rather than left to create_command's refusal landing in `error` below:
+                        # a rule matching a phone and a hundred PCs is working exactly as written,
+                        # and a fire row that reads "error" for the phone every evening trains an
+                        # operator to ignore the column that means something.
+                        record["skipped"] = unsupported
+                    else:
+                        record["command_id"] = fleet.create_command(
+                            db_path, machine, command_type, command_params,
+                            issued_by=_issued_by(rule),
+                            ttl_seconds=int(config.get("command_ttl_seconds")
+                                            or fleet.DEFAULT_COMMAND_TTL_SECONDS),
+                        )
             elif kind == ACTION_SCRIPT:
                 record.update(_dispatch_script(db_path, params, machine, variables,
                                                rule=rule, config=config))

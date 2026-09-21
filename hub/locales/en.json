@@ -689,7 +689,8 @@
       "map": "Map",
       "policy": "Policy",
       "ai": "AI Assistance",
-      "events": "Event Logs"
+      "events": "Event Logs",
+      "discovery": "Network discovery"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1190,6 +1191,12 @@
         "summary_window_seconds": {
           "label": "Count events over",
           "help": "How far back the counters above the event list look. Separate from the retention window on purpose -- shortening how long records are kept must not silently change what the page claims happened today."
+        }
+      },
+      "discovery": {
+        "scan_ttl_seconds": {
+          "label": "Give up on a sweep after",
+          "help": "A sweep is run by a PC that is awake and answering, so a report that has not arrived by this point is not coming."
         }
       }
     },
@@ -2522,6 +2529,44 @@
     "tools": {
       "hidden": "Some tools are hidden: this machine has reported that it cannot answer them.",
       "hidden_android": "Some tools are hidden: this is an Android device, and there is no shell, no BIOS and no filesystem for them to work on."
+    },
+    "discovery": {
+      "title": "Subnet discovery",
+      "help": "Ask this PC to look at the network it is on and list everything that answers. Only the subnets this PC is itself on can be swept.",
+      "subnet_label": "Subnet to sweep",
+      "sweep": "Sweep this subnet",
+      "sweep_title": "Ask this PC to ARP every address on the chosen subnet.",
+      "sweep_offline": "This PC has to be awake to look at its own network.",
+      "load_failed": "Could not load this machine's discovery results.",
+      "sweeping_on": "Asking this PC to sweep {subnet}.",
+      "swept": "Swept {subnet} on {when}, {probed} addresses probed.",
+      "truncated": "More hosts answered than the hub will store; only the first of them are shown.",
+      "nothing_found": "Nothing else answered on this subnet.",
+      "no_subnets_help": "This PC has not reported an address on any subnet yet, so there is nothing it can sweep.",
+      "state": {
+        "scanning": "Sweeping",
+        "done": "Swept",
+        "failed": "Could not sweep"
+      },
+      "status": {
+        "sweeping": "Sweeping…",
+        "never": "Never swept",
+        "clean": "Nothing unmanaged",
+        "unmanaged": "{count} unmanaged",
+        "failed": "Last sweep failed",
+        "no_subnets": "No subnet reported"
+      },
+      "class": {
+        "relay": "This PC",
+        "managed": "Managed",
+        "unmanaged": "Not managed"
+      },
+      "col": {
+        "address": "Address",
+        "mac": "MAC",
+        "name": "Name",
+        "known": "Known to the hub"
+      }
     }
   },
   "remote": {
