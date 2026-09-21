@@ -734,6 +734,12 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             return jsonify({"error": "PCs are woken from the Network tab, which picks a "
                                      "machine on the target's own subnet to send the "
                                      "packet."}), 400
+        # A discovery command has to begin by creating and validating its scan row. A
+        # hand-rolled queue entry skips the on-segment check, result persistence, and the
+        # notice-level audit that makes a network probe accountable.
+        if data.get("type") in fleet.UNSAVEABLE_DISCOVERY_COMMANDS:
+            return jsonify({"error": "Network sweeps are started from the machine's Network "
+                                     "card, which validates the subnet and records the scan."}), 400
         # Same capability, but a different door on purpose: processes_web validates the
         # (name, pid) pairing that protects against PID reuse and refuses the critical
         # Windows processes whose termination is a bugcheck rather than a closed program.

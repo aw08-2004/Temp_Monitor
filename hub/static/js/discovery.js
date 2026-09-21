@@ -48,6 +48,8 @@
     let data = null;
     let pollTimer = null;
     let pollsLeft = 0;
+    let requestGeneration = 0;
+    let refreshInFlight = false;
     const POLL_INTERVAL_MS = 4000;
     // A /24 at 32 probes in flight is under a minute; a /22 is nearer four. This covers the
     // slow case with room to spare, and gives up rather than polling all afternoon.
@@ -105,10 +107,16 @@
     }
 
     async function load() {
+        stopPolling();
+        const generation = requestGeneration;
+        const machine = currentMachine();
         setStatus('muted', t('common.loading'));
         try {
-            data = await api(`/api/discovery/machines/${encodeURIComponent(currentMachine())}`);
+            const loaded = await loadDiscovery(machine);
+            if (!isCurrent(generation, machine)) return;
+            data = loaded;
         } catch (e) {
+            if (!isCurrent(generation, machine)) return;
             data = null;
             setStatus('danger', t('machine.discovery.load_failed'));
             body.replaceChildren(el('p', 'setting__error', e.message));
@@ -120,11 +128,32 @@
         render();
     }
 
-    async function refresh() {
+    function isCurrent(generation, machine) {
+        return generation === requestGeneration && machine === currentMachine();
+    }
+
+    async function loadDiscovery(machine) {
+        const payload = await api(`/api/discovery/machines/${encodeURIComponent(machine)}`);
+        const scanId = payload && payload.scan && payload.scan.id;
+        if (!scanId) return payload;
+        // The machine endpoint deliberately carries a compact current-scan row. Always
+        // replace it with the scan resource before rendering so hosts and counts agree.
+        const scan = await api(`/api/discovery/scans/${encodeURIComponent(scanId)}`);
+        return { ...payload, scan };
+    }
+
+    async function refresh(generation, machine) {
+        if (refreshInFlight) return false;
+        refreshInFlight = true;
         try {
-            data = await api(`/api/discovery/machines/${encodeURIComponent(currentMachine())}`);
+            const loaded = await loadDiscovery(machine);
+            if (!isCurrent(generation, machine)) return false;
+            data = loaded;
             render();
+            return true;
         } catch (e) { /* a failed poll is not worth tearing the card down over */ }
+        finally { refreshInFlight = false; }
+        return false;
     }
 
     function setStatus(tone, text) {
@@ -137,14 +166,22 @@
     function startPolling() {
         stopPolling();
         pollsLeft = MAX_POLLS;
+        const generation = requestGeneration;
+        const machine = currentMachine();
         pollTimer = setInterval(async () => {
+            if (!isCurrent(generation, machine)) return;
             if (pollsLeft-- <= 0) { stopPolling(); return; }
-            await refresh();
-            if (!isOpen(data && data.scan)) stopPolling();
+            const refreshed = await refresh(generation, machine);
+            if (refreshed && isCurrent(generation, machine) && !isOpen(data && data.scan)) {
+                stopPolling();
+            }
         }, POLL_INTERVAL_MS);
     }
 
     function stopPolling() {
+        // A timer callback may already be awaiting fetch(). Bump the generation before it
+        // resumes so a closed panel or a different machine never receives that old result.
+        requestGeneration += 1;
         if (pollTimer !== null) clearInterval(pollTimer);
         pollTimer = null;
     }
@@ -291,13 +328,23 @@
         sweepBtn.addEventListener('click', async () => {
             sweepBtn.disabled = true;
             const subnet = subnetPicker ? subnetPicker.value : '';
+            const machine = currentMachine();
+            stopPolling();
+            const generation = requestGeneration;
             try {
-                data = await post(
-                    `/api/discovery/machines/${encodeURIComponent(currentMachine())}/scan`,
+                const payload = await post(
+                    `/api/discovery/machines/${encodeURIComponent(machine)}/scan`,
                     { subnet });
+                const scanId = payload && payload.scan && payload.scan.id;
+                const scan = scanId
+                    ? await api(`/api/discovery/scans/${encodeURIComponent(scanId)}`)
+                    : null;
+                if (!isCurrent(generation, machine)) return;
+                data = scan ? { ...payload, scan } : payload;
                 render();
                 if (isOpen(data.scan)) startPolling();
             } catch (e) {
+                if (!isCurrent(generation, machine)) return;
                 stateBox.replaceChildren(el('p', 'setting__error', e.message));
                 sweepBtn.disabled = false;
             }

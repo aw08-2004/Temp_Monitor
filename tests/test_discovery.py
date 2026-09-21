@@ -93,6 +93,23 @@ def main():
             "nics": [nic("AA:BB:CC:DD:EE:B1", ipv4="10.0.0.5", prefix=8)]})
         check("a subnet wider than the cap is not offered at all",
               discovery.sweepable_subnets(db_path, "BIG-1") == [])
+        # wake.subnet_key already rejects /0 and /32 while accepting reports. Exercise
+        # discovery's own acceptance boundary too, so it cannot start offering a range the
+        # agent refuses if another network source later bypasses wake's parser.
+        real_get_network = discovery.wake.get_network
+        real_subnet_key = discovery.wake.subnet_key
+        try:
+            discovery.wake.get_network = lambda *_: {"nics": [
+                {"ipv4": "10.4.10.6", "prefix": 31},
+                {"ipv4": "10.4.10.7", "prefix": 32},
+                {"ipv4": "10.4.10.7", "prefix": 0},
+            ]}
+            discovery.wake.subnet_key = lambda ipv4, prefix: f"{ipv4}/{prefix}"
+            check("only ranges the agent can sweep are offered",
+                  discovery.sweepable_subnets(db_path, "BOUNDARY-1") == ["10.4.10.6/31"])
+        finally:
+            discovery.wake.get_network = real_get_network
+            discovery.wake.subnet_key = real_subnet_key
 
         # ==================================================================== requesting
         print("\n-- what a sweep will and will not be aimed at --")

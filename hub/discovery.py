@@ -190,7 +190,10 @@ def sweepable_subnets(db_path, machine):
     subnets = set()
     for nic in network["nics"]:
         key = wake.subnet_key(nic.get("ipv4"), nic.get("prefix"))
-        if key and _addresses_in(key) <= MAX_SWEEP_ADDRESSES:
+        # NetworkSweepExecutor has no meaningful host list for a /32, and refuses both
+        # it and /0 before it can run. Keep this boundary here as well as in wake's NIC
+        # parser: discovery owns the promise that every picker entry can actually sweep.
+        if key and 1 < _addresses_in(key) <= MAX_SWEEP_ADDRESSES:
             subnets.add(key)
     return sorted(subnets)
 

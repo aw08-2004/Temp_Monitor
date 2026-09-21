@@ -1461,8 +1461,9 @@ feature already collects.
 
 **The probe is ARP, not ping.** A Windows PC at default firewall settings does not answer
 ICMP from an unknown host, so a ping sweep of an office subnet finds the printers and misses
-the PCs -- the exact inverse of what this is for. Nothing on a segment can decline to answer
-ARP and stay reachable, so ARP is the one probe whose silence really means nothing is there.
+the PCs -- the exact inverse of what this is for. The sweep identifies only addresses that
+respond to ARP; sleeping, filtered, isolated, or otherwise non-responding devices may still
+be present, so silence is not proof that an address is unused.
 
 **It cannot be pointed anywhere.** The subnet is chosen from a list of the ones the machine
 has already reported being on, never typed, and the hub refuses anything else. ARP does not
