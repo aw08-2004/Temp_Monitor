@@ -695,6 +695,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
     @login_required
     @access.require(permissions.ISSUE_COMMANDS)
     def fleet_issue_command():
+        """Queue a generic command after excluding flows with stricter, dedicated gates."""
         data = request.get_json(silent=True) or {}
         issued_by = _current_email()
         # The sharp end of the whole model: this queues code to run as SYSTEM. The

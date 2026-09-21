@@ -122,6 +122,7 @@ class DiscoveryRejected(ValueError):
 # DB SETUP
 # ================================
 def get_conn(db_path):
+    """Open a row-addressable connection with the wait used by the rest of the hub."""
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
@@ -210,6 +211,7 @@ def _addresses_in(subnet):
 # READS
 # ================================
 def _clean(value, limit=MAX_TEXT_CHARS):
+    """Bound machine-supplied text before it reaches a scan row or response."""
     return str(value if value is not None else "").strip()[:limit]
 
 
@@ -255,6 +257,7 @@ def classify(mac, relay, index):
 
 
 def _scan_row(row, counts=None):
+    """Turn a SQLite scan row into the JSON shape shared by every reader."""
     scan = dict(row)
     scan["truncated"] = bool(scan.get("truncated"))
     scan["counts"] = counts if counts is not None else {}
@@ -262,6 +265,7 @@ def _scan_row(row, counts=None):
 
 
 def get_scan(db_path, scan_id):
+    """Return one scan without its potentially large host list, or None."""
     with get_conn(db_path) as conn:
         row = conn.execute("SELECT * FROM discovery_scans WHERE id = ?",
                            (str(scan_id),)).fetchone()
@@ -297,6 +301,7 @@ def scan_hosts(db_path, scan_id):
 
 
 def _sort_key(ip):
+    """Sort valid IPv4 addresses numerically and leave malformed legacy values first."""
     try:
         return int(ipaddress.IPv4Address(ip))
     except (ValueError, TypeError):
@@ -317,6 +322,7 @@ def count_by_class(hosts):
 
 
 def list_scans(db_path, machine=None, limit=50, open_only=False):
+    """List compact scan rows newest first, optionally narrowed to a machine or open work."""
     clauses, params = [], []
     if machine:
         clauses.append("machine = ?")
@@ -523,6 +529,7 @@ def fail_scan(db_path, scan_id, machine, error, now=None):
 
 
 def _finish_failed(db_path, scan_id, error, now):
+    """Close a scan with one bounded reason, shared by agent reports and reconciliation."""
     with get_conn(db_path) as conn:
         conn.execute(
             "UPDATE discovery_scans SET status = ?, finished_at = ?, error = ? WHERE id = ?",

@@ -60,14 +60,17 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
     private readonly ILogger<NetworkSweepExecutor> _log;
     private readonly FleetClient _fleet;
 
+    /// <summary>Build the executor with its result transport and diagnostic sink.</summary>
     public NetworkSweepExecutor(ILogger<NetworkSweepExecutor> log, FleetClient fleet)
     {
         _log = log;
         _fleet = fleet;
     }
 
+    /// <summary>The hub command name routed to this executor.</summary>
     public string Type => "network_sweep";
 
+    /// <summary>Validate, probe, name, and report one on-segment ARP sweep.</summary>
     public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput,
                                                   CancellationToken ct)
     {
@@ -178,6 +181,7 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
         return addresses;
     }
 
+    /// <summary>Convert a network-order IPv4 address for mask arithmetic.</summary>
     private static uint ToUInt32(IPAddress address)
     {
         var bytes = address.GetAddressBytes();
@@ -185,6 +189,7 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
                | ((uint)bytes[2] << 8) | bytes[3];
     }
 
+    /// <summary>Restore a network-order integer to an IPv4 address.</summary>
     private static IPAddress FromUInt32(uint value) => new(new[]
     {
         (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value,
@@ -206,6 +211,7 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
         return false;
     }
 
+    /// <summary>Yield usable local adapters, treating an unreadable inventory as empty.</summary>
     private static IEnumerable<NetworkInterface> SafeAdapters()
     {
         NetworkInterface[] adapters;
@@ -271,6 +277,7 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
         return string.Join(":", mac.Take(6).Select(b => b.ToString("X2")));
     }
 
+    /// <summary>Ask Windows which MAC answers for one destination address.</summary>
     [DllImport("iphlpapi.dll", ExactSpelling = true)]
     private static extern int SendARP(uint destIp, uint srcIp, byte[] macAddr,
                                       ref uint macAddrLen);
@@ -320,6 +327,7 @@ public sealed class NetworkSweepExecutor : ICommandExecutor
         }
     }
 
+    /// <summary>Best-effort persistence of a failure the command result also carries.</summary>
     private async Task ReportFailureAsync(string scanId, string error, CancellationToken ct)
     {
         try

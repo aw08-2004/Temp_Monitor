@@ -57,14 +57,17 @@ def create_discovery_blueprint(db_path, login_required, access, machine_roster=N
     can_view = access.require(permissions.VIEW)
 
     def _current_email():
+        """Attribute a sweep to the authenticated actor, never to request data."""
         return permissions_web.current_actor()
 
     def _require_json():
+        """Reject bodies Flask would otherwise silently treat as an empty request."""
         if not request.is_json:
             return jsonify({"error": "expected application/json"}), 415
         return None
 
     def _online(machine):
+        """Use app.py's live roster as the single definition of agent availability."""
         entries = machine_roster() if machine_roster else []
         return any(e.get("machine") == machine and e.get("online") for e in entries)
 
@@ -104,6 +107,7 @@ def create_discovery_blueprint(db_path, login_required, access, machine_roster=N
     @login_required
     @access.require_machine(permissions.VIEW)
     def machine_discovery(machine):
+        """Return the scoped machine card payload for the Network tab."""
         return jsonify(_payload(machine)), 200
 
     @bp.route("/api/discovery/scans/<scan_id>", methods=["GET"])

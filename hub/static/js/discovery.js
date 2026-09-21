@@ -35,6 +35,7 @@
     if (!pane) return;
 
     const t = window.t;
+    /** Read the active machine at call time so delayed polls cannot retain an old page. */
     const currentMachine = () => window.MachineContext.current();
 
     const statusPill = document.getElementById('discovery-status');
@@ -66,6 +67,7 @@
         failed: () => t('machine.discovery.state.failed'),
     };
 
+    /** Resolve known labels while keeping forward-compatible server values legible. */
     function labelFor(map, value) {
         const fn = map[value];
         // An unrecognised value shows itself: a newer hub reporting a class this console has
@@ -73,6 +75,7 @@
         return fn ? fn() : value;
     }
 
+    /** Fetch one JSON resource and turn its server error into a rejected request. */
     async function api(path, options) {
         const resp = await fetch(path, options);
         let payload = null;
@@ -81,6 +84,7 @@
         return payload;
     }
 
+    /** POST JSON through the card's shared response and error handling. */
     function post(path, bodyObj) {
         return api(path, {
             method: 'POST',
@@ -89,6 +93,7 @@
         });
     }
 
+    /** Say whether a scan still needs polling. */
     function isOpen(scan) {
         return !!scan && scan.status === 'scanning';
     }
@@ -100,12 +105,14 @@
         requires: (machine) => !!machine,
     });
 
+    /** Clear card state and invalidate any response still in flight. */
     function reset() {
         stopPolling();
         data = null;
         pollsLeft = 0;
     }
 
+    /** Load the card for the active machine without letting stale navigation win. */
     async function load() {
         stopPolling();
         const generation = requestGeneration;
@@ -128,10 +135,12 @@
         render();
     }
 
+    /** Guard state writes from requests started for an earlier machine or generation. */
     function isCurrent(generation, machine) {
         return generation === requestGeneration && machine === currentMachine();
     }
 
+    /** Replace the compact machine payload's scan with its complete host resource. */
     async function loadDiscovery(machine) {
         const payload = await api(`/api/discovery/machines/${encodeURIComponent(machine)}`);
         const scanId = payload && payload.scan && payload.scan.id;
@@ -142,6 +151,7 @@
         return { ...payload, scan };
     }
 
+    /** Refresh one polling generation, leaving the current card intact on failure. */
     async function refresh(generation, machine) {
         if (refreshInFlight) return false;
         refreshInFlight = true;
@@ -156,6 +166,7 @@
         return false;
     }
 
+    /** Keep the status tone, text, and accessibility-friendly DOM in sync. */
     function setStatus(tone, text) {
         statusPill.className = `status-pill status-pill--${tone}`;
         statusText.textContent = text;
@@ -163,6 +174,7 @@
     }
 
     // ---------------------------------------------------------------- polling
+    /** Watch an open scan for a bounded period and stop as soon as it closes. */
     function startPolling() {
         stopPolling();
         pollsLeft = MAX_POLLS;
@@ -178,6 +190,7 @@
         }, POLL_INTERVAL_MS);
     }
 
+    /** Stop the timer and invalidate a callback that may already be awaiting fetch. */
     function stopPolling() {
         // A timer callback may already be awaiting fetch(). Bump the generation before it
         // resumes so a closed panel or a different machine never receives that old result.
@@ -187,6 +200,7 @@
     }
 
     // ---------------------------------------------------------------- render
+    /** Render every dependent part from one consistent discovery snapshot. */
     function render() {
         if (!data) return;
         renderStatus();
@@ -196,6 +210,7 @@
         syncButtons();
     }
 
+    /** Summarize availability, progress, failure, or unmanaged findings in the pill. */
     function renderStatus() {
         const scan = data.scan;
         if (isOpen(scan)) { setStatus('muted', t('machine.discovery.status.sweeping')); return; }
@@ -217,6 +232,7 @@
             : t('machine.discovery.status.clean'));
     }
 
+    /** Rebuild safe subnet choices without discarding the operator's selection. */
     function renderSubnets() {
         if (!subnetPicker) return;
         const subnets = data.subnets || [];
@@ -235,6 +251,7 @@
         }
     }
 
+    /** Enable sweeping only when this online machine has a selectable local subnet. */
     function syncButtons() {
         if (!sweepBtn) return;
         const subnets = data.subnets || [];
@@ -244,6 +261,7 @@
             : t('machine.discovery.sweep_offline');
     }
 
+    /** Show transient and failed scan state separately from completed host results. */
     function renderState() {
         stateBox.replaceChildren();
         const scan = data.scan;
@@ -268,6 +286,7 @@
         }
     }
 
+    /** Render a completed observation without treating an empty subnet as a failure. */
     function renderHosts() {
         body.replaceChildren();
         const scan = data.scan;
