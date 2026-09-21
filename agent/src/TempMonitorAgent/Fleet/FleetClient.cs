@@ -1233,6 +1233,41 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     // ---------------------------------------------------------------- file explorer
 
     /// <summary>
+    /// Report one network sweep's host list (roadmap #18). Returns true if the hub took it.
+    ///
+    /// Sent here rather than as the command's output for the same reason the listing above
+    /// is: a full /22 is a thousand rows, and the command channel is a terminal transcript.
+    /// The separation earns its keep twice over here -- a sweep whose POST was lost must not
+    /// look like a subnet with nothing on it, which is exactly the finding this feature
+    /// would then get wrong.
+    ///
+    /// NOT retried, for the listing's reason: an operator is watching the card, and a second
+    /// click gets a fresh sweep rather than a stale one replayed. What a lost report costs
+    /// here is one scan row marked failed with "the machine never sent its results back",
+    /// which is a truthful description of what happened.
+    /// </summary>
+    public async Task<bool> ReportSweepAsync(string scanId, JsonNode payload,
+                                             CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/discovery/scan/"
+                  + $"{Uri.EscapeDataString(scanId)}";
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused a network sweep ({Status})", (int)resp.StatusCode);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Sweep POST failed: {Msg}", e.Message);
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Report one directory listing. Returns true if the hub took it.
     ///
     /// Sent here rather than as the command's output because a folder of two thousand

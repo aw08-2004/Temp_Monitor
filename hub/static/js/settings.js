@@ -25,6 +25,7 @@ const panels = {
     directory: document.getElementById('tab-directory'),
     patches: document.getElementById('tab-patches'),
     wake: document.getElementById('tab-wake'),
+    discovery: document.getElementById('tab-discovery'),
     provisioning: document.getElementById('tab-provisioning'),
     location: document.getElementById('tab-location'),
     map: document.getElementById('tab-map'),

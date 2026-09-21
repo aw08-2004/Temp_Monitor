@@ -36,6 +36,13 @@ import requests
 
 KIND_WEBHOOK = "webhook"
 KIND_EMAIL = "email"
+#: Push to a paired device (roadmap #11 phase 2). A third transport here rather than a queue
+#: of its own: a push is an outbound message that must survive a restart, must not block the
+#: thread that noticed it and must back off when the far end is down -- which is the whole of
+#: what this module already provides. push.py decides who gets told and what the count is;
+#: this file only carries it. Unlike the other two it is never a RULE ACTION, so it arrives
+#: through enqueue_push rather than through deliver().
+KIND_PUSH = "push"
 
 STATUS_PENDING = "pending"
 STATUS_SENT = "sent"
@@ -198,6 +205,34 @@ def deliver(action, context):
     return True, {"queued": outbox_id}
 
 
+def enqueue_push(db_path, kind, push_token, token_id, count, now=None):
+    """Queue one push for one device. push.scan's `enqueue` callback.
+
+    Takes `db_path` rather than reading the module-level one, because push.scan is called
+    directly by tests against a temp database and configure() may never have run in that
+    process -- the same reason send_due takes one.
+
+    The outbox row carries `token_id` alongside the push token so a permanent failure can
+    clear the registration that caused it. Storing the registration token in the payload is
+    deliberate and not a leak: it is an address FCM issued for one app install, it is
+    already in `api_tokens`, and the alternative -- re-reading the device at send time --
+    would push to whatever the row says NOW rather than to the device the scan decided
+    about.
+    """
+    now = int(now if now is not None else time.time())
+    payload = {"kind": kind, "push_token": push_token,
+               "token_id": token_id, "count": int(count)}
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO notify_outbox (kind, payload_json, next_attempt_at, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (KIND_PUSH, json.dumps(payload), now, now),
+        )
+        outbox_id = cur.lastrowid
+    _wake.set()
+    return outbox_id
+
+
 # ---------------------------------------------------------------------------------------
 # The worker
 # ---------------------------------------------------------------------------------------
@@ -239,13 +274,20 @@ def send_due(db_path, now=None):
         try:
             if row["kind"] == KIND_WEBHOOK:
                 _send_webhook(payload)
+            elif row["kind"] == KIND_PUSH:
+                _send_push(db_path, payload)
             else:
                 _send_email(payload)
             _mark(db_path, row["id"], STATUS_SENT, row["attempts"] + 1, "", now)
             sent += 1
         except Exception as e:                        # noqa: BLE001
             attempts = row["attempts"] + 1
-            if attempts >= MAX_ATTEMPTS:
+            # A push to a device FCM says no longer exists must not be retried four times
+            # over twenty minutes for every alert -- see push.send_fcm. The registration is
+            # already cleared by then; this stops the row too.
+            if getattr(e, "permanent", False):
+                _mark(db_path, row["id"], STATUS_FAILED, attempts, str(e)[:500], now)
+            elif attempts >= MAX_ATTEMPTS:
                 _mark(db_path, row["id"], STATUS_FAILED, attempts, str(e)[:500], now)
             else:
                 _mark(db_path, row["id"], STATUS_PENDING, attempts, str(e)[:500], now,
@@ -330,6 +372,48 @@ def _send_webhook(payload):
                              headers={"User-Agent": "FleetHub-Rules/1.0"})
     if response.status_code >= 400:
         raise ValueError(f"webhook returned HTTP {response.status_code}")
+
+
+def _send_push(db_path, payload):
+    """Deliver one push (roadmap #11 phase 2).
+
+    Imported inside the function rather than at module scope: push.py imports alerts and
+    permissions, and this module is imported by rules.py at hub start -- pulling that chain
+    in at import time would widen what a hub has to load before it can send an email.
+
+    **A permanent failure clears the registration here**, in the transport, rather than
+    leaving the row for a sweeper. FCM answering 404 for a registration token means the app
+    was uninstalled or its data was cleared, and the only honest response is to stop
+    believing there is a phone there. The device itself is untouched -- the operator's token
+    is still valid and their laptop still works; it is only the push address that is dead,
+    and the app re-registers a fresh one the next time it starts.
+    """
+    import push
+
+    kind = str(payload.get("kind") or "")
+    if kind == push.KIND_APNS:
+        # Deliberately unbuilt, not missed. See push.py's module docstring: APNs is HTTP/2
+        # only, `requests` is not, and a second HTTP client is not worth taking for a
+        # platform with no build and no developer account. Failing with the reason beats a
+        # row that sits pending forever.
+        refusal = ValueError(
+            "APNs is not implemented on this hub -- no iOS client has been published. "
+            "Only FCM (Android) push is delivered.")
+        # Permanent, so it fails on the first attempt rather than four times over twenty
+        # minutes: no retry can make a transport exist.
+        refusal.permanent = True
+        raise refusal
+    if kind != push.KIND_FCM:
+        unknown = ValueError(f"unknown push kind: {kind}")
+        unknown.permanent = True
+        raise unknown
+
+    try:
+        push.send_fcm(payload.get("push_token"), int(payload.get("count") or 0))
+    except push.PushError as exc:
+        if getattr(exc, "permanent", False) and payload.get("token_id"):
+            push.unregister(db_path, payload["token_id"])
+        raise
 
 
 def _send_email(payload):

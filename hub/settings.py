@@ -157,10 +157,33 @@ DEFAULT_SENSOR_PREFERENCE = [
     "cpu cores",
 ]
 
+# Defaults for the three preference lists that roadmap #3 added beside it (GPU, disk,
+# network). They differ from the CPU one in WHERE they are applied: the agent picks the CPU
+# temperature, so that list is agent=True and rides the config channel, whereas GPU, disk and
+# network are re-derived by the hub out of the full sensor block on every read
+# (app.extract_diagnostics). These three are therefore hub-only -- they take effect on the
+# next reading from every agent already in the field, including ones too old to have heard of
+# them.
+#
+# The two GPU lists match a SENSOR NAME, as the CPU list does; the disk and network lists
+# match a HARDWARE name or identifier, because the question there is *which device*, not which
+# reading of it. Both ship EMPTY, which means "keep the behaviour that predates this setting":
+# the first "Used Space" sensor in block order for disk, the busiest adapter for network. An
+# empty list is a real answer here, not a missing one -- see the notes in app.py.
+DEFAULT_GPU_TEMP_PREFERENCE = ["gpu core", "gpu hot spot", "gpu package"]
+DEFAULT_GPU_LOAD_PREFERENCE = ["gpu core", "d3d 3d"]
+
 REGISTRY = (
     # ---------------- Computer: how a machine's telemetry is interpreted ----------------
     _s("computer.primary_sensor_preference", "computer", "str_list",
        DEFAULT_SENSOR_PREFERENCE, agent=True),
+    # The other three sensor picks an operator can now steer (roadmap #3). Deliberately NOT
+    # agent=True -- see the DEFAULT_* block above for why these are hub-side and the CPU one
+    # is not, and app.sensor_preferences() for how they are consumed.
+    _s("computer.gpu_temp_preference", "computer", "str_list", DEFAULT_GPU_TEMP_PREFERENCE),
+    _s("computer.gpu_load_preference", "computer", "str_list", DEFAULT_GPU_LOAD_PREFERENCE),
+    _s("computer.disk_preference", "computer", "str_list", []),
+    _s("computer.network_preference", "computer", "str_list", []),
 
     # ---------------- Hub: thresholds and internals ----------------
     _s("hub.low_load_threshold", "hub", "int", 40, minimum=0, maximum=100, unit="percent"),
@@ -278,6 +301,66 @@ REGISTRY = (
     # are unaffected by collect_fans -- the toggle governs what goes into HISTORY.
     _s("metrics.collect_fans", "metrics", "bool", True),
     _s("metrics.collect_power", "metrics", "bool", True),
+
+    # ---------------- How often a machine samples and reports (roadmap #3) ----------------
+    # The two telemetry cadences, previously compiled into the agent as AgentConfig
+    # .IntervalSeconds and .SensorIntervalSeconds. Defaults MUST equal those constants.
+    #
+    # Both are agent=True, and they are the first settings here whose effect is invisible on
+    # an agent that predates them: RuntimeConfig.Apply reads an allow-list, so an older build
+    # ignores these keys and keeps its compiled 5/10. That is the right failure (nothing
+    # breaks, the machine keeps reporting) but it is a SILENT one, which is why the help text
+    # says so and why tests/test_settings.py pins the defaults to the agent's constants.
+    #
+    # Neither touches liveness. The heartbeat is its own 10-second loop and it is what
+    # last_seen and the offline window are driven by, so an operator who slows reporting right
+    # down to five minutes gets a coarser chart, not a fleet that reads offline. Nor does it
+    # touch the live page: while somebody has a machine open the agent reports every second
+    # regardless (LiveTelemetry), because that cadence exists to make a three-second spike
+    # visible and a fleet-wide default has no business overriding an operator who is watching.
+    #
+    # The sensor cadence may be set FASTER than the report cadence; the agent clamps it to the
+    # report cadence rather than refusing it, because "every report carries the full block" is
+    # a sensible thing to ask for and the natural way to ask for it is a small number.
+    _s("metrics.report_interval_seconds", "metrics", "int", 5, minimum=1, maximum=300,
+       unit="seconds", agent=True),
+    _s("metrics.sensor_interval_seconds", "metrics", "int", 10, minimum=1, maximum=3600,
+       unit="seconds", agent=True),
+
+    # ---------------- Per-metric retention (roadmap #3) ----------------
+    # How long each metric's HISTORY survives, one knob per collection toggle above, so the
+    # grouping an operator already sets collection in is the grouping they set retention in.
+    #
+    # 0 means "follow data.retention_days", and that is the shipped default for every one of
+    # them -- so an untouched hub prunes exactly as it did before this existed. A non-zero
+    # value only ever SHORTENS: the row itself is deleted at data.retention_days, so a longer
+    # per-metric window could not be honoured, and app.prune_metric_columns_once ignores one
+    # rather than pretending. See its docstring.
+    #
+    # Blanking a column rather than deleting the row is what makes this possible at all. The
+    # readings table is one row per sample with temperature in it, and temperature is the core
+    # metric with no toggle and no separate window -- so "drop network history after 7 days"
+    # has to mean net_rx_bps/net_tx_bps go NULL, not that the sample disappears.
+    #
+    # **This deletes history permanently, the same way data.retention_days does.** It is the
+    # one knob in this section that destroys data rather than deciding what is recorded next,
+    # which is why it sits behind the same manage_settings gate and says so in its help.
+    _s("metrics.retention_days_cpu_load", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_memory", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_gpu", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_disk", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_disk_io", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_network", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_fans", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_power", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
 
     # ---------------- Fleet: liveness and command timings ----------------
     # These next two are different windows that operators WILL confuse, so the labels
@@ -485,6 +568,20 @@ REGISTRY = (
     # a deploy.
     _s("wake.auto_wake_targets", "wake", "bool", False),
 
+    # ------------- Network discovery and shadow IT (roadmap #18) -------------
+    # One knob, and what is NOT here is the point. There is no "subnets to scan" list and no
+    # schedule: a sweep is aimed at one of the subnets the chosen machine has already told
+    # the hub it is on (discovery.request_scan refuses anything else), and it is started by
+    # a named operator rather than by the hub on a timer. Both absences are answers to the
+    # roadmap entry's own worry that a discovery sweep is a scanner pointed at a colleague's
+    # network -- a configured range and a schedule are exactly what would turn it into one.
+    #
+    # This bounds how long a queued sweep may sit before the hub calls it lost. Short
+    # compared with a wake's TTL, and for the opposite reason: a wake waits on a machine
+    # that is switched off, while a sweep waits on one the operator just watched respond.
+    _s("discovery.scan_ttl_seconds", "discovery", "int", 10 * 60, minimum=60, maximum=3600,
+       unit="seconds"),
+
     # ------------- Provisioning: the Android device-owner QR (roadmap #23) -------------
     # One size cap and one behaviour knob. Everything else the QR needs is DERIVED -- see
     # apkhost.py: the APK is uploaded on the provisioning page, the hub reads the signing
@@ -677,6 +774,8 @@ BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
             "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
             "policy", "rules", "sharing", "events", "ai", "security")
+            "directory", "firmware", "patches", "wake", "discovery", "provisioning",
+            "location", "map", "policy", "rules", "sharing", "events", "ai")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

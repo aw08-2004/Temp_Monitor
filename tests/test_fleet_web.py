@@ -201,6 +201,11 @@ def main():
                        json={"machine": "PC-01", "type": command_type, "params": {}})
             check(f"{command_type} refused on the generic command channel -> 400",
                   r.status_code == 400)
+        r = c.post("/api/fleet/commands", json={
+            "machine": "PC-01", "type": "network_sweep",
+            "params": {"scan_id": "bypass", "subnet": "10.4.7.0/24"}})
+        check("network_sweep is refused on the generic command channel -> 400",
+              r.status_code == 400)
 
         print("\n== Audit attributes the command to the session, not the body ==")
         global CURRENT_USER

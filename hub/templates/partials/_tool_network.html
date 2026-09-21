@@ -36,3 +36,32 @@
         <p class="stat-card__meta">{{ t('machine.network.history_help') }}</p>
         <div id="network-history"></div>
     </details>
+
+    {# Network discovery (roadmap #18). The third card on this tab, and it belongs here
+       rather than on a fleet page for one reason: a sweep is aimed at a subnet THIS machine
+       is on, which is a fact that only exists next to this machine's adapters. The subnet
+       picker below is filled from the card above's own inventory.
+
+       Same note about the <summary> as the cards above: the title and the pill are inside
+       it, the controls are not, because a click anywhere in a <summary> toggles the
+       disclosure and "Sweep" would have folded away the results it was producing. #}
+    <details class="card fold" data-fold-key="tools:network:discovery" id="discovery-card">
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.discovery.title') }}</span>
+            <span class="status-pill status-pill--muted" id="discovery-status">
+                <span class="status-pill__dot"></span><span id="discovery-status-text">{{ t('common.loading') }}</span></span>
+        </summary>
+        <p class="stat-card__meta">{{ t('machine.discovery.help') }}</p>
+        {% if cap.ISSUE_COMMANDS in user_capabilities %}
+        <div class="terminal__head-actions fold__actions">
+            {# A picker rather than a text field, and that is the feature's safety property
+               rather than a UI preference: the options are the subnets this machine has
+               already reported being on, so there is no way to aim a sweep at a network
+               nobody here is standing in. The hub refuses anything else anyway. #}
+            <select id="discovery-subnet" class="input" aria-label="{{ t('machine.discovery.subnet_label') }}"></select>
+            <button id="discovery-sweep" type="button" class="btn btn--primary">{{ t('machine.discovery.sweep') }}</button>
+        </div>
+        {% endif %}
+        <div id="discovery-state"></div>
+        <div id="discovery-body"></div>
+    </details>

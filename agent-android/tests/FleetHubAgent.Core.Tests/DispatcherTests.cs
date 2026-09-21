@@ -83,11 +83,14 @@ public class DispatcherTests
     [Fact]
     public void An_unwritten_command_reads_as_not_implemented_and_names_the_version()
     {
-        // show_message rather than gpupdate: it is the honest example of this branch, because
-        // a phone CAN show a message and this agent simply has not implemented it yet. gpupdate
-        // used to stand here and had to move -- Group Policy has no Android counterpart, so it
-        // belongs in the impossible table, and using it here tested the wrong thing.
-        var message = CommandDispatcher.Unsupported("show_message", ["rename"]);
+        // wake_machine rather than gpupdate: it is the honest example of this branch, because
+        // an app CAN put a magic packet on the local network -- roadmap #10's peer relay asks
+        // an awake machine on the subnet to broadcast one, and a phone in the building is
+        // exactly that -- and this agent simply has not implemented it yet. gpupdate used to
+        // stand here and had to move: Group Policy has no Android counterpart, so it belongs
+        // in the impossible table, and using it here tested the wrong thing. show_message
+        // stood here next and had to move for the opposite reason -- it is implemented now.
+        var message = CommandDispatcher.Unsupported("wake_machine", ["rename"]);
         Assert.Contains("not implemented by the Android agent", message);
         Assert.Contains(AgentConfig.Version, message);
     }
@@ -96,7 +99,7 @@ public class DispatcherTests
     public void Both_shapes_list_what_this_agent_can_do()
     {
         Assert.Contains("rename", CommandDispatcher.Unsupported("shutdown", ["rename"]));
-        Assert.Contains("rename", CommandDispatcher.Unsupported("show_message", ["rename"]));
+        Assert.Contains("rename", CommandDispatcher.Unsupported("wake_machine", ["rename"]));
     }
 
     [Fact]
