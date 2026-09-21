@@ -130,6 +130,12 @@ public sealed class Worker : BackgroundService
     /// sensor block, uptime) and nothing else -- a slow or failing sensor read now costs
     /// only the next temperature sample.
     ///
+    /// The first two of those three are operator settings rather than compiled constants
+    /// (metrics.report_interval_seconds / metrics.sensor_interval_seconds, roadmap #3), so a
+    /// fleet on a metered link or a hub with a year of history to keep can be dialled back
+    /// without an agent release. Uptime is not: it is a number that changes by one per second
+    /// and is rendered to the minute, so there is nothing to tune.
+    ///
     /// Two of those three speed up while an operator has this machine's page open (see
     /// Telemetry/LiveTelemetry): a report every second instead of every five, each carrying
     /// the full sensor block, because eleven of that page's twelve panels are drawn from the
@@ -146,11 +152,15 @@ public sealed class Worker : BackgroundService
             // Read once per tick: the flag can flip between here and the delay at the bottom,
             // and a tick that sampled as "watched" should also be paced as one.
             var live = LiveTelemetry.Wanted;
+            // ...and the cadences alongside it, once per tick from the same store the sensor
+            // read uses, so a hub push takes effect on the next tick without a restart
+            // (roadmap #3).
+            var config = RuntimeConfigStore.Current;
             try
             {
                 var now = DateTime.UtcNow;
                 bool includeSensors = live ||
-                    (now - lastSensor).TotalSeconds >= AgentConfig.SensorIntervalSeconds;
+                    (now - lastSensor).TotalSeconds >= config.EffectiveSensorIntervalSeconds;
                 bool includeUptime = (now - lastUptime).TotalSeconds >= AgentConfig.UptimeIntervalSeconds;
 
                 var snapshot = _sensors.Read();
