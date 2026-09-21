@@ -568,6 +568,20 @@ REGISTRY = (
     # a deploy.
     _s("wake.auto_wake_targets", "wake", "bool", False),
 
+    # ------------- Network discovery and shadow IT (roadmap #18) -------------
+    # One knob, and what is NOT here is the point. There is no "subnets to scan" list and no
+    # schedule: a sweep is aimed at one of the subnets the chosen machine has already told
+    # the hub it is on (discovery.request_scan refuses anything else), and it is started by
+    # a named operator rather than by the hub on a timer. Both absences are answers to the
+    # roadmap entry's own worry that a discovery sweep is a scanner pointed at a colleague's
+    # network -- a configured range and a schedule are exactly what would turn it into one.
+    #
+    # This bounds how long a queued sweep may sit before the hub calls it lost. Short
+    # compared with a wake's TTL, and for the opposite reason: a wake waits on a machine
+    # that is switched off, while a sweep waits on one the operator just watched respond.
+    _s("discovery.scan_ttl_seconds", "discovery", "int", 10 * 60, minimum=60, maximum=3600,
+       unit="seconds"),
+
     # ------------- Provisioning: the Android device-owner QR (roadmap #23) -------------
     # One size cap and one behaviour knob. Everything else the QR needs is DERIVED -- see
     # apkhost.py: the APK is uploaded on the provisioning page, the hub reads the signing
@@ -740,8 +754,8 @@ REGISTRY = (
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
-            "policy", "rules", "sharing", "events", "ai")
+            "directory", "firmware", "patches", "wake", "discovery", "provisioning",
+            "location", "map", "policy", "rules", "sharing", "events", "ai")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

@@ -43,6 +43,7 @@ import bios
 import channels
 import firmware
 import patches
+import discovery
 import wake
 import events
 import apps
@@ -62,6 +63,7 @@ import files
 import live
 import authconfig
 import apitokens
+import push
 import sharing
 import envfile
 import i18n
@@ -77,6 +79,7 @@ from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 from patches_web import create_patches_blueprint
+from discovery_web import create_discovery_blueprint
 from wake_web import create_wake_blueprint
 from events_web import create_events_blueprint
 from capabilities_web import create_capabilities_blueprint
@@ -95,6 +98,7 @@ from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
+from push_web import create_push_blueprint
 from sharing_web import create_sharing_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
@@ -131,7 +135,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.120.0"
+HUB_VERSION = "1.125.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2400,6 +2404,14 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 app.register_blueprint(create_wake_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
 
+# Network discovery and shadow IT (roadmap #18): what is on the subnet a managed machine is
+# sitting on, swept BY that machine because the hub is almost never on the network it is
+# being asked about. Reading behind `view` and sweeping behind `issue_commands`, with no new
+# capability -- an operator who can open a SYSTEM shell on that PC can already run `arp -a`
+# on it. Shares wake's roster for the same reason wake takes it: one definition of online.
+app.register_blueprint(create_discovery_blueprint(
+    DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
+
 # What each machine can actually do (roadmap #23). Read-only and gated on `view` + machine
 # scope, because a machine's abilities are inventory in the same sense its disks are -- and
 # because this is what the console reads to decide which tabs to render at all, so a narrower
@@ -2534,6 +2546,13 @@ app.register_blueprint(create_auth_blueprint(
 # because the signed client manifest ships beside the code, like the agent's does.
 app.register_blueprint(create_apitokens_blueprint(
     DB_PATH, login_required, access, code_dir=HUB_CODE_DIR))
+
+# Push registration for paired devices (roadmap #11 phase 2). Separate from the pairing
+# blueprint above even though both are about devices, because the gates are opposites: those
+# routes are for a signed-in BROWSER pairing a device, these are for the DEVICE itself and
+# refuse a browser session outright. One blueprint would have had to carry both rules and
+# explain which applied where.
+app.register_blueprint(create_push_blueprint(DB_PATH, login_required, access))
 
 # Cross-hub machine sharing (roadmap #15). The one blueprint in this hub whose caller can be
 # ANOTHER HUB: `/api/peer/...` is gated on a peer token and nothing else, while
@@ -3307,8 +3326,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     """Absorb `dropped` into `survivor` -- the same physical machine seen under an old
     hostname. Re-points the dropped host's readings onto the survivor so temperature
     history stays continuous, backfills any identity field the survivor is missing from
-    the dropped row, then removes the dropped identity row and its stale fleet
-    enrollment. Irreversible."""
+    the dropped row, then removes the dropped identity row and its stale fleet enrollment.
+    Module-owned history, including network sweeps, follows the survivor where meaningful;
+    transient process and file-browser state is dropped. Irreversible."""
     survivor = str(survivor or "").strip()
     dropped = str(dropped or "").strip()
     if not survivor or not dropped or survivor == dropped:
@@ -3387,6 +3407,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Sweep history follows the same name (roadmap #18). The HOSTS inside those scans are
+    # deliberately untouched: they record what was on the wire, and a merge does not change
+    # that. They reclassify themselves on the next read, against the merged machine's
+    # adapters, which is the point of classifying at read time rather than at ingest.
+    discovery.rename_machine(DB_PATH, dropped, survivor)
     # Capabilities follow too, and the survivor's own row wins a collision (roadmap #23) --
     # both rows describe one physical machine, and the survivor is the one still reporting.
     # Not merged: a union of two command lists would claim an ability neither agent reported.
@@ -4580,6 +4605,7 @@ firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 events.init_events_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
+discovery.init_discovery_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
@@ -4601,6 +4627,12 @@ ai.init_ai_db(DB_PATH)
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
 # never block on a mail server that has stopped answering.
 notify.configure(DB_PATH)
+# Points push at the database and starts its alert-delta scan. After notify.configure
+# because it enqueues into notify's outbox, and separate from the init_* calls for the same
+# reason notify is: it owns a thread. ALLOWED_EMAILS is handed in because the scan asks what
+# each device's owner may see WITHOUT a request to read it off, and a superuser list it did
+# not have would make a break-glass operator's phone the one that never rings.
+push.configure(DB_PATH, superusers=ALLOWED_EMAILS)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
@@ -5468,10 +5500,14 @@ def put_machine_channel(machine):
 @login_required
 @access.require_machine(permissions.MANAGE_SETTINGS)
 def delete_machine(machine):
-    """Hard-delete a decommissioned machine: its identity row, all temperature history,
-    and its fleet agent enrollment. Irreversible. If the machine's agent is still
-    running it will re-enroll and reappear on its next report -- this is meant for
-    machines that are actually gone."""
+    """Hard-delete a decommissioned machine and its module-owned active state.
+
+    This removes its identity, temperature readings, fleet enrollment, discovery history,
+    and other live inventory and configuration. Historical records that remain useful after
+    decommissioning, such as patch outcomes and backup manifests, survive. Irreversible. If
+    the agent is still running it will re-enroll and reappear on its next report -- this is
+    meant for machines that are actually gone.
+    """
     machine_name = str(machine).strip()
     if not machine_name:
         return jsonify({"error": "Machine name required"}), 400
@@ -5507,6 +5543,11 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And its sweep history (roadmap #18). Its rows inside OTHER machines' scans stay, and
+    # quietly change verdict from 'managed' to 'unmanaged' on the next read -- which is the
+    # truth about an address the hub no longer manages, and the one thing a shadow-IT list
+    # has to get right.
+    discovery.forget_machine(DB_PATH, machine_name)
     # And what it reported it could do (roadmap #23). Unlike most of the rows above this one
     # is an ENFORCEMENT input, so leaving it behind is worse than leaving stale display data:
     # a different box reusing this hostname would silently have commands REFUSED that it can
