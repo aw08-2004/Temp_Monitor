@@ -3468,9 +3468,10 @@ the separate facts they are. And `FleetClient` logged the missing-secret warning
 30-second retry forever, which on a ring-buffered logcat steadily evicts everything else the
 agent said.
 
-`show_message` is the obvious next command (the one place a phone beats a PC), and FCM against
-the `push_*` columns already on `api_tokens` is what would let the command loop stop holding a
-request every 25 seconds.
+`show_message` -- the one place a phone beats a PC -- is **done**, unreleased on `main`; see
+*Messages to the person holding the device* below. FCM against the `push_*` columns already on
+`api_tokens` is what would let the command loop stop holding a request every 25 seconds, and is
+now the next thing worth doing here.
 
 ### Full trimming switched off System.Text.Json reflection · agent 0.2.3
 
@@ -4683,6 +4684,64 @@ No agent release is cut for this. The agent half is on `main` unreleased, so a m
 the field gets the hub half now — which is what makes the *uninstall* path work — and the
 in-service recovery when the next agent release ships.
 
+## ✅ Messages to the person holding the device · agent-android, unreleased
+
+The last of #23's software phases, and the only command in the hub's catalog where a phone is
+**better** than a PC rather than a smaller version of it. `show_message` has been in
+`fleet.py`'s catalog and in the rules engine's action list since the rules engine shipped; the
+Windows agent answers it with a desktop dialog. An Android device answered "not implemented",
+which was the honest answer and the wrong one to leave standing -- a notice on a desktop waits
+for somebody to come back to their desk, and the same notice on the phone in their pocket is
+answered in a corridor.
+
+Nothing on the hub changes. The command type, its parameters, its outcome vocabulary and the
+follow-up routing in `rules.handle_message_result` all already exist, and the phone starts
+receiving the command because its heartbeat's `commands` list is **derived from its executor
+set** -- the machinery hub 1.98.0 built for exactly this. That is the payoff of capabilities
+over `MIN_*_AGENT` constants stated concretely: a phone learned a command and the console
+started offering it, with no hub release and no version gate anywhere.
+
+**The full contract, or the routing strands.** The hub remembers the command id, waits for an
+answer and maps the outcome onto follow-up actions. An agent that posted a notice and reported
+success would leave every rule holding a message nobody ever answers, and the symptom is a rule
+that silently never reaches its second half -- not an error, a branch that never fires. So the
+device reports one of the hub's own outcome strings, and an outcome the platform half invents
+is clamped to `failed` rather than passed through, because `handle_message_result` records an
+unmapped outcome and deliberately does nothing with it.
+
+### Rejected alternatives
+
+- **An Activity showing a real dialog**, to match Windows. Android 10 and later refuse to let a
+  background app start an activity at all; the sanctioned way round it is a full-screen-intent
+  notification, and from Android 14 that intent's permission is granted only to calling and
+  alarm apps. So the dialog buys a message that shows on some devices and silently does not on
+  others, in exchange for looking like the other agent. A heads-up notification with two
+  buttons is also simply what a phone user expects an answerable message to look like.
+- **Truncating a four-button message to the three Android can draw.** Rejected: the fourth
+  button's route in the hub would be one nobody can ever reach, which reads in the console as a
+  configured branch that only ever times out. It comes back `failed` naming the limit instead.
+  None of `rules.py`'s presets asks for four.
+- **`setOngoing`, so the notice cannot be swiped away.** Rejected: `dismissed` is one of the
+  hub's four non-button outcomes and rules route on it. Making dismissal impossible would
+  delete a branch operators can configure, and turn those messages into timeouts an hour later.
+  Somebody declining to engage is an answer.
+- **Honouring `timeout_seconds: 0` as "wait forever"**, which is what the Windows executor does.
+  Rejected: a waiting message holds one of the agent's concurrent command slots, so on a phone
+  that is a device which shows online and accepts nothing, with nothing failing anywhere. An
+  unbounded message gets an hour; a bounded one is clamped to the same range `rules.py`
+  enforces. The slot count moved from 2 to 4 in the same change, because the comment justifying
+  2 said nothing on this agent could occupy a slot for ten minutes and that stopped being true.
+- **An i18n layer in the agent for the seven preset button labels.** Rejected: the hub's
+  catalogs cover the console, and a second string table on the device is a second place for the
+  words to disagree. An operator's own label is used verbatim, which is the case that matters.
+
+**Not built, and not seen on a device.** The Core half is under test with the rest; the Android
+half was type-checked against the `Mono.Android` reference assembly rather than compiled into an
+APK, because the Android platform SDK downloads from `dl.google.com` and the session had no
+route to it. The hardware table below carries what that leaves open.
+
+---
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
@@ -4700,6 +4759,7 @@ This is that list, so nothing is quietly skipped:
 | **D policy** | Apply a blocklist to one test app and confirm the system's "paused by your organisation" dialog; confirm the console shows it as enforced from the device's OWN inventory; confirm a package that cannot be suspended comes back in `failed`; **delete the policy and confirm the app comes back** (the empty-document release valve); confirm the dead-man switch by setting a short `policy.max_age_seconds` and taking the device off the network |
 | **H** | `lock_device` on the pilot: the screen locks and the console shows the row. Confirm the card is absent on a Windows PC, that a helpdesk account with `issue_commands` sees no buttons, and that a wrong typed name is refused by the API and not only by the page. **Wipe on a scratch device only**, and check both `reset_protection` answers: cleared means it can be set up again, kept means it asks for the previous account |
 | **#22 self-update** | Cut a `0.2.0` of each agent and confirm each machine takes ITS OWN build: the Linux box updates from the Linux manifest, the phone from the Android one, and neither is ever offered the Windows exe. On the phone confirm the install is silent and the agent comes back on its own (ACTION_MY_PACKAGE_REPLACED) rather than sitting stopped. Confirm a device that is NOT a device owner declines rather than raising the system installer. Confirm the dashboard's outdated count is right per platform. Then break one on purpose: serve a manifest signed with the wrong key and confirm both agents refuse it |
+| **show_message** | Send a notice from a rule with a Yes / No / Later preset: the heads-up banner appears with three buttons, pressing one reports that id inside a second and the console's rule history shows the follow-up firing; swiping the notice away reports `dismissed` and not a timeout; a message left alone for its timeout reports `timeout` and the notification is gone afterwards; with notifications switched off for the agent in Settings it comes back `no_session` with the reason, and NOT as a failed command |
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
 **Also owed, and not from #23: roadmap #16's event log query.** Nothing in the collection
