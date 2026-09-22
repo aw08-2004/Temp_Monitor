@@ -635,7 +635,7 @@
       "policy": "Richtlinie",
       "ai": "KI-Unterstützung",
       "events": "Ereignisprotokolle",
-      "security": "Endgerätesicherheit"
+      "security": "Endgerätesicherheit",
       "discovery": "Netzwerkerkennung"
     },
     "unit": {
@@ -1185,6 +1185,7 @@
       "security.escrow_bitlocker_keys": {
         "label": "BitLocker-Wiederherstellungsschlüssel hinterlegen",
         "help": "Die BitLocker-Wiederherstellungskennwörter jeder Maschine einsammeln und verschlüsselt neben diesem Hub aufbewahren, damit ein PC, der sich selbst aussperrt, wiederhergestellt werden kann. Benötigt einen Backup-Hauptschlüssel. Abschalten beendet das Einsammeln und löscht nie, was bereits hinterlegt ist."
+      },
       "discovery": {
         "scan_ttl_seconds": {
           "label": "Durchlauf aufgeben nach",

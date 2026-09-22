@@ -694,7 +694,7 @@
       "policy": "Policy",
       "ai": "AI Assistance",
       "events": "Event Logs",
-      "security": "Endpoint Security"
+      "security": "Endpoint Security",
       "discovery": "Network discovery"
     },
     "_unit": [
@@ -1257,6 +1257,7 @@
       "security.escrow_bitlocker_keys": {
         "label": "Escrow BitLocker recovery keys",
         "help": "Collect each machine's BitLocker recovery passwords and keep them encrypted beside this hub, so a PC that locks itself out can be recovered. Needs a backup master key. Switching this off stops collecting and never deletes what is already escrowed."
+      },
       "discovery": {
         "scan_ttl_seconds": {
           "label": "Give up on a sweep after",
