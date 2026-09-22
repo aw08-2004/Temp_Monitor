@@ -2677,9 +2677,9 @@ what survived, and why the rest did not. The two decisions that framed the triag
 | PRD item | Verdict |
 |---|---|
 | FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
-| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
-| FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
-| FR-04 Automation | **Done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs shipped as **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
+| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.124.0, `correlate.baselines`). |
+| FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`). Still open there: an `event.*` rules variable, so a counter can be alerted on rather than only read. |
+| FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
 | FR-07 Security | Encryption-key escrow → **#19**. Shadow-AI detection is cheap and lands there too: it is an inventory query, not a new channel. EDR integration is **deferred** — there is no EDR here to integrate with, and the requirement is an API shape rather than a feature. |
@@ -2726,6 +2726,14 @@ Hub side is `patches.py` (`machine_patches`, `patch_approvals`, `maintenance_win
 `patch_runs`, `patch_run_targets`, and a `tick()` registered beside `packages.tick`) plus
 `patches_web.py` and a Patches page. Agent side is `Patch/PatchInventoryReporter.cs` and
 `Patch/InstallPatchesExecutor.cs`.
+
+**The Linux half reports and does not install** (hub 1.123.0, agent-linux on `main`; see #22).
+`apt` and `dnf` joined `SOURCE_KINDS`, and `agent-linux/src/FleetHubAgent/Patch/` scans with
+`apt-get -s upgrade` or `dnf -C check-update` on its own inventory loop. A Linux machine's uid
+is a package NAME rather than a KB, which `normalize_uid` already accepted. No installer:
+that agent's capability report names four commands and `install_patches` is not among them,
+so `create_command` refuses one — which is what stops the patch scheduler queuing work a
+Linux box cannot answer, rather than each scheduler being taught the difference.
 
 **Built so the AI half needs no schema change later.** `patch_run_items` — the third table,
 one row per update actually attempted per machine — records the machine's model and OS build
@@ -2973,17 +2981,20 @@ it — the same trap `manage_firmware` avoided by shipping live.
   per-machine console control to hide, so a machine on an older agent simply never reports and
   `machine_event_state` says "we have not been told" rather than "nothing happened". That
   distinction is the reason that table exists.
-- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`), and
-  the agent half's pure parts are (`EventLogTests.cs`) — but the query has never been executed
-  against a Windows event service, and no record has ever made the trip. See the hardware
-  validation note.
+- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`).
+  The agent half **compiles** (see the note under the hardware validation about building it from
+  Linux, which is how the two faults that shipped in the first cut were found), but
+  `EventLogTests.cs` has never been *run*: the test host needs `Microsoft.WindowsDesktop.App`,
+  which exists only on Windows. So the pure parts are written down rather than verified, the
+  query has never been executed against a Windows event service, and no record has ever made
+  the trip. See the hardware validation note.
 
 ---
 
-## 📋 17. Alert correlation and recommended fixes
+## 🚧 17. Alert correlation and recommended fixes   ·   hub 1.124.0   ·   `correlate.py` / `correlate_web.py`
 
 The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
-**one** bundle, not three alerts. The substrate is already here — `alerts.py` keeps episodes,
+**one** bundle, not three alerts. The substrate was already here — `alerts.py` keeps episodes,
 `rules.py` keeps `rule_fires` — so this is grouping over data that exists, plus the two new
 inputs from #14 and #16 that make the grouping worth doing.
 
@@ -3000,8 +3011,90 @@ asked anything, rather than a second one grown here.
 Anomaly baselining (FR-02) lands here too, and for the same reason: a per-machine baseline is
 a statistic over the history table, not a model.
 
-**Open parameters.** How much reduction is worth claiming (the PRD's 75% is a marketing
-number, not a target). Whether a bundle is a first-class row or a view over alerts.
+### Built · hub 1.124.0
+
+`correlate.py` is the model half, `correlate_web.py` the four routes, and the Alerts tab
+renders a bundle as a heading over its member cards — a bundle of one is still just an alert
+card, because wrapping it in chrome saying "1 alert on PC-04" makes the common case worse than
+it was.
+
+* **Grouping.** Same machine, episode windows overlapping within `JOIN_SLACK_SECONDS` (300 s),
+  transitively closed with a union-find so three alerts chained through a middle one are one
+  bundle rather than two pairs. An ACTIVE episode's window reaches forward to *now*, not to
+  its last evaluation, or a week-old ongoing problem could never group with the alert it
+  caused this morning.
+* **Facets, derived from the rule's condition.** "Is this a disk alert" is answered by "does
+  its condition read a `disk.*` variable". That survives an operator renaming the rule or
+  writing it in German, which a keyword list over rule names does not.
+* **The causal claim.** Six pairs in `CAUSAL_PAIRS`, each a mechanism statable in one
+  sentence, and the cause must have STARTED FIRST. Without a match the card says the alerts
+  overlap and stops. One claim per bundle, not a list: three competing causes is a bundle the
+  operator has to adjudicate, which is the work this was supposed to save.
+* **Anomaly baselining.** Median and MAD over a trailing fortnight of `readings`, per machine,
+  excluding the last hour so the excursion being judged is not in its own reference set.
+  Refuses to answer below 60 samples, and never on a metric whose MAD is zero.
+* **The wording layer.** `correlate.recommend()` calls `ai.complete()` with the deterministic
+  facts and asks for prose. Every outcome — including the provider being off — lands in
+  `ai_requests` under kind `recommend_fix`. The suggested script goes into the script library
+  through `scripts.validate_script` **switched off**, so `validate_reference` refuses it at
+  rule-save time and `rules.py` refuses it again at fire time.
+
+### Decisions
+
+* **A bundle is a VIEW, not a row** — the open parameter above, settled. There is no
+  `alert_bundles` table and no `bundle_id` column. A bundle is a pure function of the open
+  alert list the Alerts tab already loads, so it cannot drift from the list it groups.
+* **Anomalies do not raise alerts.** They are read by a bundle and by the machine page and
+  write nothing. A baseline that alerted would light up the fleet on the morning it shipped,
+  from a threshold nobody chose, in a product whose alerting is otherwise entirely
+  operator-authored. If a baseline should alert, it belongs in `rules.py` as a variable an
+  operator can write a rule against.
+* **No new capability.** Reading bundles is `view`; asking for a recommendation is
+  `manage_rules` (what ai_web.py already requires of every route that spends a provider call);
+  drafting the script is `issue_commands` (what `POST /api/rules/scripts` already requires).
+  Machine-named routes take `require_machine`, so scope is checked as well as capability.
+* **Scope is applied BEFORE bundling**, not to the finished bundles. Group a scoped
+  operator's alerts together with somebody else's and a hostname outside their reach turns up
+  in the membership, the causal claim and the recommendation written about it.
+* **A model-authored script body containing `{{` is dropped, not escaped.** Templating binds
+  a value at run time that nobody reviewed at read time, which reverses the entire safety
+  argument. The explanation, which was the useful part, is kept.
+* **A recommendation goes stale when its bundle's membership changes.** The row stays, keyed
+  on the bundle, carrying the exact alert ids it was written about; a bundle that has since
+  gained an alert shows nothing rather than prose about something else.
+
+### Rejected alternatives
+
+* **A stored bundle row with a `bundle_id` on `alerts`.** Rejected on mechanism, not taste.
+  Alerts are written from three unrelated code paths, so an id stamped at raise time is a
+  grouping computed before the rest of the bundle existed — the second alert of a causal pair
+  would never join the first one's bundle. The alternative is invalidating stored bundles on
+  every episode refresh, fleet-wide, on every rules tick.
+* **Matching facets on the rule's NAME or its alert text.** Works on the rules whoever wrote
+  the keyword list imagined, fails silently on the rest, and no test can tell the difference.
+* **Mean and standard deviation for the baseline.** Both are dragged by exactly the excursion
+  they are meant to detect, and the standard deviation harder because it squares the distance.
+* **`cpu → thermal` and `network → liveness` as causal pairs.** The first has an arrow
+  pointing both ways (heat throttles, throttling raises load); the second is usually the same
+  observation twice rather than a cause. A table that claims a direction it cannot establish
+  is the invented cause this feature exists to avoid.
+* **A second AI provider or an "ai" capability.** Both rejected upstream, in #24 and #8
+  respectively, and nothing here is a reason to revisit either.
+
+### Not done
+
+* **An `event.*` rules variable is still open.** #16's event rows already join the bundle
+  whose window they overlap, but an operator still cannot write a rule over those counters.
+  `facet_for_variable` is ready to classify that alert once the rules engine exposes it.
+* **A recommendation is never asked for on a timer**, only from an operator pressing the
+  button on one bundle. A feature that quietly bills a provider per alert episode is one an
+  operator discovers from an invoice.
+* **No hardware validation.** Everything above is hub-side and was exercised against the test
+  suite on Linux; nothing was run against the deployed Windows hub or a real fleet.
+
+**Open parameter still open.** How much reduction is worth claiming (the PRD's 75% is a
+marketing number, not a target) — the hub does not report a reduction figure anywhere, and
+will not until somebody has a month of real bundles to count.
 
 ---
 
@@ -3364,8 +3457,9 @@ untested on real hardware.") and `linux-agent-v0.2.0`, both published 2026-09-06
 `install.sh` installs 0.2.0 on a new box, but **a machine that already has the agent cannot
 take either one**: the manifest an installed agent updates from is not in the repo, and the
 source on `main` is still `0.1.0`. See *The manifest is not in the repo* below. It reports
-telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`.
-Full detail in `agent-linux/README.md`.
+telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`,
+streaming a command's output while it runs; it reports what `apt`/`dnf` says is available on
+an inventory loop of its own. Full detail in `agent-linux/README.md`.
 
 Installed the same way Windows machines are — `curl -fsSL .../agent-linux/install/install.sh |
 sudo bash -s -- --secret '…'` — and `install.sh` resolves its binary exactly as `install.ps1`
@@ -3480,42 +3574,102 @@ hub can move a machine between channels; it cannot point one at a binary of its 
   is `0400`, and that serial is how `resolve_serial_group` collapses the duplicate a `rename`
   creates.
 
-### Two hub-side gaps, deliberately not worked around in the agent
+### Two hub-side gaps, now closed (hub 1.123.0)
 
-1. **`run_script`'s `shell` enum is `("powershell", "cmd")`** — Windows-shaped, because until
-   now every machine that could receive one was Windows. The agent runs the script under
-   `bash`/`sh` regardless and says so in the first line of the result. Refusing would make
-   `run_script` permanently unusable on Linux, since the console offers no third choice; running
-   it silently would let an operator believe PowerShell ran. **Fix:** add `bash`/`sh` to the
-   enum in `hub/fleet.py`.
-2. **`_OS_MATCHES` misses some distros.** It buckets `ubuntu`/`debian`/`rhel`/`centos`/`fedora`/
-   `suse`/`alma`/`rocky` and the bare word `linux`, which covers most `PRETTY_NAME`s including
-   "Arch Linux" and "Linux Mint" — but not "Pop!_OS 22.04 LTS", which buckets as `unknown`. The
-   agent reports the caption honestly rather than smuggling the word "Linux" into a string the
-   machine never said. **Fix:** widen `_OS_MATCHES`, or bucket on `/etc/os-release`'s `ID_LIKE`.
+Both were worked around in the agent rather than in the hub, on the grounds that neither was
+urgent enough to justify a hub push on the agent's own branch. They were fixed together with
+the first slice of the list below, because that slice touched the hub anyway.
 
-Neither is urgent enough to justify a hub push on this branch.
+1. **`run_script`'s `shell` enum was `("powershell", "cmd")`** — Windows-shaped, because until
+   then every machine that could receive one was Windows. It now names all four
+   (`hub/fleet.py` `COMMAND_PARAMS`), so a rule action can say `bash`; `rules._validate_action`
+   reads exactly that tuple and used to refuse the value outright. **The agent's substitution
+   stays**: an old rule, and an operator who never changed the default, still arrive saying
+   "powershell", and the result's first line still says what actually ran. The default is
+   still `powershell`, because the fleet is overwhelmingly Windows and a default nothing there
+   understands would be the same bug pointed the other way. **The Windows agent's
+   `ResolveShell` should reject `"bash"` and `"sh"` before interpreter selection**,
+   returning a failed `CommandResult` with a clear unsupported-shell message, because
+   these values are Linux interpreters that cannot run on Windows. Preserve the existing
+   `powershell` and `cmd` behaviour for supported or legacy values.
+2. **`_OS_MATCHES` missed the distributions that never say "Linux".** "Pop!_OS 22.04 LTS",
+   "elementary OS", "Zorin OS", "NixOS", "EndeavourOS", "Deepin", "Solus", "KDE neon" and
+   "Raspbian" all bucketed as `unknown`, which put managed machines in the Dashboard's
+   leftovers pile beside the ones nothing is known about. The needle list is widened.
+   **Rejected, and worth recording because it is the better-shaped fix:** bucketing on
+   `/etc/os-release`'s `ID_LIKE` (a field no agent sends, so it needs a wire change, a column
+   and a migration to reach `normalize_os`), and bucketing on the platform the agent now
+   reports on its heartbeat (`capabilities.platform_of` is a per-machine DB read, in a
+   function whose contract is that it costs no round-trip). The needles cost nothing and fail
+   the way this bucketing already fails everywhere else -- as `unknown`, never as wrong.
 
 ### Next, in order
 
-1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0). The hub endpoint and
-   sequencing exist; `onOutput` is already threaded through the executors.
+Two of these landed together with the hub fixes above, on `main` but **not in a release**:
+`AgentConfig.Version` is still `0.1.0` and the two-file version pair moves only through
+`release.ps1` (`VERSIONING.md`), so an installed Linux box does not have this code until one
+is cut. Neither needed a hub change beyond the patch sources named below.
+
+1. ~~**Live command output streaming**~~ — done. `OutputStreamer` is the Windows agent's,
+   ported unchanged, and `Worker.RunCommandAsync` flushes it **before** reporting the result:
+   the console stops polling for output the moment a command reaches a terminal status, so a
+   result that lands first silently eats the tail an operator was reading. `ProcessRunner`
+   puts back the newline that `OutputDataReceived` strips, because the streamer appends what
+   it is given verbatim -- a producer of partial lines would be corrupted by one added per
+   call. **No console change was needed and none was made:** `fleet-terminal.js` polls
+   `/api/fleet/commands/<id>/output` for any agent. `MIN_STREAMING_AGENT` (3.1.0) gates the
+   hint above the box and the interactive affordances. **The follow-up** gates the stale
+   `run_script` refusal warning and interactive affordances using the agent capabilities
+   report rather than a version number alone: agents that report `run_script` support see
+   no warning, while agents that genuinely lack it keep the existing message. For agents
+   that do support it but fall below `MIN_STREAMING_AGENT`, a Linux-specific caption
+   replaces the refusal wording so operators are not misled. It is a caption, not a refusal,
+   which is why this shipped without it.
 2. **Signed self-update.** The Ed25519 manifest verification ports one-to-one, but it needs its
    own manifest, its own channel and a `release.sh` moving the two-file version pair. Until
    then an upgrade is `install/install.sh` run again, and the trust root for a download is
    GitHub plus TLS rather than the fleet's offline key — which is the reason to keep this to a
    pilot machine. **Do not point this agent at the Windows manifest.**
-3. **Patch inventory** (`apt`/`dnf`) — #14's Linux half.
+3. ~~**Patch inventory** (`apt`/`dnf`)~~ — done, #14's Linux half, reporting only.
+   `PatchScanner` asks `apt-get -s -o Debug::NoLocking=true upgrade` or `dnf -C check-update`
+   on the agent's new inventory loop, six-hourly, change-only, and the heartbeat carries the
+   result. **Nothing refreshes an index**: a refresh is a network call that takes the package
+   manager's lock, and the machine's own `apt-daily.timer` / `dnf-makecache.timer` already
+   does it. `hub/patches.py` gained `apt` and `dnf` as `SOURCE_KINDS` with their catalog
+   entries.
+   - **A package NAME is the uid, not name+version.** An approval is a statement about a
+     package, and a version-keyed uid would expire at every upload to the archive while
+     leaving a `machine_patches` row that never disappears -- which is exactly the absence
+     `confirm_from_inventory` reads as "it installed".
+   - **`upgrade`, not `full-upgrade`**: the difference is the packages that can only be
+     upgraded by removing something else, and a console that lists one is offering a trap.
+   - **Installing is deliberately not implemented.** The agent's capability report names four
+     commands and `install_patches` is not one, so `fleet.create_command` refuses it — which
+     is what stops the patch scheduler queuing an install a Linux box cannot answer. Doing
+     the install half means `PatchInventoryReporter.Invalidate()` (already there and
+     uncalled) and an executor; the classification is honest enough for approvals today.
+   - **Classification is honest about what it does not know.** apt reads `security` out of
+     the origin list (`jammy-security`, `Debian-Security:…`); dnf has no advisory data in
+     `check-update`, so a second `check-update --security` marks what it can and everything
+     else stays `unknown` rather than being filed as `other` as though something had decided.
+   - **Reboot-required is a kernel-package name match and nothing more.** Neither manager
+     reports it before an install; `/var/run/reboot-required` is a fact about the machine
+     afterwards. Flagging every `openssl` bump would train people to ignore the flag.
 4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
    Windows one.
 5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
 6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
 
-**Known limitation.** The volume walk uses `DriveInfo.GetDrives()`, which `statfs()`es every
-mount point — so a hung NFS or CIFS mount blocks it before the filesystem-type filter can
-reject it, and the telemetry loop stalls. Only that loop: heartbeat and commands are separate,
-so the machine stays online and answerable and merely stops reporting readings. The fix is to
-parse `/proc/mounts` and `statfs` only the survivors on a bounded thread.
+**Known limitation, now fixed.** The volume walk used `DriveInfo.GetDrives()`, which
+`statfs()`es every mount point — so a hung NFS or CIFS mount blocked it before the
+filesystem-type filter could reject it and the telemetry loop stalled, silently, on a machine
+that stayed online and answerable throughout. `MountTable` now reads `/proc/self/mounts`,
+which the kernel serves out of the table it already holds, so a dead mount of the wrong type
+is filtered out before anything touches it; the survivors are `statfs`'d in parallel on the
+thread pool with a two-second deadline. **The deadline is not the interesting half** — a
+`statfs` on a hung mount is uninterruptible, so the probe thread stays blocked until the
+server returns, and what stops that costing a thread per five-second tick is that a mount
+with a probe still in flight is never probed again.
 
 **Answered (was an open parameter).** The Linux agent keeps a line of its own rather than
 joining the 3.x train. Joining would have meant one number that has to mean two things: a
@@ -3808,7 +3962,7 @@ Orphans a loop creates after the deploy are pruned whether or not a report touch
 
 ---
 
-## 🚧 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0
+## ✅ 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0; **machine panel, fleet query and summary hub 1.120.0**
 
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
@@ -3913,16 +4067,72 @@ both switched on and configured. Describe, adjust, then per stage: preview throu
 ordinary rule editor, so the last thing between a sentence and the fleet is somebody reading
 the normal form and pressing Enable. The stages not yet created stay on the card.
 
-**Partial, and the line is the drafter.** Describe, adjust, preview and create are built and
-tested at 1.109.0, off until somebody configures a provider. **The machine chat panel, the
-fleet query and the daily summary are not built** — each is a stub in `ai.py` with its seam
-named and nothing behind it. The first needs the redaction that `ai.send_machine_names`
-implies; the third wants #17's correlation under it, without which a summary is the alert list
-in longer words.
+### The three answering surfaces · hub 1.120.0
+
+Describe, adjust, preview and create were built at 1.109.0; the machine chat panel, the fleet
+query and the daily summary were stubs in `ai.py` until 1.120.0. All three are built now, and
+each draws the same line in a different place: **between what the hub computed and what the
+model said.**
+
+**The machine panel sends an allow-list, not a deny-list.** `ai.send_machine_names` is off by
+default, and the filter it drives lists the text variables that are safe to send
+(`ai.SHAREABLE_TEXT`: status, agent version, model, manufacturer, the BIOS strings, the AD OS)
+rather than listing the ones that are not. Numbers and booleans pass unconditionally — a
+temperature identifies nobody, and redacting it would leave the panel with a privacy setting
+and no feature. **Rejected: a deny-list of the identifying variables.** It has to be extended
+every time an operator adds a custom field, a probe or a derived variable, and the cost of
+forgetting once is an owner's name arriving at a hosted provider with nothing in the console
+to notice it by. The allow-list fails the other way, as a slightly thinner answer. **Also
+rejected: redacting by matching values against the machine list**, which misses every
+identifier the hub did not think of first.
+
+**The panel hands the snapshot BACK with the answer, and the card renders both.** Everything
+else the console shows a model's output for is checked by the engine before it arrives — an
+expression that did not parse never reaches the page. A paragraph cannot be checked that way,
+so the numbers it claims to be about sit underneath it. An answer citing
+`metric.cpu_load_pct = 96` beside a row reading 12 is caught in a glance, and nothing else
+would catch it. **Rejected: a second model call checking the first** — that is two guesses,
+not a check. **Rejected: a conversation thread.** The readings move and a transcript does not,
+so a refinement would be edited against values that were true four minutes ago.
+
+**The fleet query is answered by the evaluator.** The model writes one expression; the engine
+resolves the targets, applies `access.in_scope` BEFORE evaluation, and answers. A machine out
+of reach is never resolved, so it cannot appear in a tally either — the property text-to-SQL
+could not have had. The console shows the canonical expression above the answer, because an
+answer with no visible question is one nobody can disagree with.
+
+**The summary computes every figure and asks only for the sentence around them.** Alert
+episodes come from a new `alerts.episodes_between`, rule fires from a new
+`rules.fires_between`, both filtered by the same scope predicate, and `ai.summary_lines`
+renders them with no model anywhere near. Only the covering note is a completion. That
+ordering has a consequence worth stating: **a provider that is off, unreachable or out of
+credit costs the sentence and nothing else** — the report still arrives, and the console says
+what is missing. A summary that existed only as prose is the one that gets an invented figure
+quoted into a change ticket.
+
+Two details that were wrong on the first pass, kept written down. The fires query is its own
+function rather than `rules.list_fires` with a limit, because a count computed off a capped
+read is wrong exactly on the busiest day and arrives looking like every other number. And both
+window queries are **closed at both ends**: `end` is always "now", and a half-open window drops
+whatever was raised in the second the report was asked for, which is the event somebody is most
+likely reading the report because of.
+
+Where each one lives: the machine panel is a fold on the machine page's Overview; the fleet
+query is a card on the Rules page, because it answers over that namespace with that evaluator,
+and it is gated on `view` rather than `manage_rules` since asking is reading; the summary is a
+fold on the Alerts page, which is the page it is a reading of.
+
+**Correlation is still #17's, and is deliberately not faked here.** The summary counts what was
+raised, cleared, fired and left open; it does not say "these nine alerts are one switch". That
+grouping is a statistic over the history table rather than a model's opinion, and a made-up
+grouping is the one error in a report nobody can check. When #17 lands it becomes one more
+section of `ai.summary_figures`, computed the same way.
 
 **Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
 starts off, which is right for a hosted provider and probably wrong for one on the same LAN.
-Whether the drafter belongs anywhere other than the Rules page once #17's wording layer exists.
+Whether `SHAREABLE_TEXT` should become operator-editable rather than a constant, once somebody
+has a custom field they actively want sent. Whether the drafter belongs anywhere other than the
+Rules page once #17's wording layer exists.
 
 ---
 
@@ -4979,6 +5189,14 @@ whole pass; that a provider channel with a `/` in its name is queryable by that 
 an idle machine's empty report reaches the hub, since that report is what tells the console a
 collector is alive rather than stopped.
 
+**The agent can at least be compiled without Windows**, which is new and worth knowing before
+any of the above: `apt-get install -y dotnet-sdk-10.0`, then pass
+`-p:EnableWindowsTargeting=true` to `dotnet build`. It builds `net10.0-windows` on Linux and
+catches every compile error, which is the whole class of mistake that used to reach `main`
+untouched, since no CI builds this project. It does not let the tests RUN (the test host wants
+`Microsoft.WindowsDesktop.App`), and it proves nothing about behaviour on a real machine, so
+the table above stands unchanged.
+
 **A is no longer blocked** — the pilot Galaxy A15 has been factory reset, so it can be
 provisioned by QR and used for the whole table. The remaining blocker is the phone re-authorising
 USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
@@ -5104,11 +5322,14 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     written. What is deliberately NOT here is a rule condition over the collected counters —
     that is a change to the rules engine, which belongs to #17, and `events.summary` is the
     counter it will read.
-17. **#17 Alert correlation and recommended fixes** — after #14 and #16 by dependency, not by
-    preference. **Both are now in place**: patch outcomes since 1.92.0, and event counters
-    since 1.118.0. The deterministic half can be built the day both land; the language layer
-    above it is gated on a pluggable AI provider that does not exist yet, and that provider
-    is the one piece of new plumbing this item introduces.
+17. **#17 Alert correlation and recommended fixes** — **grouping, the causal claim, anomaly
+    baselining and the wording layer shipped in hub 1.124.0**, and a bundle now carries the
+    #16 events that fall inside its own window. Both dependencies landed first as planned:
+    patch outcomes since 1.92.0, event counters since 1.118.0. The provider the language
+    layer was gated on turned out to be #24's, so this item introduced no new plumbing after
+    all. What it still owes is the other half of #16's hand-off — an `event.*` rules variable
+    so an operator can write "more than N of event 4625 in a window" — which is a change to
+    the rules engine and is scoped as its own piece rather than folded in here.
 18. **#18 Network discovery and shadow IT** — first slice built: an ARP sweep run by a
     machine already on the subnet, and every answer classified against the NIC inventory #10
     already collects. No prerequisite, low expected yield on an MDM-driven fleet, sequenced

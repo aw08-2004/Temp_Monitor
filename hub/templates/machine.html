@@ -354,6 +354,45 @@
         <div class="table-scroll" id="usage-body"></div>
     </details>
 
+    {# Ask about this machine -- roadmap #24.
+
+       A question in English about THIS PC, answered from the variables the rules engine
+       already resolves for it. The answer arrives with the readings it was built from, and
+       the card renders both: a paragraph a language model wrote is checkable only if the
+       numbers it claims to be about are on the same screen.
+
+       Hidden until the hub reports a configured provider, like the drafter on the Rules page.
+       A hub with no AI configured is the normal case rather than a broken one, and a card
+       offering a box that always errors is worse than no card.
+
+       Closed by default: it costs a request to a third party the moment somebody uses it, and
+       nothing on this page needs it to be open to be useful. #}
+    <details class="card fold" data-fold-key="machine:overview:ask" id="card-ask" hidden>
+        <summary class="fold__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.ask.title') }}</span>
+        </summary>
+        <p class="stat-card__meta" style="margin: var(--space-3) 0;" id="ask-disclosure"></p>
+        <div class="toolbar" style="margin-bottom: var(--space-3);">
+            <label for="ask-text" class="sr-only">{{ t('machine.ask.title') }}</label>
+            <input class="input" id="ask-text" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="{{ t('ai.ask_placeholder') }}" style="min-width: 320px; flex: 1;">
+            <button class="btn btn--primary" type="button" id="ask-send">{{ t('ai.ask') }}</button>
+            <span class="stat-card__meta" id="ask-status"></span>
+        </div>
+        {# The model's own prose. Written with textContent in machine-ask.js, never innerHTML:
+           this is the one string on the page that came from a third party's model. #}
+        <p id="ask-answer" style="margin: 0 0 var(--space-3); white-space: pre-wrap;"></p>
+        {# A fold with a key of its own, not a bare disclosure. The readings are what make the
+           paragraph above checkable, so an operator who wants them open on every answer
+           should get that decision remembered rather than re-made on each question. They are
+           folded by default only because a machine resolves several dozen variables and the
+           table would bury the answer. #}
+        <details class="fold" data-fold-key="machine:overview:ask:readings" id="ask-readings" hidden>
+            <summary class="stat-card__meta">{{ t('ai.ask_readings') }}</summary>
+            <div class="table-scroll" id="ask-snapshot"></div>
+        </details>
+    </details>
+
     {# Lock and wipe -- roadmap #23 phase H.
 
        Closed by default and last on the page, which is the only placement that is not an
@@ -629,6 +668,7 @@
 <script src="{{ url_for('static', filename='js/machine-apps.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-ask.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-bitlocker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>

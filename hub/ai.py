@@ -33,6 +33,16 @@ Three design choices worth the words:
    the operator would be confirming a sentence rather than the rule that will run -- and the
    two can differ with nothing in the console revealing it.
 
+Three more entry points sit on the same provider path and answer rather than author --
+`answer_machine_question`, `fleet_query` and `daily_summary`. Each of them draws the same line
+in a different place, and the line is always between what the hub computed and what the model
+said: the machine panel sends a snapshot built here and hands it BACK with the answer, so the
+prose and the readings it claims to be about are on one screen; the fleet query lets the model
+write an expression and lets the EVALUATOR answer it, because generated SQL cannot be passed
+through `access.filter_machines()`; and the summary computes every figure from two local
+tables and asks only for the sentence wrapped around them. **Nothing in this module lets a
+model's assertion reach an operator as a fact of this hub's.**
+
 Provider-wise there is ONE wire shape here, OpenAI-compatible `/v1/chat/completions`, because
 that is also what Ollama, vLLM, LM Studio and OpenRouter speak: a LAN-only deployment and a
 hosted one then differ by a base url rather than by a code path. #17's wording layer is meant
@@ -58,6 +68,7 @@ from urllib.parse import urlparse
 
 import requests
 
+import alerts
 import rules
 import scripts
 
@@ -154,6 +165,16 @@ MAX_RESPONSE_BYTES = 256 * 1024
 MAX_MODELS_BYTES = 8 * 1024 * 1024
 MAX_DRAFTS_PER_ACTOR = 25
 MAX_REFUSAL_CHARS = 400
+# How much PROSE may come back from the three answering entry points -- the machine panel, the
+# fleet query's refusal and the summary's covering note. Small next to MAX_RESPONSE_CHARS
+# because this text is rendered into a console rather than parsed: an answer that runs past a
+# screen is one nobody reads to the end, and the readings it was built from are on the same
+# page anyway.
+MAX_ANSWER_CHARS = 2000
+# How many matching machines a fleet query hands back. A question answered with four hundred
+# hostnames is a list nobody reads; the TALLY is the answer at that size, and it is counted
+# over every machine rather than over this slice.
+MAX_QUERY_RESULTS = 200
 # How many rules one sentence may draft. An escalation is a SET of rules -- the engine has no
 # schedule, so "warn after five days, restart after ten" is two conditions over the same
 # variable and cannot be one rule -- and a drafter that could only answer with one silently
@@ -161,6 +182,13 @@ MAX_REFUSAL_CHARS = 400
 # needing six stages is a policy document rather than a rule, and an unbounded list is an
 # unbounded number of validator runs and of rows somebody has to read before committing.
 MAX_RULES_PER_DRAFT = 5
+# The longest report window a summary will compute. Thirty days because `data.retention_days`
+# prunes history at thirty by default, so a longer window would count what SURVIVED rather
+# than what happened -- a figure that shrinks as the pruner runs is worse than no figure.
+MAX_SUMMARY_WINDOW_DAYS = 30
+# How many rules and machines the summary NAMES before it stops naming them. The counts stay
+# whole; only the list is cut, and it says so.
+SUMMARY_TOP_N = 8
 
 KIND_DRAFT_RULE = "draft_rule"
 KIND_REFINE_RULE = "refine_rule"
@@ -652,6 +680,16 @@ def action_prompt(db_path):
             "sentence in `refusal` instead of inventing an action.")
 
 
+# The engine's expression language, described once. Both prompts in this file quote it -- the
+# drafter's and the fleet query's -- and the two describing it separately is how one of them
+# ends up a release behind the parser, teaching an operator a syntax that no longer parses.
+EXPRESSION_SYNTAX = (
+    "Expression syntax: and, or, not, parentheses, comparisons (>, >=, <, <=, ==, !=), "
+    "contains, not_contains, starts_with, ends_with, matches, in, not_in, `is known`, "
+    "`is unknown`. Durations are written 30s, 5m, 2h, 7d. Message templates interpolate "
+    "{{variable.name}}.")
+
+
 # The action shapes the prompt teaches, and the ONLY place they are written down.
 #
 # **Every one of these is asserted against rules.validate_actions by tests/test_ai.py.** That
@@ -729,10 +767,7 @@ def system_prompt(db_path, disks=None):
         "You translate an IT operator's sentence into rules for the FleetHub rules engine. One\nrule per stage: a request that escalates is a set of rules, not one rule with the\nharshest action.",
         "Variables you may reference. Use these names EXACTLY; there are no others:\n"
         + catalog_prompt(db_path, disks),
-        "Expression syntax: and, or, not, parentheses, comparisons (>, >=, <, <=, ==, !=), "
-        "contains, not_contains, starts_with, ends_with, matches, in, not_in, `is known`, "
-        "`is unknown`. Durations are written 30s, 5m, 2h, 7d. Message templates interpolate "
-        "{{variable.name}}.",
+        EXPRESSION_SYNTAX,
         target_prompt(db_path),
         action_prompt(db_path),
         _ENVELOPE,
@@ -1244,54 +1279,550 @@ def list_requests(db_path, limit=100):
 
 
 # ---------------------------------------------------------------------------------------
-# Not built yet -- roadmap #24's later halves
+# What may leave this hub about ONE machine
 # ---------------------------------------------------------------------------------------
-# Three stubs, each with its seam named, because for these the SHAPE is the decision and the
-# code is not. What is deliberately absent matters as much: anomaly baselining and alert
-# correlation belong to #17, which says a per-machine baseline is a statistic over the history
-# table rather than a model. A stub for them in this file would make the board lie.
+# `ai.send_machine_names` is off by default, and honouring it is the whole reason the machine
+# panel waited for a release of its own. A question about one PC carries, with no help at all,
+# the hostname, the person signed into it, its serial number, its MAC address and the OU it
+# sits in -- five identifiers, and the ones that matter identify a PERSON rather than a
+# computer the moment somebody has the directory open beside them.
+#
+# **The filter is an allow-list, and that is the decision.** A deny-list naming "the
+# identifying variables" has to be extended every time an operator adds a custom field, a
+# probe or a derived variable, and the cost of forgetting once is an owner's name arriving at
+# a hosted provider with nothing in the console to notice it by. An allow-list fails the other
+# way: a new text variable is withheld until somebody decides it is safe, which shows up as a
+# slightly thinner answer and never as a disclosure. Rejected: redacting by matching values
+# against the machine list, which misses every identifier the hub did not think of first.
+#
+# Numbers and booleans pass unconditionally. A temperature, a disk percentage and "the link is
+# up" identify nobody, and they are the entire substance of "why is this machine slow" -- a
+# redaction that took them out would leave the panel with a privacy setting and no feature.
+REDACTED = "(withheld)"
+
+# The text variables that describe what a machine IS rather than whose it is. Deliberately
+# short: `bios.support` is a vendor support state, `ad.os` an operating system name, and
+# everything absent here -- hostname, serial, service tag, asset tag, signed-in account,
+# domain, IP, MAC, OU, DN, owner, every custom field, every probe -- is withheld while the
+# setting is off.
+SHAREABLE_TEXT = frozenset((
+    "sys.status", "sys.agent_version",
+    "hw.model", "hw.manufacturer",
+    "bios.version", "bios.vendor", "bios.support",
+    "ad.os",
+))
+
+
+def _shareable(name, value, send_names):
+    """Whether one resolved variable's VALUE may be sent to the provider.
+
+    The NAME always may -- `session.user` is a schema, not a person -- which is why a withheld
+    entry still reaches the prompt as a name with `(withheld)` next to it. A model told the
+    variable exists and is not being shown stops asking for it; a model told nothing invents
+    a hostname to make its sentence read well.
+    """
+    if send_names:
+        return True
+    if value.kind in (rules.KIND_NUMBER, rules.KIND_BOOL):
+        return True
+    return str(name) in SHAREABLE_TEXT
+
+
+def machine_snapshot(resolved, *, send_names=False):
+    """{name: Value} -> the rows the panel shows AND the prompt is built from. No model call.
+
+    **One list, rendered twice on purpose.** The operator sees exactly what was sent, marked
+    entry by entry, so "did this machine's name leave the building" is answerable from the
+    screen rather than by reading this file. A second list built for display would be the one
+    that drifts.
+    """
+    rows = []
+    for name in sorted(resolved or {}):
+        value = resolved[name]
+        known = bool(getattr(value, "known", False))
+        shared = _shareable(name, value, send_names)
+        rows.append({
+            "name": name,
+            "kind": value.kind,
+            "value": (rules.format_value(value.value) if known and shared
+                      else (REDACTED if known else rules.UNKNOWN_PLACEHOLDER)),
+            "age_seconds": value.age_seconds,
+            "known": known,
+            "withheld": known and not shared,
+        })
+    return rows
+
+
+def snapshot_prompt(rows):
+    """A snapshot as prompt text. Three sections, and the last two earn their bytes.
+
+    **The AGE is on every line.** A machine that stopped reporting four hours ago still has a
+    complete-looking set of numbers, and an answer that reads them as current is wrong in
+    exactly the case where being wrong costs somebody an afternoon.
+
+    The unknown names are listed because "the hub has no CPU reading for this PC" is a real
+    answer to "why is it slow", and a model shown only the variables that resolved will reach
+    for the ones that did instead. The withheld names are listed for the reason `_shareable`
+    gives.
+    """
+    lines = []
+    for row in rows:
+        if not row["known"] or row["withheld"]:
+            continue
+        age = row.get("age_seconds")
+        stamp = "" if age is None else f"   [{int(age)}s old]"
+        lines.append(f"{row['name']} = {row['value']}{stamp}")
+    body = "\n".join(lines)
+    unknown = [row["name"] for row in rows if not row["known"]]
+    if unknown:
+        body += "\n\nNot reported by this machine: " + ", ".join(unknown)
+    withheld = [row["name"] for row in rows if row["withheld"]]
+    if withheld:
+        body += ("\n\nWithheld by this hub on purpose -- do not ask for these and do not guess"
+                 " at them: " + ", ".join(withheld))
+    return body
+
+
+# The rules the answering model works under. Every line is here because the alternative is a
+# failure somebody would have to catch by reading the answer carefully, which is precisely
+# what nobody does with a panel that usually sounds right.
+MACHINE_ANSWER_RULES = """You are answering an IT operator's question about ONE Windows PC managed by FleetHub.
+Everything this hub knows about that PC is listed below as variables, with each reading's age.
+
+Rules:
+* Answer ONLY from those readings. Nothing you know about other machines, other products or
+  typical values is evidence about this one.
+* Never state a number that is not in the readings, and never round one into a different one.
+* Name the variables you used, spelled exactly as they are written.
+* A reading that is hours old is evidence about the past. Say so rather than reading it as now.
+* If the readings do not answer the question, say which reading is missing and stop. That is
+  a useful answer; a plausible guess is not.
+* At most six sentences of plain English. No markup, no lists, no headings."""
+
+
 def answer_machine_question(db_path, config, machine, text, *, resolve_vars,
                             api_key="", actor="", now=None):
     """"Why is this machine slow?" -> (error, answer). The machine chat panel.
 
     The seam is `resolve_vars`: the caller hands in the same per-machine resolver rules_web.py
-    already builds for its preview endpoint, so the model answers over the variable namespace
-    rather than over raw tables. That keeps the answer citable -- every number in it has a
-    variable name and an age -- and keeps this function out of Flask and out of app.py.
+    builds for its preview endpoint, so the model answers over the variable namespace rather
+    than over raw tables. That keeps the answer citable -- every number in it has a variable
+    name and an age -- and keeps this function out of Flask and out of app.py.
 
-    Not built. The work is the redaction pass `ai.send_machine_names` implies: a question about
-    one PC carries its hostname, its logged-in user and its serial number unless something
-    takes them out first, and deciding what "took them out" means is not a detail.
+    **The snapshot travels back with the answer, not just into the prompt.** The console shows
+    both, which is the only honest way to render a paragraph a language model wrote: the
+    operator reads the sentence, and the numbers it was supposedly built from sit underneath
+    it. An answer that cites `metric.cpu_load_pct = 96` next to a row reading 12 is caught by
+    the person reading it, and there is no other mechanism that would catch it -- a second
+    model call checking the first is two guesses, not a check.
+
+    Redaction is `machine_snapshot`'s, driven by `ai.send_machine_names`. Nothing here decides
+    it per request: a per-question override would make "what leaves this hub" a property of
+    whoever asked rather than of the hub's configuration.
     """
-    raise NotImplementedError("roadmap #24: the machine chat panel is not built yet")
+    request = str(text or "").strip()
+    if not request:
+        return "ask a question about this machine", None
+    if len(request) > MAX_REQUEST_CHARS:
+        return f"that question is too long (limit {MAX_REQUEST_CHARS} characters)", None
+
+    # Resolved here as well as inside complete(), because `send_machine_names` decides what the
+    # prompt may contain and the prompt is built before the call. Cheap, and the alternative --
+    # reading the raw config dict for that one key -- is a second place that has to know how a
+    # half-configured provider resolves.
+    error, resolved_config = provider_config(config, api_key)
+    if error:
+        record_request(db_path, actor=actor, kind=KIND_MACHINE_ASK, **_stamp(config),
+                       machine=str(machine), prompt_chars=len(request),
+                       outcome=(OUTCOME_DISABLED if "switched off" in error
+                                else OUTCOME_PROVIDER_ERROR),
+                       error=error, now=now)
+        return error, None
+
+    send_names = bool(resolved_config["send_machine_names"])
+    rows = machine_snapshot(resolve_vars(machine) or {}, send_names=send_names)
+    subject = str(machine) if send_names else "this PC"
+    messages = [
+        {"role": "system",
+         "content": MACHINE_ANSWER_RULES + f"\n\nReadings for {subject}:\n"
+                    + snapshot_prompt(rows)},
+        {"role": "user", "content": request},
+    ]
+    error, answer = complete(config, messages, api_key=api_key)
+    record_request(db_path, actor=actor, kind=KIND_MACHINE_ASK, **_stamp(config),
+                   machine=str(machine), prompt_chars=len(request),
+                   outcome=(OUTCOME_PROVIDER_ERROR if error else OUTCOME_OK),
+                   error=str(error or ""), now=now)
+    if error:
+        return error, None
+    return None, {
+        "machine": str(machine),
+        "question": request,
+        "answer": str(answer).strip()[:MAX_ANSWER_CHARS],
+        "snapshot": rows,
+        # Both stated, rather than left to be inferred from the rows: the panel prints a line
+        # saying what was sent, and a console that had to count `withheld` flags to write it
+        # would be one sentence away from claiming the opposite of the truth.
+        "sent_machine_name": send_names,
+        "withheld": sum(1 for row in rows if row["withheld"]),
+    }
 
 
-def fleet_query(db_path, config, text, *, in_scope, api_key="", actor="", now=None):
-    """"Which machines are over 90 degrees?" -> (error, rows).
+# ---------------------------------------------------------------------------------------
+# Natural language -> a question the evaluator answers
+# ---------------------------------------------------------------------------------------
+# **Not text to SQL**, which reads as the safe place to start and is the most dangerous thing
+# in this feature area: generated SQL cannot be passed through `access.filter_machines()`, so
+# an operator scoped to one department asks a question and is answered from the whole fleet --
+# a failure that looks exactly like a working feature. Rejected in ROADMAP.MD #24 and this is
+# the code that does the other thing.
+_QUERY_ENVELOPE = """Answer with one JSON object and nothing else:
 
-    **Not text to SQL.** The model maps the question onto a rules expression and the existing
-    evaluator answers it, because generated SQL cannot be passed through
-    `access.filter_machines()` -- a scoped operator would be answered from the whole fleet, and
-    that is the one failure in this feature area that looks exactly like a working feature.
-    Rejected explicitly in ROADMAP.MD #24.
+{"condition_text": "<one-line expression>",
+ "target": {"include": [{"kind": "all"}]},
+ "refusal": ""}
 
-    `in_scope` is the caller's scope predicate, applied to the machine list BEFORE evaluation
-    rather than to the results, so a machine outside somebody's reach is never resolved at all.
+The expression is a QUESTION, not a rule. It is evaluated on every machine the operator can
+see, and the machines it is true for are the answer -- so there are no actions, no thresholds
+to escalate between, and no second stage.
 
-    Not built.
+Leave `target` as every machine unless the question itself names a group, in which case use
+the same selectors a rule uses.
+
+Set `refusal` to one plain sentence and leave `condition_text` empty when the question cannot
+be asked with the variables listed above. Three kinds of question cannot: one about what
+happened earlier (these variables are the CURRENT reading and nothing else), one about an
+individual process or a piece of installed software, and one asking why something is so
+rather than which machines it is true of."""
+
+
+def query_prompt(db_path, disks=None):
+    """The whole prompt a fleet query runs with.
+
+    Shares the namespace, the syntax and the target vocabulary with `system_prompt` and
+    deliberately not the envelope: a question has no actions, and a prompt that offered them
+    would produce a draft rule in answer to "which machines are hot", which is the wrong
+    answer delivered convincingly.
     """
-    raise NotImplementedError("roadmap #24: natural-language fleet query is not built yet")
+    return "\n\n".join([
+        "You turn an IT operator's question about a fleet of Windows PCs into ONE expression\n"
+        "for the FleetHub rules engine. The hub evaluates it and reports which machines it is\n"
+        "true for; you never see the answer and must not guess at it.",
+        "Variables you may reference. Use these names EXACTLY; there are no others:\n"
+        + catalog_prompt(db_path, disks),
+        EXPRESSION_SYNTAX,
+        target_prompt(db_path),
+        _QUERY_ENVELOPE,
+    ])
 
 
-def daily_summary(db_path, config, *, window_days=1, api_key="", now=None):
+def validated_query(payload, extra):
+    """One query envelope -> (error, question). The gate, in the query's shape.
+
+    The same discipline `validated_draft` applies, minus the actions a question does not have:
+    the expression goes through the engine's parser, the target through the engine's target
+    validator, and what comes back is the CANONICAL text rather than the model's, so the
+    console shows what parsed instead of what was typed at it.
+    """
+    refusal = str(payload.get("refusal") or "").strip()
+    if refusal:
+        return refusal[:MAX_REFUSAL_CHARS], None
+    condition_text = str(payload.get("condition_text") or "").strip()
+    if not condition_text:
+        return "the AI provider answered without a question this hub could evaluate", None
+    error, condition = rules.parse_expression(condition_text, extra)
+    if error:
+        return error, None
+    error, target = rules.validate_target(
+        payload.get("target") or {"include": [{"kind": "all"}]}, extra)
+    if error:
+        return error, None
+    return None, {"condition": condition,
+                  "condition_text": rules.format_expression(condition),
+                  "target": target,
+                  "variables": rules.condition_variables(condition)}
+
+
+def evaluate_query(db_path, question, *, in_scope, resolve_vars, limit=None):
+    """Run a validated question across the fleet. **No model call, and no provider needed.**
+
+    `in_scope` filters the machine list BEFORE evaluation rather than filtering the results
+    afterwards, so a machine outside somebody's reach is never resolved at all -- its values
+    are not read, and it cannot appear in a tally as a number that narrows a guess about how
+    many machines exist.
+
+    A machine whose values will not resolve counts as UNKNOWN rather than aborting the run.
+    Three hundred machines answered and one that failed is a useful answer; a stack trace is
+    not, and the same reasoning is written out at length in rules_web.preview_condition.
+    """
+    try:
+        limit = int(limit or MAX_QUERY_RESULTS)
+    except (TypeError, ValueError):
+        # A console sending nonsense in `limit` should get an answer, not a 500. Same
+        # reasoning as _int_field: the limit is a display preference, not part of the
+        # question, so a value that will not convert becomes the default.
+        limit = MAX_QUERY_RESULTS
+    limit = max(1, min(MAX_QUERY_RESULTS, limit))
+    machines = rules.resolve_targets(db_path, question.get("target"))
+    if in_scope is not None:
+        machines = [m for m in machines if in_scope(m)]
+    tally = {"true": 0, "false": 0, "unknown": 0}
+    matched = []
+    for machine in machines:
+        try:
+            resolved = resolve_vars(machine)
+            outcome = rules._result_name(rules.evaluate(question["condition"], resolved))
+        except Exception:                             # noqa: BLE001
+            tally["unknown"] += 1
+            continue
+        tally[outcome] += 1
+        if outcome == "true" and len(matched) < limit:
+            # The operand values travel with the hostname. "PC-07" alone invites the next
+            # question; "PC-07, because disk.min_free_gb is 3" answers it in the same breath,
+            # and it is the same `explain` the rule preview shows.
+            matched.append({"machine": machine,
+                            "detail": rules.explain(question["condition"], resolved)})
+    return {"targeted": len(machines), "matched": tally["true"], "tally": tally,
+            "results": matched, "truncated": tally["true"] > len(matched)}
+
+
+def fleet_query(db_path, config, text, *, in_scope, resolve_vars, extra=None, api_key="",
+                actor="", now=None, limit=None, disks=None):
+    """"Which machines are over 90 degrees?" -> (error, answer).
+
+    Two halves with a validator between them: the model turns a sentence into an expression,
+    and the EVALUATOR -- the one that runs rules on this fleet -- answers it. Nothing the
+    model says reaches the answer except an expression that parsed and a refusal it was asked
+    to write in plain language.
+
+    One repair round, for the reason `draft_rule` gives: a model that cannot fix "unknown
+    variable: cpu.temp_c" on the first correction will not fix it on the fourth, and an
+    unbounded loop is an unbounded bill.
+    """
+    request = str(text or "").strip()
+    if not request:
+        return "ask a question about the fleet", None
+    if len(request) > MAX_REQUEST_CHARS:
+        return f"that question is too long (limit {MAX_REQUEST_CHARS} characters)", None
+    if extra is None:
+        extra = rules.all_extra_variables(db_path)
+
+    messages = [{"role": "system", "content": query_prompt(db_path, disks)},
+                {"role": "user", "content": request}]
+    last_error = None
+    for attempt in range(MAX_REPAIR_ATTEMPTS + 1):
+        error, answer = complete(config, messages, api_key=api_key)
+        if error:
+            error = last_error or error
+            record_request(db_path, actor=actor, kind=KIND_FLEET_QUERY, **_stamp(config),
+                           prompt_chars=len(request),
+                           outcome=(OUTCOME_DISABLED if "switched off" in error
+                                    else OUTCOME_PROVIDER_ERROR),
+                           error=error, now=now)
+            return error, None
+        # The drafter's parser, reused rather than reimplemented. Its no-`rules`-key branch
+        # returns the top-level object as the one entry, which is exactly this envelope's
+        # shape, and its refusal branch already travels the same way -- a second parser here
+        # would be a second place for the fence-stripping and brace-trimming to drift.
+        error, entries = _parse_envelope(answer)
+        if not error:
+            error, question = validated_query(entries[0], extra)
+            if not error:
+                outcome = evaluate_query(db_path, question, in_scope=in_scope,
+                                         resolve_vars=resolve_vars, limit=limit)
+                record_request(db_path, actor=actor, kind=KIND_FLEET_QUERY, **_stamp(config),
+                               prompt_chars=len(request), outcome=OUTCOME_OK, now=now)
+                return None, {"question": request, **question, **outcome}
+        last_error = error
+        if attempt < MAX_REPAIR_ATTEMPTS:
+            messages.append({"role": "assistant", "content": answer})
+            messages.append({"role": "user", "content":
+                             "The rules engine rejected that: " + str(error)
+                             + "\nAnswer again with the same JSON object, corrected. If the"
+                               " question cannot be asked with the listed variables, set"
+                               " `refusal` instead."})
+    record_request(db_path, actor=actor, kind=KIND_FLEET_QUERY, **_stamp(config),
+                   prompt_chars=len(request), outcome=OUTCOME_REFUSED,
+                   error=str(last_error), now=now)
+    return last_error, None
+
+
+# ---------------------------------------------------------------------------------------
+# The fleet summary
+# ---------------------------------------------------------------------------------------
+# **The figures are computed here and the model only writes the sentence around them.** Same
+# division #17 draws, and for the same reason: a summary that invents a number is worse than
+# no summary at all, because this one gets quoted into a change ticket and outlives the day it
+# describes. So `summary_figures` takes no config and makes no call, `summary_lines` renders
+# it with no model either, and `daily_summary` adds prose on top of both.
+#
+# That ordering has a second consequence worth stating: a provider that is off, unreachable or
+# out of credit costs the covering note and nothing else. The report still arrives.
+#
+# What is NOT here is correlation -- "these nine alerts are one switch" -- which belongs to
+# #17 and is a statistic over the history table rather than a model's opinion. When it lands
+# it becomes another section of `summary_figures`, computed the same way; it is deliberately
+# not faked in the meantime, because a made-up grouping is the one error in a report nobody
+# can check.
+
+
+def _alert_machines(alert):
+    """Every machine an alert row names. Two shapes, because two kinds of alert.
+
+    A per-machine alert carries `machine`; a duplicate-serial one carries a LIST and no
+    machine at all. Scoping has to see both, or a scoped operator's report silently counts a
+    duplicate-serial alert raised on somebody else's hardware.
+    """
+    if alert.get("machine"):
+        return [str(alert["machine"])]
+    return [str(m) for m in (alert.get("machines") or []) if m]
+
+
+def summary_figures(db_path, *, window_days=1, in_scope=None, now=None):
+    """What happened in the window, counted. **No model call, and no provider needed.**
+
+    **`in_scope` is the same gate a fleet query gets, and for a sharper reason.** A count is
+    not obviously scoped when you read it -- "14 alerts today" looks like an answer rather
+    than like a statement about a fleet somebody cannot see -- so an unscoped count handed to
+    a scoped operator both misinforms them and tells them how much else exists. Alerts and
+    fires are filtered by the machines they name; an alert naming no machine at all is counted
+    only for an operator with no scope, which is the fail-closed reading.
+    """
+    window_days = max(1, min(MAX_SUMMARY_WINDOW_DAYS, int(window_days or 1)))
+    end = int(now or time.time())
+    start = end - window_days * 86400
+
+    def visible(machines):
+        if in_scope is None:
+            return True
+        return bool(machines) and any(in_scope(m) for m in machines)
+
+    raised, cleared, kinds, touched = 0, 0, {}, set()
+    for alert in alerts.episodes_between(db_path, start, end):
+        named = _alert_machines(alert)
+        if not visible(named):
+            continue
+        touched.update(named)
+        created = int(alert.get("created_at") or 0)
+        ended = alert.get("episode_ended_at")
+        # Closed at both ends, the same window alerts.episodes_between selected on: `end` is
+        # now, and an exclusive end drops whatever happened in the second the report was run.
+        if start <= created <= end:
+            raised += 1
+            kinds[alert.get("kind", "")] = kinds.get(alert.get("kind", ""), 0) + 1
+        if ended is not None and start <= int(ended) <= end:
+            cleared += 1
+
+    open_now = sum(1 for alert in alerts.list_open(db_path)
+                   if visible(_alert_machines(alert)))
+
+    names = {rule["id"]: rule.get("name") or f"rule {rule['id']}"
+             for rule in rules.list_rules(db_path)}
+    fires, by_rule, by_machine, outcomes = 0, {}, {}, {}
+    for fire in rules.fires_between(db_path, start, end):
+        machine = str(fire.get("machine") or "")
+        if in_scope is not None and not (machine and in_scope(machine)):
+            continue
+        fires += 1
+        # A fire whose rule has since been deleted cannot happen -- rules.py deletes the fires
+        # with it -- but the name is looked up defensively anyway, because a report that dies
+        # on a missing key is a report nobody gets.
+        label = names.get(fire.get("rule_id"), f"rule {fire.get('rule_id')}")
+        by_rule[label] = by_rule.get(label, 0) + 1
+        by_machine[machine] = by_machine.get(machine, 0) + 1
+        outcome = str(fire.get("outcome") or "")
+        if outcome:
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        touched.add(machine)
+
+    def top(counts):
+        ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        return [{"name": name, "count": count} for name, count in ranked[:SUMMARY_TOP_N]]
+
+    return {
+        "window_days": window_days, "from": start, "to": end,
+        "raised": raised, "raised_by_kind": top(kinds),
+        "cleared": cleared, "open_now": open_now,
+        "fires": fires, "fires_by_rule": top(by_rule), "fires_by_machine": top(by_machine),
+        "fire_outcomes": top(outcomes),
+        "machines_affected": len(touched - {""}),
+        "rules_named": len(by_rule), "machines_named": len(by_machine),
+        "scoped": in_scope is not None,
+    }
+
+
+def summary_lines(figures):
+    """The figures as sentences, with no model anywhere near them.
+
+    This is the report. `daily_summary`'s prose is a covering note ON it, which is why these
+    lines are generated first and travel whether or not the provider answers -- and why the
+    console renders both rather than the paragraph alone.
+    """
+    days = int(figures.get("window_days") or 1)
+    span = "the last 24 hours" if days == 1 else f"the last {days} days"
+    lines = [f"In {span}: {figures['raised']} alert episode(s) raised, "
+             f"{figures['cleared']} cleared, {figures['open_now']} open now."]
+    if figures["raised_by_kind"]:
+        lines.append("Raised by kind: " + ", ".join(
+            f"{entry['name']} {entry['count']}" for entry in figures["raised_by_kind"]))
+    lines.append(f"{figures['fires']} rule fire(s) across "
+                 f"{figures['machines_affected']} machine(s).")
+    if figures["fires_by_rule"]:
+        lines.append("Rules that fired: " + ", ".join(
+            f"{entry['name']} x{entry['count']}" for entry in figures["fires_by_rule"])
+            + (" (and more)" if figures["rules_named"] > len(figures["fires_by_rule"]) else ""))
+    if figures["fire_outcomes"]:
+        lines.append("Command outcomes: " + ", ".join(
+            f"{entry['name']} {entry['count']}" for entry in figures["fire_outcomes"]))
+    return lines
+
+
+SUMMARY_RULES = """You are writing the covering note on an IT fleet's status report. The hub computed the
+figures below; your job is to say what they mean to somebody skimming, in prose.
+
+Rules:
+* Use ONLY these figures. Do not introduce a number that is not among them, and do not
+  re-round one into a different number.
+* Do not guess at causes. You cannot see the machines, and a cause invented here is read as
+  a finding.
+* Say what is still outstanding last, because that is the part somebody has to act on.
+* At most five sentences of plain English. No markup, no lists, no headings.
+* If every figure is zero, say the fleet was quiet and stop."""
+
+
+def daily_summary(db_path, config, *, window_days=1, in_scope=None, api_key="", actor="",
+                  now=None):
     """The fleet health summary -- what was raised, remediated and left outstanding.
 
-    The seam is that the FIGURES are computed here, deterministically, from alerts.py's
-    episodes and rules.py's `rule_fires`; only the prose wrapping them goes to the model. Same
-    division #17 draws, and for the same reason: a summary that invents a number is worse than
-    no summary, because it will be quoted into a change ticket.
+    Returns (error, summary), and **an unavailable provider is not an error here.** Every
+    other entry point in this module refuses when the feature is off, because every other one
+    has nothing to say without a model. This one has the whole report: the figures are
+    arithmetic over two local tables, and refusing to compute them because a third party is
+    unreachable would withhold the part that was never a guess in the first place. So the
+    provider's failure arrives as `prose_error` next to a complete set of figures, and the
+    console prints both.
 
-    Not built. Its real prerequisite is #17's correlation, without which the summary is a
-    restatement of the alert list in longer words.
+    The error return is kept for a caller that hands in something unusable, and so this reads
+    like its two siblings.
     """
-    raise NotImplementedError("roadmap #24: the fleet summary is not built yet")
+    figures = summary_figures(db_path, window_days=window_days, in_scope=in_scope, now=now)
+    summary = {"figures": figures, "lines": summary_lines(figures),
+               "prose": "", "prose_error": ""}
+    if not is_enabled(config):
+        # Not recorded in `ai_requests`: nothing was requested of a provider, and a row saying
+        # otherwise would make the audit trail overcount what this hub sent.
+        summary["prose_error"] = "the AI features are switched off (Settings -> AI)"
+        return None, summary
+
+    body = "\n".join(summary["lines"])
+    error, answer = complete(config, [{"role": "system", "content": SUMMARY_RULES},
+                                      {"role": "user", "content": body}], api_key=api_key)
+    record_request(db_path, actor=actor, kind=KIND_SUMMARY, **_stamp(config),
+                   prompt_chars=len(body),
+                   outcome=(OUTCOME_PROVIDER_ERROR if error else OUTCOME_OK),
+                   error=str(error or ""), now=now)
+    if error:
+        summary["prose_error"] = error
+        return None, summary
+    summary["prose"] = str(answer).strip()[:MAX_ANSWER_CHARS]
+    return None, summary

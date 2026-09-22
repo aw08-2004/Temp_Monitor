@@ -327,6 +327,51 @@
         "other": "El vigilante «{watchdog}» se dio por vencido; informado {count} veces. Primer informe {since}."
       },
       "ended": "La máquina volvió a arreglárselas hacia {until}. Informado desde {from}."
+    "bundle": {
+      "title": {
+        "one": "{count} alerta en {machine}",
+        "other": "{count} alertas relacionadas en {machine}"
+      },
+      "cause_line": "{cause} Primera alerta a las {since}.",
+      "together": "Empezaron juntas y se solapan en el tiempo ({facets}). El hub no conoce ninguna causa que las relacione. Primera alerta a las {since}.",
+      "facet": {
+        "disk": "espacio en disco",
+        "memory": "memoria",
+        "cpu": "carga del procesador",
+        "thermal": "temperatura",
+        "network": "red",
+        "process": "procesos",
+        "liveness": "comunicación",
+        "session": "usuario con sesión iniciada",
+        "directory": "directorio",
+        "identity": "identidad del equipo",
+        "other": "otros",
+        "event": "registro de eventos"
+      },
+      "cause": {
+        "disk_starved_process": "La unidad se llenó primero y después falló un proceso en el equipo.",
+        "disk_starved_agent": "La unidad se llenó primero y después el equipo dejó de comunicarse.",
+        "memory_paging": "El equipo se quedó sin memoria primero, así que la carga del procesador es con toda probabilidad paginación.",
+        "memory_starved_process": "El equipo se quedó sin memoria primero y después falló un proceso.",
+        "thermal_throttling": "El equipo se calentó primero, así que la carga del procesador es con toda probabilidad limitación térmica.",
+        "offline_unmatched": "El equipo dejó de comunicarse primero y después el directorio le perdió la pista."
+      },
+      "recommend": "Sugerir una solución",
+      "recommend_working": "Consultando...",
+      "recommend_failed": "No se pudo obtener una sugerencia: {error}",
+      "recommendation_title": "Solución sugerida",
+      "recommendation_source": "Redactado por {model} en {provider} a partir de los datos anteriores. Revíselo antes de actuar.",
+      "draft_script": "Añadir este script a la biblioteca",
+      "script_drafted": "Guardado en la biblioteca de scripts como '{name}', desactivado. Léalo y actívelo antes de que ninguna regla pueda usarlo.",
+      "script_failed": "No se pudo guardar el script: {error}",
+      "detail": "Mostrar qué más ocurrió",
+      "detail_working": "Cargando...",
+      "detail_failed": "No se pudo cargar el detalle: {error}",
+      "detail_none": "No destacó nada más en este equipo durante este periodo.",
+      "anomalies_title": "Fuera de lo normal para este equipo",
+      "anomaly_row": "{metric}: ahora {value}, lo habitual es en torno a {median}.",
+      "events_title": "Registro de eventos, mismo periodo",
+      "event_row": "{log} {event_id} ({level}), {count}x: {message}"
     }
   },
   "audit": {
@@ -2493,6 +2538,9 @@
       "hidden": "Algunas herramientas están ocultas: esta máquina ha informado de que no puede responderlas.",
       "hidden_android": "Algunas herramientas están ocultas: es un dispositivo Android, y no hay shell, ni BIOS, ni sistema de archivos sobre el que actúen."
     },
+    "ask": {
+      "title": "Preguntar por esta máquina"
+    },
     "discovery": {
       "title": "Descubrimiento de subred",
       "help": "Pedir a este PC que mire la red en la que está y liste todo lo que responda. Solo se pueden barrer las subredes en las que este PC está.",
@@ -3172,7 +3220,41 @@
     "preview": "Qué equipos coinciden ahora",
     "create": "Crear la regla",
     "discard": "Descartar",
-    "failed": "{error}"
+    "failed": "{error}",
+    "ask": "Preguntar",
+    "ask_placeholder": "¿Por qué está lento este PC?",
+    "asking": "Preguntando...",
+    "ask_readings": "Las lecturas en las que se basa esta respuesta",
+    "unknown_value": "desconocido",
+    "sends_names": "Este hub envía el nombre de esta máquina y sus datos identificativos junto con la pregunta. Se cambia en Ajustes, apartado IA.",
+    "withholds_names": "Este hub retiene los nombres de máquina y otros valores identificativos. Solo se envían lecturas como temperaturas y espacio libre en disco.",
+    "sent_with_names": "Enviado con el nombre de esta máquina y sus valores identificativos.",
+    "sent_without_names": "Enviado sin nombres de máquina. Se retuvieron {withheld} valores identificativos.",
+    "age_seconds": "hace {seconds}s",
+    "age_minutes": "hace {minutes} min",
+    "age_hours": "hace {hours} h",
+    "column": {
+      "variable": "Variable",
+      "value": "Valor",
+      "age": "Leído",
+      "machine": "Máquina",
+      "why": "Por qué"
+    },
+    "query_title": "Preguntar por la flota",
+    "query_intro": "Una pregunta en lenguaje corriente, convertida en una de las mismas expresiones con las que se escriben las reglas y respondida por el mismo evaluador. Solo se le responde sobre las máquinas a las que tiene acceso.",
+    "query_placeholder": "¿Qué máquinas tienen menos de 10 GB libres?",
+    "query_run": "Preguntar",
+    "query_running": "Trabajando...",
+    "query_tally": "{matched} de {targeted} máquinas coinciden, {unknown} no se pudieron responder",
+    "query_truncated": "Mostrando {shown} de {matched} coincidencias.",
+    "summary_title": "Resumen de la flota",
+    "summary_window": "Periodo del informe",
+    "summary_window_1": "Últimas 24 horas",
+    "summary_window_7": "Últimos 7 días",
+    "summary_window_30": "Últimos 30 días",
+    "summary_run": "Generar el informe",
+    "summary_running": "Trabajando...",
+    "summary_no_prose": "Las cifras de abajo están completas. Falta la nota de presentación: {error}"
   },
   "scripts": {
     "body": "Script",
@@ -3365,6 +3447,14 @@
       "winget": {
         "label": "winget",
         "description": "Actualizaciones de aplicaciones, del gestor de paquetes winget del equipo."
+      },
+      "apt": {
+        "label": "apt",
+        "description": "Actualizaciones de paquetes en un equipo Debian o Ubuntu, leídas de las listas que apt ya tiene. Lo actualizadas que estén lo decide el temporizador de refresco del propio equipo."
+      },
+      "dnf": {
+        "label": "dnf",
+        "description": "Actualizaciones de paquetes en un equipo Fedora, RHEL o Rocky, leídas de los metadatos que dnf ya tiene. Lo actualizados que estén lo decide el temporizador de refresco del propio equipo."
       }
     },
     "heading": "Parches",

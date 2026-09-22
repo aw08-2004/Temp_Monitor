@@ -6,6 +6,7 @@ using FleetHubAgent.Fleet;
 using FleetHubAgent.State;
 using FleetHubAgent.Update;
 using FleetHubAgent.Telemetry;
+using FleetHubAgent.Patch;
 
 namespace FleetHubAgent;
 
@@ -17,6 +18,7 @@ namespace FleetHubAgent;
 ///   * heartbeat -- liveness; the call that decides whether the machine reads online
 ///   * commands  -- poll, claim, and dispatch fleet commands
 ///   * update    -- look for a newer signed build, and exit onto it
+///   * inventory -- the slow local scans (what the package manager says is available)
 ///
 /// **Why they are separate**, which is a lesson the Windows agent learned the hard way and
 /// this one inherits rather than repeats: in a serial loop the slowest step sets the latency
@@ -26,10 +28,9 @@ namespace FleetHubAgent;
 /// takes. Worse, the machine can read offline (the hub's 90-second window) because its own
 /// telemetry post is queued in front of its heartbeat.
 ///
-/// The Windows agent runs six loops; this one runs four. The missing two (inventory,
-/// processes) back features this agent does not have -- see AgentConfig.Version for why it
-/// deliberately sits below the console's version gates for them, and README.md for what is
-/// next.
+/// The Windows agent runs six loops; this one runs five. The missing one (processes) backs a
+/// feature this agent does not have -- see AgentConfig.Version for why it deliberately sits
+/// below the console's version gates for it, and README.md for what is next.
 /// </summary>
 public sealed class Worker : BackgroundService
 {
@@ -40,6 +41,7 @@ public sealed class Worker : BackgroundService
     private readonly FleetClient _fleet;
     private readonly CommandDispatcher _dispatcher;
     private readonly SelfUpdater _updater;
+    private readonly PatchInventoryReporter _patches;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -55,6 +57,10 @@ public sealed class Worker : BackgroundService
     private bool _telemetryOnlyLogged;
     private bool _noTempLogged;
 
+    /// <summary>How often the inventory loop asks whether a scan is due. Not the scan
+    /// interval -- see InventoryLoopAsync.</summary>
+    private const int InventoryTickSeconds = 60;
+
     /// <summary>When the command loop last saw a command. Keeps it on the fast cadence for
     /// CommandBurstSeconds afterwards -- see AgentConfig.</summary>
     private DateTime _lastCommandUtc = DateTime.MinValue;
@@ -64,7 +70,7 @@ public sealed class Worker : BackgroundService
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
-        SelfUpdater updater)
+        SelfUpdater updater, PatchInventoryReporter patches)
     {
         _log = log;
         _state = state;
@@ -73,6 +79,7 @@ public sealed class Worker : BackgroundService
         _fleet = fleet;
         _dispatcher = dispatcher;
         _updater = updater;
+        _patches = patches;
         _enrollmentSecret = ReadEnrollmentSecret(log);
     }
 
@@ -98,6 +105,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => HeartbeatLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => InventoryLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait on
@@ -190,8 +198,13 @@ public sealed class Worker : BackgroundService
         {
             try
             {
-                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct))
+                // Whatever the inventory loop left behind, or null when nothing changed. It
+                // is marked sent only below, once the hub has actually answered -- see
+                // PatchInventoryReporter on why those are two steps.
+                var patches = _patches.TakeIfChanged();
+                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct, patches))
                 {
+                    if (patches is not null) _patches.MarkSent(patches);
                     // A heartbeat the hub accepted is proof this build can do its job, which
                     // is what retires the previous binary after an update. The telemetry loop
                     // says the same thing independently; either is enough, and neither is
@@ -203,6 +216,35 @@ public sealed class Worker : BackgroundService
             catch (Exception e) { _log.LogWarning(e, "Heartbeat tick failed"); }
 
             if (!await DelayAsync(AgentConfig.HeartbeatSeconds, ct)) break;
+        }
+    }
+
+    // ------------------------------------------------------------------ inventory
+
+    /// <summary>The slow local scans, on a loop of their own.
+    ///
+    /// One scan today -- what the package manager says is available (roadmap #14) -- and it is
+    /// here rather than on the heartbeat for the reason every loop in this file exists: an
+    /// apt dependency solve is seconds of work, the hub calls a machine offline after ninety,
+    /// and a heartbeat that waited for it would eventually take a healthy machine off the
+    /// console. The reporter decides whether a scan is actually due; this loop only asks.
+    ///
+    /// The one-minute tick is not the scan interval. It is how quickly the agent NOTICES that
+    /// a scan has become due (the reporter's own interval is six hours), which matters after
+    /// a restart -- a box that has just come back from an update should not wait an hour
+    /// before telling the hub what it is missing.</summary>
+    private async Task InventoryLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await _patches.RefreshIfDueAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { _log.LogWarning(e, "Inventory tick failed"); }
+
+            if (!await DelayAsync(InventoryTickSeconds, ct)) break;
         }
     }
 
@@ -320,9 +362,17 @@ public sealed class Worker : BackgroundService
 
     private async Task RunCommandAsync(FleetCommand cmd, CancellationToken ct)
     {
+        // Live output, so a ten-minute script shows its progress in the console instead of a
+        // spinner (roadmap #22). One streamer per command; disposing it flushes.
+        await using var streamer = new OutputStreamer(_fleet, cmd.Id, _log);
         try
         {
-            var result = await _dispatcher.ExecuteAsync(cmd, onOutput: null, ct);
+            var result = await _dispatcher.ExecuteAsync(cmd, streamer.Add, ct);
+            // ORDER MATTERS, and it is the Windows agent's hardest-won detail here: the
+            // console stops polling for output the moment a command reaches a terminal
+            // status, so the last chunks must land BEFORE the result or the operator
+            // silently loses the tail of what they ran.
+            await streamer.CompleteAsync(CancellationToken.None);
             // CancellationToken.None: a result must reach the hub even while the service is
             // stopping. The alternative is a command the console shows as running forever,
             // with a machine that has already rebooted underneath it.
@@ -333,6 +383,10 @@ public sealed class Worker : BackgroundService
             _log.LogWarning(e, "Command {Id} ({Type}) failed outright", cmd.Id, cmd.Type);
             try
             {
+                // Flush buffered output before reporting the terminal result -- the
+                // console stops polling for output the moment a command reaches a terminal
+                // status, so a result that lands first silently eats the tail.
+                await streamer.CompleteAsync(CancellationToken.None);
                 await _fleet.ReportResultAsync(
                     cmd.Id, CommandResult.Fail($"agent error: {e.Message}"), CancellationToken.None);
             }

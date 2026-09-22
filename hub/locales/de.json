@@ -327,6 +327,51 @@
         "other": "Der Wächter „{watchdog}“ hat aufgegeben, {count}-mal erneut gemeldet. Zuerst gemeldet {since}."
       },
       "ended": "Der Rechner kam bis {until} wieder zurecht. Gemeldet seit {from}."
+    "bundle": {
+      "title": {
+        "one": "{count} Meldung auf {machine}",
+        "other": "{count} zusammenhängende Meldungen auf {machine}"
+      },
+      "cause_line": "{cause} Erste Meldung um {since}.",
+      "together": "Diese begannen gemeinsam und überschneiden sich zeitlich ({facets}). Der Hub kennt keine Ursache, die sie verbindet. Erste Meldung um {since}.",
+      "facet": {
+        "disk": "Speicherplatz",
+        "memory": "Arbeitsspeicher",
+        "cpu": "Prozessorlast",
+        "thermal": "Temperatur",
+        "network": "Netzwerk",
+        "process": "Prozesse",
+        "liveness": "Rückmeldung",
+        "session": "angemeldeter Benutzer",
+        "directory": "Verzeichnis",
+        "identity": "Hardware-Identität",
+        "other": "Sonstiges",
+        "event": "Ereignisprotokoll"
+      },
+      "cause": {
+        "disk_starved_process": "Das Laufwerk lief zuerst voll, danach ist ein Prozess auf dem Rechner fehlgeschlagen.",
+        "disk_starved_agent": "Das Laufwerk lief zuerst voll, danach hat sich der Rechner nicht mehr gemeldet.",
+        "memory_paging": "Dem Rechner ging zuerst der Arbeitsspeicher aus, die Prozessorlast ist daher höchstwahrscheinlich Auslagerung.",
+        "memory_starved_process": "Dem Rechner ging zuerst der Arbeitsspeicher aus, danach ist ein Prozess fehlgeschlagen.",
+        "thermal_throttling": "Der Rechner wurde zuerst heiß, die Prozessorlast ist daher höchstwahrscheinlich Drosselung.",
+        "offline_unmatched": "Der Rechner meldete sich zuerst nicht mehr, danach hat ihn das Verzeichnis aus den Augen verloren."
+      },
+      "recommend": "Lösung vorschlagen",
+      "recommend_working": "Wird angefragt...",
+      "recommend_failed": "Vorschlag nicht erhalten: {error}",
+      "recommendation_title": "Vorgeschlagene Lösung",
+      "recommendation_source": "Von {model} bei {provider} aus den obigen Werten formuliert. Prüfen Sie den Text, bevor Sie danach handeln.",
+      "draft_script": "Dieses Skript in die Bibliothek aufnehmen",
+      "script_drafted": "Als '{name}' in der Skriptbibliothek gespeichert, deaktiviert. Lesen Sie es und aktivieren Sie es, bevor eine Regel es verwenden kann.",
+      "script_failed": "Skript konnte nicht gespeichert werden: {error}",
+      "detail": "Zeigen, was sonst passiert ist",
+      "detail_working": "Wird geladen...",
+      "detail_failed": "Details konnten nicht geladen werden: {error}",
+      "detail_none": "In diesem Zeitraum ist auf diesem Rechner sonst nichts aufgefallen.",
+      "anomalies_title": "Außerhalb des Normalen dieses Rechners",
+      "anomaly_row": "{metric}: jetzt {value}, üblich sind etwa {median}.",
+      "events_title": "Ereignisprotokoll, gleicher Zeitraum",
+      "event_row": "{log} {event_id} ({level}), {count}x: {message}"
     }
   },
   "audit": {
@@ -2493,6 +2538,9 @@
       "hidden": "Einige Werkzeuge sind ausgeblendet: Dieser Rechner hat gemeldet, dass er sie nicht beantworten kann.",
       "hidden_android": "Einige Werkzeuge sind ausgeblendet: Das ist ein Android-Gerät, und es gibt dafür weder eine Shell noch ein BIOS noch ein Dateisystem."
     },
+    "ask": {
+      "title": "Diesen Rechner fragen"
+    },
     "discovery": {
       "title": "Subnetz-Erkennung",
       "help": "Diesen PC bitten, sein Netzwerk zu durchsuchen und alles aufzulisten, was antwortet. Nur Subnetze, in denen dieser PC selbst ist, können durchsucht werden.",
@@ -3172,7 +3220,41 @@
     "preview": "Welche PCs passen jetzt",
     "create": "Regel anlegen",
     "discard": "Verwerfen",
-    "failed": "{error}"
+    "failed": "{error}",
+    "ask": "Fragen",
+    "ask_placeholder": "Warum ist dieser PC langsam?",
+    "asking": "Frage läuft...",
+    "ask_readings": "Die Messwerte, auf denen diese Antwort beruht",
+    "unknown_value": "unbekannt",
+    "sends_names": "Dieser Hub sendet den Namen dieses Rechners und seine identifizierenden Angaben mit der Frage. Zu ändern in den Einstellungen unter KI.",
+    "withholds_names": "Dieser Hub hält Rechnernamen und andere identifizierende Werte zurück. Gesendet werden nur Messwerte wie Temperaturen und freier Speicherplatz.",
+    "sent_with_names": "Mit dem Namen dieses Rechners und seinen identifizierenden Werten gesendet.",
+    "sent_without_names": "Ohne Rechnernamen gesendet. {withheld} identifizierende Werte wurden zurückgehalten.",
+    "age_seconds": "vor {seconds}s",
+    "age_minutes": "vor {minutes} Min.",
+    "age_hours": "vor {hours} Std.",
+    "column": {
+      "variable": "Variable",
+      "value": "Wert",
+      "age": "Gelesen",
+      "machine": "Rechner",
+      "why": "Warum"
+    },
+    "query_title": "Die Flotte fragen",
+    "query_intro": "Eine Frage in normaler Sprache, übersetzt in einen der Ausdrücke, in denen auch Regeln geschrieben werden, und von derselben Auswertung beantwortet. Beantwortet wird immer nur über Rechner, auf die Sie Zugriff haben.",
+    "query_placeholder": "Welche Rechner haben weniger als 10 GB frei?",
+    "query_run": "Fragen",
+    "query_running": "Läuft...",
+    "query_tally": "{matched} von {targeted} Rechnern treffen zu, {unknown} konnten nicht beantwortet werden",
+    "query_truncated": "{shown} von {matched} Treffern angezeigt.",
+    "summary_title": "Flottenbericht",
+    "summary_window": "Berichtszeitraum",
+    "summary_window_1": "Letzte 24 Stunden",
+    "summary_window_7": "Letzte 7 Tage",
+    "summary_window_30": "Letzte 30 Tage",
+    "summary_run": "Bericht erstellen",
+    "summary_running": "Läuft...",
+    "summary_no_prose": "Die Zahlen unten sind vollständig. Der begleitende Text fehlt: {error}"
   },
   "scripts": {
     "body": "Skript",
@@ -3365,6 +3447,14 @@
       "winget": {
         "label": "winget",
         "description": "Anwendungsupdates aus dem winget-Paketmanager des Rechners."
+      },
+      "apt": {
+        "label": "apt",
+        "description": "Paketupdates auf einem Debian- oder Ubuntu-Rechner, gelesen aus den Listen, die apt bereits hat. Wie aktuell die sind, entscheidet der Aktualisierungs-Timer des Rechners selbst."
+      },
+      "dnf": {
+        "label": "dnf",
+        "description": "Paketupdates auf einem Fedora-, RHEL- oder Rocky-Rechner, gelesen aus den Metadaten, die dnf bereits hat. Wie aktuell die sind, entscheidet der Aktualisierungs-Timer des Rechners selbst."
       }
     },
     "heading": "Patches",

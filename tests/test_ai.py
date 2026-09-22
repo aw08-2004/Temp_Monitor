@@ -11,6 +11,15 @@ alerting feature untrustworthy.
 So the assertions below are mostly refusals, and each one names a thing a model will actually
 try. A fake provider is injected in place of ai.complete, because a test that needed a model
 running would be a test nobody runs.
+
+**Three more silent failures arrived with the answering half**, and the last sections are
+theirs. A redaction that does not redact looks exactly like one that does -- the panel answers
+either way, and the hostname is in a request body nobody reads -- so those assertions search
+the prompt the fake provider was handed for each identifier by value. A count that was not
+scoped looks like an answer rather than like a statement about a fleet somebody cannot see, so
+the scoped figures are asserted against a predicate rather than trusted. And a summary built
+on a capped read of `rule_fires` would be wrong only on a busy day, which is the day it is
+read, so one fire is deliberately seeded outside the window.
 """
 import json
 import os
@@ -22,6 +31,7 @@ from ipaddress import ip_address
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "hub"))
 import ai
+import alerts
 import rules
 import scripts
 
@@ -655,20 +665,195 @@ def main():
         check("...naming the model that answered",
               any(r["model"] == "test-model" for r in rows))
 
-        print("\n== What is deliberately not built ==")
-        for name, call in (
-                ("the machine chat panel",
-                 lambda: ai.answer_machine_question(db_path, CONFIG, "PC-01", "why slow?",
-                                                    resolve_vars=lambda m: {})),
-                ("natural-language fleet query",
-                 lambda: ai.fleet_query(db_path, CONFIG, "which are hot?",
-                                        in_scope=lambda m: True)),
-                ("the fleet summary", lambda: ai.daily_summary(db_path, CONFIG))):
-            try:
-                call()
-                check(f"{name} refuses rather than half-working", False)
-            except NotImplementedError as exc:
-                check(f"{name} refuses rather than half-working", "#24" in str(exc))
+        print("\n== The machine panel withholds what the setting says it withholds ==")
+        # The five identifiers a question about one PC carries for free, plus two readings
+        # that are the actual substance of "why is this slow", plus a custom field -- which
+        # is the case the allow-list exists for, because nobody can know what an operator
+        # named it after.
+        readings = {
+            "sys.machine": rules.Value("PC-01", rules.KIND_TEXT, None),
+            "session.user": rules.Value("a.wiens", rules.KIND_TEXT, 30),
+            "hw.serial_number": rules.Value("5CG91ZXQ7T", rules.KIND_TEXT, None),
+            "net.ipv4": rules.Value("10.4.2.17", rules.KIND_TEXT, 120),
+            "ad.ou": rules.Value("OU=Sales,DC=corp", rules.KIND_TEXT, 600),
+            "field.owner": rules.Value("Marta Benitez", rules.KIND_TEXT, None),
+            "hw.model": rules.Value("EliteDesk 800 G6", rules.KIND_TEXT, None),
+            "metric.cpu_temp": rules.Value(91.5, rules.KIND_NUMBER, 12),
+            "sys.online": rules.Value(True, rules.KIND_BOOL, None),
+            "metric.gpu_temp": rules.unknown(rules.KIND_NUMBER),
+        }
+        provider = fake_provider("The CPU is at 91.5 C -- see metric.cpu_temp, read 12s ago.")
+        error, answer = ai.answer_machine_question(
+            db_path, CONFIG, "PC-01", "why is it slow?",
+            resolve_vars=lambda m: readings)
+        check(f"the panel answers ({error})", error is None and answer)
+        sent = json.dumps(provider.calls[0])
+        for secret in ("PC-01", "a.wiens", "5CG91ZXQ7T", "10.4.2.17", "OU=Sales",
+                       "Marta Benitez"):
+            check(f"nothing identifying reaches the provider: {secret}",
+                  secret not in sent)
+        check("...while the readings that answer the question do", "91.5" in sent)
+        check("...and so does configuration, which identifies nobody",
+              "EliteDesk 800 G6" in sent)
+        # The allow-list's whole point. A custom field is a text variable this hub has never
+        # heard of, and the deny-list version of this filter would have sent it.
+        check("a custom field is withheld without anybody having listed it",
+              "field.owner" not in ai.SHAREABLE_TEXT
+              and any(row["name"] == "field.owner" and row["withheld"]
+                      for row in answer["snapshot"]))
+        check("the snapshot says how many values were withheld", answer["withheld"] == 6)
+        check("...and says the machine's name was not sent",
+              answer["sent_machine_name"] is False)
+        check("a variable the machine never reported reads as unknown, not as withheld",
+              any(row["name"] == "metric.gpu_temp" and not row["known"]
+                  and not row["withheld"] for row in answer["snapshot"]))
+        check("...and the prompt says so, rather than leaving the model to guess",
+              "Not reported by this machine" in sent and "metric.gpu_temp" in sent)
+        check("the withheld NAMES travel, so the model stops asking for them",
+              "session.user" in sent and "Withheld by this hub on purpose" in sent)
+        check("the answer carries the readings it was built from, not just prose",
+              len(answer["snapshot"]) == len(readings))
+
+        # The other half of the setting. An operator on a LAN-only provider turns this on and
+        # gets an answer that can name the PC it is about.
+        named = dict(CONFIG, send_machine_names=True)
+        provider = fake_provider("PC-01 is at 91.5 C.")
+        error, answer = ai.answer_machine_question(
+            db_path, named, "PC-01", "why is it slow?", resolve_vars=lambda m: readings)
+        sent = json.dumps(provider.calls[0])
+        check("with the setting on, the hostname does reach the provider", "PC-01" in sent)
+        check("...and nothing is marked withheld", answer["withheld"] == 0)
+
+        fake_provider()
+        error, answer = ai.answer_machine_question(
+            db_path, dict(CONFIG, enabled=False), "PC-01", "why?",
+            resolve_vars=lambda m: readings)
+        check("a hub with the feature off refuses before resolving anything",
+              answer is None and error and "switched off" in error)
+
+        print("\n== A fleet query is answered by the EVALUATOR, not by the model ==")
+        asked = []
+
+        def query_vars(machine):
+            asked.append(machine)
+            return {"metric.cpu_temp": rules.Value(95.0 if machine == "PC-01" else 40.0,
+                                                   rules.KIND_NUMBER, 5)}
+
+        fake_provider(json.dumps({"condition_text": "metric.cpu_temp > 90",
+                                  "target": {"include": [{"kind": "all"}]}, "refusal": ""}))
+        error, result = ai.fleet_query(db_path, CONFIG, "which machines are over 90?",
+                                       in_scope=lambda m: True, resolve_vars=query_vars,
+                                       extra=extra)
+        check(f"a well-formed question is answered ({error})", error is None and result)
+        check("...by the machines the evaluator said match, not by the model",
+              [row["machine"] for row in result["results"]] == ["PC-01"])
+        check("...with the tally over every machine, matched or not",
+              result["tally"] == {"true": 1, "false": 1, "unknown": 0})
+        check("...and the canonical expression, so the question asked is readable",
+              result["condition_text"] == "metric.cpu_temp > 90")
+        check("...carrying the operand values, so a row explains itself",
+              result["results"][0]["detail"]["actual"] == 95.0)
+
+        # The reason this is not text-to-SQL, asserted rather than described: a machine out of
+        # reach is never RESOLVED, so it cannot appear in a tally either.
+        asked.clear()
+        fake_provider(json.dumps({"condition_text": "metric.cpu_temp > 90",
+                                  "target": {"include": [{"kind": "all"}]}, "refusal": ""}))
+        error, result = ai.fleet_query(db_path, CONFIG, "which machines are over 90?",
+                                       in_scope=lambda m: m == "PC-01",
+                                       resolve_vars=query_vars, extra=extra)
+        check("a machine outside the caller's scope is never resolved", asked == ["PC-01"])
+        check("...and is not counted, so the tally is not a machine census",
+              result["targeted"] == 1 and result["tally"]["false"] == 0)
+
+        fake_provider(json.dumps({"condition_text": "cpu.temp_c > 90", "refusal": ""}),
+                      json.dumps({"condition_text": "cpu.temp_c > 90", "refusal": ""}))
+        error, result = ai.fleet_query(db_path, CONFIG, "which machines are over 90?",
+                                       in_scope=lambda m: True, resolve_vars=query_vars,
+                                       extra=extra)
+        check("a question naming a variable that does not exist is refused",
+              result is None and error and "cpu.temp_c" in error)
+
+        fake_provider(json.dumps({"refusal": "this hub has no record of installed software",
+                                  "condition_text": ""}))
+        error, result = ai.fleet_query(db_path, CONFIG, "which machines have Photoshop?",
+                                       in_scope=lambda m: True, resolve_vars=query_vars,
+                                       extra=extra)
+        check("a question this namespace cannot ask comes back as the refusal it was asked for",
+              result is None and error and "installed software" in error)
+
+        fake_provider(json.dumps({"condition_text": "metric.cpu_temp > 90", "refusal": ""}))
+        error, result = ai.fleet_query(db_path, CONFIG, "x" * (ai.MAX_REQUEST_CHARS + 1),
+                                       in_scope=lambda m: True, resolve_vars=query_vars,
+                                       extra=extra)
+        check("an over-long question is refused before a provider is paid for it",
+              result is None and error and "too long" in error)
+
+        print("\n== The summary's figures are the hub's arithmetic, not the model's ==")
+        alerts.init_alerts_db(db_path)
+        now = 1_800_000_000
+        # Two episodes on PC-01 and one on PC-02, one of which cleared inside the window --
+        # the recovery half, which a query on created_at alone would silently drop.
+        alerts.upsert_rule(db_path, "PC-01", 1, "Hot", "over 90", now=now - 3600)
+        alerts.end_rule_episode(db_path, "PC-01", 1, now=now - 1800)
+        alerts.upsert_rule(db_path, "PC-01", 2, "Low disk", "under 5 GB", now=now - 7200)
+        alerts.upsert_rule(db_path, "PC-02", 1, "Hot", "over 90", now=now - 5400)
+        conn = sqlite3.connect(db_path)
+        conn.executemany(
+            "INSERT INTO rule_fires (rule_id, machine, fired_at, actions_json, outcome) "
+            "VALUES (?,?,?,?,?)",
+            [(1, "PC-01", now - 3600, "[]", "ok"),
+             (1, "PC-01", now - 3000, "[]", "ok"),
+             (1, "PC-02", now - 5400, "[]", "failed"),
+             # Outside the window, and the reason fires_between exists rather than a capped
+             # list: a report that counted this one would be reporting last week.
+             (2, "PC-01", now - 20 * 86400, "[]", "ok")])
+        conn.commit()
+        conn.close()
+
+        figures = ai.summary_figures(db_path, window_days=1, now=now)
+        check("every episode raised in the window is counted", figures["raised"] == 3)
+        check("...and the one that cleared is counted separately", figures["cleared"] == 1)
+        check("fires outside the window are not counted", figures["fires"] == 3)
+        check("...and the machines they touched are", figures["machines_affected"] == 2)
+        check("an outcome that failed is visible rather than averaged away",
+              {entry["name"]: entry["count"] for entry in figures["fire_outcomes"]}
+              == {"ok": 2, "failed": 1})
+
+        scoped = ai.summary_figures(db_path, window_days=1, in_scope=lambda m: m == "PC-01",
+                                    now=now)
+        check("a scoped operator's counts cover their own machines only",
+              scoped["raised"] == 2 and scoped["fires"] == 2)
+        check("...and the report says it was scoped", scoped["scoped"] is True)
+
+        wide = ai.summary_figures(db_path, window_days=9999, now=now)
+        check("the window is clamped to what retention can actually answer for",
+              wide["window_days"] == ai.MAX_SUMMARY_WINDOW_DAYS)
+
+        provider = fake_provider("Three alerts came up, one cleared, two remain open.")
+        error, summary = ai.daily_summary(db_path, CONFIG, now=now)
+        check(f"the summary is built ({error})", error is None and summary)
+        check("...with the figures as lines, generated here rather than asked for",
+              summary["lines"] and "3 alert episode(s) raised" in summary["lines"][0])
+        check("...and only the covering note comes from the model",
+              summary["prose"].startswith("Three alerts"))
+        check("the model is shown the figures and nothing else",
+              "alert episode(s) raised" in json.dumps(provider.calls[0]))
+
+        fake_provider(("the AI provider could not be reached", None))
+        error, summary = ai.daily_summary(db_path, CONFIG, now=now)
+        check("a provider that will not answer costs the sentence, not the report",
+              error is None and summary["lines"] and not summary["prose"])
+        check("...and the missing note is named rather than left blank",
+              "could not be reached" in summary["prose_error"])
+
+        fake_provider()
+        error, summary = ai.daily_summary(db_path, dict(CONFIG, enabled=False), now=now)
+        check("the figures are arithmetic over local tables, so the off switch keeps them",
+              error is None and summary["lines"] and not summary["prose"])
+        check("...and no provider row is recorded for a call never made",
+              all(row["kind"] != ai.KIND_SUMMARY or row["outcome"] != ai.OUTCOME_DISABLED
+                  for row in ai.list_requests(db_path)))
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         return 1 if FAIL else 0

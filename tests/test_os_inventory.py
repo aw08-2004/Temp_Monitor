@@ -88,6 +88,30 @@ def test_the_other_buckets():
               app.normalize_os(caption, None, None)["bucket"] == "linux")
 
 
+def test_a_distro_that_never_says_linux_still_buckets_as_linux():
+    # The Linux agent reports its distribution's own PRETTY_NAME verbatim rather than
+    # smuggling the word "Linux" into a string the machine never said (roadmap #22). Every
+    # caption below is a real PRETTY_NAME that does not contain it, and each one used to land
+    # in `unknown` -- putting a managed machine in the Dashboard's leftovers pile beside the
+    # ones nothing is known about, which is the pile an operator is supposed to be able to act
+    # on. It fails as a miscount, never as an error, which is why it survived two releases.
+    print("\n-- distributions that do not name the kernel --")
+    for caption in ("Pop!_OS 22.04 LTS", "elementary OS 7.1", "Zorin OS 17",
+                    "NixOS 24.05 (Uakari)", "EndeavourOS", "Deepin 20.9", "Solus 4.5",
+                    "KDE neon 6.0", "Raspbian GNU/Linux 11"):
+        check(f"{caption} buckets as linux",
+              app.normalize_os(caption, None, None)["bucket"] == "linux")
+
+    # ...and the widening must not have started swallowing Windows. "Windows Server" is
+    # checked before the linux needles for exactly this reason, and a needle that matched a
+    # Windows caption would move machines between buckets silently.
+    for caption, expected in (("Microsoft Windows 11 Pro", "windows_11"),
+                              ("Microsoft Windows Server 2022 Standard", "windows_server"),
+                              ("Android 16", "android")):
+        check(f"{caption} still buckets as {expected}",
+              app.normalize_os(caption, None, None)["bucket"] == expected)
+
+
 def test_nonsense_is_unknown_rather_than_wrong():
     print("\n-- garbage in, 'unknown' out --")
     for caption, build in (("", None), (None, None), ("   ", "22000"),
@@ -177,6 +201,7 @@ def test_the_agent_reports_what_the_hub_reads():
 def main():
     test_the_build_number_beats_the_caption()
     test_the_other_buckets()
+    test_a_distro_that_never_says_linux_still_buckets_as_linux()
     test_nonsense_is_unknown_rather_than_wrong()
     test_the_directory_is_a_fallback_and_says_so()
     test_the_columns_and_the_wire_agree()
