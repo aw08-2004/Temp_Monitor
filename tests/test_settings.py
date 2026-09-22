@@ -75,6 +75,31 @@ def test_defaults_match_the_old_constants():
           all(settings.get(db, k) is True for k in (
               "metrics.collect_cpu_load", "metrics.collect_memory",
               "metrics.collect_gpu", "metrics.collect_disk", "metrics.collect_network")))
+    # The two telemetry cadences (roadmap #3). Literals, like everything above, and the
+    # constants they must equal are AgentConfig.IntervalSeconds and .SensorIntervalSeconds --
+    # a mismatch here re-paces every machine in the field the first time a hub pushes config.
+    check("the reporting cadence defaults to the agent's compiled 5s",
+          settings.get(db, "metrics.report_interval_seconds") == 5)
+    check("the sensor-block cadence defaults to the agent's compiled 10s",
+          settings.get(db, "metrics.sensor_interval_seconds") == 10)
+    # 0 means "follow data.retention_days", so an untouched hub prunes exactly as it did
+    # before per-metric retention existed. Any other default would silently start deleting.
+    check("every per-metric retention window defaults to 0 (follow the fleet-wide window)",
+          all(settings.get(db, s.key) == 0 for s in settings.REGISTRY
+              if s.key.startswith("metrics.retention_days_")))
+    check("there is one retention window per collection toggle",
+          len([s for s in settings.REGISTRY if s.key.startswith("metrics.retention_days_")]) ==
+          len([s for s in settings.REGISTRY if s.key.startswith("metrics.collect_")]))
+    # The three hub-side picks that joined the CPU one. The GPU defaults are the lists that
+    # used to be literals in app.extract_diagnostics; disk and network ship EMPTY, which means
+    # "the behaviour that predates the setting" -- first-in-block, and busiest, respectively.
+    check("the GPU preferences default to what extract_diagnostics used to hardcode",
+          settings.get(db, "computer.gpu_temp_preference") ==
+          ["gpu core", "gpu hot spot", "gpu package"] and
+          settings.get(db, "computer.gpu_load_preference") == ["gpu core", "d3d 3d"])
+    check("the disk and network preferences ship empty",
+          settings.get(db, "computer.disk_preference") == [] and
+          settings.get(db, "computer.network_preference") == [])
 
 
 def test_init_is_idempotent():
@@ -400,9 +425,22 @@ def test_agent_config():
     db = fresh_db()
     config = settings.agent_config(db)
     check("only agent=True keys are shipped",
-          set(config) == {"computer.primary_sensor_preference", "metrics.collect_network"})
+          set(config) == {"computer.primary_sensor_preference", "metrics.collect_network",
+                          "metrics.report_interval_seconds",
+                          "metrics.sensor_interval_seconds"})
     check("the network collection toggle ships to agents",
           config["metrics.collect_network"] is True)
+    # The two telemetry cadences (roadmap #3). Their defaults are the agent's compiled
+    # constants, asserted as literals above with the rest -- an agent_config that shipped
+    # anything else would re-pace the whole fleet the first time a hub pushed a config.
+    check("the reporting cadence ships to agents",
+          config["metrics.report_interval_seconds"] == 5)
+    check("...and so does the sensor-block cadence",
+          config["metrics.sensor_interval_seconds"] == 10)
+    # Per-metric retention is a HUB-side prune, so shipping it would be telling every agent
+    # something it has no use for and churning the fleet's config hash for nothing.
+    check("a per-metric retention window does NOT ship to agents",
+          "metrics.retention_days_network" not in config)
     check("no hub-internal knob leaks to agents",
           "data.retention_days" not in config)
     check("a hub-only metric toggle does NOT ship to agents",

@@ -603,6 +603,10 @@
       "wipe_device": {
         "label": "Bloquear y borrar un dispositivo",
         "description": "Bloquear la pantalla de un dispositivo gestionado y borrarlo. Es un permiso propio y no parte de 'Emitir comandos': el argumento que mantiene a los demás comandos bajo ese permiso -- menos peligroso que el shell SYSTEM que ya concede -- vale para un reinicio y no para un restablecimiento de fábrica. Borrar exige además escribir el nombre de la máquina, queda registrado en la auditoría antes de enviar el comando, y no se puede guardar como favorito ni emitir desde una regla. Para ver que un dispositivo fue bloqueado o borrado basta con 'Ver' más la máquina en el ámbito."
+      },
+      "read_recovery_keys": {
+        "label": "Leer claves de recuperación",
+        "description": "Ver una contraseña de recuperación de BitLocker custodiada para estas máquinas. Cada lectura queda en el registro de auditoría. Para ver si una máquina está cifrada basta con 'Ver'."
       }
     }
   },
@@ -630,7 +634,9 @@
       "map": "Mapa",
       "policy": "Política",
       "ai": "Asistencia con IA",
-      "events": "Registros de eventos"
+      "events": "Registros de eventos",
+      "security": "Seguridad del endpoint",
+      "discovery": "Descubrimiento de red"
     },
     "unit": {
       "celsius": "°C",
@@ -650,6 +656,22 @@
       "computer.primary_sensor_preference": {
         "label": "Preferencia de sensor de temperatura de CPU",
         "help": "Ordenada, la mejor primero. El hub vuelve a deducir la temperatura principal de cada equipo a partir del bloque de sensores que informa, usando el primer nombre que coincida. Si no coincide ninguno, se conserva la temperatura que eligió el agente. Se aplica solo a las lecturas nuevas: el historial mantiene el valor registrado en su momento."
+      },
+      "computer.gpu_temp_preference": {
+        "label": "Preferencia de sensor de temperatura de GPU",
+        "help": "Ordenada, la mejor primero. Qué sensor de temperatura de la GPU se grafica, buscado como parte del nombre del sensor. Se aplica solo a las lecturas nuevas: el historial mantiene el valor registrado en su momento."
+      },
+      "computer.gpu_load_preference": {
+        "label": "Preferencia de sensor de carga de GPU",
+        "help": "Ordenada, la mejor primero. Qué sensor de carga de la GPU se grafica, buscado como parte del nombre del sensor. Se aplica solo a las lecturas nuevas."
+      },
+      "computer.disk_preference": {
+        "label": "Preferencia de disco",
+        "help": "Ordenada, el mejor primero. Qué unidad se grafica cuando el equipo tiene varias, buscada como parte del nombre de la unidad (\"Samsung SSD 980\"). Déjalo vacío para graficar la primera que informe el equipo. Las tarjetas de Almacenamiento por disco siguen mostrando todas las unidades."
+      },
+      "computer.network_preference": {
+        "label": "Preferencia de adaptador de red",
+        "help": "Ordenada, el mejor primero. Qué adaptador se grafica, buscado como parte del nombre del adaptador (\"Intel(R) Ethernet\"). Déjalo vacío para graficar el más ocupado, que es la respuesta correcta hasta que un conmutador virtual o una base de conexión duplican el adaptador real. Si un adaptador nombrado falta en una lectura, se vuelve al más ocupado."
       },
       "hub.low_load_threshold": {
         "label": "Umbral de carga baja",
@@ -718,6 +740,46 @@
       "metrics.collect_power": {
         "label": "Registrar la potencia de CPU y GPU",
         "help": "Grafica el consumo del paquete en vatios. Sin efecto en equipos cuyos chips no informan de ningún sensor de potencia."
+      },
+      "metrics.report_interval_seconds": {
+        "label": "Enviar lecturas cada",
+        "help": "Con qué frecuencia cada equipo envía una lectura. Más lento significa un gráfico más grueso, no un equipo que aparece desconectado: la disponibilidad va por un latido aparte. Sin efecto mientras alguien tiene abierta la página de un equipo. Los agentes anteriores a esta opción siguen informando cada 5 segundos."
+      },
+      "metrics.sensor_interval_seconds": {
+        "label": "Enviar el bloque completo de sensores cada",
+        "help": "Con qué frecuencia una lectura lleva todos los sensores en lugar de solo la temperatura. De ahí salen los gráficos de carga, memoria, disco, red, ventiladores y potencia. Nunca más rápido que el intervalo de envío de arriba. Los agentes anteriores a esta opción siguen enviándolo cada 10 segundos."
+      },
+      "metrics.retention_days_cpu_load": {
+        "label": "Conservar el historial de carga de CPU durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_memory": {
+        "label": "Conservar el historial de memoria durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_gpu": {
+        "label": "Conservar el historial de GPU durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_disk": {
+        "label": "Conservar el historial de uso de disco durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_disk_io": {
+        "label": "Conservar el historial de lectura/escritura durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_network": {
+        "label": "Conservar el historial de red durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_fans": {
+        "label": "Conservar el historial de ventiladores durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_power": {
+        "label": "Conservar el historial de potencia durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Quitar un equipo del panel tras",
@@ -1118,6 +1180,16 @@
         "summary_window_seconds": {
           "label": "Contar eventos de los últimos",
           "help": "Hasta dónde miran hacia atrás los contadores situados sobre la lista de eventos. Separado a propósito de la ventana de retención: acortar cuánto se conservan los registros no debe cambiar en silencio lo que la página afirma que ocurrió hoy."
+        }
+      },
+      "security.escrow_bitlocker_keys": {
+        "label": "Custodiar claves de recuperación de BitLocker",
+        "help": "Recoger las contraseñas de recuperación de BitLocker de cada máquina y guardarlas cifradas junto a este hub, para poder recuperar un PC que se bloquee a sí mismo. Necesita una clave maestra de copias. Desactivarlo detiene la recogida y nunca borra lo ya custodiado."
+      },
+      "discovery": {
+        "scan_ttl_seconds": {
+          "label": "Abandonar un barrido tras",
+          "help": "Un barrido lo ejecuta un PC encendido y respondiendo, así que un informe que no ha llegado para entonces ya no va a llegar."
         }
       }
     },
@@ -2409,6 +2481,44 @@
     "tools": {
       "hidden": "Algunas herramientas están ocultas: esta máquina ha informado de que no puede responderlas.",
       "hidden_android": "Algunas herramientas están ocultas: es un dispositivo Android, y no hay shell, ni BIOS, ni sistema de archivos sobre el que actúen."
+    },
+    "discovery": {
+      "title": "Descubrimiento de subred",
+      "help": "Pedir a este PC que mire la red en la que está y liste todo lo que responda. Solo se pueden barrer las subredes en las que este PC está.",
+      "subnet_label": "Subred a barrer",
+      "sweep": "Barrer esta subred",
+      "sweep_title": "Pedir a este PC que consulte por ARP cada dirección de la subred elegida.",
+      "sweep_offline": "Este PC tiene que estar encendido para mirar su propia red.",
+      "load_failed": "No se pudieron cargar los resultados de descubrimiento de este equipo.",
+      "sweeping_on": "Pidiendo a este PC que barra {subnet}.",
+      "swept": "{subnet} barrida el {when}, {probed} direcciones consultadas.",
+      "truncated": "Respondieron más equipos de los que el hub guarda; solo se muestran los primeros.",
+      "nothing_found": "Nada más respondió en esta subred.",
+      "no_subnets_help": "Este PC aún no ha informado de una dirección en ninguna subred, así que no hay nada que barrer.",
+      "state": {
+        "scanning": "Barriendo",
+        "done": "Barrida",
+        "failed": "No se pudo barrer"
+      },
+      "status": {
+        "sweeping": "Barriendo…",
+        "never": "Nunca barrida",
+        "clean": "Nada sin gestionar",
+        "unmanaged": "{count} sin gestionar",
+        "failed": "El último barrido falló",
+        "no_subnets": "Ninguna subred informada"
+      },
+      "class": {
+        "relay": "Este PC",
+        "managed": "Gestionado",
+        "unmanaged": "Sin gestionar"
+      },
+      "col": {
+        "address": "Dirección",
+        "mac": "MAC",
+        "name": "Nombre",
+        "known": "Conocido por el hub"
+      }
     }
   },
   "remote": {
@@ -3739,5 +3849,51 @@
     "count": "{count} acción(es)",
     "failed": "Se ha rechazado.",
     "unreachable": "No se ha podido contactar con el hub."
+  },
+  "bitlocker": {
+    "title": "Cifrado de disco",
+    "summary": "{encrypted} de {total} volúmenes protegidos",
+    "unsupported": "Este equipo no tiene proveedor de BitLocker, así que no hay nada que cifrar ni que custodiar aquí. Esa es la respuesta normal y permanente para Windows Home y para los agentes que no son de Windows.",
+    "read_failed": "No se pudo leer el estado de cifrado de este equipo: {error}",
+    "load_error": "No se pudieron cargar los datos de cifrado.",
+    "retry": "Reintentar",
+    "column": {
+      "volume": "Volumen",
+      "protection": "Protección",
+      "method": "Método",
+      "key": "Clave de recuperación"
+    },
+    "protection": {
+      "on": "Protegido",
+      "off": "Sin proteger",
+      "unknown": "Desconocido"
+    },
+    "conversion": {
+      "fully_encrypted": "Cifrado por completo",
+      "fully_decrypted": "Sin cifrar",
+      "encrypting": "Cifrando",
+      "decrypting": "Descifrando",
+      "encryption_paused": "Cifrado en pausa",
+      "decryption_paused": "Descifrado en pausa"
+    },
+    "escrow": {
+      "no_recovery_protector": "Este volumen no tiene contraseña de recuperación, así que no hay nada que nadie pueda escribir en la pantalla de recuperación.",
+      "pending": "Aún no está custodiada. El equipo la entrega en su próximo reporte.",
+      "disabled": "Sin custodiar. La custodia de claves está desactivada en este hub.",
+      "held": "Custodiada el {when}",
+      "read_before": {
+        "one": "Leída una vez, la última el {when}.",
+        "other": "Leída {count} veces, la última el {when}."
+      }
+    },
+    "orphaned": {
+      "one": "Este hub también guarda 1 clave de recuperación de un volumen que este equipo ya no reporta.",
+      "other": "Este hub también guarda {count} claves de recuperación de volúmenes que este equipo ya no reporta."
+    },
+    "reveal": "Mostrar clave de recuperación",
+    "reveal_failed": "No se pudo leer esa clave de recuperación.",
+    "unreachable": "No se pudo contactar con el hub.",
+    "key_for": "Clave de recuperación de {volume}",
+    "key_warning": "Esta lectura quedó registrada en el registro de auditoría. La clave desaparece al salir de la página."
   }
 }
