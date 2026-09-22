@@ -2595,6 +2595,9 @@
       "hidden": "Some tools are hidden: this machine has reported that it cannot answer them.",
       "hidden_android": "Some tools are hidden: this is an Android device, and there is no shell, no BIOS and no filesystem for them to work on."
     },
+    "ask": {
+      "title": "Ask about this machine"
+    },
     "discovery": {
       "title": "Subnet discovery",
       "help": "Ask this PC to look at the network it is on and list everything that answers. Only the subnets this PC is itself on can be swept.",
@@ -3223,7 +3226,41 @@
     "preview": "Which machines match now",
     "create": "Create it",
     "discard": "Discard",
-    "failed": "{error}"
+    "failed": "{error}",
+    "ask": "Ask",
+    "ask_placeholder": "Why is this PC slow?",
+    "asking": "Asking...",
+    "ask_readings": "The readings this answer was built from",
+    "unknown_value": "unknown",
+    "sends_names": "This hub sends this machine's name and its identifying details with a question. Change that in Settings, under AI.",
+    "withholds_names": "This hub withholds machine names and other identifying values. Only readings such as temperatures and free disk space are sent.",
+    "sent_with_names": "Sent with this machine's name and its identifying values.",
+    "sent_without_names": "Sent without machine names. {withheld} identifying value(s) were withheld.",
+    "age_seconds": "{seconds}s ago",
+    "age_minutes": "{minutes} min ago",
+    "age_hours": "{hours} h ago",
+    "column": {
+      "variable": "Variable",
+      "value": "Value",
+      "age": "Read",
+      "machine": "Machine",
+      "why": "Why"
+    },
+    "query_title": "Ask about the fleet",
+    "query_intro": "A question in plain English, turned into one of the same expressions a rule is written in and answered by the same evaluator. You are only ever answered about machines you have access to.",
+    "query_placeholder": "Which machines have less than 10 GB free?",
+    "query_run": "Ask",
+    "query_running": "Working...",
+    "query_tally": "{matched} of {targeted} machines match, {unknown} could not be answered",
+    "query_truncated": "Showing {shown} of {matched} matches.",
+    "summary_title": "Fleet summary",
+    "summary_window": "Report window",
+    "summary_window_1": "Last 24 hours",
+    "summary_window_7": "Last 7 days",
+    "summary_window_30": "Last 30 days",
+    "summary_run": "Build the report",
+    "summary_running": "Working...",
+    "summary_no_prose": "The figures below are complete. The covering note is missing: {error}"
   },
   "scripts": {
     "body": "Script",

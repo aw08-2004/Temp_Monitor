@@ -3615,6 +3615,36 @@ def list_fires(db_path, rule_id=None, machine=None, limit=100):
     return out
 
 
+def fires_between(db_path, start, end):
+    """Every rule fire inside a window, newest first. No limit argument, deliberately.
+
+    `list_fires` above is a VIEW -- the last hundred, for a page somebody is scrolling -- and
+    reusing it for a report would cap the report at whatever that page happens to show. A
+    count computed off a capped read is a number that is wrong exactly when the fleet is
+    busiest, and it arrives looking like every other number in the report. The window is the
+    bound instead: `prune_fires` keeps this table inside `data.retention_days`, and the
+    caller (ai.summary_figures, roadmap #24) clamps its window to the same thirty days.
+
+    Closed at both ends, matching alerts.episodes_between: `end` is "now", and an exclusive
+    end silently drops whatever fired in the same second the report was asked for.
+    """
+    start, end = int(start), int(end)
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM rule_fires WHERE fired_at >= ? AND fired_at <= ? "
+            "ORDER BY fired_at DESC, id DESC", (start, end)).fetchall()
+    out = []
+    for row in rows:
+        fire = dict(row)
+        for key in ("actions_json", "detail"):
+            try:
+                fire[key.replace("_json", "")] = json.loads(fire.pop(key) or "null")
+            except (TypeError, ValueError):
+                fire[key.replace("_json", "")] = None
+        out.append(fire)
+    return out
+
+
 def prune_fires(db_path, retention_days, now=None):
     now = int(now if now is not None else time.time())
     cutoff = now - int(retention_days) * 86400

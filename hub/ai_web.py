@@ -12,9 +12,12 @@ treatment as a top-level one.
 **Committing a draft goes through the same two scope checks a hand-written rule does**, and
 for the reason rules_web.py's docstring spells out at length: the resolved target membership
 must lie inside the caller's scope at save time, AND the author's scope is persisted with the
-rule so a dynamic `{"kind": "all"}` cannot grow past its author later. Drafting by machine is
-the one route here that names a machine, so it takes `require_machine` rather than `require` --
-capability and scope, not capability alone.
+rule so a dynamic `{"kind": "all"}` cannot grow past its author later. Asking a question ABOUT
+a machine is the one route here that names one, so it takes `require_machine` rather than
+`require` -- capability and scope, not capability alone. The two fleet-wide answering routes
+have the matching problem in a shape that is easier to miss: a query and a count both describe
+machines without naming one, so `access.in_scope` is threaded into the evaluation and into the
+figures rather than applied to what comes back.
 
 Error text is split in two, copied from rules_web.py deliberately. Validation messages produced
 by rules.py out of the caller's own input ("unknown variable: cpu.temp_c") go back VERBATIM:
@@ -425,19 +428,44 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         ai.delete_draft(db_path, draft_id)
         return jsonify({"status": "deleted"}), 200
 
-    # ---------------- Not built yet (roadmap #24) ----------------
-    # Both routes exist and both answer 501. They are here rather than absent so the console
-    # can ask what this hub supports without a version check, and so the GATE each one needs
-    # is written down now, while the reasoning is fresh -- `require_machine` on the machine
-    # route is the whole point of it, and adding it later, to a route somebody had already
-    # copied from a sibling, is how a scope leak gets introduced.
+    # ---------------- Answering, rather than authoring ----------------
+    # Three routes that ANSWER a question instead of drafting a rule. Each one's gate is the
+    # interesting part, and each is different:
+    #
+    #  * the machine route names a machine, so it takes `require_machine` -- capability AND
+    #    scope. Written this way when it was still a 501, precisely so it could not later be
+    #    copied from a sibling that only needed `require`.
+    #  * the query route answers over machines, and `access.in_scope` goes INTO the evaluation
+    #    rather than filtering its output, so a machine outside somebody's reach is never
+    #    resolved at all. `view` is the right capability: asking which machines are hot is
+    #    reading the fleet, not managing rules.
+    #  * the summary route counts alerts and rule fires, and a count is the easiest thing in
+    #    this file to leak a fleet through -- "14 alerts today" reads as an answer rather than
+    #    as a statement about machines the caller cannot see. So the same predicate goes in.
 
     @bp.route("/api/ai/machines/<machine>/ask", methods=["POST"])
     @login_required
     @access.require_machine(permissions.VIEW)
     def ask_about_machine(machine):
-        """The machine chat panel. Capability AND scope, because the route names a machine."""
-        return jsonify({"error": "the machine chat panel is not built yet (roadmap #24)"}), 501
+        """The machine chat panel. Capability AND scope, because the route names a machine.
+
+        The answer travels with the SNAPSHOT it was built from, and ai.py's docstring argues
+        why at length: this is the one response in this file that carries a model's prose to
+        an operator, and the readings underneath it are what make that prose checkable.
+        """
+        body = request.get_json(silent=True) or {}
+        try:
+            error, answer = ai.answer_machine_question(
+                db_path, ai_config(), machine, body.get("text"), resolve_vars=resolve_vars,
+                api_key=_api_key(), actor=_actor())
+        except Exception:                             # noqa: BLE001
+            # The resolver reads eight tables and the live cache. One machine whose values
+            # will not resolve is a hub-side failure, not a sentence about the request, so it
+            # follows this file's split: logged in full, answered with the fixed message.
+            return jsonify({"error": _log_generic(f"answering a question about {machine}")}), 500
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify(answer), 200
 
     @bp.route("/api/ai/query", methods=["POST"])
     @login_required
@@ -446,6 +474,47 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         """Natural-language fleet query. Answers over the rules evaluator, filtered by
         access.in_scope -- never over generated SQL, which cannot be scoped. See ai.fleet_query
         and ROADMAP.MD #24."""
-        return jsonify({"error": "fleet query is not built yet (roadmap #24)"}), 501
+        body = request.get_json(silent=True) or {}
+        try:
+            error, answer = ai.fleet_query(
+                db_path, ai_config(), body.get("text"), in_scope=access.in_scope,
+                resolve_vars=resolve_vars, extra=_extra(), api_key=_api_key(),
+                actor=_actor(), limit=body.get("limit"))
+        except Exception:                             # noqa: BLE001
+            return jsonify({"error": _log_generic("answering a fleet query")}), 500
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify(answer), 200
+
+    @bp.route("/api/ai/summary", methods=["POST"])
+    @login_required
+    @can_view
+    def fleet_summary():
+        """What was raised, cleared and left open. **A POST, and not because it changes
+        anything.**
+
+        It changes nothing; it SPENDS something. A GET would be fetchable from a third party's
+        page by an `<img>` tag, and every fetch is a request this hub pays a provider for. The
+        JSON body is the same CSRF protection every other route in this file relies on, and
+        here it is protecting a bill rather than a write.
+
+        A provider that is off or unreachable is not an error: ai.daily_summary computes the
+        figures locally and reports the provider's failure beside them, so the report arrives
+        either way and the console prints what is missing.
+        """
+        body = request.get_json(silent=True) or {}
+        try:
+            window = int(body.get("window_days") or 1)
+        except (TypeError, ValueError):
+            return jsonify({"error": "the report window must be a number of days"}), 400
+        try:
+            error, summary = ai.daily_summary(
+                db_path, ai_config(), window_days=window, in_scope=access.in_scope,
+                api_key=_api_key(), actor=_actor())
+        except Exception:                             # noqa: BLE001
+            return jsonify({"error": _log_generic("building the fleet summary")}), 500
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify(summary), 200
 
     return bp

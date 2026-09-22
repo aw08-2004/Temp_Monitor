@@ -21,6 +21,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "hub"))
 import ai
+import alerts
 import fleet
 import permissions
 import rules
@@ -81,6 +82,27 @@ def answer(condition_text, target=None, actions=None):
 def answer_stages(*stages):
     """Stand in for the provider with a canned ESCALATION -- one rule object per stage."""
     body = {"rules": [_rule(*stage) for stage in stages], "refusal": ""}
+    return lambda config, messages, **kwargs: (None, json.dumps(body))
+
+
+# What app.py's resolver hands back, in miniature: one hot machine, one cool one, and the
+# hostname as a variable -- which is what makes the redaction assertions below meaningful.
+RESOLVED = {
+    "PC-01": {"metric.cpu_temp": rules.Value(95.0, rules.KIND_NUMBER, 5),
+              "sys.machine": rules.Value("PC-01", rules.KIND_TEXT, None)},
+    "PC-02": {"metric.cpu_temp": rules.Value(41.0, rules.KIND_NUMBER, 5),
+              "sys.machine": rules.Value("PC-02", rules.KIND_TEXT, None)},
+}
+
+
+def resolve_vars(machine):
+    return dict(RESOLVED.get(machine) or {})
+
+
+def question(condition_text):
+    """Stand in for the provider with one canned fleet-query envelope."""
+    body = {"condition_text": condition_text, "target": {"include": [{"kind": "all"}]},
+            "refusal": ""}
     return lambda config, messages, **kwargs: (None, json.dumps(body))
 
 
@@ -149,7 +171,7 @@ def main():
 
         app.register_blueprint(create_ai_blueprint(
             db_path, fake_login_required, access,
-            lambda machine: {},
+            resolve_vars,
             lambda: {"max_targets_per_tick": 50, "command_cooldown_floor_seconds": 3600},
             lambda: dict(CONFIG),
             # A lookup, the way app.py passes it: a key saved through /api/ai/key has to be
@@ -342,16 +364,62 @@ def main():
         check("a draft can be deleted by its author", r.status_code == 200)
         check("...and is gone", ai.get_draft(db_path, rid) is None)
 
-        print("\n== The two routes that are not built ==")
+        print("\n== Asking ABOUT a machine is capability AND scope ==")
         CURRENT_USER = "scoped@x.com"
+        ai.complete = lambda config, messages, **kwargs: (None, "It is at 95 C.")
         r = c.post("/api/ai/machines/PC-02/ask", json={"text": "why slow?"})
         check("the machine route checks SCOPE, not just the capability",
               r.status_code == 403)
         r = c.post("/api/ai/machines/PC-01/ask", json={"text": "why slow?"})
-        check("...and answers 501 for a machine they can see, not 404 or 500",
-              r.status_code == 501)
+        body = r.get_json()
+        check("...and answers for a machine they can see", r.status_code == 200)
+        check("...carrying the readings the answer was built from, not prose alone",
+              any(row["name"] == "metric.cpu_temp" for row in body["snapshot"]))
+        check("...with the hostname withheld, the setting being off",
+              body["sent_machine_name"] is False
+              and any(row["name"] == "sys.machine" and row["withheld"]
+                      for row in body["snapshot"]))
+        check("no route leaks the provider key", API_KEY not in json.dumps(body))
+
+        print("\n== A fleet query answers about the caller's machines only ==")
+        CURRENT_USER = "viewer@x.com"
+        ai.complete = question("metric.cpu_temp > 90")
         r = c.post("/api/ai/query", json={"text": "which are hot?"})
-        check("fleet query answers 501 rather than half-working", r.status_code == 501)
+        body = r.get_json()
+        check("a viewer may ask -- this is reading the fleet, not authoring a rule",
+              r.status_code == 200)
+        check("...and is answered by the evaluator",
+              [row["machine"] for row in body["results"]] == ["PC-01"])
+        check("...over both machines they can see", body["targeted"] == 2)
+
+        CURRENT_USER = "scoped@x.com"
+        ai.complete = question("metric.cpu_temp > 90")
+        r = c.post("/api/ai/query", json={"text": "which are hot?"})
+        body = r.get_json()
+        check("an operator scoped to one machine is answered about one machine",
+              body["targeted"] == 1 and body["tally"]["false"] == 0)
+
+        print("\n== The summary is scoped, and survives a provider that is not there ==")
+        alerts.init_alerts_db(db_path)
+        alerts.upsert_rule(db_path, "PC-01", 1, "Hot", "over 90")
+        alerts.upsert_rule(db_path, "PC-02", 1, "Hot", "over 90")
+        CURRENT_USER = "scoped@x.com"
+        ai.complete = lambda config, messages, **kwargs: (None, "One alert is open.")
+        r = c.post("/api/ai/summary", json={"window_days": 1})
+        body = r.get_json()
+        check("a scoped operator gets a scoped count, not a fleet census",
+              r.status_code == 200 and body["figures"]["raised"] == 1)
+        check("...marked as scoped", body["figures"]["scoped"] is True)
+        r = c.get("/api/ai/summary")
+        check("the summary is a POST, so a third party's page cannot spend a provider on it",
+              r.status_code == 405)
+        ai.complete = lambda config, messages, **kwargs: (
+            "the AI provider could not be reached", None)
+        r = c.post("/api/ai/summary", json={"window_days": 1})
+        body = r.get_json()
+        check("a provider that will not answer still returns the figures",
+              r.status_code == 200 and body["lines"] and not body["prose"])
+        check("...and names what is missing", "could not be reached" in body["prose_error"])
 
         print("\n== The model list, and who may refresh it ==")
         CURRENT_USER = "scoped@x.com"

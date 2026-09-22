@@ -336,6 +336,38 @@ def list_open(db_path):
     return [_decode(r) for r in rows]
 
 
+def episodes_between(db_path, start, end):
+    """Every alert episode that was RAISED or CLEARED inside a window, newest first.
+
+    **Two timestamps, not one**, because a report has two different questions to answer --
+    what started going wrong today, and what stopped -- and an episode that opened on Monday
+    and cleared on Tuesday morning belongs in Tuesday's second answer and in neither of its
+    firsts. A query on `created_at` alone would silently drop every recovery, which is the
+    half of a summary an operator actually wants to read.
+
+    **The window is closed at both ends**, not half-open. `end` is "now" for every caller
+    there is, and an exclusive end drops the episode raised in the same second the report was
+    asked for -- which is the one somebody is most likely reading the report because of.
+
+    Status is not filtered: a dismissed alert still happened, and a report that quietly
+    stopped counting the ones somebody clicked away would understate the day. Written for
+    ai.summary_figures (roadmap #24), and kept here rather than there so the schema this
+    module owns has exactly one reader.
+    """
+    start, end = int(start), int(end)
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, kind, serial_number, machines, machine, detail, status, rule_id, "
+            "episode_ended_at, created_at, updated_at FROM alerts "
+            "WHERE (created_at >= ? AND created_at <= ?) "
+            "   OR (episode_ended_at IS NOT NULL AND episode_ended_at >= ? "
+            "       AND episode_ended_at <= ?) "
+            "ORDER BY created_at DESC, id DESC",
+            (start, end, start, end),
+        ).fetchall()
+    return [_decode(r) for r in rows]
+
+
 def count_open(db_path):
     with get_conn(db_path) as conn:
         return conn.execute(

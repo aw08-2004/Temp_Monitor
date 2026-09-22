@@ -6,9 +6,45 @@
     {{ t('alerts.intro') }}
 </p>
 
+{# The fleet summary -- roadmap #24.
+
+   On this page because it is a reading of what this page lists: what was raised, what cleared
+   and what is still open. The FIGURES are computed by the hub from the alerts and rule-fire
+   tables and arrive whether or not a provider answers; the paragraph above them is the only
+   part a model writes, and it is asked for a covering note rather than for findings.
+
+   Closed and fetched only when opened: it costs a request to a third party, and most visits
+   to this page are somebody checking one alert.
+
+   No `data-fold-key`, deliberately. collapse.js is not loaded on this page, and adding it so
+   this one section could remember being open would mean the report is fetched -- and paid
+   for -- on every visit by anybody who ever opened it once. #}
+<details class="card fold" id="ai-summary" hidden
+         style="margin-bottom: var(--space-5);">
+    <summary class="fold__summary">
+        <span class="section-title" style="margin-bottom: 0;">{{ t('ai.summary_title') }}</span>
+    </summary>
+    <div class="toolbar" style="margin: var(--space-3) 0;">
+        <label for="ai-summary-window" class="sr-only">{{ t('ai.summary_window') }}</label>
+        <select class="input" id="ai-summary-window" style="max-width: 200px;">
+            <option value="1">{{ t('ai.summary_window_1') }}</option>
+            <option value="7">{{ t('ai.summary_window_7') }}</option>
+            <option value="30">{{ t('ai.summary_window_30') }}</option>
+        </select>
+        <button class="btn btn--primary" type="button" id="ai-summary-run">{{ t('ai.summary_run') }}</button>
+        <span class="stat-card__meta" id="ai-summary-status"></span>
+    </div>
+    {# The model's covering note. Written with textContent in ai-summary.js, never innerHTML. #}
+    <p id="ai-summary-prose" style="margin: 0 0 var(--space-3); white-space: pre-wrap;"></p>
+    {# The figures. These are the report; the paragraph above is a reading OF them, which is
+       why they are rendered even when the paragraph is missing. #}
+    <ul id="ai-summary-lines" class="stat-card__meta" style="margin: 0; padding-left: var(--space-4);"></ul>
+</details>
+
 <div id="alerts-list"></div>
 <div class="empty-state" id="alerts-empty" style="display:none;">{{ t('alerts.empty') }}</div>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/alerts.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ai-summary.js') }}"></script>
 {% endblock %}
