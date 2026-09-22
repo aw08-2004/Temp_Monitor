@@ -316,7 +316,53 @@
       },
       "merge_failed": "No se pudo fusionar: {error}"
     },
-    "unknown_kind": "Alerta de un tipo no reconocido ({kind})"
+    "unknown_kind": "Alerta de un tipo no reconocido ({kind})",
+    "bundle": {
+      "title": {
+        "one": "{count} alerta en {machine}",
+        "other": "{count} alertas relacionadas en {machine}"
+      },
+      "cause_line": "{cause} Primera alerta a las {since}.",
+      "together": "Empezaron juntas y se solapan en el tiempo ({facets}). El hub no conoce ninguna causa que las relacione. Primera alerta a las {since}.",
+      "facet": {
+        "disk": "espacio en disco",
+        "memory": "memoria",
+        "cpu": "carga del procesador",
+        "thermal": "temperatura",
+        "network": "red",
+        "process": "procesos",
+        "liveness": "comunicación",
+        "session": "usuario con sesión iniciada",
+        "directory": "directorio",
+        "identity": "identidad del equipo",
+        "other": "otros",
+        "event": "registro de eventos"
+      },
+      "cause": {
+        "disk_starved_process": "La unidad se llenó primero y después falló un proceso en el equipo.",
+        "disk_starved_agent": "La unidad se llenó primero y después el equipo dejó de comunicarse.",
+        "memory_paging": "El equipo se quedó sin memoria primero, así que la carga del procesador es con toda probabilidad paginación.",
+        "memory_starved_process": "El equipo se quedó sin memoria primero y después falló un proceso.",
+        "thermal_throttling": "El equipo se calentó primero, así que la carga del procesador es con toda probabilidad limitación térmica.",
+        "offline_unmatched": "El equipo dejó de comunicarse primero y después el directorio le perdió la pista."
+      },
+      "recommend": "Sugerir una solución",
+      "recommend_working": "Consultando...",
+      "recommend_failed": "No se pudo obtener una sugerencia: {error}",
+      "recommendation_title": "Solución sugerida",
+      "recommendation_source": "Redactado por {model} en {provider} a partir de los datos anteriores. Revíselo antes de actuar.",
+      "draft_script": "Añadir este script a la biblioteca",
+      "script_drafted": "Guardado en la biblioteca de scripts como '{name}', desactivado. Léalo y actívelo antes de que ninguna regla pueda usarlo.",
+      "script_failed": "No se pudo guardar el script: {error}",
+      "detail": "Mostrar qué más ocurrió",
+      "detail_working": "Cargando...",
+      "detail_failed": "No se pudo cargar el detalle: {error}",
+      "detail_none": "No destacó nada más en este equipo durante este periodo.",
+      "anomalies_title": "Fuera de lo normal para este equipo",
+      "anomaly_row": "{metric}: ahora {value}, lo habitual es en torno a {median}.",
+      "events_title": "Registro de eventos, mismo periodo",
+      "event_row": "{log} {event_id} ({level}), {count}x: {message}"
+    }
   },
   "audit": {
     "heading": "Registro de auditoría",

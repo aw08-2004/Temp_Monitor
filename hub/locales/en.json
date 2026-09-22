@@ -352,7 +352,53 @@
       },
       "merge_failed": "Could not merge: {error}"
     },
-    "unknown_kind": "Alert of an unrecognised type ({kind})"
+    "unknown_kind": "Alert of an unrecognised type ({kind})",
+    "bundle": {
+      "title": {
+        "one": "{count} alert on {machine}",
+        "other": "{count} related alerts on {machine}"
+      },
+      "cause_line": "{cause} First alert at {since}.",
+      "together": "These started together and overlap in time ({facets}). The hub has no known cause linking them. First alert at {since}.",
+      "facet": {
+        "disk": "disk space",
+        "memory": "memory",
+        "cpu": "processor load",
+        "thermal": "temperature",
+        "network": "network",
+        "process": "processes",
+        "liveness": "check-in",
+        "session": "signed-in user",
+        "directory": "directory",
+        "identity": "hardware identity",
+        "other": "other",
+        "event": "event log"
+      },
+      "cause": {
+        "disk_starved_process": "The drive filled first, and a process on the machine failed after that.",
+        "disk_starved_agent": "The drive filled first, and the machine stopped checking in after that.",
+        "memory_paging": "The machine ran out of memory first, so the processor load is most likely paging.",
+        "memory_starved_process": "The machine ran out of memory first, and a process failed after that.",
+        "thermal_throttling": "The machine got hot first, so the processor load is most likely throttling.",
+        "offline_unmatched": "The machine stopped checking in first, and the directory lost sight of it after that."
+      },
+      "recommend": "Suggest a fix",
+      "recommend_working": "Asking...",
+      "recommend_failed": "Could not get a suggestion: {error}",
+      "recommendation_title": "Suggested fix",
+      "recommendation_source": "Written by {model} at {provider} from the figures above. Check it before you act on it.",
+      "draft_script": "Add this script to the library",
+      "script_drafted": "Saved to the script library as '{name}', switched off. Read it and turn it on before any rule can use it.",
+      "script_failed": "Could not save the script: {error}",
+      "detail": "Show what else happened",
+      "detail_working": "Loading...",
+      "detail_failed": "Could not load the detail: {error}",
+      "detail_none": "Nothing else stood out on this machine during this period.",
+      "anomalies_title": "Outside this machine's normal",
+      "anomaly_row": "{metric}: {value} now, usually around {median}.",
+      "events_title": "Event log, same period",
+      "event_row": "{log} {event_id} ({level}), {count}x: {message}"
+    }
   },
   "audit": {
     "heading": "Audit Log",

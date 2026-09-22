@@ -1,4 +1,16 @@
-// Alerts: operator-facing conditions that want attention. Four kinds:
+// Alerts: operator-facing conditions that want attention, grouped into BUNDLES (roadmap
+// #17). A machine whose disk filled, whose backup service then failed, and whose CPU pinned
+// while it retried raises three alerts about one problem; the hub groups those three and
+// this file renders the group as one block with its member cards inside it.
+//
+// **Two fetches, deliberately.** /api/alerts/bundles owns the grouping, the causal claim and
+// any recommendation; /api/alerts owns the per-alert payload, including the machine status
+// enrichment only duplicate_serial cards use. Joining them here on alert id keeps that
+// enrichment in the one endpoint that already does it, rather than growing a second copy in
+// correlate_web.py that would drift. If the bundles call fails, every alert renders flat --
+// the grouping is a lens over the list, so losing it costs the lens, not the list.
+//
+// Four alert kinds:
 //   * rule -- raised by an operator-written rule's `alert` action. The text comes from the
 //     rule, so the card just states it; one card per EPISODE, like the others.
 //   * duplicate_serial -- two machines sharing a serial while both online. The hub refuses
@@ -347,6 +359,330 @@ function renderDuplicateSerial(alert) {
     return card;
 }
 
+// ---------------------------------------------------------------------------- bundles
+
+// Server vocabularies, rendered through literal t() calls in a lookup map rather than a key
+// built by `+`. The catalog scan in tests/test_i18n.py only sees literal keys, so a key
+// assembled from a prefix and a server-supplied code is a typo no test can catch -- it just
+// prints its own key on the card. Same idiom wake.js uses for its diagnosis codes, and the
+// same reason CLAUDE.md gives for preferring a literal key over a computed one.
+const CAUSE_LABELS = {
+    disk_starved_process: () => t('alerts.bundle.cause.disk_starved_process'),
+    disk_starved_agent: () => t('alerts.bundle.cause.disk_starved_agent'),
+    memory_paging: () => t('alerts.bundle.cause.memory_paging'),
+    memory_starved_process: () => t('alerts.bundle.cause.memory_starved_process'),
+    thermal_throttling: () => t('alerts.bundle.cause.thermal_throttling'),
+    offline_unmatched: () => t('alerts.bundle.cause.offline_unmatched'),
+};
+
+const FACET_LABELS = {
+    disk: () => t('alerts.bundle.facet.disk'),
+    memory: () => t('alerts.bundle.facet.memory'),
+    cpu: () => t('alerts.bundle.facet.cpu'),
+    thermal: () => t('alerts.bundle.facet.thermal'),
+    network: () => t('alerts.bundle.facet.network'),
+    process: () => t('alerts.bundle.facet.process'),
+    liveness: () => t('alerts.bundle.facet.liveness'),
+    session: () => t('alerts.bundle.facet.session'),
+    directory: () => t('alerts.bundle.facet.directory'),
+    identity: () => t('alerts.bundle.facet.identity'),
+    event: () => t('alerts.bundle.facet.event'),
+    other: () => t('alerts.bundle.facet.other'),
+};
+
+// An unrecognised code shows itself. A newer hub adding a facet renders as `disk_io` rather
+// than as a missing catalog key, which is ugly and true instead of broken and confident.
+function labelFor(map, value) {
+    const fn = map[value];
+    return fn ? fn() : value;
+}
+
+function bundleUrl(bundle, suffix) {
+    return '/api/alerts/bundles/' + encodeURIComponent(bundle.machine)
+        + '/' + encodeURIComponent(bundle.anchor) + (suffix || '');
+}
+
+async function requestRecommendation(bundle, boxEl, btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = t('alerts.bundle.recommend_working');
+    try {
+        const resp = await fetch(bundleUrl(bundle, '/recommend'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+        // Replace the button with the answer in place. The operator asked about THIS bundle
+        // and is looking at it; a full reload would scroll the page out from under them.
+        boxEl.replaceChildren(renderRecommendation(bundle, body));
+    } catch (e) {
+        btnEl.disabled = false;
+        btnEl.textContent = t('alerts.bundle.recommend');
+        const failed = document.createElement('p');
+        failed.className = 'stat-card__meta';
+        failed.textContent = t('alerts.bundle.recommend_failed', { error: e.message });
+        boxEl.appendChild(failed);
+    }
+}
+
+async function draftSuggestedScript(bundle, btnEl, noteEl) {
+    btnEl.disabled = true;
+    try {
+        const resp = await fetch(bundleUrl(bundle, '/script'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+        // Says "switched off" on purpose. The whole safety argument for a suggested script is
+        // that a human reads it and turns it on, so the confirmation has to state that it is
+        // off rather than read as "done".
+        noteEl.textContent = t('alerts.bundle.script_drafted', { name: body.name });
+    } catch (e) {
+        btnEl.disabled = false;
+        noteEl.textContent = t('alerts.bundle.script_failed', { error: e.message });
+    }
+}
+
+// What else the machine was saying while the bundle was open: metrics outside its own
+// trailing normal, and #16's event log rows inside the same window. Loaded on a click and
+// not with the list, deliberately -- a baseline is a scan of a fortnight of readings per
+// machine and the Alerts tab polls, so doing it per bundle per poll would make the alert
+// badge the most expensive query in the hub.
+async function loadBundleDetail(bundle, boxEl, btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = t('alerts.bundle.detail_working');
+    try {
+        const resp = await fetch(bundleUrl(bundle, ''));
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+        boxEl.replaceChildren(renderBundleDetail(body.facts || {}));
+    } catch (e) {
+        btnEl.disabled = false;
+        btnEl.textContent = t('alerts.bundle.detail');
+        const failed = document.createElement('p');
+        failed.className = 'stat-card__meta';
+        failed.textContent = t('alerts.bundle.detail_failed', { error: e.message });
+        boxEl.appendChild(failed);
+    }
+}
+
+// One decimal on a percentage or a temperature; a whole number on an RPM. toFixed(1) on
+// everything would report a fan at "1234.0 rpm", which reads as a precision nobody has.
+function formatMetric(value) {
+    if (typeof value !== 'number') return '?';
+    return Math.abs(value) >= 1000 ? String(Math.round(value)) : value.toFixed(1);
+}
+
+function renderBundleDetail(facts) {
+    const box = document.createElement('div');
+    box.style.marginTop = 'var(--space-3)';
+
+    const anomalies = facts.anomalies || [];
+    const events = facts.events || [];
+    // Absence, not an all-clear. A machine with three days of history has no baseline and no
+    // collected events, and this sentence says nothing stood out -- which is true -- rather
+    // than that everything is fine, which is not something the hub knows.
+    if (!anomalies.length && !events.length) {
+        const none = document.createElement('p');
+        none.className = 'stat-card__meta';
+        none.textContent = t('alerts.bundle.detail_none');
+        box.appendChild(none);
+        return box;
+    }
+
+    if (anomalies.length) {
+        box.appendChild(Object.assign(document.createElement('div'), {
+            className: 'section-title',
+            textContent: t('alerts.bundle.anomalies_title'),
+        }));
+        const list = document.createElement('ul');
+        list.className = 'stat-card__meta';
+        for (const anomaly of anomalies) {
+            const item = document.createElement('li');
+            item.textContent = t('alerts.bundle.anomaly_row', {
+                metric: anomaly.metric,
+                value: formatMetric(anomaly.value),
+                median: formatMetric(anomaly.median),
+            });
+            list.appendChild(item);
+        }
+        box.appendChild(list);
+    }
+
+    if (events.length) {
+        box.appendChild(Object.assign(document.createElement('div'), {
+            className: 'section-title',
+            textContent: t('alerts.bundle.events_title'),
+        }));
+        const list = document.createElement('ul');
+        list.className = 'stat-card__meta';
+        for (const event of events) {
+            const item = document.createElement('li');
+            item.textContent = t('alerts.bundle.event_row', {
+                log: event.log,
+                event_id: event.event_id,
+                level: event.level,
+                count: event.count,
+                message: event.message || '',
+            });
+            list.appendChild(item);
+        }
+        box.appendChild(list);
+    }
+    return box;
+}
+
+function renderRecommendation(bundle, recommendation) {
+    const box = document.createElement('div');
+    box.className = 'notice';
+    box.style.marginTop = 'var(--space-4)';
+
+    box.appendChild(Object.assign(document.createElement('div'), {
+        className: 'section-title',
+        textContent: t('alerts.bundle.recommendation_title'),
+    }));
+
+    const explanation = document.createElement('p');
+    explanation.className = 'stat-card__meta';
+    explanation.textContent = recommendation.explanation || '';
+    box.appendChild(explanation);
+
+    const steps = recommendation.steps || [];
+    if (steps.length) {
+        const list = document.createElement('ol');
+        list.className = 'stat-card__meta';
+        for (const step of steps) {
+            const item = document.createElement('li');
+            item.textContent = step;
+            list.appendChild(item);
+        }
+        box.appendChild(list);
+    }
+
+    // The provenance line is not decoration. This paragraph is the one place on the page
+    // whose words came from a language model rather than from the hub, and an operator about
+    // to quote it into a change ticket should be able to see that at a glance.
+    const source = document.createElement('p');
+    source.className = 'stat-card__meta';
+    source.textContent = t('alerts.bundle.recommendation_source', {
+        provider: recommendation.provider || '?',
+        model: recommendation.model || '?',
+    });
+    box.appendChild(source);
+
+    if (recommendation.script && bundle.can_draft_script) {
+        const pre = document.createElement('pre');
+        pre.className = 'stat-card__meta';
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.textContent = recommendation.script.body || '';
+        box.appendChild(pre);
+
+        const note = document.createElement('p');
+        note.className = 'stat-card__meta';
+
+        if (recommendation.script_name) {
+            note.textContent = t('alerts.bundle.script_drafted', { name: recommendation.script_name });
+        } else {
+            const draftBtn = document.createElement('button');
+            draftBtn.type = 'button';
+            draftBtn.className = 'btn btn--ghost';
+            draftBtn.textContent = t('alerts.bundle.draft_script');
+            draftBtn.addEventListener('click', () => draftSuggestedScript(bundle, draftBtn, note));
+            box.appendChild(draftBtn);
+        }
+        box.appendChild(note);
+    }
+    return box;
+}
+
+// A bundle of two or more alerts: a heading that says how many and on which machine, the
+// causal claim when the hub has one, and the member cards below. A bundle of ONE is not
+// rendered with any of this -- see renderBundle.
+function renderBundleHeader(bundle) {
+    const header = document.createElement('div');
+    header.className = 'card';
+    header.style.marginBottom = 'var(--space-3)';
+
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.style.marginBottom = 'var(--space-2)';
+    title.textContent = tPlural('alerts.bundle.title', bundle.alert_ids.length, {
+        count: bundle.alert_ids.length,
+        machine: bundle.machine || t('alerts.unknown_machine'),
+    });
+    header.appendChild(title);
+
+    const meta = document.createElement('p');
+    meta.className = 'stat-card__meta';
+    meta.style.marginBottom = 'var(--space-3)';
+    // Two whole sentences from the catalog, never one assembled from clauses -- the same
+    // rule the rule and high-temperature bodies above follow. Without a causal pair the line
+    // says what the alerts have in common and stops; claiming a cause the hub cannot
+    // establish is the one thing this feature must never do.
+    if (bundle.cause) {
+        meta.textContent = t('alerts.bundle.cause_line', {
+            cause: labelFor(CAUSE_LABELS, bundle.cause.reason),
+            since: formatEpoch(bundle.started_at),
+        });
+    } else {
+        meta.textContent = t('alerts.bundle.together', {
+            facets: (bundle.facets || []).map((f) => labelFor(FACET_LABELS, f)).join(', '),
+            since: formatEpoch(bundle.started_at),
+        });
+    }
+    header.appendChild(meta);
+
+    if (bundle.machine) {
+        const detailBox = document.createElement('div');
+        const detailBtn = document.createElement('button');
+        detailBtn.type = 'button';
+        detailBtn.className = 'btn btn--ghost';
+        detailBtn.textContent = t('alerts.bundle.detail');
+        detailBtn.addEventListener('click', () => loadBundleDetail(bundle, detailBox, detailBtn));
+        header.appendChild(detailBtn);
+        header.appendChild(detailBox);
+    }
+
+    const box = document.createElement('div');
+    if (bundle.recommendation) {
+        box.appendChild(renderRecommendation(bundle, bundle.recommendation));
+    } else if (bundle.can_recommend && bundle.machine) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn--ghost';
+        btn.textContent = t('alerts.bundle.recommend');
+        btn.addEventListener('click', () => requestRecommendation(bundle, box, btn));
+        box.appendChild(btn);
+    }
+    header.appendChild(box);
+    return header;
+}
+
+function renderBundle(bundle, byId) {
+    const members = bundle.alert_ids.map((id) => byId[String(id)]).filter(Boolean);
+    if (!members.length) return null;
+
+    // A bundle of one is just an alert. Wrapping it in bundle chrome would add a heading
+    // saying "1 alert on PC-04" above a card that already says so, which is how a grouping
+    // feature makes the common case worse than it was before.
+    if (members.length === 1) return renderAlert(members[0]);
+
+    const group = document.createElement('div');
+    group.style.marginBottom = 'var(--space-5)';
+    group.appendChild(renderBundleHeader(bundle));
+
+    const nested = document.createElement('div');
+    nested.style.marginLeft = 'var(--space-5)';
+    for (const alert of members) {
+        nested.appendChild(renderAlert(alert));
+    }
+    group.appendChild(nested);
+    return group;
+}
+
 async function loadAlerts() {
     try {
         const resp = await fetch('/api/alerts');
@@ -354,9 +690,35 @@ async function loadAlerts() {
         const alerts = await resp.json();
         alertsList.innerHTML = '';
         setAlertsEmpty(alerts.length === 0);
+        // The badge counts ALERTS, not bundles, and deliberately keeps doing so: it has to
+        // agree with /api/alerts/count, which the poller in the shell calls and which knows
+        // nothing about grouping. A badge reading 4 beside a tab showing 7 cards is a bug
+        // report waiting to happen.
         setAlertBadge(alerts.length);
+
+        const byId = {};
+        for (const alert of alerts) byId[String(alert.id)] = alert;
+
+        const grouping = await fetchBundles();
+        if (!grouping) {
+            for (const alert of alerts) alertsList.appendChild(renderAlert(alert));
+            return;
+        }
+        const rendered = new Set();
+        for (const bundle of grouping.bundles || []) {
+            bundle.can_recommend = grouping.can_recommend;
+            bundle.can_draft_script = grouping.can_draft_script;
+            const node = renderBundle(bundle, byId);
+            if (!node) continue;
+            for (const id of bundle.alert_ids) rendered.add(String(id));
+            alertsList.appendChild(node);
+        }
+        // Anything the grouping did not account for still renders. The two endpoints read the
+        // alert table a moment apart, so an alert raised between them belongs to no bundle
+        // yet -- and an alert this tab silently dropped would be the worst possible bug in an
+        // alerting feature.
         for (const alert of alerts) {
-            alertsList.appendChild(renderAlert(alert));
+            if (!rendered.has(String(alert.id))) alertsList.appendChild(renderAlert(alert));
         }
     } catch (e) {
         // DOM rather than an innerHTML string, now that the message comes from the catalog.
@@ -364,6 +726,18 @@ async function loadAlerts() {
         failed.className = 'stat-card__meta';
         failed.textContent = t('alerts.load_failed');
         alertsList.replaceChildren(failed);
+    }
+}
+
+// Null on any failure, which loadAlerts renders as a flat list. Grouping is a lens over the
+// alert list; losing the lens must not lose the alerts.
+async function fetchBundles() {
+    try {
+        const resp = await fetch('/api/alerts/bundles');
+        if (!resp.ok) return null;
+        return await resp.json();
+    } catch (e) {
+        return null;
     }
 }
 
