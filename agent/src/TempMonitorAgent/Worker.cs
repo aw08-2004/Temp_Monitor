@@ -377,6 +377,7 @@ public sealed class Worker : BackgroundService
                 TempMonitorAgent.Remote.RemoteInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Bios.BiosInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Network.NetworkInventoryReporter.RefreshIfDue();
+                TempMonitorAgent.Security.BitLockerInventoryReporter.RefreshIfDue();
                 // Available updates (roadmap #14). The slowest scan on this loop by far --
                 // a Windows Update search contacts WSUS and winget refreshes its sources --
                 // which is exactly why it is here and not on the heartbeat path.
@@ -389,6 +390,14 @@ public sealed class Worker : BackgroundService
                 TempMonitorAgent.Events.EventLogReporter.RefreshIfDue();
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
+
+            // Hand over any BitLocker recovery passwords the hub has said it is missing
+            // (roadmap #19). Here rather than on the heartbeat because reading one is several
+            // WMI round trips, and here rather than on its own loop because it is the same
+            // shape of work as the scans above -- slow, local, and only occasionally needed.
+            // A settled machine takes this branch once and never again.
+            try { await _fleet.SubmitBitLockerKeysAsync(ct); }
+            catch (Exception e) { _log.LogWarning(e, "BitLocker escrow failed"); }
 
             if (!await DelayAsync(AgentConfig.InventoryScanSeconds, ct)) break;
         }

@@ -750,12 +750,30 @@ REGISTRY = (
     # A draft is somebody's unfinished sentence. A week is long enough to come back to one
     # after a holiday and short enough that abandoned experiments do not accumulate.
     _s("ai.draft_retention_days", "ai", "int", 7, minimum=1, maximum=365, unit="days"),
+
+    # ---------------- Endpoint security ----------------
+    # BitLocker recovery-key escrow (roadmap #19). The keys themselves are absent from this
+    # registry for the reason the backup credentials are -- settings are rendered into a form,
+    # returned wholesale by as_dict() and partly shipped to agents. What lives here is only
+    # whether the hub asks for them at all.
+    #
+    # **Default on**, which is the opposite of how the backup toggles default, and the
+    # difference is which way each one fails. A backup that runs unasked writes somebody's
+    # files to a bucket they did not choose; escrow that does not run costs a machine the day
+    # BitLocker locks it, and that cost is discovered exactly once, far too late. Escrow is
+    # also already gated by something an operator did deliberately: no BACKUP_MASTER_KEY, no
+    # collection, so this defaults on into a hub that has already decided to hold secrets.
+    #
+    # Turning it off stops collection and nothing else. It never deletes what is escrowed --
+    # see bitlocker.py; reading a checkbox as "destroy the keys" would be the most destructive
+    # thing in this console.
+    _s("security.escrow_bitlocker_keys", "security", "bool", True),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "discovery", "provisioning",
-            "location", "map", "policy", "rules", "sharing", "events", "ai")
+            "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
+            "policy", "rules", "sharing", "events", "ai", "security")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

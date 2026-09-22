@@ -34,6 +34,7 @@ const panels = {
     sharing: document.getElementById('tab-sharing'),
     events: document.getElementById('tab-events'),
     ai: document.getElementById('tab-ai'),
+    security: document.getElementById('tab-security'),
 };
 
 // NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`

@@ -662,6 +662,10 @@
       "wipe_device": {
         "label": "Lock and wipe a device",
         "description": "Lock a managed device's screen, and erase it. Its own capability rather than part of 'Issue commands': the argument that puts every other command under that one -- less dangerous than the SYSTEM shell it already grants -- is true of a reboot and false of a factory reset. Wiping additionally requires the machine's name to be typed out, is recorded in the audit trail before the command is sent, and cannot be saved as a favorite or issued by a rule. Seeing that a device was locked or erased only needs 'View' plus the machine being in scope."
+      },
+      "read_recovery_keys": {
+        "label": "Read recovery keys",
+        "description": "Be shown an escrowed BitLocker recovery password for these machines. Every read is written to the audit log. Seeing whether a machine is encrypted needs only View."
       }
     }
   },
@@ -690,6 +694,7 @@
       "policy": "Policy",
       "ai": "AI Assistance",
       "events": "Event Logs",
+      "security": "Endpoint Security",
       "discovery": "Network discovery"
     },
     "_unit": [
@@ -1248,6 +1253,10 @@
           "label": "Count events over",
           "help": "How far back the counters above the event list look. Separate from the retention window on purpose -- shortening how long records are kept must not silently change what the page claims happened today."
         }
+      },
+      "security.escrow_bitlocker_keys": {
+        "label": "Escrow BitLocker recovery keys",
+        "help": "Collect each machine's BitLocker recovery passwords and keep them encrypted beside this hub, so a PC that locks itself out can be recovered. Needs a backup master key. Switching this off stops collecting and never deletes what is already escrowed."
       },
       "discovery": {
         "scan_ttl_seconds": {
@@ -3958,5 +3967,51 @@
     "count": "{count} action(s)",
     "failed": "That was refused.",
     "unreachable": "The hub could not be reached."
+  },
+  "bitlocker": {
+    "title": "Drive encryption",
+    "summary": "{encrypted} of {total} volumes protected",
+    "unsupported": "This machine has no BitLocker provider, so there is nothing to encrypt or escrow here. That is the normal, permanent answer for Windows Home and for non-Windows agents.",
+    "read_failed": "This machine's encryption state could not be read: {error}",
+    "load_error": "Encryption data could not be loaded.",
+    "retry": "Retry",
+    "column": {
+      "volume": "Volume",
+      "protection": "Protection",
+      "method": "Method",
+      "key": "Recovery key"
+    },
+    "protection": {
+      "on": "Protected",
+      "off": "Not protected",
+      "unknown": "Unknown"
+    },
+    "conversion": {
+      "fully_encrypted": "Fully encrypted",
+      "fully_decrypted": "Not encrypted",
+      "encrypting": "Encrypting",
+      "decrypting": "Decrypting",
+      "encryption_paused": "Encryption paused",
+      "decryption_paused": "Decryption paused"
+    },
+    "escrow": {
+      "no_recovery_protector": "No recovery password exists on this volume, so there is nothing anyone could type at a recovery screen.",
+      "pending": "Not escrowed yet. The machine hands it over on its next check-in.",
+      "disabled": "Not escrowed. Key escrow is switched off for this hub.",
+      "held": "Escrowed {when}",
+      "read_before": {
+        "one": "Read once, most recently {when}.",
+        "other": "Read {count} times, most recently {when}."
+      }
+    },
+    "orphaned": {
+      "one": "This hub also holds 1 recovery key for a volume this machine no longer reports.",
+      "other": "This hub also holds {count} recovery keys for volumes this machine no longer reports."
+    },
+    "reveal": "Show recovery key",
+    "reveal_failed": "That recovery key could not be read.",
+    "unreachable": "The hub could not be reached.",
+    "key_for": "Recovery key for {volume}",
+    "key_warning": "Reading this key has been recorded in the audit log. It disappears when you leave the page."
   }
 }

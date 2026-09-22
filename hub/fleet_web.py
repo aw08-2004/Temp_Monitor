@@ -36,6 +36,8 @@ import apps
 import auth_helpers
 import backups
 import bios
+import bitlocker
+import bitlocker_web
 import capabilities
 import channels
 import events
@@ -255,6 +257,20 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                                                 (data["bios"] or {}).get("bios_version"))
             except Exception as e:
                 print(f"[firmware] Could not confirm updates for {machine}: {e}")
+        # BitLocker posture (roadmap #19), on the same change-only cadence and with the same
+        # never-fatal handling. Volume encryption state is slow to read and almost never
+        # changes, so it is scanned on the agent's inventory loop and merely CARRIED here.
+        #
+        # **No recovery password ever arrives on this endpoint.** What comes in is posture --
+        # which volumes exist, whether they are protected, and the ids of their key protectors.
+        # The passwords travel on their own authenticated endpoint, and only for the ids the
+        # reply below asks for; see bitlocker.py for why that split is the design rather than
+        # an ordering accident.
+        if data.get("bitlocker"):
+            try:
+                bitlocker.record_inventory(db_path, machine, data["bitlocker"])
+            except Exception as e:
+                print(f"[bitlocker] Could not record posture for {machine}: {e}")
         # Network adapters (roadmap #10), same change-only cadence and same never-fatal
         # handling. This is what the hub groups machines into subnets by, so that a sleeping
         # PC can be woken through an awake peer on its own segment -- and it has to come
@@ -338,6 +354,21 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             payload["live_interval_seconds"] = live.FAST_INTERVAL_SECONDS
         except Exception as e:
             print(f"[live] Could not resolve the watch for {machine}: {e}")
+        # Which BitLocker recovery passwords the hub is still missing for this machine
+        # (roadmap #19). Answered on every heartbeat, like the watch flags above and for the
+        # same reason: it is how an agent learns that a protector it rotated last night is now
+        # wanted, and how it learns to stop offering one that has since been escrowed.
+        #
+        # An EMPTY list is the steady state and costs the machine nothing -- a settled fleet
+        # transmits no key material at all, which is the property that makes escrow cheap
+        # enough to leave on. The list is a plain read over two indexed tables; the secret
+        # store is never opened here, because a heartbeat must not depend on decrypting
+        # anything. Its own try/except, so a failure here cannot cost the flags above.
+        try:
+            if bitlocker_web.escrow_enabled(db_path):
+                payload["bitlocker_escrow_wanted"] = bitlocker.escrow_wanted(db_path, machine)
+        except Exception as e:
+            print(f"[bitlocker] Could not resolve escrow for {machine}: {e}")
         # Which release channel this machine follows (roadmap #21). Answered on EVERY
         # heartbeat, like the two flags above and for the same reason: this is how a machine
         # learns it has been moved BACK to stable, which is a change nothing else would tell

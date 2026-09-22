@@ -3095,13 +3095,13 @@ finding #10's `NicReader` produced on first contact.
 
 ---
 
-## 📋 19. Endpoint security odds and ends
+## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.121.0**
 
-Three small things from FR-06 and FR-07 that share no code but are each about a day:
+Three small things from FR-06 and FR-07 that share no code but are each about a day. The
+first is built; the other two are not.
 
-- **BitLocker key escrow.** Auto-enable, and escrow the recovery key into the
-  master-key-wrapped secret store `backups.py` already provides and the BIOS setup password
-  already uses. The custody warning that applies to `BACKUP_MASTER_KEY` applies double here.
+- **BitLocker key escrow.** ✅ **Done, hub 1.121.0** — see below. Auto-enable is deliberately
+  NOT part of it; see *Rejected alternatives*.
 - **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
   inventory already collects, plus a policy list — no new channel, and worth being honest in
   the UI that a policy list is not an enforcement.
@@ -3109,6 +3109,101 @@ Three small things from FR-06 and FR-07 that share no code but are each about a 
   outside the hub DB. The one with real cost, and the one with a real question attached:
   recording a colleague's screen is a decision to take deliberately, not a default to leave
   on.
+
+### BitLocker key escrow · hub 1.121.0 · `bitlocker.py` / `bitlocker_web.py`
+
+**The failure this closes is the one that costs a machine.** BitLocker locks a volume on its
+own — a firmware update that moves the TPM measurement, a disk moved into another chassis, a
+user who fails the PIN often enough — and at that point the 48-digit recovery password is the
+only way back in. Before this the hub could see that a PC existed and could not say whether
+anybody held its key, so the honest answer to "we are locked out of OTTOWIENS" was to reimage
+it. A key nobody escrowed is discovered missing exactly once, at the worst moment, by somebody
+who cannot do anything about it.
+
+**Posture is stored in the database; recovery passwords never are.** The passwords go into the
+`.env`-master-key-wrapped sidecar `backups.py` already gives the BIOS setup password, keyed by
+machine name so a blob copied between machines fails to decrypt rather than being handed to the
+wrong PC. `fleet.db` keeps only the protector *ids* — a GUID is an index, not a secret. That
+split is what makes the rest cheap: deciding what the hub is missing is plain SQL on the
+heartbeat path, the secret store opens only when a key arrives or an operator asks, and no
+recovery password is ever inside the file `backup.hub_enabled` copies to a bucket.
+
+**Keys do not ride the heartbeat.** The heartbeat carries posture; the hub answers with
+`bitlocker_escrow_wanted`, the ids it has no row for; the agent then POSTs exactly those to
+`/api/agent/bitlocker/keys`. Three properties fall out and each was the point: a settled fleet
+transmits no key material at all, a protector rotated on a machine is picked up within one
+heartbeat with nothing scheduled, and the hub asks for what it lacks rather than being handed
+everything every time. The server recomputes the wanted set when the keys arrive, so an
+enrolled agent cannot file ids it invented.
+
+**Reading a key is an event, not a lookup.** `POST /api/bitlocker/<machine>/reveal` behind the
+new `read_recovery_keys` capability plus machine scope, one protector per call, named in the
+body rather than the path (a URL is kept by browser history, proxies and screenshots), audited
+at security level *before* the key is produced. That audit row is the whole argument for a hub
+holding these keys at all.
+
+**A key is never deleted because a machine stopped reporting its protector.** A decrypted disk
+or a half-failed inventory leaves the escrowed password exactly where it was; the orphan is
+shown on the card instead of pruned. Pruning on report would make one bad inventory the thing
+that erases the only copy of a key — the failure this feature exists to prevent, arriving by a
+new route. The one place that destroys a key is deleting the machine, which already means "this
+PC is gone".
+
+### Decisions
+
+- **Its own capability, not `manage_backups`.** The store is an implementation detail the two
+  happen to share. Folding them together would have granted the fleet's recovery passwords
+  silently, on the day it shipped, to everyone who could configure a backup destination.
+- **Reading the posture is `view`.** Whether a laptop is encrypted is inventory in the sense
+  its model and its disks are. Holding the key is the privilege; knowing the lock exists is not.
+- **`security.escrow_bitlocker_keys` defaults ON**, which is the opposite of how the backup
+  toggles default, and the difference is which way each fails. A backup that runs unasked
+  writes somebody's files to a bucket they did not choose; escrow that does not run costs a
+  machine. It is already gated by a deliberate act — no `BACKUP_MASTER_KEY`, no collection.
+  Turning it off stops collection and never deletes what is escrowed.
+- **No agent version gate on the card**, unlike the Files and Processes tabs. Nothing on it
+  asks a machine to do anything, so `support: null` — "no agent has told us" — already says
+  what a `MIN_*_AGENT` constant would, and says it correctly for a machine that is merely
+  offline.
+- **Protector kinds are flattened to two on the wire**, `recovery_password` or `other`, rather
+  than Microsoft's eleven-value enum. The only decision the hub makes with the answer is
+  whether there is a transferable secret to ask for; shipping the full enum invites the hub to
+  grow opinions about TPM-and-PIN that belong on the machine, which is #9's argument for
+  keeping vendor dispatch off the hub.
+
+### Rejected alternatives
+
+- **Auto-enabling BitLocker across the fleet**, which the original bullet above named. Turning
+  encryption *on* is a different risk class from storing the key: it is a long conversion on a
+  machine somebody is using, it can want a TPM that is not initialised, and on a misconfigured
+  volume it is how a fleet locks itself out — which is the exact outcome this feature exists to
+  make survivable. Escrow first, so that when auto-enable is built there is already somewhere
+  for its keys to go. Still open.
+- **Escrowing to Active Directory instead.** `BackupRecoveryInformationToActiveDirectory` is
+  right there on the WMI class and is the answer for a fleet with a healthy DC. It was not
+  chosen because #4's entry records that this deployment's directory integration has never run
+  against a real DC, and because a hub that cannot read the key it tells you exists is not
+  escrow. The two are not exclusive — a later change can call it as well.
+- **Storing the passwords in `fleet.db` beside the posture.** One table, no sidecar, no master
+  key. Rejected: that file is what `backup.hub_enabled` ships offsite, so every recovery
+  password in the fleet would land in a bucket with it.
+- **Pruning escrowed keys the machine no longer reports.** Tidier, and the one form of
+  tidiness that can destroy the thing the feature is for.
+- **A fleet-wide encryption posture view.** That is #25 phase D's, which this board already
+  splits the same way: #25 *reports* a posture, #19 *acts* on one. Building it here would have
+  been two answers to one question in two places.
+
+### Not done
+
+- Auto-enable (above), and the other two bullets of #19.
+- **The agent half has never been compiled or run.** There is no .NET toolchain on the machine
+  it was written on and no CI job builds the Windows agent, so `BitLockerReader` is syntax-
+  checked and reviewed against the `Win32_EncryptableVolume` documentation and nothing more.
+  It also carries no agent release: source stays at 3.36.0 and this rides whichever release is
+  cut next, the way #14 and #21 shared one.
+- **`PrecisionFactor`, `GetLockStatus` and free-space wiping are not read.** The class exposes
+  `ConversionStatus` and `EncryptionMethod` as plain properties, which is all the card shows;
+  the method forms exist for real-time answers nobody is asking for here.
 
 ---
 
@@ -4966,8 +5061,13 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     late for that reason rather than for difficulty. The Intune cross-reference and a
     scheduled sweep were both left out on purpose — see the entry above.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
-    forward on its own if a need appears. BitLocker escrow reuses the `backups.py` secret
-    store and is the smallest genuinely useful thing on this list.
+    forward on its own if a need appears, and **BitLocker escrow was** (hub 1.121.0), on that
+    line's own argument: it reuses the `backups.py` secret store and is the smallest genuinely
+    useful thing on this list. Pulled ahead of #16–#18 because it needed none of them and
+    because a fleet with no escrowed keys is losing machines today rather than later. Shadow-AI
+    detection now has a real prerequisite that did not exist when this was written — #25 phase
+    B's Windows software inventory — and remote session recording is still the one with a
+    question attached rather than a cost.
 20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
     engine to grow a second evaluation site (on the agent), and that is a bigger change to a
     working feature than any of the above make.

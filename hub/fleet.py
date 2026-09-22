@@ -635,6 +635,16 @@ ACTION_LEVELS = {
     "bios_settings_change": LEVEL_SECURITY,
     "bios_password_set": LEVEL_SECURITY,
     "bios_password_clear": LEVEL_SECURITY,
+    # BitLocker recovery keys (roadmap #19). The read is the row that matters: escrow is only
+    # worth having if taking a key back out of this hub leaves a record naming who did it and
+    # which protector they asked for. The escrow write is recorded at the same level because
+    # it is the moment a secret entered the hub, and the two together are the custody chain.
+    "bitlocker_key_read": LEVEL_SECURITY,
+    "bitlocker_key_escrow": LEVEL_SECURITY,
+    # An existing escrow blob this hub cannot decrypt -- the master key changed underneath it.
+    # Security level rather than notice: it means every recovery key stored before that change
+    # is currently unreadable, which is the same class of event as losing a credential.
+    "bitlocker_escrow_unreadable": LEVEL_SECURITY,
     "backup_key_create": LEVEL_SECURITY,
     "backup_key_reveal": LEVEL_SECURITY,
     "backup_key_escrowed": LEVEL_SECURITY,
@@ -647,6 +657,10 @@ ACTION_LEVELS = {
     "settings.update": LEVEL_SECURITY,
     "settings.reset": LEVEL_SECURITY,
     # -- notice: an operator changed fleet state or configuration.
+    # A machine offering more protectors than the hub will hold. Notice rather than security:
+    # nothing was revealed and nothing was lost, but the NEW key was refused, and a refusal
+    # nobody ever reads is how a machine ends up with no escrowed key while looking fine.
+    "bitlocker_escrow_full": LEVEL_NOTICE,
     # Changing modes only reconfigures an already-trusted driver; it grants nothing new.
     "virtual_display_mode": LEVEL_NOTICE,
     # The BORROWING hub noticing that a peer's catalogue changed -- a machine appeared or

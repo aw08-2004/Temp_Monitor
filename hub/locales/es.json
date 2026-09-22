@@ -603,6 +603,10 @@
       "wipe_device": {
         "label": "Bloquear y borrar un dispositivo",
         "description": "Bloquear la pantalla de un dispositivo gestionado y borrarlo. Es un permiso propio y no parte de 'Emitir comandos': el argumento que mantiene a los demás comandos bajo ese permiso -- menos peligroso que el shell SYSTEM que ya concede -- vale para un reinicio y no para un restablecimiento de fábrica. Borrar exige además escribir el nombre de la máquina, queda registrado en la auditoría antes de enviar el comando, y no se puede guardar como favorito ni emitir desde una regla. Para ver que un dispositivo fue bloqueado o borrado basta con 'Ver' más la máquina en el ámbito."
+      },
+      "read_recovery_keys": {
+        "label": "Leer claves de recuperación",
+        "description": "Ver una contraseña de recuperación de BitLocker custodiada para estas máquinas. Cada lectura queda en el registro de auditoría. Para ver si una máquina está cifrada basta con 'Ver'."
       }
     }
   },
@@ -631,6 +635,7 @@
       "policy": "Política",
       "ai": "Asistencia con IA",
       "events": "Registros de eventos",
+      "security": "Seguridad del endpoint",
       "discovery": "Descubrimiento de red"
     },
     "unit": {
@@ -1176,6 +1181,10 @@
           "label": "Contar eventos de los últimos",
           "help": "Hasta dónde miran hacia atrás los contadores situados sobre la lista de eventos. Separado a propósito de la ventana de retención: acortar cuánto se conservan los registros no debe cambiar en silencio lo que la página afirma que ocurrió hoy."
         }
+      },
+      "security.escrow_bitlocker_keys": {
+        "label": "Custodiar claves de recuperación de BitLocker",
+        "help": "Recoger las contraseñas de recuperación de BitLocker de cada máquina y guardarlas cifradas junto a este hub, para poder recuperar un PC que se bloquee a sí mismo. Necesita una clave maestra de copias. Desactivarlo detiene la recogida y nunca borra lo ya custodiado."
       },
       "discovery": {
         "scan_ttl_seconds": {
@@ -3840,5 +3849,51 @@
     "count": "{count} acción(es)",
     "failed": "Se ha rechazado.",
     "unreachable": "No se ha podido contactar con el hub."
+  },
+  "bitlocker": {
+    "title": "Cifrado de disco",
+    "summary": "{encrypted} de {total} volúmenes protegidos",
+    "unsupported": "Este equipo no tiene proveedor de BitLocker, así que no hay nada que cifrar ni que custodiar aquí. Esa es la respuesta normal y permanente para Windows Home y para los agentes que no son de Windows.",
+    "read_failed": "No se pudo leer el estado de cifrado de este equipo: {error}",
+    "load_error": "No se pudieron cargar los datos de cifrado.",
+    "retry": "Reintentar",
+    "column": {
+      "volume": "Volumen",
+      "protection": "Protección",
+      "method": "Método",
+      "key": "Clave de recuperación"
+    },
+    "protection": {
+      "on": "Protegido",
+      "off": "Sin proteger",
+      "unknown": "Desconocido"
+    },
+    "conversion": {
+      "fully_encrypted": "Cifrado por completo",
+      "fully_decrypted": "Sin cifrar",
+      "encrypting": "Cifrando",
+      "decrypting": "Descifrando",
+      "encryption_paused": "Cifrado en pausa",
+      "decryption_paused": "Descifrado en pausa"
+    },
+    "escrow": {
+      "no_recovery_protector": "Este volumen no tiene contraseña de recuperación, así que no hay nada que nadie pueda escribir en la pantalla de recuperación.",
+      "pending": "Aún no está custodiada. El equipo la entrega en su próximo reporte.",
+      "disabled": "Sin custodiar. La custodia de claves está desactivada en este hub.",
+      "held": "Custodiada el {when}",
+      "read_before": {
+        "one": "Leída una vez, la última el {when}.",
+        "other": "Leída {count} veces, la última el {when}."
+      }
+    },
+    "orphaned": {
+      "one": "Este hub también guarda 1 clave de recuperación de un volumen que este equipo ya no reporta.",
+      "other": "Este hub también guarda {count} claves de recuperación de volúmenes que este equipo ya no reporta."
+    },
+    "reveal": "Mostrar clave de recuperación",
+    "reveal_failed": "No se pudo leer esa clave de recuperación.",
+    "unreachable": "No se pudo contactar con el hub.",
+    "key_for": "Clave de recuperación de {volume}",
+    "key_warning": "Esta lectura quedó registrada en el registro de auditoría. La clave desaparece al salir de la página."
   }
 }

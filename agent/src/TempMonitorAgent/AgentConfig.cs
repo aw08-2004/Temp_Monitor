@@ -51,6 +51,11 @@ public static class AgentConfig
     /// live charts, or neither. One request for both watches; ProcessWatchUrl above is the
     /// older half of it, kept for hubs that predate this route (they 404 here).</summary>
     public static string WatchUrl => HubBase + "/api/agent/watch";
+    /// <summary>Where escrowed BitLocker recovery passwords go (roadmap #19). Its own
+    /// endpoint rather than a field on the heartbeat: the heartbeat is a ten-second tick that
+    /// every machine sends forever, and a secret does not belong on a channel whose shape is
+    /// "always on". This one is called only when the hub has said it is missing a key.</summary>
+    public static string BitLockerKeysUrl => HubBase + "/api/agent/bitlocker/keys";
     public static string CommandResultUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
     public static string CommandOutputUrl(string commandId) =>
