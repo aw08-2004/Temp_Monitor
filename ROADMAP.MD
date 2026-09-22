@@ -3448,7 +3448,11 @@ the first slice of the list below, because that slice touched the hub anyway.
    stays**: an old rule, and an operator who never changed the default, still arrive saying
    "powershell", and the result's first line still says what actually ran. The default is
    still `powershell`, because the fleet is overwhelmingly Windows and a default nothing there
-   understands would be the same bug pointed the other way.
+   understands would be the same bug pointed the other way. **The Windows agent's
+   `ResolveShell` should reject `"bash"` and `"sh"` before interpreter selection**,
+   returning a failed `CommandResult` with a clear unsupported-shell message, because
+   these values are Linux interpreters that cannot run on Windows. Preserve the existing
+   `powershell` and `cmd` behaviour for supported or legacy values.
 2. **`_OS_MATCHES` missed the distributions that never say "Linux".** "Pop!_OS 22.04 LTS",
    "elementary OS", "Zorin OS", "NixOS", "EndeavourOS", "Deepin", "Solus", "KDE neon" and
    "Raspbian" all bucketed as `unknown`, which put managed machines in the Dashboard's
@@ -3475,12 +3479,13 @@ is cut. Neither needed a hub change beyond the patch sources named below.
    it is given verbatim -- a producer of partial lines would be corrupted by one added per
    call. **No console change was needed and none was made:** `fleet-terminal.js` polls
    `/api/fleet/commands/<id>/output` for any agent. `MIN_STREAMING_AGENT` (3.1.0) gates the
-   hint above the box and the interactive affordances, which this agent still has no claim
-   to -- so an operator sees live output under a warning that says this agent refuses
-   `run_script`, which it does not. **That wrong caption is the follow-up**, and the fix is
-   the capability report rather than a number: those gates move onto `capabilities` when
-   there is something to gate. It is a caption, not a refusal, which is why this shipped
-   without it.
+   hint above the box and the interactive affordances. **The follow-up** gates the stale
+   `run_script` refusal warning and interactive affordances using the agent capabilities
+   report rather than a version number alone: agents that report `run_script` support see
+   no warning, while agents that genuinely lack it keep the existing message. For agents
+   that do support it but fall below `MIN_STREAMING_AGENT`, a Linux-specific caption
+   replaces the refusal wording so operators are not misled. It is a caption, not a refusal,
+   which is why this shipped without it.
 2. **Signed self-update.** The Ed25519 manifest verification ports one-to-one, but it needs its
    own manifest, its own channel and a `release.sh` moving the two-file version pair. Until
    then an upgrade is `install/install.sh` run again, and the trust root for a download is

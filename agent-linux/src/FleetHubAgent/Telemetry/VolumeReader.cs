@@ -102,6 +102,11 @@ public static class VolumeReader
     /// which in kernel order is the one mounted earliest -- "/" rather than the bind of a
     /// directory inside it.
     ///
+    /// Deduplicates by major:minor identity from /proc/self/mountinfo rather than by the
+    /// device string, because device names like /dev/sda2 and /dev/dm-0 can refer to the
+    /// same underlying block device through different paths, while a device name alone
+    /// cannot distinguish aliases and bind mounts from genuinely separate volumes.
+    ///
     /// Internal so a test can pin the filtering against a real mount table without stat-ing
     /// anything.</summary>
     internal static IReadOnlyList<MountEntry> Candidates(IReadOnlyList<MountEntry> mounts)
@@ -111,7 +116,12 @@ public static class VolumeReader
         foreach (var mount in mounts)
         {
             if (!RealFilesystems.Contains(mount.FsType)) continue;
-            if (!seen.Add(mount.Device)) continue;
+            // Use major:minor as the stable filesystem identity when available (mountinfo);
+            // fall back to the device string for the older /proc/mounts format.
+            var key = mount.DeviceMajor > 0 || mount.DeviceMinor > 0
+                ? $"{mount.DeviceMajor}:{mount.DeviceMinor}"
+                : mount.Device;
+            if (!seen.Add(key)) continue;
             keep.Add(mount);
         }
         return keep;
@@ -125,16 +135,24 @@ public static class VolumeReader
         var probes = new List<(string Mount, Task<Capacity?> Task)>(candidates.Count);
         foreach (var mount in candidates)
         {
+            // Key includes the mount ID so a replacement filesystem at the same path
+            // (e.g. a remount or container recreation) gets its own probe entry. Without
+            // it, completion or timeout cleanup from an older task could remove a newer
+            // instance's entry, and the new filesystem would silently stop being probed.
+            var inFlightKey = mount.MountId > 0
+                ? $"{mount.MountPoint}@{mount.MountId}"
+                : mount.MountPoint;
             // A probe already blocked on this mount from an earlier tick: leave it alone. It
             // will either come back and clear itself, or this mount stays unreported for as
             // long as its server is dead -- which is the honest answer, and the one that
             // costs one thread rather than one per tick.
-            if (!_inFlight.TryAdd(mount.MountPoint, 0)) continue;
+            if (!_inFlight.TryAdd(inFlightKey, 0)) continue;
             var path = mount.MountPoint;
+            var key = inFlightKey;
             probes.Add((path, Task.Run(() =>
             {
                 try { return Stat(path); }
-                finally { _inFlight.TryRemove(path, out _); }
+                finally { _inFlight.TryRemove(key, out _); }
             })));
         }
 

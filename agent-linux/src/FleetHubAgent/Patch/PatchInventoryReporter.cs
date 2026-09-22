@@ -79,7 +79,11 @@ public sealed class PatchInventoryReporter(ILogger<PatchInventoryReporter> log, 
         var hash = Hash(payload.ToJsonString());
         lock (_gate)
         {
-            if (hash == _lastSentHash) return;
+            if (hash == _lastSentHash)
+            {
+                _pending = null;
+                return;
+            }
             _pending = payload;
         }
     }

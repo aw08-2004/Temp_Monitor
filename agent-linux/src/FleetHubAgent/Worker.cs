@@ -383,6 +383,10 @@ public sealed class Worker : BackgroundService
             _log.LogWarning(e, "Command {Id} ({Type}) failed outright", cmd.Id, cmd.Type);
             try
             {
+                // Flush buffered output before reporting the terminal result -- the
+                // console stops polling for output the moment a command reaches a terminal
+                // status, so a result that lands first silently eats the tail.
+                await streamer.CompleteAsync(CancellationToken.None);
                 await _fleet.ReportResultAsync(
                     cmd.Id, CommandResult.Fail($"agent error: {e.Message}"), CancellationToken.None);
             }

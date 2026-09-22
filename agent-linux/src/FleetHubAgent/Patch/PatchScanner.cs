@@ -81,10 +81,16 @@ public sealed class PatchScanner(ILogger<PatchScanner> log)
     {
         var dnf = ProcessRunner.ProgramPath("/usr/bin/dnf", "/bin/dnf");
 
+        // LC_ALL=C: ParseDnf stops at the first "Obsoleting" heading, and that word is
+        // the English one. Without a locale override a non-English service locale would
+        // produce a translated heading that the parser does not recognise, causing the
+        // obsoleting section to leak into the inventory as phantom updates.
+        var env = new Dictionary<string, string> { ["LC_ALL"] = "C" };
+
         // -C: answer from the cache. See the class remarks -- a metadata refresh here would
         // be a network call on somebody else's schedule.
         var run = await ProcessRunner.RunAsync(
-            dnf, new[] { "-q", "-C", "check-update" }, TimeoutSeconds, onOutput: null, ct);
+            dnf, new[] { "-q", "-C", "check-update" }, TimeoutSeconds, onOutput: null, ct, env);
 
         if (run.TimedOut) return PatchScan.Failed($"dnf did not finish in {TimeoutSeconds}s");
         // **100 is the success case**, and mistaking it for a failure is the obvious way to
@@ -102,7 +108,7 @@ public sealed class PatchScanner(ILogger<PatchScanner> log)
         // none of them is a security fix.
         var security = await ProcessRunner.RunAsync(
             dnf, new[] { "-q", "-C", "check-update", "--security" },
-            TimeoutSeconds, onOutput: null, ct);
+            TimeoutSeconds, onOutput: null, ct, env);
 
         if (!security.TimedOut && security.ExitCode is 0 or 100)
         {

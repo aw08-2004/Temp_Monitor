@@ -2,8 +2,12 @@ using System.Text;
 
 namespace FleetHubAgent.Telemetry;
 
-/// <summary>One line of /proc/mounts: what is mounted, where, and as what.</summary>
-public readonly record struct MountEntry(string Device, string MountPoint, string FsType);
+/// <summary>One mount: what is mounted, where, as what, and its kernel identity.
+/// MountId, DeviceMajor and DeviceMinor are populated from /proc/self/mountinfo and
+/// default to 0 when parsed from the older /proc/mounts format.</summary>
+public readonly record struct MountEntry(
+    string Device, string MountPoint, string FsType,
+    int MountId = 0, int DeviceMajor = 0, int DeviceMinor = 0);
 
 /// <summary>
 /// Reads /proc/mounts, which is the only way to learn a mount's FILESYSTEM TYPE without
@@ -34,13 +38,24 @@ public static class MountTable
     /// reporting.</summary>
     public const string MountsPath = "/proc/self/mounts";
 
-    /// <summary>Every mount this process can see, in kernel order. Never throws: a machine
-    /// whose /proc is not mounted (a chroot, an unusual container) reports no volumes rather
-    /// than costing the caller its whole sensor block.</summary>
+    /// <summary>Extended mount table with major:minor device numbers and mount IDs.
+    /// Used by default because it provides the stable identity needed for deduplication
+    /// and in-flight tracking.</summary>
+    public const string MountinfoPath = "/proc/self/mountinfo";
+
+    /// <summary>Every mount this process can see, in kernel order. Reads mountinfo by
+    /// default so VolumeReader can deduplicate by major:minor; falls back to /proc/mounts
+    /// when mountinfo is unavailable. Never throws: a machine whose /proc is not mounted
+    /// (a chroot, an unusual container) reports no volumes rather than costing the caller
+    /// its whole sensor block.</summary>
     public static IReadOnlyList<MountEntry> Read(string? path = null)
     {
-        try { return Parse(File.ReadAllLines(path ?? MountsPath)); }
-        catch { return Array.Empty<MountEntry>(); }
+        try { return ParseMountinfo(File.ReadAllLines(path ?? MountinfoPath)); }
+        catch
+        {
+            try { return Parse(File.ReadAllLines(MountsPath)); }
+            catch { return Array.Empty<MountEntry>(); }
+        }
     }
 
     /// <summary>Parse mount-table lines. Malformed lines are skipped rather than raising --
@@ -67,6 +82,63 @@ public static class MountTable
             if (!byMountPoint.ContainsKey(mountPoint)) order.Add(mountPoint);
             byMountPoint[mountPoint] = new MountEntry(
                 Unescape(parts[0]), mountPoint, Unescape(parts[2]));
+        }
+
+        return order.Select(m => byMountPoint[m]).ToArray();
+    }
+
+    /// <summary>
+    /// Parse /proc/self/mountinfo, which differs from /proc/mounts by including a mount ID,
+    /// major:minor device numbers, and optional fields before a " - " separator:
+    ///
+    /// <code>
+    /// 36 35 98:0 / / rw,relatime - ext4 /dev/sda2 rw
+    /// </code>
+    ///
+    /// The major:minor pair is the stable filesystem identity that prevents aliases and
+    /// bind mounts from being counted multiple times. The mount ID lets in-flight tracking
+    /// distinguish replacement filesystems at the same path.
+    /// </summary>
+    public static IReadOnlyList<MountEntry> ParseMountinfo(IEnumerable<string> lines)
+    {
+        var byMountPoint = new Dictionary<string, MountEntry>(StringComparer.Ordinal);
+        var order = new List<string>();
+
+        foreach (var line in lines)
+        {
+            // mountinfo: mount-id parent-id major:minor root mount-point opts [optional...] - fs-type source super-opts
+            var sepIdx = line.IndexOf(" - ");
+            if (sepIdx < 0) continue;
+
+            var before = line[..sepIdx];
+            var after = line[(sepIdx + 3)..];
+
+            var beforeParts = before.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (beforeParts.Length < 6) continue;
+
+            var afterParts = after.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (afterParts.Length < 2) continue;
+
+            if (!int.TryParse(beforeParts[0], out var mountId)) continue;
+
+            var majorMinor = beforeParts[2];
+            var colonIdx = majorMinor.IndexOf(':');
+            int major = 0, minor = 0;
+            if (colonIdx > 0)
+            {
+                int.TryParse(majorMinor[..colonIdx], out major);
+                int.TryParse(majorMinor[(colonIdx + 1)..], out minor);
+            }
+
+            var mountPoint = Unescape(beforeParts[4]);
+            if (mountPoint.Length == 0) continue;
+
+            var fsType = Unescape(afterParts[0]);
+            var device = Unescape(afterParts[1]);
+
+            if (!byMountPoint.ContainsKey(mountPoint)) order.Add(mountPoint);
+            byMountPoint[mountPoint] = new MountEntry(
+                device, mountPoint, fsType, mountId, major, minor);
         }
 
         return order.Select(m => byMountPoint[m]).ToArray();
