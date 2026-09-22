@@ -40,9 +40,11 @@ import backups
 import remote
 import directory
 import bios
+import bitlocker
 import channels
 import firmware
 import patches
+import discovery
 import wake
 import events
 import apps
@@ -62,6 +64,7 @@ import files
 import live
 import authconfig
 import apitokens
+import push
 import sharing
 import envfile
 import i18n
@@ -76,7 +79,10 @@ from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
+import bitlocker_web
+from bitlocker_web import create_bitlocker_blueprint
 from patches_web import create_patches_blueprint
+from discovery_web import create_discovery_blueprint
 from wake_web import create_wake_blueprint
 from events_web import create_events_blueprint
 from capabilities_web import create_capabilities_blueprint
@@ -95,6 +101,7 @@ from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
+from push_web import create_push_blueprint
 from sharing_web import create_sharing_blueprint
 
 # The hub's code lives in a `hub/` subdirectory; its mutable state (.env, logs/, the
@@ -131,7 +138,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.123.0"
+HUB_VERSION = "1.125.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -437,29 +444,28 @@ def resolve_primary_temp(machine, reported_temp, sensors):
     return rederived if rederived is not None else reported_temp
 
 
-def _find_sensor_strict(sensors, sensor_type, name_substrs):
-    """Like _find_sensor_value, but identifies a metric by its sensor NAME rather than
-    by hardware category, and returns None when no name matches -- never a blind
-    first-candidate fallback.
+def _hardware_rank(sensor, preference):
+    """Where this sensor's HARDWARE falls in an operator's preference list, best first, or
+    None when it matches nothing.
 
-    Used for disk usage, where the hardware identifier isn't a single stable substring
-    (storage is "/nvme/","/hdd/","/ssd/"...) but the sensor name is distinctive
-    ("Used Space"). First match wins. Network throughput does NOT go through here --
-    picking the first match is exactly the bug _network_throughput exists to avoid."""
-    for s in sensors:
-        if s.get("type") != sensor_type:
-            continue
-        value = s.get("value")
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            continue
-        name = str(s.get("name") or "").lower()
-        if any(w in name for w in name_substrs):
-            return value
+    Matched against the hardware name and identifier together, lowercased, as a substring --
+    the same shape as every other preference list here, and the one an operator can actually
+    write down: the console shows them "Intel(R) Ethernet Connection I219-LM", not "/nic/1".
+
+    Separate from _find_sensor_value's preferred_name_substrs because the question is a
+    different one. "Which reading of this chip" is answered by a sensor name; "which of this
+    machine's four disks, or its twenty-six adapters" is answered by the hardware.
+    """
+    haystack = f"{sensor.get('hardware_id') or ''} {sensor.get('hardware') or ''}".lower()
+    for rank, wanted in enumerate(preference or ()):
+        if wanted and wanted in haystack:
+            return rank
     return None
 
 
-def _network_throughput(sensors):
-    """(download_bps, upload_bps) for this machine's busiest network adapter.
+def _network_throughput(sensors, preference=()):
+    """(download_bps, upload_bps) for this machine's busiest network adapter -- or for the
+    first adapter matching `preference` (computer.network_preference), when one does.
 
     Windows exposes a LOT of NICs, and LHM reports every one of them: Bluetooth,
     disconnected Wi-Fi, Hyper-V/WSL virtual switches, and one pseudo-adapter per NDIS
@@ -478,9 +484,19 @@ def _network_throughput(sensors):
     (None, None) when the block carries no NIC throughput at all -- no NIC hardware, or an
     agent with network collection switched off. A genuinely idle machine reports (0.0, 0.0),
     which is a real reading and charts as such, not as a gap.
+
+    **The preference list beats busiest, and busiest remains the fallback** (roadmap #3).
+    Busiest is a good heuristic and a wrong one on the machines that need it most: a box with
+    a Hyper-V switch bridged onto the office NIC has a virtual adapter carrying the same
+    traffic, and a laptop docked over USB-C has two adapters that trade places as it moves.
+    An operator who knows which adapter is the real one can now say so -- and if the named
+    adapter is absent from a block (undocked, disabled) this falls back to busiest rather than
+    charting a gap, because the machine is still on the network through something.
     """
     # {hardware_id: [download, upload]} -- grouped per adapter so the pair stays coherent.
     per_nic = {}
+    # ...and {hardware_id: rank} for the preferred ones, built in the same pass.
+    ranked = {}
     for s in sensors:
         # Disk read/write rate shares SensorType.Throughput with network, so pin to NIC
         # hardware ("/nic/...") to avoid mixing them up.
@@ -504,9 +520,16 @@ def _network_throughput(sensors):
         # one, so a stray 0 can't displace a real reading.
         if pair[slot] is None or float(value) > pair[slot]:
             pair[slot] = float(value)
+        rank = _hardware_rank(s, preference)
+        if rank is not None and rank < ranked.get(hardware_id, rank + 1):
+            ranked[hardware_id] = rank
 
     if not per_nic:
         return None, None
+    if ranked:
+        best = min(ranked, key=lambda hid: ranked[hid])
+        rx, tx = per_nic[best]
+        return rx, tx
     rx, tx = max(per_nic.values(), key=lambda p: (p[0] or 0.0) + (p[1] or 0.0))
     return rx, tx
 
@@ -556,6 +579,45 @@ def _disk_throughput(sensors):
     read = sum(p[0] for p in per_disk.values() if p[0] is not None)
     write = sum(p[1] for p in per_disk.values() if p[1] is not None)
     return read, write
+
+
+def _disk_used_pct(sensors, preference=()):
+    """The one chartable disk-usage number: a "Used Space" Load percentage.
+
+    Which disk that is has always been decided by BLOCK ORDER -- the first such sensor the
+    agent happened to report -- and on a single-drive office PC that is the right answer by
+    construction. On a workstation with an OS NVMe and three data drives it is an arbitrary
+    one, and worse, a silently arbitrary one: the chart is captioned "Disk usage" with nothing
+    saying which disk, so a full D: and an empty C: are indistinguishable on the page.
+
+    `preference` (computer.disk_preference) is the operator's answer, matched against the
+    hardware name best-first -- "Samsung SSD 980", or just "980". It ships EMPTY, which keeps
+    the historical first-in-block behaviour exactly, and a named drive that is absent from a
+    block (unplugged, failed) falls back to it too rather than charting nothing (roadmap #3).
+
+    Identified by its sensor NAME rather than by hardware category, unlike
+    _find_sensor_value: storage identifiers vary ("/nvme/", "/hdd/", "/ssd/") while
+    "Used Space" is unique to storage devices. Network throughput does NOT work this way --
+    picking by name there is exactly the bug _network_throughput exists to avoid.
+    """
+    candidates = []
+    for s in sensors:
+        if s.get("type") != "Load":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        if "used space" not in str(s.get("name") or "").lower():
+            continue
+        # The value is kept as reported, not coerced: this is the number the charts and the
+        # diagnostics JSON have always carried for this metric.
+        candidates.append((_hardware_rank(s, preference), value))
+    if not candidates:
+        return None
+    ranked = [c for c in candidates if c[0] is not None]
+    if ranked:
+        return min(ranked, key=lambda c: c[0])[1]
+    return candidates[0][1]
 
 
 def _disk_volumes(sensors):
@@ -745,10 +807,35 @@ def _package_power(sensors, hardware_substr, preferred_name_substrs):
     return max(value for _, value in candidates)
 
 
-def extract_diagnostics(sensors):
+def sensor_preferences():
+    """The operator's four hub-side sensor preference lists, as one dict (roadmap #3).
+
+    Read here rather than inside extract_diagnostics's helpers so one ingest costs one
+    settings read per list instead of one per sensor, and so a test can hand in an explicit
+    dict without a settings table. settings.get_list is served from the copy-on-write cache,
+    so this is cheap on the 5-second ingest path.
+
+    The CPU temperature preference is deliberately NOT here: the agent picks that one and the
+    hub only re-derives it against the machine's own override (resolve_primary_temp).
+    """
+    return {
+        "gpu_temp": settings.get_list(DB_PATH, "computer.gpu_temp_preference"),
+        "gpu_load": settings.get_list(DB_PATH, "computer.gpu_load_preference"),
+        "disk": settings.get_list(DB_PATH, "computer.disk_preference"),
+        "network": settings.get_list(DB_PATH, "computer.network_preference"),
+    }
+
+
+def extract_diagnostics(sensors, prefs=None):
     """Pulls the specific fields the UI shows out of a raw flattened LHM sensor
     list (see the agent's SensorReader flattening). Every field is None when not
-    found -- e.g. no discrete GPU, or an older client that sent no sensors."""
+    found -- e.g. no discrete GPU, or an older client that sent no sensors.
+
+    `prefs` is sensor_preferences(), read once here when the caller doesn't supply it. It is
+    a parameter rather than a plain lookup so the pure-function tests in
+    tests/test_history_metrics.py can pin a preference without a settings table, and so a
+    caller looping over machines pays for one read rather than one per machine.
+    """
     if not sensors:
         return {
             # "we have never seen this machine's sensors" -- distinct from "it reported and
@@ -765,25 +852,34 @@ def extract_diagnostics(sensors):
             "fan_rpm": None, "fans": [],
             "cpu_power_w": None, "gpu_power_w": None,
         }
+    # Resolved after the empty-block return above, not before it: a machine the hub has
+    # never had sensors from is a common case on the fleet page, and it needs no preferences.
+    prefs = sensor_preferences() if prefs is None else prefs
     mem_used_gb, mem_total_gb = _memory_gb(sensors)
-    net_rx_bps, net_tx_bps = _network_throughput(sensors)
+    net_rx_bps, net_tx_bps = _network_throughput(sensors, prefs.get("network") or ())
     disk_read_bps, disk_write_bps = _disk_throughput(sensors)
     fans = _fans(sensors)
     return {
         "has_sensors": True,
         "cpu_load_pct": _find_sensor_value(sensors, "cpu", "Load", ["cpu total", "total cpu"]),
         "cpu_clock_mhz": _find_sensor_value(sensors, "cpu", "Clock", ["core average", "cpu core #1", "bus speed"]),
-        "gpu_temp": _find_sensor_value(sensors, "gpu", "Temperature", ["gpu core", "gpu hot spot", "gpu package"]),
-        "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", ["gpu core", "d3d 3d"]),
+        # The two GPU picks an operator can steer (computer.gpu_temp_preference /
+        # gpu_load_preference, roadmap #3). Their defaults are the lists that used to be
+        # literals here -- settings.DEFAULT_GPU_*_PREFERENCE -- so an untouched hub picks
+        # exactly what it always picked. gpu_clock_mhz is deliberately not settable: it is
+        # not charted or stored, so a knob for it would be a knob with nothing behind it.
+        "gpu_temp": _find_sensor_value(sensors, "gpu", "Temperature", prefs.get("gpu_temp")),
+        "gpu_load_pct": _find_sensor_value(sensors, "gpu", "Load", prefs.get("gpu_load")),
         "gpu_clock_mhz": _find_sensor_value(sensors, "gpu", "Clock", ["gpu core", "gpu shader"]),
         "memory_load_pct": _find_sensor_value(sensors, "ram", "Load", ["memory"]),
         # Absolute RAM (GB) so the Memory chart can say what 100% is and show GB-in-use on
         # hover. total is a machine constant; used is exact at report time.
         "mem_used_gb": mem_used_gb,
         "mem_total_gb": mem_total_gb,
-        # "Used Space" is unique to storage devices, so name alone identifies it.
-        "disk_load_pct": _find_sensor_strict(sensors, "Load", ["used space"]),
-        # Busiest NIC, not the first one listed -- see _network_throughput.
+        # "Used Space" is unique to storage devices, so name alone identifies it; WHICH
+        # drive is computer.disk_preference -- see _disk_used_pct.
+        "disk_load_pct": _disk_used_pct(sensors, prefs.get("disk") or ()),
+        # The preferred NIC, else the busiest -- see _network_throughput.
         "net_rx_bps": net_rx_bps,
         "net_tx_bps": net_tx_bps,
         # Summed across every disk, unlike network -- see _disk_throughput.
@@ -841,6 +937,29 @@ METRIC_COLUMN_TOGGLE = {
     # chips, and an operator who doesn't care about watts doesn't care about either.
     "cpu_power_w": "metrics.collect_power",
     "gpu_power_w": "metrics.collect_power",
+}
+
+# ...and which per-metric retention window (settings.py `metrics.retention_days_*`) governs
+# each column, one per collection toggle above so the two read as a pair on the Settings page
+# (roadmap #3). Spelled out rather than derived from the toggle key by string surgery: a
+# derivation that produced a key the registry doesn't have would fail at prune time, in a
+# background thread, on the one hub that had actually set the value.
+# tests/test_metric_retention.py asserts this map covers exactly READING_METRIC_COLUMNS, that
+# every key is in the registry, and that each pairs with the same group as its collection
+# toggle -- so the two cannot drift apart silently.
+METRIC_COLUMN_RETENTION = {
+    "cpu_load_pct": "metrics.retention_days_cpu_load",
+    "memory_load_pct": "metrics.retention_days_memory",
+    "gpu_temp": "metrics.retention_days_gpu",
+    "gpu_load_pct": "metrics.retention_days_gpu",
+    "disk_load_pct": "metrics.retention_days_disk",
+    "net_rx_bps": "metrics.retention_days_network",
+    "net_tx_bps": "metrics.retention_days_network",
+    "disk_read_bps": "metrics.retention_days_disk_io",
+    "disk_write_bps": "metrics.retention_days_disk_io",
+    "fan_rpm": "metrics.retention_days_fans",
+    "cpu_power_w": "metrics.retention_days_power",
+    "gpu_power_w": "metrics.retention_days_power",
 }
 
 # Friendly metric keys used by the per-machine history endpoint's `metrics` param, mapped
@@ -2302,6 +2421,13 @@ app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, acces
 app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, access,
                                              hub_url=HUB_URL))
 
+# BitLocker posture and recovery-key escrow (roadmap #19): the encryption state of every
+# volume behind `view`, and handing an operator one escrowed recovery password behind its own
+# `read_recovery_keys` capability. LOG_DIR is passed for the same reason bios needs it -- the
+# passwords live in the master-key-wrapped secret file, never in the database this hub backs
+# up to a bucket.
+app.register_blueprint(create_bitlocker_blueprint(DB_PATH, LOG_DIR, login_required, access))
+
 # Wake-on-LAN (roadmap #10): a machine's NIC inventory and wakeability diagnosis behind
 # `view`, and waking/preparing behind `issue_commands` -- no new capability, because waking
 # a PC is strictly less dangerous than the `shutdown` that gate already covers.
@@ -2310,6 +2436,14 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 # "online" mean one thing across the hub, and its `last_seen` is what lets a wake be
 # confirmed against the moment its packet went out rather than against mere online-ness.
 app.register_blueprint(create_wake_blueprint(
+    DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
+
+# Network discovery and shadow IT (roadmap #18): what is on the subnet a managed machine is
+# sitting on, swept BY that machine because the hub is almost never on the network it is
+# being asked about. Reading behind `view` and sweeping behind `issue_commands`, with no new
+# capability -- an operator who can open a SYSTEM shell on that PC can already run `arp -a`
+# on it. Shares wake's roster for the same reason wake takes it: one definition of online.
+app.register_blueprint(create_discovery_blueprint(
     DB_PATH, login_required, access, machine_roster=lambda: backup_machine_roster()))
 
 # What each machine can actually do (roadmap #23). Read-only and gated on `view` + machine
@@ -2446,6 +2580,13 @@ app.register_blueprint(create_auth_blueprint(
 # because the signed client manifest ships beside the code, like the agent's does.
 app.register_blueprint(create_apitokens_blueprint(
     DB_PATH, login_required, access, code_dir=HUB_CODE_DIR))
+
+# Push registration for paired devices (roadmap #11 phase 2). Separate from the pairing
+# blueprint above even though both are about devices, because the gates are opposites: those
+# routes are for a signed-in BROWSER pairing a device, these are for the DEVICE itself and
+# refuse a browser session outright. One blueprint would have had to carry both rules and
+# explain which applied where.
+app.register_blueprint(create_push_blueprint(DB_PATH, login_required, access))
 
 # Cross-hub machine sharing (roadmap #15). The one blueprint in this hub whose caller can be
 # ANOTHER HUB: `/api/peer/...` is gated on a peer token and nothing else, while
@@ -3219,8 +3360,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     """Absorb `dropped` into `survivor` -- the same physical machine seen under an old
     hostname. Re-points the dropped host's readings onto the survivor so temperature
     history stays continuous, backfills any identity field the survivor is missing from
-    the dropped row, then removes the dropped identity row and its stale fleet
-    enrollment. Irreversible."""
+    the dropped row, then removes the dropped identity row and its stale fleet enrollment.
+    Module-owned history, including network sweeps, follows the survivor where meaningful;
+    transient process and file-browser state is dropped. Irreversible."""
     survivor = str(survivor or "").strip()
     dropped = str(dropped or "").strip()
     if not survivor or not dropped or survivor == dropped:
@@ -3291,6 +3433,14 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # (same hardware, so the same attributes), which is why bios.rename_machine keeps the
     # survivor's row rather than overwriting it with the dropped name's older reading.
     bios.rename_machine(DB_PATH, dropped, survivor)
+    # Encryption posture and the escrow index follow the hostname (roadmap #19), and the
+    # escrowed passwords with them -- the secret blob is keyed by machine name, so moving the
+    # index without it would leave the console listing keys the hub can no longer find.
+    # The secret-store move is performed and verified before the database rename so that a
+    # failure (unavailable master key, unreadable source blob) preserves the dropped-to-
+    # survivor mapping rather than leaving the index pointing at keys the hub can no longer find.
+    if bitlocker_web.move_escrow(LOG_DIR, dropped, survivor):
+        bitlocker.rename_machine(DB_PATH, dropped, survivor)
     # Firmware update targets follow too, and the survivor's own row wins a collision --
     # both rows describe one physical machine, and it only needs flashing once.
     firmware.rename_machine(DB_PATH, dropped, survivor)
@@ -3299,6 +3449,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Sweep history follows the same name (roadmap #18). The HOSTS inside those scans are
+    # deliberately untouched: they record what was on the wire, and a merge does not change
+    # that. They reclassify themselves on the next read, against the merged machine's
+    # adapters, which is the point of classifying at read time rather than at ingest.
+    discovery.rename_machine(DB_PATH, dropped, survivor)
     # Capabilities follow too, and the survivor's own row wins a collision (roadmap #23) --
     # both rows describe one physical machine, and the survivor is the one still reporting.
     # Not merged: a union of two command lists would claim an ability neither agent reported.
@@ -3558,6 +3713,76 @@ def prune_old_readings_once():
     return total
 
 
+def metric_column_cutoffs(now=None):
+    """{cutoff_epoch: [columns whose history ends there]} for every metric given a window
+    SHORTER than data.retention_days (roadmap #3). Empty on an untouched hub.
+
+    Pure apart from reading settings, and separate from the prune below so a test can assert
+    the arithmetic -- which is where the two traps are.
+
+    **A window at or above the global one is dropped, not honoured.** The row carrying the
+    metric is deleted at data.retention_days, so there is no such thing as keeping one column
+    longer; a hub that "honoured" 90 days against a global 30 would report pruning nothing
+    and look broken. 0 means "follow the global window" and lands in the same bucket, which
+    is why 0 is the shipped default for all eight.
+
+    Columns are grouped by cutoff so eight settings cost at most eight UPDATEs and usually
+    one: the common case is an operator dropping several noisy metrics to the same number.
+    """
+    now = int(time.time() if now is None else now)
+    global_days = settings.get_int(DB_PATH, "data.retention_days")
+    buckets = {}
+    for column in READING_METRIC_COLUMNS:
+        days = settings.get_int(DB_PATH, METRIC_COLUMN_RETENTION[column])
+        if not days or days >= global_days:
+            continue
+        buckets.setdefault(now - days * 86400, []).append(column)
+    return buckets
+
+
+def prune_metric_columns_once():
+    """Blank the metric columns whose own retention window has passed. Returns the number of
+    rows touched.
+
+    NULL rather than DELETE, because the row is not the metric's: one `readings` row carries
+    temperature (the core metric, which has no toggle and no window of its own) alongside
+    twelve optional columns. "Keep network history for 7 days but temperature for 30" can
+    therefore only mean "blank net_rx_bps/net_tx_bps at 7 days", and a NULL there is already
+    what a metric whose collection toggle is off stores -- so the charts, the bucketing and
+    the history endpoint need no change to read it. That equivalence is the point: a metric
+    turned off and a metric aged out look identical to everything downstream, because in both
+    cases the honest answer is "not recorded".
+
+    Batched like prune_old_readings_once and for the same reason -- the first pass after an
+    operator shortens a window can touch millions of rows, and one long write lock would
+    stall the reading writer.
+
+    Runs AFTER the row prune, which is not merely tidy: rows past the global window are gone
+    by then, so this only ever walks rows that are still being kept.
+    """
+    total = 0
+    for cutoff, columns in metric_column_cutoffs().items():
+        # Built from READING_METRIC_COLUMNS constants only, exactly like _READINGS_INSERT_SQL
+        # -- no user input reaches the column list.
+        assignments = ", ".join(f"{c} = NULL" for c in columns)
+        remaining = " OR ".join(f"{c} IS NOT NULL" for c in columns)
+        while True:
+            with get_db_conn() as conn:
+                cur = conn.execute(
+                    f"UPDATE readings SET {assignments} WHERE id IN "
+                    f"(SELECT id FROM readings WHERE ts_epoch < ? AND ({remaining}) LIMIT ?)",
+                    (cutoff, RETENTION_PRUNE_BATCH),
+                )
+                updated = cur.rowcount or 0
+            total += updated
+            if updated < RETENTION_PRUNE_BATCH:
+                break
+            time.sleep(0.2)  # let other writers/readers through between batches
+    if total:
+        print(f"[retention] Blanked aged-out metric columns in {total} reading(s).")
+    return total
+
+
 def prune_command_output_once():
     """Drop live-terminal scrollback for commands that finished long ago. The durable
     record (command_results.output) is untouched -- these rows only exist so an operator
@@ -3588,6 +3813,14 @@ def retention_pruner():
                 prune_old_readings_once()
             except Exception as e:
                 print(f"[retention] Prune failed: {e}")
+            # Per-metric windows, after the row prune so it only walks rows still being kept
+            # (roadmap #3). Its own try, like every other step here: a metric window failing
+            # must not stop the row prune's neighbours, and on an untouched hub -- every
+            # window at 0 -- this does no queries at all.
+            try:
+                prune_metric_columns_once()
+            except Exception as e:
+                print(f"[retention] Metric-column prune failed: {e}")
             # Separate try: a failure pruning chunks must not stop readings being pruned,
             # and vice versa -- the readings table is the one that grows unboundedly.
             try:
@@ -4410,10 +4643,12 @@ packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
 bios.init_bios_db(DB_PATH)
+bitlocker.init_bitlocker_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
 patches.init_patches_db(DB_PATH)
 events.init_events_db(DB_PATH)
 wake.init_wake_db(DB_PATH)
+discovery.init_discovery_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
@@ -4435,6 +4670,12 @@ ai.init_ai_db(DB_PATH)
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
 # never block on a mail server that has stopped answering.
 notify.configure(DB_PATH)
+# Points push at the database and starts its alert-delta scan. After notify.configure
+# because it enqueues into notify's outbox, and separate from the init_* calls for the same
+# reason notify is: it owns a thread. ALLOWED_EMAILS is handed in because the scan asks what
+# each device's owner may see WITHOUT a request to read it off, and a superuser list it did
+# not have would make a break-glass operator's phone the one that never rings.
+push.configure(DB_PATH, superusers=ALLOWED_EMAILS)
 # Must run AFTER init_db(): it ALTERs machine_info, which init_db() creates.
 directory.init_directory_db(DB_PATH)
 # Collapse any duplicate-serial rows left by past agent-upgrade renames before serving.
@@ -5302,10 +5543,14 @@ def put_machine_channel(machine):
 @login_required
 @access.require_machine(permissions.MANAGE_SETTINGS)
 def delete_machine(machine):
-    """Hard-delete a decommissioned machine: its identity row, all temperature history,
-    and its fleet agent enrollment. Irreversible. If the machine's agent is still
-    running it will re-enroll and reappear on its next report -- this is meant for
-    machines that are actually gone."""
+    """Hard-delete a decommissioned machine and its module-owned active state.
+
+    This removes its identity, temperature readings, fleet enrollment, discovery history,
+    and other live inventory and configuration. Historical records that remain useful after
+    decommissioning, such as patch outcomes and backup manifests, survive. Irreversible. If
+    the agent is still running it will re-enroll and reappear on its next report -- this is
+    meant for machines that are actually gone.
+    """
     machine_name = str(machine).strip()
     if not machine_name:
         return jsonify({"error": "Machine name required"}), 400
@@ -5333,6 +5578,9 @@ def delete_machine(machine):
     # attribute list describing hardware it isn't -- which is exactly what an operator would
     # then be offered a "change this setting" button against.
     bios.forget_machine(DB_PATH, machine_name)
+    # Same for its encryption posture and escrow index (roadmap #19). The escrowed passwords
+    # themselves are deleted below with the BIOS password, for the same reason.
+    bitlocker.forget_machine(DB_PATH, machine_name)
     # Same for any queued or in-flight firmware flash: its targets go, so a fleet-wide
     # update is not left permanently at 39/40 waiting on a machine record that no longer
     # exists. The job's own history stays, because it happened.
@@ -5341,6 +5589,11 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And its sweep history (roadmap #18). Its rows inside OTHER machines' scans stay, and
+    # quietly change verdict from 'managed' to 'unmanaged' on the next read -- which is the
+    # truth about an address the hub no longer manages, and the one thing a shadow-IT list
+    # has to get right.
+    discovery.forget_machine(DB_PATH, machine_name)
     # And what it reported it could do (roadmap #23). Unlike most of the rows above this one
     # is an ENFORCEMENT input, so leaving it behind is worse than leaving stale display data:
     # a different box reusing this hostname would silently have commands REFUSED that it can
@@ -5390,6 +5643,11 @@ def delete_machine(machine):
     # bios.forget_machine cannot reach it -- and a stored password surviving its machine would
     # be handed to whatever next takes that hostname.
     backups.delete_secret(LOG_DIR, bios.secret_id_for(machine_name))
+    # And its escrowed BitLocker recovery passwords (roadmap #19). This is the ONE place in
+    # the product that destroys a recovery key, and it is deliberately the one action that
+    # already means "this machine is gone": everything else in that module refuses to delete a
+    # key, because a key deleted early is discovered missing at the recovery screen.
+    backups.delete_secret(LOG_DIR, bitlocker.secret_id_for(machine_name))
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
     actor = permissions_web.current_actor()

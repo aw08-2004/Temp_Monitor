@@ -15,7 +15,9 @@ form-encoded fallback.
 Every change is written to the existing fleet audit_log. Settings are not cosmetic:
 data.retention_days permanently deletes history, and it does so asynchronously in a
 background thread, so without an audit row "where did last month's data go?" has no
-answer.
+answer. The per-metric windows (metrics.retention_days_*, roadmap #3) are the same kind
+of knob and produce a stranger question -- one chart goes flat while its neighbours keep
+their history -- so they are audited by the same path and for the same reason.
 """
 import fleet
 import permissions
@@ -32,9 +34,10 @@ def create_settings_blueprint(db_path, login_required, access):
     bp = Blueprint("settings", __name__)
     # Settings are fleet-wide, so there is no machine scope to apply here -- the
     # capability IS the whole gate. That makes manage_settings a genuinely powerful
-    # grant: data.retention_days deletes history for every machine, including ones
-    # the holder cannot otherwise see, and hub.auto_update turns on execution of code
-    # pulled from main. Do not hand it out as "can tweak the dashboard".
+    # grant: data.retention_days and the metrics.retention_days_* windows delete history
+    # for every machine, including ones the holder cannot otherwise see, and
+    # hub.auto_update turns on execution of code pulled from main. Do not hand it out as
+    # "can tweak the dashboard".
     manage = access.require(permissions.MANAGE_SETTINGS)
 
     def _current_email():

@@ -189,11 +189,22 @@ public static class AgentConfig
 
     public const int OfflineBufferMax = 1000;
 
-    /// <summary>Bound concurrent command execution. Lower than the Linux agent's 4 because
-    /// this agent's whole command set is short, local and non-blocking -- nothing here can
-    /// occupy a slot for ten minutes the way run_script can, so a deeper pool would only
-    /// widen the window in which two commands race over the same stored name.</summary>
-    public const int MaxConcurrentCommands = 2;
+    /// <summary>Bound concurrent command execution.
+    ///
+    /// **Raised from 2 to 4 when show_message arrived, and that was not tuning.** The old
+    /// comment here said this agent's whole command set was "short, local and non-blocking --
+    /// nothing here can occupy a slot for ten minutes the way run_script can", and used that
+    /// to justify a pool shallower than the Linux agent's. A message to the person holding the
+    /// device holds its slot until they press a button, which is minutes at best and an hour
+    /// at the bound ShowMessageExecutor puts on it. Two of those outstanding would have left
+    /// a device accepting no commands at all, with nothing failing anywhere -- the console
+    /// would show a phone that is online and simply never answers.
+    ///
+    /// Four is still the Linux agent's number rather than something larger, because the
+    /// original argument holds for everything else here: a deeper pool only widens the window
+    /// in which two commands race over the same stored name. What it buys is that a fleet-wide
+    /// notice cannot wedge locate, lock and rename behind it.</summary>
+    public const int MaxConcurrentCommands = 4;
 
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;

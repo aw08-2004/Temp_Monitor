@@ -85,6 +85,18 @@ MANAGE_FIRMWARE = "manage_firmware"
 # like a machine's disks or its BIOS version. Knowing a PC is missing a security update is
 # not a privilege; deciding what happens about it is.
 MANAGE_PATCHES = "manage_patches"
+# Reading an escrowed BitLocker recovery password (roadmap #19). Its own toggle, and the
+# narrowest capability in this product on purpose: it grants the ability to take one specific
+# secret out of the hub, and nothing else.
+#
+# **Not a reuse of MANAGE_BACKUPS**, even though the key sits in that module's secret store.
+# Configuring where backups go and being handed the recovery password of any PC in scope are
+# different powers, and the store is an implementation detail they happen to share -- folding
+# them together would have granted this silently, on the day it shipped, to everyone who
+# already had that. READING the encryption posture is deliberately NOT gated here: whether a
+# laptop is encrypted is inventory, in the same sense its model and its disks are, and it is
+# VIEW. Holding the key is the privilege; knowing the lock exists is not.
+READ_RECOVERY_KEYS = "read_recovery_keys"
 # Asking a device where it is (roadmap #23). **The one command-issuing feature in this product
 # that does NOT reuse ISSUE_COMMANDS**, and the departure is deliberate rather than an
 # oversight: wake, the Processes card and the file explorer all reuse it on the argument that
@@ -159,6 +171,7 @@ CAPABILITIES = (
     MANAGE_BACKUPS,
     MANAGE_FIRMWARE,
     MANAGE_PATCHES,
+    READ_RECOVERY_KEYS,
     LOCATE_DEVICE,
     MANAGE_DEVICE_POLICY,
     WIPE_DEVICE,

@@ -191,6 +191,25 @@ UNSAVEABLE_WAKE_COMMANDS = frozenset({
     "wake_machine",
 })
 
+# Network discovery (roadmap #18). One command, run by a machine that is already on the
+# subnet in question -- the same peer-relay reasoning as `wake_machine`, because the hub is
+# almost never on the network it is being asked about.
+#
+# **It is NOT favoritable, and for a sharper reason than `wake_machine`'s.** Its params
+# carry a `scan_id`, which names one row that is already finished by the time anybody could
+# replay it, so a saved copy would sweep and have nowhere to put the answer. But the subnet
+# is the real objection: a saved "sweep 10.4.7.0/24" replayed against a machine at another
+# site asks it to ARP a range it is not on, which returns nothing and reads as an empty
+# network rather than as a question that could not be asked. discovery.request_scan refuses
+# an off-segment subnet for exactly that reason, and a favorite would be a way around it.
+DISCOVERY_COMMANDS = frozenset({
+    "network_sweep",
+})
+
+UNSAVEABLE_DISCOVERY_COMMANDS = frozenset({
+    "network_sweep",
+})
+
 # The machine Processes card -- the console's task manager (see processes.py).
 #
 # Both carry a PID, which is what makes them the least reusable params in this whole
@@ -312,7 +331,8 @@ ALL_COMMANDS = frozenset({
 }) | (SESSION_CONTROL_COMMANDS | SCHEDULED_COMMANDS | REMOTE_CONTROL_COMMANDS
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
-      | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS)
+      | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS
+      | DISCOVERY_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS
@@ -400,6 +420,11 @@ COMMAND_PARAMS = {
     "lock_device": (),
     "gpupdate": (),
     "prepare_wake": (),
+    # Network/NetworkSweepExecutor.cs: the scan row to report against, and the subnet to
+    # sweep. Both are resolved hub-side -- the subnet is one the machine has already told
+    # the hub it is on, never a range an operator typed (see discovery.request_scan).
+    "network_sweep": (_p("scan_id", "str", required=True, max_chars=64),
+                      _p("subnet", "str", required=True, max_chars=64)),
     "refresh_bios_inventory": (),
     "uninstall_virtual_display": (),
     "set_virtual_display_mode": (),
@@ -625,6 +650,16 @@ ACTION_LEVELS = {
     "bios_settings_change": LEVEL_SECURITY,
     "bios_password_set": LEVEL_SECURITY,
     "bios_password_clear": LEVEL_SECURITY,
+    # BitLocker recovery keys (roadmap #19). The read is the row that matters: escrow is only
+    # worth having if taking a key back out of this hub leaves a record naming who did it and
+    # which protector they asked for. The escrow write is recorded at the same level because
+    # it is the moment a secret entered the hub, and the two together are the custody chain.
+    "bitlocker_key_read": LEVEL_SECURITY,
+    "bitlocker_key_escrow": LEVEL_SECURITY,
+    # An existing escrow blob this hub cannot decrypt -- the master key changed underneath it.
+    # Security level rather than notice: it means every recovery key stored before that change
+    # is currently unreadable, which is the same class of event as losing a credential.
+    "bitlocker_escrow_unreadable": LEVEL_SECURITY,
     "backup_key_create": LEVEL_SECURITY,
     "backup_key_reveal": LEVEL_SECURITY,
     "backup_key_escrowed": LEVEL_SECURITY,
@@ -637,6 +672,10 @@ ACTION_LEVELS = {
     "settings.update": LEVEL_SECURITY,
     "settings.reset": LEVEL_SECURITY,
     # -- notice: an operator changed fleet state or configuration.
+    # A machine offering more protectors than the hub will hold. Notice rather than security:
+    # nothing was revealed and nothing was lost, but the NEW key was refused, and a refusal
+    # nobody ever reads is how a machine ends up with no escrowed key while looking fine.
+    "bitlocker_escrow_full": LEVEL_NOTICE,
     # Changing modes only reconfigures an already-trusted driver; it grants nothing new.
     "virtual_display_mode": LEVEL_NOTICE,
     # The BORROWING hub noticing that a peer's catalogue changed -- a machine appeared or
@@ -1872,8 +1911,12 @@ def _favorite_row(row):
 
 
 def _validate_favorite(name, command_type, params):
-    """Shared by create/update. Mirrors create_command's type+params rules, so a
-    favorite can never store something the command endpoint would reject."""
+    """Validate a favorite's command contract and reject commands that are unsafe to replay.
+
+    Shared by create and update. The type and parameter checks mirror `create_command`; the
+    replay checks are intentionally stricter because one-shot and machine-specific commands
+    are valid to issue now but not to save for another target or time.
+    """
     name = str(name or "").strip()
     if not name:
         raise ValueError("name is required")
@@ -1912,6 +1955,14 @@ def _validate_favorite(name, command_type, params):
         raise ValueError(f"{command_type!r} commands carry another machine's address and "
                          f"cannot be saved as a favorite; wake machines from the console "
                          f"instead")
+    if command_type in UNSAVEABLE_DISCOVERY_COMMANDS:
+        # Carries a scan id that is finished before anybody could replay it, and a subnet
+        # that belongs to the machine it was issued to. Replayed elsewhere it would ARP a
+        # range that machine is not on -- which answers with nothing and reads as an empty
+        # network rather than as a question that could not be asked.
+        raise ValueError(f"{command_type!r} commands name one subnet the target machine is "
+                         f"on and cannot be saved as a favorite; sweep from the machine's "
+                         f"Network card instead")
     if command_type in PROCESS_COMMANDS:
         # Carries a PID, and Windows recycles those within minutes. A favorite replayed
         # tomorrow would not end the process the operator saved it for -- it would end

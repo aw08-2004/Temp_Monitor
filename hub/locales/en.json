@@ -662,6 +662,10 @@
       "wipe_device": {
         "label": "Lock and wipe a device",
         "description": "Lock a managed device's screen, and erase it. Its own capability rather than part of 'Issue commands': the argument that puts every other command under that one -- less dangerous than the SYSTEM shell it already grants -- is true of a reboot and false of a factory reset. Wiping additionally requires the machine's name to be typed out, is recorded in the audit trail before the command is sent, and cannot be saved as a favorite or issued by a rule. Seeing that a device was locked or erased only needs 'View' plus the machine being in scope."
+      },
+      "read_recovery_keys": {
+        "label": "Read recovery keys",
+        "description": "Be shown an escrowed BitLocker recovery password for these machines. Every read is written to the audit log. Seeing whether a machine is encrypted needs only View."
       }
     }
   },
@@ -689,7 +693,9 @@
       "map": "Map",
       "policy": "Policy",
       "ai": "AI Assistance",
-      "events": "Event Logs"
+      "events": "Event Logs",
+      "security": "Endpoint Security",
+      "discovery": "Network discovery"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -722,6 +728,22 @@
       "computer.primary_sensor_preference": {
         "label": "CPU temperature sensor preference",
         "help": "Ordered, best first. The hub re-derives each machine's primary temperature from its reported sensor block, using the first name that matches. If none match, the temperature the agent picked is kept. Applies to new readings only -- history keeps the value recorded at the time."
+      },
+      "computer.gpu_temp_preference": {
+        "label": "GPU temperature sensor preference",
+        "help": "Ordered, best first. Which of a GPU's temperature sensors is charted, matched as part of the sensor name. Applies to new readings only -- history keeps the value recorded at the time."
+      },
+      "computer.gpu_load_preference": {
+        "label": "GPU load sensor preference",
+        "help": "Ordered, best first. Which of a GPU's load sensors is charted, matched as part of the sensor name. Applies to new readings only."
+      },
+      "computer.disk_preference": {
+        "label": "Disk usage preference",
+        "help": "Ordered, best first. Which drive's used space is charted on a machine with several, matched as part of the drive name (\"Samsung SSD 980\"). Leave empty to chart whichever drive the machine reports first. The per-disk Storage cards always show every drive."
+      },
+      "computer.network_preference": {
+        "label": "Network adapter preference",
+        "help": "Ordered, best first. Which adapter's throughput is charted, matched as part of the adapter name (\"Intel(R) Ethernet\"). Leave empty to chart the busiest one, which is the right answer until a virtual switch or a dock mirrors the real adapter. A named adapter missing from a report falls back to the busiest."
       },
       "hub.low_load_threshold": {
         "label": "Low-load threshold",
@@ -790,6 +812,46 @@
       "metrics.collect_power": {
         "label": "Record CPU & GPU power",
         "help": "Chart package power draw in watts. No effect on machines whose chips report no power sensor."
+      },
+      "metrics.report_interval_seconds": {
+        "label": "Report readings every",
+        "help": "How often each machine sends a reading. Slower means a coarser chart, not a machine that reads offline -- liveness is a separate heartbeat. No effect while an operator has a machine's page open. Agents that predate this setting keep reporting every 5 seconds."
+      },
+      "metrics.sensor_interval_seconds": {
+        "label": "Send the full sensor block every",
+        "help": "How often a reading carries every sensor rather than temperature alone. This is what the load, memory, disk, network, fan and power charts are built from. Never faster than the reporting interval above. Agents that predate this setting keep sending it every 10 seconds."
+      },
+      "metrics.retention_days_cpu_load": {
+        "label": "Keep CPU load history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_memory": {
+        "label": "Keep memory history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_gpu": {
+        "label": "Keep GPU history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_disk": {
+        "label": "Keep disk usage history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_disk_io": {
+        "label": "Keep disk read/write history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_network": {
+        "label": "Keep network history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_fans": {
+        "label": "Keep fan speed history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_power": {
+        "label": "Keep CPU & GPU power history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
       },
       "fleet.dashboard_online_window_seconds": {
         "label": "Drop a machine off the Dashboard after",
@@ -1190,6 +1252,16 @@
         "summary_window_seconds": {
           "label": "Count events over",
           "help": "How far back the counters above the event list look. Separate from the retention window on purpose -- shortening how long records are kept must not silently change what the page claims happened today."
+        }
+      },
+      "security.escrow_bitlocker_keys": {
+        "label": "Escrow BitLocker recovery keys",
+        "help": "Collect each machine's BitLocker recovery passwords and keep them encrypted beside this hub, so a PC that locks itself out can be recovered. Needs a backup master key. Switching this off stops collecting and never deletes what is already escrowed."
+      },
+      "discovery": {
+        "scan_ttl_seconds": {
+          "label": "Give up on a sweep after",
+          "help": "A sweep is run by a PC that is awake and answering, so a report that has not arrived by this point is not coming."
         }
       }
     },
@@ -2522,6 +2594,44 @@
     "tools": {
       "hidden": "Some tools are hidden: this machine has reported that it cannot answer them.",
       "hidden_android": "Some tools are hidden: this is an Android device, and there is no shell, no BIOS and no filesystem for them to work on."
+    },
+    "discovery": {
+      "title": "Subnet discovery",
+      "help": "Ask this PC to look at the network it is on and list everything that answers. Only the subnets this PC is itself on can be swept.",
+      "subnet_label": "Subnet to sweep",
+      "sweep": "Sweep this subnet",
+      "sweep_title": "Ask this PC to ARP every address on the chosen subnet.",
+      "sweep_offline": "This PC has to be awake to look at its own network.",
+      "load_failed": "Could not load this machine's discovery results.",
+      "sweeping_on": "Asking this PC to sweep {subnet}.",
+      "swept": "Swept {subnet} on {when}, {probed} addresses probed.",
+      "truncated": "More hosts answered than the hub will store; only the first of them are shown.",
+      "nothing_found": "Nothing else answered on this subnet.",
+      "no_subnets_help": "This PC has not reported an address on any subnet yet, so there is nothing it can sweep.",
+      "state": {
+        "scanning": "Sweeping",
+        "done": "Swept",
+        "failed": "Could not sweep"
+      },
+      "status": {
+        "sweeping": "Sweeping…",
+        "never": "Never swept",
+        "clean": "Nothing unmanaged",
+        "unmanaged": "{count} unmanaged",
+        "failed": "Last sweep failed",
+        "no_subnets": "No subnet reported"
+      },
+      "class": {
+        "relay": "This PC",
+        "managed": "Managed",
+        "unmanaged": "Not managed"
+      },
+      "col": {
+        "address": "Address",
+        "mac": "MAC",
+        "name": "Name",
+        "known": "Known to the hub"
+      }
     }
   },
   "remote": {
@@ -3865,5 +3975,51 @@
     "count": "{count} action(s)",
     "failed": "That was refused.",
     "unreachable": "The hub could not be reached."
+  },
+  "bitlocker": {
+    "title": "Drive encryption",
+    "summary": "{encrypted} of {total} volumes protected",
+    "unsupported": "This machine has no BitLocker provider, so there is nothing to encrypt or escrow here. That is the normal, permanent answer for Windows Home and for non-Windows agents.",
+    "read_failed": "This machine's encryption state could not be read: {error}",
+    "load_error": "Encryption data could not be loaded.",
+    "retry": "Retry",
+    "column": {
+      "volume": "Volume",
+      "protection": "Protection",
+      "method": "Method",
+      "key": "Recovery key"
+    },
+    "protection": {
+      "on": "Protected",
+      "off": "Not protected",
+      "unknown": "Unknown"
+    },
+    "conversion": {
+      "fully_encrypted": "Fully encrypted",
+      "fully_decrypted": "Not encrypted",
+      "encrypting": "Encrypting",
+      "decrypting": "Decrypting",
+      "encryption_paused": "Encryption paused",
+      "decryption_paused": "Decryption paused"
+    },
+    "escrow": {
+      "no_recovery_protector": "No recovery password exists on this volume, so there is nothing anyone could type at a recovery screen.",
+      "pending": "Not escrowed yet. The machine hands it over on its next check-in.",
+      "disabled": "Not escrowed. Key escrow is switched off for this hub.",
+      "held": "Escrowed {when}",
+      "read_before": {
+        "one": "Read once, most recently {when}.",
+        "other": "Read {count} times, most recently {when}."
+      }
+    },
+    "orphaned": {
+      "one": "This hub also holds 1 recovery key for a volume this machine no longer reports.",
+      "other": "This hub also holds {count} recovery keys for volumes this machine no longer reports."
+    },
+    "reveal": "Show recovery key",
+    "reveal_failed": "That recovery key could not be read.",
+    "unreachable": "The hub could not be reached.",
+    "key_for": "Recovery key for {volume}",
+    "key_warning": "Reading this key has been recorded in the audit log. It disappears when you leave the page."
   }
 }
