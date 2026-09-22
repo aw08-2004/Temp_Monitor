@@ -509,6 +509,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
 
         try
         {
+            if (!Uri.TryCreate(AgentConfig.BitLockerKeysUrl, UriKind.Absolute, out var escrowUri)
+                || (escrowUri.Scheme != Uri.UriSchemeHttps && !escrowUri.IsLoopback))
+            {
+                _log.LogWarning("BitLocker escrow skipped: URL must be HTTPS or loopback HTTP ({Url})", AgentConfig.BitLockerKeysUrl);
+                return false;
+            }
+
             using var req = Authorized(HttpMethod.Post, AgentConfig.BitLockerKeysUrl);
             req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
                                             "application/json");
