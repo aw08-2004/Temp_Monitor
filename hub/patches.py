@@ -83,12 +83,21 @@ import fleet
 # create_command accepts it and the agent's dispatcher can route it.
 COMMAND_TYPE = "install_patches"
 
-# Where an available update came from. Two sources, and the list is short for the same
-# reason packages' step kinds are: each one is code the C# agent must implement and keep
-# working across Windows versions.
+# Where an available update came from. The list is short for the same reason packages' step
+# kinds are: each one is code an agent must implement and keep working across OS releases.
+#
+# **The last two are the Linux half of this feature** (roadmap #22), and they arrive from a
+# different agent on a different release train. They are listed here rather than in a Linux-
+# specific table because everything downstream of this tuple -- approvals, maintenance
+# windows, the fleet rollup, `parse_report` -- asks "which update" and never "which operating
+# system", and splitting the vocabulary would mean teaching each of those the difference for
+# no gain. What IS different is handled where it belongs: a Linux machine reports a package
+# NAME as its uid where Windows reports a KB, and `normalize_uid` already accepts both.
 SOURCE_WINDOWS_UPDATE = "windows_update"   # the WUApiLib COM search interface
 SOURCE_WINGET = "winget"                   # `winget upgrade`
-SOURCE_KINDS = (SOURCE_WINDOWS_UPDATE, SOURCE_WINGET)
+SOURCE_APT = "apt"                         # `apt-get -s upgrade` on Debian/Ubuntu
+SOURCE_DNF = "dnf"                         # `dnf check-update` on Fedora/RHEL
+SOURCE_KINDS = (SOURCE_WINDOWS_UPDATE, SOURCE_WINGET, SOURCE_APT, SOURCE_DNF)
 
 # How Windows classifies an update, normalised. `security` and `critical` are the two that
 # auto-approval can be switched on for, because they are the two whose absence is a finding

@@ -72,6 +72,13 @@ public static class AgentConfig
     public static string CommandResultUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
 
+    /// <summary>Where a running command's output is streamed to, chunk by chunk, so the
+    /// console shows a script's progress instead of a spinner (roadmap #22). The hub keys a
+    /// chunk on (command_id, seq) with INSERT OR IGNORE -- see OutputStreamer on why a retry
+    /// must reuse its seq.</summary>
+    public static string CommandOutputUrl(string commandId) =>
+        HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
+
     /// <summary>
     /// Does <paramref name="url"/> actually address OUR hub?
     ///
@@ -139,6 +146,25 @@ public static class AgentConfig
 
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;
+
+    // --- Live output streaming ---------------------------------------------
+    // The Windows agent's three constants, unchanged and for the same reasons. They are sized
+    // against what an operator watching a terminal perceives and against what the hub will
+    // store for one chunk, neither of which is a property of the operating system.
+
+    /// <summary>How long output is allowed to pool before it is posted. Long enough that a
+    /// chatty script costs a handful of requests rather than one per line, short enough that
+    /// a human reading the console does not think it has stopped.</summary>
+    public const int StreamFlushMillis = 1500;
+
+    /// <summary>The most text one chunk may carry, matching the hub's own per-chunk ceiling
+    /// so a buffer is split here rather than rejected there.</summary>
+    public const int StreamMaxChunkChars = 16_000;
+
+    /// <summary>How many times one chunk is retried before it is dropped and the stream moves
+    /// on. Losing a chunk costs live scrollback, never the record -- the full text still
+    /// reaches the hub with the result.</summary>
+    public const int StreamPostRetries = 3;
 
     // --- State paths -------------------------------------------------------
     // /var/lib/fleethub/agent, not /etc and not /opt: this is variable state the agent

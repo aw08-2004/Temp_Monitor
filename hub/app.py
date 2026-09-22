@@ -1066,13 +1066,37 @@ OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "android", 
 #: the servers. Without this entry every phone counted as `unknown` -- the agent reports
 #: "Android 16" honestly rather than smuggling "Linux" into the caption, which would have
 #: shown an operator a string the device never said (roadmap #23).
+#:
+#: The linux needles carry a second job: a Linux agent reports its distribution's own
+#: PRETTY_NAME verbatim rather than smuggling the word "Linux" into a string the machine never
+#: said (roadmap #22), so the bucket has to recognise the distributions that do not name the
+#: kernel. "Pop!_OS 22.04 LTS", "elementary OS 7", "Zorin OS 16", "NixOS", "EndeavourOS",
+#: "Deepin", "Solus" and "KDE neon" all bucketed as `unknown` until this list grew -- which put
+#: real, managed machines in the Dashboard's leftovers pile beside the ones nothing is known
+#: about, and that pile is the one an operator is supposed to be able to act on.
+#:
+#: **A list of names is the wrong SHAPE of fix and is kept anyway**, so say why. The right one
+#: is to bucket on what the machine reported about ITSELF -- os-release's ID_LIKE, or the
+#: platform the agent now sends on its heartbeat (capabilities.platform_of). Both were
+#: rejected here: ID_LIKE is a field no agent sends today and would need a wire change, a
+#: column and a migration to reach this function, and platform_of is a per-machine DB read in
+#: a function whose whole contract is that it costs no round-trip (see the comment on
+#: machine_status above). The needles cost nothing, are one line to extend when somebody
+#: enrolls something exotic, and their failure mode is the one this bucketing already has
+#: everywhere else: a caption nobody recognised reads as `unknown` rather than as wrong.
 _OS_MATCHES = (
     ("windows_server", ("windows server", "server 20")),
     ("windows_11", ("windows 11",)),
     ("windows_10", ("windows 10",)),
     ("android", ("android",)),
     ("linux", ("linux", "ubuntu", "debian", "red hat", "rhel", "centos", "fedora",
-               "suse", "alma", "rocky")),
+               "suse", "alma", "rocky",
+               # Distributions whose PRETTY_NAME does not contain "Linux" at all. Only
+               # Linux ones: a FreeBSD-based appliance is not a Linux machine, and filing
+               # it here to avoid an `unknown` would put a caption in a bucket that lies
+               # about what is running.
+               "pop!_os", "pop os", "elementary", "zorin", "nixos", "endeavour",
+               "deepin", "solus", "kde neon", "raspbian", "armbian")),
 )
 
 #: The first Windows 11 build. Below it is 10, at or above it is 11 -- see normalize_os.

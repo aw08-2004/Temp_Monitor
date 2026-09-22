@@ -56,8 +56,9 @@ public static class ProcessRunner
     /// <summary>Run a program with an argument list and no stdin.</summary>
     public static Task<ProcessRun> RunAsync(
         string fileName, IEnumerable<string> args, int timeoutSeconds,
-        Action<string>? onOutput, CancellationToken ct) =>
-        CoreAsync(fileName, args, stdin: null, timeoutSeconds, onOutput, ct);
+        Action<string>? onOutput, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? env = null) =>
+        CoreAsync(fileName, args, stdin: null, timeoutSeconds, onOutput, ct, env);
 
     /// <summary>Run an interpreter and feed it <paramref name="stdin"/> as its program.
     ///
@@ -65,12 +66,14 @@ public static class ProcessRunner
     /// by anything in the path, while stdin is neither. See RunScriptExecutor.</summary>
     public static Task<ProcessRun> RunStdinAsync(
         string fileName, string stdin, int timeoutSeconds,
-        Action<string>? onOutput, CancellationToken ct) =>
-        CoreAsync(fileName, Array.Empty<string>(), stdin, timeoutSeconds, onOutput, ct);
+        Action<string>? onOutput, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? env = null) =>
+        CoreAsync(fileName, Array.Empty<string>(), stdin, timeoutSeconds, onOutput, ct, env);
 
     private static async Task<ProcessRun> CoreAsync(
         string fileName, IEnumerable<string> args, string? stdin, int timeoutSeconds,
-        Action<string>? onOutput, CancellationToken ct)
+        Action<string>? onOutput, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? env = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -82,6 +85,8 @@ public static class ProcessRunner
             CreateNoWindow = true,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
+        if (env is not null)
+            foreach (var (k, v) in env) psi.Environment[k] = v;
 
         using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
@@ -90,8 +95,24 @@ public static class ProcessRunner
         void Collect(string? line)
         {
             if (line is null) return;
-            lock (sink) buffer.AppendLine(line);
-            onOutput?.Invoke(line);
+            // Both the collected buffer and the live streamer see each line under the
+            // same lock so their ordering is identical. Without it, a concurrent drain
+            // on the other pipe could interleave between AppendLine and onOutput,
+            // giving the streamer a different sequence than the final result.
+            //
+            // Never allowed to throw: this runs on the thread draining the child's stdout
+            // pipe, and an exception escaping here stops that drain. The child then blocks on
+            // a full pipe and the command times out looking like slow work.
+            lock (sink)
+            {
+                buffer.AppendLine(line);
+                // The newline is ours to add: OutputStreamer appends what it is given verbatim,
+                // because a producer that emits partial lines (a prompt with no newline) would
+                // have them corrupted by one added per call. This producer is line-oriented --
+                // OutputDataReceived strips the terminator -- so it puts one back.
+                try { onOutput?.Invoke(line + "\n"); }
+                catch { /* narration is not worth the command */ }
+            }
         }
 
         proc.OutputDataReceived += (_, e) => Collect(e.Data);

@@ -3499,6 +3499,14 @@
       "winget": {
         "label": "winget",
         "description": "Application updates, from the machine's winget package manager."
+      },
+      "apt": {
+        "label": "apt",
+        "description": "Package updates on a Debian or Ubuntu machine, read from the lists apt already has. The machine's own refresh timer decides how fresh those are."
+      },
+      "dnf": {
+        "label": "dnf",
+        "description": "Package updates on a Fedora, RHEL or Rocky machine, read from the metadata dnf already has. The machine's own refresh timer decides how fresh that is."
       }
     },
     "heading": "Patches",

@@ -3381,6 +3381,14 @@
       "winget": {
         "label": "winget",
         "description": "Anwendungsupdates aus dem winget-Paketmanager des Rechners."
+      },
+      "apt": {
+        "label": "apt",
+        "description": "Paketupdates auf einem Debian- oder Ubuntu-Rechner, gelesen aus den Listen, die apt bereits hat. Wie aktuell die sind, entscheidet der Aktualisierungs-Timer des Rechners selbst."
+      },
+      "dnf": {
+        "label": "dnf",
+        "description": "Paketupdates auf einem Fedora-, RHEL- oder Rocky-Rechner, gelesen aus den Metadaten, die dnf bereits hat. Wie aktuell die sind, entscheidet der Aktualisierungs-Timer des Rechners selbst."
       }
     },
     "heading": "Patches",

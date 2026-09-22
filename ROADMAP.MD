@@ -2727,6 +2727,14 @@ Hub side is `patches.py` (`machine_patches`, `patch_approvals`, `maintenance_win
 `patches_web.py` and a Patches page. Agent side is `Patch/PatchInventoryReporter.cs` and
 `Patch/InstallPatchesExecutor.cs`.
 
+**The Linux half reports and does not install** (hub 1.123.0, agent-linux on `main`; see #22).
+`apt` and `dnf` joined `SOURCE_KINDS`, and `agent-linux/src/FleetHubAgent/Patch/` scans with
+`apt-get -s upgrade` or `dnf -C check-update` on its own inventory loop. A Linux machine's uid
+is a package NAME rather than a KB, which `normalize_uid` already accepted. No installer:
+that agent's capability report names four commands and `install_patches` is not among them,
+so `create_command` refuses one — which is what stops the patch scheduler queuing work a
+Linux box cannot answer, rather than each scheduler being taught the difference.
+
 **Built so the AI half needs no schema change later.** `patch_run_items` — the third table,
 one row per update actually attempted per machine — records the machine's model and OS build
 beside each outcome from the first release, so the PRD's "stability scoring" becomes a query
@@ -3392,8 +3400,9 @@ untested on real hardware.") and `linux-agent-v0.2.0`, both published 2026-09-06
 `install.sh` installs 0.2.0 on a new box, but **a machine that already has the agent cannot
 take either one**: the manifest an installed agent updates from is not in the repo, and the
 source on `main` is still `0.1.0`. See *The manifest is not in the repo* below. It reports
-telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`.
-Full detail in `agent-linux/README.md`.
+telemetry, enrolls, heartbeats, and executes `restart`, `shutdown`, `rename` and `run_script`,
+streaming a command's output while it runs; it reports what `apt`/`dnf` says is available on
+an inventory loop of its own. Full detail in `agent-linux/README.md`.
 
 Installed the same way Windows machines are — `curl -fsSL .../agent-linux/install/install.sh |
 sudo bash -s -- --secret '…'` — and `install.sh` resolves its binary exactly as `install.ps1`
@@ -3508,42 +3517,102 @@ hub can move a machine between channels; it cannot point one at a binary of its 
   is `0400`, and that serial is how `resolve_serial_group` collapses the duplicate a `rename`
   creates.
 
-### Two hub-side gaps, deliberately not worked around in the agent
+### Two hub-side gaps, now closed (hub 1.123.0)
 
-1. **`run_script`'s `shell` enum is `("powershell", "cmd")`** — Windows-shaped, because until
-   now every machine that could receive one was Windows. The agent runs the script under
-   `bash`/`sh` regardless and says so in the first line of the result. Refusing would make
-   `run_script` permanently unusable on Linux, since the console offers no third choice; running
-   it silently would let an operator believe PowerShell ran. **Fix:** add `bash`/`sh` to the
-   enum in `hub/fleet.py`.
-2. **`_OS_MATCHES` misses some distros.** It buckets `ubuntu`/`debian`/`rhel`/`centos`/`fedora`/
-   `suse`/`alma`/`rocky` and the bare word `linux`, which covers most `PRETTY_NAME`s including
-   "Arch Linux" and "Linux Mint" — but not "Pop!_OS 22.04 LTS", which buckets as `unknown`. The
-   agent reports the caption honestly rather than smuggling the word "Linux" into a string the
-   machine never said. **Fix:** widen `_OS_MATCHES`, or bucket on `/etc/os-release`'s `ID_LIKE`.
+Both were worked around in the agent rather than in the hub, on the grounds that neither was
+urgent enough to justify a hub push on the agent's own branch. They were fixed together with
+the first slice of the list below, because that slice touched the hub anyway.
 
-Neither is urgent enough to justify a hub push on this branch.
+1. **`run_script`'s `shell` enum was `("powershell", "cmd")`** — Windows-shaped, because until
+   then every machine that could receive one was Windows. It now names all four
+   (`hub/fleet.py` `COMMAND_PARAMS`), so a rule action can say `bash`; `rules._validate_action`
+   reads exactly that tuple and used to refuse the value outright. **The agent's substitution
+   stays**: an old rule, and an operator who never changed the default, still arrive saying
+   "powershell", and the result's first line still says what actually ran. The default is
+   still `powershell`, because the fleet is overwhelmingly Windows and a default nothing there
+   understands would be the same bug pointed the other way. **The Windows agent's
+   `ResolveShell` should reject `"bash"` and `"sh"` before interpreter selection**,
+   returning a failed `CommandResult` with a clear unsupported-shell message, because
+   these values are Linux interpreters that cannot run on Windows. Preserve the existing
+   `powershell` and `cmd` behaviour for supported or legacy values.
+2. **`_OS_MATCHES` missed the distributions that never say "Linux".** "Pop!_OS 22.04 LTS",
+   "elementary OS", "Zorin OS", "NixOS", "EndeavourOS", "Deepin", "Solus", "KDE neon" and
+   "Raspbian" all bucketed as `unknown`, which put managed machines in the Dashboard's
+   leftovers pile beside the ones nothing is known about. The needle list is widened.
+   **Rejected, and worth recording because it is the better-shaped fix:** bucketing on
+   `/etc/os-release`'s `ID_LIKE` (a field no agent sends, so it needs a wire change, a column
+   and a migration to reach `normalize_os`), and bucketing on the platform the agent now
+   reports on its heartbeat (`capabilities.platform_of` is a per-machine DB read, in a
+   function whose contract is that it costs no round-trip). The needles cost nothing and fail
+   the way this bucketing already fails everywhere else -- as `unknown`, never as wrong.
 
 ### Next, in order
 
-1. **Live command output streaming** (`MIN_STREAMING_AGENT` 3.1.0). The hub endpoint and
-   sequencing exist; `onOutput` is already threaded through the executors.
+Two of these landed together with the hub fixes above, on `main` but **not in a release**:
+`AgentConfig.Version` is still `0.1.0` and the two-file version pair moves only through
+`release.ps1` (`VERSIONING.md`), so an installed Linux box does not have this code until one
+is cut. Neither needed a hub change beyond the patch sources named below.
+
+1. ~~**Live command output streaming**~~ — done. `OutputStreamer` is the Windows agent's,
+   ported unchanged, and `Worker.RunCommandAsync` flushes it **before** reporting the result:
+   the console stops polling for output the moment a command reaches a terminal status, so a
+   result that lands first silently eats the tail an operator was reading. `ProcessRunner`
+   puts back the newline that `OutputDataReceived` strips, because the streamer appends what
+   it is given verbatim -- a producer of partial lines would be corrupted by one added per
+   call. **No console change was needed and none was made:** `fleet-terminal.js` polls
+   `/api/fleet/commands/<id>/output` for any agent. `MIN_STREAMING_AGENT` (3.1.0) gates the
+   hint above the box and the interactive affordances. **The follow-up** gates the stale
+   `run_script` refusal warning and interactive affordances using the agent capabilities
+   report rather than a version number alone: agents that report `run_script` support see
+   no warning, while agents that genuinely lack it keep the existing message. For agents
+   that do support it but fall below `MIN_STREAMING_AGENT`, a Linux-specific caption
+   replaces the refusal wording so operators are not misled. It is a caption, not a refusal,
+   which is why this shipped without it.
 2. **Signed self-update.** The Ed25519 manifest verification ports one-to-one, but it needs its
    own manifest, its own channel and a `release.sh` moving the two-file version pair. Until
    then an upgrade is `install/install.sh` run again, and the trust root for a download is
    GitHub plus TLS rather than the fleet's offline key — which is the reason to keep this to a
    pilot machine. **Do not point this agent at the Windows manifest.**
-3. **Patch inventory** (`apt`/`dnf`) — #14's Linux half.
+3. ~~**Patch inventory** (`apt`/`dnf`)~~ — done, #14's Linux half, reporting only.
+   `PatchScanner` asks `apt-get -s -o Debug::NoLocking=true upgrade` or `dnf -C check-update`
+   on the agent's new inventory loop, six-hourly, change-only, and the heartbeat carries the
+   result. **Nothing refreshes an index**: a refresh is a network call that takes the package
+   manager's lock, and the machine's own `apt-daily.timer` / `dnf-makecache.timer` already
+   does it. `hub/patches.py` gained `apt` and `dnf` as `SOURCE_KINDS` with their catalog
+   entries.
+   - **A package NAME is the uid, not name+version.** An approval is a statement about a
+     package, and a version-keyed uid would expire at every upload to the archive while
+     leaving a `machine_patches` row that never disappears -- which is exactly the absence
+     `confirm_from_inventory` reads as "it installed".
+   - **`upgrade`, not `full-upgrade`**: the difference is the packages that can only be
+     upgraded by removing something else, and a console that lists one is offering a trap.
+   - **Installing is deliberately not implemented.** The agent's capability report names four
+     commands and `install_patches` is not one, so `fleet.create_command` refuses it — which
+     is what stops the patch scheduler queuing an install a Linux box cannot answer. Doing
+     the install half means `PatchInventoryReporter.Invalidate()` (already there and
+     uncalled) and an executor; the classification is honest enough for approvals today.
+   - **Classification is honest about what it does not know.** apt reads `security` out of
+     the origin list (`jammy-security`, `Debian-Security:…`); dnf has no advisory data in
+     `check-update`, so a second `check-update --security` marks what it can and everything
+     else stays `unknown` rather than being filed as `other` as though something had decided.
+   - **Reboot-required is a kernel-package name match and nothing more.** Neither manager
+     reports it before an install; `/var/run/reboot-required` is a fact about the machine
+     afterwards. Flagging every `openssl` bump would train people to ignore the flag.
 4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
    Windows one.
 5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
 6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
 
-**Known limitation.** The volume walk uses `DriveInfo.GetDrives()`, which `statfs()`es every
-mount point — so a hung NFS or CIFS mount blocks it before the filesystem-type filter can
-reject it, and the telemetry loop stalls. Only that loop: heartbeat and commands are separate,
-so the machine stays online and answerable and merely stops reporting readings. The fix is to
-parse `/proc/mounts` and `statfs` only the survivors on a bounded thread.
+**Known limitation, now fixed.** The volume walk used `DriveInfo.GetDrives()`, which
+`statfs()`es every mount point — so a hung NFS or CIFS mount blocked it before the
+filesystem-type filter could reject it and the telemetry loop stalled, silently, on a machine
+that stayed online and answerable throughout. `MountTable` now reads `/proc/self/mounts`,
+which the kernel serves out of the table it already holds, so a dead mount of the wrong type
+is filtered out before anything touches it; the survivors are `statfs`'d in parallel on the
+thread pool with a two-second deadline. **The deadline is not the interesting half** — a
+`statfs` on a hung mount is uninterruptible, so the probe thread stays blocked until the
+server returns, and what stops that costing a thread per five-second tick is that a mount
+with a probe still in flight is never probed again.
 
 **Answered (was an open parameter).** The Linux agent keeps a line of its own rather than
 joining the 3.x train. Joining would have meant one number that has to mean two things: a

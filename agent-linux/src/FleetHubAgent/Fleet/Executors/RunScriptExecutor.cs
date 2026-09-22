@@ -17,8 +17,12 @@ namespace FleetHubAgent.Fleet.Executors;
 /// executed by sh fails on its first cmdlet, which is noisy and harmless; an operator who
 /// never learns which shell ran is the actual hazard.
 ///
-/// `sh` and `bash` are accepted too, so the day the hub's enum grows them nothing here needs
-/// to change. Adding them is the follow-up this note exists to name (ROADMAP.MD #22).
+/// `sh` and `bash` are accepted too, and **the hub's enum now names them** -- hub/fleet.py's
+/// COMMAND_PARAMS offers all four, so a rule action can finally say "bash" instead of having
+/// its value refused by rules._validate_action. Nothing here had to change for that, which
+/// was the point of accepting them before they could be sent. The substitution above stays
+/// regardless: an older rule, and an operator who never changed the default, still arrive
+/// saying "powershell".
 ///
 /// The script goes to the shell on STDIN rather than as `-c &lt;script&gt;`. An argv-passed
 /// script is bounded by ARG_MAX and mangled by anything that re-parses the command line;
@@ -53,11 +57,17 @@ public sealed class RunScriptExecutor : ICommandExecutor
         _log.LogInformation("run_script via {Shell} (requested '{Requested}'), timeout {Timeout}s",
             shell, requested, timeout);
 
-        var run = await ProcessRunner.RunStdinAsync(shell, script, timeout, onOutput, ct);
-
         var header = substituted
             ? $"[fleethub] '{requested}' is not available on Linux; ran under {shell} instead.\n"
             : "";
+
+        // Streamed BEFORE the script starts, not only prepended to the result. An operator
+        // watching the console has to learn which shell ran while they are still reading the
+        // output of it -- a substitution note that only appears at the end explains the first
+        // error message several minutes after they have drawn their own conclusion from it.
+        if (header.Length > 0) onOutput?.Invoke(header);
+
+        var run = await ProcessRunner.RunStdinAsync(shell, script, timeout, onOutput, ct);
 
         if (run.TimedOut)
             return CommandResult.Fail(header + run.Output);

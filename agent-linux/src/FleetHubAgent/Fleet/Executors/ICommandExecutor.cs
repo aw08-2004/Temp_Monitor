@@ -10,11 +10,17 @@ namespace FleetHubAgent.Fleet.Executors;
 /// have its commands routed nowhere and answer "unsupported" to a console that shows the
 /// button.
 ///
-/// <paramref name="onOutput"/> receives output lines as they are produced. Nothing consumes
-/// it yet: live streaming is gated in the console behind MIN_STREAMING_AGENT (3.1.0) and this
-/// agent sits below it on purpose, so the full text in CommandResult is what an operator
-/// sees. The parameter is threaded through anyway because the executors already produce lines
-/// one at a time, and retrofitting it later would touch every one of them.</summary>
+/// <paramref name="onOutput"/> receives output lines as they are produced, and the Worker
+/// now hands it an <see cref="OutputStreamer"/> that posts them to the hub while the command
+/// is still running (roadmap #22) -- so a ten-minute script shows its progress in the console
+/// rather than arriving all at once at the end. It stays NULLABLE because a caller that does
+/// not care (a test, a future internal dispatch) must not have to invent a sink, and because
+/// an executor that never produces intermediate output is a perfectly good executor.
+///
+/// **Whatever it is handed must never be blocked on or trusted to return quickly.** The
+/// callback runs on the thread draining the child process's stdout pipe; a slow one there
+/// stalls the child against a full pipe, which shows up as a command that timed out rather
+/// than as anything to do with the hub.</summary>
 public interface ICommandExecutor
 {
     string Type { get; }

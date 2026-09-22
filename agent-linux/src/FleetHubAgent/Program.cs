@@ -8,6 +8,7 @@ using FleetHubAgent.Fleet.Executors;
 using FleetHubAgent.State;
 using FleetHubAgent.Update;
 using FleetHubAgent.Telemetry;
+using FleetHubAgent.Patch;
 
 // Composition root, and nothing else -- the same rule the hub's app.py follows.
 //
@@ -67,6 +68,12 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+
+    // What the machine's package manager says is available (roadmap #14's Linux half). Its
+    // own loop in Worker, not the heartbeat: an apt dependency solve is seconds of work and
+    // the hub calls a machine offline after ninety of them.
+    builder.Services.AddSingleton<PatchScanner>();
+    builder.Services.AddSingleton<PatchInventoryReporter>();
 
     // Signed self-update (roadmap #22). Its own manifest and its own train -- the hub
     // picks which by the platform this agent reports, so it can never be handed the

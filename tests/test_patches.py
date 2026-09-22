@@ -34,6 +34,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import fleet
+import i18n
 import patches
 import settings
 
@@ -170,6 +171,32 @@ def main():
         check("a titleless update falls back to its uid rather than being dropped",
               patches.parse_report(
                   [{"uid": "kb9", "source": "winget", "title": "  "}])[0]["title"] == "kb9")
+
+        # A Linux machine reports a package NAME where Windows reports a KB, from apt or dnf
+        # (roadmap #22). The failure this catches is the whole Linux half arriving and being
+        # dropped on the floor: parse_report discards an update whose source it does not
+        # recognise, silently and per update, so a fleet of Linux boxes would report
+        # faithfully every six hours and show as missing nothing -- which in a console is
+        # indistinguishable from fully patched.
+        linux = patches.parse_report([
+            {"uid": "libssl3", "source": "apt", "title": "libssl3 3.0.2-0ubuntu1.15",
+             "classification": "security", "reboot_required": False},
+            {"uid": "kernel", "source": "dnf", "title": "kernel 5.14.0-427.el9",
+             "classification": "unknown", "reboot_required": True},
+        ])
+        check("apt and dnf are sources the hub accepts", len(linux) == 2)
+        check("...a package name is a usable update identity",
+              [u["uid"] for u in linux] == ["libssl3", "kernel"])
+        check("...and a package name carries no KB", all(u["kb"] == "" for u in linux))
+        # A source kind with no catalog entry captions the console's filter with its own
+        # key -- "patches.source.apt.label" in the dropdown. i18n.translate returns the key
+        # itself for a miss, which is exactly what makes that assertable here.
+        check("every source kind has a catalog entry to caption it with",
+              all(i18n.translate(f"{patches.SOURCE_TEXT_KEY}.{kind}.label")
+                  != f"{patches.SOURCE_TEXT_KEY}.{kind}.label"
+                  for kind in patches.SOURCE_KINDS))
+        check("a package name with a plus in it survives normalisation",
+              patches.normalize_uid("libstdc++6") == "libstdc++6")
 
         # -------------------------------------------------------------- fleet rollup
         print("\n== Fleet rollup and scope ==")

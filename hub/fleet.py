@@ -384,8 +384,23 @@ COMMAND_PARAMS = {
     "shutdown": (_p("delay_seconds", "int", 60, minimum=0, maximum=86400),
                  _p("force", "bool", False)),
     # RunScriptExecutor.cs:28-34. The timeout bounds are its own Math.Clamp(1, 24h).
+    #
+    # **The shell enum names four interpreters because the fleet now has two kinds of
+    # machine.** It used to be ("powershell", "cmd"), which was true while every machine that
+    # could receive a run_script was Windows. A Linux box has neither, so the agent-linux
+    # RunScriptExecutor treats a Windows shell name as "the operator took the default", runs
+    # the script under bash/sh and says so in the first line of the result -- refusing would
+    # make run_script permanently unusable there, since this list is what the console offers
+    # and nothing in it existed on the machine. That substitution stays (an old rule, or an
+    # operator who never changed the default, still has to work); what these two add is the
+    # ability to SAY bash, which a rule action could not express at all before -- rules
+    # ._validate_action reads exactly this tuple and refused the value. Roadmap #22.
+    #
+    # The default stays "powershell": the fleet is overwhelmingly Windows, and a default
+    # nothing there understands would be the same bug pointed the other way.
     "run_script": (_p("script", "text", required=True, max_chars=MAX_SCRIPT_CHARS),
-                   _p("shell", "enum", "powershell", choices=("powershell", "cmd")),
+                   _p("shell", "enum", "powershell",
+                      choices=("powershell", "cmd", "bash", "sh")),
                    _p("timeout_seconds", "int", 600, minimum=1, maximum=86400)),
     # LowRiskExecutors.cs InstallAppExecutor: a winget id OR an msi path, tried in that order.
     "install_app": (_p("id", "str", max_chars=200),
