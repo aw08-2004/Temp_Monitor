@@ -249,13 +249,34 @@ def move_escrow(log_dir, old, new):
     master = backups.load_master_key()
     if master is None:
         return False
-    source = bitlocker.secret_id_for(old)
-    if not backups.has_secret(log_dir, source):
+    source_id = bitlocker.secret_id_for(old)
+    dest_id = bitlocker.secret_id_for(new)
+    # Load the source blob (the machine being merged away).
+    if not backups.has_secret(log_dir, source_id):
         return False
     try:
-        stored = backups.load_secret(log_dir, master, source)
-    except ValueError:
+        source_stored = backups.load_secret(log_dir, master, source_id)
+    except (ValueError, Exception):
         return False
-    backups.store_secret(log_dir, master, bitlocker.secret_id_for(new), stored)
-    backups.delete_secret(log_dir, source)
+    # Load the destination blob if it already holds keys for the survivor.
+    dest_stored = {}
+    try:
+        if backups.has_secret(log_dir, dest_id):
+            dest_stored = backups.load_secret(log_dir, master, dest_id) or {}
+    except (ValueError, Exception):
+        # Destination unreadable -- refuse to overwrite; source keeps its copy.
+        return False
+    # Union both machines' key sets; the survivor's keys win on collision
+    # (same physical device, the survivor was still reporting).
+    merged_keys = dict((dest_stored.get("keys") or {}))
+    for protector_id, key_data in (source_stored.get("keys") or {}).items():
+        if protector_id not in merged_keys:
+            merged_keys[protector_id] = key_data
+    merged = dict(source_stored)
+    merged["keys"] = merged_keys
+    try:
+        backups.store_secret(log_dir, master, dest_id, merged)
+    except (ValueError, Exception):
+        return False
+    backups.delete_secret(log_dir, source_id)
     return True

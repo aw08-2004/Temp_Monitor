@@ -491,10 +491,20 @@ def rename_machine(db_path, old, new):
     could no longer decrypt, which is worse than either half alone.
     """
     with get_conn(db_path) as conn:
-        conn.execute("DELETE FROM machine_bitlocker WHERE machine = ?", (new,))
-        conn.execute("UPDATE machine_bitlocker SET machine = ? WHERE machine = ?", (new, old))
-        conn.execute("DELETE FROM bitlocker_keys WHERE machine = ?", (new,))
-        conn.execute("UPDATE bitlocker_keys SET machine = ? WHERE machine = ?", (new, old))
+        # Keep the survivor's own posture when both machines share the same hardware;
+        # INSERT OR IGNORE preserves the destination row on collision.
+        conn.execute(
+            "INSERT OR IGNORE INTO machine_bitlocker (machine, protector_count, latest_protector_id, updated_at) "
+            "SELECT ?, protector_count, latest_protector_id, updated_at FROM machine_bitlocker WHERE machine = ?",
+            (new, old))
+        conn.execute("DELETE FROM machine_bitlocker WHERE machine = ?", (old,))
+        # Merge source escrow-index rows into destination using collision-safe inserts;
+        # the survivor's own keys win when protector_ids collide (same physical device).
+        conn.execute(
+            "INSERT OR IGNORE INTO bitlocker_keys (machine, protector_id, volume, escrowed_at) "
+            "SELECT ?, protector_id, volume, escrowed_at FROM bitlocker_keys WHERE machine = ?",
+            (new, old))
+        conn.execute("DELETE FROM bitlocker_keys WHERE machine = ?", (old,))
 
 
 def forget_machine(db_path, machine):
