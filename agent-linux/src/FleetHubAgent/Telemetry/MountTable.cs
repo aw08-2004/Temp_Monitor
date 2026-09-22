@@ -45,12 +45,19 @@ public static class MountTable
 
     /// <summary>Every mount this process can see, in kernel order. Reads mountinfo by
     /// default so VolumeReader can deduplicate by major:minor; falls back to /proc/mounts
-    /// when mountinfo is unavailable. Never throws: a machine whose /proc is not mounted
-    /// (a chroot, an unusual container) reports no volumes rather than costing the caller
-    /// its whole sensor block.</summary>
+    /// when mountinfo is unavailable. When a caller supplies an explicit path (tests), that
+    /// file is parsed as the old /proc/mounts format only. Never throws: a machine whose
+    /// /proc is not mounted (a chroot, an unusual container) reports no volumes rather than
+    /// costing the caller its whole sensor block.</summary>
     public static IReadOnlyList<MountEntry> Read(string? path = null)
     {
-        try { return ParseMountinfo(File.ReadAllLines(path ?? MountinfoPath)); }
+        if (path is not null)
+        {
+            try { return Parse(File.ReadAllLines(path)); }
+            catch { return Array.Empty<MountEntry>(); }
+        }
+
+        try { return ParseMountinfo(File.ReadAllLines(MountinfoPath)); }
         catch
         {
             try { return Parse(File.ReadAllLines(MountsPath)); }
