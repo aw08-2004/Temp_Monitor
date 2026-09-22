@@ -3855,6 +3855,8 @@
     "summary": "{encrypted} von {total} Volumes geschützt",
     "unsupported": "Auf diesem Gerät gibt es keinen BitLocker-Anbieter, also nichts zu verschlüsseln oder zu hinterlegen. Das ist die normale, dauerhafte Antwort für Windows Home und für Agenten außerhalb von Windows.",
     "read_failed": "Der Verschlüsselungszustand dieses Geräts konnte nicht gelesen werden: {error}",
+    "load_error": "Verschlüsselungsdaten konnten nicht geladen werden.",
+    "retry": "Erneut versuchen",
     "column": {
       "volume": "Volume",
       "protection": "Schutz",

@@ -3855,6 +3855,8 @@
     "summary": "{encrypted} de {total} volúmenes protegidos",
     "unsupported": "Este equipo no tiene proveedor de BitLocker, así que no hay nada que cifrar ni que custodiar aquí. Esa es la respuesta normal y permanente para Windows Home y para los agentes que no son de Windows.",
     "read_failed": "No se pudo leer el estado de cifrado de este equipo: {error}",
+    "load_error": "No se pudieron cargar los datos de cifrado.",
+    "retry": "Reintentar",
     "column": {
       "volume": "Volumen",
       "protection": "Protección",

@@ -224,12 +224,39 @@
         try {
             response = await fetch(`/api/bitlocker/${encodeURIComponent(machine)}`);
         } catch (e) {
+            // Transport failure — show error with retry instead of silently vanishing.
+            fold.hidden = false;
+            errorEl.hidden = false;
+            errorEl.replaceChildren(
+                el('span', null, t('bitlocker.unreachable')),
+                document.createTextNode(' '),
+            );
+            const retry = el('button', 'btn btn--ghost', t('bitlocker.retry'));
+            retry.type = 'button';
+            retry.addEventListener('click', () => load());
+            errorEl.appendChild(retry);
             return;
         }
         if (!response.ok) {
-            fold.hidden = true;      // out of scope, which for this operator is "no such card"
+            if (response.status >= 500) {
+                // Server error — show error with retry.
+                fold.hidden = false;
+                errorEl.hidden = false;
+                errorEl.replaceChildren(
+                    el('span', null, t('bitlocker.load_error')),
+                    document.createTextNode(' '),
+                );
+                const retry = el('button', 'btn btn--ghost', t('bitlocker.retry'));
+                retry.type = 'button';
+                retry.addEventListener('click', () => load());
+                errorEl.appendChild(retry);
+            } else {
+                // Access denial (4xx) — hide card.
+                fold.hidden = true;
+            }
             return;
         }
+        errorEl.hidden = true;
         render(await response.json());
     }
 

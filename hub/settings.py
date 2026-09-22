@@ -774,8 +774,6 @@ BY_KEY = {s.key: s for s in REGISTRY}
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
             "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
             "policy", "rules", "sharing", "events", "ai", "security")
-            "directory", "firmware", "patches", "wake", "discovery", "provisioning",
-            "location", "map", "policy", "rules", "sharing", "events", "ai")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

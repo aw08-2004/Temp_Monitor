@@ -3973,6 +3973,8 @@
     "summary": "{encrypted} of {total} volumes protected",
     "unsupported": "This machine has no BitLocker provider, so there is nothing to encrypt or escrow here. That is the normal, permanent answer for Windows Home and for non-Windows agents.",
     "read_failed": "This machine's encryption state could not be read: {error}",
+    "load_error": "Encryption data could not be loaded.",
+    "retry": "Retry",
     "column": {
       "volume": "Volume",
       "protection": "Protection",

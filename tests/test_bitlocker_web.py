@@ -25,6 +25,7 @@ quietly rather than loudly:
 import functools
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -248,6 +249,7 @@ def main():
         sys.exit(1 if FAIL else 0)
     finally:
         os.environ.pop("BACKUP_MASTER_KEY", None)
+        shutil.rmtree(log_dir, ignore_errors=True)
         for suffix in ("", "-wal", "-shm"):
             try:
                 os.remove(db_path + suffix)
