@@ -197,3 +197,37 @@ class DeviceCapabilities {
             .toSet(),
       );
 }
+
+/// Whether push can reach this device, from `/api/push/status` (roadmap #11 phase 2).
+///
+/// Two independent facts, kept apart on purpose. [configured] is about the HUB -- whether
+/// it has Firebase credentials in its .env at all -- and [registered] is about THIS
+/// install. A screen that collapsed them into one "push works" flag could only ever show
+/// the operator a dead end: the first is fixed by their hub admin and the second by
+/// granting a notification permission, and telling somebody the wrong one of those is
+/// worse than telling them nothing.
+class PushStatus {
+  const PushStatus({
+    required this.configured,
+    required this.registered,
+    this.kind = '',
+  });
+
+  /// The hub can send a push to somebody. Not necessarily to us.
+  final bool configured;
+
+  /// The hub holds a push address for this device.
+  final bool registered;
+
+  /// Which transport it holds -- `fcm` or `apns`. Empty when nothing is registered.
+  final String kind;
+
+  factory PushStatus.fromJson(Map<String, dynamic> json) {
+    final registration = json['registration'];
+    return PushStatus(
+      configured: json['configured'] == true,
+      registered: registration is Map && registration['registered'] == true,
+      kind: registration is Map ? _asString(registration['kind']) : '',
+    );
+  }
+}

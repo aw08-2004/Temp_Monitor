@@ -270,8 +270,8 @@ OIDC sign-in plus permission groups, see below):
 
 ### The machine page reports at 1 Hz while you are watching it
 
-A machine reports every 5s, and only every other report carries the full sensor block the
-CPU/GPU/memory/fan/power panels are drawn from -- so a page whose window is sixty seconds
+A machine reports every 5s by default (**Settings -> History Metrics**, see below), and only
+every other report carries the full sensor block the CPU/GPU/memory/fan/power panels are drawn from -- so a page whose window is sixty seconds
 wide drew about six points a minute on most panels, and a three-second spike was one dot or
 none. **While an operator has a machine page open and in front, that machine reports every
 second with a sensor block on every report.** Nothing to enable.
@@ -297,6 +297,43 @@ bearer-authenticated request, because the alternative is doubling the only traff
 unwatched machine generates for either. `processes_wanted`/`live_wanted` also ride the
 heartbeat, which is how a machine learns to stop, and the only path for an agent older than
 v3.28.0 (which keeps polling `GET /api/agent/processes/wanted` and never speeds up).
+
+### Tuning what is sampled, which sensor, and for how long
+
+Three groups of knobs, all on the Settings page, all fleet-wide.
+
+**How often a machine samples** -- *History Metrics*. `metrics.report_interval_seconds` (5)
+is how often a machine sends a reading; `metrics.sensor_interval_seconds` (10) is how often
+one of those readings carries the full sensor block. Turn them down on a fleet over a metered
+link, or up for finer charts. Neither touches liveness: whether a machine reads online is the
+heartbeat's business and that is a separate 10-second loop, so a fleet reporting every five
+minutes is a coarser chart and nothing else. Neither touches the watched-machine path either
+-- a page you have open still gets 1 Hz. Both ride the agent config channel, so an agent
+older than these settings keeps its compiled 5/10 and nothing breaks.
+
+**Which sensor gets charted** -- *Computer*. `computer.primary_sensor_preference` has always
+picked the CPU temperature; `gpu_temp_preference`, `gpu_load_preference`, `disk_preference`
+and `network_preference` now do the same for the rest. The two GPU lists match part of a
+*sensor* name ("gpu hot spot"); the disk and network lists match part of a *hardware* name
+("Samsung SSD 980", "Intel(R) Ethernet"), because the question there is which of four drives
+or which of twenty-six adapters. Both of the latter ship **empty**, meaning the behaviour that
+predates them: the first drive the machine reports, and the busiest adapter. Empty is right
+until a Hyper-V switch or a dock mirrors the real NIC, or until the arbitrary drive is not the
+one you care about. A named device missing from a report falls back rather than charting a
+gap. These are re-derived by the hub from the reported block, so they apply to every agent in
+the field immediately -- and to **new readings only**: history keeps what was recorded at the
+time.
+
+**How long each metric is kept** -- *History Metrics*. `data.retention_days` (30) still bounds
+the whole readings table, and each metric now has its own window beside its collection toggle:
+`metrics.retention_days_network`, `..._disk_io`, `..._gpu` and so on. **0 means "follow the
+fleet-wide window"**, which is the default for all eight, so an untouched hub prunes exactly as
+it always did. A shorter window blanks that metric's columns on older readings while the
+reading itself -- and its temperature -- stays; a metric aged out is indistinguishable from one
+whose collection toggle is off, which is the point, because in both cases the honest answer is
+"not recorded". A window **longer** than `data.retention_days` is ignored: the whole row is
+deleted there, so there is nothing to keep. Like `data.retention_days` this deletes permanently
+and is audited.
 
 ### Temperature alerts
 
@@ -1476,6 +1513,76 @@ document goes back on that same reply.
 > **Status:** collection built — hub 1.118.0. The agent half is in the source tree and reaches
 > the fleet with the next agent release, so nothing is collected until then. Correlating events
 > into alerts, and writing a rule against the counters, is roadmap #17.
+
+## Network discovery and shadow IT
+
+What else is on the network a managed PC is sitting on, and which of it the hub has never
+heard of. The **Subnet discovery** card sits under the adapters on the machine page's
+Network tab, because the subnets it can sweep are that machine's own.
+
+**The sweep runs on the machine, not on the hub.** The hub is almost never on the network it
+is being asked about -- for a helpdesk with more than one site it sits in one office and the
+subnet in question is behind a router in another -- so it asks a machine that is already
+there. Same reasoning as Wake-on-LAN's peer relay above, and it reuses the NIC inventory that
+feature already collects.
+
+**The probe is ARP, not ping.** A Windows PC at default firewall settings does not answer
+ICMP from an unknown host, so a ping sweep of an office subnet finds the printers and misses
+the PCs -- the exact inverse of what this is for. The sweep identifies only addresses that
+respond to ARP; sleeping, filtered, isolated, or otherwise non-responding devices may still
+be present, so silence is not proof that an address is unused.
+
+**It cannot be pointed anywhere.** The subnet is chosen from a list of the ones the machine
+has already reported being on, never typed, and the hub refuses anything else. ARP does not
+cross a router, so this is a statement of fact before it is a rule -- but it is also what
+keeps a discovery sweep from becoming a scanner aimed at somebody else's network. Sweeps are
+on demand only; there is no schedule and no configured range.
+
+Every address that answers is classified against the adapters the fleet has reported:
+
+| Verdict | What it means |
+|---|---|
+| **This PC** | The machine doing the looking. Not a finding, and kept out of the counts so a quiet VLAN does not read as having found a PC. |
+| **Managed** | A MAC the hub already knows, named with the machine it belongs to. |
+| **Not managed** | Everything else. Deliberately not called *rogue* -- most of it is a printer, an access point or a phone, and a console that calls the accounting department's label printer rogue teaches people to ignore the column. |
+
+The verdict is worked out **when the list is read**, not when it was collected, so a machine
+enrolled an hour after a sweep turns that scan's unknown device into itself, and a machine
+deleted from the fleet turns back into a finding. One stale false alarm is what stops a
+shadow-IT list being read.
+
+**A discovered device becomes nothing.** Nothing here enrolls, names, groups, alerts on or
+sends a command to an address. The classification is a MAC match, and a MAC is a claim a
+device makes about itself.
+
+**Gating**: reading a machine's sweepable subnets and its last sweep is `view` + machine
+scope; running one is `issue_commands` + machine scope, with no new capability -- an operator
+who can open a SYSTEM shell on that PC can already run `arp -a` on it. Every sweep writes a
+notice-level audit row naming who asked and which subnet.
+
+**Endpoints** (console-facing): `GET|POST /api/discovery/machines/<machine>`,
+`GET /api/discovery/scans`, `GET /api/discovery/scans/<id>`. The machine posts its host list
+to `POST /api/agent/discovery/scan/<id>` under agent bearer auth, rather than returning it as
+command output -- a full /22 is a thousand rows, and keeping the two apart is what lets the
+console tell an empty subnet from a report that was lost.
+
+> **Status:** first slice built -- hub 1.125.0. **The agent half ships in source and needs a
+> signed release** before any machine can answer; deploy the hub first, as always. Until
+> then the card is visible and a sweep fails with the agent's own `unknown command type:
+> network_sweep`, which is why there is no agent-version gate on this one.
+>
+> **Not in this slice**: the Intune/Azure cross-reference, a fleet-wide sweep, scheduled
+> sweeps, and MAC vendor lookup. See roadmap #18 for why each was left out.
+>
+> **The agent half has no tests and has never been executed.** It compiles clean, which
+> caught a real error, but compiling is not running -- the agent test host needs
+> `Microsoft.WindowsDesktop.App`, which is Windows-only. The hub half is covered by tests
+> against literal payloads.
+>
+> **On-hardware validation outstanding**: how long `SendARP` actually blocks on an
+> unanswered address, whether 32 probes in flight is polite on a busy segment, what a VPN or
+> a Hyper-V virtual switch does to the interface Windows picks, and whether reverse DNS on a
+> Windows domain resolves inside the ten-second budget.
 
 ## Machine capabilities
 
