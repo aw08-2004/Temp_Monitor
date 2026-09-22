@@ -327,6 +327,7 @@
         "other": "El vigilante «{watchdog}» se dio por vencido; informado {count} veces. Primer informe {since}."
       },
       "ended": "La máquina volvió a arreglárselas hacia {until}. Informado desde {from}."
+    },
     "bundle": {
       "title": {
         "one": "{count} alerta en {machine}",
