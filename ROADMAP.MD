@@ -2974,7 +2974,7 @@ it — the same trap `manage_firmware` avoided by shipping live.
   `machine_event_state` says "we have not been told" rather than "nothing happened". That
   distinction is the reason that table exists.
 - **Never run against a real event log.** The hub half is tested (`tests/test_events.py`).
-  The agent half **compiles** (see the note under the build order about building it from
+  The agent half **compiles** (see the note under the hardware validation about building it from
   Linux, which is how the two faults that shipped in the first cut were found), but
   `EventLogTests.cs` has never been *run*: the test host needs `Microsoft.WindowsDesktop.App`,
   which exists only on Windows. So the pure parts are written down rather than verified, the

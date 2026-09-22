@@ -76,7 +76,7 @@ Each of these looks like leftover mess and is load-bearing.
   pattern.
 - Agent: `dotnet test agent/TempMonitorAgent.slnx`.
   Publish: `dotnet publish agent/src/TempMonitorAgent/TempMonitorAgent.csproj -c Release -o agent/dist`.
-- **From Linux, the agent still compiles** -- add `-p:EnableWindowsTargeting=true` to `build`
+- **From Linux, the agent still compiles** -- run `dotnet build agent/TempMonitorAgent.slnx -p:EnableWindowsTargeting=true`
   (after `apt-get install -y dotnet-sdk-10.0`). The tests cannot be *run* there, but compiling
   is not optional: nothing else builds this project, and a `csproj` or C# change that was never
   compiled has reached `main` broken before.
