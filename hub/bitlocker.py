@@ -471,6 +471,23 @@ def record_escrowed(db_path, machine, submissions, now=None):
             )
 
 
+def reconcile_escrow_index(db_path, machine, keys, now=None):
+    """Ensure index rows exist for ALL keys present in the stored blob.
+
+    Unlike record_escrowed which only indexes newly added keys, this reconciles the full
+    key set so retries repair missing index rows caused by partial failures, while preserving
+    existing rows that were added by concurrent updates (INSERT OR IGNORE).
+    """
+    now = int(now if now is not None else time.time())
+    with get_conn(db_path) as conn:
+        for protector_id, entry in keys.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO bitlocker_keys(machine, protector_id, volume, "
+                "                                     escrowed_at) VALUES (?, ?, ?, ?)",
+                (machine, protector_id, entry.get("volume", ""), now),
+            )
+
+
 def note_read(db_path, machine, protector_id, now=None):
     """Record that somebody read this key. The audit log is the record of WHO; this is what
     lets the console show, beside the key, that it has been read before and when."""

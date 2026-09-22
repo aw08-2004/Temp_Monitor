@@ -41,6 +41,8 @@ quietly doing nothing is worse than one that is plainly off.
 The CSRF note from fleet_web.py applies verbatim: bodies are read with
 request.get_json(silent=True), which requires Content-Type: application/json.
 """
+import threading
+from collections import defaultdict
 from flask import Blueprint, jsonify, request
 
 import auth_helpers
@@ -50,6 +52,9 @@ import fleet
 import permissions
 import permissions_web
 import settings
+
+# Per-machine lock for the escrow read-modify-write + index reconciliation sequence.
+_machine_escrow_locks = defaultdict(threading.Lock)
 
 
 def escrow_enabled(db_path):
@@ -196,44 +201,49 @@ def create_bitlocker_blueprint(db_path, log_dir, login_required, access):
                         detail={"held": held, "offered": len(submissions)})
             return jsonify({"stored": 0, "error": "escrow full"}), 409
 
-        master = backups.load_master_key()
-        if master is None:
-            return jsonify({"stored": 0, "escrow": "disabled"}), 200
-        secret_id = bitlocker.secret_id_for(machine)
-        try:
-            stored = backups.load_secret(log_dir, master, secret_id) if \
-                backups.has_secret(log_dir, secret_id) else {}
-        except ValueError:
-            # An existing blob this hub cannot open. Refused rather than replaced: writing a
-            # fresh store over it would destroy every key in it, which is the one outcome this
-            # module is built to make impossible. An operator fixes this by restoring the
-            # master key (hub 1.117.0's import), and the audit entry is what tells them to.
-            fleet.audit(db_path, actor=machine, action="bitlocker_escrow_unreadable",
-                        level=fleet.LEVEL_SECURITY, target=machine, detail={})
-            return jsonify({"stored": 0, "error": "existing escrow is unreadable"}), 409
+        # Per-machine lock covering the complete read-modify-write and index
+        # reconciliation sequence, so concurrent submissions for the same machine
+        # cannot lose keys or produce inconsistent index rows.
+        with _machine_escrow_locks[machine]:
+            master = backups.load_master_key()
+            if master is None:
+                return jsonify({"stored": 0, "escrow": "disabled"}), 200
+            secret_id = bitlocker.secret_id_for(machine)
+            try:
+                stored = backups.load_secret(log_dir, master, secret_id) if \
+                    backups.has_secret(log_dir, secret_id) else {}
+            except ValueError:
+                # An existing blob this hub cannot open. Refused rather than replaced: writing a
+                # fresh store over it would destroy every key in it, which is the one outcome this
+                # module is built to make impossible. An operator fixes this by restoring the
+                # master key (hub 1.117.0's import), and the audit entry is what tells them to.
+                fleet.audit(db_path, actor=machine, action="bitlocker_escrow_unreadable",
+                            level=fleet.LEVEL_SECURITY, target=machine, detail={})
+                return jsonify({"stored": 0, "error": "existing escrow is unreadable"}), 409
 
-        merged, added = bitlocker.merge_keys((stored or {}).get("keys") or {}, submissions)
-        if not added:
-            return jsonify({"stored": 0}), 200
-        try:
-            backups.store_secret(log_dir, master, secret_id, {"keys": merged})
-        except ValueError as e:
-            # A hub without `cryptography` installed. Nothing is indexed, so the heartbeat
-            # goes on asking and the key arrives once somebody fixes the install -- which is
-            # strictly better than recording an escrow that does not exist.
-            #
-            # The reason goes to the hub's log, not to the agent: the caller here is a service
-            # that cannot act on it, and this is the one route in this module whose body would
-            # otherwise carry an internal failure string back out over the wire. Whoever fixes
-            # the install is reading the hub's console output anyway.
-            print(f"[bitlocker] Could not store escrowed keys for {machine}: {e}")
-            return jsonify({"stored": 0, "error": "escrow store unavailable"}), 500
-        # Index rows only after the store write -- see bitlocker.record_escrowed.
-        bitlocker.record_escrowed(db_path, machine, added)
-        fleet.audit(db_path, actor=machine, action="bitlocker_key_escrow",
-                    level=fleet.LEVEL_SECURITY, target=machine,
-                    detail={"protectors": [a["protector_id"] for a in added]})
-        return jsonify({"stored": len(added)}), 200
+            merged, added = bitlocker.merge_keys((stored or {}).get("keys") or {}, submissions)
+            if not added:
+                return jsonify({"stored": 0}), 200
+            try:
+                backups.store_secret(log_dir, master, secret_id, {"keys": merged})
+            except ValueError as e:
+                # A hub without `cryptography` installed. Nothing is indexed, so the heartbeat
+                # goes on asking and the key arrives once somebody fixes the install -- which is
+                # strictly better than recording an escrow that does not exist.
+                #
+                # The reason goes to the hub's log, not to the agent: the caller here is a service
+                # that cannot act on it, and this is the one route in this module whose body would
+                # otherwise carry an internal failure string back out over the wire. Whoever fixes
+                # the install is reading the hub's console output anyway.
+                print(f"[bitlocker] Could not store escrowed keys for {machine}: {e}")
+                return jsonify({"stored": 0, "error": "escrow store unavailable"}), 500
+            # Reconcile index rows for ALL validated keys in the stored blob, not only newly
+            # added entries, so retries repair missing indexes while preserving concurrent updates.
+            bitlocker.reconcile_escrow_index(db_path, machine, merged)
+            fleet.audit(db_path, actor=machine, action="bitlocker_key_escrow",
+                        level=fleet.LEVEL_SECURITY, target=machine,
+                        detail={"protectors": [a["protector_id"] for a in added]})
+            return jsonify({"stored": len(added)}), 200
 
     return bp
 
