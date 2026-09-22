@@ -2981,10 +2981,13 @@ it — the same trap `manage_firmware` avoided by shipping live.
   per-machine console control to hide, so a machine on an older agent simply never reports and
   `machine_event_state` says "we have not been told" rather than "nothing happened". That
   distinction is the reason that table exists.
-- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`), and
-  the agent half's pure parts are (`EventLogTests.cs`) — but the query has never been executed
-  against a Windows event service, and no record has ever made the trip. See the hardware
-  validation note.
+- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`).
+  The agent half **compiles** (see the note under the hardware validation about building it from
+  Linux, which is how the two faults that shipped in the first cut were found), but
+  `EventLogTests.cs` has never been *run*: the test host needs `Microsoft.WindowsDesktop.App`,
+  which exists only on Windows. So the pure parts are written down rather than verified, the
+  query has never been executed against a Windows event service, and no record has ever made
+  the trip. See the hardware validation note.
 
 ---
 
@@ -5131,6 +5134,14 @@ channel LocalSystem cannot read comes back as `error` on the report instead of c
 whole pass; that a provider channel with a `/` in its name is queryable by that name; and that
 an idle machine's empty report reaches the hub, since that report is what tells the console a
 collector is alive rather than stopped.
+
+**The agent can at least be compiled without Windows**, which is new and worth knowing before
+any of the above: `apt-get install -y dotnet-sdk-10.0`, then pass
+`-p:EnableWindowsTargeting=true` to `dotnet build`. It builds `net10.0-windows` on Linux and
+catches every compile error, which is the whole class of mistake that used to reach `main`
+untouched, since no CI builds this project. It does not let the tests RUN (the test host wants
+`Microsoft.WindowsDesktop.App`), and it proves nothing about behaviour on a real machine, so
+the table above stands unchanged.
 
 **A is no longer blocked** — the pilot Galaxy A15 has been factory reset, so it can be
 provisioned by QR and used for the whole table. The remaining blocker is the phone re-authorising

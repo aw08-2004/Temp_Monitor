@@ -76,6 +76,10 @@ Each of these looks like leftover mess and is load-bearing.
   pattern.
 - Agent: `dotnet test agent/TempMonitorAgent.slnx`.
   Publish: `dotnet publish agent/src/TempMonitorAgent/TempMonitorAgent.csproj -c Release -o agent/dist`.
+- **From Linux, the agent still compiles** -- run `dotnet build agent/TempMonitorAgent.slnx -p:EnableWindowsTargeting=true`
+  (after `apt-get install -y dotnet-sdk-10.0`). The tests cannot be *run* there, but compiling
+  is not optional: nothing else builds this project, and a `csproj` or C# change that was never
+  compiled has reached `main` broken before.
 - **Trap:** an agent `dotnet test` run rewrites `tests/fixtures/*.fhb` in place. Check
   `git status` before staging.
 - **No CI runs these tests** — only CodeQL and a Claude PR review. If you didn't run them,
@@ -142,7 +146,8 @@ The most distinctive thing about this codebase, and what a generic model gets wr
 - **Write down the alternatives you rejected, and why.** Record history when something has
   bitten before ("This has bitten twice already"). That is the point of the density.
 - `**bold**` inside docstrings for the load-bearing claim. Use `--`, not em dashes, in Python
-  and C# source.
+  and C# source. **Not in XML** (`.csproj`, templates): a comment there may not contain `--`
+  at all, and MSBuild refuses to load the whole project file over it.
 - With no linter, style comes from imitating the surrounding file. Read it before adding to it.
 - **Commit messages use the same voice**: a title stating the change in plain language, a body
   explaining **why**, not what. For calibration: *"Narrow the maintenance-window read, and stop
