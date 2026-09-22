@@ -1014,9 +1014,10 @@ def suggested_script_name(bundle):
     replaces the draft instead of littering the library with `fix_1`, `fix_2`, `fix_3`.
     """
     machine = re.sub(r"[^a-z0-9]+", "_", str(bundle.get("machine") or "").lower()).strip("_")
-    suffix = str(min(bundle.get("alert_ids") or [0]))
-    name = f"suggested_{machine}_{suffix}"[:32]
-    return name.rstrip("_")
+    prefix = "suggested_"
+    suffix = f"_{min(bundle.get('alert_ids') or [0])}"
+    machine_chars = 32 - len(prefix) - len(suffix)
+    return f"{prefix}{machine[:machine_chars]}{suffix}"
 
 
 def draft_script(db_path, bundle, *, known_variable=None, actor="", now=None):

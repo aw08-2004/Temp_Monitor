@@ -2676,12 +2676,9 @@ what survived, and why the rest did not. The two decisions that framed the triag
 
 | PRD item | Verdict |
 |---|---|
-| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
+| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.124.0, `correlate.baselines`). |
 | FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`). Still open there: an `event.*` rules variable, so a counter can be alerted on rather than only read. |
-| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
-| FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
-| FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
@@ -3075,10 +3072,9 @@ it was.
 
 ### Not done
 
-* **#16's event rows are not folded into a bundle yet.** The seam is `facet_for_variable` —
-  an event-derived rules variable maps to a facet like any other — but #16 was in flight in a
-  parallel branch while this was written, and guessing at its schema would produce a join
-  against columns that do not exist. Named and left empty rather than invented.
+* **An `event.*` rules variable is still open.** #16's event rows already join the bundle
+  whose window they overlap, but an operator still cannot write a rule over those counters.
+  `facet_for_variable` is ready to classify that alert once the rules engine exposes it.
 * **A recommendation is never asked for on a timer**, only from an operator pressing the
   button on one bundle. A feature that quietly bills a provider per alert episode is one an
   operator discovers from an invoice.
@@ -5144,13 +5140,6 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     all. What it still owes is the other half of #16's hand-off — an `event.*` rules variable
     so an operator can write "more than N of event 4625 in a window" — which is a change to
     the rules engine and is scoped as its own piece rather than folded in here.
-18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
-    MDM-driven fleet. Sequenced late for that reason rather than for difficulty.
-17. **#17 Alert correlation and recommended fixes** — after #14 and #16 by dependency, not by
-    preference. **Both are now in place**: patch outcomes since 1.92.0, and event counters
-    since 1.118.0. The deterministic half can be built the day both land; the language layer
-    above it is gated on a pluggable AI provider that does not exist yet, and that provider
-    is the one piece of new plumbing this item introduces.
 18. **#18 Network discovery and shadow IT** — first slice built: an ARP sweep run by a
     machine already on the subnet, and every answer classified against the NIC inventory #10
     already collects. No prerequisite, low expected yield on an MDM-driven fleet, sequenced

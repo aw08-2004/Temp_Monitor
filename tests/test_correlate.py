@@ -511,6 +511,12 @@ def test_a_suggested_script_lands_switched_off():
           scripts.validate_reference(scripts.specs(app.DB_PATH), script["name"], {})[0])
     check("its name is inside the script grammar",
           script and rules.is_valid_name(script["name"]))
+    long_name = correlate.suggested_script_name({
+        "machine": "PC with a machine name far beyond the script-name limit",
+        "alert_ids": [12345, 67890],
+    })
+    check("a long machine name does not truncate the bundle anchor",
+          len(long_name) == 32 and long_name.endswith("_12345"))
 
     # Asking twice replaces the draft rather than littering the library.
     error, again = correlate.draft_script(app.DB_PATH, bundle, actor="tester@example.com")
