@@ -2484,6 +2484,7 @@
     },
     "ask": {
       "title": "Preguntar por esta máquina"
+    },
     "discovery": {
       "title": "Descubrimiento de subred",
       "help": "Pedir a este PC que mire la red en la que está y liste todo lo que responda. Solo se pueden barrer las subredes en las que este PC está.",

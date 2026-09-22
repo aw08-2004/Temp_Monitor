@@ -2484,6 +2484,7 @@
     },
     "ask": {
       "title": "Diesen Rechner fragen"
+    },
     "discovery": {
       "title": "Subnetz-Erkennung",
       "help": "Diesen PC bitten, sein Netzwerk zu durchsuchen und alles aufzulisten, was antwortet. Nur Subnetze, in denen dieser PC selbst ist, können durchsucht werden.",

@@ -2597,6 +2597,7 @@
     },
     "ask": {
       "title": "Ask about this machine"
+    },
     "discovery": {
       "title": "Subnet discovery",
       "help": "Ask this PC to look at the network it is on and list everything that answers. Only the subnets this PC is itself on can be swept.",
