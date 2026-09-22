@@ -3412,8 +3412,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Encryption posture and the escrow index follow the hostname (roadmap #19), and the
     # escrowed passwords with them -- the secret blob is keyed by machine name, so moving the
     # index without it would leave the console listing keys the hub can no longer find.
-    bitlocker.rename_machine(DB_PATH, dropped, survivor)
-    bitlocker_web.move_escrow(LOG_DIR, dropped, survivor)
+    # The secret-store move is performed and verified before the database rename so that a
+    # failure (unavailable master key, unreadable source blob) preserves the dropped-to-
+    # survivor mapping rather than leaving the index pointing at keys the hub can no longer find.
+    if bitlocker_web.move_escrow(LOG_DIR, dropped, survivor):
+        bitlocker.rename_machine(DB_PATH, dropped, survivor)
     # Firmware update targets follow too, and the survivor's own row wins a collision --
     # both rows describe one physical machine, and it only needs flashing once.
     firmware.rename_machine(DB_PATH, dropped, survivor)
