@@ -363,6 +363,7 @@
         "other": "The watchdog “{watchdog}” stood down, re-reported {count} times. First reported {since}."
       },
       "ended": "The machine was coping again by {until}. Reported from {from}."
+    },
     "bundle": {
       "title": {
         "one": "{count} alert on {machine}",
