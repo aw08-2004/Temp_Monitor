@@ -327,6 +327,7 @@
         "other": "Der Wächter „{watchdog}“ hat aufgegeben, {count}-mal erneut gemeldet. Zuerst gemeldet {since}."
       },
       "ended": "Der Rechner kam bis {until} wieder zurecht. Gemeldet seit {from}."
+    },
     "bundle": {
       "title": {
         "one": "{count} Meldung auf {machine}",
