@@ -202,6 +202,17 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // so a settled desktop sends this once.
             var network = TempMonitorAgent.Network.NetworkInventoryReporter.TakeIfChanged();
             if (network is not null) body["network"] = network;
+            // BitLocker posture (roadmap #19): which volumes exist, whether they are
+            // protected, and the IDs of their key protectors. Same change-only discipline as
+            // its neighbours, and the longest cadence of any of them -- encryption state
+            // changes on the day somebody turns it on.
+            //
+            // **No recovery password is in here.** The hub answers this heartbeat with the
+            // protector IDs it is missing, and those passwords go to their own endpoint; see
+            // ApplyEscrowRequestFromHeartbeat below and SubmitBitLockerKeysAsync.
+            var encryption =
+                TempMonitorAgent.Security.BitLockerInventoryReporter.TakeIfChanged();
+            if (encryption is not null) body["bitlocker"] = encryption;
             // Available updates (roadmap #14). Change-only like its neighbours, with one
             // difference that matters: the payload is an OBJECT wrapping the list, so that a
             // machine with nothing left to install still sends something truthy. That report
@@ -250,9 +261,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             }
             if (!resp.IsSuccessStatusCode) return false;
 
+            if (encryption is not null)
+                TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
+
             var text = await resp.Content.ReadAsStringAsync(ct);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
+            ApplyEscrowRequestFromHeartbeat(text);
             ApplyLiveWatchFromHeartbeat(text);
             ApplyChannelFromHeartbeat(text);
             ApplyEventSubscriptionsFromHeartbeat(text);
@@ -498,6 +513,89 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // Deliberately does NOT clear the watch: a single unparseable reply is not the
             // hub saying "stop", and blanking an operator's live list over one bad response
             // would be a worse failure than sampling for one extra cycle.
+        }
+    }
+
+    /// <summary>
+    /// Note which BitLocker recovery passwords the hub says it is missing (roadmap #19).
+    ///
+    /// **Recorded, not acted on.** Reading a recovery password is several WMI round trips
+    /// against a provider that insists on an encrypted connection, and this is the heartbeat
+    /// -- the one call in this agent that decides whether the machine reads online. The
+    /// inventory loop calls <see cref="SubmitBitLockerKeysAsync"/> within its next tick.
+    ///
+    /// **An absent key means "do not send", not "send everything".** A hub with escrow turned
+    /// off omits the field entirely, and a hub older than this feature has never heard of it;
+    /// both must leave a machine offering nothing, which is what an empty list does.
+    /// </summary>
+    private void ApplyEscrowRequestFromHeartbeat(string body)
+    {
+        try
+        {
+            var ids = new List<string>();
+            if (JsonNode.Parse(body)?["bitlocker_escrow_wanted"] is JsonArray wanted)
+            {
+                foreach (var node in wanted)
+                {
+                    var id = node?.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                }
+            }
+            TempMonitorAgent.Security.BitLockerInventoryReporter.SetEscrowWanted(ids);
+        }
+        catch
+        {
+            // An unparseable reply leaves whatever was already pending in place. Clearing it
+            // would drop an escrow request over one bad response, and the key it names is the
+            // one nobody finds out is missing until the recovery screen.
+        }
+    }
+
+    /// <summary>
+    /// Send the recovery passwords the hub asked for, if it asked for any (roadmap #19).
+    /// Returns true when something was sent.
+    ///
+    /// Called from the inventory loop rather than the heartbeat, for the reason above. Failure
+    /// is silent and costs nothing: the hub re-states what it is missing on every heartbeat,
+    /// so a failed submission is retried by the next tick without any state to keep here.
+    /// </summary>
+    public async Task<bool> SubmitBitLockerKeysAsync(CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return false;
+        var wanted = TempMonitorAgent.Security.BitLockerInventoryReporter.TakeEscrowWanted();
+        if (wanted.Count == 0) return false;
+
+        JsonObject? payload;
+        try
+        {
+            payload = TempMonitorAgent.Security.BitLockerInventoryReporter.BuildEscrow(wanted);
+        }
+        catch (Exception e)
+        {
+            _log.LogDebug("BitLocker escrow read failed: {Msg}", e.Message);
+            return false;
+        }
+        if (payload is null) return false;
+
+        try
+        {
+            if (!Uri.TryCreate(AgentConfig.BitLockerKeysUrl, UriKind.Absolute, out var escrowUri)
+                || (escrowUri.Scheme != Uri.UriSchemeHttps && !escrowUri.IsLoopback))
+            {
+                _log.LogWarning("BitLocker escrow skipped: URL must be HTTPS or loopback HTTP ({Url})", AgentConfig.BitLockerKeysUrl);
+                return false;
+            }
+
+            using var req = Authorized(HttpMethod.Post, AgentConfig.BitLockerKeysUrl);
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("BitLocker escrow post failed: {Msg}", e.Message);
+            return false;
         }
     }
 
@@ -1210,6 +1308,41 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     }
 
     // ---------------------------------------------------------------- file explorer
+
+    /// <summary>
+    /// Report one network sweep's host list (roadmap #18). Returns true if the hub took it.
+    ///
+    /// Sent here rather than as the command's output for the same reason the listing above
+    /// is: a full /22 is a thousand rows, and the command channel is a terminal transcript.
+    /// The separation earns its keep twice over here -- a sweep whose POST was lost must not
+    /// look like a subnet with nothing on it, which is exactly the finding this feature
+    /// would then get wrong.
+    ///
+    /// NOT retried, for the listing's reason: an operator is watching the card, and a second
+    /// click gets a fresh sweep rather than a stale one replayed. What a lost report costs
+    /// here is one scan row marked failed with "the machine never sent its results back",
+    /// which is a truthful description of what happened.
+    /// </summary>
+    public async Task<bool> ReportSweepAsync(string scanId, JsonNode payload,
+                                             CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/discovery/scan/"
+                  + $"{Uri.EscapeDataString(scanId)}";
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused a network sweep ({Status})", (int)resp.StatusCode);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Sweep POST failed: {Msg}", e.Message);
+        }
+        return false;
+    }
 
     /// <summary>
     /// Report one directory listing. Returns true if the hub took it.

@@ -1,3 +1,5 @@
+using TempMonitorAgent.State;
+
 namespace TempMonitorAgent.Telemetry;
 
 /// <summary>
@@ -5,7 +7,7 @@ namespace TempMonitorAgent.Telemetry;
 /// should be reporting.
 ///
 /// **The cadence follows attention.** Ordinarily telemetry goes out every
-/// <see cref="AgentConfig.IntervalSeconds"/> with a full sensor block on every second one
+/// <see cref="RuntimeConfig.ReportIntervalSeconds"/> with a full sensor block on every second one
 /// -- which is about a dozen points a minute on a page whose charts are sixty seconds wide,
 /// so a three-second spike is one dot or none. While the hub says somebody is watching
 /// (<c>live_wanted</c> on the heartbeat, and on the watch poll beside it), the loop drops to
@@ -32,6 +34,10 @@ public static class LiveTelemetry
 
     private static readonly Lock Gate = new();
     private static bool _wanted;
+    /// <summary>What the hub asked for, UNCLAMPED. The ceiling is the ordinary reporting
+    /// cadence, and that is now an operator setting (roadmap #3) which can change after this
+    /// was stored -- so clamping on the way in would leave a stale bound behind. Clamped on
+    /// every read instead, against whatever the ordinary cadence is at that moment.</summary>
     private static int _intervalSeconds = AgentConfig.LiveIntervalSeconds;
 
     /// <summary>Is somebody watching this machine's charts? Set from the hub's replies.</summary>
@@ -47,7 +53,13 @@ public static class LiveTelemetry
     {
         get
         {
-            lock (Gate) return _wanted ? _intervalSeconds : AgentConfig.IntervalSeconds;
+            var ordinary = RuntimeConfigStore.Current.ReportIntervalSeconds;
+            lock (Gate)
+            {
+                return _wanted
+                    ? Math.Clamp(_intervalSeconds, MinIntervalSeconds, ordinary)
+                    : ordinary;
+            }
         }
     }
 
@@ -59,11 +71,7 @@ public static class LiveTelemetry
         lock (Gate)
         {
             _wanted = wanted;
-            if (intervalSeconds is int seconds)
-            {
-                _intervalSeconds = Math.Clamp(seconds, MinIntervalSeconds,
-                                              AgentConfig.IntervalSeconds);
-            }
+            if (intervalSeconds is int seconds) _intervalSeconds = seconds;
         }
     }
 }

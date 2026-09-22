@@ -29,7 +29,7 @@
 
     <!-- Assembly version drives the self-update version comparison. Keep in
          sync with AgentConfig.Version. -->
-    <Version>3.36.0</Version>
+    <Version>3.37.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -48,10 +48,12 @@
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="System.Management" Version="10.0.0" />
     <!-- System.Diagnostics.Eventing.Reader, for event log mining (roadmap #16). Not in the
-         box for net10.0-windows -- the Eventing.Reader API ships in this package rather than
-         in the framework, unlike on .NET Framework where it was built in. Pinned to the same
-         10.0.0 line as System.Management above. -->
-    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.0" />
+         box for net10.0-windows: the Eventing.Reader API ships in this package rather than
+         in the framework, unlike on .NET Framework where it was built in. 10.0.6 rather
+         than the 10.0.0 line System.Management sits on: ServiceController below is 10.0.6
+         and depends on this package at that version, so a 10.0.0 pin here is a NU1605
+         downgrade and this project does not restore at all. -->
+    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.6" />
     <!-- ServiceController, for restart_process: a process that hosts exactly one Windows
          service is restarted AS that service (stop, wait, start, wait, bring its dependents
          back) rather than killed. Killing it instead leaves the SCM believing it crashed,

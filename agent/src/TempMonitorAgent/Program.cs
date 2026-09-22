@@ -130,6 +130,12 @@ try
     // precondition half, turning this machine's own wake flags on and Fast Startup off.
     builder.Services.AddSingleton<ICommandExecutor, WakeMachineExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, PrepareWakeExecutor>();
+    // Network discovery (roadmap #18), and the third command in this list whose subject is
+    // not this machine: it ARPs one of the subnets this PC is already on and reports what
+    // answered. ARP rather than ping because a Windows PC at default firewall settings does
+    // not answer ICMP from an unknown host, so a ping sweep finds the printers and misses
+    // exactly the machines a shadow-IT hunt is about.
+    builder.Services.AddSingleton<ICommandExecutor, NetworkSweepExecutor>();
     // The machine Processes card. There is no list_processes executor to go with these:
     // reading the list is not a command at all, it rides the heartbeat while an operator has
     // the card open (see Telemetry/ProcessReporter). These two are the half that CHANGES the
