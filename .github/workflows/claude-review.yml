@@ -44,7 +44,7 @@ jobs:
       - name: Review
         uses: anthropics/claude-code-action@v1
         with:
-          allowed_bots: "claude"
+          allowed_bots: "claude,coderabbitai"
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
@@ -53,6 +53,8 @@ jobs:
             Review this pull request. The PR branch is already checked out.
 
             Review ONLY the diff, not the repository around it. `gh pr diff` is the change.
+            Read the surrounding files freely for context -- what a helper already does,
+            what the local conventions are -- but every finding must be about the diff.
 
             Look for, roughly in this order:
 
@@ -82,5 +84,11 @@ jobs:
             Use `mcp__github_inline_comment__create_inline_comment` (with `confirmed: true`)
             for anything anchored to a specific line.
 
+          # Read, Glob and Grep are read-only, and they are here because points 3 and 4 of
+          # the prompt ask for judgements the diff alone cannot support: whether a change
+          # matches the conventions of the file it landed in, and which helper already
+          # exists. Without them the reviewer tries anyway and spends a turn per denial.
+          # They need no new job permission -- the checkout is already on disk from the
+          # step above, and `contents: read` is unchanged. Nothing here may write.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git show:*)"
+            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git log:*),Bash(git show:*)"

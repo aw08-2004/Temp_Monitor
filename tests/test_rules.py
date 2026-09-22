@@ -1107,6 +1107,18 @@ check("an unset parameter is not materialised", err is None
 check("update_bios cannot be issued by a rule (its id is minted per window)",
       val_actions([{"type": "command", "params": {
           "command_type": "update_bios", "params": {"update_id": "x"}}}])[0] is not None)
+check("network_sweep cannot be issued by a rule without a discovery scan",
+      val_actions([{"type": "command", "params": {
+          "command_type": "network_sweep",
+          "params": {"scan_id": "bypass", "subnet": "10.4.7.0/24"}}}])[0] is not None)
+legacy_sweep = rules.dispatch_actions(
+    DB,
+    [{"type": "command", "params": {
+        "command_type": "network_sweep",
+        "params": {"scan_id": "bypass", "subnet": "10.4.7.0/24"}}}],
+    "PC1", {}, rule={"id": "legacy"}, now=NOW, config={"actions_enabled": True})
+check("a legacy network_sweep rule is skipped instead of bypassing discovery",
+      legacy_sweep[0].get("skipped") == "network sweeps are started from the Discovery card")
 
 # THE regression this whole change hangs on: a follow-up is validated by the same funnel as a
 # top-level action. There is one _validate_action; a second path would eventually disagree.

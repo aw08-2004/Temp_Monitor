@@ -121,9 +121,9 @@ block — no new `/api/report` field, and an older hub ignores them. A machine t
 sending them (an agent below 3.10.0) falls back to LHM's per-device
 percentage and shows the bar without the GB line.
 
-## 🚧 3. Settings: which sensors to read, data retention, etc.
+## ✅ 3. Settings: which sensors to read, data retention, etc.   ·   per-metric retention, cadence and the GPU/disk/network picks — **hub 1.120.0 + agent (next release)**
 
-Mostly done:
+Done:
 - `computer.primary_sensor_preference` — ordered CPU-temp sensor preference (+ per-machine
   override).
 - `metrics.collect_cpu_load` / `collect_memory` / `collect_gpu` / `collect_disk` /
@@ -152,10 +152,68 @@ Upgrading hubs get a **disabled** rule named "High temperature", seeded by
 Both settings are gone from the registry. `alerts.KIND_HIGH_TEMP` survives as a read-only kind
 so alerts raised before the upgrade still render and can still be dismissed.
 
-Remaining gaps: no per-metric retention (one global window for all readings), no
-sampling/reporting-cadence setting, no sensor *preference* list for GPU/disk/network (only CPU
-temp has one — the others are on/off only). Fold these in opportunistically; no dedicated
-feature push planned.
+### The three gaps, closed · hub 1.120.0 + agent (next release)
+
+This entry used to end "fold these in opportunistically". All three are now in.
+
+**Per-metric retention.** One window per collection toggle —
+`metrics.retention_days_cpu_load`, `..._memory`, `..._gpu`, `..._disk`, `..._disk_io`,
+`..._network`, `..._fans`, `..._power` — pruned by `app.prune_metric_columns_once`, on the
+same tick as the row prune and after it.
+
+The shape that made this possible is **NULL, not DELETE**. A `readings` row is one sample:
+temperature (the core metric, no toggle and no window of its own) plus twelve optional columns.
+"Keep network for 7 days and temperature for 30" can therefore only mean blanking
+`net_rx_bps`/`net_tx_bps` — and a NULL there is *already* what a metric whose collection
+toggle is off stores, so the bucketing, the charts and the history endpoint needed no change to
+read it. A metric turned off and a metric aged out look identical downstream, deliberately: in
+both cases the honest answer is "not recorded".
+
+0 means "follow `data.retention_days`" and is the default for all eight, so an untouched hub
+prunes exactly as before. A window longer than the fleet-wide one is **dropped rather than
+honoured** — the row is deleted there, so there is nothing to keep, and honouring it would
+mean reporting a prune that never happens.
+
+*Rejected:* one extra knob covering all non-temperature metrics. Cheaper, but it answers the
+wrong question — the reason to shorten a window is that *this* metric is noisy, and the
+grouping an operator already thinks in is the collection toggles'. *Also rejected:* deriving
+each retention key from its toggle key by string surgery. One source of truth, but a derivation
+that produced a key the registry lacks would fail in a background thread on the one hub that
+set the value; `app.METRIC_COLUMN_RETENTION` is explicit and `tests/test_metric_retention.py`
+pins it to the toggles instead.
+
+**Sampling/reporting cadence.** `metrics.report_interval_seconds` (5) and
+`metrics.sensor_interval_seconds` (10), both `agent=True`, replacing
+`AgentConfig.IntervalSeconds` and `.SensorIntervalSeconds` as the numbers the telemetry loop
+actually paces on. The sensor cadence is clamped up to the report cadence rather than refused:
+a sensor block can only ride on a report, and "put it on every one" is a sensible thing to ask
+for.
+
+Neither touches liveness — the heartbeat is its own 10-second loop and it is what `last_seen`
+and the offline window follow — and neither touches the watched-machine path, which stays at
+1 Hz because that cadence exists to make a three-second spike visible. **The one thing to know:
+an agent that predates these keys ignores them and keeps its compiled 5/10.** Nothing breaks,
+but the setting silently does nothing on that machine until the fleet is updated, which is why
+the help text says so.
+
+**Sensor preference lists for GPU, disk and network.** `computer.gpu_temp_preference`,
+`gpu_load_preference`, `disk_preference`, `network_preference`.
+
+These are **hub-side, unlike the CPU one**, and that is the whole reason they were cheap: the
+agent picks the CPU temperature, but GPU, disk and network are re-derived by the hub out of the
+full sensor block on every read (`app.extract_diagnostics`). So they apply immediately to every
+agent already in the field, including ones far too old to have heard of them.
+
+The two GPU lists match a sensor name, as the CPU one does. Disk and network match a *hardware*
+name, because the question there is which device: which of four drives, which of twenty-six
+adapters. Both ship empty, meaning the behaviour that predates them — the first "Used Space"
+in block order, and the busiest NIC. Busiest is a good heuristic and wrong exactly where it
+matters: a Hyper-V switch bridged onto the office NIC carries the same traffic, and a docked
+laptop has two adapters that trade places. A named device absent from a block falls back rather
+than charting a gap.
+
+*Rejected:* pushing these to the agent beside the CPU preference. It would have needed an agent
+release to reach anything, for a pick the hub already re-does itself on every read.
 
 ---
 
@@ -1987,7 +2045,7 @@ comes online.
 
 ---
 
-## 🚧 11. Desktop & mobile app   ·   hub 1.69.0   ·   client 1.1.0
+## 🚧 11. Desktop & mobile app   ·   hub 1.69.0 + 1.119.0   ·   client 1.1.0
 
 **The hub half is built (1.69.0), 1.0.0 is published on stable, and 1.1.0 is signed and
 published on the BETA channel** (roadmap #21) — one version sequence, so promoting it is
@@ -2260,8 +2318,82 @@ warning, the same shape as its existing version-agreement check.
   an unsigned zip is a folder. Revisit as MSIX once there is a code-signing certificate,
   which is also what would let toasts stop depending on `local_notifier`'s Start Menu
   shortcut for an application identity.
-- **Phase 2**: the Android/iOS builds, FCM/APNs against the `push_*` columns already in
-  place, and the bundled localization described above. Scoped in detail below.
+- **Phase 2**: the Android/iOS builds and the bundled localization described above. The
+  hub half of push now exists (hub 1.119.0, below); what remains is the Android project
+  itself, which is where the FCM plugin and the two localization keys live.
+
+### Built (hub side) — push, phase 2's prerequisite   ·   hub 1.119.0
+
+**The gap named below is closed on the hub side.** `push.py` (model, flask-free) +
+`push_web.py` (three device-only routes), a `push` transport in `notify.py`, and
+`FleetApi`'s four calls in the Flutter client. The `push_kind` / `push_token` columns that
+have sat unused on `api_tokens` since the pairing work are now written by something.
+
+**The delta is computed by a scan, not signalled from the alert raise path**, and that is
+the decision the rest follows from. A callback would have had to live in
+`alerts.upsert_rule`, which cannot today tell a NEW episode from the refresh of a running
+one -- so a rule matched for a week would push on every evaluation tick, which is the
+notification storm the client's `_priming` exists to prevent, arriving at 02:00 every ten
+seconds. Instead each device carries a cursor and the scan works out what it has not been
+told about, which is the same shape as the client's own seen-set: the phone and the desktop
+agree about what "new" means rather than holding two definitions that drift.
+
+- **Priming, at registration.** A phone paired on a Monday is told about nothing that
+  already existed. The alternative -- deliver the open-alert backlog -- is what teaches
+  somebody to swipe FleetHub notifications away unread, and the one they eventually swipe
+  away unread is the one that mattered.
+- **Delivery is not readership.** The cursor moves forward only when the app says the list
+  was opened (`/api/push/seen`). Advancing it on delivery instead is how the fourth alert
+  of the night arrives announcing "1" -- the count being wrong at exactly the moment the
+  count is the whole message.
+- **Scope is intersected LIVE, exactly as `permissions_web._narrow_to_device` does it.**
+  This path runs with no request to read permissions off, so the intersection had to be
+  rebuilt here rather than inherited. Without it, a device paired while its owner was an
+  admin would go on being told about machines its own API calls now refuse to show it --
+  the credential outliving the grant, in the one place nobody would think to look. Tested
+  by demoting the owner AFTER pairing, which is the sequence that would otherwise pass.
+- **The payload carries a COUNT and no content.** Not the machine, not the rule, not a
+  temperature. Two reasons that agree: a push transits Google's servers and a helpdesk's
+  machine names are the inventory of somebody's estate; and a notification is a nudge to
+  open the app, where the list is already scoped and already correct.
+- **The words come from the DEVICE, via `title_loc_key` / `body_loc_key`.** FCM and APNs
+  both resolve a localization key against the app's own bundled catalog, which is a better
+  fit than rendering here even setting aside the hub not knowing the phone's language: this
+  entry chose bundled catalogs over fetched ones because the app gets opened in a car park
+  with no signal, and a hub-rendered body would be the one string left depending on a round
+  trip. `push_title` and `push_alerts` are therefore a compatibility API in the same sense
+  as the `MIN_*_AGENT` constants -- rename one and every phone shows its raw key.
+- **Delivery rides notify.py's outbox rather than a second queue.** Durability across a
+  restart, backoff, and not blocking the thread that noticed are all things that module
+  already does. A 404 or 403 from FCM is treated as PERMANENT and clears the registration:
+  it means the app was uninstalled, and retrying it five times per alert for a phone that
+  no longer exists fills the outbox with noise that hides the failures worth reading.
+- **APNs is refused, not omitted.** `apns` is a valid registration kind so the registry is
+  right the day an iOS build exists, but the transport raises with the reason. APNs is
+  HTTP/2 and `requests` is not, so building it means a second HTTP client in the hub's
+  requirements -- for a platform needing an Apple Developer account this project does not
+  have, against a build that has never been produced. It would be an untested dependency by
+  the time anyone could use it.
+- **`google-auth` was rejected** for the same shape of reason. The service-account
+  assertion is thirty lines of RS256 against `cryptography`, which backups.py already
+  depends on; the library brings a transport stack, a credentials-discovery chain and an
+  async half, and this hub's dependency list is read by whoever has to approve an install
+  on a helpdesk's server.
+- **Credentials go in .env** (`FCM_SERVICE_ACCOUNT`, a PATH to the JSON key file), never
+  the settings table -- the same rule that keeps SMTP credentials and the BIOS setup
+  password out of a database that is inside the nightly backup.
+
+**What this does NOT include, and deliberately:** there is no console indicator of which
+devices are registered. The Devices tab still shows what it showed. That is a Tailwind
+rebuild plus a locale sweep for a column nobody needs until a phone exists to appear in it,
+and `/api/push/status` already tells the app both halves of the answer -- whether the hub
+has credentials, and whether this install registered.
+
+**Untested against anything real**, and the honest boundary is the same one the rest of
+this entry draws: `scan`, the scoping, the priming and the message shape are covered by
+`tests/test_push.py` (46 checks) and `tests/test_push_web.py` (25), but no push has ever
+reached a phone, because that needs a Firebase project, an Android build and a device. The
+first-contact-with-hardware finding this entry keeps predicting is still ahead of it.
 
 ### Phase 2 — what an Android build actually costs
 
@@ -2310,6 +2442,13 @@ useful. That work is: a Firebase project, a hub-side sender against the `push_ki
 token, and **content-free payloads** ("3 alerts", tap to open) so no machine name or
 temperature transits Google. iOS is the same shape with APNs, plus an Apple Developer
 account, and would appear on the Download page as a `link`-kind build rather than a file.
+
+**Everything in that sentence except the Firebase project now exists** -- see the hub 1.119.0
+section above, which also records why APNs is a refusal rather than a gap. What is left on
+the app side is the Android project itself: the FCM plugin that produces a registration
+token, the two calls to `/api/push/register` and `/api/push/seen` (already written, as
+`FleetApi.registerPush` and `FleetApi.pushSeen`), and `push_title` / `push_alerts` in the
+Android string resources, without which every notification displays its own key.
 
 **Build prerequisites**, none of which are on the current build machine: the Android SDK
 and a JDK (`flutter doctor` currently reports "Unable to locate Android SDK"), plus the
@@ -2537,7 +2676,7 @@ what survived, and why the rest did not. The two decisions that framed the triag
 
 | PRD item | Verdict |
 |---|---|
-| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. IP-range scan, Intune sync and shadow-IT detection are not built → **#18**. |
+| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining → part of **#17**. |
 | FR-03 Alert brain | **Substrate exists** — `alerts.py` already keeps episodes and `rules.py` keeps `rule_fires`. Grouping, correlation and recommended-fix → **#17**, deliberately *after* #14 and #16, which are what give it something to correlate. |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
@@ -2866,7 +3005,7 @@ number, not a target). Whether a bundle is a first-class row or a view over aler
 
 ---
 
-## 📋 18. Network discovery and shadow IT
+## 🚧 18. Network discovery and shadow IT   ·   sweep + classification hub 1.125.0 (agent half unreleased)
 
 The half of FR-01 that #4 does not cover: an IP-range sweep from an agent already on that
 subnet — the same peer-relay trick #10 uses for Wake-on-LAN, since the hub is usually not on
@@ -2874,20 +3013,95 @@ the network it is being asked about — plus an Intune/Azure device cross-refere
 for anything on the wire that no hub knows about.
 
 Lower priority than it looks. On a fleet where enrollment is driven by MDM the answer is
-usually "nothing", and a discovery sweep is a scanner pointed at a colleague's network.
+usually "nothing", and a discovery sweep is a scanner pointed at a colleague's network. That
+sentence is why the first slice is shaped the way it is rather than why it was deferred
+again: everything below narrows the feature until it cannot be pointed anywhere.
 
-**Open parameters.** Whether discovery is scheduled or on demand. What a discovered-but-not-
-managed device is allowed to become without someone approving it.
+**Built: the sweep and the classification.** `discovery.py` (model, Flask-free) +
+`discovery_web.py` (console and agent API), a `discovery_scans` / `discovery_hosts` schema,
+a Discovery card on the machine page's Network tab, one `discovery.*` setting, and one new
+command type — `network_sweep`, issued to a machine that is already on the subnet. Agent
+half: `Network/NetworkSweepExecutor.cs` and `FleetClient.ReportSweepAsync`. **The agent half
+is on `main` unreleased** — the hub ships first, as always, and the sweep starts working on a
+machine when its agent is next cut and propagates.
+
+**Both open parameters resolved, and both resolved narrowly:**
+
+- **Discovery is ON DEMAND, and there is no schedule.** A subnet list plus a timer is exactly
+  what would turn this into the thing the paragraph above is uneasy about — a scanner
+  running against a network on its own, aimed at a range somebody typed once. A sweep has a
+  named operator, a `LEVEL_NOTICE` audit row and one target chosen from the machine's own
+  adapters. The scheduled version is worth revisiting only once somebody has wanted the
+  manual one twice.
+- **A discovered device is allowed to become NOTHING.** No enrollment, no naming, no
+  grouping, no alert, no command. It is a row and a count. The reason is not caution for its
+  own sake: the classification is a MAC match, and a MAC is a claim a device makes about
+  itself, so an automatic action on one lets anything on the segment decide what the fleet
+  does about it.
+
+**Three decisions worth carrying forward:**
+
+- **ARP, not ping, and the choice is the feature.** A Windows PC at default firewall settings
+  does not answer ICMP from an unknown host, so a ping sweep of an office subnet finds the
+  printers and misses the PCs — the exact inverse of what a shadow-IT hunt is for. A host
+  cannot decline to answer ARP and stay reachable on the segment, so ARP is the one probe
+  whose silence really means nothing is there. `SendARP` also needs no raw socket, which
+  keeps a packet crafter out of the agent.
+- **A sweep can only look at a subnet the relay is itself on, and that bound is doing two
+  jobs.** ARP does not cross a router, so it is first a statement of fact. But it is also why
+  this cannot be aimed: the target is not a range an operator types, it is one of the subnets
+  the chosen machine has already reported living on, and `request_scan` refuses anything
+  else. The console offers a picker rather than a text field for the same reason.
+- **Classification is computed at READ time, against `machine_nics` as it stands now.** A
+  machine enrolled an hour after a sweep turns that scan's "unknown device" into itself,
+  because it IS itself; a machine deleted from the fleet turns back into a finding. Storing
+  the verdict at ingest would freeze the fleet as it was when the packets went out, and one
+  stale false alarm is what teaches a helpdesk to stop reading a shadow-IT list.
+
+**Deliberately NOT in this slice**, each with the reason rather than as a to-do list:
+
+- **The Intune/Azure cross-reference.** It needs a Graph credential in the hub's secret
+  store, a token refresh path and a device-matching rule of its own — a feature the size of
+  #4, not a column on this card. It is also the half with the least to say on a fleet whose
+  enrollment is already MDM-driven: a device in Intune and not in the hub is a hub gap, which
+  is #4's subject.
+- **A fleet-wide sweep verb.** #10 has one, so its absence here needs saying: a wake is one
+  UDP frame per target, a sweep is a few hundred ARP probes per subnet, and one click that
+  does that across every site at once is the shape of the worry at the top of this entry.
+- **MAC vendor (OUI) lookup.** It would make the unmanaged column far more readable — most
+  of it is printers and access points — but it needs a vendor table to carry and keep
+  current, and a stale one mislabels rather than fails. Worth doing; worth doing on purpose.
+- **An agent-version gate on the card.** Every other version-sensitive surface has a `MIN_*`
+  constant in `hub/static/js/`; this one has none, because an agent too old for the executor
+  fails the command with `unknown command type: network_sweep`, which the card renders
+  verbatim. Telling the operator what is actually wrong beats a button that is absent for
+  reasons the console cannot explain — and the constant would have had to name a release
+  that has not been cut.
+
+**What is tested, stated precisely, because the two halves are not in the same state.** The
+hub half is exercised against literal payloads with no network at all -- `tests/
+test_discovery.py` and `tests/test_discovery_web.py`. **The agent half has no tests and has
+never been executed**; it was COMPILED (`dotnet build ... -p:EnableWindowsTargeting=true`,
+clean), which is worth doing and caught a `Dns.GetHostEntryAsync` overload that does not
+exist, but compiling is not running. The agent test host wants `Microsoft.WindowsDesktop.App`,
+which has no Linux build, so nothing here has executed a single line of
+`NetworkSweepExecutor`.
+
+What neither could cover is `SendARP` against real hardware -- how long an unanswered address
+actually blocks for, whether 32 probes in flight is polite on a busy segment, what a VPN or
+Hyper-V virtual switch does to the interface Windows picks, and whether reverse DNS on a
+Windows domain is fast enough to be worth the ten-second budget. Expect the same shape of
+finding #10's `NicReader` produced on first contact.
 
 ---
 
-## 📋 19. Endpoint security odds and ends
+## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.121.0**
 
-Three small things from FR-06 and FR-07 that share no code but are each about a day:
+Three small things from FR-06 and FR-07 that share no code but are each about a day. The
+first is built; the other two are not.
 
-- **BitLocker key escrow.** Auto-enable, and escrow the recovery key into the
-  master-key-wrapped secret store `backups.py` already provides and the BIOS setup password
-  already uses. The custody warning that applies to `BACKUP_MASTER_KEY` applies double here.
+- **BitLocker key escrow.** ✅ **Done, hub 1.121.0** — see below. Auto-enable is deliberately
+  NOT part of it; see *Rejected alternatives*.
 - **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
   inventory already collects, plus a policy list — no new channel, and worth being honest in
   the UI that a policy list is not an enforcement.
@@ -2895,6 +3109,101 @@ Three small things from FR-06 and FR-07 that share no code but are each about a 
   outside the hub DB. The one with real cost, and the one with a real question attached:
   recording a colleague's screen is a decision to take deliberately, not a default to leave
   on.
+
+### BitLocker key escrow · hub 1.121.0 · `bitlocker.py` / `bitlocker_web.py`
+
+**The failure this closes is the one that costs a machine.** BitLocker locks a volume on its
+own — a firmware update that moves the TPM measurement, a disk moved into another chassis, a
+user who fails the PIN often enough — and at that point the 48-digit recovery password is the
+only way back in. Before this the hub could see that a PC existed and could not say whether
+anybody held its key, so the honest answer to "we are locked out of OTTOWIENS" was to reimage
+it. A key nobody escrowed is discovered missing exactly once, at the worst moment, by somebody
+who cannot do anything about it.
+
+**Posture is stored in the database; recovery passwords never are.** The passwords go into the
+`.env`-master-key-wrapped sidecar `backups.py` already gives the BIOS setup password, keyed by
+machine name so a blob copied between machines fails to decrypt rather than being handed to the
+wrong PC. `fleet.db` keeps only the protector *ids* — a GUID is an index, not a secret. That
+split is what makes the rest cheap: deciding what the hub is missing is plain SQL on the
+heartbeat path, the secret store opens only when a key arrives or an operator asks, and no
+recovery password is ever inside the file `backup.hub_enabled` copies to a bucket.
+
+**Keys do not ride the heartbeat.** The heartbeat carries posture; the hub answers with
+`bitlocker_escrow_wanted`, the ids it has no row for; the agent then POSTs exactly those to
+`/api/agent/bitlocker/keys`. Three properties fall out and each was the point: a settled fleet
+transmits no key material at all, a protector rotated on a machine is picked up within one
+heartbeat with nothing scheduled, and the hub asks for what it lacks rather than being handed
+everything every time. The server recomputes the wanted set when the keys arrive, so an
+enrolled agent cannot file ids it invented.
+
+**Reading a key is an event, not a lookup.** `POST /api/bitlocker/<machine>/reveal` behind the
+new `read_recovery_keys` capability plus machine scope, one protector per call, named in the
+body rather than the path (a URL is kept by browser history, proxies and screenshots), audited
+at security level *before* the key is produced. That audit row is the whole argument for a hub
+holding these keys at all.
+
+**A key is never deleted because a machine stopped reporting its protector.** A decrypted disk
+or a half-failed inventory leaves the escrowed password exactly where it was; the orphan is
+shown on the card instead of pruned. Pruning on report would make one bad inventory the thing
+that erases the only copy of a key — the failure this feature exists to prevent, arriving by a
+new route. The one place that destroys a key is deleting the machine, which already means "this
+PC is gone".
+
+### Decisions
+
+- **Its own capability, not `manage_backups`.** The store is an implementation detail the two
+  happen to share. Folding them together would have granted the fleet's recovery passwords
+  silently, on the day it shipped, to everyone who could configure a backup destination.
+- **Reading the posture is `view`.** Whether a laptop is encrypted is inventory in the sense
+  its model and its disks are. Holding the key is the privilege; knowing the lock exists is not.
+- **`security.escrow_bitlocker_keys` defaults ON**, which is the opposite of how the backup
+  toggles default, and the difference is which way each fails. A backup that runs unasked
+  writes somebody's files to a bucket they did not choose; escrow that does not run costs a
+  machine. It is already gated by a deliberate act — no `BACKUP_MASTER_KEY`, no collection.
+  Turning it off stops collection and never deletes what is escrowed.
+- **No agent version gate on the card**, unlike the Files and Processes tabs. Nothing on it
+  asks a machine to do anything, so `support: null` — "no agent has told us" — already says
+  what a `MIN_*_AGENT` constant would, and says it correctly for a machine that is merely
+  offline.
+- **Protector kinds are flattened to two on the wire**, `recovery_password` or `other`, rather
+  than Microsoft's eleven-value enum. The only decision the hub makes with the answer is
+  whether there is a transferable secret to ask for; shipping the full enum invites the hub to
+  grow opinions about TPM-and-PIN that belong on the machine, which is #9's argument for
+  keeping vendor dispatch off the hub.
+
+### Rejected alternatives
+
+- **Auto-enabling BitLocker across the fleet**, which the original bullet above named. Turning
+  encryption *on* is a different risk class from storing the key: it is a long conversion on a
+  machine somebody is using, it can want a TPM that is not initialised, and on a misconfigured
+  volume it is how a fleet locks itself out — which is the exact outcome this feature exists to
+  make survivable. Escrow first, so that when auto-enable is built there is already somewhere
+  for its keys to go. Still open.
+- **Escrowing to Active Directory instead.** `BackupRecoveryInformationToActiveDirectory` is
+  right there on the WMI class and is the answer for a fleet with a healthy DC. It was not
+  chosen because #4's entry records that this deployment's directory integration has never run
+  against a real DC, and because a hub that cannot read the key it tells you exists is not
+  escrow. The two are not exclusive — a later change can call it as well.
+- **Storing the passwords in `fleet.db` beside the posture.** One table, no sidecar, no master
+  key. Rejected: that file is what `backup.hub_enabled` ships offsite, so every recovery
+  password in the fleet would land in a bucket with it.
+- **Pruning escrowed keys the machine no longer reports.** Tidier, and the one form of
+  tidiness that can destroy the thing the feature is for.
+- **A fleet-wide encryption posture view.** That is #25 phase D's, which this board already
+  splits the same way: #25 *reports* a posture, #19 *acts* on one. Building it here would have
+  been two answers to one question in two places.
+
+### Not done
+
+- Auto-enable (above), and the other two bullets of #19.
+- **The agent half has never been compiled or run.** There is no .NET toolchain on the machine
+  it was written on and no CI job builds the Windows agent, so `BitLockerReader` is syntax-
+  checked and reviewed against the `Win32_EncryptableVolume` documentation and nothing more.
+  It also carries no agent release: source stays at 3.36.0 and this rides whichever release is
+  cut next, the way #14 and #21 shared one.
+- **`PrecisionFactor`, `GetLockStatus` and free-space wiping are not read.** The class exposes
+  `ConversionStatus` and `EncryptionMethod` as plain properties, which is all the card shows;
+  the method forms exist for real-time answers nobody is asking for here.
 
 ---
 
@@ -3312,9 +3621,10 @@ the separate facts they are. And `FleetClient` logged the missing-secret warning
 30-second retry forever, which on a ring-buffered logcat steadily evicts everything else the
 agent said.
 
-`show_message` is the obvious next command (the one place a phone beats a PC), and FCM against
-the `push_*` columns already on `api_tokens` is what would let the command loop stop holding a
-request every 25 seconds.
+`show_message` -- the one place a phone beats a PC -- is **done**, unreleased on `main`; see
+*Messages to the person holding the device* below. FCM against the `push_*` columns already on
+`api_tokens` is what would let the command loop stop holding a request every 25 seconds, and is
+now the next thing worth doing here.
 
 ### Full trimming switched off System.Text.Json reflection · agent 0.2.3
 
@@ -4583,6 +4893,64 @@ No agent release is cut for this. The agent half is on `main` unreleased, so a m
 the field gets the hub half now — which is what makes the *uninstall* path work — and the
 in-service recovery when the next agent release ships.
 
+## ✅ Messages to the person holding the device · agent-android, unreleased
+
+The last of #23's software phases, and the only command in the hub's catalog where a phone is
+**better** than a PC rather than a smaller version of it. `show_message` has been in
+`fleet.py`'s catalog and in the rules engine's action list since the rules engine shipped; the
+Windows agent answers it with a desktop dialog. An Android device answered "not implemented",
+which was the honest answer and the wrong one to leave standing -- a notice on a desktop waits
+for somebody to come back to their desk, and the same notice on the phone in their pocket is
+answered in a corridor.
+
+Nothing on the hub changes. The command type, its parameters, its outcome vocabulary and the
+follow-up routing in `rules.handle_message_result` all already exist, and the phone starts
+receiving the command because its heartbeat's `commands` list is **derived from its executor
+set** -- the machinery hub 1.98.0 built for exactly this. That is the payoff of capabilities
+over `MIN_*_AGENT` constants stated concretely: a phone learned a command and the console
+started offering it, with no hub release and no version gate anywhere.
+
+**The full contract, or the routing strands.** The hub remembers the command id, waits for an
+answer and maps the outcome onto follow-up actions. An agent that posted a notice and reported
+success would leave every rule holding a message nobody ever answers, and the symptom is a rule
+that silently never reaches its second half -- not an error, a branch that never fires. So the
+device reports one of the hub's own outcome strings, and an outcome the platform half invents
+is clamped to `failed` rather than passed through, because `handle_message_result` records an
+unmapped outcome and deliberately does nothing with it.
+
+### Rejected alternatives
+
+- **An Activity showing a real dialog**, to match Windows. Android 10 and later refuse to let a
+  background app start an activity at all; the sanctioned way round it is a full-screen-intent
+  notification, and from Android 14 that intent's permission is granted only to calling and
+  alarm apps. So the dialog buys a message that shows on some devices and silently does not on
+  others, in exchange for looking like the other agent. A heads-up notification with two
+  buttons is also simply what a phone user expects an answerable message to look like.
+- **Truncating a four-button message to the three Android can draw.** Rejected: the fourth
+  button's route in the hub would be one nobody can ever reach, which reads in the console as a
+  configured branch that only ever times out. It comes back `failed` naming the limit instead.
+  None of `rules.py`'s presets asks for four.
+- **`setOngoing`, so the notice cannot be swiped away.** Rejected: `dismissed` is one of the
+  hub's four non-button outcomes and rules route on it. Making dismissal impossible would
+  delete a branch operators can configure, and turn those messages into timeouts an hour later.
+  Somebody declining to engage is an answer.
+- **Honouring `timeout_seconds: 0` as "wait forever"**, which is what the Windows executor does.
+  Rejected: a waiting message holds one of the agent's concurrent command slots, so on a phone
+  that is a device which shows online and accepts nothing, with nothing failing anywhere. An
+  unbounded message gets an hour; a bounded one is clamped to the same range `rules.py`
+  enforces. The slot count moved from 2 to 4 in the same change, because the comment justifying
+  2 said nothing on this agent could occupy a slot for ten minutes and that stopped being true.
+- **An i18n layer in the agent for the seven preset button labels.** Rejected: the hub's
+  catalogs cover the console, and a second string table on the device is a second place for the
+  words to disagree. An operator's own label is used verbatim, which is the case that matters.
+
+**Not built, and not seen on a device.** The Core half is under test with the rest; the Android
+half was type-checked against the `Mono.Android` reference assembly rather than compiled into an
+APK, because the Android platform SDK downloads from `dl.google.com` and the session had no
+route to it. The hardware table below carries what that leaves open.
+
+---
+
 ## 📋 Hardware validation still owed (roadmap #23)
 
 **Nothing in phases F.1, A, B or C has been exercised on a real device.** The work was built and
@@ -4600,6 +4968,7 @@ This is that list, so nothing is quietly skipped:
 | **D policy** | Apply a blocklist to one test app and confirm the system's "paused by your organisation" dialog; confirm the console shows it as enforced from the device's OWN inventory; confirm a package that cannot be suspended comes back in `failed`; **delete the policy and confirm the app comes back** (the empty-document release valve); confirm the dead-man switch by setting a short `policy.max_age_seconds` and taking the device off the network |
 | **H** | `lock_device` on the pilot: the screen locks and the console shows the row. Confirm the card is absent on a Windows PC, that a helpdesk account with `issue_commands` sees no buttons, and that a wrong typed name is refused by the API and not only by the page. **Wipe on a scratch device only**, and check both `reset_protection` answers: cleared means it can be set up again, kept means it asks for the previous account |
 | **#22 self-update** | Cut a `0.2.0` of each agent and confirm each machine takes ITS OWN build: the Linux box updates from the Linux manifest, the phone from the Android one, and neither is ever offered the Windows exe. On the phone confirm the install is silent and the agent comes back on its own (ACTION_MY_PACKAGE_REPLACED) rather than sitting stopped. Confirm a device that is NOT a device owner declines rather than raising the system installer. Confirm the dashboard's outdated count is right per platform. Then break one on purpose: serve a manifest signed with the wrong key and confirm both agents refuse it |
+| **show_message** | Send a notice from a rule with a Yes / No / Later preset: the heads-up banner appears with three buttons, pressing one reports that id inside a second and the console's rule history shows the follow-up firing; swiping the notice away reports `dismissed` and not a timeout; a message left alone for its timeout reports `timeout` and the notification is gone afterwards; with notifications switched off for the agent in Settings it comes back `no_session` with the reason, and NOT as a failed command |
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
 **Also owed, and not from #23: roadmap #16's event log query.** Nothing in the collection
@@ -4742,11 +5111,19 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     since 1.118.0. The deterministic half can be built the day both land; the language layer
     above it is gated on a pluggable AI provider that does not exist yet, and that provider
     is the one piece of new plumbing this item introduces.
-18. **#18 Network discovery and shadow IT** — no prerequisite, low expected yield on an
-    MDM-driven fleet. Sequenced late for that reason rather than for difficulty.
+18. **#18 Network discovery and shadow IT** — first slice built: an ARP sweep run by a
+    machine already on the subnet, and every answer classified against the NIC inventory #10
+    already collects. No prerequisite, low expected yield on an MDM-driven fleet, sequenced
+    late for that reason rather than for difficulty. The Intune cross-reference and a
+    scheduled sweep were both left out on purpose — see the entry above.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
-    forward on its own if a need appears. BitLocker escrow reuses the `backups.py` secret
-    store and is the smallest genuinely useful thing on this list.
+    forward on its own if a need appears, and **BitLocker escrow was** (hub 1.121.0), on that
+    line's own argument: it reuses the `backups.py` secret store and is the smallest genuinely
+    useful thing on this list. Pulled ahead of #16–#18 because it needed none of them and
+    because a fleet with no escrowed keys is losing machines today rather than later. Shadow-AI
+    detection now has a real prerequisite that did not exist when this was written — #25 phase
+    B's Windows software inventory — and remote session recording is still the one with a
+    question attached rather than a cost.
 20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
     engine to grow a second evaluation site (on the agent), and that is a bigger change to a
     working feature than any of the above make.

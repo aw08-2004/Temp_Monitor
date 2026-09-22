@@ -143,11 +143,11 @@ public sealed class AgentService : Service
         _sensors = new AndroidSensorReader(this, _loggerFactory.CreateLogger("Sensors"));
         _reporter = new TelemetryReporter(
             _loggerFactory.CreateLogger<TelemetryReporter>(), identity, _names);
-        // The executors, which are the whole of what this agent can be TOLD to do today. Two
+        // The executors, which are the whole of what this agent can be TOLD to do today. Five
         // out of the hub's ~thirty command types, and the gap is a platform limit rather than a
         // backlog: see CommandDispatcher, which distinguishes the commands Android forbids from
         // the ones simply not written yet. The hub is told this exact set on every heartbeat
-        // (AgentCapabilities), which is what stops it queueing the other twenty-eight.
+        // (AgentCapabilities), which is what stops it queueing the rest.
         var security = new AndroidDeviceSecurity(this, _loggerFactory.CreateLogger("Security"));
 
         var executors = new ICommandExecutor[]
@@ -168,6 +168,13 @@ public sealed class AgentService : Service
                 _loggerFactory.CreateLogger<LockDeviceExecutor>(), security),
             new WipeDeviceExecutor(
                 _loggerFactory.CreateLogger<WipeDeviceExecutor>(), security),
+            // Roadmap #23, and the one command in the hub's catalog where a phone beats a PC:
+            // a notice on a desktop waits for somebody to come back to their desk. Same split
+            // as locate -- the outcome vocabulary the hub routes on is in Core, and the
+            // Android object only puts buttons on a screen and says which one was pressed.
+            new ShowMessageExecutor(
+                _loggerFactory.CreateLogger<ShowMessageExecutor>(),
+                new UserMessageNotifier(this, _loggerFactory.CreateLogger("UserMessage"))),
         };
 
         var dispatcher = new CommandDispatcher(

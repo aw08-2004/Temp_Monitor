@@ -25,6 +25,7 @@ const panels = {
     directory: document.getElementById('tab-directory'),
     patches: document.getElementById('tab-patches'),
     wake: document.getElementById('tab-wake'),
+    discovery: document.getElementById('tab-discovery'),
     provisioning: document.getElementById('tab-provisioning'),
     location: document.getElementById('tab-location'),
     map: document.getElementById('tab-map'),
@@ -33,6 +34,7 @@ const panels = {
     sharing: document.getElementById('tab-sharing'),
     events: document.getElementById('tab-events'),
     ai: document.getElementById('tab-ai'),
+    security: document.getElementById('tab-security'),
 };
 
 // NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`

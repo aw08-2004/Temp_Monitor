@@ -283,6 +283,38 @@
        Closed by default and fetched on page load anyway: the fetch is what decides whether the
        card exists at all, so it cannot wait for a click on something invisible. Opening it
        afterwards costs nothing. #}
+    {# Drive encryption and recovery-key escrow -- roadmap #19.
+
+       Hidden entirely on a machine that has never reported a posture, which is every PC until
+       the agent half of #19 is in the field and every Linux and Android device forever. That
+       is the same absent-report rule the Apps and Location folds use, and it is deliberately
+       NOT the rule the hub uses for refusing work: showing an empty "not encrypted" card for a
+       fleet nobody has asked yet would read as a finding, and it would be a false one.
+
+       Open by default, unlike Usage. Nothing here is a person's evening -- it is the state of
+       a disk -- and whether the laptop in front of you is encrypted is a question somebody
+       came to this page with. The recovery password itself still takes a deliberate click and
+       is written into the audit log when it is read. #}
+    <details class="card sensor-browser fold" data-fold-key="machine:overview:bitlocker"
+             id="card-bitlocker" hidden open>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('bitlocker.title') }}</span>
+            <span class="stat-card__meta" id="bitlocker-summary"></span>
+        </summary>
+        <p class="stat-card__meta" id="bitlocker-note" hidden></p>
+        <div class="table-scroll" id="bitlocker-body"></div>
+        <p class="stat-card__meta" id="bitlocker-error" hidden></p>
+        {# The revealed key lives here rather than in a dialog, so it is beside the volume it
+           belongs to and disappears with the page rather than lingering in a modal somebody
+           walked away from. #}
+        <div id="bitlocker-key" hidden style="margin-top: var(--space-3);">
+            <div class="stat-card__label" id="bitlocker-key-label"></div>
+            <div class="stat-card__value" id="bitlocker-key-value"
+                 style="font-family: var(--font-mono); word-break: break-all;"></div>
+            <p class="stat-card__meta">{{ t('bitlocker.key_warning') }}</p>
+        </div>
+    </details>
+
     <details class="card sensor-browser fold" data-fold-key="machine:overview:apps" id="card-apps" hidden>
         <summary class="sensor-browser__summary">
             <span class="section-title" style="margin-bottom: 0;">{{ t('machine.apps.title') }}</span>
@@ -637,6 +669,7 @@
 <script src="{{ url_for('static', filename='js/machine-usage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-ask.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-bitlocker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>
@@ -652,6 +685,9 @@
 {% endif %}
 <script src="{{ url_for('static', filename='js/firmware.js') }}"></script>
 <script src="{{ url_for('static', filename='js/wake.js') }}"></script>
+{# After wake.js: both draw into the Network panel, and the discovery card is below the
+   adapter card it reads its subnets from. #}
+<script src="{{ url_for('static', filename='js/discovery.js') }}"></script>
 {% if cap.ISSUE_COMMANDS in user_capabilities %}
 <script src="{{ url_for('static', filename='js/files.js') }}"></script>
 {% endif %}
