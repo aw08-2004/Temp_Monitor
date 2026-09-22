@@ -635,7 +635,7 @@
       "policy": "Política",
       "ai": "Asistencia con IA",
       "events": "Registros de eventos",
-      "security": "Seguridad del endpoint"
+      "security": "Seguridad del endpoint",
       "discovery": "Descubrimiento de red"
     },
     "unit": {
@@ -1185,6 +1185,7 @@
       "security.escrow_bitlocker_keys": {
         "label": "Custodiar claves de recuperación de BitLocker",
         "help": "Recoger las contraseñas de recuperación de BitLocker de cada máquina y guardarlas cifradas junto a este hub, para poder recuperar un PC que se bloquee a sí mismo. Necesita una clave maestra de copias. Desactivarlo detiene la recogida y nunca borra lo ya custodiado."
+      },
       "discovery": {
         "scan_ttl_seconds": {
           "label": "Abandonar un barrido tras",
