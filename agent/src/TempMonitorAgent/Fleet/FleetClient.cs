@@ -235,6 +235,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             }
             if (!resp.IsSuccessStatusCode) return false;
 
+            if (encryption is not null)
+                TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
+
             var text = await resp.Content.ReadAsStringAsync(ct);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);

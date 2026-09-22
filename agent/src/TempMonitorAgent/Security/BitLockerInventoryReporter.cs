@@ -72,17 +72,30 @@ public static class BitLockerInventoryReporter
         }
     }
 
-    /// <summary>Hand the pending payload to a heartbeat, or null when nothing changed. The
-    /// hash is recorded as sent only here, so a failed heartbeat re-sends next time.</summary>
+    /// <summary>Reserve the pending payload for a heartbeat, or null when nothing changed.
+    /// Does NOT clear <see cref="_pending"/> or commit <see cref="_lastSentHash"/>; call
+    /// <see cref="AckSent"/> after the heartbeat succeeds to advance both. A failed heartbeat
+    /// therefore leaves the same payload eligible for the next attempt.</summary>
     public static JsonObject? TakeIfChanged()
     {
         lock (Gate)
         {
-            if (_pending is null) return null;
-            var payload = _pending;
+            return _pending;
+        }
+    }
+
+    /// <summary>Mark the pending payload as delivered. Only clears <see cref="_pending"/> if
+    /// it still carries the same content (by hash), so a concurrent <see cref="RefreshIfDue"/>
+    /// that produced a newer payload is not silently discarded.</summary>
+    public static void AckSent()
+    {
+        lock (Gate)
+        {
+            if (_pending is null) return;
+            var hash = Hash(_pending.ToJsonString());
+            if (hash == _lastSentHash) return;          // already acked or replaced
+            _lastSentHash = hash;
             _pending = null;
-            _lastSentHash = Hash(payload.ToJsonString());
-            return payload;
         }
     }
 
