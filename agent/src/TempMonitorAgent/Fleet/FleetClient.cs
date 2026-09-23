@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using TempMonitorAgent.Backup;
 using TempMonitorAgent.State;
+using TempMonitorAgent.Watchdog;
 
 namespace TempMonitorAgent.Fleet;
 
@@ -91,6 +92,17 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             Timeout = TimeSpan.FromSeconds(AgentConfig.CommandPollTimeoutSeconds),
         };
     }
+
+    /// <summary>The watchdog runner, handed over after construction (roadmap #20).
+    ///
+    /// A property rather than a constructor argument, and it is the one place in this class
+    /// that needed the exception: the runner is what the heartbeat delivers documents TO, and
+    /// FleetClient is a dependency of almost everything else in the container. Taking it in the
+    /// constructor would close a cycle that only DI ordering luck keeps open. Null until
+    /// Program.cs wires it, and every use below tolerates that -- an agent whose runner has not
+    /// been attached yet simply does not ask for a document, which is the same state an agent
+    /// with no watchdogs is in.</summary>
+    public WatchdogRunner? Watchdogs { get; set; }
 
     public bool IsEnrolled => _identity.IsEnrolled;
     public string AgentId => _identity.AgentId;
@@ -223,6 +235,20 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // stopped". A machine with nothing subscribed contributes nothing at all.
             var eventRecords = TempMonitorAgent.Events.EventLogReporter.TakeIfReady();
             if (eventRecords is not null) body["events"] = eventRecords;
+            // Watchdogs (roadmap #20). The VERSION goes on every heartbeat, like
+            // config_version, and its mere PRESENCE is what tells the hub this agent
+            // understands watchdogs at all -- an older build never sends the key and is
+            // therefore never sent a document. That is the capability check: the agent half of
+            // #20 ships as unreleased source, so there is no agent minor for the hub to gate
+            // on, and a Windows agent has never reported a capabilities block.
+            //
+            // The STATES ride change-only beside it, like every other inventory block here.
+            if (Watchdogs is { } watchdogs)
+            {
+                body["watchdog_version"] = watchdogs.Version;
+                var states = WatchdogReporter.TakeIfChanged();
+                if (states is not null) body["watchdog"] = states;
+            }
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 
@@ -245,6 +271,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             ApplyLiveWatchFromHeartbeat(text);
             ApplyChannelFromHeartbeat(text);
             ApplyEventSubscriptionsFromHeartbeat(text);
+            ApplyWatchdogsFromHeartbeat(text);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -419,6 +446,46 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e)
         {
             _log.LogWarning("Ignoring malformed event subscriptions from the hub: {Msg}",
+                            e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Adopt a watchdog document the heartbeat carried (roadmap #20).
+    ///
+    /// Its own method with its own try/catch, for the reason every neighbour here has one: a
+    /// malformed block must not be able to cost the channel or the watch flags their read.
+    ///
+    /// **An EMPTY document is applied, not ignored**, and that asymmetry is the release valve.
+    /// The hub sends `watchdogs: []` when nothing targets this machine any more, and reading
+    /// that as "the hub had nothing to say" would leave a machine enforcing a watchdog
+    /// somebody deliberately deleted -- with no way to stop it short of uninstalling the
+    /// agent. The absent-key case is the one that means nothing to say, and it is handled by
+    /// WatchdogDocument.Parse returning null.
+    ///
+    /// The reporter is invalidated on adoption so the next heartbeat carries the current state
+    /// of every watchdog against the NEW ids. Without that, a hub that has just been told
+    /// about three new watchdogs would hear nothing about them until one of them did
+    /// something, and silence is what a healthy watchdog also looks like.
+    /// </summary>
+    private void ApplyWatchdogsFromHeartbeat(string body)
+    {
+        if (Watchdogs is not { } runner) return;
+        try
+        {
+            var root = JsonNode.Parse(body)?.AsObject();
+            if (root is null) return;
+            if (!root.TryGetPropertyValue("watchdog_document", out var node) || node is null)
+                return;
+            var version = root["watchdog_version"]?.GetValue<string>() ?? "";
+            var document = WatchdogDocument.Parse(node, version);
+            if (document is null) return;
+            runner.Apply(document);
+            WatchdogReporter.Invalidate();
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring a malformed watchdog document from the hub: {Msg}",
                             e.Message);
         }
     }

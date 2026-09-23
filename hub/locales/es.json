@@ -35,7 +35,8 @@
       "operate": "Operación",
       "admin": "Administración"
     },
-    "events": "Eventos"
+    "events": "Eventos",
+    "watchdogs": "Vigilantes"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -317,6 +318,16 @@
       "merge_failed": "No se pudo fusionar: {error}"
     },
     "unknown_kind": "Alerta de un tipo no reconocido ({kind})",
+    "watchdog": {
+      "title_failed": "No se pudo reiniciar {service} en {machine}",
+      "title_given_up": "{service} se detiene una y otra vez en {machine}",
+      "ongoing": "El vigilante «{watchdog}» se dio por vencido. Primer informe {since}.",
+      "ongoing_count": {
+        "one": "El vigilante «{watchdog}» se dio por vencido. Primer informe {since}.",
+        "other": "El vigilante «{watchdog}» se dio por vencido; informado {count} veces. Primer informe {since}."
+      },
+      "ended": "La máquina volvió a arreglárselas hacia {until}. Informado desde {from}."
+    },
     "bundle": {
       "title": {
         "one": "{count} alerta en {machine}",
@@ -3139,6 +3150,62 @@
     "no_scripts": "Aún no hay scripts. Cree uno primero en la pestaña Scripts.",
     "script_disabled": "desactivado",
     "script_reads": "Lee: {variables}"
+  },
+  "watchdogs": {
+    "heading": "Vigilantes de autorreparación",
+    "intro": "Un vigilante es un servicio que debe seguir en marcha. El agente de cada PC lo comprueba por su cuenta y vuelve a iniciarlo si se detiene, así que la máquina se recupera sin esperar al hub y sin esperar a nadie. Solo le llega el momento en que se da por vencido.",
+    "read_only": "Puede escribir instrucciones permanentes, pero un vigilante reinicia un servicio por su cuenta, así que crear uno requiere además el permiso para emitir comandos. Pida «issue_commands» a una administradora.",
+    "new": "Nuevo vigilante",
+    "count": "{count} vigilantes",
+    "name": "Nombre",
+    "service": "Servicio",
+    "service_help": "El nombre del servicio de Windows, no el nombre mostrado: «Spooler», no «Cola de impresión». Algunos servicios se rechazan: reiniciarlos no recupera una máquina, la tumba.",
+    "description": "Para qué es esto (opcional)",
+    "enabled": "Activo",
+    "flap": "Límite de reinicios",
+    "flap_summary": "{count} reinicios por {minutes} min",
+    "reporting": "Informando",
+    "reporting_count": "{count} máquinas",
+    "trouble": "Requiere atención",
+    "trouble_count": "{count} con problemas",
+    "missing_count": "{count} sin ese servicio",
+    "empty": "Aún no hay vigilantes.",
+    "section_target": "Qué máquinas",
+    "add_selector": "Añadir",
+    "exclude": "Excepto estas",
+    "targets": "{count} máquinas alcanzadas",
+    "section_limits": "Tiempos y protección contra reinicios en bucle",
+    "grace": "Esperar antes de actuar (segundos)",
+    "max_restarts": "Reinicios permitidos",
+    "window": "Contados durante (segundos)",
+    "limits_help": "El agente mira cada 30 segundos. Espera el periodo de gracia para no pelearse con un instalador que detiene un servicio un momento, y luego lo vuelve a iniciar. Cuando ya lo ha reiniciado tantas veces como se permite dentro de la ventana, deja de intentarlo y levanta una alerta.",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "edit": "Editar",
+    "enable": "Activar",
+    "disable": "Desactivar",
+    "delete": "Eliminar",
+    "delete_confirm": "¿Eliminar el vigilante «{name}»? Las máquinas dejarán de vigilar en su próximo latido.",
+    "show_state": "Máquinas",
+    "state_title": "{name} -- {service}",
+    "state_help": "Lo último que informó cada máquina. Una máquina alcanzada que no aparezca aquí aún no ha recogido el vigilante.",
+    "state_empty": "Ninguna máquina ha informado todavía sobre este vigilante.",
+    "machine": "Máquina",
+    "status": "Estado",
+    "restarts": "Reinicios",
+    "reported": "Último informe",
+    "detail": "Detalle",
+    "history": "Lo que han hecho los vigilantes",
+    "history_help": "Una línea por cambio, la más reciente primero. Un servicio reiniciado siempre queda registrado; una máquina que repite que está bien, no.",
+    "history_empty": "Nada todavía.",
+    "when": "Cuándo",
+    "status_name": {
+      "ok": "En marcha",
+      "restarted": "Reiniciado",
+      "failed": "Fallo al reiniciar",
+      "given_up": "Se dio por vencido",
+      "missing": "No existe el servicio"
+    }
   },
   "ai": {
     "drafter_title": "Describe una regla",

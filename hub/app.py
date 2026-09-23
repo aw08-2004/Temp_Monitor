@@ -56,6 +56,7 @@ import location
 import apkhost
 import provisioning
 import rules
+import watchdogs
 import scripts
 import ai
 import correlate
@@ -98,6 +99,7 @@ from files_web import create_files_blueprint
 from ai_web import create_ai_blueprint
 from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
+from watchdogs_web import create_watchdogs_blueprint
 import device_groups
 from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
@@ -140,7 +142,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.125.2"
+HUB_VERSION = "1.127.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2554,6 +2556,11 @@ app.register_blueprint(create_rules_blueprint(
     lambda: _rules_config(),
 ))
 
+# Self-healing watchdogs (roadmap #20). No variable resolver and no config injection, unlike
+# the rules blueprint above, and the absence is the feature: a watchdog is never evaluated on
+# the hub, so there is nothing here to resolve. See watchdogs.py's module docstring.
+app.register_blueprint(create_watchdogs_blueprint(DB_PATH, login_required, access))
+
 # The AI drafter (roadmap #24). Same two injections as the rules blueprint above, because it
 # is a front end onto that engine rather than a second one -- a draft is validated by
 # rules.py's own parser and committed through rules.save_rule. No new capability: reading is
@@ -3501,6 +3508,11 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # stopped resolving would look to the borrowing hub like a machine that had simply gone
     # quiet -- a revocation nobody made, discovered when a colleague could not connect.
     sharing.rename_machine(DB_PATH, dropped, survivor)
+    # Watchdog state and events follow the survivor (roadmap #20): both names describe one PC,
+    # and "the spooler was restarted here four times last Tuesday" is true of it under either.
+    # The state rows collide by design when both names reported on one watchdog, and the
+    # survivor's own agent overwrites whichever won within a heartbeat.
+    watchdogs.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -4361,6 +4373,15 @@ def rule_evaluator():
                                   settings.get_int(DB_PATH, "rules.history_retention_days"))
             except Exception as e:
                 print(f"[rules] History prune failed: {e}")
+            # Watchdog events ride the same retention setting and the same tick, rather than
+            # getting a knob of their own. They are the same kind of record -- "this standing
+            # instruction did something to that PC on that day" -- and a second retention
+            # number would be one an operator has to discover before they can trust either.
+            try:
+                watchdogs.prune_events(
+                    DB_PATH, settings.get_int(DB_PATH, "rules.history_retention_days"))
+            except Exception as e:
+                print(f"[watchdogs] History prune failed: {e}")
         try:
             interval = settings.get_int(DB_PATH, "rules.evaluator_interval_seconds")
         except Exception:
@@ -4678,6 +4699,9 @@ apitokens.init_apitokens_db(DB_PATH)
 sharing.init_sharing_db(DB_PATH)
 scripts.init_scripts_db(DB_PATH)
 rules.init_rules_db(DB_PATH)
+# After rules.init_rules_db: a watchdog's target is the rules engine's target grammar,
+# and its scope check reads the same custom fields (roadmap #20).
+watchdogs.init_watchdogs_db(DB_PATH)
 device_groups.init_device_groups_db(DB_PATH)
 ai.init_ai_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
@@ -5613,6 +5637,11 @@ def delete_machine(machine):
     # a different box reusing this hostname would silently have commands REFUSED that it can
     # run perfectly well, with a message naming a platform it is not.
     capabilities.forget_machine(DB_PATH, machine_name)
+    # And everything it said about its watchdogs (roadmap #20). Dropped rather than kept,
+    # unlike patch outcomes and backup manifests: a watchdog event is a fact about a machine
+    # record rather than about an archive that still exists, and a different box reusing this
+    # hostname would inherit a history of restarts it never had.
+    watchdogs.forget_machine(DB_PATH, machine_name)
     # And every position it ever reported (roadmap #23). No exception here, unlike patch
     # outcomes and backup manifests: those survive because they are facts about an update or an
     # archive, while where a device WAS is a fact about a person, and keeping it after the

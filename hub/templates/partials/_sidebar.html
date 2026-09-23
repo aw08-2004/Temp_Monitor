@@ -135,6 +135,18 @@
             <span class="sidebar__link-label">{{ t('nav.rules') }}</span>
         </a>
         {% endif %}
+        {# Self-healing watchdogs (roadmap #20, hub 1.127.0): the services the agents put back
+           on their own. Beside Rules because it is the same kind of object -- a standing
+           instruction that acts without anybody present -- and NOT a panel inside it, because
+           it is authored under a different perimeter and most of its page is what the fleet is
+           reporting rather than an editor. Gated on VIEW like Rules; the page hides its editor
+           without manage_rules AND issue_commands. #}
+        {% if cap.VIEW in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'watchdogs.watchdogs_page' else '' }}" data-nav-prefix="/watchdogs" href="{{ url_for('watchdogs.watchdogs_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5.5c0 4.2-2.9 7.6-7 8.5-4.1-.9-7-4.3-7-8.5V6l7-3z"/><path d="M9 12.5l2 2 4-4.5"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.watchdogs') }}</span>
+        </a>
+        {% endif %}
         {# Device groups (hub 1.114.0): the saved filters Rules, Packages and Devices aim at.
            Beside Rules, because a group is a rule's target spec with a name. Gated on VIEW,
            matching the route; the page hides its editor without manage_device_groups. #}

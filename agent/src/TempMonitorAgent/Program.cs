@@ -12,6 +12,7 @@ using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
 using TempMonitorAgent.UserMessage;
+using TempMonitorAgent.Watchdog;
 
 // Remote view/control (roadmap #2): the service session-injects THIS SAME BINARY with
 // --remote-helper <session-file> into the interactive desktop. That process is not a service
@@ -172,6 +173,13 @@ try
     builder.Services.AddSingleton<ICommandExecutor, TempMonitorAgent.Patch.InstallPatchesExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
+    // Self-healing watchdogs (roadmap #20). Not an executor: nothing in the command queue
+    // drives this. The runner holds a document the heartbeat delivers, evaluates it on its own
+    // loop in Worker, and reports afterwards -- which is the whole point of the item, since a
+    // command would put the hub back in the path of a machine that may not be able to reach it.
+    builder.Services.AddSingleton<IServiceControl, WindowsServiceControl>();
+    builder.Services.AddSingleton<WatchdogRunner>();
+
     // Self-update
     builder.Services.AddSingleton<SelfUpdater>();
 
@@ -183,6 +191,12 @@ try
     builder.Services.AddHostedService<RemoteSessionSupervisor>();
 
     var host = builder.Build();
+    // Hand the watchdog runner to the heartbeat, which is where documents arrive (roadmap #20).
+    // Done here rather than through FleetClient's constructor because FleetClient is a
+    // dependency of nearly everything above and the runner is not: taking it in the ctor would
+    // close a cycle that only resolution order keeps open. See FleetClient.Watchdogs.
+    host.Services.GetRequiredService<FleetClient>().Watchdogs =
+        host.Services.GetRequiredService<WatchdogRunner>();
     host.Run();
 }
 catch (Exception ex)

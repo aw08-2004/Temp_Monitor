@@ -1,3 +1,4 @@
+// Alerts: operator-facing conditions that want attention. Five kinds:
 // Alerts: operator-facing conditions that want attention, grouped into BUNDLES (roadmap
 // #17). A machine whose disk filled, whose backup service then failed, and whose CPU pinned
 // while it retried raises three alerts about one problem; the hub groups those three and
@@ -13,6 +14,9 @@
 // Four alert kinds:
 //   * rule -- raised by an operator-written rule's `alert` action. The text comes from the
 //     rule, so the card just states it; one card per EPISODE, like the others.
+//   * watchdog -- a machine's agent-local watchdog stopped coping (roadmap #20): either a
+//     restart did not bring the service back, or it hit its flap limit and stood down. The
+//     card leads with the SERVICE, because that is the thing somebody has to go and look at.
 //   * duplicate_serial -- two machines sharing a serial while both online. The hub refuses
 //     to auto-merge live machines, so the operator picks a survivor here and the rest are
 //     merged into it (POST /api/machines/merge).
@@ -102,6 +106,7 @@ async function dismissAlert(alertId, cardEl, btnEl) {
 // added degrades to a plain, true card instead of a confidently wrong one.
 const RENDERERS = {
     rule: renderRule,
+    watchdog: renderWatchdog,
     duplicate_serial: renderDuplicateSerial,
     ad_unmatched: renderAdUnmatched,
     high_temperature: renderHighTemp,
@@ -188,6 +193,47 @@ function renderRule(alert) {
             : t('alerts.rule.ongoing', { since: formatEpoch(alert.created_at) });
     } else {
         when.textContent = t('alerts.rule.ended', {
+            from: formatEpoch(alert.created_at),
+            until: formatEpoch(alert.episode_ended_at),
+        });
+    }
+    card.appendChild(when);
+
+    card.appendChild(alertActions(alert, card));
+    return card;
+}
+
+// A watchdog that stopped coping. Two statuses reach this card and they are different
+// problems, so they get different titles rather than one that hedges: `failed` is a restart
+// that did not work (the machine is in trouble now), `given_up` is the flap limit being
+// reached (the service keeps dying, and restarting it again is not the answer). Nothing to
+// decide on the card either way -- the remedy is on the machine, which is why the only
+// controls are the link to it and Dismiss.
+function renderWatchdog(alert) {
+    const detail = alert.detail || {};
+    const ongoing = !alert.episode_ended_at;
+    const machineName = alert.machine || t('alerts.unknown_machine');
+    const service = detail.service || t('alerts.unknown_machine');
+    const title = detail.status === 'failed'
+        ? t('alerts.watchdog.title_failed', { service, machine: machineName })
+        : t('alerts.watchdog.title_given_up', { service, machine: machineName });
+    const card = alertCard(title, detail.text || '');
+
+    // Whole sentences from the catalog, never clauses joined with `+` -- the same rule the
+    // rule and temperature cards follow, for the same reason.
+    const when = document.createElement('p');
+    when.className = 'stat-card__meta';
+    when.style.marginBottom = 'var(--space-4)';
+    const count = Number(detail.count) || 1;
+    if (ongoing) {
+        when.textContent = count > 1
+            ? tPlural('alerts.watchdog.ongoing_count', count,
+                      { since: formatEpoch(alert.created_at), count,
+                        watchdog: detail.watchdog_name || '' })
+            : t('alerts.watchdog.ongoing', { since: formatEpoch(alert.created_at),
+                                             watchdog: detail.watchdog_name || '' });
+    } else {
+        when.textContent = t('alerts.watchdog.ended', {
             from: formatEpoch(alert.created_at),
             until: formatEpoch(alert.episode_ended_at),
         });

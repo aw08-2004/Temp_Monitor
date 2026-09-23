@@ -45,7 +45,8 @@
       "operate": "Operate",
       "admin": "Administration"
     },
-    "events": "Events"
+    "events": "Events",
+    "watchdogs": "Watchdogs"
   },
   "hub_update": {
     "_note": [
@@ -353,6 +354,16 @@
       "merge_failed": "Could not merge: {error}"
     },
     "unknown_kind": "Alert of an unrecognised type ({kind})",
+    "watchdog": {
+      "title_failed": "{service} could not be restarted on {machine}",
+      "title_given_up": "{service} keeps stopping on {machine}",
+      "ongoing": "The watchdog “{watchdog}” stood down. First reported {since}.",
+      "ongoing_count": {
+        "one": "The watchdog “{watchdog}” stood down. First reported {since}.",
+        "other": "The watchdog “{watchdog}” stood down, re-reported {count} times. First reported {since}."
+      },
+      "ended": "The machine was coping again by {until}. Reported from {from}."
+    },
     "bundle": {
       "title": {
         "one": "{count} alert on {machine}",
@@ -3257,6 +3268,62 @@
     "no_scripts": "No scripts yet. Add one on the Scripts tab first.",
     "script_disabled": "switched off",
     "script_reads": "Reads: {variables}"
+  },
+  "watchdogs": {
+    "heading": "Self-healing watchdogs",
+    "intro": "A watchdog is a service that must stay running. The agent on each PC checks it itself and starts it again if it stops, so a machine recovers without waiting for the hub -- and without waiting for anybody at all. Only the giving-up reaches you.",
+    "read_only": "You can write standing instructions, but a watchdog restarts a service on its own, so writing one also needs the permission to issue commands. Ask an administrator for 'issue_commands'.",
+    "new": "New watchdog",
+    "count": "{count} watchdogs",
+    "name": "Name",
+    "service": "Service",
+    "service_help": "The Windows service name, not its display name -- 'Spooler', not 'Print Spooler'. Some services are refused: restarting them does not recover a machine, it takes it down.",
+    "description": "What this is for (optional)",
+    "enabled": "Enabled",
+    "flap": "Flap limit",
+    "flap_summary": "{count} restarts per {minutes} min",
+    "reporting": "Reporting",
+    "reporting_count": "{count} machines",
+    "trouble": "Needs attention",
+    "trouble_count": "{count} in trouble",
+    "missing_count": "{count} have no such service",
+    "empty": "No watchdogs yet.",
+    "section_target": "Which machines",
+    "add_selector": "Add",
+    "exclude": "Except these",
+    "targets": "{count} machines targeted",
+    "section_limits": "Timing and flap protection",
+    "grace": "Wait before acting (seconds)",
+    "max_restarts": "Restarts allowed",
+    "window": "Counted over (seconds)",
+    "limits_help": "The agent looks every 30 seconds. It waits the grace period so an installer that stops a service for a moment is not fought, then starts it again. Once it has restarted the service as many times as allowed inside the window, it stops trying and raises an alert instead.",
+    "save": "Save",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "enable": "Enable",
+    "disable": "Disable",
+    "delete": "Delete",
+    "delete_confirm": "Delete the watchdog “{name}”? The machines holding it stop watching on their next heartbeat.",
+    "show_state": "Machines",
+    "state_title": "{name} -- {service}",
+    "state_help": "What each machine last reported. A machine that is targeted but not listed here has not picked the watchdog up yet.",
+    "state_empty": "No machine has reported on this watchdog yet.",
+    "machine": "Machine",
+    "status": "Status",
+    "restarts": "Restarts",
+    "reported": "Last reported",
+    "detail": "Detail",
+    "history": "What the watchdogs have done",
+    "history_help": "One line per change, newest first. A service being restarted is always recorded; a machine repeating that it is fine is not.",
+    "history_empty": "Nothing yet.",
+    "when": "When",
+    "status_name": {
+      "ok": "Running",
+      "restarted": "Restarted",
+      "failed": "Restart failed",
+      "given_up": "Gave up",
+      "missing": "No such service"
+    }
   },
   "ai": {
     "drafter_title": "Describe a rule",

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.watchdogs') }} - FleetHub{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('watchdogs.heading') }}</h1>
+
+{# Its own page rather than a third panel on Rules (roadmap #20), and the reason is not
+   length. A watchdog is authored under a different perimeter -- manage_rules AND
+   issue_commands, see watchdogs_web.py -- and most of what is below is not an editor at all
+   but the fleet's REPORTED STATE. "Is this actually working" is the question a self-healing
+   feature has to be able to answer, and it is not a question about writing conditions. #}
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('watchdogs.intro') }}</p>
+
+{# Shown to somebody who may write rules but not issue commands. A greyed-out form with no
+   sentence beside it reads as a broken page; this says which of the two they are missing. #}
+<p class="banner banner--warn" id="watchdogs-read-only" hidden>{{ t('watchdogs.read_only') }}</p>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <button id="watchdog-new" type="button" class="btn btn--primary" hidden>{{ t('watchdogs.new') }}</button>
+    <span class="stat-card__meta" id="watchdogs-count"></span>
+</div>
+
+<div class="card">
+    <div class="table-scroll">
+        <table class="data-table rules-table" id="watchdogs-table">
+            <thead>
+                <tr>
+                    <th>{{ t('watchdogs.name') }}</th>
+                    <th>{{ t('watchdogs.service') }}</th>
+                    <th>{{ t('watchdogs.flap') }}</th>
+                    <th>{{ t('watchdogs.reporting') }}</th>
+                    <th>{{ t('watchdogs.trouble') }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="watchdogs-body"></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="watchdogs-empty" hidden>{{ t('watchdogs.empty') }}</p>
+</div>
+
+{# ------------------------------------------------------------------ editor -- #}
+<div class="card" id="watchdog-editor" hidden style="margin-top: var(--space-5);">
+    <div class="toolbar" style="margin-bottom: var(--space-4);">
+        <input class="input" id="watchdog-name" type="text" placeholder="{{ t('watchdogs.name') }}"
+               style="min-width: 260px;">
+        <input class="input" id="watchdog-service" type="text" placeholder="{{ t('watchdogs.service') }}"
+               style="min-width: 220px;">
+        <label class="stat-card__meta">
+            <input type="checkbox" id="watchdog-enabled" checked> {{ t('watchdogs.enabled') }}
+        </label>
+    </div>
+    <p class="stat-card__meta">{{ t('watchdogs.service_help') }}</p>
+
+    <input class="input" id="watchdog-description" type="text" style="width: 100%; margin-top: var(--space-3);"
+           placeholder="{{ t('watchdogs.description') }}">
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('watchdogs.section_target') }}</h2>
+    <div id="watchdog-target-include"></div>
+    <div class="toolbar" style="margin-bottom: var(--space-3);">
+        <select class="input" id="watchdog-target-kind"></select>
+        <button type="button" class="btn btn--ghost" id="watchdog-target-add">{{ t('watchdogs.add_selector') }}</button>
+    </div>
+    <p class="stat-card__meta">{{ t('watchdogs.exclude') }}</p>
+    <div id="watchdog-target-exclude"></div>
+    <div class="toolbar" style="margin-bottom: var(--space-3);">
+        <select class="input" id="watchdog-exclude-kind"></select>
+        <button type="button" class="btn btn--ghost" id="watchdog-exclude-add">{{ t('watchdogs.add_selector') }}</button>
+    </div>
+    <p class="stat-card__meta" id="watchdog-target-count"></p>
+
+    <h2 class="section-title" style="margin-top: var(--space-5);">{{ t('watchdogs.section_limits') }}</h2>
+    <div class="toolbar">
+        <label class="stat-card__meta">{{ t('watchdogs.grace') }}
+            <input class="input" id="watchdog-grace" type="number" min="0" value="60" style="width: 7rem;">
+        </label>
+        <label class="stat-card__meta">{{ t('watchdogs.max_restarts') }}
+            <input class="input" id="watchdog-max-restarts" type="number" min="2" value="3" style="width: 6rem;">
+        </label>
+        <label class="stat-card__meta">{{ t('watchdogs.window') }}
+            <input class="input" id="watchdog-window" type="number" min="300" value="3600" style="width: 8rem;">
+        </label>
+    </div>
+    <p class="stat-card__meta">{{ t('watchdogs.limits_help') }}</p>
+
+    <div class="toolbar" style="margin-top: var(--space-5);">
+        <button type="button" class="btn btn--primary" id="watchdog-save">{{ t('watchdogs.save') }}</button>
+        <button type="button" class="btn btn--ghost" id="watchdog-cancel">{{ t('watchdogs.cancel') }}</button>
+        <span class="stat-card__meta" id="watchdog-save-error" style="color: var(--color-danger, #f85149);"></span>
+    </div>
+</div>
+
+{# ------------------------------------------------------------------ state -- #}
+<div class="card" id="watchdog-state" hidden style="margin-top: var(--space-5);">
+    <h2 class="section-title" id="watchdog-state-title"></h2>
+    <p class="stat-card__meta" style="margin-bottom: var(--space-4);">{{ t('watchdogs.state_help') }}</p>
+    <div class="table-scroll">
+        <table class="data-table rules-table">
+            <thead>
+                <tr>
+                    <th>{{ t('watchdogs.machine') }}</th>
+                    <th>{{ t('watchdogs.status') }}</th>
+                    <th>{{ t('watchdogs.restarts') }}</th>
+                    <th>{{ t('watchdogs.reported') }}</th>
+                    <th>{{ t('watchdogs.detail') }}</th>
+                </tr>
+            </thead>
+            <tbody id="watchdog-state-body"></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="watchdog-state-empty" hidden>{{ t('watchdogs.state_empty') }}</p>
+</div>
+
+<h2 class="section-title" style="margin-top: var(--space-5);">{{ t('watchdogs.history') }}</h2>
+<p class="stat-card__meta" style="margin-bottom: var(--space-3);">{{ t('watchdogs.history_help') }}</p>
+<div class="card">
+    <div class="table-scroll">
+        <table class="data-table rules-table">
+            <thead>
+                <tr>
+                    <th>{{ t('watchdogs.when') }}</th>
+                    <th>{{ t('watchdogs.machine') }}</th>
+                    <th>{{ t('watchdogs.name') }}</th>
+                    <th>{{ t('watchdogs.status') }}</th>
+                    <th>{{ t('watchdogs.detail') }}</th>
+                </tr>
+            </thead>
+            <tbody id="watchdog-events-body"></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="watchdog-events-empty" hidden>{{ t('watchdogs.history_empty') }}</p>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/watchdogs.js') }}?v={{ hub_version }}"></script>
+{% endblock %}

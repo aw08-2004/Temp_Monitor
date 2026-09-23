@@ -1,12 +1,14 @@
 using System.Text.Json;
+using TempMonitorAgent.Watchdog;
 
 namespace TempMonitorAgent.State;
 
 /// <summary>
 /// Reads/writes the agent's persisted state under %ProgramData%\TempMonitorAgent:
-/// enrollment identity (agent.json) and the self-update restart guard
-/// (restart_state.json). All operations fail soft — a missing/corrupt file reads
-/// as "no state" rather than throwing.
+/// enrollment identity (agent.json), the self-update restart guard (restart_state.json),
+/// the hub-delivered runtime config (config.json) and the watchdog document with its
+/// restart history (watchdogs.json). All operations fail soft — a missing/corrupt file
+/// reads as "no state" rather than throwing.
 /// </summary>
 public sealed class AgentState
 {
@@ -112,6 +114,46 @@ public sealed class AgentState
         EnsureStateDir();
         var json = JsonSerializer.Serialize(config, JsonOpts);
         AtomicWrite(AgentConfig.AgentConfigPath, json);
+    }
+
+    // --- Watchdogs (roadmap #20) -------------------------------------------
+    /// <summary>The watchdog document and the restart history behind it, or null when this
+    /// machine has never held one.
+    ///
+    /// **Persisted for the restart history, not for the document.** The document arrives again
+    /// on the first heartbeat after a restart; the count of how many times the spooler has
+    /// already been restarted in the last hour does not, and losing it would let a machine
+    /// whose flapping service takes the agent down with it restart that service forever while
+    /// the hub is told everything is fine. Fails soft like everything else here: an unreadable
+    /// file reads as "no watchdogs", which is the direction that does nothing rather than the
+    /// direction that acts on stale instructions.</summary>
+    public StoredWatchdogState? LoadWatchdogState()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.WatchdogStatePath))
+            {
+                var json = File.ReadAllText(AgentConfig.WatchdogStatePath);
+                return JsonSerializer.Deserialize<StoredWatchdogState>(json);
+            }
+        }
+        catch { /* ignore -- see the docstring */ }
+        return null;
+    }
+
+    public void SaveWatchdogState(StoredWatchdogState state)
+    {
+        try
+        {
+            EnsureStateDir();
+            AtomicWrite(AgentConfig.WatchdogStatePath, JsonSerializer.Serialize(state, JsonOpts));
+        }
+        catch
+        {
+            // A write that fails costs the flap history across a restart, which is bad, but
+            // throwing here would cost the watchdog TICK, which is worse: the loop exists to
+            // act on a machine nobody is watching.
+        }
     }
 
     private static void AtomicWrite(string path, string contents)

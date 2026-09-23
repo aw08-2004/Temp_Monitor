@@ -6,6 +6,7 @@ using TempMonitorAgent.Fleet.Shell;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
+using TempMonitorAgent.Watchdog;
 
 namespace TempMonitorAgent;
 
@@ -19,6 +20,7 @@ namespace TempMonitorAgent;
 ///   * inventory  -- the slow local scans (backup profiles, logon sessions, displays)
 ///   * processes  -- the live process list, but only while an operator is watching one
 ///   * updates    -- the signed self-update check
+///   * watchdogs  -- the services this machine must keep running (roadmap #20)
 ///
 /// WHY THEY ARE SEPARATE. This used to be a single loop that did all five in order, and in
 /// a serial loop the slowest step sets the latency of every other one. A sensor read
@@ -28,6 +30,11 @@ namespace TempMonitorAgent;
 /// starting a remote session while the machine was doing anything else watched a
 /// "Connecting" pill for as long as the unrelated work took. Worse, the machine could read
 /// offline (90s window) because its own telemetry post was in front of its heartbeat.
+///
+/// The watchdog loop is the newest and the one whose separateness is least negotiable: its
+/// promise is that a stopped service is back inside two minutes with no hub involved, and a
+/// promise like that cannot be queued behind a heartbeat waiting out a 10-second HTTP timeout
+/// to a hub that is exactly as unreachable as the watchdog is there to survive.
 ///
 /// Now nothing on this list can delay anything else on it. The loops share only the
 /// FleetClient (whose HttpClient is designed for concurrent use) and the enrollment gate
@@ -47,6 +54,7 @@ public sealed class Worker : BackgroundService
     private readonly SelfUpdater _updater;
     private readonly ShellSessionManager _shells;
     private readonly PtySessionManager _ptys;
+    private readonly WatchdogRunner _watchdogs;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -75,7 +83,8 @@ public sealed class Worker : BackgroundService
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
-        SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys)
+        SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys,
+        WatchdogRunner watchdogs)
     {
         _log = log;
         _state = state;
@@ -86,6 +95,7 @@ public sealed class Worker : BackgroundService
         _updater = updater;
         _shells = shells;
         _ptys = ptys;
+        _watchdogs = watchdogs;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -115,6 +125,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => InventoryLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => ProcessLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => WatchdogLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait
@@ -490,6 +501,38 @@ public sealed class Worker : BackgroundService
     /// ends cleanly either way: the runner reports "the agent is shutting down" and the
     /// console says so instead of hanging.
     /// </summary>
+    // ------------------------------------------------------------------ watchdogs
+
+    /// <summary>Put back the services this machine has been told to keep (roadmap #20).
+    ///
+    /// **It runs before the first heartbeat and keeps running without one.** The document is
+    /// restored from disk by the runner, so a machine that reboots into a network outage is
+    /// looking after its services from the first tick -- which is the whole of what agent-local
+    /// evaluation buys over a rule the hub evaluates. A machine that has never held a document
+    /// does nothing here and costs one dictionary lookup every thirty seconds.
+    ///
+    /// The tick is synchronous (the SCM has no async surface worth the name) and runs on this
+    /// loop's own thread-pool context, which is why each loop is a Task.Run above: a service
+    /// taking its full 30-second stop timeout must not be felt by the command poller.</summary>
+    private async Task WatchdogLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _watchdogs.Tick();
+            }
+            catch (Exception e)
+            {
+                // The runner already swallows per-watchdog failures; reaching here means the
+                // pass itself threw. Logged and continued, because a loop that exits is a
+                // machine that has silently stopped looking after itself.
+                _log.LogWarning(e, "Watchdog pass failed");
+            }
+            if (!await DelayAsync(WatchdogRunner.TickSeconds, ct)) break;
+        }
+    }
+
     private async Task UpdateLoopAsync(CancellationToken ct)
     {
         var lastCheck = DateTime.UtcNow;

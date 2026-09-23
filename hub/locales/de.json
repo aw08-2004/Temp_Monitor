@@ -35,7 +35,8 @@
       "operate": "Betrieb",
       "admin": "Verwaltung"
     },
-    "events": "Ereignisse"
+    "events": "Ereignisse",
+    "watchdogs": "Wächter"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -317,6 +318,16 @@
       "merge_failed": "Zusammenführen nicht möglich: {error}"
     },
     "unknown_kind": "Alarm eines unbekannten Typs ({kind})",
+    "watchdog": {
+      "title_failed": "{service} konnte auf {machine} nicht neu gestartet werden",
+      "title_given_up": "{service} bleibt auf {machine} immer wieder stehen",
+      "ongoing": "Der Wächter „{watchdog}“ hat aufgegeben. Zuerst gemeldet {since}.",
+      "ongoing_count": {
+        "one": "Der Wächter „{watchdog}“ hat aufgegeben. Zuerst gemeldet {since}.",
+        "other": "Der Wächter „{watchdog}“ hat aufgegeben, {count}-mal erneut gemeldet. Zuerst gemeldet {since}."
+      },
+      "ended": "Der Rechner kam bis {until} wieder zurecht. Gemeldet seit {from}."
+    },
     "bundle": {
       "title": {
         "one": "{count} Meldung auf {machine}",
@@ -3139,6 +3150,62 @@
     "no_scripts": "Noch keine Skripte. Legen Sie zuerst eines im Reiter „Skripte“ an.",
     "script_disabled": "abgeschaltet",
     "script_reads": "Liest: {variables}"
+  },
+  "watchdogs": {
+    "heading": "Selbstheilende Wächter",
+    "intro": "Ein Wächter ist ein Dienst, der laufen muss. Der Agent auf jedem PC prüft ihn selbst und startet ihn wieder, wenn er stehen bleibt -- ohne auf den Hub und ohne auf jemanden zu warten. Nur das Aufgeben erreicht Sie.",
+    "read_only": "Sie dürfen Daueraufträge schreiben, aber ein Wächter startet einen Dienst von selbst neu; dafür ist zusätzlich die Berechtigung zum Ausführen von Befehlen nötig. Bitten Sie eine Administratorin um „issue_commands“.",
+    "new": "Neuer Wächter",
+    "count": "{count} Wächter",
+    "name": "Name",
+    "service": "Dienst",
+    "service_help": "Der Windows-Dienstname, nicht der Anzeigename -- „Spooler“, nicht „Druckwarteschlange“. Manche Dienste werden abgelehnt: sie neu zu starten stellt keinen Rechner wieder her, sondern legt ihn lahm.",
+    "description": "Wofür das gedacht ist (optional)",
+    "enabled": "Aktiv",
+    "flap": "Flatter-Grenze",
+    "flap_summary": "{count} Neustarts pro {minutes} Min.",
+    "reporting": "Meldet",
+    "reporting_count": "{count} Rechner",
+    "trouble": "Braucht Aufmerksamkeit",
+    "trouble_count": "{count} in Schwierigkeiten",
+    "missing_count": "{count} ohne diesen Dienst",
+    "empty": "Noch keine Wächter.",
+    "section_target": "Welche Rechner",
+    "add_selector": "Hinzufügen",
+    "exclude": "Außer diesen",
+    "targets": "{count} Rechner betroffen",
+    "section_limits": "Zeiten und Flatterschutz",
+    "grace": "Warten vor dem Eingreifen (Sekunden)",
+    "max_restarts": "Erlaubte Neustarts",
+    "window": "Gezählt über (Sekunden)",
+    "limits_help": "Der Agent sieht alle 30 Sekunden nach. Er wartet die Schonfrist ab, damit ein Installationsprogramm, das einen Dienst kurz anhält, nicht bekämpft wird, und startet ihn dann neu. Hat er den Dienst innerhalb des Zeitfensters so oft neu gestartet wie erlaubt, hört er auf und meldet stattdessen eine Warnung.",
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "edit": "Bearbeiten",
+    "enable": "Aktivieren",
+    "disable": "Deaktivieren",
+    "delete": "Löschen",
+    "delete_confirm": "Den Wächter „{name}“ löschen? Die Rechner hören beim nächsten Herzschlag auf zu überwachen.",
+    "show_state": "Rechner",
+    "state_title": "{name} -- {service}",
+    "state_help": "Was jeder Rechner zuletzt gemeldet hat. Ein Rechner, der betroffen ist, hier aber fehlt, hat den Wächter noch nicht übernommen.",
+    "state_empty": "Zu diesem Wächter hat noch kein Rechner etwas gemeldet.",
+    "machine": "Rechner",
+    "status": "Status",
+    "restarts": "Neustarts",
+    "reported": "Zuletzt gemeldet",
+    "detail": "Details",
+    "history": "Was die Wächter getan haben",
+    "history_help": "Eine Zeile je Änderung, neueste zuerst. Ein neu gestarteter Dienst wird immer festgehalten; ein Rechner, der wiederholt meldet, dass alles in Ordnung ist, nicht.",
+    "history_empty": "Noch nichts.",
+    "when": "Wann",
+    "status_name": {
+      "ok": "Läuft",
+      "restarted": "Neu gestartet",
+      "failed": "Neustart fehlgeschlagen",
+      "given_up": "Aufgegeben",
+      "missing": "Dienst nicht vorhanden"
+    }
   },
   "ai": {
     "drafter_title": "Eine Regel beschreiben",
