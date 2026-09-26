@@ -5849,9 +5849,28 @@ def merge_machines_endpoint():
         else:
             refused.append(victim)
     if refused:
-        # 409 and the alert stays up: these duplicates were not collapsed. The body names the fix
-        # because the console shows it verbatim (alerts.js, alerts.duplicate.merge_failed), and
-        # "refused" on its own sends an operator hunting for a permission problem they do not have.
+        # The alert stays up, but it must not still name the machines this call just deleted.
+        #
+        # A partial merge is the case: two of three victims absorbed, one refused, and the open
+        # duplicate_serial alert -- the thing the operator clicked to get here -- goes on listing
+        # all four hostnames until some machine happens to post a report and re-runs
+        # resolve_serial_group. Until then the console offers a merge control for names that no
+        # longer exist. Recomputed from machine_info rather than subtracted from `merged`, because
+        # that is the same question resolve_serial_group asks and it stays right for a serial
+        # shared by a machine nobody named in this request.
+        if found.get(survivor):
+            with get_db_conn() as conn:
+                still = [r["machine"] for r in conn.execute(
+                    "SELECT machine FROM machine_info WHERE serial_number = ? COLLATE NOCASE",
+                    (found[survivor],),
+                ).fetchall()]
+            if len(still) > 1:
+                alerts.upsert_duplicate(DB_PATH, found[survivor], still)
+            else:
+                alerts.resolve_for_serial(DB_PATH, found[survivor])
+        # 409, because these duplicates were not collapsed. The body names the fix because the
+        # console shows it verbatim (alerts.js, alerts.duplicate.merge_failed), and "refused" on
+        # its own sends an operator hunting for a permission problem they do not have.
         return jsonify({
             "status": "partial" if merged else "refused",
             "survivor": survivor, "merged": merged, "refused": refused,

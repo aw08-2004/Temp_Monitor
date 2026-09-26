@@ -422,6 +422,45 @@ def test_merge_refused_rather_than_stranding_recovery_keys():
         os.environ.pop("BACKUP_MASTER_KEY", None)
 
 
+def test_partial_merge_stops_the_duplicate_alert_naming_deleted_machines():
+    """A manual merge that absorbs some victims and refuses others refreshes the open
+    duplicate_serial alert, instead of leaving it listing hostnames it just deleted.
+
+    The silent failure this catches: the operator clicks the duplicate alert, one of three
+    victims is refused over its escrowed keys, and the alert -- still open, correctly -- goes on
+    offering a merge control for two machines that no longer exist. Nothing corrects it until
+    some machine posts a report and re-runs resolve_serial_group, which on an offline duplicate
+    is never. The endpoint resolves the alert on a clean merge and did nothing at all on a
+    partial one, which is the gap.
+    """
+    print("\n-- a partial merge refreshes the duplicate alert rather than leaving it stale --")
+    for name in ("partKeep", "partGone", "partStay"):
+        report(name, "SER-PARTIAL-1")
+    enroll("partKeep")
+    alerts.upsert_duplicate(app.DB_PATH, "SER-PARTIAL-1", ["partKeep", "partGone", "partStay"])
+    os.environ["BACKUP_MASTER_KEY"] = backups.generate_master_key()
+    try:
+        _unopenable_blob("partStay", sealed_for="partKeep")
+        _report_posture("partStay")
+        console_session.sign_in(client, "tester@example.com")
+        resp = client.post("/api/machines/merge",
+                           json={"survivor": "partKeep", "victims": ["partGone", "partStay"]})
+        body = resp.get_json() or {}
+        check("the endpoint reports a partial merge", resp.status_code == 409
+              and body.get("status") == "partial")
+        check("...the readable duplicate is gone", not machine_exists("partGone"))
+        check("...and the one holding unreadable keys stayed", machine_exists("partStay"))
+        open_dupes = [a for a in alerts.list_open(app.DB_PATH)
+                      if a["kind"] == alerts.KIND_DUPLICATE_SERIAL
+                      and a["serial_number"] == "SER-PARTIAL-1"]
+        check("...the alert is still open, because the collision is not collapsed",
+              len(open_dupes) == 1)
+        check("...and names only the machines that still exist",
+              open_dupes and sorted(open_dupes[0]["machines"]) == ["partKeep", "partStay"])
+    finally:
+        os.environ.pop("BACKUP_MASTER_KEY", None)
+
+
 def test_escrow_move_failing_mid_merge_leaves_posture_with_the_keys():
     """The residual race: the escrow check passed at the top of the merge, and the store or the
     master key changed before the move ran a few dozen lines later.
@@ -482,6 +521,7 @@ if __name__ == "__main__":
     test_unenrolled_survivor_never_absorbs_a_real_machine()
     test_report_cannot_rewrite_an_established_serial()
     test_merge_refused_rather_than_stranding_recovery_keys()
+    test_partial_merge_stops_the_duplicate_alert_naming_deleted_machines()
     test_escrow_move_failing_mid_merge_leaves_posture_with_the_keys()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
