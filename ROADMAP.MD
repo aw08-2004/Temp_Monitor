@@ -2902,7 +2902,7 @@ can be born into the ring.
 
 ---
 
-## 🚧 16. Event log mining   ·   hub 1.118.0 · agent unreleased
+## 🚧 16. Event log mining   ·   hub 1.118.0 · agent 3.37.0
 
 Windows Event Log (Security, Application, System) ingested on the agent and correlated into
 alerts — the PRD's example, 4625 failed logons, is the right one. This is the first genuinely
@@ -2976,18 +2976,24 @@ it — the same trap `manage_firmware` avoided by shipping live.
 - **No per-group targeting.** The subscription set is fleet-wide: one document, one version,
   every agent. Per-`device_groups` targeting is a real want and a real cost (a document and a
   version per machine on a ten-second heartbeat), and nothing yet needs it.
-- **No agent release.** The agent half is source on `main` at 3.36.0; it reaches the fleet
-  with the next `agent/release.ps1` cut. The hub needs no gate for that: this feature has no
-  per-machine console control to hide, so a machine on an older agent simply never reports and
-  `machine_event_state` says "we have not been told" rather than "nothing happened". That
-  distinction is the reason that table exists.
-- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`).
-  The agent half **compiles** (see the note under the hardware validation about building it from
-  Linux, which is how the two faults that shipped in the first cut were found), but
-  `EventLogTests.cs` has never been *run*: the test host needs `Microsoft.WindowsDesktop.App`,
-  which exists only on Windows. So the pure parts are written down rather than verified, the
-  query has never been executed against a Windows event service, and no record has ever made
-  the trip. See the hardware validation note.
+- ~~**No agent release.**~~ **Released** in agent **3.37.0** on 2026-09-23 (re-cut as 3.37.1),
+  alongside BitLocker escrow and network discovery. No hub gate was needed and none was added:
+  this feature has no per-machine console control to hide, so a machine on an older agent
+  simply never reports and `machine_event_state` says "we have not been told" rather than
+  "nothing happened". That distinction is the reason that table exists, and it is now the thing
+  to read on the Events page while the fleet is mid-upgrade.
+- **Never verified against a real event log, and now it can be.** The hub half is tested
+  (`tests/test_events.py`). The agent half **compiles** (see the hardware validation note about
+  building it from Linux, which is how the two faults that shipped in the first cut were
+  found), but `EventLogTests.cs` has never been *run*: the test host needs
+  `Microsoft.WindowsDesktop.App`, which exists only on Windows. So the pure parts are written
+  down rather than verified.
+  **What changed with the release is that the query is now executing on real machines**, which
+  it never had before. Until somebody looks at the Events page and sees rows, the honest state
+  of this feature is *deployed and unconfirmed* -- and the failure mode it was designed around
+  makes that gap invisible, because a fleet that collects nothing looks exactly like a fleet
+  with nothing to report. The five checks are in the hardware validation note; the first two
+  cost about a minute each.
 
 ---
 
@@ -5179,9 +5185,9 @@ This is that list, so nothing is quietly skipped:
 | **show_message** | Send a notice from a rule with a Yes / No / Later preset: the heads-up banner appears with three buttons, pressing one reports that id inside a second and the console's rule history shows the follow-up firing; swiping the notice away reports `dismissed` and not a timeout; a message left alone for its timeout reports `timeout` and the notification is gone afterwards; with notifications switched off for the agent in Settings it comes back `no_session` with the reason, and NOT as a failed command |
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
-**Also owed, and not from #23: roadmap #16's event log query.** Nothing in the collection
-half has ever run against a Windows event service. On the first machine that gets the new
-agent, confirm that a Security subscription for 4625 returns records at all (the XPath, the
+**Also owed, and not from #23: roadmap #16's event log query.** No longer hypothetical:
+agent **3.37.0** shipped on 2026-09-23, so this is running in the field now and nothing about
+it has been confirmed. On any machine that has taken the new agent, confirm that a Security subscription for 4625 returns records at all (the XPath, the
 `timediff` window and the level mapping are all unexercised); that Information on Security
 returns records rather than nothing, which is what the level-0 mapping exists for; that a
 channel LocalSystem cannot read comes back as `error` on the report instead of costing the
