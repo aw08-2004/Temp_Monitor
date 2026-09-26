@@ -407,8 +407,26 @@ def main():
               stale is not None and stale.current_key_id == live_id)
         check("and nothing was written",
               backups.master_key_b64() == outsider)
-        check("passing no expectation skips the check entirely",
+        check("omitting the argument entirely still skips the check",
               backups.import_master_key(env_path, incoming)["key_b64"] == incoming)
+
+        # An import that asks the operator nothing -- a first import into an empty hub, or
+        # a re-import of the key already configured -- used to skip the check, which made it
+        # the way in for the failure the confirmation exists to stop: nobody is shown a
+        # warning, so nobody sees which key gets discarded. `None` is the caller saying it
+        # saw no key, and that is a claim worth checking like any other.
+        backups.import_master_key(env_path, outsider)
+        stale = None
+        try:
+            backups.import_master_key(env_path, incoming, expect_key_id=None)
+        except backups.KeyConfirmationStale as e:
+            stale = e
+        check("a first import that raced a key installation is refused, not silent",
+              stale is not None)
+        check("and it names the key that appeared underneath it",
+              stale is not None and stale.current_key_id == live_id)
+        check("the key that appeared is still the configured one",
+              backups.master_key_b64() == outsider)
 
         # The lock is the other half: a check inside the read is only worth something if no
         # other writer can slip between that read and the write it authorised. Proven by

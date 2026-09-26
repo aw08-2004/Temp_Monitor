@@ -505,7 +505,11 @@ Decisions worth carrying:
   console can re-render its warning against the real key rather than retrying blind. Its
   own class rather than a bare `ValueError` because `refusals.refuse` would flatten it to
   400, and "you confirmed against a key that is no longer there" is a conflict the operator
-  resolves by looking, not a malformed request.
+  resolves by looking, not a malformed request. The route sends what it saw on **every**
+  import, not only on the ones it asked about: a first import into an empty hub and a
+  re-import of the configured key ask nothing, so skipping the check there would leave the
+  same failure a door open -- and the one where nobody was shown a warning at all is the
+  worse half. `None` means "I saw no key", which is checked like any other claim.
 - **A credential store that cannot be written after the key changed is reported, not
   raised.** The `.env`-first ordering below rules out the other half of that window, not
   this one. By then `.env` already says the import happened and the next restart will

@@ -554,7 +554,13 @@ def ensure_master_key(env_path):
         return key_b64, True
 
 
-def import_master_key(env_path, raw, log_dir=None, expect_key_id=None):
+# Distinguishes "do not check what is configured" from "expect nothing to be configured".
+# None cannot carry both meanings: a first import is a caller saying it saw NO key, which is
+# a claim about the world worth checking, not an absence of one.
+_UNCHECKED = object()
+
+
+def import_master_key(env_path, raw, log_dir=None, expect_key_id=_UNCHECKED):
     """Adopt a master key the operator already holds. Returns a dict:
     `key_b64`, `previous_key_id`, `rewrapped`, `stranded`, `credentials_error`.
 
@@ -565,8 +571,11 @@ def import_master_key(env_path, raw, log_dir=None, expect_key_id=None):
     separate reads with a scheduler between them: both requests pass their own check, both
     write, and the second discards a key whose key_id nobody ever saw. That is the
     `replace_key_id` confirmation defeated by the gap it was added to close, so the check
-    belongs where the write is. Callers that have nothing to confirm (a first import, or a
-    repair over an unusable key) pass None and the check is skipped.
+    belongs where the write is. A caller that saw no key at all passes None, which is
+    checked like any other value: "there was nothing here" is a claim about the world, and a
+    first import that races a key installation would otherwise discard that key with no
+    confirmation ever shown -- the same failure, entering through the door that asks no
+    question. Only an internal caller with nothing to say omits the argument entirely.
 
     **The counterpart to ensure_master_key, and what makes a reinstall survivable.** A hub
     brought up on a new server, in a new folder, or from a VM image without its `.env`
@@ -621,10 +630,11 @@ def import_master_key(env_path, raw, log_dir=None, expect_key_id=None):
             previous = None
 
         previous_id = key_id(previous) if previous is not None else None
-        if expect_key_id is not None and previous_id != expect_key_id:
+        if expect_key_id is not _UNCHECKED and previous_id != expect_key_id:
             raise KeyConfirmationStale(
-                "The backup encryption key changed while you were confirming, so nothing "
-                "was replaced. Check which key this hub holds now and confirm again.",
+                "The backup encryption key on this hub changed while this import was in "
+                "flight, so nothing was replaced. Check which key it holds now and try "
+                "again.",
                 current_key_id=previous_id)
 
         result = {"key_b64": new_b64, "previous_key_id": previous_id,

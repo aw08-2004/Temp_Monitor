@@ -212,11 +212,12 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     KEY_UNUSABLE = ("The backup encryption key configured on this hub is not usable. Check "
                     "BACKUP_MASTER_KEY in .env, or use an existing key to replace it.")
 
-    # Shown when a key is replaced out from under a confirmation. It has to say that nothing
-    # was replaced -- an operator who reads only "the key changed" will assume theirs landed.
+    # Shown when the key moved under a request mid-flight. It has to say that nothing was
+    # replaced -- an operator who reads only "the key changed" will assume theirs landed.
+    # Worded for a request that asked no confirmation too, since those are checked as well.
     KEY_CONFIRMATION_STALE = (
-        "The backup encryption key on this hub changed while you were confirming, so "
-        "nothing was replaced. Check which key it holds now and confirm again.")
+        "The backup encryption key on this hub changed while this import was in flight, so "
+        "nothing was replaced. Check which key it holds now and try again.")
 
     def _key_state():
         """Everything the console needs to nag correctly, and nothing that reveals the
@@ -408,15 +409,22 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             }), 409
 
         try:
-            # The confirmed key_id goes WITH the call rather than being checked only above.
-            # This check and the one above answer two different questions: this route read
-            # the key once to decide whether to ask, and backups.py reads it again to do the
-            # replacing, so only a check inside that second read can say the key being
-            # discarded is still the one named on screen. Without it the two reads are a gap
-            # two concurrent imports fit through -- see backups.KeyConfirmationStale.
+            # What this route SAW goes with the call, always -- not only when it decided to
+            # ask for a confirmation. This check and the one above answer two different
+            # questions: the route read the key once to decide whether to ask, and
+            # backups.py reads it again to do the replacing, so only a check inside that
+            # second read can say the key being discarded is still the one that was on
+            # screen. Without it the two reads are a gap two concurrent imports fit through.
+            #
+            # **Passing None for "there was no key" is the point, not an omission.** A first
+            # import and a re-import of the same key ask the operator nothing, so if they
+            # skipped the check they would be the way in for the very failure the
+            # confirmation exists to stop: import into an empty hub while another tab
+            # installs a key, and the empty-hub request silently discards it, having shown
+            # nobody a warning. Carrying the observed state means the world moving is
+            # answered the same way whether or not a question was asked.
             imported = backups.import_master_key(
-                env_path, raw, log_dir=log_dir,
-                expect_key_id=current_id if replacing else None)
+                env_path, raw, log_dir=log_dir, expect_key_id=current_id)
         except backups.KeyConfirmationStale as e:
             # 409, not 400: the request was well formed and the world moved underneath it.
             # Same shape as the refusal above, so the console re-renders its warning against
