@@ -4228,9 +4228,11 @@ and re-cut as 3.37.1 for #20, neither of which contains `SoftwareInventoryReport
 entry that names an already-released number is not just stale prose: `MIN_SOFTWARE_AGENT` is a
 hub-side **compatibility gate**, so shipping it as `'3.37.0'` would make the console offer a
 Software section on every machine already in the field and read an empty answer as "nothing
-installed". Whoever cuts this reads the released number first and takes the next free MINOR
-above it -- and agent MINORs are allocated centrally while several threads are running, so the
-number is asked for, not picked. Same for C below, which must land a MINOR above B's.
+installed". Whoever cuts this reads the released number first and takes the next MINOR above it.
+Nobody reserves agent numbers in advance and nobody can: a MINOR becomes real only when
+`agent/release.ps1` cuts it, which is the whole reason a number written into a *planned* entry
+is right the day it is written and wrong the day somebody cuts a release. Same for C below,
+which must land a MINOR above B's.
 
 Shipping B with A is what makes that gate constant honest on day one. **Deploy order is hub
 first, then the agent** (VERSIONING.md), so there is a window on every release where the
