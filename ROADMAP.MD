@@ -2698,7 +2698,7 @@ what survived, and why the rest did not. The two decisions that framed the triag
 |---|---|
 | FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent 3.37.0); Intune sync is not → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.124.0, `correlate.baselines`). |
-| FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`). Still open there: an `event.*` rules variable, so a counter can be alerted on rather than only read. |
+| FR-03 Alert brain | **Done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`); the `event.*` rules variable, so a counter can be alerted on rather than only read, in hub 1.128.0 (`rules.py` / `events.py`). |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
@@ -3017,7 +3017,7 @@ it — the same trap `manage_firmware` avoided by shipping live.
 
 ---
 
-## 🚧 17. Alert correlation and recommended fixes   ·   hub 1.124.0   ·   `correlate.py` / `correlate_web.py`
+## ✅ 17. Alert correlation and recommended fixes   ·   hub 1.124.0, `event.*` rules variable hub 1.128.0   ·   `correlate.py` / `correlate_web.py`
 
 The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
 **one** bundle, not three alerts. The substrate was already here — `alerts.py` keeps episodes,
@@ -3109,9 +3109,40 @@ it was.
 
 ### Not done
 
-* **An `event.*` rules variable is still open.** #16's event rows already join the bundle
-  whose window they overlap, but an operator still cannot write a rule over those counters.
-  `facet_for_variable` is ready to classify that alert once the rules engine exposes it.
+* **The `event.*` rules variable landed in hub 1.128.0**, closing the last of #16's hand-off:
+  `event.count`, `event.critical_count`, `event.error_count`, `event.warning_count` and a
+  per-id `event.id_4625.count`, all over the `events.summary_window_seconds` window the
+  console's own summary uses. `facet_for_variable` already routes the `event.` family, so an
+  event-driven alert bundles with a metric one. Three decisions worth keeping:
+  * **A machine with no `machine_event_state` row is UNKNOWN, not zero.** That row is absent
+    on an agent too old to know what a subscription is, and zero there would make
+    `event.error_count == 0` true across every un-upgraded PC in the fleet — a rule written to
+    find the healthy machines would return the ones nobody can see.
+  * **An id no subscription asks for is absent, not zero.** The hub never told any agent to
+    collect it, so it has no basis for saying the event did not happen.
+  * **The per-id family is matched structurally, like `disk.<letter>.*`**, rather than
+    validated against the live subscription set. Validating would mean deleting a subscription
+    silently makes every rule mentioning it unsaveable, so an operator editing an unrelated
+    clause on an old rule would be stopped by a message about a variable they never touched.
+  Two limits found in review of that change and left open on purpose, both needing a column on
+  `machine_event_state` that #16 does not have -- and `init_events_db` is `CREATE TABLE IF NOT
+  EXISTS` with no migration path, so adding one to an existing hub is the same shape as the
+  BitLocker `protector_count` gap rather than a one-liner:
+  * **The adopted-document residue.** A per-id count is withheld until the machine reports
+    again, but the heartbeat that first carries a new subscription is itself a report, so
+    there is one heartbeat -- about ten seconds -- in which the count is trusted and the
+    machine has not looked. Storing the agent's adopted document version per machine would
+    close it exactly.
+  * **The blind interval after an error clears.** One clean report restores trust in the whole
+    counting window, including the part of it the machine spent unable to read the channel.
+    A `last_error_at` column would let the counters stay UNKNOWN until the window has moved
+    past the blind stretch.
+
+  Rejected: a variable per *subscription*, keyed by a slug of the operator's name for it (two
+  subscriptions can slug to one name, and renaming one would break every rule referencing it);
+  and ids discovered from collected rows rather than from subscriptions (the variable would not
+  exist on the quiet morning somebody sits down to write the rule, and would appear only once
+  the brute-force was already under way).
 * **A recommendation is never asked for on a timer**, only from an operator pressing the
   button on one bundle. A feature that quietly bills a provider per alert episode is one an
   operator discovers from an invoice.
@@ -5381,17 +5412,18 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     than mechanism, and that risk is settled three times over: the filter runs on the machine
     as one XPath per channel, identical repeats are rolled up into a count instead of a row,
     and both the retention window and a per-machine row cap existed before the first row was
-    written. What is deliberately NOT here is a rule condition over the collected counters —
-    that is a change to the rules engine, which belongs to #17, and `events.summary` is the
-    counter it will read.
+    written. The rule condition over the collected counters was deliberately NOT here — it is
+    a change to the rules engine, so it belongs to #17, and it shipped there in hub 1.128.0
+    reading `events.summary`'s counters narrowed to one machine.
 17. **#17 Alert correlation and recommended fixes** — **grouping, the causal claim, anomaly
     baselining and the wording layer shipped in hub 1.124.0**, and a bundle now carries the
     #16 events that fall inside its own window. Both dependencies landed first as planned:
     patch outcomes since 1.92.0, event counters since 1.118.0. The provider the language
     layer was gated on turned out to be #24's, so this item introduced no new plumbing after
-    all. What it still owes is the other half of #16's hand-off — an `event.*` rules variable
-    so an operator can write "more than N of event 4625 in a window" — which is a change to
-    the rules engine and is scoped as its own piece rather than folded in here.
+    all. The other half of #16's hand-off followed in **hub 1.128.0** as its own change rather
+    than folded in here: `event.*` variables in the rules engine, so "more than twenty failed
+    logons on one machine in the window" is now a condition an operator can write. **Item
+    complete.**
 18. **#18 Network discovery and shadow IT** — first slice built: an ARP sweep run by a
     machine already on the subnet, and every answer classified against the NIC inventory #10
     already collects. No prerequisite, low expected yield on an MDM-driven fleet, sequenced

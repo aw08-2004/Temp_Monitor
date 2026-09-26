@@ -42,6 +42,7 @@ from datetime import datetime
 
 import alerts
 import capabilities
+import events
 import fleet
 import scripts
 
@@ -141,6 +142,11 @@ AGE_NETWORK = 10800
 AGE_BIOS = None
 AGE_PROC = 300
 AGE_AD = 172800
+#   event   3600  machine_event_state.reported_at is stamped on every event report, empty
+#                 ones included, and the report rides the same heartbeat as everything else.
+#                 events.STALE_AFTER_SECONDS is what the console already calls a stale event
+#                 view, and a rule must not read "quiet" off a collector that stopped.
+AGE_EVENT = events.STALE_AFTER_SECONDS
 
 GROUP_SYS = "sys"
 GROUP_HW = "hw"
@@ -151,6 +157,7 @@ GROUP_NET = "net"
 GROUP_BIOS = "bios"
 GROUP_AD = "ad"
 GROUP_PROC = "proc"
+GROUP_EVENT = "event"
 GROUP_FIELD = "field"
 
 STATIC_VARIABLES = (
@@ -218,6 +225,14 @@ STATIC_VARIABLES = (
     Var("proc.count", KIND_NUMBER, GROUP_PROC, AGE_PROC),
     Var("proc.cpu_cores", KIND_NUMBER, GROUP_PROC, AGE_PROC),
     Var("proc.mem_total_mb", KIND_NUMBER, GROUP_PROC, AGE_PROC),
+    # -- event: windowed counts over collected Windows event log records (roadmap #16) ---
+    # Totals only. The per-id counters are `event.id_<n>.count`, expanded dynamically from
+    # the subscription set the same way disk.<letter>.* is expanded from a machine's
+    # volumes -- see _EVENT_VAR_RE and _resolve_events.
+    Var("event.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
+    Var("event.critical_count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
+    Var("event.error_count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
+    Var("event.warning_count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
 )
 
 STATIC_BY_NAME = {v.name: v for v in STATIC_VARIABLES}
@@ -895,7 +910,8 @@ def _pick_session(sessions):
 
 
 def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=None,
-                         online_window=None, enrolled=None, fields=None, row=None):
+                         online_window=None, enrolled=None, fields=None, row=None,
+                         event_context_=None):
     """Every variable for one machine: {name: Value}.
 
     Arguments the caller supplies rather than this module computing them, and why:
@@ -911,6 +927,9 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
       per-machine loop.
     * `row`/`fields` -- pre-fetched machine_info row and field values, so the evaluator can
       batch its reads across the fleet instead of doing two queries per machine per tick.
+    * `event_context_` -- `event_context()`'s output: the subscription set and the counting
+      window for event.*. Both are fleet-wide rather than per-machine, and the window comes
+      from a setting this module cannot read, so the caller supplies them.
 
     Everything is optional and everything degrades to UNKNOWN, so a caller that knows only
     the machine name still gets a usable (if sparse) namespace.
@@ -995,6 +1014,7 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
     _resolve_network(db_path, machine, out, now)
     _resolve_bios(db_path, machine, out, now)
     _resolve_processes(db_path, machine, out, now)
+    _resolve_events(db_path, machine, out, now, event_context_)
 
     # -- AD ------------------------------------------------------------------------------
     ad_age = _age(now, info.get("ad_synced_at"))
@@ -1126,6 +1146,124 @@ def _resolve_processes(db_path, machine, out, now):
     _put(out, STATIC_BY_NAME["proc.mem_total_mb"], _num(payload.get("mem_total_mb")), age)
 
 
+def event_context(db_path, window_seconds=None):
+    """The fleet-wide half of `event.*`, read once instead of once per machine.
+
+    The subscription set and the counting window are the same for every machine in the fleet,
+    so this is separable from the per-machine read and a caller evaluating the whole fleet can
+    build it once. `app.resolve_rule_vars` currently builds it per machine, alongside the
+    per-machine `fleet.dashboard_online_window_seconds` read it already does -- one small
+    query, and hoisting one without the other would buy nothing. `resolve_machine_vars` falls
+    back to calling this itself, so a caller that knows only a machine name still gets correct
+    values.
+
+    `window_seconds` is passed in rather than read here, because this module does not import
+    `settings` -- no model half in the hub does, and the one that started would drag the whole
+    configuration layer into the unit tests. Callers pass
+    `settings.get_int(db_path, "events.summary_window_seconds")`, the same knob the console's
+    event summary reads, so a threshold fires on the number the operator was looking at when
+    they chose it. The fallback equals that setting's own default and
+    `tests/test_event_rules.py` asserts the two have not drifted -- a mismatch would be
+    invisible, since both numbers are plausible and only one is the one on screen.
+    """
+    since = _subscribed_since(db_path)
+    return {
+        "event_ids": tuple(sorted(since)),
+        # When each id was first asked for, so a machine that has not reported since then can
+        # be told apart from one that reported no occurrences. See `_resolve_events`.
+        "subscribed_since": since,
+        "window_seconds": int(window_seconds if window_seconds is not None
+                              else events.DEFAULT_RULE_WINDOW_SECONDS),
+    }
+
+
+def _resolve_events(db_path, machine, out, now, context=None):
+    """event.* -- how much the Windows event log said, inside the counting window.
+
+    Four refusals are the whole of this function.
+
+    **A machine we have never been told about is UNKNOWN, not zero.** No row in
+    `machine_event_state` means an agent too old to know what a subscription is, or one that
+    has never finished a heartbeat -- not a quiet machine. Reading that as zero would make
+    `event.error_count == 0` true for every un-upgraded PC in the fleet, and a rule written to
+    find healthy machines would return the ones nobody can see.
+
+    **An id no subscription asks for is absent, not zero.** The hub is not collecting it, so
+    it cannot say the event did not happen; `evaluate` reads an absent name as UNKNOWN and the
+    rule does not fire. A zero there would be the module asserting something it never looked
+    for, which is the one thing every docstring in this file is arranged against.
+
+    **An id subscribed more recently than this machine's last report is absent too.**
+    Subscribing is not collecting. Add a subscription for 4625 at noon and the machine is
+    still holding yesterday's document; its last report is minutes old, so the freshness
+    checks all pass, and a counter would answer zero for an id nobody has yet been asked to
+    watch. That is the same lie as the unsubscribed case, only with a plausible timestamp in
+    front of it, and it lasts as long as the machine stays quiet -- a week, for a PC that is
+    switched off. `events.subscribed_since` explains the one residue this leaves.
+
+    **A machine whose latest report carried a collector error is UNKNOWN too.** It is the same
+    mistake wearing a disguise: the report is fresh, `reported_at` is minutes old, and every
+    counter reads a confident zero off a machine that just said it could not read the channel.
+    A rule cannot distinguish "nothing happened" from "we were not allowed to look" unless this
+    function does it here, and the fresh timestamp makes it the version of the mistake that
+    survives review. `record_events` overwrites `error` on each report rather than accumulating
+    it, so one clean report puts the counters back.
+
+    The window comes from `events.summary_window_seconds`, the setting the console's event
+    summary already uses. One knob, so the number a rule fires on is the number the operator
+    was looking at when they chose the threshold.
+    """
+    if context is None:
+        context = event_context(db_path)
+    try:
+        counters = events.rule_counters(
+            db_path, machine,
+            event_ids=context.get("event_ids") or (),
+            window_seconds=(context.get("window_seconds")
+                            or events.DEFAULT_RULE_WINDOW_SECONDS),
+            now=now,
+        )
+    except sqlite3.Error:
+        counters = None
+
+    trusted = bool(counters) and counters.get("reported_at") is not None \
+        and not counters.get("error")
+    if not trusted:
+        # Age None with a max_age set is UNKNOWN by _put's second branch, which is the
+        # "cannot show it is current" rule. Reused for the error case rather than adding a
+        # second way to say UNKNOWN: one chokepoint, so a future edit cannot restore half of
+        # it. Spelled out rather than relied on, because this is the branch a future edit is
+        # most likely to get wrong.
+        age = None
+    else:
+        age = _age(now, counters["reported_at"])
+
+    by_level = (counters or {}).get("by_level") or {}
+    _put(out, STATIC_BY_NAME["event.count"],
+         _num((counters or {}).get("total")) if trusted else UNKNOWN, age)
+    for name, level in (("event.critical_count", events.LEVEL_CRITICAL),
+                        ("event.error_count", events.LEVEL_ERROR),
+                        ("event.warning_count", events.LEVEL_WARNING)):
+        _put(out, STATIC_BY_NAME[name],
+             _num(by_level.get(level, 0)) if trusted else UNKNOWN, age)
+
+    # The per-id counters are only emitted for a machine we can vouch for. An untrusted one
+    # leaves them absent rather than present-and-UNKNOWN; both read UNKNOWN to `evaluate`,
+    # and absent is the honest shape, because there is nothing to report an age for.
+    if trusted:
+        subscribed_since = context.get("subscribed_since") or {}
+        reported_at = counters["reported_at"]
+        for event_id, count in (counters.get("by_event_id") or {}).items():
+            asked_at = subscribed_since.get(event_id)
+            # Strictly before, so a report landing in the same second as the subscription
+            # counts as having adopted it. These timestamps are whole seconds and a heartbeat
+            # runs every ten, so a tie is a tie, not evidence of the gap this guards against.
+            if asked_at is not None and reported_at < asked_at:
+                continue    # asked for after this machine last spoke -- see the docstring
+            _put(out, Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
+                 _num(count), age)
+
+
 def _resolve_fields(db_path, machine, out, fields=None):
     """field.* -- operator-set, so never stale (age None).
 
@@ -1156,6 +1294,7 @@ def catalog(db_path, disks=None):
     entries = list(STATIC_VARIABLES) + list(disk_variables(disks))
     for field in list_fields(db_path):
         entries.append(Var(f"field.{field['name']}", field["kind"], GROUP_FIELD, None))
+    entries.extend(event_variables(db_path).values())
     entries.extend(probe_variables(db_path).values())
     entries.extend(derived_variables(db_path).values())
     return entries
@@ -1279,15 +1418,73 @@ _DISK_VAR_RE = re.compile(r"^disk\.([a-z])\.(used_pct|free_gb|used_gb|total_gb)$
 _DISK_SUFFIX_KINDS = dict(DISK_VOLUME_SUFFIXES)
 _DISK_SUFFIX_UNITS = {"used_pct": "percent", "free_gb": "gb", "used_gb": "gb", "total_gb": "gb"}
 
+# `event.id_4625.count` -- occurrences of one Windows event id on this machine inside the
+# counting window. Matched structurally rather than looked up in `extra`, for the same reason
+# `disk.<letter>` is: **a rule must be storable before the thing it names exists.** Nobody
+# writes the subscription and the rule in a fixed order, and validating against the live
+# subscription set would mean that deleting a subscription silently makes every rule
+# mentioning it unsaveable -- so editing an unrelated clause on an old rule would fail with a
+# message about a variable the author never touched.
+#
+# Bounded by Windows' own id range, which `events` already owns. An id outside it cannot
+# appear in a subscription and so cannot appear in a record either.
+#
+# One spelling per id, so no leading zeros: `event.id_04625.count` would otherwise be a second
+# name for 4625 that validates, saves, and then never settles -- `_resolve_events` only ever
+# emits the canonical spelling, so the clause would sit in a rule reading UNKNOWN forever.
+_EVENT_VAR_RE = re.compile(r"^event\.id_(0|[1-9][0-9]{0,4})\.count$")
+
+
+def event_id_in_name(name):
+    """The event id `event.id_<n>.count` names, or None. Out-of-range ids are not names."""
+    match = _EVENT_VAR_RE.match(str(name or ""))
+    if not match:
+        return None
+    event_id = int(match.group(1))
+    if event_id < events.MIN_EVENT_ID or event_id > events.MAX_EVENT_ID:
+        return None
+    return event_id
+
+
+def _subscribed_since(db_path):
+    """`events.subscribed_since`, tolerating a database with no events tables.
+
+    A hub that has never started the events feature, or a test database holding only the
+    rules schema, has no `event_subscriptions`. Same shape as every other sub-payload read in
+    this file: absent becomes an empty mapping, so no `event.id_<n>.count` is offered or
+    resolved and a rule naming one reads UNKNOWN. Never zero -- a hub that is demonstrably not
+    collecting must not answer "it did not happen".
+    """
+    try:
+        return events.subscribed_since(db_path)
+    except sqlite3.Error:
+        return {}
+
+
+def event_variables(db_path):
+    """The per-id half of the catalog, one entry per event id a subscription names.
+
+    The fleet-wide analogue of `disk_variables`: the picker offers what is actually being
+    collected, because offering all 65536 ids would be a scroll bar rather than a catalog.
+    `lookup_variable` still accepts any id in range, so a rule may name one that no
+    subscription covers -- it simply reads UNKNOWN, which is the correct answer to "how many
+    4625s" on a hub that never asked for them.
+    """
+    return {f"event.id_{event_id}.count":
+            Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT)
+            for event_id in sorted(_subscribed_since(db_path))}
+
 
 def lookup_variable(name, extra=None):
     """The Var for a name, or None if no such variable can exist.
 
-    Handles the two dynamic families structurally rather than by enumeration:
+    Handles the dynamic families structurally rather than by enumeration:
     `disk.<letter>.<suffix>` is valid for ANY drive letter, because which letters a machine
     has is a per-machine fact and a rule written against `disk.d.free_gb` must be storable
-    before the machine with a D: drive has reported in. `field.<name>` comes from `extra`,
-    which the caller builds once per request from the field definitions.
+    before the machine with a D: drive has reported in. `event.id_<n>.count` is valid for any
+    id Windows allows, for the same reason applied to a subscription that may not exist yet.
+    `field.<name>` comes from `extra`, which the caller builds once per request from the field
+    definitions.
     """
     name = str(name or "")
     static = STATIC_BY_NAME.get(name)
@@ -1300,6 +1497,8 @@ def lookup_variable(name, extra=None):
         suffix = match.group(2)
         return Var(name, _DISK_SUFFIX_KINDS[suffix], GROUP_DISK, AGE_LIVE,
                    _DISK_SUFFIX_UNITS[suffix])
+    if event_id_in_name(name) is not None:
+        return Var(name, KIND_NUMBER, GROUP_EVENT, AGE_EVENT)
     return None
 
 

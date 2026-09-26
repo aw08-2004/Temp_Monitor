@@ -142,7 +142,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.129.0"
+HUB_VERSION = "1.130.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4306,6 +4306,12 @@ def resolve_rule_vars(machine, now=None):
         DB_PATH, machine, now=now, diagnostics=diagnostics, live=live,
         online_window=settings.get_int(DB_PATH, "fleet.dashboard_online_window_seconds"),
         enrolled=fleet.is_enrolled(DB_PATH, machine),
+        # The counting window for event.* comes from the same setting the console's event
+        # summary reads, so a rule fires on the number the operator was looking at when they
+        # chose the threshold. rules.py cannot read it itself -- no model half imports
+        # settings -- so this seam supplies it, exactly as it supplies the online window.
+        event_context_=rules.event_context(
+            DB_PATH, settings.get_int(DB_PATH, "events.summary_window_seconds")),
     )
 
 
