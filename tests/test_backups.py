@@ -378,6 +378,83 @@ def main():
         check("the failure names no path back to the caller",
               blocked not in partial["credentials_error"])
 
+        # ---- the confirmation is checked where the write happens, not before it ----
+        # The console already refuses an import whose `replace_key_id` does not name the
+        # configured key. That check reads the key once and import_master_key reads it
+        # again, so on its own it leaves a gap: two concurrent imports both pass, both
+        # write, and the second discards a key whose id was never on anybody's screen.
+        # These pin the second check -- the one inside the read that does the replacing.
+        backups.import_master_key(env_path, outsider)
+        live_id = backups.key_id(backups.decode_master_key(outsider))
+        incoming = backups.generate_master_key()
+
+        check("a confirmation naming the configured key goes through",
+              backups.import_master_key(
+                  env_path, incoming, expect_key_id=live_id)["previous_key_id"] == live_id)
+
+        backups.import_master_key(env_path, outsider)
+        stale = None
+        try:
+            backups.import_master_key(env_path, incoming,
+                                      expect_key_id="0000000000000000")
+        except backups.KeyConfirmationStale as e:
+            stale = e
+        check("a confirmation naming a key this hub no longer holds is refused",
+              stale is not None)
+        check("the refusal is a ValueError, so existing handlers still catch it",
+              isinstance(stale, ValueError))
+        check("it carries the key_id that IS configured, for the next warning",
+              stale is not None and stale.current_key_id == live_id)
+        check("and nothing was written",
+              backups.master_key_b64() == outsider)
+        check("omitting the argument entirely still skips the check",
+              backups.import_master_key(env_path, incoming)["key_b64"] == incoming)
+
+        # An import that asks the operator nothing -- a first import into an empty hub, or
+        # a re-import of the key already configured -- used to skip the check, which made it
+        # the way in for the failure the confirmation exists to stop: nobody is shown a
+        # warning, so nobody sees which key gets discarded. `None` is the caller saying it
+        # saw no key, and that is a claim worth checking like any other.
+        backups.import_master_key(env_path, outsider)
+        stale = None
+        try:
+            backups.import_master_key(env_path, incoming, expect_key_id=None)
+        except backups.KeyConfirmationStale as e:
+            stale = e
+        check("a first import that raced a key installation is refused, not silent",
+              stale is not None)
+        check("and it names the key that appeared underneath it",
+              stale is not None and stale.current_key_id == live_id)
+        check("the key that appeared is still the configured one",
+              backups.master_key_b64() == outsider)
+
+        # The lock is the other half: a check inside the read is only worth something if no
+        # other writer can slip between that read and the write it authorised. Proven by
+        # trying to take the lock while the .env write is in flight -- a plain Lock is not
+        # reentrant, so a failed acquire here means it is genuinely held, and any other
+        # thread would block on it exactly the same way. Deterministic, unlike racing two
+        # real imports and hoping the scheduler cooperates.
+        backups.import_master_key(env_path, outsider)
+        real_set_vars = backups.envfile.set_vars
+        held = []
+
+        def _spy(*args, **kwargs):
+            # A would-be second import gets no further than this lock while we are inside
+            # the first one's critical section. True == could not acquire == held.
+            held.append(not backups._MASTER_KEY_LOCK.acquire(timeout=0.2))
+            return real_set_vars(*args, **kwargs)
+
+        backups.envfile.set_vars = _spy
+        try:
+            backups.import_master_key(env_path, incoming)
+        finally:
+            backups.envfile.set_vars = real_set_vars
+        check("the .env write happens while the master-key lock is held",
+              held == [True])
+        check("and the lock is released afterwards",
+              backups._MASTER_KEY_LOCK.acquire(timeout=0.2) and
+              (backups._MASTER_KEY_LOCK.release() or True))
+
         # Back to a key of this test's own making, since everything below encrypts with it.
         backups.import_master_key(env_path, outsider)
         master_key = backups.load_master_key()
