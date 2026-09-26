@@ -1537,6 +1537,11 @@ the absence of something it never looked for:
   PC that says it cannot read the Security channel has told you nothing about what is in it. One
   clean report puts the counters back. A machine that dropped records mid-storm still counts what
   it did send.
+* **A newly subscribed id reads unknown on a machine that has not reported since you added it.**
+  Subscribing is not collecting: the PC is still holding the previous subscription set and has
+  not looked once. It becomes a real zero on that machine's next report, which is usually
+  seconds — but for a PC switched off before a holiday it is a week, and a week of confident
+  zeros is exactly what you do not want a brute-force rule reading.
 
 > **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0.
 > The agent half is in the source tree and reaches the fleet with the next agent release, so

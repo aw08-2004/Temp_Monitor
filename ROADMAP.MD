@@ -3098,6 +3098,20 @@ it was.
     validated against the live subscription set. Validating would mean deleting a subscription
     silently makes every rule mentioning it unsaveable, so an operator editing an unrelated
     clause on an old rule would be stopped by a message about a variable they never touched.
+  Two limits found in review of that change and left open on purpose, both needing a column on
+  `machine_event_state` that #16 does not have -- and `init_events_db` is `CREATE TABLE IF NOT
+  EXISTS` with no migration path, so adding one to an existing hub is the same shape as the
+  BitLocker `protector_count` gap rather than a one-liner:
+  * **The adopted-document residue.** A per-id count is withheld until the machine reports
+    again, but the heartbeat that first carries a new subscription is itself a report, so
+    there is one heartbeat -- about ten seconds -- in which the count is trusted and the
+    machine has not looked. Storing the agent's adopted document version per machine would
+    close it exactly.
+  * **The blind interval after an error clears.** One clean report restores trust in the whole
+    counting window, including the part of it the machine spent unable to read the channel.
+    A `last_error_at` column would let the counters stay UNKNOWN until the window has moved
+    past the blind stretch.
+
   Rejected: a variable per *subscription*, keyed by a slug of the operator's name for it (two
   subscriptions can slug to one name, and renaming one would break every rule referencing it);
   and ids discovered from collected rows rather than from subscriptions (the variable would not

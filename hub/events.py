@@ -872,13 +872,46 @@ def subscribed_event_ids(db_path):
     "any" is not a number a counter can be keyed by. Its records still count toward the
     level totals, which is where a channel-wide subscription belongs.
     """
-    out = set()
+    return tuple(sorted(subscribed_since(db_path)))
+
+
+def subscribed_since(db_path):
+    """`{event_id: epoch}` -- the earliest moment the fleet was asked for each id.
+
+    **Subscribing is not collecting**, and the gap between the two is a window in which a
+    count would be a lie. An operator adds a subscription for 4625 at noon; the machine is
+    still holding yesterday's document and will not carry a single 4625 until its next
+    heartbeat brings the new one. Ask for its count at 12:00:01 and the honest answer is "we
+    have not been told", not zero -- but its last report is minutes old, so every freshness
+    check passes and zero is exactly what a naive counter says. A rule written to catch a
+    brute-force would report the machine clean while it was being sprayed.
+
+    The caller compares this against the machine's own `reported_at` to decide whether that
+    machine can have been collecting yet. **This is necessary but not quite sufficient**, and
+    the residue is worth stating: the heartbeat that first carries the new document is also a
+    report, so there is one heartbeat -- about ten seconds -- in which `reported_at` is newer
+    than the subscription and the machine still has not looked. Closing that properly needs
+    the agent's adopted document version stored per machine, which `machine_event_state` does
+    not have. Ten seconds against a window measured in hours is a residue; the untreated
+    version of this bug is unbounded, because a machine that is off for a week keeps answering
+    zero the whole time.
+
+    The MINIMUM across enabled subscriptions naming an id, not the maximum: if an old
+    subscription already covered 4625, adding a second one naming it does not make yesterday's
+    collection retroactively untrustworthy.
+    """
+    out = {}
     for subscription in list_subscriptions(db_path):
         if not subscription.get("enabled"):
             continue
+        # `updated_at`, not `created_at`: editing a subscription to add an id starts that id's
+        # collection then, and the row keeps its original creation time.
+        since = int(subscription.get("updated_at") or 0)
         for event_id in subscription.get("event_ids") or []:
-            out.add(int(event_id))
-    return tuple(sorted(out))
+            event_id = int(event_id)
+            if event_id not in out or since < out[event_id]:
+                out[event_id] = since
+    return out
 
 
 def rule_counters(db_path, machine, *, event_ids=(),

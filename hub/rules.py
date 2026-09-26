@@ -1166,8 +1166,12 @@ def event_context(db_path, window_seconds=None):
     `tests/test_event_rules.py` asserts the two have not drifted -- a mismatch would be
     invisible, since both numbers are plausible and only one is the one on screen.
     """
+    since = _subscribed_since(db_path)
     return {
-        "event_ids": _subscribed_event_ids(db_path),
+        "event_ids": tuple(sorted(since)),
+        # When each id was first asked for, so a machine that has not reported since then can
+        # be told apart from one that reported no occurrences. See `_resolve_events`.
+        "subscribed_since": since,
         "window_seconds": int(window_seconds if window_seconds is not None
                               else events.DEFAULT_RULE_WINDOW_SECONDS),
     }
@@ -1176,7 +1180,7 @@ def event_context(db_path, window_seconds=None):
 def _resolve_events(db_path, machine, out, now, context=None):
     """event.* -- how much the Windows event log said, inside the counting window.
 
-    Three refusals are the whole of this function.
+    Four refusals are the whole of this function.
 
     **A machine we have never been told about is UNKNOWN, not zero.** No row in
     `machine_event_state` means an agent too old to know what a subscription is, or one that
@@ -1188,6 +1192,14 @@ def _resolve_events(db_path, machine, out, now, context=None):
     it cannot say the event did not happen; `evaluate` reads an absent name as UNKNOWN and the
     rule does not fire. A zero there would be the module asserting something it never looked
     for, which is the one thing every docstring in this file is arranged against.
+
+    **An id subscribed more recently than this machine's last report is absent too.**
+    Subscribing is not collecting. Add a subscription for 4625 at noon and the machine is
+    still holding yesterday's document; its last report is minutes old, so the freshness
+    checks all pass, and a counter would answer zero for an id nobody has yet been asked to
+    watch. That is the same lie as the unsubscribed case, only with a plausible timestamp in
+    front of it, and it lasts as long as the machine stays quiet -- a week, for a PC that is
+    switched off. `events.subscribed_since` explains the one residue this leaves.
 
     **A machine whose latest report carried a collector error is UNKNOWN too.** It is the same
     mistake wearing a disguise: the report is fresh, `reported_at` is minutes old, and every
@@ -1239,7 +1251,15 @@ def _resolve_events(db_path, machine, out, now, context=None):
     # leaves them absent rather than present-and-UNKNOWN; both read UNKNOWN to `evaluate`,
     # and absent is the honest shape, because there is nothing to report an age for.
     if trusted:
+        subscribed_since = context.get("subscribed_since") or {}
+        reported_at = counters["reported_at"]
         for event_id, count in (counters.get("by_event_id") or {}).items():
+            asked_at = subscribed_since.get(event_id)
+            # Strictly before, so a report landing in the same second as the subscription
+            # counts as having adopted it. These timestamps are whole seconds and a heartbeat
+            # runs every ten, so a tie is a tie, not evidence of the gap this guards against.
+            if asked_at is not None and reported_at < asked_at:
+                continue    # asked for after this machine last spoke -- see the docstring
             _put(out, Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
                  _num(count), age)
 
@@ -1426,19 +1446,19 @@ def event_id_in_name(name):
     return event_id
 
 
-def _subscribed_event_ids(db_path):
-    """`events.subscribed_event_ids`, tolerating a database with no events tables.
+def _subscribed_since(db_path):
+    """`events.subscribed_since`, tolerating a database with no events tables.
 
     A hub that has never started the events feature, or a test database holding only the
     rules schema, has no `event_subscriptions`. Same shape as every other sub-payload read in
-    this file: absent becomes an empty set, so no `event.id_<n>.count` is offered or resolved
-    and a rule naming one reads UNKNOWN. Never zero -- a hub that is demonstrably not
+    this file: absent becomes an empty mapping, so no `event.id_<n>.count` is offered or
+    resolved and a rule naming one reads UNKNOWN. Never zero -- a hub that is demonstrably not
     collecting must not answer "it did not happen".
     """
     try:
-        return events.subscribed_event_ids(db_path)
+        return events.subscribed_since(db_path)
     except sqlite3.Error:
-        return ()
+        return {}
 
 
 def event_variables(db_path):
@@ -1452,7 +1472,7 @@ def event_variables(db_path):
     """
     return {f"event.id_{event_id}.count":
             Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT)
-            for event_id in _subscribed_event_ids(db_path)}
+            for event_id in sorted(_subscribed_since(db_path))}
 
 
 def lookup_variable(name, extra=None):

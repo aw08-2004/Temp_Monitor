@@ -3,7 +3,7 @@ records (roadmap #17, the half #16 handed on).
 
 **The silent failure this file exists to catch is a rule that reads zero off a machine nobody
 is listening to.** Every variable here is a count, zero is a perfectly ordinary value, and
-that makes four different kinds of "we do not know" indistinguishable from "it did not
+that makes five different kinds of "we do not know" indistinguishable from "it did not
 happen" unless something asserts otherwise:
 
   * **A machine that has never reported events at all.** No `machine_event_state` row means
@@ -18,6 +18,10 @@ happen" unless something asserts otherwise:
     not quiet, so the counts age out to UNKNOWN through the same `max_age` chokepoint every
     other variable uses. `events.STALE_AFTER_SECONDS` is the bound, because that is already
     what the console calls a stale event view.
+  * **An id subscribed more recently than the machine's last report.** Subscribing is not
+    collecting: the machine is still holding the previous document and has not looked once,
+    while its timestamp is minutes old. It lasts as long as the machine stays quiet, which for
+    a PC switched off before a holiday is a week of confident zeros.
   * **A collector that reported an error.** The one that survives the other three, because the
     report is FRESH: a machine that says "access is denied reading Security" has a timestamp
     seconds old and counters reading zero. `event.error_count == 0` would settle TRUE for a PC
@@ -119,6 +123,16 @@ def resolve(db_path, machine, *, now=None, window=None):
     return rules.resolve_machine_vars(
         db_path, machine, now=now if now is not None else NOW,
         event_context_=rules.event_context(db_path, window))
+
+
+def set_reported_at(db_path, machine, when):
+    """Move a machine's last event report in time, so ordering against a subscription is
+    deterministic rather than a race between two calls inside the same second."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE machine_event_state SET reported_at = ? WHERE machine = ?",
+                 (int(when), machine))
+    conn.commit()
+    conn.close()
 
 
 def value_of(resolved, name):
@@ -545,6 +559,80 @@ def test_a_collector_error_is_unknown_even_on_a_fresh_report():
         os.unlink(db)
 
 
+def test_an_id_subscribed_after_the_last_report_is_not_zero_yet():
+    """Subscribing is not collecting -- the second finding out of review of this change.
+
+    The machine reported cleanly at noon. At 12:00:01 somebody adds a subscription for 4625.
+    The machine is still holding yesterday's document and has not looked for a single 4625,
+    but its `reported_at` is a second old, so every freshness check passes and a counter would
+    answer zero. A brute-force rule would report the machine clean while it was being sprayed,
+    and it would go on doing so for as long as the machine stays quiet -- a week, for a PC
+    somebody switched off before going on leave.
+
+    The totals are deliberately unaffected: they count what was collected under whatever
+    subscriptions were in force, and a new one does not make yesterday's collection wrong.
+    """
+    print("\n-- subscribed after the machine last spoke --")
+    db = fresh_db()
+    try:
+        events.record_events(db, "PC-1", {"events": []})
+        fresh_sub = events.create_subscription(db, name="New watch", log="Security",
+                                               event_ids=[4625], levels=["warning"])
+        # Put the machine's report an hour BEFORE the subscription. Both timestamps are whole
+        # seconds off the same clock, so a test that just did one then the other would land
+        # them in the same second and prove nothing -- and a tie is deliberately trusted.
+        set_reported_at(db, "PC-1", fresh_sub["updated_at"] - 3600)
+        check("the report predates the subscription",
+              events.machine_state(db, "PC-1")["reported_at"] < fresh_sub["updated_at"])
+        resolved = resolve(db, "PC-1")
+        check("the id is absent, not zero", "event.id_4625.count" not in resolved)
+        check("so a zero-count rule does not settle",
+              rules.evaluate({"var": "event.id_4625.count", "cmp": "==", "value": 0},
+                             resolved) is rules.UNKNOWN)
+        check("the totals are unaffected", value_of(resolved, "event.count") == 0)
+        check("and the catalog still offers it",
+              "event.id_4625.count" in [v.name for v in rules.catalog(db)])
+
+        # Once the machine reports again it has had the document, so the count is real.
+        events.record_events(db, "PC-1", {"events": []})
+        adopted = resolve(db, "PC-1")
+        check("after the next report the count is a real zero",
+              value_of(adopted, "event.id_4625.count") == 0)
+        check("and == 0 settles TRUE",
+              rules.evaluate({"var": "event.id_4625.count", "cmp": "==", "value": 0},
+                             adopted) is True)
+    finally:
+        os.unlink(db)
+
+
+def test_an_older_subscription_keeps_an_id_trustworthy():
+    """A second subscription naming an id already covered must not reset its history.
+
+    `subscribed_since` takes the MINIMUM across enabled subscriptions naming an id. Taking the
+    maximum would mean that adding a broader subscription today makes every machine's 4625
+    count UNKNOWN until each one next reports -- a fleet-wide blackout caused by adding, not
+    removing, collection.
+    """
+    print("\n-- two subscriptions, one id --")
+    db = fresh_db()
+    try:
+        events.create_subscription(db, name="Long-standing", log="Security",
+                                   event_ids=[4625], levels=["warning"])
+        record("PC-1", db, event_id=4625, count=4)
+        check("counting under the first subscription",
+              value_of(resolve(db, "PC-1"), "event.id_4625.count") == 4)
+
+        events.create_subscription(db, name="Also watches 4625", log="Application",
+                                   event_ids=[4625], levels=["error"])
+        check("the newer one does not blind the older collection",
+              value_of(resolve(db, "PC-1"), "event.id_4625.count") == 4)
+        check("subscribed_since keeps the earliest",
+              events.subscribed_since(db)[4625] <=
+              events.machine_state(db, "PC-1")["reported_at"])
+    finally:
+        os.unlink(db)
+
+
 def main():
     test_the_catalog_offers_what_is_subscribed_and_accepts_what_is_not()
     test_a_rule_survives_the_subscription_being_deleted()
@@ -559,6 +647,8 @@ def main():
     test_the_default_window_matches_the_setting_the_console_uses()
     test_a_stopped_collector_ages_out_to_unknown()
     test_a_collector_error_is_unknown_even_on_a_fresh_report()
+    test_an_id_subscribed_after_the_last_report_is_not_zero_yet()
+    test_an_older_subscription_keeps_an_id_trustworthy()
     test_a_database_with_no_event_tables_resolves_rather_than_raising()
     test_the_roadmaps_own_example_is_writable()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
