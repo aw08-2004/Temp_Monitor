@@ -553,7 +553,6 @@ def main():
                                            {"id": ""}, "not-an-object"]}).encode()
         real_get = ai.requests.get
         try:
-            ai.requests.get = lambda *a, **k: FakeResponse([models_body])
             seen_get = {}
 
             def capture_get(*a, **k):
