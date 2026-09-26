@@ -2976,12 +2976,12 @@ it — the same trap `manage_firmware` avoided by shipping live.
 - **No per-group targeting.** The subscription set is fleet-wide: one document, one version,
   every agent. Per-`device_groups` targeting is a real want and a real cost (a document and a
   version per machine on a ten-second heartbeat), and nothing yet needs it.
-- ~~**No agent release.**~~ **Released** in agent **3.37.0** on 2026-09-23 (re-cut as 3.37.1),
-  alongside BitLocker escrow and network discovery. No hub gate was needed and none was added:
-  this feature has no per-machine console control to hide, so a machine on an older agent
-  simply never reports and `machine_event_state` says "we have not been told" rather than
-  "nothing happened". That distinction is the reason that table exists, and it is now the thing
-  to read on the Events page while the fleet is mid-upgrade.
+- ~~**No agent release.**~~ **Released** in agent **3.37.0** on 2026-09-22 (`4d10bf3`; re-cut as
+  3.37.1 the next day for #20), alongside BitLocker escrow and network discovery. No hub gate
+  was needed and none was added: this feature has no per-machine console control to hide, so a
+  machine on an older agent simply never reports and `machine_event_state` says "we have not
+  been told" rather than "nothing happened". That distinction is the reason that table exists,
+  and it is now the thing to read on the Events page while the fleet is mid-upgrade.
 - **Never verified against a real event log, and now it can be.** The hub half is tested
   (`tests/test_events.py`). The agent half **compiles** (see the hardware validation note about
   building it from Linux, which is how the two faults that shipped in the first cut were
@@ -3121,7 +3121,7 @@ again: everything below narrows the feature until it cannot be pointed anywhere.
 a Discovery card on the machine page's Network tab, one `discovery.*` setting, and one new
 command type — `network_sweep`, issued to a machine that is already on the subnet. Agent
 half: `Network/NetworkSweepExecutor.cs` and `FleetClient.ReportSweepAsync`. **The agent half
-shipped in agent 3.37.0** on 2026-09-23; the hub went first, as always, so the sweep starts
+shipped in agent 3.37.0** on 2026-09-22; the hub went first, as always, so the sweep starts
 working on each machine as that release propagates.
 
 **Both open parameters resolved, and both resolved narrowly:**
@@ -3298,7 +3298,7 @@ PC is gone".
 - **The agent half has never been compiled or run.** There is no .NET toolchain on the machine
   it was written on and no CI job builds the Windows agent, so `BitLockerReader` is syntax-
   checked and reviewed against the `Win32_EncryptableVolume` documentation and nothing more.
-  It was released in agent **3.37.0** on 2026-09-23, riding the same cut as #16 and #18 the
+  It was released in agent **3.37.0** on 2026-09-22, riding the same cut as #16 and #18 the
   way #14 and #21 shared one. Compiling it is possible now and was not then; see the hardware
   validation note. Running it against an encrypted volume is still owed.
 - **`PrecisionFactor`, `GetLockStatus` and free-space wiping are not read.** The class exposes
@@ -4223,7 +4223,7 @@ a licence question and the one `machine_apps` already proves the shape of (`apps
 console gates on `MIN_SOFTWARE_AGENT`, set to whatever MINOR the cut actually takes.
 
 **The MINOR is deliberately not named here, and this entry used to name 3.37.0.** That was
-written when 3.37.0 was the next number; it was cut on 2026-09-23 carrying #16, #18 and #19,
+written when 3.37.0 was the next number; it was cut on 2026-09-22 carrying #16, #18 and #19,
 and re-cut as 3.37.1 for #20, neither of which contains `SoftwareInventoryReporter`. A planned
 entry that names an already-released number is not just stale prose: `MIN_SOFTWARE_AGENT` is a
 hub-side **compatibility gate**, so shipping it as `'3.37.0'` would make the console offer a
@@ -5199,7 +5199,7 @@ This is that list, so nothing is quietly skipped:
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
 **Also owed, and not from #23: roadmap #16's event log query.** No longer hypothetical:
-agent **3.37.0** shipped on 2026-09-23, so this is running in the field now and nothing about
+agent **3.37.0** shipped on 2026-09-22, so this is running in the field now and nothing about
 it has been confirmed. On any machine that has taken the new agent, confirm that a Security subscription for 4625 returns records at all (the XPath, the
 `timediff` window and the level mapping are all unexercised); that Information on Security
 returns records rather than nothing, which is what the level-0 mapping exists for; that a
