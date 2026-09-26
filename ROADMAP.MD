@@ -4196,7 +4196,7 @@ a helpdesk actually hits them:
 
 ### Phases
 
-**A and B ship as one release**, hub first and then agent 3.37.0, and are built in that order
+**A and B ship as one release**, hub first and then one agent MINOR, and are built in that order
 within one branch: the sheet is what proves the shape of the software section, and the section
 is what makes the sheet worth printing. Nothing goes to the fleet until both halves exist.
 
@@ -4210,25 +4210,35 @@ or which feature would fill them, rather than being absent. That is no longer a 
 B, but it is still load-bearing: an agent release reaches the fleet over about fifteen
 minutes, the Linux and Android agents answer none of these questions, and a machine that has
 been offline for a week reports nothing when it returns. A Software section reading "waiting
-for agent 3.37.0 on this machine" is the difference between a rollout in progress and a PC
+for a newer agent on this machine" is the difference between a rollout in progress and a PC
 with nothing installed on it.
 
-**B — installed software.** `SoftwareInventoryReporter` on the agent (hub + **agent 3.37.0**),
-walking both HKLM registry views plus per-user hives for name, version, publisher, install
-date, install location and the uninstall string; change-only behind a content hash, on the
-inventory loop, never on the heartbeat path. Hub side is a `software.py` / `software_web.py`
+**B — installed software.** `SoftwareInventoryReporter` on the agent (hub + **one agent
+MINOR**), walking both HKLM registry views plus per-user hives for name, version, publisher,
+install date, install location and the uninstall string; change-only behind a content hash, on
+the inventory loop, never on the heartbeat path. Hub side is a `software.py` / `software_web.py`
 pair over a `machine_software` table keyed `(machine, id)`, and a **fleet software catalog** —
-one row per product and version with the machine count behind it, which is the view that
-answers a licence question and the one `machine_apps` already proves the shape of
-(`apps.py:232`). The console gates on `MIN_SOFTWARE_AGENT = '3.37.0'`.
+one row per product and version with the machine count behind it, which is the view that answers
+a licence question and the one `machine_apps` already proves the shape of (`apps.py:232`). The
+console gates on `MIN_SOFTWARE_AGENT`, set to whatever MINOR the cut actually takes.
+
+**The MINOR is deliberately not named here, and this entry used to name 3.37.0.** That was
+written when 3.37.0 was the next number; it was cut on 2026-09-23 carrying #16, #18 and #19,
+and re-cut as 3.37.1 for #20, neither of which contains `SoftwareInventoryReporter`. A planned
+entry that names an already-released number is not just stale prose: `MIN_SOFTWARE_AGENT` is a
+hub-side **compatibility gate**, so shipping it as `'3.37.0'` would make the console offer a
+Software section on every machine already in the field and read an empty answer as "nothing
+installed". Whoever cuts this reads the released number first and takes the next free MINOR
+above it -- and agent MINORs are allocated centrally while several threads are running, so the
+number is asked for, not picked. Same for C below, which must land a MINOR above B's.
 
 Shipping B with A is what makes that gate constant honest on day one. **Deploy order is hub
 first, then the agent** (VERSIONING.md), so there is a window on every release where the
 console offers a Software section and no machine has answered yet — which is precisely the
 state A's "waiting for" wording was written for.
 
-**C — hardware detail.** `HardwareInventoryReporter` (hub + **agent 3.38.0**), one WMI sweep
-per component class, stored as a single change-only blob in `machine_hardware` on the
+**C — hardware detail.** `HardwareInventoryReporter` (hub + **the agent MINOR after B's**), one
+WMI sweep per component class, stored as a single change-only blob in `machine_hardware` on the
 `machine_bios` precedent — components are read together, replaced together, and never written
 individually. Fills the report's Hardware section and, incidentally, gives the rules engine
 "machines with less than 8 GB" without a script.
@@ -5371,11 +5381,13 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     page may not say than on what it does.
 23. **#25 Inventory report** — no prerequisite. Its sheet is a join over tables that already
     exist and has no agent half, so it can be built the day anybody wants it, but **it does not
-    ship alone**: A and B go out as one release pair, hub then agent 3.37.0, built in that order
+    ship alone**: A and B go out as one release pair, hub then one agent MINOR, built in that order
     on one branch. Its later phases are the reverse of everything above them — the hub work is
     small and the *collection* is the feature, which is why they are split by agent release
-    (software in 3.37.0, hardware in 3.38.0) rather than by console surface. Pulled forward of
-    #16–#20 in practice: it is the only item on this board a helpdesk asks for by name.
+    (software in one MINOR, hardware in the next) rather than by console surface. The numbers
+    are unallocated on purpose: this entry named 3.37.0 and 3.38.0 until 3.37.x shipped without
+    either phase in it. Pulled forward of #16–#20 in practice: it is the only item on this
+    board a helpdesk asks for by name.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
