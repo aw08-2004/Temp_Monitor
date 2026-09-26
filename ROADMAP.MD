@@ -3326,6 +3326,19 @@ PC is gone".
   whether there is a transferable secret to ask for; shipping the full enum invites the hub to
   grow opinions about TPM-and-PIN that belong on the machine, which is #9's argument for
   keeping vendor dispatch off the hub.
+- **A machine merge is refused when the escrowed keys either side holds cannot be moved.** A merge
+  moves posture, escrow index and secret blob together, and the blob is the one of the three with
+  no retry: by the time it moves, the dropped hostname has no `machine_info` row, so
+  `/api/machines/merge` answers 404 for it and "restore the master key and merge again" is not
+  something an operator can do. So the question is asked before the first `DELETE`
+  (`bitlocker_web.escrow_blocked`), the merge does not happen, the duplicate stays on the board
+  where somebody can see it, and the refusal is audited at security level. A machine with nothing
+  escrowed is never blocked -- most of the fleet, and all of it on a hub with no master key.
+  **Both blobs are read, not just the dropped one.** The move unions the two key sets, so an
+  unopenable survivor blob fails it just as hard, and that is the likelier hub: the long-lived
+  machine escrowed before a master key rotation, the duplicate after it. A source-only check
+  cleared that merge and stranded the keys anyway, which is the whole failure again with the
+  operands swapped.
 
 ### Rejected alternatives
 
@@ -3348,6 +3361,12 @@ PC is gone".
 - **A fleet-wide encryption posture view.** That is #25 phase D's, which this board already
   splits the same way: #25 *reports* a posture, #19 *acts* on one. Building it here would have
   been two answers to one question in two places.
+- **Letting a merge finish and leaving the keys behind**, which is what it did through hub 1.131.0:
+  it reported success, deleted the dropped identity row, and left the recovery passwords filed
+  under a hostname the console no longer shows. They were still readable by name through the API,
+  which is not a recovery path anybody walks. Also rejected on the way to the check above:
+  keeping the dropped `machine_info` row alive so the merge could be re-run, which leaves a ghost
+  machine -- no readings, no agent, no history -- in every list in the console.
 
 ### Not done
 

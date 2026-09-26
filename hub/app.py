@@ -142,7 +142,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.131.0"
+HUB_VERSION = "1.132.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3382,11 +3382,32 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     history stays continuous, backfills any identity field the survivor is missing from
     the dropped row, then removes the dropped identity row and its stale fleet enrollment.
     Module-owned history, including network sweeps, follows the survivor where meaningful;
-    transient process and file-browser state is dropped. Irreversible."""
+    transient process and file-browser state is dropped. Irreversible.
+
+    **Returns True only if the merge actually happened.** A caller has to look: the one piece of
+    a merge that cannot be undone afterwards is custody of an escrowed recovery key, so a merge
+    that would lose one is refused here, before anything is touched, and the duplicate is left
+    standing for an operator to deal with."""
     survivor = str(survivor or "").strip()
     dropped = str(dropped or "").strip()
     if not survivor or not dropped or survivor == dropped:
-        return
+        return False
+    # Refuse the whole merge rather than strand recovery keys (roadmap #19).
+    #
+    # This is asked HERE, before the first DELETE, because the escrow move is the only step of a
+    # merge with no way back: by the time it runs, the dropped machine's machine_info row is gone
+    # and /api/machines/merge answers 404 for that name, so "fix the master key and merge again"
+    # is not a thing an operator can do. Refusing up front costs a duplicate row that is already
+    # there and keeps the retry available.
+    if bitlocker_web.escrow_blocked(LOG_DIR, dropped, into=survivor):
+        fleet.audit(DB_PATH, actor, "machine.merge_refused", dropped,
+                    {"survivor": survivor,
+                     "reason": "the hub cannot read the escrowed BitLocker recovery keys this "
+                               "merge would have to move -- either side's blob failing to open "
+                               "strands this machine's under a hostname the console no longer "
+                               "shows"},
+                    level=fleet.LEVEL_SECURITY)
+        return False
     with get_db_conn() as conn:
         # Preserve history: the dropped hostname's readings belong to the same box.
         #
@@ -3464,11 +3485,17 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     if escrow_move != bitlocker_web.ESCROW_FAILED:
         bitlocker.rename_machine(DB_PATH, dropped, survivor)
     else:
-        # The keys exist and could not be moved, so posture and index deliberately stay under
-        # the old name, where the blob still is: the two halves remain consistent and the keys
-        # are recoverable once the master key is, by re-running the merge. Audited at security
-        # level because the merge otherwise reports plain success and this is the one piece of
-        # it that did not happen -- and what did not happen is custody of a recovery key.
+        # Reachable only as a race now: escrow_blocked() cleared this machine at the top of the
+        # merge and the master key or the store changed in the seconds since. Posture and index
+        # stay under the old name, where the blob still is, so the two halves stay consistent.
+        #
+        # **This one is NOT recoverable by re-running the merge**, which is why the check at the
+        # top of this function exists rather than only this branch: `dropped` has no machine_info
+        # row any more, so /api/machines/merge answers 404 for it. The passwords are intact and
+        # still readable by hostname -- /api/bitlocker/<machine>/reveal gates on capability and
+        # scope, not on the machine still existing -- and this audit row is the only thing left
+        # that names the hostname to ask for. Security level, because the merge otherwise reports
+        # plain success and what did not happen is custody of a recovery key.
         fleet.audit(DB_PATH, actor, "bitlocker_escrow_move_failed", dropped,
                     {"survivor": survivor}, level=fleet.LEVEL_SECURITY)
     # Firmware update targets follow too, and the survivor's own row wins a collision --
@@ -3526,6 +3553,7 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
+    return True
 
 
 def resolve_serial_group(serial, actor="system:dedup"):
@@ -3584,9 +3612,16 @@ def resolve_serial_group(serial, actor="system:dedup"):
                     level=fleet.LEVEL_SECURITY)
         return [r["machine"] for r in rows]
 
+    refused = []
     for r in rows:
-        if r["machine"] != survivor:
-            merge_machines(survivor, r["machine"], actor=actor)
+        if r["machine"] != survivor and not merge_machines(survivor, r["machine"], actor=actor):
+            refused.append(r["machine"])
+    if refused:
+        # A refused merge leaves the duplicate standing, so the alert has to stay up -- the same
+        # shape as the unenrolled-survivor refusal above, and for the same reason: what blocked
+        # it is something only an operator can clear. merge_machines has already audited why.
+        alerts.upsert_duplicate(DB_PATH, serial, [survivor] + refused)
+        return [survivor] + refused
     # Collision collapsed to a single record -- clear any alert it had raised.
     alerts.resolve_for_serial(DB_PATH, serial)
     return [survivor]
@@ -5807,8 +5842,43 @@ def merge_machines_endpoint():
         return jsonify({"error": f"unknown machine(s): {', '.join(missing)}"}), 404
 
     actor = permissions_web.current_actor()
+    merged, refused = [], []
     for victim in victims:
-        merge_machines(survivor, victim, actor=actor)
+        if merge_machines(survivor, victim, actor=actor):
+            merged.append(victim)
+        else:
+            refused.append(victim)
+    if refused:
+        # The alert stays up, but it must not still name the machines this call just deleted.
+        #
+        # A partial merge is the case: two of three victims absorbed, one refused, and the open
+        # duplicate_serial alert -- the thing the operator clicked to get here -- goes on listing
+        # all four hostnames until some machine happens to post a report and re-runs
+        # resolve_serial_group. Until then the console offers a merge control for names that no
+        # longer exist. Recomputed from machine_info rather than subtracted from `merged`, because
+        # that is the same question resolve_serial_group asks and it stays right for a serial
+        # shared by a machine nobody named in this request.
+        if found.get(survivor):
+            with get_db_conn() as conn:
+                still = [r["machine"] for r in conn.execute(
+                    "SELECT machine FROM machine_info WHERE serial_number = ? COLLATE NOCASE",
+                    (found[survivor],),
+                ).fetchall()]
+            if len(still) > 1:
+                alerts.upsert_duplicate(DB_PATH, found[survivor], still)
+            else:
+                alerts.resolve_for_serial(DB_PATH, found[survivor])
+        # 409, because these duplicates were not collapsed. The body names the fix because the
+        # console shows it verbatim (alerts.js, alerts.duplicate.merge_failed), and "refused" on
+        # its own sends an operator hunting for a permission problem they do not have.
+        return jsonify({
+            "status": "partial" if merged else "refused",
+            "survivor": survivor, "merged": merged, "refused": refused,
+            "error": f"Refused to merge {', '.join(refused)}: this hub holds escrowed BitLocker "
+                     "recovery keys it cannot read, and merging would leave them under a "
+                     "hostname the console no longer shows. Restore BACKUP_MASTER_KEY, then "
+                     "merge again.",
+        }), 409
     if found.get(survivor):
         alerts.resolve_for_serial(DB_PATH, found[survivor])
     return jsonify({"status": "merged", "survivor": survivor, "victims": victims}), 200
