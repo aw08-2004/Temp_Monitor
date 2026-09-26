@@ -134,6 +134,10 @@ DURATION_UNITS = (UNIT_SECONDS, UNIT_DAYS)
 #                  must not conclude "0 processes" from "nobody was looking".
 #   ad     172800  directory.sync_once runs on its own schedule; 2 days survives a weekend
 #                  with the sync disabled.
+#   event    3600  machine_event_state.reported_at is stamped on every event report, empty
+#                  ones included, and the report rides the same heartbeat as everything else.
+#                  events.STALE_AFTER_SECONDS is what the console already calls a stale event
+#                  view, and a rule must not read "quiet" off a collector that stopped.
 #
 # Identity (hw.*, sys.machine) never expires: a serial number is not a measurement.
 AGE_LIVE = 900
@@ -142,10 +146,6 @@ AGE_NETWORK = 10800
 AGE_BIOS = None
 AGE_PROC = 300
 AGE_AD = 172800
-#   event   3600  machine_event_state.reported_at is stamped on every event report, empty
-#                 ones included, and the report rides the same heartbeat as everything else.
-#                 events.STALE_AFTER_SECONDS is what the console already calls a stale event
-#                 view, and a rule must not read "quiet" off a collector that stopped.
 AGE_EVENT = events.STALE_AFTER_SECONDS
 
 GROUP_SYS = "sys"
@@ -1180,7 +1180,7 @@ def event_context(db_path, window_seconds=None):
 def _resolve_events(db_path, machine, out, now, context=None):
     """event.* -- how much the Windows event log said, inside the counting window.
 
-    Four refusals are the whole of this function.
+    Five refusals are the whole of this function.
 
     **A machine we have never been told about is UNKNOWN, not zero.** No row in
     `machine_event_state` means an agent too old to know what a subscription is, or one that
@@ -1209,6 +1209,15 @@ def _resolve_events(db_path, machine, out, now, context=None):
     survives review. `record_events` overwrites `error` on each report rather than accumulating
     it, so one clean report puts the counters back.
 
+    **A machine whose latest report lost events to the cap is UNKNOWN as well**, and this one
+    was missed on the first pass. `MAX_EVENTS_PER_REPORT` truncates the tail of a report, so a
+    heartbeat carrying two hundred Information events and then one Critical arrives complete
+    as far as `error` is concerned and `event.critical_count` reads a confident zero. The
+    argument for ignoring drops was that a machine dropping records has MORE events than it
+    could carry and so is never one whose count is zero -- true of `event.count`, false of
+    every per-level and per-id counter, which is all of them. `events.rule_counters` reads the
+    per-report drop rather than the lifetime one, so the next complete heartbeat clears it.
+
     The window comes from `events.summary_window_seconds`, the setting the console's event
     summary already uses. One knob, so the number a rule fires on is the number the operator
     was looking at when they chose the threshold.
@@ -1227,13 +1236,13 @@ def _resolve_events(db_path, machine, out, now, context=None):
         counters = None
 
     trusted = bool(counters) and counters.get("reported_at") is not None \
-        and not counters.get("error")
+        and not counters.get("error") and not counters.get("incomplete")
     if not trusted:
         # Age None with a max_age set is UNKNOWN by _put's second branch, which is the
-        # "cannot show it is current" rule. Reused for the error case rather than adding a
-        # second way to say UNKNOWN: one chokepoint, so a future edit cannot restore half of
-        # it. Spelled out rather than relied on, because this is the branch a future edit is
-        # most likely to get wrong.
+        # "cannot show it is current" rule. Reused for the error and incomplete cases rather
+        # than adding a second way to say UNKNOWN: one chokepoint, so a future edit cannot
+        # restore half of it. Spelled out rather than relied on, because this is the branch a
+        # future edit is most likely to get wrong.
         age = None
     else:
         age = _age(now, counters["reported_at"])
