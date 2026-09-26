@@ -3,7 +3,7 @@ records (roadmap #17, the half #16 handed on).
 
 **The silent failure this file exists to catch is a rule that reads zero off a machine nobody
 is listening to.** Every variable here is a count, zero is a perfectly ordinary value, and
-that makes three different kinds of "we do not know" indistinguishable from "it did not
+that makes four different kinds of "we do not know" indistinguishable from "it did not
 happen" unless something asserts otherwise:
 
   * **A machine that has never reported events at all.** No `machine_event_state` row means
@@ -18,6 +18,11 @@ happen" unless something asserts otherwise:
     not quiet, so the counts age out to UNKNOWN through the same `max_age` chokepoint every
     other variable uses. `events.STALE_AFTER_SECONDS` is the bound, because that is already
     what the console calls a stale event view.
+  * **A collector that reported an error.** The one that survives the other three, because the
+    report is FRESH: a machine that says "access is denied reading Security" has a timestamp
+    seconds old and counters reading zero. `event.error_count == 0` would settle TRUE for a PC
+    whose audit log nobody can see. Found in review of this change rather than by me, which is
+    why it is spelled out at this length.
 
 The second thing asserted is that a rule stays SAVEABLE across subscription changes. The
 per-id variables are matched structurally, like `disk.<letter>.*`, rather than validated
@@ -487,6 +492,59 @@ def test_the_roadmaps_own_example_is_writable():
         os.unlink(db)
 
 
+def test_a_collector_error_is_unknown_even_on_a_fresh_report():
+    """The same mistake wearing a fresh timestamp -- found by review, not by me.
+
+    A machine reports on time and says it could not read the Security channel. `reported_at`
+    is seconds old, so every staleness check passes, and the counters read a confident zero
+    off a machine that just told us it was not allowed to look. `event.error_count == 0` then
+    settles TRUE for a PC whose audit log nobody can see, which is the exact failure the other
+    three refusals exist to prevent -- this one just survives them.
+
+    `dropped` is deliberately not treated the same way: it is cumulative over the machine's
+    lifetime, so one bad afternoon would make every count untrustworthy forever, and a machine
+    dropping records is one with more events than it could carry, never one whose count is zero.
+    """
+    print("\n-- reported, but could not look --")
+    db = fresh_db()
+    try:
+        events.create_subscription(db, name="Failed logons", log="Security",
+                                   event_ids=[4625], levels=["warning"])
+        record("PC-1", db, event_id=4625, count=2)
+        check("clean report: the count is real",
+              value_of(resolve(db, "PC-1"), "event.id_4625.count") == 2)
+
+        events.record_events(db, "PC-1", {"events": [],
+                                          "error": "Access is denied reading Security"})
+        broken = resolve(db, "PC-1")
+        check("the report is fresh", events.machine_state(db, "PC-1")["stale"] is False)
+        check("every total is UNKNOWN", all(
+            value_of(broken, name) is rules.UNKNOWN
+            for name in ("event.count", "event.critical_count", "event.error_count",
+                         "event.warning_count")))
+        check("the per-id counter is gone rather than zero",
+              "event.id_4625.count" not in broken)
+        check("so == 0 does not settle",
+              rules.evaluate({"var": "event.error_count", "cmp": "==", "value": 0},
+                             broken) is rules.UNKNOWN)
+
+        # One clean report puts them back -- record_events overwrites `error`.
+        events.record_events(db, "PC-1", {"events": []})
+        recovered = resolve(db, "PC-1")
+        check("a clean report restores the counters",
+              value_of(recovered, "event.count") == 2)
+        check("and the per-id counter comes back",
+              value_of(recovered, "event.id_4625.count") == 2)
+
+        # Cumulative drops are not an error and must not poison the counts.
+        events.record_events(db, "PC-1", {"events": [], "dropped": 300})
+        dropped = resolve(db, "PC-1")
+        check("a machine that dropped records still counts what it did send",
+              value_of(dropped, "event.count") == 2)
+    finally:
+        os.unlink(db)
+
+
 def main():
     test_the_catalog_offers_what_is_subscribed_and_accepts_what_is_not()
     test_a_rule_survives_the_subscription_being_deleted()
@@ -500,6 +558,7 @@ def main():
     test_the_window_bounds_the_count()
     test_the_default_window_matches_the_setting_the_console_uses()
     test_a_stopped_collector_ages_out_to_unknown()
+    test_a_collector_error_is_unknown_even_on_a_fresh_report()
     test_a_database_with_no_event_tables_resolves_rather_than_raising()
     test_the_roadmaps_own_example_is_writable()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")

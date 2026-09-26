@@ -885,13 +885,21 @@ def rule_counters(db_path, machine, *, event_ids=(),
                   window_seconds=DEFAULT_RULE_WINDOW_SECONDS, now=None):
     """One machine's windowed occurrence counts, for the rules engine.
 
-    Returns `{"reported_at", "total", "by_level", "by_event_id"}`. `reported_at` is None for
-    a machine this module has never been told about, and **that is not the same as zero**:
-    it is an agent too old to know what a subscription is, or one that has never completed a
-    heartbeat. The caller turns it into UNKNOWN. Collapsing the two would let
+    Returns `{"reported_at", "error", "total", "by_level", "by_event_id"}`. `reported_at` is
+    None for a machine this module has never been told about, and **that is not the same as
+    zero**: it is an agent too old to know what a subscription is, or one that has never
+    completed a heartbeat. The caller turns it into UNKNOWN. Collapsing the two would let
     `event.error_count == 0` report every un-upgraded machine in the fleet as healthy, which
     is the silent failure this whole distinction exists to prevent -- `machine_state` above
     makes the same one for the console.
+
+    `error` is the third case and it is returned for the same reason: a machine that reported
+    and said it could not read the channel has told us nothing about what is in it. It is the
+    LATEST report's error, because `record_events` overwrites rather than accumulates it, so a
+    clean report clears it. `dropped` is deliberately NOT returned: it is cumulative over the
+    machine's lifetime, so one bad afternoon in August would make every count untrustworthy
+    forever, and the case it would guard against cannot arise -- a machine dropping records is
+    one with more events than it could carry, which is never a machine whose count is zero.
 
     `occurrences`, not rows, exactly as `summary` counts: a rolled-up run of four hundred
     4625s is four hundred, not one. A run whose `last_seen` falls inside the window counts in
@@ -908,8 +916,9 @@ def rule_counters(db_path, machine, *, event_ids=(),
     wanted = sorted({int(event_id) for event_id in event_ids or ()})
 
     with get_conn(db_path) as conn:
-        state = conn.execute("SELECT reported_at FROM machine_event_state WHERE machine = ?",
-                             (machine,)).fetchone()
+        state = conn.execute(
+            "SELECT reported_at, error FROM machine_event_state WHERE machine = ?",
+            (machine,)).fetchone()
         totals = conn.execute(
             "SELECT COALESCE(SUM(count), 0) AS n FROM machine_events "
             "WHERE machine = ? AND last_seen >= ?", (machine, since)).fetchone()
@@ -928,6 +937,7 @@ def rule_counters(db_path, machine, *, event_ids=(),
 
     return {
         "reported_at": state["reported_at"] if state else None,
+        "error": (state["error"] or None) if state else None,
         "total": int(totals["n"]),
         "by_level": {row["level"]: int(row["n"]) for row in by_level},
         # A subscribed id with no records in the window is 0, not absent. The machine did

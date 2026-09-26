@@ -1533,6 +1533,10 @@ the absence of something it never looked for:
   agent predates the feature. Otherwise a rule looking for healthy machines would return exactly
   the ones you cannot see. A machine that reported and had nothing to say counts a real zero, and
   one whose last report is over an hour old reads unknown again rather than quiet.
+* **A machine that reported an error reads unknown as well**, even though its report is fresh — a
+  PC that says it cannot read the Security channel has told you nothing about what is in it. One
+  clean report puts the counters back. A machine that dropped records mid-storm still counts what
+  it did send.
 
 > **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0.
 > The agent half is in the source tree and reaches the fleet with the next agent release, so

@@ -1176,7 +1176,7 @@ def event_context(db_path, window_seconds=None):
 def _resolve_events(db_path, machine, out, now, context=None):
     """event.* -- how much the Windows event log said, inside the counting window.
 
-    Two refusals are the whole of this function.
+    Three refusals are the whole of this function.
 
     **A machine we have never been told about is UNKNOWN, not zero.** No row in
     `machine_event_state` means an agent too old to know what a subscription is, or one that
@@ -1188,6 +1188,14 @@ def _resolve_events(db_path, machine, out, now, context=None):
     it cannot say the event did not happen; `evaluate` reads an absent name as UNKNOWN and the
     rule does not fire. A zero there would be the module asserting something it never looked
     for, which is the one thing every docstring in this file is arranged against.
+
+    **A machine whose latest report carried a collector error is UNKNOWN too.** It is the same
+    mistake wearing a disguise: the report is fresh, `reported_at` is minutes old, and every
+    counter reads a confident zero off a machine that just said it could not read the channel.
+    A rule cannot distinguish "nothing happened" from "we were not allowed to look" unless this
+    function does it here, and the fresh timestamp makes it the version of the mistake that
+    survives review. `record_events` overwrites `error` on each report rather than accumulating
+    it, so one clean report puts the counters back.
 
     The window comes from `events.summary_window_seconds`, the setting the console's event
     summary already uses. One knob, so the number a rule fires on is the number the operator
@@ -1206,26 +1214,34 @@ def _resolve_events(db_path, machine, out, now, context=None):
     except sqlite3.Error:
         counters = None
 
-    if not counters or counters.get("reported_at") is None:
+    trusted = bool(counters) and counters.get("reported_at") is not None \
+        and not counters.get("error")
+    if not trusted:
         # Age None with a max_age set is UNKNOWN by _put's second branch, which is the
-        # "cannot show it is current" rule. Spelled out rather than relied on, because this
-        # is the branch a future edit is most likely to get wrong.
+        # "cannot show it is current" rule. Reused for the error case rather than adding a
+        # second way to say UNKNOWN: one chokepoint, so a future edit cannot restore half of
+        # it. Spelled out rather than relied on, because this is the branch a future edit is
+        # most likely to get wrong.
         age = None
     else:
         age = _age(now, counters["reported_at"])
 
     by_level = (counters or {}).get("by_level") or {}
     _put(out, STATIC_BY_NAME["event.count"],
-         _num((counters or {}).get("total")) if counters else UNKNOWN, age)
+         _num((counters or {}).get("total")) if trusted else UNKNOWN, age)
     for name, level in (("event.critical_count", events.LEVEL_CRITICAL),
                         ("event.error_count", events.LEVEL_ERROR),
                         ("event.warning_count", events.LEVEL_WARNING)):
         _put(out, STATIC_BY_NAME[name],
-             _num(by_level.get(level, 0)) if counters else UNKNOWN, age)
+             _num(by_level.get(level, 0)) if trusted else UNKNOWN, age)
 
-    for event_id, count in ((counters or {}).get("by_event_id") or {}).items():
-        _put(out, Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
-             _num(count), age)
+    # The per-id counters are only emitted for a machine we can vouch for. An untrusted one
+    # leaves them absent rather than present-and-UNKNOWN; both read UNKNOWN to `evaluate`,
+    # and absent is the honest shape, because there is nothing to report an age for.
+    if trusted:
+        for event_id, count in (counters.get("by_event_id") or {}).items():
+            _put(out, Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
+                 _num(count), age)
 
 
 def _resolve_fields(db_path, machine, out, fields=None):
