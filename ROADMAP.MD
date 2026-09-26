@@ -2913,7 +2913,7 @@ before the first row is written, not after.
 
 Its real value is as an input to #17, which is why it comes first.
 
-**Collection — built (hub 1.118.0, agent source on `main`).** `events.py` (subscriptions,
+**Collection — built and released (hub 1.118.0, agent 3.37.0).** `events.py` (subscriptions,
 the versioned document agents receive, ingest, roll-up, caps, retention, counters) /
 `events_web.py`, an Events page in the console, and on the agent `Events/WindowsEventReader.cs`
 (the query), `Events/EventLogReporter.cs` (the payload) and `Events/EventSubscriptionStore.cs`
