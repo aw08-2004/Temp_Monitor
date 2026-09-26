@@ -37,11 +37,13 @@ same reason: deleting the last subscription has to be able to *stop* collection.
 block reads to the agent as "the hub had nothing to say", and it would go on reading the
 Security channel forever.
 
-**What this module deliberately does not do yet** is let a rule be written against an event.
-That is the open parameter the roadmap entry names, it is the reason #16 comes before #17,
-and it is a change to the rules engine rather than to this file -- growing both in one commit
-would make the collection half impossible to review. The counters this module keeps
-(`summary`) are the shape a rule condition will read.
+**A rule can now be written against an event**, which was the open parameter the roadmap
+entry named and the reason #16 came before #17. It landed as its own change rather than
+alongside collection, because growing both in one commit would have made the collection half
+impossible to review. The namespace and the staleness rule live in `rules.py`; what this
+file contributes is `subscribed_event_ids` and `rule_counters` at the bottom, which are
+`summary`'s counters narrowed to one machine. **A rule can only count what a subscription
+asked for** -- see `subscribed_event_ids` for why that bound is the honest one.
 
 Kept free of Flask so it can be unit-tested in isolation, exactly like fleet.py and
 processes.py; events_web.py wires thin HTTP endpoints on top.
@@ -132,6 +134,13 @@ MAX_EVENT_ID = 65535
 #: would put six figures of rows into a SQLite file that is also serving the console's live
 #: charts -- and produce a page nobody can read, because the useful answer is a count.
 ROLLUP_WINDOW_SECONDS = 300
+
+#: The counting window `rule_counters` uses when its caller passes none. **It must equal the
+#: default of the `events.summary_window_seconds` setting**, which is the knob the console's
+#: event summary and the rules engine both read: a rule has to fire on the number the
+#: operator was looking at when they picked the threshold. Two plausible-but-different
+#: numbers is not a visible failure, so tests/test_event_rules.py asserts they agree.
+DEFAULT_RULE_WINDOW_SECONDS = 86400
 
 #: A machine that has not reported for longer than this has a stale event view rather than a
 #: quiet one. The console says so instead of rendering "nothing since Tuesday" as good news,
@@ -831,4 +840,141 @@ def summary(db_path, machines=None, window_seconds=86400):
         "top_events": [{"log": row["log"], "event_id": row["event_id"],
                         "occurrences": row["n"], "machines": row["machines"]}
                        for row in top],
+    }
+
+
+# ================================
+# WHAT A RULE READS
+# ================================
+# The counters behind rules.py's `event.*` namespace (roadmap #17). The split is deliberate:
+# the rules engine owns the namespace, the staleness rule and what a missing answer means,
+# because those are properties of a rule rather than of an event. This file owns what the
+# numbers themselves mean, which belongs next to `record_events` and `ROLLUP_WINDOW_SECONDS`
+# -- counting a rolled-up row as one occurrence would be a bug about the roll-up, not a bug
+# about rules, and it would be found here.
+
+
+def subscribed_event_ids(db_path):
+    """Every event id an ENABLED subscription names, sorted, deduplicated.
+
+    **The rules namespace is built from what the hub asked for, not from what arrived**, and
+    the difference is the whole reason this function exists rather than a `SELECT DISTINCT
+    event_id FROM machine_events`.
+
+    An operator sits down to write "alert me on twenty failed logons" on a quiet morning. If
+    the variable came from collected rows, `event.id_4625.count` would not exist yet -- it
+    would appear only once the brute-force was already under way, which is to say the
+    variable would be missing at exactly the moment it is needed and present only when it is
+    too late. Subscribing is also the only way such a row can ever exist, so the subscription
+    set is both the honest bound and the one an operator can see and change.
+
+    A subscription naming no ids (`[]`, "any id on this channel") contributes nothing here:
+    "any" is not a number a counter can be keyed by. Its records still count toward the
+    level totals, which is where a channel-wide subscription belongs.
+    """
+    return tuple(sorted(subscribed_since(db_path)))
+
+
+def subscribed_since(db_path):
+    """`{event_id: epoch}` -- the earliest moment the fleet was asked for each id.
+
+    **Subscribing is not collecting**, and the gap between the two is a window in which a
+    count would be a lie. An operator adds a subscription for 4625 at noon; the machine is
+    still holding yesterday's document and will not carry a single 4625 until its next
+    heartbeat brings the new one. Ask for its count at 12:00:01 and the honest answer is "we
+    have not been told", not zero -- but its last report is minutes old, so every freshness
+    check passes and zero is exactly what a naive counter says. A rule written to catch a
+    brute-force would report the machine clean while it was being sprayed.
+
+    The caller compares this against the machine's own `reported_at` to decide whether that
+    machine can have been collecting yet. **This is necessary but not quite sufficient**, and
+    the residue is worth stating: the heartbeat that first carries the new document is also a
+    report, so there is one heartbeat -- about ten seconds -- in which `reported_at` is newer
+    than the subscription and the machine still has not looked. Closing that properly needs
+    the agent's adopted document version stored per machine, which `machine_event_state` does
+    not have. Ten seconds against a window measured in hours is a residue; the untreated
+    version of this bug is unbounded, because a machine that is off for a week keeps answering
+    zero the whole time.
+
+    The MINIMUM across enabled subscriptions naming an id, not the maximum: if an old
+    subscription already covered 4625, adding a second one naming it does not make yesterday's
+    collection retroactively untrustworthy.
+    """
+    out = {}
+    for subscription in list_subscriptions(db_path):
+        if not subscription.get("enabled"):
+            continue
+        # `updated_at`, not `created_at`: editing a subscription to add an id starts that id's
+        # collection then, and the row keeps its original creation time.
+        since = int(subscription.get("updated_at") or 0)
+        for event_id in subscription.get("event_ids") or []:
+            event_id = int(event_id)
+            if event_id not in out or since < out[event_id]:
+                out[event_id] = since
+    return out
+
+
+def rule_counters(db_path, machine, *, event_ids=(),
+                  window_seconds=DEFAULT_RULE_WINDOW_SECONDS, now=None):
+    """One machine's windowed occurrence counts, for the rules engine.
+
+    Returns `{"reported_at", "error", "total", "by_level", "by_event_id"}`. `reported_at` is
+    None for a machine this module has never been told about, and **that is not the same as
+    zero**: it is an agent too old to know what a subscription is, or one that has never
+    completed a heartbeat. The caller turns it into UNKNOWN. Collapsing the two would let
+    `event.error_count == 0` report every un-upgraded machine in the fleet as healthy, which
+    is the silent failure this whole distinction exists to prevent -- `machine_state` above
+    makes the same one for the console.
+
+    `error` is the third case and it is returned for the same reason: a machine that reported
+    and said it could not read the channel has told us nothing about what is in it. It is the
+    LATEST report's error, because `record_events` overwrites rather than accumulates it, so a
+    clean report clears it. `dropped` is deliberately NOT returned: it is cumulative over the
+    machine's lifetime, so one bad afternoon in August would make every count untrustworthy
+    forever, and the case it would guard against cannot arise -- a machine dropping records is
+    one with more events than it could carry, which is never a machine whose count is zero.
+
+    `occurrences`, not rows, exactly as `summary` counts: a rolled-up run of four hundred
+    4625s is four hundred, not one. A run whose `last_seen` falls inside the window counts in
+    full even when it started before it. Prorating across the roll-up was rejected because
+    the arrival times inside a roll-up are precisely what `ROLLUP_WINDOW_SECONDS` threw away
+    -- a share computed from `first_seen`/`last_seen` would be an invented distribution
+    presented to an operator as a measurement.
+
+    An id named by two subscriptions is one entry counted once; the subscriptions overlap,
+    the event did not happen twice.
+    """
+    now = int(now if now is not None else time.time())
+    since = now - int(window_seconds)
+    wanted = sorted({int(event_id) for event_id in event_ids or ()})
+
+    with get_conn(db_path) as conn:
+        state = conn.execute(
+            "SELECT reported_at, error FROM machine_event_state WHERE machine = ?",
+            (machine,)).fetchone()
+        totals = conn.execute(
+            "SELECT COALESCE(SUM(count), 0) AS n FROM machine_events "
+            "WHERE machine = ? AND last_seen >= ?", (machine, since)).fetchone()
+        by_level = conn.execute(
+            "SELECT level, COALESCE(SUM(count), 0) AS n FROM machine_events "
+            "WHERE machine = ? AND last_seen >= ? GROUP BY level",
+            (machine, since)).fetchall()
+        by_event_id = {}
+        if wanted:
+            placeholders = ",".join("?" * len(wanted))
+            rows = conn.execute(
+                f"SELECT event_id, COALESCE(SUM(count), 0) AS n FROM machine_events "
+                f"WHERE machine = ? AND last_seen >= ? AND event_id IN ({placeholders}) "
+                f"GROUP BY event_id", [machine, since] + wanted).fetchall()
+            by_event_id = {int(row["event_id"]): int(row["n"]) for row in rows}
+
+    return {
+        "reported_at": state["reported_at"] if state else None,
+        "error": (state["error"] or None) if state else None,
+        "total": int(totals["n"]),
+        "by_level": {row["level"]: int(row["n"]) for row in by_level},
+        # A subscribed id with no records in the window is 0, not absent. The machine did
+        # report, and "it did not happen" is the answer a threshold rule needs; leaving the
+        # key out would make the variable UNKNOWN and the rule would never settle.
+        "by_event_id": {event_id: by_event_id.get(event_id, 0) for event_id in wanted},
     }

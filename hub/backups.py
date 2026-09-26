@@ -402,6 +402,33 @@ def set_state(db_path, key, value):
 # ================================
 # MASTER KEY
 # ================================
+class KeyConfirmationStale(ValueError):
+    """The key an import was confirmed against is no longer the key this hub holds.
+
+    Its own type so the web layer can answer 409 -- the request was fine, the world moved --
+    while a genuine bug still becomes a 500. Mirrors firmware.PayloadRejected. Carries the
+    key_id that IS configured, because the caller's next move is to show the operator a
+    warning naming the right key rather than the one they were shown.
+    """
+
+    def __init__(self, message, current_key_id=None):
+        super().__init__(message)
+        self.current_key_id = current_key_id
+
+
+# Serialises every write to BACKUP_MASTER_KEY, so the read a decision was made on and the
+# write it authorised cannot be split by another request.
+#
+# **The hub runs Socket.IO with async_mode="threading", so two console requests really do
+# execute at once.** Without this, two operators importing different keys interleave as
+# read/read/write/write: both see the key they confirmed against, both write, and the second
+# one discards a key whose key_id was never on anybody's screen -- the same failure the
+# `replace_key_id` confirmation exists to prevent, one layer down. `ensure_master_key` takes
+# the same lock because it writes the same line; a lock that covers one of two writers to a
+# file is a lock that reads as protection and is not.
+_MASTER_KEY_LOCK = threading.Lock()
+
+
 def generate_master_key():
     """A fresh base64 master key. `os.urandom`, not `random` -- this is the only secret
     standing between the storage provider and every backup."""
@@ -501,34 +528,54 @@ def ensure_master_key(env_path):
     An unwritable `.env` raises: silently keeping the key in memory would mean every hub
     restart generates a new one and yesterday's backup becomes undecryptable.
     """
-    existing = os.environ.get(MASTER_KEY_ENV, "").strip()
-    if existing:
-        decode_master_key(existing)     # validate now, not at the first backup
-        return existing, False
+    with _MASTER_KEY_LOCK:
+        existing = os.environ.get(MASTER_KEY_ENV, "").strip()
+        if existing:
+            decode_master_key(existing)     # validate now, not at the first backup
+            return existing, False
 
-    key_b64 = generate_master_key()
-    line = f"{MASTER_KEY_ENV}={key_b64}\n"
-    try:
-        needs_newline = False
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8-sig") as fh:
-                current = fh.read()
-            needs_newline = bool(current) and not current.endswith("\n")
-        with open(env_path, "a", encoding="utf-8", newline="\n") as fh:
-            if needs_newline:
-                fh.write("\n")
-            fh.write(line)
-    except OSError as e:
-        raise ValueError(
-            f"Could not write the backup master key to {env_path}: {e}. Add the line "
-            f"'{MASTER_KEY_ENV}=<key>' yourself and restart the hub.")
-    os.environ[MASTER_KEY_ENV] = key_b64
-    return key_b64, True
+        key_b64 = generate_master_key()
+        line = f"{MASTER_KEY_ENV}={key_b64}\n"
+        try:
+            needs_newline = False
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8-sig") as fh:
+                    current = fh.read()
+                needs_newline = bool(current) and not current.endswith("\n")
+            with open(env_path, "a", encoding="utf-8", newline="\n") as fh:
+                if needs_newline:
+                    fh.write("\n")
+                fh.write(line)
+        except OSError as e:
+            raise ValueError(
+                f"Could not write the backup master key to {env_path}: {e}. Add the line "
+                f"'{MASTER_KEY_ENV}=<key>' yourself and restart the hub.")
+        os.environ[MASTER_KEY_ENV] = key_b64
+        return key_b64, True
 
 
-def import_master_key(env_path, raw, log_dir=None):
+# Distinguishes "do not check what is configured" from "expect nothing to be configured".
+# None cannot carry both meanings: a first import is a caller saying it saw NO key, which is
+# a claim about the world worth checking, not an absence of one.
+_UNCHECKED = object()
+
+
+def import_master_key(env_path, raw, log_dir=None, expect_key_id=_UNCHECKED):
     """Adopt a master key the operator already holds. Returns a dict:
     `key_b64`, `previous_key_id`, `rewrapped`, `stranded`, `credentials_error`.
+
+    `expect_key_id` is the key_id the caller confirmed the replacement against, and it is
+    **checked here, under the same lock and the same read that does the replacing** --
+    raising KeyConfirmationStale if the hub is holding something else by now. Checking it
+    in the route instead would leave the caller's read and this function's read as two
+    separate reads with a scheduler between them: both requests pass their own check, both
+    write, and the second discards a key whose key_id nobody ever saw. That is the
+    `replace_key_id` confirmation defeated by the gap it was added to close, so the check
+    belongs where the write is. A caller that saw no key at all passes None, which is
+    checked like any other value: "there was nothing here" is a claim about the world, and a
+    first import that races a key installation would otherwise discard that key with no
+    confirmation ever shown -- the same failure, entering through the door that asks no
+    question. Only an internal caller with nothing to say omits the argument entirely.
 
     **The counterpart to ensure_master_key, and what makes a reinstall survivable.** A hub
     brought up on a new server, in a new folder, or from a VM image without its `.env`
@@ -567,33 +614,47 @@ def import_master_key(env_path, raw, log_dir=None):
     # whitespace, and what lands in `.env` has to be exactly what reads back out of it.
     new_b64 = base64.b64encode(new_key).decode("ascii")
 
-    previous_b64 = master_key_b64()
-    try:
-        previous = decode_master_key(previous_b64) if previous_b64 else None
-    except ValueError:
-        # A hand-edited or truncated BACKUP_MASTER_KEY. There is nothing to re-wrap and
-        # nothing that can be decrypted with it, so replacing it is pure repair -- and
-        # refusing here would trap the hub in the exact state this function exists to fix.
-        previous = None
+    # Everything from here to the `.env` write is one critical section: the read that says
+    # which key is being replaced, the check that the caller confirmed against THAT key, and
+    # the write that replaces it. The credential re-wrap stays inside it too, so a second
+    # import cannot start sealing secrets under a third key half way through this one.
+    with _MASTER_KEY_LOCK:
+        previous_b64 = master_key_b64()
+        try:
+            previous = decode_master_key(previous_b64) if previous_b64 else None
+        except ValueError:
+            # A hand-edited or truncated BACKUP_MASTER_KEY. There is nothing to re-wrap and
+            # nothing that can be decrypted with it, so replacing it is pure repair -- and
+            # refusing here would trap the hub in the exact state this function exists to
+            # fix.
+            previous = None
 
-    result = {"key_b64": new_b64,
-              "previous_key_id": key_id(previous) if previous is not None else None,
-              "rewrapped": 0, "stranded": 0, "credentials_error": None}
+        previous_id = key_id(previous) if previous is not None else None
+        if expect_key_id is not _UNCHECKED and previous_id != expect_key_id:
+            raise KeyConfirmationStale(
+                "The backup encryption key on this hub changed while this import was in "
+                "flight, so nothing was replaced. Check which key it holds now and try "
+                "again.",
+                current_key_id=previous_id)
 
-    if previous is not None and hmac.compare_digest(previous, new_key):
-        # Idempotent rather than a refusal: an operator pasting the key the hub already
-        # has is asking for the state it is already in, and there is no harm to report.
-        return result
+        result = {"key_b64": new_b64, "previous_key_id": previous_id,
+                  "rewrapped": 0, "stranded": 0, "credentials_error": None}
 
-    try:
-        envfile.set_vars(env_path, {MASTER_KEY_ENV: new_b64})
-    except OSError as e:
-        raise ValueError(
-            f"Could not write the backup master key to {env_path}: {e}. Set the line "
-            f"'{MASTER_KEY_ENV}=<key>' yourself and restart the hub.")
-    envfile.apply_to_environ({MASTER_KEY_ENV: new_b64})
+        if previous is not None and hmac.compare_digest(previous, new_key):
+            # Idempotent rather than a refusal: an operator pasting the key the hub already
+            # has is asking for the state it is already in, and there is no harm to report.
+            return result
 
-    if previous is not None and log_dir and CRYPTO_AVAILABLE:
+        try:
+            envfile.set_vars(env_path, {MASTER_KEY_ENV: new_b64})
+        except OSError as e:
+            raise ValueError(
+                f"Could not write the backup master key to {env_path}: {e}. Set the line "
+                f"'{MASTER_KEY_ENV}=<key>' yourself and restart the hub.")
+        envfile.apply_to_environ({MASTER_KEY_ENV: new_b64})
+
+        if previous is None or not log_dir or not CRYPTO_AVAILABLE:
+            return result
         try:
             result["rewrapped"], result["stranded"] = rewrap_secrets(
                 log_dir, previous, new_key)
@@ -609,7 +670,7 @@ def import_master_key(env_path, raw, log_dir=None):
                 "The key was adopted, but the stored destination credentials could not be "
                 "re-encrypted with it. Open each destination and enter its credentials "
                 "again, or its next backup will fail.")
-    return result
+        return result
 
 
 # ================================
