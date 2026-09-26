@@ -804,6 +804,39 @@ def main():
 
         check("the escrow nag does not fire for a key that came from somewhere else",
               body["state"]["escrowed_at"] is not None)
+
+        # A confirmation that was still true when this route checked it, and no longer true
+        # by the time backups.py did the replacing. The route cannot produce that on its own
+        # -- it needs two requests interleaving -- so the model's refusal is raised directly
+        # and what is asserted is that the route turns it into the same 409 the console
+        # already knows how to re-render, rather than a 400 or a 500.
+        real_import = backups.import_master_key
+
+        def _stale(*args, **kwargs):
+            raise backups.KeyConfirmationStale("changed underneath you",
+                                               current_key_id="beefbeefbeefbeef")
+
+        backups.import_master_key = _stale
+        try:
+            r = c.post("/api/backups/key/import",
+                       json={"key": backups.generate_master_key(),
+                             "replace_key_id": body["state"]["key_id"]})
+        finally:
+            backups.import_master_key = real_import
+        check("a confirmation that went stale mid-request is a 409, not a 400 or a 500",
+              r.status_code == 409)
+        check("it asks for confirmation again rather than looking like a bad request",
+              r.get_json()["confirm_required"] is True)
+        check("and it names the key that is configured NOW, not the one confirmed",
+              r.get_json()["current_key_id"] == "beefbeefbeefbeef")
+        # CodeQL flagged the first version of this handler, which returned str(e). The
+        # message happened to be one this codebase authored, but a hand-built response is
+        # not refusals.refuse() and the alert is right about the shape -- so the route says
+        # its own sentence and the exception's text stays in the log.
+        check("the 409 does not echo the exception's text back to the caller",
+              "changed underneath you" not in r.get_json()["error"])
+        check("and it says nothing was replaced, not merely that the key changed",
+              "nothing was replaced" in r.get_json()["error"])
         r = c.post("/api/backups/key/import", json={"key": incoming})
         check("importing the key already in use needs no confirmation",
               r.status_code == 200)
