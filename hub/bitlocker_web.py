@@ -299,9 +299,11 @@ def move_escrow(log_dir, old, new):
         return ESCROW_FAILED
     # Load the destination blob if it already holds keys for the survivor.
     dest_stored = {}
+    dest_had_prior = False
     try:
         if backups.has_secret(log_dir, dest_id):
             dest_stored = backups.load_secret(log_dir, master, dest_id) or {}
+            dest_had_prior = True
     except (ValueError, OSError):
         # Destination unreadable -- refuse to overwrite; source keeps its copy.
         return ESCROW_FAILED
@@ -320,5 +322,14 @@ def move_escrow(log_dir, old, new):
     try:
         backups.delete_secret(log_dir, source_id)
     except (ValueError, OSError):
+        # Roll back the destination blob to its pre-move state so we do not
+        # leave a newly written merged blob behind on failure.
+        try:
+            if dest_had_prior:
+                backups.store_secret(log_dir, master, dest_id, dest_stored)
+            else:
+                backups.delete_secret(log_dir, dest_id)
+        except Exception:
+            pass
         return ESCROW_FAILED
     return ESCROW_MOVED
