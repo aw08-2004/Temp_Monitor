@@ -273,13 +273,23 @@ def move_escrow(log_dir, old, new):
     Only a genuine failure to move a blob that exists is a reason to leave the index where it is.
     """
     master = backups.load_master_key()
-    if master is None:
-        # No master key: nothing is escrowed anywhere on this hub, so there is nothing to lose.
-        return ESCROW_NOTHING
     source_id = bitlocker.secret_id_for(old)
+    if master is None:
+        # No master key: a source blob that exists but cannot be opened is a failure;
+        # no source blob means nothing was ever escrowed.
+        try:
+            if backups.has_secret(log_dir, source_id, strict=True):
+                return ESCROW_FAILED
+        except (ValueError, OSError):
+            return ESCROW_FAILED
+        return ESCROW_NOTHING
     dest_id = bitlocker.secret_id_for(new)
     # Load the source blob (the machine being merged away).
-    if not backups.has_secret(log_dir, source_id):
+    try:
+        source_exists = backups.has_secret(log_dir, source_id, strict=True)
+    except (ValueError, OSError):
+        return ESCROW_FAILED
+    if not source_exists:
         return ESCROW_NOTHING
     try:
         source_stored = backups.load_secret(log_dir, master, source_id)
@@ -307,5 +317,8 @@ def move_escrow(log_dir, old, new):
         backups.store_secret(log_dir, master, dest_id, merged)
     except (ValueError, OSError):
         return ESCROW_FAILED
-    backups.delete_secret(log_dir, source_id)
+    try:
+        backups.delete_secret(log_dir, source_id)
+    except (ValueError, OSError):
+        return ESCROW_FAILED
     return ESCROW_MOVED
