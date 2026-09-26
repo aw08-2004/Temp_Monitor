@@ -1535,15 +1535,19 @@ the absence of something it never looked for:
   one whose last report is over an hour old reads unknown again rather than quiet.
 * **A machine that reported an error reads unknown as well**, even though its report is fresh — a
   PC that says it cannot read the Security channel has told you nothing about what is in it. One
-  clean report puts the counters back. A machine that dropped records mid-storm still counts what
-  it did send.
+  clean report puts the counters back.
+* **A machine whose last report lost events to the per-report cap reads unknown too.** A
+  heartbeat may carry 200 events; past that the newest go, so a burst of 200 routine events
+  followed by one critical one loses the critical one, and a counter reading zero there would be
+  wrong in the one direction that matters. The next complete report clears it.
 * **A newly subscribed id reads unknown on a machine that has not reported since you added it.**
   Subscribing is not collecting: the PC is still holding the previous subscription set and has
   not looked once. It becomes a real zero on that machine's next report, which is usually
   seconds — but for a PC switched off before a holiday it is a week, and a week of confident
   zeros is exactly what you do not want a brute-force rule reading.
 
-> **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0.
+> **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0,
+> with the truncated-report case corrected in hub 1.131.1.
 > The agent half is in the source tree and reaches the fleet with the next agent release, so
 > nothing is collected until then, and until it is, every counter above reads unknown. Grouping
 > events into alert bundles is roadmap #17 and shipped in hub 1.124.0 — see

@@ -3017,7 +3017,7 @@ it — the same trap `manage_firmware` avoided by shipping live.
 
 ---
 
-## ✅ 17. Alert correlation and recommended fixes   ·   hub 1.124.0, `event.*` rules variable hub 1.128.0   ·   `correlate.py` / `correlate_web.py`
+## ✅ 17. Alert correlation and recommended fixes   ·   hub 1.124.0, `event.*` rules variable hub 1.128.0 (drop handling corrected in 1.131.1)   ·   `correlate.py` / `correlate_web.py`
 
 The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
 **one** bundle, not three alerts. The substrate was already here — `alerts.py` keeps episodes,
@@ -3124,10 +3124,26 @@ it was.
     validated against the live subscription set. Validating would mean deleting a subscription
     silently makes every rule mentioning it unsaveable, so an operator editing an unrelated
     clause on an old rule would be stopped by a message about a variable they never touched.
-  Two limits found in review of that change and left open on purpose, both needing a column on
-  `machine_event_state` that #16 does not have -- and `init_events_db` is `CREATE TABLE IF NOT
-  EXISTS` with no migration path, so adding one to an existing hub is the same shape as the
-  BitLocker `protector_count` gap rather than a one-liner:
+  * **A report the per-report cap truncated is UNKNOWN** -- corrected in hub 1.131.1, after
+    1.128.0 shipped with the opposite behaviour. `MAX_EVENTS_PER_REPORT` takes the
+    TAIL of an oversized report, so two hundred Information events followed by one Critical
+    arrive as two hundred Information events with no error attached, and
+    `event.critical_count == 0` reads as a measurement. The first version of this change
+    ignored drops on the written argument that a machine dropping records has *more* events
+    than it could carry and so never reads zero -- true of `event.count`, false of every
+    per-level and per-id counter. Review caught it. The state row now carries `dropped_last`
+    beside the cumulative `dropped`, because a lifetime counter cannot say whether the number
+    in front of you is complete, only that something was lost at some point; distrusting a
+    machine forever after one bad afternoon is the failure in the other direction. Sorting a
+    report by level before truncating was rejected: it makes the kept slice depend on a
+    severity judgement the hub is not the one making, and the roll-up needs arrival order to
+    group a run correctly.
+  Two further limits found in review and left open, both needing another column on
+  `machine_event_state`. The migration itself is no longer the obstacle this entry once
+  claimed -- `init_events_db` now does the `PRAGMA table_info` / ALTER-if-missing dance that
+  `backups.py` has always done, so the next column is genuinely a one-liner. What is left is
+  scope: neither can make a rule fire wrongly, only keep one trusted for a few seconds longer
+  than it should be, and both are better done with the agent-side half in hand:
   * **The adopted-document residue.** A per-id count is withheld until the machine reports
     again, but the heartbeat that first carries a new subscription is itself a report, so
     there is one heartbeat -- about ten seconds -- in which the count is trusted and the
