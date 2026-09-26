@@ -4155,6 +4155,29 @@ grouping is a statistic over the history table rather than a model's opinion, an
 grouping is the one error in a report nobody can check. When #17 lands it becomes one more
 section of `ai.summary_figures`, computed the same way.
 
+**The API key left the resolved provider config at 1.132.0.** `ai.provider_config()` used to
+return it in the dict beside its error string, so the error an operator reads and the credential
+a request carries came out of the same `return`. Nothing leaked, and that is the point: any
+reader had to prove by hand that the two halves stayed apart, and CodeQL — which cannot — read
+every `error` unpacked from an `ai.*` entry point as the key itself and failed the branch that
+printed one in a test name. `complete()` and `refresh_models()` take the key as their own
+parameter now and build the one header that needs it; `/api/ai/status` still lists its fields
+one at a time, which is belt and braces rather than the guard it used to be. *Rejected: renaming
+the test variables and leaving the shape*, which silences the scanner and keeps the thing that
+made the alert plausible.
+
+**A key never crosses the network in clear, even where a prompt may.** `check_provider_url` has
+always allowed plaintext `http://` to a private address — `ai.allow_private_endpoint` defaults on,
+and the recommended deployment is Ollama on loopback — and that decision was made about prompts.
+`ai.check_key_transport` draws the line differently for the credential: a prompt seen on the wire
+is a disclosure bounded by that prompt, while a Bearer token seen on the wire is replayable by
+whoever saw it, on somebody else's bill, until the key is rotated. Loopback stays exempt, because
+nothing leaves the machine and that deployment has no key anyway. The one configuration this
+refuses is a provider on `http://` elsewhere on the network *with* an API key set.
+*Rejected: withholding the key and sending the request regardless*, which answers with the
+provider's own 401 and points an operator at regenerating a credential that was never at fault.
+Raised by a review bot on PR #84, on lines that change had just written.
+
 **Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
 starts off, which is right for a hosted provider and probably wrong for one on the same LAN.
 Whether `SHAREABLE_TEXT` should become operator-editable rather than a constant, once somebody
