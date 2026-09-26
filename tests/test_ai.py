@@ -525,6 +525,24 @@ def main():
         check("...while a hub with no key sends no Authorization header at all",
               "Authorization" not in headers_of())
 
+        # check_provider_url lets a prompt cross the LAN in clear; a key is a different thing,
+        # because whoever sees one can replay it on somebody else's bill for as long as it
+        # lives. Loopback is exempt -- nothing leaves the box, and that deployment has no key.
+        check("a key may go to a loopback http provider",
+              ai.check_key_transport("http://127.0.0.1:11434") is None
+              and ai.check_key_transport("http://localhost:11434") is None)
+        check("...and to anything over https",
+              ai.check_key_transport("https://openrouter.ai/api") is None)
+        check("...but never over plaintext http to another machine",
+              "will not send the API key"
+              in (ai.check_key_transport("http://192.168.0.7:11434") or ""))
+        lan = dict(CONFIG, provider="custom", base_url="http://192.168.0.7:11434")
+        error, answer = ai.complete(lan, [{"role": "user", "content": "x"}], api_key="k")
+        # Refused rather than sent keyless: the provider's own 401 would read as a wrong key
+        # and send somebody to regenerate a credential that was never the problem.
+        check("...and the call is refused rather than sent without it",
+              answer is None and "will not send the API key" in (error or ""))
+
         print("\n== The model list is cached, not fetched to draw a page ==")
         listing = ai.list_models(db_path, "openrouter")
         check("an unread provider reports no models", listing["models"] == [])
@@ -536,9 +554,19 @@ def main():
         real_get = ai.requests.get
         try:
             ai.requests.get = lambda *a, **k: FakeResponse([models_body])
+            seen_get = {}
+
+            def capture_get(*a, **k):
+                seen_get.update(k.get("headers") or {})
+                return FakeResponse([models_body])
+            ai.requests.get = capture_get
             error, listing = ai.refresh_models(
                 db_path, dict(CONFIG, provider="openrouter", model=""), api_key="k")
             check("a refresh works with NO model chosen yet", error is None)
+            # Asserted separately from complete()'s header: the two build their own, and a
+            # regression dropping this one would have passed every other test in this file.
+            check("...and the picker's own request carries the key too",
+                  seen_get.get("Authorization") == "Bearer k")
             check("...which is the whole point of the picker", listing is not None)
             check("...sorted, with the junk dropped",
                   listing["models"] == ["a-model", "z-model"])

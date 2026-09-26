@@ -440,6 +440,41 @@ def check_provider_url(url, allow_private):
     return None
 
 
+def check_key_transport(url):
+    """Whether an API key may travel to this base url. Returns an error or None.
+
+    **`check_provider_url` allows plaintext to the LAN, and it made that call about prompts
+    rather than about credentials.** A prompt seen on the wire is a disclosure bounded by that
+    one prompt. A Bearer token seen on the wire is replayable by whoever saw it, against a
+    hosted provider, on somebody else's bill, for as long as the key lives. The two deserve
+    different rules, so a prompt may cross the LAN in clear and a key may not.
+
+    Loopback is exempt because nothing leaves the machine -- and that is also the deployment
+    with no key to send, since Ollama needs none. What this refuses is narrow and real: a
+    provider on `http://` somewhere else on the network, configured with an API key.
+
+    *Rejected: withholding the key and sending the request anyway.* The answer is then the
+    provider's own 401, which reads as a wrong key rather than as a key this hub declined to
+    send, and points an operator at regenerating a credential that was never the problem.
+    """
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme == "https":
+        return None
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 80,
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        # check_provider_url resolves first and refuses what will not resolve, so arriving
+        # here means the name stopped resolving between the two calls. Fail closed: an
+        # unresolvable host is not one we can say is loopback.
+        return "cannot resolve the AI provider, so this hub will not send the API key to it"
+    if all(_unwrap_v4(ip_address(info[4][0])).is_loopback for info in infos):
+        return None
+    return ("the AI provider is reached over plaintext http, so this hub will not send the "
+            "API key to it -- use an https URL, move the provider onto this machine "
+            "(127.0.0.1), or clear the API key in Settings -> AI")
+
+
 # ---------------------------------------------------------------------------------------
 # The completion call
 # ---------------------------------------------------------------------------------------
@@ -468,6 +503,9 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
     # This function and refresh_models are the only two places the key is read at all.
     key = str(api_key or "")
     if key:
+        error = check_key_transport(resolved["base_url"])
+        if error:
+            return error, None
         headers["Authorization"] = f"Bearer {key}"
     body = {
         "model": resolved["model"],
@@ -595,6 +633,10 @@ def refresh_models(db_path, config, *, api_key="", now=None):
     headers = {"Accept": "application/json", "User-Agent": "FleetHub-AI/1.0"}
     key = str(api_key or "")
     if key:
+        # Same refusal as complete(): the picker is not worth a credential in clear either.
+        error = check_key_transport(resolved["base_url"])
+        if error:
+            return error, None
         headers["Authorization"] = f"Bearer {key}"
     try:
         with requests.get(f"{resolved['base_url']}/v1/models", headers=headers,

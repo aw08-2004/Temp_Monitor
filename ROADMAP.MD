@@ -4139,6 +4139,18 @@ one at a time, which is belt and braces rather than the guard it used to be. *Re
 the test variables and leaving the shape*, which silences the scanner and keeps the thing that
 made the alert plausible.
 
+**A key never crosses the network in clear, even where a prompt may.** `check_provider_url` has
+always allowed plaintext `http://` to a private address — `ai.allow_private_endpoint` defaults on,
+and the recommended deployment is Ollama on loopback — and that decision was made about prompts.
+`ai.check_key_transport` draws the line differently for the credential: a prompt seen on the wire
+is a disclosure bounded by that prompt, while a Bearer token seen on the wire is replayable by
+whoever saw it, on somebody else's bill, until the key is rotated. Loopback stays exempt, because
+nothing leaves the machine and that deployment has no key anyway. The one configuration this
+refuses is a provider on `http://` elsewhere on the network *with* an API key set.
+*Rejected: withholding the key and sending the request regardless*, which answers with the
+provider's own 401 and points an operator at regenerating a credential that was never at fault.
+Raised by a review bot on PR #84, on lines that change had just written.
+
 **Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
 starts off, which is right for a hosted provider and probably wrong for one on the same LAN.
 Whether `SHAREABLE_TEXT` should become operator-editable rather than a constant, once somebody
