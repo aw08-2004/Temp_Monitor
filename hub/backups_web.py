@@ -212,6 +212,12 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     KEY_UNUSABLE = ("The backup encryption key configured on this hub is not usable. Check "
                     "BACKUP_MASTER_KEY in .env, or use an existing key to replace it.")
 
+    # Shown when a key is replaced out from under a confirmation. It has to say that nothing
+    # was replaced -- an operator who reads only "the key changed" will assume theirs landed.
+    KEY_CONFIRMATION_STALE = (
+        "The backup encryption key on this hub changed while you were confirming, so "
+        "nothing was replaced. Check which key it holds now and confirm again.")
+
     def _key_state():
         """Everything the console needs to nag correctly, and nothing that reveals the
         key itself."""
@@ -415,8 +421,16 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             # 409, not 400: the request was well formed and the world moved underneath it.
             # Same shape as the refusal above, so the console re-renders its warning against
             # the key that is actually configured now and the operator confirms that one.
+            #
+            # The sentence is authored here rather than taken from the exception, for the
+            # same reason KEY_UNUSABLE is: this response is built by hand instead of going
+            # through refusals.refuse(), which is the one place this codebase decided a
+            # refusal becomes a response and the one place whose docstring answers CodeQL's
+            # py/stack-trace-exposure. An `str(e)` in a hand-built response is the pattern
+            # that alert is right to flag whatever today's message happens to say, and the
+            # exception's text is for the log, where an operator never sees it.
             return jsonify({
-                "error": str(e),
+                "error": KEY_CONFIRMATION_STALE,
                 "confirm_required": True,
                 "current_key_id": e.current_key_id,
             }), 409

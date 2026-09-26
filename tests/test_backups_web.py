@@ -829,6 +829,14 @@ def main():
               r.get_json()["confirm_required"] is True)
         check("and it names the key that is configured NOW, not the one confirmed",
               r.get_json()["current_key_id"] == "beefbeefbeefbeef")
+        # CodeQL flagged the first version of this handler, which returned str(e). The
+        # message happened to be one this codebase authored, but a hand-built response is
+        # not refusals.refuse() and the alert is right about the shape -- so the route says
+        # its own sentence and the exception's text stays in the log.
+        check("the 409 does not echo the exception's text back to the caller",
+              "changed underneath you" not in r.get_json()["error"])
+        check("and it says nothing was replaced, not merely that the key changed",
+              "nothing was replaced" in r.get_json()["error"])
         r = c.post("/api/backups/key/import", json={"key": incoming})
         check("importing the key already in use needs no confirmation",
               r.status_code == 200)
