@@ -261,6 +261,42 @@ def create_bitlocker_blueprint(db_path, log_dir, login_required, access):
     return bp
 
 
+def escrow_blocked(log_dir, machine):
+    """Would moving this machine's escrowed keys fail? Read-only, and safe to ask before a
+    merge has destroyed anything.
+
+    **This is a question a caller has to ask FIRST, not read off the answer afterwards.**
+    move_escrow runs in the middle of a machine merge, by which point the dropped machine's
+    identity row is already gone -- so a failure there cannot be undone and cannot be retried
+    from the console, which 404s on a machine it can no longer find. Asked up front, the same
+    failure is simply a merge that does not happen: nothing is lost, and re-running it once the
+    master key is restored does the whole job.
+
+    Three ways a move fails, and all three are decided here rather than discovered halfway:
+
+      * the store cannot be read at all -- see backups.secret_store_unreadable;
+      * a blob exists and there is no master key, so it cannot be re-wrapped. The secret id is
+        the AAD, so a blob is never simply copied to a new name: it is opened and sealed again;
+      * a blob exists and will not open, which is the master key having changed under it.
+
+    A machine with nothing escrowed is never blocked, whatever the hub's key situation -- and
+    that is most of the fleet, all of it on a hub that never switched escrow on.
+    """
+    if backups.secret_store_unreadable(log_dir):
+        return True
+    source_id = bitlocker.secret_id_for(machine)
+    if not backups.has_secret(log_dir, source_id):
+        return False
+    master = backups.load_master_key()
+    if master is None:
+        return True
+    try:
+        backups.load_secret(log_dir, master, source_id)
+    except (ValueError, OSError):
+        return True
+    return False
+
+
 def move_escrow(log_dir, old, new):
     """Move a machine's escrowed keys to its new name, alongside bitlocker.rename_machine.
 
@@ -271,16 +307,24 @@ def move_escrow(log_dir, old, new):
     rename must not fail because a hub has no master key or because this machine never escrowed
     anything -- both are ordinary, and in both the posture rows should still follow the new name.
     Only a genuine failure to move a blob that exists is a reason to leave the index where it is.
+
+    The failing cases are decided by escrow_blocked() rather than inline, so that a caller can
+    ask the same question before it starts destroying things. Deciding them twice -- once in the
+    check, once here -- costs one decrypt per merge and is deliberate: the two calls are not one
+    transaction, so the state can change between them, and it is this one that acts on it.
     """
-    master = backups.load_master_key()
-    if master is None:
-        # No master key: nothing is escrowed anywhere on this hub, so there is nothing to lose.
-        return ESCROW_NOTHING
+    if escrow_blocked(log_dir, old):
+        return ESCROW_FAILED
     source_id = bitlocker.secret_id_for(old)
     dest_id = bitlocker.secret_id_for(new)
     # Load the source blob (the machine being merged away).
     if not backups.has_secret(log_dir, source_id):
         return ESCROW_NOTHING
+    master = backups.load_master_key()
+    if master is None:
+        # Only reachable if the key went away between escrow_blocked() and here: a blob exists
+        # and cannot be re-wrapped, which is a failure and not an empty escrow.
+        return ESCROW_FAILED
     try:
         source_stored = backups.load_secret(log_dir, master, source_id)
     except (ValueError, OSError):

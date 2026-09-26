@@ -750,6 +750,31 @@ def has_secret(log_dir, destination_id):
     return destination_id in _read_secret_file(log_dir)
 
 
+def secret_store_unreadable(log_dir):
+    """True when the store file is there and cannot be read or parsed at all.
+
+    _read_secret_file() deliberately degrades a corrupt or unreadable store to `{}` so one bad
+    file cannot take the console down -- which means **has_secret() cannot tell "no such entry"
+    from "the whole store is unreadable"**. A caller that only wants to READ one credential is
+    right to treat those alike: either way it cannot have it, and it says so.
+
+    A caller about to MOVE or DELETE an entry is not, and that is why this exists (the escrow
+    move for roadmap #19). "No entry" means there is nothing to lose. "Unreadable" means the
+    entry may be sitting in that file, so a caller that reads the two as one re-points its index
+    at the machine's new name without having moved the blob -- and the passwords and the record
+    of which machine they belong to end up under different hostnames, permanently, the day
+    somebody repairs the file.
+    """
+    path = secrets_path(log_dir)
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return not isinstance(json.load(fh), dict)
+    except (OSError, ValueError):
+        return True
+
+
 def _require_crypto():
     if not CRYPTO_AVAILABLE:
         raise ValueError(
