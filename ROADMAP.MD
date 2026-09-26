@@ -2676,7 +2676,7 @@ what survived, and why the rest did not. The two decisions that framed the triag
 
 | PRD item | Verdict |
 |---|---|
-| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
+| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent 3.37.0); Intune sync is not → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.124.0, `correlate.baselines`). |
 | FR-03 Alert brain | **Partly done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`). Still open there: an `event.*` rules variable, so a counter can be alerted on rather than only read. |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
@@ -3104,7 +3104,7 @@ will not until somebody has a month of real bundles to count.
 
 ---
 
-## 🚧 18. Network discovery and shadow IT   ·   sweep + classification hub 1.125.0 (agent half unreleased)
+## 🚧 18. Network discovery and shadow IT   ·   sweep + classification hub 1.125.0 · agent 3.37.0
 
 The half of FR-01 that #4 does not cover: an IP-range sweep from an agent already on that
 subnet — the same peer-relay trick #10 uses for Wake-on-LAN, since the hub is usually not on
@@ -3121,8 +3121,8 @@ again: everything below narrows the feature until it cannot be pointed anywhere.
 a Discovery card on the machine page's Network tab, one `discovery.*` setting, and one new
 command type — `network_sweep`, issued to a machine that is already on the subnet. Agent
 half: `Network/NetworkSweepExecutor.cs` and `FleetClient.ReportSweepAsync`. **The agent half
-is on `main` unreleased** — the hub ships first, as always, and the sweep starts working on a
-machine when its agent is next cut and propagates.
+shipped in agent 3.37.0** on 2026-09-23; the hub went first, as always, so the sweep starts
+working on each machine as that release propagates.
 
 **Both open parameters resolved, and both resolved narrowly:**
 
@@ -3298,8 +3298,9 @@ PC is gone".
 - **The agent half has never been compiled or run.** There is no .NET toolchain on the machine
   it was written on and no CI job builds the Windows agent, so `BitLockerReader` is syntax-
   checked and reviewed against the `Win32_EncryptableVolume` documentation and nothing more.
-  It also carries no agent release: source stays at 3.36.0 and this rides whichever release is
-  cut next, the way #14 and #21 shared one.
+  It was released in agent **3.37.0** on 2026-09-23, riding the same cut as #16 and #18 the
+  way #14 and #21 shared one. Compiling it is possible now and was not then; see the hardware
+  validation note. Running it against an encrypted volume is still owed.
 - **`PrecisionFactor`, `GetLockStatus` and free-space wiping are not read.** The class exposes
   `ConversionStatus` and `EncryptionMethod` as plain properties, which is all the card shows;
   the method forms exist for real-time answers nobody is asking for here.
@@ -5319,8 +5320,8 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     accident but the security argument itself: the borrowing hub never speaks to an agent, so
     there was nothing to add to one. That also makes it the first feature since #7 that is
     fully live the moment the hub is deployed, with no fifteen-minute propagation to wait on.
-16. **#16 Event log mining** — **collection built, hub 1.118.0**; the agent half is source
-    on `main` and reaches the fleet with the next agent cut. Taken before #17, because it is
+16. **#16 Event log mining** — **collection built and shipped, hub 1.118.0 + agent 3.37.0**;
+    the collector is running in the field and no record has been confirmed arriving yet. Taken before #17, because it is
     one of the two inputs that make correlation worth doing. Its own risk was volume rather
     than mechanism, and that risk is settled three times over: the filter runs on the machine
     as one XPath per channel, identical repeats are rolled up into a count instead of a row,
@@ -5349,8 +5350,8 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     detection now has a real prerequisite that did not exist when this was written — #25 phase
     B's Windows software inventory — and remote session recording is still the one with a
     question attached rather than a cost.
-20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half on `main` as
-    unreleased source until the next agent release is cut. Sequenced last on the belief that it
+20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half carried by
+    the 3.37.1 re-cut of 2026-09-23 rather than by 3.37.0, whose release notes predate it. Sequenced last on the belief that it
     needed the rules engine to grow a second evaluation site; building it established that it
     must not, and the entry above records why. What it actually needed was the target grammar
     and the `issue_commands` gate, both of which already existed.
