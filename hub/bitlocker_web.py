@@ -57,6 +57,19 @@ import settings
 _machine_escrow_locks = defaultdict(threading.Lock)
 
 
+# --------------------------------------------------------- escrow move outcomes
+# Three outcomes, not a bool, because **"nothing to move" and "could not move" must not be
+# the same answer.** The caller uses this to decide whether the posture and escrow-index rows
+# may follow the machine's new name, and the two cases want opposite decisions: a machine with
+# no escrowed keys (the common case, and every case on a hub with escrow off) must still have
+# its posture follow the rename, while a machine whose keys could not be moved must not, or the
+# index would list keys under a name the secret store has nothing under. A bool conflated them
+# and silently stranded every un-escrowed machine's posture under the merged-away hostname.
+ESCROW_MOVED = "moved"      # keys were moved: the index MUST follow
+ESCROW_NOTHING = "nothing"  # no keys to move: the index may safely follow
+ESCROW_FAILED = "failed"    # keys could not be moved: the index must NOT follow
+
+
 def escrow_enabled(db_path):
     """Is the hub collecting recovery keys at all?
 
@@ -252,22 +265,28 @@ def move_escrow(log_dir, old, new):
     """Move a machine's escrowed keys to its new name, alongside bitlocker.rename_machine.
 
     Lives here rather than in bitlocker.py because opening the store needs the master key, and
-    bitlocker.py is deliberately Flask-free and secret-free. Silent when there is nothing to
-    move or nothing to move it with: a rename must not fail because a hub has no master key,
-    and the index rows the model half moves are what make the loss visible if it ever happens.
+    bitlocker.py is deliberately Flask-free and secret-free.
+
+    **Returns which of the three outcomes above happened, not whether it did something.** A
+    rename must not fail because a hub has no master key or because this machine never escrowed
+    anything -- both are ordinary, and in both the posture rows should still follow the new name.
+    Only a genuine failure to move a blob that exists is a reason to leave the index where it is.
     """
     master = backups.load_master_key()
     if master is None:
-        return False
+        # No master key: nothing is escrowed anywhere on this hub, so there is nothing to lose.
+        return ESCROW_NOTHING
     source_id = bitlocker.secret_id_for(old)
     dest_id = bitlocker.secret_id_for(new)
     # Load the source blob (the machine being merged away).
     if not backups.has_secret(log_dir, source_id):
-        return False
+        return ESCROW_NOTHING
     try:
         source_stored = backups.load_secret(log_dir, master, source_id)
     except (ValueError, OSError):
-        return False
+        # A blob that exists and will not open -- the master key changed under it. Refusing
+        # here is what keeps the index pointing at the name the keys are still filed under.
+        return ESCROW_FAILED
     # Load the destination blob if it already holds keys for the survivor.
     dest_stored = {}
     try:
@@ -275,7 +294,7 @@ def move_escrow(log_dir, old, new):
             dest_stored = backups.load_secret(log_dir, master, dest_id) or {}
     except (ValueError, OSError):
         # Destination unreadable -- refuse to overwrite; source keeps its copy.
-        return False
+        return ESCROW_FAILED
     # Union both machines' key sets; the survivor's keys win on collision
     # (same physical device, the survivor was still reporting).
     merged_keys = dict((dest_stored.get("keys") or {}))
@@ -287,6 +306,6 @@ def move_escrow(log_dir, old, new):
     try:
         backups.store_secret(log_dir, master, dest_id, merged)
     except (ValueError, OSError):
-        return False
+        return ESCROW_FAILED
     backups.delete_secret(log_dir, source_id)
-    return True
+    return ESCROW_MOVED

@@ -35,6 +35,7 @@ import bitlocker
 import fleet
 import permissions
 import settings
+import bitlocker_web
 from bitlocker_web import create_bitlocker_blueprint
 from fleet_web import create_fleet_blueprint
 from permissions_web import create_access
@@ -244,6 +245,43 @@ def main():
         check("...and is still readable, because turning collection off is not a delete",
               c.post("/api/bitlocker/PC-01/reveal",
                      json={"protector_id": "{REC-1}"}).status_code == 200)
+
+        print("\n== Moving escrowed keys with a machine's name ==")
+        # Three outcomes, and the caller acts on which one: only FAILED may hold the posture
+        # rename back. A bool here meant "nothing to move" read as failure, so the posture of
+        # every machine that had never escrowed a key -- most of the fleet, and all of it on a
+        # hub with escrow off -- silently stayed under the merged-away hostname after a merge.
+        check("a machine with no escrowed keys reports nothing to move, not failure",
+              bitlocker_web.move_escrow(log_dir, "NEVER-ESCROWED", "PC-NEW")
+              == bitlocker_web.ESCROW_NOTHING)
+
+        bitlocker_web.backups.store_secret(
+            log_dir, backups.load_master_key(), bitlocker.secret_id_for("HAS-KEYS"),
+            {"keys": {"{REC-M}": {"recovery_password": "4" * 48, "volume": "C:"}}})
+        check("...a machine that has them reports them moved",
+              bitlocker_web.move_escrow(log_dir, "HAS-KEYS", "SURVIVOR")
+              == bitlocker_web.ESCROW_MOVED)
+        moved = backups.load_secret(log_dir, backups.load_master_key(),
+                                    bitlocker.secret_id_for("SURVIVOR"))
+        check("...and the password is readable under the new name",
+              moved["keys"]["{REC-M}"]["recovery_password"] == "4" * 48)
+        check("...and gone from under the old one",
+              not backups.has_secret(log_dir, bitlocker.secret_id_for("HAS-KEYS")))
+
+        # A blob that exists and cannot be opened: the master key changed under it. This is the
+        # one case that must NOT report success, because moving the index without the passwords
+        # leaves the console offering keys the hub can no longer find.
+        with open(os.path.join(log_dir, "backup_secrets.json"), encoding="utf-8") as fh:
+            store = json.load(fh)
+        store[bitlocker.secret_id_for("UNREADABLE")] = store[bitlocker.secret_id_for("SURVIVOR")]
+        with open(os.path.join(log_dir, "backup_secrets.json"), "w", encoding="utf-8") as fh:
+            json.dump(store, fh)
+        check("an existing blob that will not open reports failure, not nothing",
+              bitlocker_web.move_escrow(log_dir, "UNREADABLE", "PC-02")
+              == bitlocker_web.ESCROW_FAILED)
+        check("...and it is left where it is rather than half-moved",
+              backups.has_secret(log_dir, bitlocker.secret_id_for("UNREADABLE")) and
+              not backups.has_secret(log_dir, bitlocker.secret_id_for("PC-02")))
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
