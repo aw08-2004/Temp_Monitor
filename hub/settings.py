@@ -771,9 +771,15 @@ REGISTRY = (
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
+# **A section missing from this tuple deletes its settings from the console.** `schema()`
+# walks SECTIONS, not REGISTRY, so a key whose section is absent still validates, still has
+# a default and still reads back -- it simply has no tab, no input, and no way for an
+# operator to change it. Nothing raises. `discovery` was lost here once, in a merge that
+# resolved a conflict in this tuple by keeping the other side, which is why
+# tests/test_settings.py asserts every registry key reaches the schema exactly once.
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
-            "directory", "firmware", "patches", "wake", "provisioning", "location", "map",
-            "policy", "rules", "sharing", "events", "ai", "security")
+            "directory", "firmware", "patches", "wake", "discovery", "provisioning",
+            "location", "map", "policy", "rules", "sharing", "events", "ai", "security")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;
