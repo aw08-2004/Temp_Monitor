@@ -490,6 +490,22 @@ Decisions worth carrying:
   discarded by a confirmation that named a different key, and nobody would ever see which
   one went. Same rule as `wipe.confirm_wipe`, checked against the machine name rather than
   a checkbox, for the same reason.
+- **The confirmed key_id is checked where the key is written, under one lock · hub
+  1.127.1.** Sending the key_id back only moves the question; it does not answer it unless
+  the check and the write cannot be separated. The route read the current key_id and
+  `import_master_key` re-read it a few lines later, and the hub serves Socket.IO with
+  `async_mode="threading"`, so two console tabs importing at once could interleave between
+  those two reads and discard a key whose key_id was never on either operator's screen --
+  precisely the failure the confirmation exists to prevent, just narrower. So
+  `import_master_key` now takes the confirmed `expect_key_id` and compares it against the
+  key it is about to replace, inside the same `threading.Lock` that guards the read, the
+  `.env` write and the re-wrap; `ensure_master_key` takes the same lock, because a
+  first-backup generation racing an import is the same window. A mismatch is
+  `KeyConfirmationStale`, answered as 409 with the key_id the hub actually holds, so the
+  console can re-render its warning against the real key rather than retrying blind. Its
+  own class rather than a bare `ValueError` because `refusals.refuse` would flatten it to
+  400, and "you confirmed against a key that is no longer there" is a conflict the operator
+  resolves by looking, not a malformed request.
 - **A credential store that cannot be written after the key changed is reported, not
   raised.** The `.env`-first ordering below rules out the other half of that window, not
   this one. By then `.env` already says the import happened and the next restart will

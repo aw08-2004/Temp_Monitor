@@ -402,7 +402,24 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             }), 409
 
         try:
-            imported = backups.import_master_key(env_path, raw, log_dir=log_dir)
+            # The confirmed key_id goes WITH the call rather than being checked only above.
+            # This check and the one above answer two different questions: this route read
+            # the key once to decide whether to ask, and backups.py reads it again to do the
+            # replacing, so only a check inside that second read can say the key being
+            # discarded is still the one named on screen. Without it the two reads are a gap
+            # two concurrent imports fit through -- see backups.KeyConfirmationStale.
+            imported = backups.import_master_key(
+                env_path, raw, log_dir=log_dir,
+                expect_key_id=current_id if replacing else None)
+        except backups.KeyConfirmationStale as e:
+            # 409, not 400: the request was well formed and the world moved underneath it.
+            # Same shape as the refusal above, so the console re-renders its warning against
+            # the key that is actually configured now and the operator confirms that one.
+            return jsonify({
+                "error": str(e),
+                "confirm_required": True,
+                "current_key_id": e.current_key_id,
+            }), 409
         except ValueError as e:
             return refusals.refuse(e)
         key_b64 = imported["key_b64"]
