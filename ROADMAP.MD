@@ -490,6 +490,26 @@ Decisions worth carrying:
   discarded by a confirmation that named a different key, and nobody would ever see which
   one went. Same rule as `wipe.confirm_wipe`, checked against the machine name rather than
   a checkbox, for the same reason.
+- **The confirmed key_id is checked where the key is written, under one lock · hub
+  1.127.1.** Sending the key_id back only moves the question; it does not answer it unless
+  the check and the write cannot be separated. The route read the current key_id and
+  `import_master_key` re-read it a few lines later, and the hub serves Socket.IO with
+  `async_mode="threading"`, so two console tabs importing at once could interleave between
+  those two reads and discard a key whose key_id was never on either operator's screen --
+  precisely the failure the confirmation exists to prevent, just narrower. So
+  `import_master_key` now takes the confirmed `expect_key_id` and compares it against the
+  key it is about to replace, inside the same `threading.Lock` that guards the read, the
+  `.env` write and the re-wrap; `ensure_master_key` takes the same lock, because a
+  first-backup generation racing an import is the same window. A mismatch is
+  `KeyConfirmationStale`, answered as 409 with the key_id the hub actually holds, so the
+  console can re-render its warning against the real key rather than retrying blind. Its
+  own class rather than a bare `ValueError` because `refusals.refuse` would flatten it to
+  400, and "you confirmed against a key that is no longer there" is a conflict the operator
+  resolves by looking, not a malformed request. The route sends what it saw on **every**
+  import, not only on the ones it asked about: a first import into an empty hub and a
+  re-import of the configured key ask nothing, so skipping the check there would leave the
+  same failure a door open -- and the one where nobody was shown a warning at all is the
+  worse half. `None` means "I saw no key", which is checked like any other claim.
 - **A credential store that cannot be written after the key changed is reported, not
   raised.** The `.env`-first ordering below rules out the other half of that window, not
   this one. By then `.env` already says the import happened and the next restart will
@@ -2676,9 +2696,9 @@ what survived, and why the rest did not. The two decisions that framed the triag
 
 | PRD item | Verdict |
 |---|---|
-| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent half unreleased); Intune sync is not → **#18**. |
+| FR-01 Asset discovery | **Partial.** AD/LDAP computer sync is #4. The subnet sweep and shadow-IT flag are built (hub 1.125.0, agent 3.37.0); Intune sync is not → **#18**. |
 | FR-02 Monitoring | **Mostly done.** CPU, RAM, disk, network and thermal all ship. GPU and disk-I/O counters are a small addition to an existing reporter. Event-log mining → **#16**; anomaly baselining shipped with **#17** (hub 1.124.0, `correlate.baselines`). |
-| FR-03 Alert brain | **Done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`); the `event.*` rules variable, so a counter can be alerted on rather than only read, in hub 1.128.1 (`rules.py` / `events.py`). |
+| FR-03 Alert brain | **Done** — grouping, the causal claim, anomaly baselining, the recommended-fix wording and the join onto #16's event rows ship in hub 1.124.0 (**#17**, `correlate.py`); the `event.*` rules variable, so a counter can be alerted on rather than only read, in hub 1.128.0 (`rules.py` / `events.py`). |
 | FR-04 Automation | **Largely done.** Rules, scripts and multi-step packages cover the scripting engine, the conditional logic and the script library. Self-healing watchdogs → **#20**. The drag-and-drop workflow builder and the RPA "new user creation" flow are **rejected**: a visual builder over a rules engine one team uses is UI for its own sake, and AD/Exchange/Teams provisioning is a different product. |
 | FR-05 Patching | **Missing entirely** → **#14**, the first thing built. |
 | FR-06 Remote access | **Done** — remote view/control, an interactive terminal and hub-proxied file transfer all ship. Session recording and malware-scanning on upload → **#19**. |
@@ -2902,7 +2922,7 @@ can be born into the ring.
 
 ---
 
-## 🚧 16. Event log mining   ·   hub 1.118.0 · agent unreleased
+## 🚧 16. Event log mining   ·   hub 1.118.0 · agent 3.37.0
 
 Windows Event Log (Security, Application, System) ingested on the agent and correlated into
 alerts — the PRD's example, 4625 failed logons, is the right one. This is the first genuinely
@@ -2913,7 +2933,7 @@ before the first row is written, not after.
 
 Its real value is as an input to #17, which is why it comes first.
 
-**Collection — built (hub 1.118.0, agent source on `main`).** `events.py` (subscriptions,
+**Collection — built and released (hub 1.118.0, agent 3.37.0).** `events.py` (subscriptions,
 the versioned document agents receive, ingest, roll-up, caps, retention, counters) /
 `events_web.py`, an Events page in the console, and on the agent `Events/WindowsEventReader.cs`
 (the query), `Events/EventLogReporter.cs` (the payload) and `Events/EventSubscriptionStore.cs`
@@ -2976,22 +2996,28 @@ it — the same trap `manage_firmware` avoided by shipping live.
 - **No per-group targeting.** The subscription set is fleet-wide: one document, one version,
   every agent. Per-`device_groups` targeting is a real want and a real cost (a document and a
   version per machine on a ten-second heartbeat), and nothing yet needs it.
-- **No agent release.** The agent half is source on `main` at 3.36.0; it reaches the fleet
-  with the next `agent/release.ps1` cut. The hub needs no gate for that: this feature has no
-  per-machine console control to hide, so a machine on an older agent simply never reports and
-  `machine_event_state` says "we have not been told" rather than "nothing happened". That
-  distinction is the reason that table exists.
-- **Never run against a real event log.** The hub half is tested (`tests/test_events.py`).
-  The agent half **compiles** (see the note under the hardware validation about building it from
-  Linux, which is how the two faults that shipped in the first cut were found), but
-  `EventLogTests.cs` has never been *run*: the test host needs `Microsoft.WindowsDesktop.App`,
-  which exists only on Windows. So the pure parts are written down rather than verified, the
-  query has never been executed against a Windows event service, and no record has ever made
-  the trip. See the hardware validation note.
+- ~~**No agent release.**~~ **Released** in agent **3.37.0** on 2026-09-22 (`4d10bf3`; re-cut as
+  3.37.1 the next day for #20), alongside BitLocker escrow and network discovery. No hub gate
+  was needed and none was added: this feature has no per-machine console control to hide, so a
+  machine on an older agent simply never reports and `machine_event_state` says "we have not
+  been told" rather than "nothing happened". That distinction is the reason that table exists,
+  and it is now the thing to read on the Events page while the fleet is mid-upgrade.
+- **Never verified against a real event log, and now it can be.** The hub half is tested
+  (`tests/test_events.py`). The agent half **compiles** (see the hardware validation note about
+  building it from Linux, which is how the two faults that shipped in the first cut were
+  found), but `EventLogTests.cs` has never been *run*: the test host needs
+  `Microsoft.WindowsDesktop.App`, which exists only on Windows. So the pure parts are written
+  down rather than verified.
+  **What changed with the release is that the query is now executing on real machines**, which
+  it never had before. Until somebody looks at the Events page and sees rows, the honest state
+  of this feature is *deployed and unconfirmed* -- and the failure mode it was designed around
+  makes that gap invisible, because a fleet that collects nothing looks exactly like a fleet
+  with nothing to report. The five checks are in the hardware validation note; the first two
+  cost about a minute each.
 
 ---
 
-## ✅ 17. Alert correlation and recommended fixes   ·   hub 1.124.0, `event.*` rules variable hub 1.128.1   ·   `correlate.py` / `correlate_web.py`
+## ✅ 17. Alert correlation and recommended fixes   ·   hub 1.124.0, `event.*` rules variable hub 1.128.0 (drop handling corrected in 1.131.1)   ·   `correlate.py` / `correlate_web.py`
 
 The PRD's "Alert Brain". One machine with high CPU, low memory and a dead service should be
 **one** bundle, not three alerts. The substrate was already here — `alerts.py` keeps episodes,
@@ -3083,7 +3109,7 @@ it was.
 
 ### Not done
 
-* **The `event.*` rules variable landed in hub 1.128.1**, closing the last of #16's hand-off:
+* **The `event.*` rules variable landed in hub 1.128.0**, closing the last of #16's hand-off:
   `event.count`, `event.critical_count`, `event.error_count`, `event.warning_count` and a
   per-id `event.id_4625.count`, all over the `events.summary_window_seconds` window the
   console's own summary uses. `facet_for_variable` already routes the `event.` family, so an
@@ -3098,7 +3124,8 @@ it was.
     validated against the live subscription set. Validating would mean deleting a subscription
     silently makes every rule mentioning it unsaveable, so an operator editing an unrelated
     clause on an old rule would be stopped by a message about a variable they never touched.
-  * **A report the per-report cap truncated is UNKNOWN.** `MAX_EVENTS_PER_REPORT` takes the
+  * **A report the per-report cap truncated is UNKNOWN** -- corrected in hub 1.131.1, after
+    1.128.0 shipped with the opposite behaviour. `MAX_EVENTS_PER_REPORT` takes the
     TAIL of an oversized report, so two hundred Information events followed by one Critical
     arrive as two hundred Information events with no error attached, and
     `event.critical_count == 0` reads as a measurement. The first version of this change
@@ -3144,7 +3171,7 @@ will not until somebody has a month of real bundles to count.
 
 ---
 
-## 🚧 18. Network discovery and shadow IT   ·   sweep + classification hub 1.125.0 (agent half unreleased)
+## 🚧 18. Network discovery and shadow IT   ·   sweep + classification hub 1.125.0 · agent 3.37.0
 
 The half of FR-01 that #4 does not cover: an IP-range sweep from an agent already on that
 subnet — the same peer-relay trick #10 uses for Wake-on-LAN, since the hub is usually not on
@@ -3161,8 +3188,8 @@ again: everything below narrows the feature until it cannot be pointed anywhere.
 a Discovery card on the machine page's Network tab, one `discovery.*` setting, and one new
 command type — `network_sweep`, issued to a machine that is already on the subnet. Agent
 half: `Network/NetworkSweepExecutor.cs` and `FleetClient.ReportSweepAsync`. **The agent half
-is on `main` unreleased** — the hub ships first, as always, and the sweep starts working on a
-machine when its agent is next cut and propagates.
+shipped in agent 3.37.0** on 2026-09-22; the hub went first, as always, so the sweep starts
+working on each machine as that release propagates.
 
 **Both open parameters resolved, and both resolved narrowly:**
 
@@ -3234,12 +3261,12 @@ finding #10's `NicReader` produced on first contact.
 
 ---
 
-## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.121.0**
+## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0**
 
 Three small things from FR-06 and FR-07 that share no code but are each about a day. The
 first is built; the other two are not.
 
-- **BitLocker key escrow.** ✅ **Done, hub 1.121.0** — see below. Auto-enable is deliberately
+- **BitLocker key escrow.** ✅ **Done, hub 1.131.0** — see below. Auto-enable is deliberately
   NOT part of it; see *Rejected alternatives*.
 - **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
   inventory already collects, plus a policy list — no new channel, and worth being honest in
@@ -3249,7 +3276,13 @@ first is built; the other two are not.
   recording a colleague's screen is a decision to take deliberately, not a default to leave
   on.
 
-### BitLocker key escrow · hub 1.121.0 · `bitlocker.py` / `bitlocker_web.py`
+### BitLocker key escrow · hub 1.131.0 · `bitlocker.py` / `bitlocker_web.py`
+
+*Version history worth keeping: PR #74 merged carrying 1.121.0 while `main` had already
+moved to 1.125.1, so git took main's higher value and the feature landed with **no bump of
+its own**. It reaches a deployed hub only because a later PR bumped past it. This is the
+third time a parallel branch has lost a version this way -- a clean merge proves nothing
+about `HUB_VERSION`, because both sides edited the same line.*
 
 **The failure this closes is the one that costs a machine.** BitLocker locks a volume on its
 own — a firmware update that moves the TPM measurement, a disk moved into another chassis, a
@@ -3338,15 +3371,16 @@ PC is gone".
 - **The agent half has never been compiled or run.** There is no .NET toolchain on the machine
   it was written on and no CI job builds the Windows agent, so `BitLockerReader` is syntax-
   checked and reviewed against the `Win32_EncryptableVolume` documentation and nothing more.
-  It also carries no agent release: source stays at 3.36.0 and this rides whichever release is
-  cut next, the way #14 and #21 shared one.
+  It was released in agent **3.37.0** on 2026-09-22, riding the same cut as #16 and #18 the
+  way #14 and #21 shared one. Compiling it is possible now and was not then; see the hardware
+  validation note. Running it against an encrypted volume is still owed.
 - **`PrecisionFactor`, `GetLockStatus` and free-space wiping are not read.** The class exposes
   `ConversionStatus` and `EncryptionMethod` as plain properties, which is all the card shows;
   the method forms exist for real-time answers nobody is asking for here.
 
 ---
 
-## ✅ 20. Self-healing watchdogs   ·   hub 1.127.0 + the agent's next release
+## ✅ 20. Self-healing watchdogs   ·   hub 1.127.0 + agent 3.37.1
 
 FR-04's watchdogs: a service stops, the agent restarts it inside two minutes, and only an
 escalation reaches a human. Shipped as `hub/watchdogs.py` + `hub/watchdogs_web.py`, its own
@@ -4174,6 +4208,29 @@ grouping is a statistic over the history table rather than a model's opinion, an
 grouping is the one error in a report nobody can check. When #17 lands it becomes one more
 section of `ai.summary_figures`, computed the same way.
 
+**The API key left the resolved provider config at 1.132.0.** `ai.provider_config()` used to
+return it in the dict beside its error string, so the error an operator reads and the credential
+a request carries came out of the same `return`. Nothing leaked, and that is the point: any
+reader had to prove by hand that the two halves stayed apart, and CodeQL — which cannot — read
+every `error` unpacked from an `ai.*` entry point as the key itself and failed the branch that
+printed one in a test name. `complete()` and `refresh_models()` take the key as their own
+parameter now and build the one header that needs it; `/api/ai/status` still lists its fields
+one at a time, which is belt and braces rather than the guard it used to be. *Rejected: renaming
+the test variables and leaving the shape*, which silences the scanner and keeps the thing that
+made the alert plausible.
+
+**A key never crosses the network in clear, even where a prompt may.** `check_provider_url` has
+always allowed plaintext `http://` to a private address — `ai.allow_private_endpoint` defaults on,
+and the recommended deployment is Ollama on loopback — and that decision was made about prompts.
+`ai.check_key_transport` draws the line differently for the credential: a prompt seen on the wire
+is a disclosure bounded by that prompt, while a Bearer token seen on the wire is replayable by
+whoever saw it, on somebody else's bill, until the key is rotated. Loopback stays exempt, because
+nothing leaves the machine and that deployment has no key anyway. The one configuration this
+refuses is a provider on `http://` elsewhere on the network *with* an API key set.
+*Rejected: withholding the key and sending the request regardless*, which answers with the
+provider's own 401 and points an operator at regenerating a credential that was never at fault.
+Raised by a review bot on PR #84, on lines that change had just written.
+
 **Open parameters.** How much telemetry may leave the hub by default — `ai.send_machine_names`
 starts off, which is right for a hosted provider and probably wrong for one on the same LAN.
 Whether `SHAREABLE_TEXT` should become operator-editable rather than a constant, once somebody
@@ -4235,7 +4292,7 @@ a helpdesk actually hits them:
 
 ### Phases
 
-**A and B ship as one release**, hub first and then agent 3.37.0, and are built in that order
+**A and B ship as one release**, hub first and then one agent MINOR, and are built in that order
 within one branch: the sheet is what proves the shape of the software section, and the section
 is what makes the sheet worth printing. Nothing goes to the fleet until both halves exist.
 
@@ -4249,25 +4306,37 @@ or which feature would fill them, rather than being absent. That is no longer a 
 B, but it is still load-bearing: an agent release reaches the fleet over about fifteen
 minutes, the Linux and Android agents answer none of these questions, and a machine that has
 been offline for a week reports nothing when it returns. A Software section reading "waiting
-for agent 3.37.0 on this machine" is the difference between a rollout in progress and a PC
+for a newer agent on this machine" is the difference between a rollout in progress and a PC
 with nothing installed on it.
 
-**B — installed software.** `SoftwareInventoryReporter` on the agent (hub + **agent 3.37.0**),
-walking both HKLM registry views plus per-user hives for name, version, publisher, install
-date, install location and the uninstall string; change-only behind a content hash, on the
-inventory loop, never on the heartbeat path. Hub side is a `software.py` / `software_web.py`
+**B — installed software.** `SoftwareInventoryReporter` on the agent (hub + **one agent
+MINOR**), walking both HKLM registry views plus per-user hives for name, version, publisher,
+install date, install location and the uninstall string; change-only behind a content hash, on
+the inventory loop, never on the heartbeat path. Hub side is a `software.py` / `software_web.py`
 pair over a `machine_software` table keyed `(machine, id)`, and a **fleet software catalog** —
-one row per product and version with the machine count behind it, which is the view that
-answers a licence question and the one `machine_apps` already proves the shape of
-(`apps.py:232`). The console gates on `MIN_SOFTWARE_AGENT = '3.37.0'`.
+one row per product and version with the machine count behind it, which is the view that answers
+a licence question and the one `machine_apps` already proves the shape of (`apps.py:232`). The
+console gates on `MIN_SOFTWARE_AGENT`, set to whatever MINOR the cut actually takes.
+
+**The MINOR is deliberately not named here, and this entry used to name 3.37.0.** That was
+written when 3.37.0 was the next number; it was cut on 2026-09-22 carrying #16, #18 and #19,
+and re-cut as 3.37.1 for #20, neither of which contains `SoftwareInventoryReporter`. A planned
+entry that names an already-released number is not just stale prose: `MIN_SOFTWARE_AGENT` is a
+hub-side **compatibility gate**, so shipping it as `'3.37.0'` would make the console offer a
+Software section on every machine already in the field and read an empty answer as "nothing
+installed". Whoever cuts this reads the released number first and takes the next MINOR above it.
+Nobody reserves agent numbers in advance and nobody can: a MINOR becomes real only when
+`agent/release.ps1` cuts it, which is the whole reason a number written into a *planned* entry
+is right the day it is written and wrong the day somebody cuts a release. Same for C below,
+which must land a MINOR above B's.
 
 Shipping B with A is what makes that gate constant honest on day one. **Deploy order is hub
 first, then the agent** (VERSIONING.md), so there is a window on every release where the
 console offers a Software section and no machine has answered yet — which is precisely the
 state A's "waiting for" wording was written for.
 
-**C — hardware detail.** `HardwareInventoryReporter` (hub + **agent 3.38.0**), one WMI sweep
-per component class, stored as a single change-only blob in `machine_hardware` on the
+**C — hardware detail.** `HardwareInventoryReporter` (hub + **the agent MINOR after B's**), one
+WMI sweep per component class, stored as a single change-only blob in `machine_hardware` on the
 `machine_bios` precedent — components are read together, replaced together, and never written
 individually. Fills the report's Hardware section and, incidentally, gives the rules engine
 "machines with less than 8 GB" without a script.
@@ -5225,9 +5294,9 @@ This is that list, so nothing is quietly skipped:
 | **show_message** | Send a notice from a rule with a Yes / No / Later preset: the heads-up banner appears with three buttons, pressing one reports that id inside a second and the console's rule history shows the follow-up firing; swiping the notice away reports `dismissed` and not a timeout; a message left alone for its timeout reports `timeout` and the notification is gone afterwards; with notifications switched off for the agent in Settings it comes back `no_session` with the reason, and NOT as a failed command |
 | **E** | Grant usage access by hand and confirm the `usage_access` capability appears and the Usage fold populates; confirm a device WITHOUT it says so rather than showing zeroes; set a 5-minute budget on a test app and confirm it suspends **with the device off the network**; set a curfew ending in two minutes and confirm it lifts on its own; confirm the wrapped window by setting one that spans midnight; confirm date and time settings are locked to network time |
 
-**Also owed, and not from #23: roadmap #16's event log query.** Nothing in the collection
-half has ever run against a Windows event service. On the first machine that gets the new
-agent, confirm that a Security subscription for 4625 returns records at all (the XPath, the
+**Also owed, and not from #23: roadmap #16's event log query.** No longer hypothetical:
+agent **3.37.0** shipped on 2026-09-22, so this is running in the field now and nothing about
+it has been confirmed. On any machine that has taken the new agent, confirm that a Security subscription for 4625 returns records at all (the XPath, the
 `timediff` window and the level mapping are all unexercised); that Information on Security
 returns records rather than nothing, which is what the level-0 mapping exists for; that a
 channel LocalSystem cannot read comes back as `error` on the report instead of costing the
@@ -5359,21 +5428,21 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     accident but the security argument itself: the borrowing hub never speaks to an agent, so
     there was nothing to add to one. That also makes it the first feature since #7 that is
     fully live the moment the hub is deployed, with no fifteen-minute propagation to wait on.
-16. **#16 Event log mining** — **collection built, hub 1.118.0**; the agent half is source
-    on `main` and reaches the fleet with the next agent cut. Taken before #17, because it is
+16. **#16 Event log mining** — **collection built and shipped, hub 1.118.0 + agent 3.37.0**;
+    the collector is running in the field and no record has been confirmed arriving yet. Taken before #17, because it is
     one of the two inputs that make correlation worth doing. Its own risk was volume rather
     than mechanism, and that risk is settled three times over: the filter runs on the machine
     as one XPath per channel, identical repeats are rolled up into a count instead of a row,
     and both the retention window and a per-machine row cap existed before the first row was
     written. The rule condition over the collected counters was deliberately NOT here — it is
-    a change to the rules engine, so it belongs to #17, and it shipped there in hub 1.128.1
+    a change to the rules engine, so it belongs to #17, and it shipped there in hub 1.128.0
     reading `events.summary`'s counters narrowed to one machine.
 17. **#17 Alert correlation and recommended fixes** — **grouping, the causal claim, anomaly
     baselining and the wording layer shipped in hub 1.124.0**, and a bundle now carries the
     #16 events that fall inside its own window. Both dependencies landed first as planned:
     patch outcomes since 1.92.0, event counters since 1.118.0. The provider the language
     layer was gated on turned out to be #24's, so this item introduced no new plumbing after
-    all. The other half of #16's hand-off followed in **hub 1.128.1** as its own change rather
+    all. The other half of #16's hand-off followed in **hub 1.128.0** as its own change rather
     than folded in here: `event.*` variables in the rules engine, so "more than twenty failed
     logons on one machine in the window" is now a condition an operator can write. **Item
     complete.**
@@ -5383,21 +5452,19 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     late for that reason rather than for difficulty. The Intune cross-reference and a
     scheduled sweep were both left out on purpose — see the entry above.
 19. **#19 Endpoint security odds and ends** — three unrelated small items; each can be pulled
-    forward on its own if a need appears, and **BitLocker escrow was** (hub 1.121.0), on that
+    forward on its own if a need appears, and **BitLocker escrow was** (hub 1.131.0), on that
     line's own argument: it reuses the `backups.py` secret store and is the smallest genuinely
     useful thing on this list. Pulled ahead of #16–#18 because it needed none of them and
     because a fleet with no escrowed keys is losing machines today rather than later. Shadow-AI
     detection now has a real prerequisite that did not exist when this was written — #25 phase
     B's Windows software inventory — and remote session recording is still the one with a
     question attached rather than a cost.
-20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half on `main` as
-    unreleased source until the next agent release is cut. Sequenced last on the belief that it
-    needed the rules engine to grow a second evaluation site; building it established that it
-    must not, and the entry above records why. What it actually needed was the target grammar
-    and the `issue_commands` gate, both of which already existed.
-20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
-    engine to grow a second evaluation site (on the agent), and that is a bigger change to a
-    working feature than any of the above make.
+20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half carried
+    by the 3.37.1 re-cut of 2026-09-23 rather than by 3.37.0, whose release notes predate it.
+    Sequenced last on the belief that it needed the rules engine to grow a second evaluation
+    site; building it established that it must not, and the entry above records why. What it
+    actually needed was the target grammar and the `issue_commands` gate, both of which
+    already existed.
 21. ~~**#21 Release channels**~~ — done, hub 1.93.0 + agent 3.35.0. Not from the PRD; asked
     for directly, and built alongside #14 rather than after it because the two shipped in one
     agent release. Its own prerequisite was nothing, but it makes every item above it safer to
@@ -5413,11 +5480,13 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     page may not say than on what it does.
 23. **#25 Inventory report** — no prerequisite. Its sheet is a join over tables that already
     exist and has no agent half, so it can be built the day anybody wants it, but **it does not
-    ship alone**: A and B go out as one release pair, hub then agent 3.37.0, built in that order
+    ship alone**: A and B go out as one release pair, hub then one agent MINOR, built in that order
     on one branch. Its later phases are the reverse of everything above them — the hub work is
     small and the *collection* is the feature, which is why they are split by agent release
-    (software in 3.37.0, hardware in 3.38.0) rather than by console surface. Pulled forward of
-    #16–#20 in practice: it is the only item on this board a helpdesk asks for by name.
+    (software in one MINOR, hardware in the next) rather than by console surface. The numbers
+    are unallocated on purpose: this entry named 3.37.0 and 3.38.0 until 3.37.x shipped without
+    either phase in it. Pulled forward of #16–#20 in practice: it is the only item on this
+    board a helpdesk asks for by name.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

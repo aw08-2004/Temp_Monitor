@@ -242,7 +242,7 @@ def init_events_db(db_path):
             )
             """
         )
-        # `dropped_last` was added in hub 1.128.1, and the cumulative `dropped` beside it is
+        # `dropped_last` was added in hub 1.131.1, and the cumulative `dropped` beside it is
         # the reason. **A cumulative counter cannot answer "is the number in front of me
         # complete"** -- it says a machine lost something once, and stays saying it forever,
         # so a rule reading it would either ignore every loss or distrust a machine for the

@@ -142,7 +142,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.128.1"
+HUB_VERSION = "1.131.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3456,11 +3456,21 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Encryption posture and the escrow index follow the hostname (roadmap #19), and the
     # escrowed passwords with them -- the secret blob is keyed by machine name, so moving the
     # index without it would leave the console listing keys the hub can no longer find.
-    # The secret-store move is performed and verified before the database rename so that a
-    # failure (unavailable master key, unreadable source blob) preserves the dropped-to-
-    # survivor mapping rather than leaving the index pointing at keys the hub can no longer find.
-    if bitlocker_web.move_escrow(LOG_DIR, dropped, survivor):
+    # The secret-store move runs first, and only a genuine FAILURE holds the database rename
+    # back -- a machine with no escrowed keys, or a hub with no master key, still has its
+    # posture follow the name. Gating on "did it move a blob" instead stranded the posture of
+    # every un-escrowed machine, which is most of them, under the merged-away hostname.
+    escrow_move = bitlocker_web.move_escrow(LOG_DIR, dropped, survivor)
+    if escrow_move != bitlocker_web.ESCROW_FAILED:
         bitlocker.rename_machine(DB_PATH, dropped, survivor)
+    else:
+        # The keys exist and could not be moved, so posture and index deliberately stay under
+        # the old name, where the blob still is: the two halves remain consistent and the keys
+        # are recoverable once the master key is, by re-running the merge. Audited at security
+        # level because the merge otherwise reports plain success and this is the one piece of
+        # it that did not happen -- and what did not happen is custody of a recovery key.
+        fleet.audit(DB_PATH, actor, "bitlocker_escrow_move_failed", dropped,
+                    {"survivor": survivor}, level=fleet.LEVEL_SECURITY)
     # Firmware update targets follow too, and the survivor's own row wins a collision --
     # both rows describe one physical machine, and it only needs flashing once.
     firmware.rename_machine(DB_PATH, dropped, survivor)

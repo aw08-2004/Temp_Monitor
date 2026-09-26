@@ -1546,7 +1546,8 @@ the absence of something it never looked for:
   seconds — but for a PC switched off before a holiday it is a week, and a week of confident
   zeros is exactly what you do not want a brute-force rule reading.
 
-> **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.1.
+> **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0,
+> with the truncated-report case corrected in hub 1.131.1.
 > The agent half is in the source tree and reaches the fleet with the next agent release, so
 > nothing is collected until then, and until it is, every counter above reads unknown. Grouping
 > events into alert bundles is roadmap #17 and shipped in hub 1.124.0 — see

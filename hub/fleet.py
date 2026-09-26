@@ -660,6 +660,7 @@ ACTION_LEVELS = {
     # Security level rather than notice: it means every recovery key stored before that change
     # is currently unreadable, which is the same class of event as losing a credential.
     "bitlocker_escrow_unreadable": LEVEL_SECURITY,
+    "bitlocker_escrow_move_failed": LEVEL_SECURITY,
     "backup_key_create": LEVEL_SECURITY,
     "backup_key_reveal": LEVEL_SECURITY,
     "backup_key_escrowed": LEVEL_SECURITY,
