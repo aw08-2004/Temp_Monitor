@@ -401,6 +401,23 @@ def test_merge_refused_rather_than_stranding_recovery_keys():
               "BACKUP_MASTER_KEY" in (body.get("error") or ""))
         check("...and the duplicate is still there afterwards",
               machine_exists("keyDrop") and machine_exists("keyKeep"))
+
+        # The survivor's side of the same failure, which a source-only check let straight through.
+        # move_escrow unions both machines' key sets, so it opens the SURVIVOR's blob too and
+        # refuses when that one will not open -- the shape of a hub whose long-lived machine was
+        # escrowed before a master key rotation and whose duplicate appeared after it. Here the
+        # dropped machine's own keys are perfectly readable, which is what made it look safe.
+        report("destKeep", "SER-ESCROW-2")
+        report("destDrop", "SER-ESCROW-2")
+        enroll("destKeep")
+        _unopenable_blob("destKeep", sealed_for="destDrop")
+        _report_posture("destDrop")
+        check("a readable dropped machine is still refused when the SURVIVOR's blob will not open",
+              app.merge_machines("destKeep", "destDrop") is False)
+        check("...and both rows survive, so restoring the key and merging again works",
+              machine_exists("destDrop") and machine_exists("destKeep"))
+        check("...and the dropped machine's own keys were never touched",
+              backups.has_secret(app.LOG_DIR, bitlocker.secret_id_for("destDrop")))
     finally:
         os.environ.pop("BACKUP_MASTER_KEY", None)
 

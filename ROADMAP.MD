@@ -3326,7 +3326,7 @@ PC is gone".
   whether there is a transferable secret to ask for; shipping the full enum invites the hub to
   grow opinions about TPM-and-PIN that belong on the machine, which is #9's argument for
   keeping vendor dispatch off the hub.
-- **A machine merge is refused when the dropped name's escrowed keys cannot be moved.** A merge
+- **A machine merge is refused when the escrowed keys either side holds cannot be moved.** A merge
   moves posture, escrow index and secret blob together, and the blob is the one of the three with
   no retry: by the time it moves, the dropped hostname has no `machine_info` row, so
   `/api/machines/merge` answers 404 for it and "restore the master key and merge again" is not
@@ -3334,6 +3334,11 @@ PC is gone".
   (`bitlocker_web.escrow_blocked`), the merge does not happen, the duplicate stays on the board
   where somebody can see it, and the refusal is audited at security level. A machine with nothing
   escrowed is never blocked -- most of the fleet, and all of it on a hub with no master key.
+  **Both blobs are read, not just the dropped one.** The move unions the two key sets, so an
+  unopenable survivor blob fails it just as hard, and that is the likelier hub: the long-lived
+  machine escrowed before a master key rotation, the duplicate after it. A source-only check
+  cleared that merge and stranded the keys anyway, which is the whole failure again with the
+  operands swapped.
 
 ### Rejected alternatives
 

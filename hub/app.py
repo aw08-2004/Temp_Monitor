@@ -3399,12 +3399,13 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # and /api/machines/merge answers 404 for that name, so "fix the master key and merge again"
     # is not a thing an operator can do. Refusing up front costs a duplicate row that is already
     # there and keeps the retry available.
-    if bitlocker_web.escrow_blocked(LOG_DIR, dropped):
+    if bitlocker_web.escrow_blocked(LOG_DIR, dropped, into=survivor):
         fleet.audit(DB_PATH, actor, "machine.merge_refused", dropped,
                     {"survivor": survivor,
-                     "reason": "the hub holds escrowed BitLocker recovery keys for this machine "
-                               "that it cannot read, so a merge would leave them under a "
-                               "hostname the console no longer shows"},
+                     "reason": "the hub cannot read the escrowed BitLocker recovery keys this "
+                               "merge would have to move -- either side's blob failing to open "
+                               "strands this machine's under a hostname the console no longer "
+                               "shows"},
                     level=fleet.LEVEL_SECURITY)
         return False
     with get_db_conn() as conn:

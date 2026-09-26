@@ -287,6 +287,31 @@ def main():
         check("...while a machine with nothing escrowed is never blocked",
               not bitlocker_web.escrow_blocked(log_dir, "NEVER-ESCROWED"))
 
+        # The SURVIVOR's blob is the other half of the same question, and asking only about the
+        # dropped machine missed it. move_escrow unions both key sets, so it opens the destination
+        # too and refuses just as hard -- which is a hub whose survivor was escrowed before a
+        # master key rotation and whose duplicate was escrowed after it. That merge cleared a
+        # source-only check, deleted the dropped machine_info row, and then stranded exactly the
+        # keys the check exists to protect. Reading the destination costs what reading the source
+        # costs, so there was never a reason for the check to be the narrower of the two.
+        bitlocker_web.backups.store_secret(
+            log_dir, backups.load_master_key(), bitlocker.secret_id_for("GOOD-SRC"),
+            {"keys": {"{REC-S}": {"recovery_password": "5" * 48, "volume": "C:"}}})
+        check("a machine whose own blob opens is not blocked on its own account",
+              not bitlocker_web.escrow_blocked(log_dir, "GOOD-SRC"))
+        check("...but IS blocked when the name it would merge INTO holds a blob that will not open",
+              bitlocker_web.escrow_blocked(log_dir, "GOOD-SRC", into="UNREADABLE"))
+        check("...which is the answer the move gives too",
+              bitlocker_web.move_escrow(log_dir, "GOOD-SRC", "UNREADABLE")
+              == bitlocker_web.ESCROW_FAILED)
+        check("...leaving the source's password readable under its own name",
+              backups.load_secret(log_dir, backups.load_master_key(),
+                                  bitlocker.secret_id_for("GOOD-SRC"))
+              ["keys"]["{REC-S}"]["recovery_password"] == "5" * 48)
+        check("...and a destination that holds nothing does not block anything",
+              not bitlocker_web.escrow_blocked(log_dir, "GOOD-SRC", into="NEVER-ESCROWED"))
+        backups.delete_secret(log_dir, bitlocker.secret_id_for("GOOD-SRC"))
+
         # A blob with no master key to open it. The secret id is the AAD, so a blob is never
         # copied to a new name -- it is opened and sealed again -- and without the key that
         # cannot happen. Reading this as "nothing to move" renamed the index away from passwords
