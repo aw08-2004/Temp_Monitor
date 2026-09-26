@@ -287,20 +287,25 @@ def is_enabled(config):
     return bool((config or {}).get("enabled"))
 
 
-def provider_config(config, api_key=""):
+def provider_config(config):
     """Settings -> (error, resolved). The one place a half-configured provider is caught.
 
     `config` is injected rather than read from settings here, the rule rules.py follows: this
     module stays unit-testable against a dict, and the caller re-reads the settings per request
     so an admin switching the feature off is obeyed on the next call.
 
-    `api_key` comes from the environment via app.py for the same reason AGENT_ENROLLMENT_SECRET
-    does -- settings.py is not a secret store, and a module that reads os.environ itself is one
-    whose configuration a test cannot vary.
+    **The API key is deliberately not in what this returns.** It used to be, and the shape was
+    wrong in a way that took a scanner to notice: the resolved dict travels a long way -- into
+    `/api/ai/status`'s response builder, into `answer_machine_question`'s prompt decisions --
+    while the error string travels back to an operator's screen, and both come out of the same
+    `return`. Anything reading this function has to prove by hand that the second half never
+    reaches the first. It no longer can: `complete()` and `refresh_models()` take the key as
+    their own parameter, which is where the one header that needs it is built. See #24.
 
-    **An empty key is not an error.** A local Ollama needs none, and refusing to run without
-    one would make the LAN-only deployment -- the one with no data-egress question attached at
-    all -- the hardest of the three to configure.
+    This function never asks about a key at all, which is also why **an empty key is not an
+    error** anywhere: a local Ollama needs none, and refusing to run without one would make the
+    LAN-only deployment -- the one with no data-egress question attached at all -- the hardest
+    of the three to configure.
     """
     config = config or {}
     if not is_enabled(config):
@@ -320,7 +325,6 @@ def provider_config(config, api_key=""):
         "wire": preset.wire,
         "base_url": base_url,
         "model": model,
-        "api_key": str(api_key or ""),
         "max_tokens": int(config.get("max_tokens") or 1024),
         "timeout": int(config.get("timeout_seconds") or 60),
         "send_machine_names": bool(config.get("send_machine_names")),
@@ -351,7 +355,7 @@ def _unwrap_v4(address):
     return address
 
 
-def endpoint_config(config, api_key=""):
+def endpoint_config(config):
     """Everything provider_config resolves EXCEPT the model. Returns (error, resolved).
 
     Its own function because `provider_config` refuses when no model is set, and the one
@@ -374,7 +378,6 @@ def endpoint_config(config, api_key=""):
         "provider": preset.name,
         "wire": preset.wire,
         "base_url": base_url,
-        "api_key": str(api_key or ""),
         "timeout": int(config.get("timeout_seconds") or 60),
     }
 
@@ -456,13 +459,16 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
     to point at something on the LAN by default -- so "the admin configured it" is a reason to
     trust the intent, not the bytes.
     """
-    error, resolved = provider_config(config, api_key)
+    error, resolved = provider_config(config)
     if error:
         return error, None
 
     headers = {"Content-Type": "application/json", "User-Agent": "FleetHub-AI/1.0"}
-    if resolved["api_key"]:
-        headers["Authorization"] = f"Bearer {resolved['api_key']}"
+    # Straight from the parameter, not out of `resolved` -- see provider_config's docstring.
+    # This function and refresh_models are the only two places the key is read at all.
+    key = str(api_key or "")
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     body = {
         "model": resolved["model"],
         "messages": list(messages or []),
@@ -582,13 +588,14 @@ def refresh_models(db_path, config, *, api_key="", now=None):
     for a minute should not also lose the picker they were using -- and an empty list looks
     identical to "this provider serves nothing", which is a lie with no way to notice it.
     """
-    error, resolved = endpoint_config(config, api_key)
+    error, resolved = endpoint_config(config)
     if error:
         return error, None
 
     headers = {"Accept": "application/json", "User-Agent": "FleetHub-AI/1.0"}
-    if resolved["api_key"]:
-        headers["Authorization"] = f"Bearer {resolved['api_key']}"
+    key = str(api_key or "")
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     try:
         with requests.get(f"{resolved['base_url']}/v1/models", headers=headers,
                           timeout=resolved["timeout"], stream=True,
@@ -1430,7 +1437,7 @@ def answer_machine_question(db_path, config, machine, text, *, resolve_vars,
     # prompt may contain and the prompt is built before the call. Cheap, and the alternative --
     # reading the raw config dict for that one key -- is a second place that has to know how a
     # half-configured provider resolves.
-    error, resolved_config = provider_config(config, api_key)
+    error, resolved_config = provider_config(config)
     if error:
         record_request(db_path, actor=actor, kind=KIND_MACHINE_ASK, **_stamp(config),
                        machine=str(machine), prompt_chars=len(request),

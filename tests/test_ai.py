@@ -491,10 +491,39 @@ def main():
         check("an unrecognised provider falls back to custom, not to nothing",
               ai.preset_for("openai_chat").name == ai.PRESET_CUSTOM)
         error, resolved = ai.provider_config(
-            dict(CONFIG, provider="openrouter", base_url="", model="m"), "k")
+            dict(CONFIG, provider="openrouter", base_url="", model="m"))
         check("a preset alone is enough to be configured", error is None)
         check("...and the call goes to the preset's address",
               resolved["base_url"] == "https://openrouter.ai/api")
+        # The resolved dict travels into /api/ai/status's response builder and into the machine
+        # panel's prompt decisions while the error string travels to an operator's screen, and
+        # both leave the same `return`. A key in there is one nobody can prove stays put -- so
+        # neither resolver holds one, and `complete`/`refresh_models` read the parameter.
+        check("neither resolver hands the API key back with the config",
+              "api_key" not in resolved
+              and "api_key" not in (ai.endpoint_config(CONFIG)[1] or {}))
+
+        # Dropping the key from the dict must not drop it from the wire. The failure that
+        # would cause is a 401 that reads as a bad key rather than as a key never sent, so the
+        # headers themselves are the assertion. ConnectionError, because complete() turns that
+        # into a sentence and a RuntimeError would break its never-raises contract.
+        def headers_of(**kwargs):
+            seen = {}
+            real_post = ai.requests.post
+            try:
+                def capture(*a, **k):
+                    seen.update(k.get("headers") or {})
+                    raise ai.requests.ConnectionError("the headers are all this needed")
+                ai.requests.post = capture
+                ai.complete(CONFIG, [{"role": "user", "content": "x"}], **kwargs)
+            finally:
+                ai.requests.post = real_post
+            return seen
+
+        check("...and the key still reaches the provider from the parameter",
+              headers_of(api_key="k").get("Authorization") == "Bearer k")
+        check("...while a hub with no key sends no Authorization header at all",
+              "Authorization" not in headers_of())
 
         print("\n== The model list is cached, not fetched to draw a page ==")
         listing = ai.list_models(db_path, "openrouter")

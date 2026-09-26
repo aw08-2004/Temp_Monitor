@@ -180,13 +180,14 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
     def ai_status():
         """Whether the feature is usable, and what it is pointed at.
 
-        **Never the key.** provider_config() carries it, so the response is assembled field by
-        field here rather than by handing that dict back with something popped out of it -- a
-        later field added to the config would then appear in this response by default, and the
-        default for a config that holds a credential must be "not exposed".
+        **Never the key**, and now belt and braces about it. `provider_config()` no longer
+        returns the key at all, so this response could not carry it by accident; the fields are
+        still listed one at a time rather than handed back as that dict, because a field added
+        to the resolved config later would otherwise appear in this response by default, and
+        the default for anything resolved from settings must be "not exposed".
         """
         config = ai_config()
-        error, resolved = ai.provider_config(config, _api_key())
+        error, resolved = ai.provider_config(config)
         if error:
             return jsonify({"enabled": ai.is_enabled(config), "ready": False,
                             "error": error, "providers": list(ai.PROVIDERS),
