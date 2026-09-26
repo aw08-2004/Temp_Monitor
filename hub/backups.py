@@ -686,7 +686,7 @@ def secrets_path(log_dir):
     return os.path.join(log_dir, SECRETS_FILENAME)
 
 
-def _read_secret_file(log_dir):
+def _read_secret_file(log_dir, strict=False):
     path = secrets_path(log_dir)
     if not os.path.exists(path):
         return {}
@@ -695,6 +695,8 @@ def _read_secret_file(log_dir):
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
+        if strict:
+            raise
         # A corrupt store must not take the console down -- every destination will simply
         # report missing credentials, which is a fixable state an operator can see.
         return {}
@@ -802,13 +804,13 @@ def load_secret(log_dir, master_key, destination_id):
 
 
 def delete_secret(log_dir, destination_id):
-    data = _read_secret_file(log_dir)
+    data = _read_secret_file(log_dir, strict=True)
     if data.pop(destination_id, None) is not None:
         _write_secret_file(log_dir, data)
 
 
-def has_secret(log_dir, destination_id):
-    return destination_id in _read_secret_file(log_dir)
+def has_secret(log_dir, destination_id, strict=False):
+    return destination_id in _read_secret_file(log_dir, strict=strict)
 
 
 def _require_crypto():
