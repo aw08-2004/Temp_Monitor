@@ -233,6 +233,27 @@ def main():
         check("...and nothing is left under the old name",
               bitlocker.escrowed_ids(db_path, "MERGE-OLD") == set())
 
+        # A rename ONTO a name that already has posture: the survivor is the machine still
+        # reporting, so its own posture and its own keys win. Asserted because the rename is
+        # written as INSERT OR IGNORE, whose whole behaviour is what happens on collision --
+        # and because the column list in that statement named columns no schema here has,
+        # which raised OperationalError on every rename and reached `main` unnoticed.
+        bitlocker.record_inventory(db_path, "KEEP-ME", supported(volume(mount="D:")))
+        bitlocker.record_escrowed(db_path, "KEEP-ME", [
+            {"protector_id": "{REC-KEEP}", "volume": "D:"}], now=100)
+        bitlocker.record_inventory(db_path, "GO-AWAY", supported(volume(mount="C:")))
+        bitlocker.record_escrowed(db_path, "GO-AWAY", [
+            {"protector_id": "{REC-GONE}", "volume": "C:"}], now=100)
+        bitlocker.rename_machine(db_path, "GO-AWAY", "KEEP-ME")
+        survivor = bitlocker.get_inventory(db_path, "KEEP-ME")
+        check("a rename onto a live name keeps the survivor's posture",
+              [v["mount"] for v in survivor["volumes"]] == ["D:"])
+        check("...and carries the dropped machine's keys across rather than losing them",
+              bitlocker.escrowed_ids(db_path, "KEEP-ME") == {"{REC-KEEP}", "{REC-GONE}"})
+        check("...leaving nothing behind under the dropped name",
+              bitlocker.get_inventory(db_path, "GO-AWAY")["support"] is None and
+              bitlocker.escrowed_ids(db_path, "GO-AWAY") == set())
+
         check("the secret id carries the machine name, so a blob cannot be read as another's",
               bitlocker.secret_id_for("PC-01") != bitlocker.secret_id_for("PC-02"))
 

@@ -510,9 +510,19 @@ def rename_machine(db_path, old, new):
     with get_conn(db_path) as conn:
         # Keep the survivor's own posture when both machines share the same hardware;
         # INSERT OR IGNORE preserves the destination row on collision.
+        #
+        # The column list is `support, error, volumes_json, reported_at` -- the columns this
+        # module's CREATE TABLE actually declares. An earlier version of this statement named
+        # `protector_count, latest_protector_id, updated_at`, which exist in no schema here, so
+        # **every rename of a machine that had ever reported posture raised OperationalError**
+        # and the console's rename returned 500. Nothing caught it because the columns are
+        # named in a string: SQLite only complains when the statement runs, and it runs only
+        # on the rename path.
         conn.execute(
-            "INSERT OR IGNORE INTO machine_bitlocker (machine, protector_count, latest_protector_id, updated_at) "
-            "SELECT ?, protector_count, latest_protector_id, updated_at FROM machine_bitlocker WHERE machine = ?",
+            "INSERT OR IGNORE INTO machine_bitlocker "
+            "            (machine, support, error, volumes_json, reported_at) "
+            "SELECT ?, support, error, volumes_json, reported_at "
+            "  FROM machine_bitlocker WHERE machine = ?",
             (new, old))
         conn.execute("DELETE FROM machine_bitlocker WHERE machine = ?", (old,))
         # Merge source escrow-index rows into destination using collision-safe inserts;

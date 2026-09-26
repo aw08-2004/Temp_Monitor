@@ -266,14 +266,14 @@ def move_escrow(log_dir, old, new):
         return False
     try:
         source_stored = backups.load_secret(log_dir, master, source_id)
-    except (ValueError, Exception):
+    except (ValueError, OSError):
         return False
     # Load the destination blob if it already holds keys for the survivor.
     dest_stored = {}
     try:
         if backups.has_secret(log_dir, dest_id):
             dest_stored = backups.load_secret(log_dir, master, dest_id) or {}
-    except (ValueError, Exception):
+    except (ValueError, OSError):
         # Destination unreadable -- refuse to overwrite; source keeps its copy.
         return False
     # Union both machines' key sets; the survivor's keys win on collision
@@ -286,7 +286,7 @@ def move_escrow(log_dir, old, new):
     merged["keys"] = merged_keys
     try:
         backups.store_secret(log_dir, master, dest_id, merged)
-    except (ValueError, Exception):
+    except (ValueError, OSError):
         return False
     backups.delete_secret(log_dir, source_id)
     return True
