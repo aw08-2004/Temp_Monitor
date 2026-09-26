@@ -1510,9 +1510,35 @@ collection and keeps what it already collected.
 arrive on the existing `POST /api/agent/heartbeat` under an `events` key, and the subscription
 document goes back on that same reply.
 
-> **Status:** collection built — hub 1.118.0. The agent half is in the source tree and reaches
-> the fleet with the next agent release, so nothing is collected until then. Correlating events
-> into alerts, and writing a rule against the counters, is roadmap #17.
+**Alerting on an event.** A rule condition can read the counters directly, so "more than twenty
+failed logons on one machine" is a rule rather than something you have to notice on a page:
+
+| Variable | What it counts |
+|---|---|
+| `event.count` | every collected record on this machine in the window |
+| `event.critical_count`, `event.error_count`, `event.warning_count` | the same, per level |
+| `event.id_4625.count` | occurrences of one event id — any id, `4625` here |
+
+The window is `Settings → Event Logs → Count events over` (a day by default), the same one the
+Events page counts over, so a threshold fires on the number you were looking at when you chose
+it. Occurrences are counted, not rows: a rolled-up run of four hundred 4625s is four hundred.
+
+Two things it deliberately refuses to answer, both for the same reason — the hub will not report
+the absence of something it never looked for:
+
+* **An event id you have no subscription for reads unknown, not zero.** Nothing was ever told to
+  collect it. The condition builder offers the ids your subscriptions name; you can still type
+  one they do not, and a rule about it simply never fires until a subscription covers it.
+* **A machine that has never reported events reads unknown, not zero** — that is a PC whose
+  agent predates the feature. Otherwise a rule looking for healthy machines would return exactly
+  the ones you cannot see. A machine that reported and had nothing to say counts a real zero, and
+  one whose last report is over an hour old reads unknown again rather than quiet.
+
+> **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0.
+> The agent half is in the source tree and reaches the fleet with the next agent release, so
+> nothing is collected until then, and until it is, every counter above reads unknown. Grouping
+> events into alert bundles is roadmap #17 and shipped in hub 1.124.0 — see
+> [grouped alerts](#grouped-alerts-and-recommended-fixes).
 
 ## Network discovery and shadow IT
 
