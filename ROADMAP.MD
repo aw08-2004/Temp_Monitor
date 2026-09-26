@@ -3307,7 +3307,7 @@ PC is gone".
 
 ---
 
-## ✅ 20. Self-healing watchdogs   ·   hub 1.127.0 + the agent's next release
+## ✅ 20. Self-healing watchdogs   ·   hub 1.127.0 + agent 3.37.1
 
 FR-04's watchdogs: a service stops, the agent restarts it inside two minutes, and only an
 escalation reaches a human. Shipped as `hub/watchdogs.py` + `hub/watchdogs_web.py`, its own
@@ -5350,14 +5350,12 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     detection now has a real prerequisite that did not exist when this was written — #25 phase
     B's Windows software inventory — and remote session recording is still the one with a
     question attached rather than a cost.
-20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half carried by
-    the 3.37.1 re-cut of 2026-09-23 rather than by 3.37.0, whose release notes predate it. Sequenced last on the belief that it
-    needed the rules engine to grow a second evaluation site; building it established that it
-    must not, and the entry above records why. What it actually needed was the target grammar
-    and the `issue_commands` gate, both of which already existed.
-20. **#20 Self-healing watchdogs** — last, because it is the one item that needs the rules
-    engine to grow a second evaluation site (on the agent), and that is a bigger change to a
-    working feature than any of the above make.
+20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half carried
+    by the 3.37.1 re-cut of 2026-09-23 rather than by 3.37.0, whose release notes predate it.
+    Sequenced last on the belief that it needed the rules engine to grow a second evaluation
+    site; building it established that it must not, and the entry above records why. What it
+    actually needed was the target grammar and the `issue_commands` gate, both of which
+    already existed.
 21. ~~**#21 Release channels**~~ — done, hub 1.93.0 + agent 3.35.0. Not from the PRD; asked
     for directly, and built alongside #14 rather than after it because the two shipped in one
     agent release. Its own prerequisite was nothing, but it makes every item above it safer to
