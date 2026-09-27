@@ -261,6 +261,70 @@ def create_bitlocker_blueprint(db_path, log_dir, login_required, access):
     return bp
 
 
+def escrow_blocked(log_dir, machine, into=None):
+    """Would moving this machine's escrowed keys fail? Read-only, and safe to ask before a
+    merge has destroyed anything.
+
+    **This is a question a caller has to ask FIRST, not read off the answer afterwards.**
+    move_escrow runs in the middle of a machine merge, by which point the dropped machine's
+    identity row is already gone -- so a failure there cannot be undone and cannot be retried
+    from the console, which 404s on a machine it can no longer find. Asked up front, the same
+    failure is simply a merge that does not happen: nothing is lost, and re-running it once the
+    master key is restored does the whole job.
+
+    It answers **every refusal move_escrow can reach by reading**, which is all of them but the
+    two writes. move_escrow calls this rather than restating the conditions, so the two cannot
+    drift apart:
+
+      * the store will not read or parse. `strict=True` is what surfaces that: has_secret()
+        otherwise degrades a corrupt store to "no such entry" for every id, including ids whose
+        blob is sitting in that very file;
+      * a blob exists and there is no master key, so it cannot be re-wrapped -- the secret id is
+        the AAD, so a blob is opened and sealed again, never copied;
+      * a blob exists and will not open, which is the master key having changed under it.
+
+    `into` is the name the keys would move TO, and it matters: move_escrow unions both machines'
+    key sets, so it reads the destination blob too and refuses just as hard when that one will
+    not open. **A caller that names only the source asks half the question.** An earlier version
+    of this docstring claimed a destination failure could not be known without doing the move,
+    which is wrong -- reading the survivor's blob costs exactly what reading the dropped
+    machine's does, and the case it misses is a real one: a survivor whose blob predates a master
+    key rotation, merged into from a machine escrowed after it. That merge passed the check and
+    then stranded the very keys this function exists to keep custody of. Omitting `into` is for
+    a caller with no destination to name, not a shortcut.
+
+    Only the two store writes are left unanswerable up front, and move_escrow rolls the
+    destination back when the second of them fails.
+
+    A machine with nothing escrowed is never blocked, whatever the hub's key situation -- and
+    that is most of the fleet, all of it on a hub that never switched escrow on.
+    """
+    source_id = bitlocker.secret_id_for(machine)
+    try:
+        if not backups.has_secret(log_dir, source_id, strict=True):
+            return False
+    except (ValueError, OSError):
+        return True
+    master = backups.load_master_key()
+    if master is None:
+        return True
+    try:
+        backups.load_secret(log_dir, master, source_id)
+    except (ValueError, OSError):
+        return True
+    if into is None:
+        return False
+    # Only reached with a source blob that opens, so the store itself already read cleanly --
+    # a raise here is this one blob, which is the destination half of the same rotation.
+    dest_id = bitlocker.secret_id_for(into)
+    try:
+        if backups.has_secret(log_dir, dest_id, strict=True):
+            backups.load_secret(log_dir, master, dest_id)
+    except (ValueError, OSError):
+        return True
+    return False
+
+
 def move_escrow(log_dir, old, new):
     """Move a machine's escrowed keys to its new name, alongside bitlocker.rename_machine.
 
@@ -272,6 +336,12 @@ def move_escrow(log_dir, old, new):
     anything -- both are ordinary, and in both the posture rows should still follow the new name.
     Only a genuine failure to move a blob that exists is a reason to leave the index where it is.
     """
+    # Every refusal below that is reachable by reading is also escrow_blocked()'s, so that a
+    # caller can ask them before it starts destroying things -- which is where they actually help,
+    # since a failure here cannot be retried. Asked again on the way through because the two calls
+    # are not one transaction: this is the one that acts on the answer.
+    if escrow_blocked(log_dir, old, into=new):
+        return ESCROW_FAILED
     master = backups.load_master_key()
     source_id = bitlocker.secret_id_for(old)
     if master is None:

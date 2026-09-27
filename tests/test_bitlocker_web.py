@@ -282,6 +282,64 @@ def main():
         check("...and it is left where it is rather than half-moved",
               backups.has_secret(log_dir, bitlocker.secret_id_for("UNREADABLE")) and
               not backups.has_secret(log_dir, bitlocker.secret_id_for("PC-02")))
+        check("...and the same answer is available BEFORE a merge destroys anything",
+              bitlocker_web.escrow_blocked(log_dir, "UNREADABLE"))
+        check("...while a machine with nothing escrowed is never blocked",
+              not bitlocker_web.escrow_blocked(log_dir, "NEVER-ESCROWED"))
+
+        # The SURVIVOR's blob is the other half of the same question, and asking only about the
+        # dropped machine missed it. move_escrow unions both key sets, so it opens the destination
+        # too and refuses just as hard -- which is a hub whose survivor was escrowed before a
+        # master key rotation and whose duplicate was escrowed after it. That merge cleared a
+        # source-only check, deleted the dropped machine_info row, and then stranded exactly the
+        # keys the check exists to protect. Reading the destination costs what reading the source
+        # costs, so there was never a reason for the check to be the narrower of the two.
+        bitlocker_web.backups.store_secret(
+            log_dir, backups.load_master_key(), bitlocker.secret_id_for("GOOD-SRC"),
+            {"keys": {"{REC-S}": {"recovery_password": "5" * 48, "volume": "C:"}}})
+        check("a machine whose own blob opens is not blocked on its own account",
+              not bitlocker_web.escrow_blocked(log_dir, "GOOD-SRC"))
+        check("...but IS blocked when the name it would merge INTO holds a blob that will not open",
+              bitlocker_web.escrow_blocked(log_dir, "GOOD-SRC", into="UNREADABLE"))
+        check("...which is the answer the move gives too",
+              bitlocker_web.move_escrow(log_dir, "GOOD-SRC", "UNREADABLE")
+              == bitlocker_web.ESCROW_FAILED)
+        check("...leaving the source's password readable under its own name",
+              backups.load_secret(log_dir, backups.load_master_key(),
+                                  bitlocker.secret_id_for("GOOD-SRC"))
+              ["keys"]["{REC-S}"]["recovery_password"] == "5" * 48)
+        check("...and a destination that holds nothing does not block anything",
+              not bitlocker_web.escrow_blocked(log_dir, "GOOD-SRC", into="NEVER-ESCROWED"))
+        backups.delete_secret(log_dir, bitlocker.secret_id_for("GOOD-SRC"))
+
+        # A blob with no master key to open it. The secret id is the AAD, so a blob is never
+        # copied to a new name -- it is opened and sealed again -- and without the key that
+        # cannot happen. Reading this as "nothing to move" renamed the index away from passwords
+        # that are still sitting in the store, and restoring the key afterwards does not put the
+        # index back: the two halves stay under different hostnames for good.
+        saved_key = os.environ.pop("BACKUP_MASTER_KEY")
+        check("a blob with no master key to open it is blocked, not empty",
+              bitlocker_web.escrow_blocked(log_dir, "SURVIVOR"))
+        check("...and reports failure rather than nothing to move",
+              bitlocker_web.move_escrow(log_dir, "SURVIVOR", "PC-03")
+              == bitlocker_web.ESCROW_FAILED)
+        check("...and a machine that never escrowed anything still is not blocked, "
+              "so an ordinary merge is untouched",
+              not bitlocker_web.escrow_blocked(log_dir, "NEVER-ESCROWED"))
+        os.environ["BACKUP_MASTER_KEY"] = saved_key
+
+        # A store file that will not parse at all. backups._read_secret_file degrades it to {} so
+        # one bad file cannot take the console down, which makes has_secret() answer False for
+        # every id -- including ids whose blob is sitting in that very file. Left alone, that is
+        # the same stranding as above, arrived at from the other direction. Last in this section:
+        # it destroys the store.
+        with open(os.path.join(log_dir, "backup_secrets.json"), "w", encoding="utf-8") as fh:
+            fh.write("{ this is not json")
+        check("an unparseable store blocks the move instead of reading as an empty one",
+              bitlocker_web.escrow_blocked(log_dir, "SURVIVOR"))
+        check("...and the move refuses rather than renaming the index off its keys",
+              bitlocker_web.move_escrow(log_dir, "SURVIVOR", "PC-04")
+              == bitlocker_web.ESCROW_FAILED)
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)
