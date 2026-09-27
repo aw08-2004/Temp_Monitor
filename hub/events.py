@@ -237,10 +237,27 @@ def init_events_db(db_path):
                 machine       TEXT PRIMARY KEY,
                 reported_at   INTEGER NOT NULL,
                 dropped       INTEGER NOT NULL DEFAULT 0,  -- cumulative, over the cap
-                error         TEXT
+                error         TEXT,
+                dropped_last  INTEGER NOT NULL DEFAULT 0   -- the LATEST report only
             )
             """
         )
+        # `dropped_last` was added in hub 1.131.1, and the cumulative `dropped` beside it is
+        # the reason. **A cumulative counter cannot answer "is the number in front of me
+        # complete"** -- it says a machine lost something once, and stays saying it forever,
+        # so a rule reading it would either ignore every loss or distrust a machine for the
+        # rest of its life after one bad afternoon. The per-report copy is what `event.*`
+        # reads: the cap truncates the TAIL of a report, so 200 Information events can push
+        # the one Critical off the end and the report still arrives with no error at all.
+        # Nullable-by-default is not an option here because the column is summed, so it takes
+        # the same NOT NULL DEFAULT 0 the CREATE does; an upgrading hub reads 0 for its
+        # existing rows, which says "the last report was complete" and is the honest answer
+        # -- we did not record whether it was, and the next heartbeat overwrites it anyway.
+        state_columns = {row["name"] for row in
+                         conn.execute("PRAGMA table_info(machine_event_state)")}
+        if "dropped_last" not in state_columns:
+            conn.execute("ALTER TABLE machine_event_state "
+                         "ADD COLUMN dropped_last INTEGER NOT NULL DEFAULT 0")
 
 
 # ================================
@@ -565,6 +582,14 @@ def record_events(db_path, machine, payload):
     # The agent caps too, and the hub caps again rather than trusting it. Nothing here is
     # authenticated beyond the bearer token, and "a machine may not put more than this on one
     # heartbeat" is a hub invariant, not an agent courtesy.
+    #
+    # **What goes is the TAIL**, and that is load-bearing for anything reading the counts
+    # afterwards: a report of two hundred Information events followed by one Critical keeps the
+    # Information and loses the Critical, and arrives with no error on it. `dropped` alone
+    # cannot express that -- it is cumulative -- which is why the state row also carries
+    # `dropped_last`; see `rule_counters`. Sorting by level before truncating was rejected: it
+    # would make the kept slice depend on a severity judgement the hub is not the one making,
+    # and the roll-up needs the arrival order to group a run correctly.
     if len(entries) > MAX_EVENTS_PER_REPORT:
         dropped += len(entries) - MAX_EVENTS_PER_REPORT
         entries = entries[:MAX_EVENTS_PER_REPORT]
@@ -624,14 +649,16 @@ def record_events(db_path, machine, payload):
         # whole reason it exists -- see init_events_db.
         conn.execute(
             """
-            INSERT INTO machine_event_state (machine, reported_at, dropped, error)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO machine_event_state
+                (machine, reported_at, dropped, error, dropped_last)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 reported_at = excluded.reported_at,
                 dropped = machine_event_state.dropped + excluded.dropped,
-                error = excluded.error
+                error = excluded.error,
+                dropped_last = excluded.dropped_last
             """,
-            (machine, now, dropped, error),
+            (machine, now, dropped, error, dropped),
         )
 
     if stored:
@@ -918,7 +945,8 @@ def rule_counters(db_path, machine, *, event_ids=(),
                   window_seconds=DEFAULT_RULE_WINDOW_SECONDS, now=None):
     """One machine's windowed occurrence counts, for the rules engine.
 
-    Returns `{"reported_at", "error", "total", "by_level", "by_event_id"}`. `reported_at` is
+    Returns `{"reported_at", "error", "incomplete", "total", "by_level", "by_event_id"}`.
+    `reported_at` is
     None for a machine this module has never been told about, and **that is not the same as
     zero**: it is an agent too old to know what a subscription is, or one that has never
     completed a heartbeat. The caller turns it into UNKNOWN. Collapsing the two would let
@@ -929,10 +957,19 @@ def rule_counters(db_path, machine, *, event_ids=(),
     `error` is the third case and it is returned for the same reason: a machine that reported
     and said it could not read the channel has told us nothing about what is in it. It is the
     LATEST report's error, because `record_events` overwrites rather than accumulates it, so a
-    clean report clears it. `dropped` is deliberately NOT returned: it is cumulative over the
-    machine's lifetime, so one bad afternoon in August would make every count untrustworthy
-    forever, and the case it would guard against cannot arise -- a machine dropping records is
-    one with more events than it could carry, which is never a machine whose count is zero.
+    clean report clears it.
+
+    `incomplete` is the fourth, and it is the one that is easy to argue yourself out of. The
+    first version of this function returned no drop information at all, on the reasoning that
+    a machine dropping records is one with MORE events than it could carry and so never one
+    whose count is zero. **That reasoning is wrong, and the counter-example is the ordinary
+    case**: `MAX_EVENTS_PER_REPORT` truncates the tail of a report, so a heartbeat carrying two
+    hundred Information events and then one Critical loses the Critical, records no error, and
+    leaves `event.critical_count == 0` reading as a measurement. Per LEVEL and per ID, a drop
+    can absolutely take the count to zero. So `dropped_last` is read here and `dropped` still
+    is not: the cumulative field cannot say whether the number in front of you is complete,
+    only that something was lost at some point, and distrusting a machine forever after one
+    bad afternoon is the failure in the other direction.
 
     `occurrences`, not rows, exactly as `summary` counts: a rolled-up run of four hundred
     4625s is four hundred, not one. A run whose `last_seen` falls inside the window counts in
@@ -950,8 +987,8 @@ def rule_counters(db_path, machine, *, event_ids=(),
 
     with get_conn(db_path) as conn:
         state = conn.execute(
-            "SELECT reported_at, error FROM machine_event_state WHERE machine = ?",
-            (machine,)).fetchone()
+            "SELECT reported_at, error, dropped_last FROM machine_event_state "
+            "WHERE machine = ?", (machine,)).fetchone()
         totals = conn.execute(
             "SELECT COALESCE(SUM(count), 0) AS n FROM machine_events "
             "WHERE machine = ? AND last_seen >= ?", (machine, since)).fetchone()
@@ -971,6 +1008,8 @@ def rule_counters(db_path, machine, *, event_ids=(),
     return {
         "reported_at": state["reported_at"] if state else None,
         "error": (state["error"] or None) if state else None,
+        # Whether the LATEST report lost anything, not whether this machine ever has.
+        "incomplete": bool(state and int(state["dropped_last"] or 0) > 0),
         "total": int(totals["n"]),
         "by_level": {row["level"]: int(row["n"]) for row in by_level},
         # A subscribed id with no records in the window is 0, not absent. The machine did
