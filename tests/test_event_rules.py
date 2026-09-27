@@ -3,7 +3,7 @@ records (roadmap #17, the half #16 handed on).
 
 **The silent failure this file exists to catch is a rule that reads zero off a machine nobody
 is listening to.** Every variable here is a count, zero is a perfectly ordinary value, and
-that makes five different kinds of "we do not know" indistinguishable from "it did not
+that makes six different kinds of "we do not know" indistinguishable from "it did not
 happen" unless something asserts otherwise:
 
   * **A machine that has never reported events at all.** No `machine_event_state` row means
@@ -27,6 +27,12 @@ happen" unless something asserts otherwise:
     seconds old and counters reading zero. `event.error_count == 0` would settle TRUE for a PC
     whose audit log nobody can see. Found in review of this change rather than by me, which is
     why it is spelled out at this length.
+  * **A report the per-report cap truncated.** Also found in review, and it defeated this
+    file's own written argument for ignoring drops. The cap takes the TAIL, so two hundred
+    Information events followed by one Critical arrive as two hundred Information events with
+    no error attached -- `event.critical_count == 0` reads as a measurement of a machine that
+    reported a Critical. The lifetime `dropped` cannot see it, because it cannot tell a loss
+    just now from a loss in August; `dropped_last` can.
 
 The second thing asserted is that a rule stays SAVEABLE across subscription changes. The
 per-id variables are matched structurally, like `disk.<letter>.*`, rather than validated
@@ -515,9 +521,9 @@ def test_a_collector_error_is_unknown_even_on_a_fresh_report():
     settles TRUE for a PC whose audit log nobody can see, which is the exact failure the other
     three refusals exist to prevent -- this one just survives them.
 
-    `dropped` is deliberately not treated the same way: it is cumulative over the machine's
-    lifetime, so one bad afternoon would make every count untrustworthy forever, and a machine
-    dropping records is one with more events than it could carry, never one whose count is zero.
+    Drops are the same class of mistake and get their own test below -- the first version of
+    this one asserted the opposite, that a dropped report could be trusted. See
+    `test_a_report_truncated_by_the_cap_is_unknown`.
     """
     print("\n-- reported, but could not look --")
     db = fresh_db()
@@ -549,12 +555,75 @@ def test_a_collector_error_is_unknown_even_on_a_fresh_report():
               value_of(recovered, "event.count") == 2)
         check("and the per-id counter comes back",
               value_of(recovered, "event.id_4625.count") == 2)
+    finally:
+        os.unlink(db)
 
-        # Cumulative drops are not an error and must not poison the counts.
-        events.record_events(db, "PC-1", {"events": [], "dropped": 300})
-        dropped = resolve(db, "PC-1")
-        check("a machine that dropped records still counts what it did send",
-              value_of(dropped, "event.count") == 2)
+
+def test_a_report_truncated_by_the_cap_is_unknown():
+    """The counter-example that killed this file's own reasoning, found by review.
+
+    The first version of `event.*` ignored drops entirely, and wrote the argument down: a
+    machine dropping records is one with MORE events than it could carry, so it is never one
+    whose count reads zero. **That is true of `event.count` and false of every other counter
+    in the namespace.** `MAX_EVENTS_PER_REPORT` truncates the TAIL of a report, so a heartbeat
+    carrying two hundred Information events and then one Critical keeps the noise, loses the
+    Critical, and records no error at all. `event.critical_count == 0` then settles TRUE on a
+    machine that just reported a Critical -- a rule watching for one never fires, and nothing
+    anywhere says why.
+
+    The fix is `dropped_last` rather than the cumulative `dropped`: the lifetime counter cannot
+    say whether the number in front of you is complete, and distrusting a machine forever after
+    one bad afternoon is the failure in the other direction. So this test pins both ends -- the
+    truncated report is UNKNOWN, and the next complete one is trusted again although `dropped`
+    still remembers.
+    """
+    print("\n-- a report the cap truncated --")
+    db = fresh_db()
+    try:
+        events.create_subscription(db, name="Everything on System", log="System",
+                                   event_ids=[], levels=list(events.LEVELS))
+        events.create_subscription(db, name="Failed logons", log="Security",
+                                   event_ids=[4625], levels=["warning"])
+        record("PC-1", db, event_id=4625, count=2)
+        check("before the storm: the count is real",
+              value_of(resolve(db, "PC-1"), "event.id_4625.count") == 2)
+
+        # Two hundred Information events, then the one that matters. Distinct ids so the
+        # roll-up cannot collapse them into one row and hide the cap.
+        noise = [{"log": "System", "provider": "Noise", "event_id": 100 + (n % 50),
+                  "level": events.LEVEL_INFORMATION, "message": f"noise {n}",
+                  "occurred_at": NOW - 60} for n in range(events.MAX_EVENTS_PER_REPORT)]
+        critical = {"log": "System", "provider": "Disk", "event_id": 7,
+                    "level": events.LEVEL_CRITICAL, "message": "The disk is failing",
+                    "occurred_at": NOW - 60}
+        events.record_events(db, "PC-1", {"events": noise + [critical]})
+
+        state = events.machine_state(db, "PC-1")
+        check("the hub counted the loss", state["dropped"] == 1)
+        check("and recorded no error, which is the whole problem",
+              state["error"] is None)
+        check("the report is fresh", state["stale"] is False)
+
+        truncated = resolve(db, "PC-1")
+        check("the critical counter is UNKNOWN, not zero",
+              value_of(truncated, "event.critical_count") is rules.UNKNOWN)
+        check("so == 0 does not settle on it",
+              rules.evaluate({"var": "event.critical_count", "cmp": "==", "value": 0},
+                             truncated) is rules.UNKNOWN)
+        check("the total is UNKNOWN too -- we cannot say what the tail held",
+              value_of(truncated, "event.count") is rules.UNKNOWN)
+        check("and the per-id counters are absent rather than zero",
+              "event.id_4625.count" not in truncated)
+
+        # A complete heartbeat clears it, although `dropped` still remembers the storm.
+        events.record_events(db, "PC-1", {"events": []})
+        recovered = resolve(db, "PC-1")
+        check("the lifetime counter still remembers",
+              events.machine_state(db, "PC-1")["dropped"] == 1)
+        check("but one complete report restores the counters",
+              value_of(recovered, "event.id_4625.count") == 2)
+        check("including the totals",
+              value_of(recovered, "event.count") is not rules.UNKNOWN)
     finally:
         os.unlink(db)
 
@@ -647,6 +716,7 @@ def main():
     test_the_default_window_matches_the_setting_the_console_uses()
     test_a_stopped_collector_ages_out_to_unknown()
     test_a_collector_error_is_unknown_even_on_a_fresh_report()
+    test_a_report_truncated_by_the_cap_is_unknown()
     test_an_id_subscribed_after_the_last_report_is_not_zero_yet()
     test_an_older_subscription_keeps_an_id_trustworthy()
     test_a_database_with_no_event_tables_resolves_rather_than_raising()
