@@ -273,10 +273,14 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
 
             if (encryption is not null)
                 TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
-            if (installed is not null)
-                TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent(installed);
 
             var text = await resp.Content.ReadAsStringAsync(ct);
+            // A 200 is not proof the software list was stored: the hub keeps a heartbeat
+            // successful when one inventory write fails (a 500 would read the machine offline)
+            // and flags it instead. Acknowledging anyway would hash-suppress the payload until
+            // something was installed, leaving the device sheet stale. Found in review.
+            if (installed is not null && !SoftwareRejected(text))
+                TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent(installed);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
             ApplyEscrowRequestFromHeartbeat(text);
@@ -289,6 +293,21 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Heartbeat failed: {Msg}", e.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Did the hub say it could not store the software list this heartbeat carried?
+    /// Unparseable text counts as no -- the heartbeat itself succeeded, and an agent that
+    /// resent on every malformed reply would never settle.</summary>
+    internal static bool SoftwareRejected(string replyBody)
+    {
+        try
+        {
+            return JsonNode.Parse(replyBody)?["software_rejected"]?.GetValue<bool>() == true;
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
+        {
             return false;
         }
     }

@@ -114,4 +114,19 @@ public class SoftwareInventoryTests
         Assert.NotNull(payload["software"]);
         Assert.Empty(payload["software"]!.AsArray());
     }
+
+    [Theory]
+    [InlineData("{\"status\":\"ok\",\"software_rejected\":true}", true)]
+    [InlineData("{\"status\":\"ok\"}", false)]
+    [InlineData("{\"software_rejected\":false}", false)]
+    [InlineData("{\"software_rejected\":\"yes\"}", false)]
+    [InlineData("not json", false)]
+    [InlineData("", false)]
+    public void OnlyAnExplicitRejectionKeepsThePayloadPending(string reply, bool rejected)
+    {
+        // A 200 whose reply flags the write as failed must not be acknowledged, or the hash
+        // suppresses the resend until the PC's software changes. Anything else is not a
+        // rejection -- a reply that cannot be parsed must not make every heartbeat resend.
+        Assert.Equal(rejected, TempMonitorAgent.Fleet.FleetClient.SoftwareRejected(reply));
+    }
 }

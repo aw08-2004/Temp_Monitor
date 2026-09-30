@@ -5418,9 +5418,10 @@ agent would re-enroll itself the moment somebody revoked it, which would make
 
 ### Not done
 
-No agent release is cut for this. The agent half is on `main` unreleased, so a machine in
-the field gets the hub half now — which is what makes the *uninstall* path work — and the
-in-service recovery when the next agent release ships.
+Nothing. The hub half shipped in 1.112.0 (which is what makes the *uninstall* path work) and
+the agent half -- the in-service recovery -- in 3.37.x. An earlier version of this note said
+the agent half was unreleased; `git diff 8ef40a9..HEAD -- agent/src` against the 3.37.1 cut
+shows it was already in.
 
 ## ✅ Messages to the person holding the device · agent-android, unreleased
 
