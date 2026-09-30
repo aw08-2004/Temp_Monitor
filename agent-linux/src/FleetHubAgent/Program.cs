@@ -57,7 +57,8 @@ try
     builder.Services.AddSingleton(sp => new FleetClient(
         sp.GetRequiredService<ILogger<FleetClient>>(),
         sp.GetRequiredService<AgentState>(),
-        () => AgentCapabilities.For(sp.GetRequiredService<CommandDispatcher>())));
+        () => AgentCapabilities.For(sp.GetRequiredService<CommandDispatcher>(),
+                                    AgentCapabilities.Implemented)));
 
     // The executors, which are the whole of what this agent can be TOLD to do today. Four out
     // of the hub's ~thirty command types, and the gap is deliberate rather than unfinished:
@@ -74,6 +75,7 @@ try
     // the hub calls a machine offline after ninety of them.
     builder.Services.AddSingleton<PatchScanner>();
     builder.Services.AddSingleton<PatchInventoryReporter>();
+    builder.Services.AddSingleton<ProcessReporter>();
 
     // Signed self-update (roadmap #22). Its own manifest and its own train -- the hub
     // picks which by the platform this agent reports, so it can never be handed the

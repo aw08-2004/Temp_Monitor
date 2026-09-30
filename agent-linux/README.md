@@ -66,10 +66,11 @@ works against an unmodified hub.
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script`, with a running command's output streamed to the console as it is produced |
 | **Patch inventory** | What `apt` or `dnf` says is available, change-only on the heartbeat, six-hourly on its own loop. Reporting only — nothing here installs a package, and the capability report is what stops the hub queueing one |
+| **Process list** | The machine page's Processes card: a `/proc` walk (CPU as a share of the whole machine, resident memory, owner, executable path, systemd unit from the cgroup), sampled every five seconds **only while somebody has the card open** and idle otherwise. Listing only -- ending or restarting a process is not implemented, and the card offers no menu for it. Claimed as the `processes` feature, which is what lets the console show the card to a 0.x agent |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops measuring it against the Windows train and stops queueing work it can never perform. Derived from the dispatcher, not written out |
 | **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed before anything is written. systemd restarts the unit onto the new binary |
 
-Five concurrent loops — telemetry, heartbeat, commands, update, inventory — for the reason
+Six concurrent loops — telemetry, heartbeat, commands, update, inventory, processes — for the reason
 the Windows agent's six exist: in a serial loop the slowest step sets the latency of every
 other one. The inventory loop is the clearest case: an `apt` dependency solve is seconds of
 work and the hub calls a machine offline after ninety.
@@ -81,8 +82,9 @@ above). In rough order of what would be worth doing next:
 
 1. **Installing patches.** The inventory half reports; nothing applies an update. The
    executor and a call to `PatchInventoryReporter.Invalidate()` are what it needs.
-2. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
-   one.
+2. **Ending and restarting processes** from the Processes card -- `kill_process` and
+   `restart_process` executors (a `kill(2)` and a `systemctl restart` of the unit). The list
+   itself is done.
 3. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
 4. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
@@ -174,21 +176,28 @@ whichever one you already have exported is the right one — passing an env var 
 not read would otherwise be indistinguishable from passing none, and would leave a machine that
 installs cleanly and silently takes no commands.
 
-Other options: `--hub URL` to override the compiled-in hub, `--agent-url URL` for an internal
-mirror (or when a lot of machines behind one NAT would hit GitHub's 60/hour unauthenticated API
-limit), `--binary PATH` to install a locally built file with no download at all, `--unit PATH`
-for a local checkout's unit file, and `--uninstall`.
+Other options: `--hub URL` to override the compiled-in hub, `--manifest-url URL` to read the
+signed manifest from an internal mirror (still verified against the fleet key), `--agent-url URL`
+to download a binary **without** checking it against the manifest (it says so when it runs),
+`--binary PATH` to install a locally built file with no download at all, `--unit PATH` for a
+local checkout's unit file, and `--uninstall`.
 
-It resolves the binary exactly as `install.ps1` does — newest GitHub release tagged
-`linux-agent-v*`, asset named `fleethub-agent` — checks the architecture before it stops
-anything, downloads before it stops the running agent, verifies the download is really an ELF
-binary rather than a proxy's error page, and confirms `systemctl is-active` afterwards rather
-than trusting `enable --now`'s exit code.
+**It installs only what the fleet key has signed** -- the same check the agent's own
+`SelfUpdater` applies to every update. It fetches `agent-linux.manifest.json` and its `.sig`,
+verifies the Ed25519 signature over the manifest's exact bytes against the key compiled into
+both agents, downloads the URL the manifest names, and refuses the binary unless its sha256
+equals the signed one. That needs **OpenSSL 3** on the target (Ubuntu 22.04+, Debian 12+,
+RHEL 9); an older box is refused with a pointer to `--binary` rather than installed unverified.
+Until a Linux release has been cut with `release.ps1`, no signed manifest exists and the
+installer says so. It also checks the architecture before it stops anything, downloads before it
+stops the running agent, and confirms `systemctl is-active` afterwards rather than trusting
+`enable --now`'s exit code.
 
 ### Releases
 
-`linux-agent-v0.1.0` is published, so the one-liner above resolves. Installing without any
-release at all — a local build, or an air-gapped machine — stays supported:
+The one-liner installs whatever the committed, signed `agent-linux.manifest.json` names.
+Installing without any release at all — a local build, or an air-gapped machine — stays
+supported, and is the one path the fleet key does not cover:
 
 ```bash
 dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
@@ -196,24 +205,15 @@ scp dist/fleethub-agent user@target:/tmp/
 ssh user@target 'curl -fsSL .../install.sh | sudo bash -s -- --binary /tmp/fleethub-agent --secret "..."'
 ```
 
-To cut the next one — the tag prefix and the asset name are what `install.sh` matches on, so
-both must be exact:
-
-```bash
-dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
-gh release create linux-agent-v0.2.0 dist/fleethub-agent \
-  --title "Linux agent v0.2.0" --notes "..."
-```
-
-The installer reads the releases list with `per_page=100` rather than the default 30. This repo
-already carries 50+ releases and Windows agent releases are frequent while Linux ones will be
-rare, so the newest `linux-agent-v*` sinks down the list — past a page boundary it would be
-reported as "no published release" for a release that plainly exists.
-
-`release.ps1` does all of that in one command, and should be used rather than the steps above:
+**Cut releases only with `release.ps1`.** A release made by hand with `gh release create`
+publishes a binary and no signed manifest, so neither the installer nor a running agent will
+ever take it. (The installer used to find the newest `linux-agent-v*` release through the GitHub
+API, reading `per_page=100` so the rare Linux release would not sink past a page of frequent
+Windows ones. The signed manifest replaced that lookup: it names the one URL allowed, and the
+pagination and 60-requests-per-hour limits went with the API.)
 
 ```powershell
-.\release.ps1 -Version 0.2.0 -NotesFile .\release-notes\0.2.0.md
+.\release.ps1 -Version 0.3.0 -NotesFile .\release-notes\0.3.0.md
 ```
 
 It bumps the two-file version pair, publishes, creates the release, signs
@@ -222,11 +222,12 @@ commits the manifest and its signature, and pushes. **Nothing reaches a machine 
 lands**, because the agent reads the manifest from `main` — an unpushed manifest is a release
 that exists on GitHub, is signed, and updates nobody.
 
-The trust root for an UPDATE is the fleet's offline Ed25519 key, the same one that signs the
-Windows agent's manifest and the client's: the download itself is untrusted, and the binary can
-come from anywhere as long as it hashes to the value inside a signed manifest. The trust root
-for a first INSTALL is still GitHub plus TLS, because `install.sh` has no key to check against
-and nothing to check it with.
+The trust root for an update AND for an install is the fleet's offline Ed25519 key, the same
+one that signs the Windows agent's manifest and the client's: the download itself is untrusted,
+and the binary can come from anywhere as long as it hashes to the value inside a signed
+manifest. What `install.sh` itself is fetched over is still HTTPS from GitHub -- pin the URL to a
+release tag rather than `main` when that matters, as the 0.3.0 release note does. `--binary` and
+`--agent-url` are the two ways around the key, and both say so when used.
 
 ## Running as root
 

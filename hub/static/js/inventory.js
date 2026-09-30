@@ -503,6 +503,18 @@ document.getElementById('inventory-export').addEventListener('click', () => expo
 document.getElementById('inventory-bulk-export').addEventListener('click', () => {
     exportCsv(allRows.filter((r) => selected.has(r.machine)).sort(compareRows));
 });
+// The ticked rows as a device report (roadmap #25). Through a real link, clicked, so shell.js
+// routes it through the frame like the deploy hand-off above. Null-guarded: the button is only
+// rendered for `view`.
+const bulkReport = document.getElementById('inventory-bulk-report');
+const reportLink = document.getElementById('inventory-report-link');
+if (bulkReport && reportLink) {
+    bulkReport.addEventListener('click', () => {
+        const names = allRows.filter((r) => selected.has(r.machine)).map((r) => r.machine);
+        reportLink.href = `/reports?machines=${encodeURIComponent(names.join(','))}`;
+        reportLink.click();
+    });
+}
 document.getElementById('inventory-bulk-clear').addEventListener('click', () => {
     selected.clear();
     render();

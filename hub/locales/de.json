@@ -36,7 +36,8 @@
       "admin": "Verwaltung"
     },
     "events": "Ereignisse",
-    "watchdogs": "Wächter"
+    "watchdogs": "Wächter",
+    "reports": "Berichte"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -227,7 +228,8 @@
       "wake": "Ausgewählte aufwecken",
       "deploy": "Paket verteilen…",
       "export": "Auswahl exportieren",
-      "clear": "Auswahl aufheben"
+      "clear": "Auswahl aufheben",
+      "report": "Bericht zur Auswahl"
     },
     "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Online-Computer erscheinen zusätzlich in der Live-Übersicht; Offline-Computer bleiben hier, bis sie gelöscht werden. Beim Löschen werden Identität, Temperaturverlauf und Flottenregistrierung dauerhaft entfernt.",
     "search_placeholder": "Nach Name, Hersteller, Anlagenkennzeichen, Seriennummer oder Service-Tag suchen…",
@@ -1248,6 +1250,10 @@
           "label": "Durchlauf aufgeben nach",
           "help": "Ein Durchlauf wird von einem PC ausgeführt, der wach ist und antwortet. Ein Bericht, der bis dahin nicht da ist, kommt nicht mehr."
         }
+      },
+      "security.genai_watchlist": {
+        "label": "Beobachtungsliste für generative KI",
+        "help": "Namensteile, die ein installiertes Programm oder eine App als Werkzeug für generative KI kennzeichnen. Ohne Beachtung der Groß-/Kleinschreibung irgendwo im Namen gesucht und auf der Seite Berichte aufgeführt. Nur Kennzeichnung – nichts wird gesperrt. Entfernen Sie einen Namen, um ein freigegebenes Werkzeug nicht mehr zu melden."
       }
     },
     "ai": {
@@ -4053,5 +4059,173 @@
     "unreachable": "Der Hub war nicht erreichbar.",
     "key_for": "Wiederherstellungsschlüssel für {volume}",
     "key_warning": "Das Lesen dieses Schlüssels wurde im Audit-Log festgehalten. Er verschwindet, sobald Sie die Seite verlassen."
+  },
+  "report": {
+    "tab": "Bericht",
+    "open_printable": "Druckansicht öffnen",
+    "export_json": "Als JSON exportieren",
+    "export_software_csv": "Software exportieren (CSV)",
+    "page_title": "Gerätebericht: {machine}",
+    "back_to_machine": "Zurück zum Gerät",
+    "print": "Drucken",
+    "yes": "Ja",
+    "no": "Nein",
+    "empty": "Gemeldet, nichts aufzuführen.",
+    "no_groups": "In keiner Gerätegruppe.",
+    "generated": "Erstellt {when}",
+    "reported": "Gemeldet {when}",
+    "load_failed": "Der Bericht konnte nicht geladen werden.",
+    "software": {
+      "count": {
+        "one": "{count} Programm installiert",
+        "other": "{count} Programme installiert"
+      }
+    },
+    "sessions": {
+      "summary": "{sessions} Anmeldesitzung(en) bei der letzten Meldung."
+    },
+    "section": {
+      "identity": "Identität",
+      "os": "Betriebssystem",
+      "directory": "Verzeichnis",
+      "fields": "Eigene Felder",
+      "groups": "Gerätegruppen",
+      "hardware": "Hardware",
+      "firmware": "Firmware",
+      "volumes": "Laufwerke",
+      "network": "Netzwerk",
+      "security": "Sicherheit",
+      "software": "Installierte Software",
+      "apps": "Apps",
+      "patches": "Verfügbare Updates",
+      "sessions": "Sitzungen",
+      "capabilities": "Agent-Fähigkeiten",
+      "location": "Letzter bekannter Standort"
+    },
+    "waiting": {
+      "agent_report": "Noch nicht gemeldet. Wird beim nächsten Melden des Geräts ausgefüllt.",
+      "agent_update": "Wartet auf einen neueren Agenten auf diesem Gerät. Das heißt nicht, dass nichts installiert ist.",
+      "phase_c": "Speichermodule, Datenträger, Monitore, Gehäuse, TPM und Akku werden von FleetHub noch nicht erfasst.",
+      "phase_d": "Virenschutz, Firewall, lokale Administratoren und TPM-Status werden von FleetHub noch nicht erfasst.",
+      "directory": "Im Verzeichnis nicht gefunden, oder es lief noch keine Verzeichnissynchronisierung."
+    },
+    "f": {
+      "manufacturer": "Hersteller",
+      "model": "Modell",
+      "serial_number": "Seriennummer",
+      "service_tag": "Service-Tag",
+      "asset_tag": "Inventarnummer",
+      "agent_version": "Agent-Version",
+      "update_channel": "Update-Kanal",
+      "last_report": "Letzte Meldung",
+      "os_caption": "Name",
+      "os_version": "Version",
+      "os_build": "Build",
+      "os_arch": "Architektur",
+      "last_boot": "Letzter Start",
+      "uptime": "Laufzeit",
+      "ad_dn": "Distinguished Name",
+      "ad_ou": "OU",
+      "ad_owner": "Besitzer",
+      "ad_os": "Betriebssystem laut Verzeichnis",
+      "ad_last_logon": "Letzte Verzeichnisanmeldung",
+      "ad_disabled": "Im Verzeichnis deaktiviert",
+      "ad_synced_at": "Verzeichnis synchronisiert",
+      "cpu": "Prozessor",
+      "gpu": "Grafik",
+      "memory_gb": "Arbeitsspeicher (GB)",
+      "support": "Firmware-Verwaltung",
+      "vendor": "Anbieter",
+      "interface": "Schnittstelle",
+      "bios_version": "BIOS-Version",
+      "password_set": "Setup-Passwort gesetzt",
+      "error": "Fehler",
+      "fast_startup": "Schnellstart",
+      "bitlocker_support": "BitLocker",
+      "platform": "Plattform",
+      "lat": "Breitengrad",
+      "lon": "Längengrad",
+      "accuracy_m": "Genauigkeit (m)",
+      "fixed_at": "Geortet"
+    },
+    "col": {
+      "volume": "Laufwerk",
+      "used_gb": "Belegt (GB)",
+      "total_gb": "Größe (GB)",
+      "used_pct": "Belegt",
+      "adapter": "Adapter",
+      "mac": "MAC",
+      "ipv4": "IPv4",
+      "kind": "Art",
+      "link": "Verbunden",
+      "protection": "Schutz",
+      "method": "Verfahren",
+      "recovery_password": "Wiederherstellungskennwort",
+      "name": "Name",
+      "version": "Version",
+      "publisher": "Herausgeber",
+      "installed": "Installiert",
+      "scope": "Für",
+      "package": "Paket",
+      "title": "Titel",
+      "kb": "KB",
+      "source": "Quelle",
+      "reboot": "Neustart nötig"
+    },
+    "scope": {
+      "user": "Ein Benutzer",
+      "machine": "Alle"
+    },
+    "no_fields": "Für dieses Gerät sind keine eigenen Felder gesetzt."
+  },
+  "reports": {
+    "heading": "Berichte",
+    "intro": "Alles, was FleetHub über jedes Gerät weiß, ein Blatt pro PC. Wählen Sie eine Gerätegruppe oder filtern Sie per Suche, öffnen Sie dann ein Blatt zum Drucken oder exportieren Sie die Auswahl.",
+    "group_label": "Gerätegruppe",
+    "group_all": "Alle Geräte",
+    "search_placeholder": "Name, Modell, Betriebssystem, Seriennummer, Besitzer suchen",
+    "clear_selection": "Alle Geräte anzeigen",
+    "export_label": "Exportieren:",
+    "export": {
+      "json": "Vollständige Blätter (JSON)",
+      "summary": "Übersicht (CSV)",
+      "software": "Software (CSV)",
+      "patches": "Updates (CSV)",
+      "network": "Netzwerk (CSV)",
+      "volumes": "Laufwerke (CSV)"
+    },
+    "col": {
+      "software": "Programme",
+      "patches": "Updates",
+      "unprotected": "Unverschlüsselte Laufwerke"
+    },
+    "count": {
+      "one": "{count} Gerät",
+      "other": "{count} Geräte"
+    },
+    "empty": "Keine Geräte in dieser Auswahl.",
+    "catalog": {
+      "heading": "Softwarekatalog",
+      "intro": "Jedes gemeldete Programm und jede Version auf den für Sie sichtbaren Geräten, mit der Anzahl der Geräte.",
+      "search_placeholder": "Programm oder Herausgeber suchen",
+      "col": {
+        "machines": "Geräte"
+      },
+      "count": {
+        "one": "{count} Eintrag",
+        "other": "{count} Einträge"
+      },
+      "empty": "Noch keine Software gemeldet. Geräte füllen dies, sobald ihr Agent neu genug ist, um sie zu erfassen.",
+      "show_machines": "Geräte anzeigen"
+    },
+    "genai": {
+      "heading": "Generative-KI-Apps",
+      "intro": "Installierte Programme und Apps, deren Name auf der Beobachtungsliste unter Einstellungen → Endgerätesicherheit steht. Das ist eine Liste, keine Sperre: Nichts hier verhindert, dass etwas läuft. Entfernen Sie einen Namen von der Liste, um ein freigegebenes Werkzeug nicht mehr zu melden.",
+      "watching": "Gesucht wird nach: {names}",
+      "empty": "Laut Inventar ist auf den für Sie sichtbaren Geräten nichts von der Beobachtungsliste installiert.",
+      "col": {
+        "matched": "Treffer"
+      }
+    }
   }
 }

@@ -52,6 +52,7 @@ import processes
 import refusals
 import remote
 import settings
+import software
 import terminal
 import usage
 import wake
@@ -219,6 +220,25 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 apps.record_inventory(db_path, machine, data["apps"])
             except Exception as e:
                 print(f"[apps] Could not record the app inventory for {machine}: {e}")
+        # Installed programs on a Windows PC (roadmap #25 B). The same OBJECT-wrapped,
+        # `is not None` shape as `apps` directly above and `patches` below, for the same
+        # reason: "this PC now reports nothing installed" is a real report and must survive a
+        # truthiness check. Change-only on the agent, scanned on its inventory loop, never
+        # fatal here.
+        #
+        # **A failed write says so in the reply.** The agent acknowledges a payload once the
+        # heartbeat returns 200 and then suppresses it by content hash, so a write that failed
+        # silently here would leave the device sheet stale until the PC's software actually
+        # changed -- possibly for weeks. Answering 500 instead was rejected: it would fail the
+        # whole heartbeat and read the machine offline over a report that is not about being
+        # online. `software_rejected` keeps the payload pending on the agent (3.38.0+) so the
+        # next heartbeat carries it again; an older agent never sends `software` at all.
+        if data.get("software") is not None:
+            try:
+                software.record_inventory(db_path, machine, data["software"])
+            except Exception as e:
+                print(f"[software] Could not record the software inventory for {machine}: {e}")
+                payload["software_rejected"] = True
         # What the device says it did with its app policy (roadmap #23 phase D). Sent after
         # an application attempt rather than on a cadence, and never fatal like everything
         # else here. `failed` is the field this exists for: setPackagesSuspended returns the

@@ -580,6 +580,22 @@ def main():
               == ["kb9000009"])
         check("and do not stay behind",
               patches.list_machine_patches(db_path, "OLDNAME") == [])
+        check("the scan marker follows the rename too",
+              patches.scanned_at(db_path, "NEWNAME") == 9000
+              and patches.scanned_at(db_path, "OLDNAME") is None)
+
+        # The marker that tells a fully patched PC from one that never scanned (roadmap #25):
+        # both have zero rows in machine_patches.
+        print("\n== Scan marker ==")
+        check("a machine that never scanned has no scan time",
+              patches.scanned_at(db_path, "NEVER") is None)
+        patches.ingest_inventory(db_path, "CLEAN", [], now=9100)
+        check("an EMPTY report still records the scan -- that is a fully patched PC",
+              patches.scanned_at(db_path, "CLEAN") == 9100
+              and patches.list_machine_patches(db_path, "CLEAN") == [])
+        patches.forget_machine(db_path, "CLEAN")
+        check("forgetting a machine drops its marker, so a reused name reads as never scanned",
+              patches.scanned_at(db_path, "CLEAN") is None)
 
         # ------------------------------------------------------------- the taxonomy
         print("\n== Command taxonomy ==")

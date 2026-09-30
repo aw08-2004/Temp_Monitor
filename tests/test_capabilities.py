@@ -120,6 +120,17 @@ def main():
         # Back to the baseline so the rest of the file reasons about one known state.
         capabilities.record_capabilities(db_path, "PHONE-1", ANDROID, now=3100)
 
+        # The Linux agent's Processes card (roadmap #22). An unknown feature is dropped at
+        # ingest, and a dropped `processes` claim means the console's version gate reads the
+        # Linux agent's 0.x as too old -- the card would exist and never fill.
+        capabilities.record_capabilities(
+            db_path, "LINUX-1", {"platform": "linux", "commands": ["rename"],
+                                 "features": ["processes"]}, now=3200)
+        check("a Linux agent's `processes` claim survives ingest",
+              capabilities.supports(db_path, "LINUX-1", capabilities.FEATURE_PROCESSES))
+        # Forgotten again: the platform tallies further down count every reporting machine.
+        capabilities.forget_machine(db_path, "LINUX-1")
+
         print("\n== Nothing a machine can send may break the heartbeat ==")
         for junk in (None, [], "rename", 7, {"platform": {"nested": True}},
                      {"commands": {"a": 1}}, {"platform": "", "commands": None},

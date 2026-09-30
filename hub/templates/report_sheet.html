@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ t('report.page_title', machine=machine) }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/reports.css') }}">
+{% endblock %}
+{% block content %}
+{# One machine's device sheet (roadmap #25 A), on a page of its own because this is the one
+   that gets printed -- see reports.css for what paper keeps. Printing is the browser's:
+   server-side PDF was rejected in ROADMAP.MD #25 as a new dependency in a hub that
+   self-updates by copying plain files, to replace a feature every operator already has. #}
+<div class="toolbar no-print" style="margin-bottom: var(--space-4);">
+    <a class="btn btn--ghost" href="{{ url_for('machine_page', machine=machine) }}">{{ t('report.back_to_machine') }}</a>
+    <button type="button" class="btn" id="report-print">{{ t('report.print') }}</button>
+    <a class="btn btn--ghost" data-report-export="json" href="#" download>{{ t('report.export_json') }}</a>
+    <a class="btn btn--ghost" data-report-export="software" href="#" download>{{ t('report.export_software_csv') }}</a>
+    <span class="stat-card__meta" id="report-sheet-status"></span>
+</div>
+<div id="report-sheet-root" class="report-sheet" data-machine="{{ machine }}"></div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/report-sheet.js') }}"></script>
+{% endblock %}

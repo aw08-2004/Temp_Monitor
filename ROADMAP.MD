@@ -82,6 +82,79 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-09-30
+
+**Read this first when working on the machine that holds the signing key.** Everything below
+was built, tested and pushed from a Linux container with no Windows, no Android device and no
+Ed25519 fleet key, so each item here is blocked on exactly one of those three. A session that
+opens this repo locally should surface this list before anything else, then tick items off
+here as they happen. The per-feature detail lives in each entry; this is the index.
+
+**0. Deploy order.** Hub **1.133.0** first (it is already the version on `main` once this
+branch merges, and the hub self-update picks it up). Only then cut the agents below. Every
+hub-side feature in this batch reads "waiting for a newer agent" until the agent arrives,
+which is correct and not a bug.
+
+**1. Windows agent release -- next MINOR above 3.37.1, so `agent/release.ps1 -Version 3.38.0`.**
+It carries, all on `main` and unreleased:
+- `SoftwareInventoryReporter` -- the device sheet's Software section and the software
+  catalog (#25 B). The hub has **no** `MIN_SOFTWARE_AGENT` constant, so no number needs
+  changing in `hub/static/js` whatever version this is cut as.
+- The `bash`/`sh` refusal in `run_script` (#22 hub-side gaps).
+- Nothing else: `git diff 8ef40a9..HEAD -- agent/src` (the 3.37.1 cut) shows only this
+  branch's changes. Entries below that still say "agent unreleased" for re-enrollment after a
+  deleted machine were already carried by 3.37.x -- the label is stale, not the code.
+- **Release notes are written:** `agent/release-notes/3.38.0.md`. Pass it with `-NotesFile`.
+- **Before cutting it:** `dotnet test agent/TempMonitorAgent.slnx` on Windows -- never run for
+  `SoftwareInventoryTests` and `RunScriptShellTests` (compiled from Linux only), nor ever for
+  `EventLogTests`. Then `git status` for rewritten `tests/fixtures/*.fhb` before staging.
+
+**2. Linux agent release -- `agent-linux/release.ps1 -Version 0.3.0` on the key machine (#22).**
+This is what makes Linux self-update exist at all: the four signed manifest files have never
+been committed (see #22, *The manifest is not in the repo*). **And 0.3.0 still has to be
+installed by hand once on every existing Linux box**: the `linux-agent-v0.2.0` tree has no
+`Update/SelfUpdater.cs`, so no installed machine can fetch anything. Re-running `install.sh`
+keeps the secret, the enrollment identity and the hub override. Release notes, which say
+exactly that to the operator, are at `agent-linux/release-notes/0.3.0.md`.
+**The re-run is now verified** (was a review finding on PR #91, CWE-494): `install.sh`
+checks the signed manifest the way `SelfUpdater` does -- Ed25519 over the manifest's exact
+bytes with the pinned fleet key (`openssl pkeyutl -rawin`, so OpenSSL 3 on the target), then
+the binary against the signed sha256 -- and refuses otherwise. Tested against the repo's real
+Windows manifest (same key) and a local server; `tests/test_linux_installer.py`. **Consequence
+to plan for:** until 0.3.0 is cut and its manifest committed, there is no signed Linux manifest,
+so a *fresh* Linux install from `main` is refused with a pointer to `--binary`/`--agent-url`.
+Cut 0.3.0 soon after merging. **Still owed on Windows:** `install.ps1` / `agent-install.ps1`
+do not check `agent.manifest.json` on a first install either; the same change belongs there. Commit the generated manifests and `.sig` files **exactly as produced** -- the
+`-text` pins in `.gitattributes` must stay. It carries live output streaming, patch inventory
+and the new process list. Also decide what to do with the unmerged
+`fix/linux-agent-web-installer` branch; its hand-made manifest commit must not be merged over a
+real one.
+
+**3. Android.** The whole of *Hardware validation still owed (roadmap #23)* near the end of
+this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchanged by this batch.
+
+**4. First contact on real machines, once 1 and 2 have propagated:**
+- **#25 software:** open a PC's Report tab and compare the Software list with Settings → Apps
+  on the same PC; sign in a second user and confirm their per-user installs appear; time the
+  walk on the machine with the most MSI patches.
+- **#25 printing:** print one sheet from Chrome and one from Edge (only ever checked on screen).
+- **#19 shadow AI:** a PC with ChatGPT or Claude desktop installed shows up under Reports →
+  Generative AI apps.
+- **#22 processes:** open the Processes card on a Linux box with systemd; the list should
+  appear within about five seconds and the Services column should name units.
+- **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
+  three shipped in agent 3.37.0 and none has been confirmed on a real machine.
+
+**5. Decisions only the owner can take** (left alone on purpose, not forgotten):
+- **#19 remote session recording** -- recording a colleague's screen is a policy call first.
+- **#18 Intune/Azure cross-reference** -- needs a Graph credential in the hub's secret store.
+- **#18 MAC vendor (OUI) lookup** -- needs a vendor table somebody commits to keeping current.
+- **#17's two residue columns** (adopted-document version, `last_error_at`) -- the entry says
+  they are better done with the agent half in hand, i.e. alongside a Windows agent release.
+- **#11** -- the Flutter client has still never talked to a live hub.
+
+---
+
 ## ✅ 6. History page
 
 Done. Per-machine multi-panel dashboard (Komodo-style): CPU load, memory (with total RAM
@@ -3261,16 +3334,28 @@ finding #10's `NicReader` produced on first contact.
 
 ---
 
-## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0**
+## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0** · **shadow-AI detection hub 1.133.0**
 
 Three small things from FR-06 and FR-07 that share no code but are each about a day. The
-first is built; the other two are not.
+first two are built; remote session recording is not.
 
 - **BitLocker key escrow.** ✅ **Done, hub 1.131.0** — see below. Auto-enable is deliberately
   NOT part of it; see *Rejected alternatives*.
-- **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
-  inventory already collects, plus a policy list — no new channel, and worth being honest in
-  the UI that a policy list is not an enforcement.
+- **Shadow-AI detection.** ✅ **Done, hub 1.133.0**, exactly as scoped: a query over the
+  inventories and a policy list, no new channel and no agent change. `software.genai_matches`
+  matches the `security.genai_watchlist` setting (name fragments, shipped with a default of
+  eleven: ChatGPT, Claude, Copilot, Gemini, Perplexity, DeepSeek, Ollama, LM Studio, GPT4All,
+  AnythingLLM, Msty) case-insensitively against the Windows software inventory (#25 B) and
+  Android's app labels and packages; `GET /api/software/genai` serves it at `view` + scope, and
+  the **Reports** page lists the findings under a sentence saying it blocks nothing.
+  Decisions: **removing a name from the watch list is how a tool is sanctioned** -- a second
+  "approved" list was turned down as two places to misspell one name; fragments are kept long
+  enough not to collide ("jan" for Jan.ai would flag every "Janitor"); matching is done in
+  Python rather than SQL LIKE so an operator's `%` or `_` is literal. **It depends on #25 B's
+  agent release for Windows findings** -- until that is cut, only Android devices can match.
+  Not done: an alert rule over findings (a `software.*` rules variable is the natural next
+  step, and should be built the way #16's `event.*` variables were), and browser-based AI use,
+  which no installed-software query can see.
 - **Remote session recording.** Video and keystroke capture for the audit trail, stored
   outside the hub DB. The one with real cost, and the one with a real question attached:
   recording a colleague's screen is a decision to take deliberately, not a default to leave
@@ -3590,9 +3675,10 @@ fixed:
 - `agents_outdated` counted every machine against the Windows manifest. **It now compares each
   machine against its own train.**
 - Every `MIN_*_AGENT` gate in `hub/static/js` still reads `0.1.0` as too old, which is what
-  keeps the console from offering a Linux machine the terminal, process list or file browser it
-  cannot answer. **Unchanged, and it is the only reason the number is still 0.1.0.** Those gates
-  move onto the capability report when there is something to gate.
+  keeps the console from offering a Linux machine the terminal or file browser it cannot
+  answer. **Unchanged, and it is the only reason the number is still 0.1.0.** Those gates
+  move onto the capability report when there is something to gate -- and the first one has:
+  the Processes card trusts a `processes` feature claim (hub 1.133.0, item 4 below).
 
 Enforced by `VersionGateTests`, not just written down: "bring the version in line with the other
 components" is a plausible change that would silently start offering features that do not exist.
@@ -3686,11 +3772,13 @@ the first slice of the list below, because that slice touched the hub anyway.
    stays**: an old rule, and an operator who never changed the default, still arrive saying
    "powershell", and the result's first line still says what actually ran. The default is
    still `powershell`, because the fleet is overwhelmingly Windows and a default nothing there
-   understands would be the same bug pointed the other way. **The Windows agent's
-   `ResolveShell` should reject `"bash"` and `"sh"` before interpreter selection**,
-   returning a failed `CommandResult` with a clear unsupported-shell message, because
-   these values are Linux interpreters that cannot run on Windows. Preserve the existing
-   `powershell` and `cmd` behaviour for supported or legacy values.
+   understands would be the same bug pointed the other way. **The Windows agent now refuses
+   `"bash"` and `"sh"`** (`RunScriptExecutor.IsLinuxOnlyShell`, agent source, unreleased):
+   before, `ShellSessionManager` mapped every unknown shell to PowerShell, so a bash rule aimed
+   at the wrong machine ran through PowerShell, half-worked, and reported success. It now fails
+   with the reason before any shell is created; `powershell`, `cmd` and the `batch`/`bat`
+   aliases are unchanged. Rides the next Windows agent release; `RunScriptShellTests` compiles
+   from Linux and has not been run.
 2. **`_OS_MATCHES` missed the distributions that never say "Linux".** "Pop!_OS 22.04 LTS",
    "elementary OS", "Zorin OS", "NixOS", "EndeavourOS", "Deepin", "Solus", "KDE neon" and
    "Raspbian" all bucketed as `unknown`, which put managed machines in the Dashboard's
@@ -3754,8 +3842,35 @@ is cut. Neither needed a hub change beyond the patch sources named below.
    - **Reboot-required is a kernel-package name match and nothing more.** Neither manager
      reports it before an install; `/var/run/reboot-required` is a fact about the machine
      afterwards. Flagging every `openssl` bump would train people to ignore the flag.
-4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
-   Windows one.
+4. ~~**Process list**~~ — done in source, unreleased (hub 1.133.0 for the console half).
+   `Telemetry/ProcessReader.cs` walks `/proc` and `ProcessReporter` samples only while the
+   hub says somebody is watching, through the same `/api/agent/processes/wanted` poll and
+   heartbeat flag the Windows agent uses; the wire shape is the Windows one field for field.
+   **Verified end to end in a container**: the real agent enrolled against a real hub,
+   reported the feature, and delivered 85 processes three seconds after a watch opened.
+   Decisions worth keeping:
+   - **The gate moved onto the capability report, as this entry said it would "when there
+     is something to gate".** The agent claims a `processes` feature
+     (`capabilities.FEATURE_PROCESSES`), and `processes.js` trusts the claim before it
+     consults `MIN_PROCESS_AGENT`; a Windows PC reports no capabilities, so it falls through
+     to the version check exactly as before. The version number was not touched, which is
+     the whole point of `VersionGateTests`.
+   - **CPU is a share of the whole machine** (process tick delta over the aggregate `cpu`
+     line's delta), the Task Manager meaning the Windows card already shows, so a Linux box
+     and a PC read the same on one card.
+   - **Identity is (pid, starttime)**, so a reused pid does not inherit its predecessor's
+     ticks; **comm is found by the last close paren**, because a process can name itself
+     `a) R 1 2 (` and a space split would shift every field after it. Both are tested.
+   - **Services come from the cgroup** (`.../system.slice/<unit>.service`), not D-Bus -- a
+     file read per process instead of a second IPC stack for a label.
+   - **The test caught a real bug before it shipped**: `/proc/<pid>/status` writes
+     `VmRSS:\t 5120 kB`, and splitting on spaces alone read every process as 0 MB.
+   - **Listing only.** `kill_process` / `restart_process` are not implemented, the capability
+     report does not claim them, and the card's context menu is now hidden for any machine
+     whose report leaves both out -- rather than offering End task and earning a refusal.
+   Owed: the Linux agent release (see *The manifest is not in the repo* above -- this rides
+   the same cut), and a look at the card against a real distribution with systemd, where the
+   services column fills in.
 5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
 6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
 
@@ -4258,11 +4373,84 @@ Rules page once #17's wording layer exists.
 
 ---
 
-## 📋 25. Inventory report — one device sheet, and the collection it still needs
+## 🚧 25. Inventory report — one device sheet, and the collection it still needs   ·   A + B hub 1.133.0 · B agent half in source, **release owed**
 
 Everything the hub knows about one PC, on one page, printable and exportable: what a Kaspersky
 export, a LOGINventory sheet or a PDQ Inventory report hands a helpdesk when somebody asks
 "what is this machine, and what is on it". Asked for directly, not from the PRD triage.
+
+### Built · hub 1.133.0 — phases A and B, and what is still owed
+
+**A (the sheet) and B (installed software) are built together on one branch, as planned, and
+the hub half is shipped in 1.133.0.** `reports.py` / `reports_web.py` join the tables below into
+one sheet per machine; `software.py` / `software_web.py` store and serve the Windows inventory;
+the agent half is `agent/src/TempMonitorAgent/Software/` (`SoftwareReader` +
+`SoftwareInventoryReporter`), wired into the inventory loop and the heartbeat, and
+`DeployPackageExecutor` invalidates it on every exit. Console: a **Report** tab on the machine
+page, a printable page at `/reports/machines/<machine>`, a **Reports** page at `/reports` (device
+group, search, or rows ticked on Devices → **Report selected**) with JSON and per-section CSV
+exports, and a fleet **software catalog** under it.
+
+**Owed, and none of it can be done from a Linux container:**
+
+1. **Cut the agent release** -- `agent/release.ps1 -Version 3.38.0` (or whatever MINOR is next
+   above the released number when it happens; 3.37.1 is current as of this entry). Until then
+   every PC's Software section reads *Waiting for a newer agent on this machine*, which is the
+   correct answer and the state A's wording was written for. Deploy order as always: hub first
+   (already true once 1.133.0 is on `main`), then the agent.
+2. **Run `dotnet test agent/TempMonitorAgent.slnx` on Windows.** `SoftwareInventoryTests.cs`
+   compiles clean from Linux (`-p:EnableWindowsTargeting=true`) and has never executed. Check
+   `git status` afterwards for rewritten `tests/fixtures/*.fhb`.
+3. **First contact on a real PC**: that HKU enumeration from LocalSystem sees every signed-in
+   profile, what an FSLogix or roaming profile looks like there, how long the walk takes on a
+   machine with thousands of registered MSI patches, and that the Programs-and-Features filter
+   lists what the Control Panel lists (compare the two side by side on one PC).
+4. **Print a sheet** from Chrome and Edge and check `reports.css`'s print rules on paper -- that
+   was checked in headless Chromium on screen only.
+
+**Decisions taken while building it, each with the alternative it beat:**
+
+- **No `MIN_SOFTWARE_AGENT` constant, and so no agent number written into the hub.** This entry
+  used to plan one, and then spent a paragraph on why naming the MINOR in advance is a trap.
+  The hub does not need it: `machine_software_state` has a row only once an agent has sent a
+  report, so "no row" IS "this agent is too old or has not checked in", exactly as
+  `machine-bitlocker.js` argues for its own card. A version constant would have to name a
+  release that has not been cut, and would be wrong for every Linux and Android machine
+  anyway. The capability-report route stays open for when a gate is genuinely needed.
+- **A state table beside the rows** (`machine_software_state`), rather than inferring
+  `reported_at` from the rows as `apps.py` does. On Android no device has zero packages; a
+  Windows report whose every entry was filtered out is rare but real, and inferring from rows
+  would make it indistinguishable from an agent that never spoke.
+- **Per-user software: loaded hives only** (was an open parameter below). Mounting every
+  `NTUSER.DAT` means mounting hives under profiles somebody may sign into mid-scan, which is
+  the thing `HiveMount` does carefully and only for a backup. A signed-out user's per-user
+  installs appear when they next sign in.
+- **A read that cannot open HKLM throws rather than reporting an empty list.** The hub stores
+  an empty list as "nothing installed", and one failed registry open must never send it.
+- **Every section carries a status** -- `ok`, `waiting` (with `agent_report`, `agent_update` or
+  `directory`) or `not_collected` (`phase_c`, `phase_d`) -- and the console words each one. The
+  Hardware and Security sections print the phase C / D sentence even when they have data,
+  because a sheet silent about DIMMs reads as a PC with none.
+- **Patches got a scan marker** (`machine_patch_state`, `patches.scanned_at`). The first cut
+  printed a fully patched PC as "not reported yet", because `machine_patches` has zero rows for
+  both that and a PC that never scanned. Each ingest now records when it happened, including an
+  empty one, so the sheet can say "none pending" and the summary CSV writes 0 rather than blank.
+  Existing hubs have no markers until each machine's next scan (six-hourly at most).
+- **Two things are left OFF the sheet** because their own pages gate them higher than `view`:
+  BitLocker escrow bookkeeping (`read_recovery_keys`) and backup history (`manage_backups`). The
+  sheet shows posture and "has a recovery password", never protector ids.
+- **CSV is built on the hub** (the browser never holds every sheet), neutralised cell by cell,
+  and an unreported count is **blank, not 0**, so a spreadsheet total does not count a silent PC
+  as patched. A selection over 1000 machines is refused rather than truncated.
+- **The print order is sent explicitly** (`order`): Flask's `jsonify` sorts object keys, and
+  the first version printed Capabilities above Identity.
+- **Plain CSS for the sheet** (`reports.css`), not Tailwind utilities: its markup is built in
+  JS strings, and a class that only appears there is one the next `build_css.ps1` run has to be
+  trusted to find.
+
+**Not done in this slice:** phases C and D; a Linux-agent or Android-agent software reader (the
+Android `apps` section already appears on a phone's sheet); a snapshot/diff of two sheets
+(still an open parameter); backup status on the sheet (gated, see above).
 
 **The hub already holds most of a device sheet and has nowhere to print it.** Nine tables carry
 per-machine facts, each behind the page that needed it, and no route joins them:
@@ -4407,9 +4595,8 @@ unencrypted is this feature's).
 
 ### Open parameters
 
-- Whether per-user installed software covers every profile on disk (loading each `NTUSER.DAT`)
-  or only the hives already loaded. The second is cheap and misses software installed by a user
-  who is logged off.
+- ~~Whether per-user installed software covers every profile on disk~~ -- **answered: loaded
+  hives only**, see *Built* above.
 - Whether a sheet is snapshotted so two dates can be diffed. Not in A; it is the only part of
   this feature with an unbounded storage cost.
 - Whether the Linux and Android agents fill the same sections or declare their own. Their
@@ -5168,7 +5355,7 @@ one word that either hides the Terminal button fleet-wide or shows a Wipe button
 
 ---
 
-## ✅ Agent re-enrollment after a machine is deleted · hub 1.112.0 · agent unreleased
+## ✅ Agent re-enrollment after a machine is deleted · hub 1.112.0 · agent 3.37.x
 
 Delete a machine from the console, reinstall the agent on that PC with the same enrollment
 secret, and the console kept saying **not enrolled, telemetry only** — permanently, with
@@ -5231,9 +5418,10 @@ agent would re-enroll itself the moment somebody revoked it, which would make
 
 ### Not done
 
-No agent release is cut for this. The agent half is on `main` unreleased, so a machine in
-the field gets the hub half now — which is what makes the *uninstall* path work — and the
-in-service recovery when the next agent release ships.
+Nothing. The hub half shipped in 1.112.0 (which is what makes the *uninstall* path work) and
+the agent half -- the in-service recovery -- in 3.37.x. An earlier version of this note said
+the agent half was unreleased; `git diff 8ef40a9..HEAD -- agent/src` against the 3.37.1 cut
+shows it was already in.
 
 ## ✅ Messages to the person holding the device · agent-android, unreleased
 
@@ -5506,6 +5694,11 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     are unallocated on purpose: this entry named 3.37.0 and 3.38.0 until 3.37.x shipped without
     either phase in it. Pulled forward of #16–#20 in practice: it is the only item on this
     board a helpdesk asks for by name.
+    **A and the hub half of B shipped in hub 1.133.0; B's agent half is in source and waits on
+    the next agent MINOR** -- see the entry's *Built* section for what is owed. "It does not
+    ship alone" was kept in substance rather than letter: the hub went first, as deploy order
+    requires anyway, and the Software section says *waiting for a newer agent* until the
+    release lands, which is the state the plan above designed the wording for.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
@@ -5530,10 +5723,12 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 > never talked to a hub. Everything else predating the triage is done except the
 > opportunistic remainder of #3.
 >
-> **Nothing on this board is waiting on an agent release any more.** Every agent half that
-> this file once listed as pending has shipped: #5 and #1 in 3.9.0/3.10.0, #2 and #6 in
-> 3.13.0, #9 in 3.20.1, #10 in 3.21.0, #12 in 3.24.0, #13 in 3.33.0, and #14 with #21 in
-> 3.35.0. Those lines stayed stale for a long time because a released agent half changes
+> **Waiting on an agent release again, as of hub 1.133.0:** #25 B's `SoftwareInventoryReporter`
+> and the `run_script` shell refusal (Windows agent, next MINOR), and #22's streaming, patch
+> inventory and process list (Linux agent) -- see *Owed locally* at the top of this file.
+> Every agent half this file listed as pending BEFORE that has shipped: #5 and #1 in
+> 3.9.0/3.10.0, #2 and #6 in 3.13.0, #9 in 3.20.1, #10 in 3.21.0, #12 in 3.24.0, #13 in
+> 3.33.0, and #14 with #21 in 3.35.0. Those lines stayed stale for a long time because a released agent half changes
 > nothing an operator can see on this page — the entry it belongs to already read done — so
 > the versions above were each verified against the `agent-v<version>` tag rather than
 > against the "built at" number in the entry, which is a SOURCE version and in #9's case

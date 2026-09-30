@@ -42,6 +42,7 @@ public sealed class Worker : BackgroundService
     private readonly CommandDispatcher _dispatcher;
     private readonly SelfUpdater _updater;
     private readonly PatchInventoryReporter _patches;
+    private readonly ProcessReporter _processes;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -70,7 +71,7 @@ public sealed class Worker : BackgroundService
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
-        SelfUpdater updater, PatchInventoryReporter patches)
+        SelfUpdater updater, PatchInventoryReporter patches, ProcessReporter processes)
     {
         _log = log;
         _state = state;
@@ -80,6 +81,7 @@ public sealed class Worker : BackgroundService
         _dispatcher = dispatcher;
         _updater = updater;
         _patches = patches;
+        _processes = processes;
         _enrollmentSecret = ReadEnrollmentSecret(log);
     }
 
@@ -106,6 +108,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => CommandLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => InventoryLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => ProcessLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait on
@@ -202,9 +205,13 @@ public sealed class Worker : BackgroundService
                 // is marked sent only below, once the hub has actually answered -- see
                 // PatchInventoryReporter on why those are two steps.
                 var patches = _patches.TakeIfChanged();
-                if (await EnsureEnrolledAsync(ct) && await _fleet.HeartbeatAsync(ct, patches))
+                if (await EnsureEnrolledAsync(ct)
+                    && await _fleet.HeartbeatAsync(ct, patches, _processes.TakeLatest()))
                 {
                     if (patches is not null) _patches.MarkSent(patches);
+                    // The heartbeat's answer is authoritative for STOPPING: the process loop
+                    // only ever asks while idle, so this is how a closed card ends sampling.
+                    if (_fleet.ProcessesWanted is { } wanted) _processes.SetWanted(wanted);
                     // A heartbeat the hub accepted is proof this build can do its job, which
                     // is what retires the previous binary after an update. The telemetry loop
                     // says the same thing independently; either is enough, and neither is
@@ -245,6 +252,46 @@ public sealed class Worker : BackgroundService
             catch (Exception e) { _log.LogWarning(e, "Inventory tick failed"); }
 
             if (!await DelayAsync(InventoryTickSeconds, ct)) break;
+        }
+    }
+
+    // ------------------------------------------------------------------ processes
+
+    /// <summary>The Processes card's list (roadmap #22), the Windows agent's ProcessLoopAsync
+    /// ported unchanged in shape.
+    ///
+    /// While nobody is watching this asks the hub every couple of seconds -- a bearer-authed,
+    /// ~30-byte request that is the whole cost of the feature on an idle machine -- because the
+    /// heartbeat is a ten-second tick and an operator who opened the card should see rows in
+    /// a few seconds, not fifteen. Once somebody is, it samples every five seconds and sends
+    /// its own heartbeat with the result, rather than leaving half of the samples to go stale
+    /// waiting for the heartbeat loop. The heartbeat reply is what turns it off again.</summary>
+    private async Task ProcessLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var watching = false;
+            try
+            {
+                watching = _processes.Wanted;
+                if (!watching && _fleet.IsEnrolled)
+                {
+                    watching = await _fleet.PollProcessWatchAsync(ct);
+                    if (watching) _processes.SetWanted(true);
+                }
+                if (watching && _fleet.IsEnrolled && await _processes.SampleAsync(ct))
+                {
+                    if (await _fleet.HeartbeatAsync(ct, processes: _processes.TakeLatest())
+                        && _fleet.ProcessesWanted is { } wanted)
+                        _processes.SetWanted(wanted);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { _log.LogWarning(e, "Process sample failed"); }
+
+            var every = watching ? AgentConfig.ProcessSampleSeconds
+                                 : AgentConfig.ProcessIdleCheckSeconds;
+            if (!await DelayAsync(every, ct)) break;
         }
     }
 

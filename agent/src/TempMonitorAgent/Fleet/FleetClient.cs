@@ -219,6 +219,16 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // -- "I am offering no updates" -- is the only honest evidence an install worked,
             // and it is what closes out a patch run on the hub. A bare array would be dropped
             // by the `if (x is not null)` shape above the moment it went empty.
+            // Installed programs (roadmap #25 B), the device sheet's Software section.
+            // Object-wrapped like `patches` below and for the same reason -- "nothing
+            // installed from that publisher any more" has to survive as a truthy payload --
+            // and acknowledged only after this heartbeat succeeds, like `bitlocker` above.
+            var installed = TempMonitorAgent.Software.SoftwareInventoryReporter.TakeIfChanged();
+            // DeepClone'd, because a JsonNode may have only one parent: attaching the
+            // reporter's own object would re-parent it, and after a FAILED heartbeat the retry
+            // would throw "the node already has a parent" on every attempt until the next
+            // scan replaced it. The original is what AckSent is handed.
+            if (installed is not null) body["software"] = installed.DeepClone();
             var patchInventory = TempMonitorAgent.Patch.PatchInventoryReporter.TakeIfChanged();
             if (patchInventory is not null) body["patches"] = patchInventory;
             // The process list, and the ONE payload here that is not change-only: a process
@@ -265,6 +275,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                 TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
 
             var text = await resp.Content.ReadAsStringAsync(ct);
+            // A 200 is not proof the software list was stored: the hub keeps a heartbeat
+            // successful when one inventory write fails (a 500 would read the machine offline)
+            // and flags it instead. Acknowledging anyway would hash-suppress the payload until
+            // something was installed, leaving the device sheet stale. Found in review.
+            if (installed is not null && !SoftwareRejected(text))
+                TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent(installed);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
             ApplyEscrowRequestFromHeartbeat(text);
@@ -277,6 +293,21 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Heartbeat failed: {Msg}", e.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Did the hub say it could not store the software list this heartbeat carried?
+    /// Unparseable text counts as no -- the heartbeat itself succeeded, and an agent that
+    /// resent on every malformed reply would never settle.</summary>
+    internal static bool SoftwareRejected(string replyBody)
+    {
+        try
+        {
+            return JsonNode.Parse(replyBody)?["software_rejected"]?.GetValue<bool>() == true;
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
+        {
             return false;
         }
     }

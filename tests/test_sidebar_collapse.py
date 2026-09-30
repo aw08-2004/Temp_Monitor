@@ -59,6 +59,7 @@ def _register_sidebar_stubs(app):
                            ("sharing", "sharing_page"),
                            ("provisioning", "provisioning_page"),
                            ("location", "fleet_map_page"),
+                           ("reports", "reports_page"),
                            ("policy", "policy_page"),
                            ("device_groups", "device_groups_page"),
                            ("watchdogs", "watchdogs_page")):

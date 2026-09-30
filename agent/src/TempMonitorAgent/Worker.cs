@@ -389,6 +389,10 @@ public sealed class Worker : BackgroundService
                 TempMonitorAgent.Bios.BiosInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Network.NetworkInventoryReporter.RefreshIfDue();
                 TempMonitorAgent.Security.BitLockerInventoryReporter.RefreshIfDue();
+                // Installed programs (roadmap #25 B): three Uninstall roots and every loaded
+                // profile hive. Cheap next to its neighbours, but still hundreds of registry
+                // opens, so here rather than in front of a heartbeat.
+                TempMonitorAgent.Software.SoftwareInventoryReporter.RefreshIfDue();
                 // Available updates (roadmap #14). The slowest scan on this loop by far --
                 // a Windows Update search contacts WSUS and winget refreshes its sources --
                 // which is exactly why it is here and not on the heartbeat path.

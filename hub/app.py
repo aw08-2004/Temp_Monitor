@@ -41,6 +41,7 @@ import remote
 import directory
 import bios
 import bitlocker
+import software
 import channels
 import firmware
 import patches
@@ -83,6 +84,8 @@ from remote_web import create_remote_blueprint
 from bios_web import create_bios_blueprint
 import bitlocker_web
 from bitlocker_web import create_bitlocker_blueprint
+from software_web import create_software_blueprint
+from reports_web import create_reports_blueprint
 from patches_web import create_patches_blueprint
 from discovery_web import create_discovery_blueprint
 from wake_web import create_wake_blueprint
@@ -142,7 +145,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.132.0"
+HUB_VERSION = "1.133.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2432,6 +2435,35 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 # up to a bucket.
 app.register_blueprint(create_bitlocker_blueprint(DB_PATH, LOG_DIR, login_required, access))
 
+# Installed software (roadmap #25 B) and the device sheet that prints it (#25 A). Both `view`
+# + scope and no new capability -- see software_web.py and reports_web.py. The sheet's live
+# half (CPU and GPU names, memory, volumes) comes out of this module's sensor cache, so it is
+# handed over as a callable rather than imported back; reports.py stays Flask-free.
+def _report_hardware(machine_name):
+    sensors = _recent_sensors_for(machine_name)
+    if not sensors:
+        return None
+    diagnostics = extract_diagnostics(sensors)
+
+    def _named(kind):
+        for s in sensors:
+            if kind in str(s.get("hardware_id") or "").lower() and s.get("hardware"):
+                return str(s["hardware"])
+        return None
+
+    return {
+        "cpu": _named("cpu"),
+        "gpu": _named("gpu"),
+        "memory_gb": diagnostics.get("mem_total_gb"),
+        "volumes": diagnostics.get("disks") or [],
+        "reported_at": None,
+    }
+
+
+app.register_blueprint(create_software_blueprint(DB_PATH, login_required, access))
+app.register_blueprint(create_reports_blueprint(DB_PATH, login_required, access,
+                                                hardware_probe=_report_hardware))
+
 # Wake-on-LAN (roadmap #10): a machine's NIC inventory and wakeability diagnosis behind
 # `view`, and waking/preparing behind `issue_commands` -- no new capability, because waking
 # a PC is strictly less dangerous than the `shutdown` that gate already covers.
@@ -3522,6 +3554,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # The app inventory follows, and the survivor's own wins a collision: both rows describe
     # one physical device, and a union would claim apps that were uninstalled before the merge.
     apps.rename_machine(DB_PATH, dropped, survivor)
+    # Installed Windows software (roadmap #25 B), on the same survivor-wins rule and for the
+    # same reason.
+    software.rename_machine(DB_PATH, dropped, survivor)
     # Policy targets follow the survivor: it IS the merged-away device, and a policy that
     # stopped covering it would silently un-block apps somebody deliberately blocked.
     policy.rename_machine(DB_PATH, dropped, survivor)
@@ -4738,6 +4773,7 @@ discovery.init_discovery_db(DB_PATH)
 capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
+software.init_software_db(DB_PATH)
 policy.init_policy_db(DB_PATH)
 usage.init_usage_db(DB_PATH)
 wipe.init_wipe_db(DB_PATH)
@@ -5702,6 +5738,8 @@ def delete_machine(machine):
     # list of somebody's apps is a fact about them rather than about an update or an
     # archive, so it has no claim to survive the machine the way patch history does.
     apps.forget_machine(DB_PATH, machine_name)
+    # The Windows half of the same fact (roadmap #25 B), dropped on the same argument.
+    software.forget_machine(DB_PATH, machine_name)
     # And drop it from every app policy that named it. A stale target is worse here than
     # elsewhere: a reused hostname would silently inherit a policy nobody aimed at it, and
     # the symptom is apps that will not open on a machine whose page shows no reason why.

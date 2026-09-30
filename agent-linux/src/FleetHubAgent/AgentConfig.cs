@@ -61,6 +61,7 @@ public static class AgentConfig
     public static string EnrollUrl => HubBase + "/api/agent/enroll";
     public static string HeartbeatUrl => HubBase + "/api/agent/heartbeat";
     public static string CommandsUrl => HubBase + "/api/agent/commands";
+    public static string ProcessesWantedUrl => HubBase + "/api/agent/processes/wanted";
 
     /// <summary>The command endpoint, asking the hub to HOLD the request open for up to
     /// <paramref name="waitSeconds"/> if nothing is queued. The hub applies its own ceiling
@@ -119,6 +120,8 @@ public static class AgentConfig
     public const int SensorIntervalSeconds = 10;  // full sensor block
     public const int UptimeIntervalSeconds = 600; // uptime field
     public const int HeartbeatSeconds = 10;       // liveness (well under the 90s online window)
+    public const int ProcessSampleSeconds = 5;    // process list while somebody is watching
+    public const int ProcessIdleCheckSeconds = 2; // "is anybody watching?" while nobody is
     public const int CommandPollSeconds = 10;     // idle command poll (the fallback cadence)
 
     /// <summary>How long the agent asks the hub to hold an empty command request open.

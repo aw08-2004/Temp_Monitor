@@ -79,6 +79,7 @@ def _register_sidebar_stubs(app):
                            ("events", "events_page"),
                            ("apitokens", "download_page"), ("sharing", "sharing_page"),
                            ("provisioning", "provisioning_page"),
+                           ("reports", "reports_page"),
                            ("policy", "policy_page"),
                            ("device_groups", "device_groups_page"),
                            ("watchdogs", "watchdogs_page")):

@@ -109,8 +109,21 @@
 
     // Asked once, the first time the card is opened. The answer only changes when the agent
     // self-updates, which takes it offline briefly and reloads this page's data anyway.
+    //
+    // **A machine that CLAIMS the `processes` feature is never too old** (roadmap #22). The
+    // version gate reads the Windows agent's number line, and the Linux agent is on its own
+    // (0.x) -- measured against 3.24.0 it would always read as too old for a card it can
+    // fill. The Windows agent reports no capabilities at all, so for it this falls through to
+    // the version check exactly as before.
     async function checkAgentVersion() {
         if (tooOld !== null) return;
+        if (window.MachineCapabilities) {
+            await window.MachineCapabilities.ready();
+            if (window.MachineCapabilities.hasFeature('processes')) {
+                tooOld = false;
+                return;
+            }
+        }
         try {
             const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}`);
             if (!resp.ok) return;
@@ -576,6 +589,12 @@
     // answers the question that was being asked by right-clicking it.
     function openMenu(target, at) {
         if (!menu || !CAN_ISSUE || !target) return false;
+        // A machine whose capability report leaves out kill_process (the Linux agent lists
+        // processes but cannot end them yet) gets no menu: offering End task would only earn
+        // a refusal from fleet.create_command. Unknown still means yes -- see
+        // machine-capabilities.js -- so every Windows PC keeps its menu.
+        if (window.MachineCapabilities && !window.MachineCapabilities.can('kill_process')
+            && !window.MachineCapabilities.can('restart_process')) return false;
         menuTarget = target;
 
         menuTargetEl.textContent = target.count > 1

@@ -273,6 +273,20 @@ def init_patches_db(db_path):
                      "ON machine_patches(uid)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_machine_patches_class "
                      "ON machine_patches(classification)")
+        # WHEN A MACHINE LAST SCANNED, including a scan that found nothing. machine_patches
+        # alone cannot say that: a fully patched PC and one whose agent has never scanned both
+        # have zero rows, and the device sheet (roadmap #25) printed the first as "not reported
+        # yet" because it could not tell them apart. One row per machine that has ever sent a
+        # `patches` block, replaced on every ingest.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS machine_patch_state (
+                machine      TEXT PRIMARY KEY,
+                count        INTEGER NOT NULL DEFAULT 0,
+                reported_at  INTEGER NOT NULL
+            )
+            """
+        )
 
         # WHAT IS ALLOWED. Keyed on the update's identity alone -- no machine column, on
         # purpose. See the module docstring.
@@ -625,8 +639,29 @@ def ingest_inventory(db_path, machine, updates, now=None):
                  update["classification"], 1 if update["reboot_required"] else 0,
                  update["size_bytes"], existing.get(uid, now), now),
             )
+        conn.execute(
+            "INSERT INTO machine_patch_state(machine, count, reported_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(machine) DO UPDATE SET count = excluded.count, "
+            "reported_at = excluded.reported_at", (host, len(incoming), now))
     added = len([u for u in incoming if u not in existing])
     return (added, len(gone), len(incoming) - added)
+
+
+def scanned_at(db_path, machine):
+    """When this machine last reported its available updates, or None if it never has.
+
+    The distinction list_machine_patches cannot draw: an empty list there is either "fully
+    patched" or "never scanned". A hub that predates this table has no rows in it, so every
+    machine reads None until its next scan (at most six hours, PatchInventoryReporter) --
+    which is the honest answer rather than a regression.
+    """
+    host = _clean(machine, 63)
+    if not host:
+        return None
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT reported_at FROM machine_patch_state WHERE machine = ?",
+                           (host,)).fetchone()
+    return None if row is None else row["reported_at"]
 
 
 def list_machine_patches(db_path, machine):
@@ -1716,6 +1751,7 @@ def forget_machine(db_path, machine):
     now = int(time.time())
     with get_conn(db_path) as conn:
         conn.execute("DELETE FROM machine_patches WHERE machine = ?", (host,))
+        conn.execute("DELETE FROM machine_patch_state WHERE machine = ?", (host,))
         run_ids = [r["run_id"] for r in conn.execute(
             "SELECT DISTINCT run_id FROM patch_run_targets WHERE machine = ?", (host,))]
         cur = conn.execute("DELETE FROM patch_run_targets WHERE machine = ?", (host,))
@@ -1733,6 +1769,9 @@ def rename_machine(db_path, old_name, new_name):
     with get_conn(db_path) as conn:
         conn.execute("DELETE FROM machine_patches WHERE machine = ?", (new,))
         conn.execute("UPDATE machine_patches SET machine = ? WHERE machine = ?", (new, old))
+        # The scan marker moves with the rows it describes, on the same rule.
+        conn.execute("DELETE FROM machine_patch_state WHERE machine = ?", (new,))
+        conn.execute("UPDATE machine_patch_state SET machine = ? WHERE machine = ?", (new, old))
         conn.execute("UPDATE patch_run_items SET machine = ? WHERE machine = ?", (new, old))
         cur = conn.execute(
             "UPDATE OR REPLACE patch_run_targets SET machine = ? WHERE machine = ?",

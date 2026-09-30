@@ -36,7 +36,8 @@
       "admin": "Administración"
     },
     "events": "Eventos",
-    "watchdogs": "Vigilantes"
+    "watchdogs": "Vigilantes",
+    "reports": "Informes"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -227,7 +228,8 @@
       "wake": "Despertar seleccionados",
       "deploy": "Implementar un paquete…",
       "export": "Exportar selección",
-      "clear": "Quitar selección"
+      "clear": "Quitar selección",
+      "report": "Informe de la selección"
     },
     "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos en línea también aparecen en el panel en vivo; los que están sin conexión permanecen aquí hasta que se eliminen. Eliminar un equipo borra de forma permanente su identidad, su historial de temperatura y su inscripción en la flota.",
     "search_placeholder": "Buscar por nombre, fabricante, etiqueta de activo, n.º de serie o service tag…",
@@ -1248,6 +1250,10 @@
           "label": "Abandonar un barrido tras",
           "help": "Un barrido lo ejecuta un PC encendido y respondiendo, así que un informe que no ha llegado para entonces ya no va a llegar."
         }
+      },
+      "security.genai_watchlist": {
+        "label": "Lista de vigilancia de IA generativa",
+        "help": "Fragmentos de nombre que identifican un programa o aplicación instalados como herramienta de IA generativa. Se buscan en cualquier parte del nombre sin distinguir mayúsculas y se listan en la página Informes. Solo se marca: no se bloquea nada. Quite un nombre para dejar de marcar una herramienta aprobada."
       }
     },
     "ai": {
@@ -4053,5 +4059,173 @@
     "unreachable": "No se pudo contactar con el hub.",
     "key_for": "Clave de recuperación de {volume}",
     "key_warning": "Esta lectura quedó registrada en el registro de auditoría. La clave desaparece al salir de la página."
+  },
+  "report": {
+    "tab": "Informe",
+    "open_printable": "Abrir hoja imprimible",
+    "export_json": "Exportar JSON",
+    "export_software_csv": "Exportar software (CSV)",
+    "page_title": "Informe del equipo: {machine}",
+    "back_to_machine": "Volver al equipo",
+    "print": "Imprimir",
+    "yes": "Sí",
+    "no": "No",
+    "empty": "Informado, sin nada que listar.",
+    "no_groups": "No pertenece a ningún grupo de equipos.",
+    "generated": "Generado {when}",
+    "reported": "Informado {when}",
+    "load_failed": "No se pudo cargar el informe.",
+    "software": {
+      "count": {
+        "one": "{count} programa instalado",
+        "other": "{count} programas instalados"
+      }
+    },
+    "sessions": {
+      "summary": "{sessions} sesión(es) iniciada(s) en el último informe."
+    },
+    "section": {
+      "identity": "Identidad",
+      "os": "Sistema operativo",
+      "directory": "Directorio",
+      "fields": "Campos personalizados",
+      "groups": "Grupos de equipos",
+      "hardware": "Hardware",
+      "firmware": "Firmware",
+      "volumes": "Volúmenes",
+      "network": "Red",
+      "security": "Seguridad",
+      "software": "Software instalado",
+      "apps": "Aplicaciones",
+      "patches": "Actualizaciones disponibles",
+      "sessions": "Sesiones",
+      "capabilities": "Capacidades del agente",
+      "location": "Última ubicación conocida"
+    },
+    "waiting": {
+      "agent_report": "Aún no informado. Se completa cuando el equipo vuelva a conectarse.",
+      "agent_update": "Esperando un agente más reciente en este equipo. No significa que no haya nada instalado.",
+      "phase_c": "FleetHub aún no recopila módulos de memoria, discos, monitores, chasis, TPM ni batería.",
+      "phase_d": "FleetHub aún no recopila antivirus, firewall, administradores locales ni estado del TPM.",
+      "directory": "No encontrado en el directorio, o aún no se ha sincronizado el directorio."
+    },
+    "f": {
+      "manufacturer": "Fabricante",
+      "model": "Modelo",
+      "serial_number": "Número de serie",
+      "service_tag": "Etiqueta de servicio",
+      "asset_tag": "Etiqueta de activo",
+      "agent_version": "Versión del agente",
+      "update_channel": "Canal de actualización",
+      "last_report": "Último informe",
+      "os_caption": "Nombre",
+      "os_version": "Versión",
+      "os_build": "Compilación",
+      "os_arch": "Arquitectura",
+      "last_boot": "Último arranque",
+      "uptime": "Tiempo en marcha",
+      "ad_dn": "Nombre distintivo",
+      "ad_ou": "OU",
+      "ad_owner": "Propietario",
+      "ad_os": "SO según el directorio",
+      "ad_last_logon": "Último inicio en el directorio",
+      "ad_disabled": "Deshabilitado en el directorio",
+      "ad_synced_at": "Directorio sincronizado",
+      "cpu": "Procesador",
+      "gpu": "Gráficos",
+      "memory_gb": "Memoria (GB)",
+      "support": "Gestión del firmware",
+      "vendor": "Proveedor",
+      "interface": "Interfaz",
+      "bios_version": "Versión del BIOS",
+      "password_set": "Contraseña de configuración establecida",
+      "error": "Error",
+      "fast_startup": "Inicio rápido",
+      "bitlocker_support": "BitLocker",
+      "platform": "Plataforma",
+      "lat": "Latitud",
+      "lon": "Longitud",
+      "accuracy_m": "Precisión (m)",
+      "fixed_at": "Localizado"
+    },
+    "col": {
+      "volume": "Volumen",
+      "used_gb": "Usado (GB)",
+      "total_gb": "Tamaño (GB)",
+      "used_pct": "Usado",
+      "adapter": "Adaptador",
+      "mac": "MAC",
+      "ipv4": "IPv4",
+      "kind": "Tipo",
+      "link": "Enlace activo",
+      "protection": "Protección",
+      "method": "Método",
+      "recovery_password": "Contraseña de recuperación",
+      "name": "Nombre",
+      "version": "Versión",
+      "publisher": "Editor",
+      "installed": "Instalado",
+      "scope": "Para",
+      "package": "Paquete",
+      "title": "Título",
+      "kb": "KB",
+      "source": "Origen",
+      "reboot": "Requiere reinicio"
+    },
+    "scope": {
+      "user": "Un usuario",
+      "machine": "Todos"
+    },
+    "no_fields": "Este equipo no tiene campos personalizados."
+  },
+  "reports": {
+    "heading": "Informes",
+    "intro": "Todo lo que FleetHub sabe de cada equipo, una hoja por PC. Elija un grupo de equipos o filtre con la búsqueda, y abra una hoja para imprimirla o exporte la selección.",
+    "group_label": "Grupo de equipos",
+    "group_all": "Todos los equipos",
+    "search_placeholder": "Buscar nombre, modelo, SO, número de serie, propietario",
+    "clear_selection": "Mostrar todos los equipos",
+    "export_label": "Exportar:",
+    "export": {
+      "json": "Hojas completas (JSON)",
+      "summary": "Resumen (CSV)",
+      "software": "Software (CSV)",
+      "patches": "Actualizaciones (CSV)",
+      "network": "Red (CSV)",
+      "volumes": "Volúmenes (CSV)"
+    },
+    "col": {
+      "software": "Programas",
+      "patches": "Actualizaciones",
+      "unprotected": "Volúmenes sin cifrar"
+    },
+    "count": {
+      "one": "{count} equipo",
+      "other": "{count} equipos"
+    },
+    "empty": "No hay equipos en esta selección.",
+    "catalog": {
+      "heading": "Catálogo de software",
+      "intro": "Cada programa y versión informados en los equipos que puede ver, con cuántos lo tienen.",
+      "search_placeholder": "Buscar programa o editor",
+      "col": {
+        "machines": "Equipos"
+      },
+      "count": {
+        "one": "{count} entrada",
+        "other": "{count} entradas"
+      },
+      "empty": "Aún no se ha informado software. Los equipos lo completan cuando su agente es lo bastante reciente para recopilarlo.",
+      "show_machines": "Mostrar qué equipos"
+    },
+    "genai": {
+      "heading": "Aplicaciones de IA generativa",
+      "intro": "Programas y aplicaciones instalados cuyo nombre coincide con la lista de vigilancia en Configuración → Seguridad del endpoint. Es una lista, no un bloqueo: nada de esto impide que algo se ejecute. Quite un nombre de la lista para dejar de marcar una herramienta aprobada.",
+      "watching": "Se busca: {names}",
+      "empty": "Según los inventarios, no hay nada de la lista de vigilancia instalado en los equipos que puede ver.",
+      "col": {
+        "matched": "Coincidencia"
+      }
+    }
   }
 }
