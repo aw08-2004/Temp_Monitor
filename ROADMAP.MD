@@ -5709,10 +5709,12 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
 > never talked to a hub. Everything else predating the triage is done except the
 > opportunistic remainder of #3.
 >
-> **Nothing on this board is waiting on an agent release any more.** Every agent half that
-> this file once listed as pending has shipped: #5 and #1 in 3.9.0/3.10.0, #2 and #6 in
-> 3.13.0, #9 in 3.20.1, #10 in 3.21.0, #12 in 3.24.0, #13 in 3.33.0, and #14 with #21 in
-> 3.35.0. Those lines stayed stale for a long time because a released agent half changes
+> **Waiting on an agent release again, as of hub 1.133.0:** #25 B's `SoftwareInventoryReporter`
+> and the `run_script` shell refusal (Windows agent, next MINOR), and #22's streaming, patch
+> inventory and process list (Linux agent) -- see *Owed locally* at the top of this file.
+> Every agent half this file listed as pending BEFORE that has shipped: #5 and #1 in
+> 3.9.0/3.10.0, #2 and #6 in 3.13.0, #9 in 3.20.1, #10 in 3.21.0, #12 in 3.24.0, #13 in
+> 3.33.0, and #14 with #21 in 3.35.0. Those lines stayed stale for a long time because a released agent half changes
 > nothing an operator can see on this page — the entry it belongs to already read done — so
 > the versions above were each verified against the `agent-v<version>` tag rather than
 > against the "built at" number in the entry, which is a SOURCE version and in #9's case

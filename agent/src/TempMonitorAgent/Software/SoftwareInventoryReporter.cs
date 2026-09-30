@@ -86,17 +86,21 @@ public static class SoftwareInventoryReporter
         }
     }
 
-    /// <summary>Mark the pending payload delivered. Clears it only if it is still the same
-    /// content, so a newer scan that landed mid-heartbeat is not discarded.</summary>
-    public static void AckSent()
+    /// <summary>Mark <paramref name="sent"/> -- the exact object <see cref="TakeIfChanged"/>
+    /// handed the heartbeat -- as delivered.
+    ///
+    /// <b>The object is passed in, not re-read from <see cref="_pending"/>.</b> The inventory
+    /// loop can replace the pending payload while a heartbeat is in flight; acknowledging
+    /// whatever is pending at the time the reply lands would clear the NEWER scan, which the
+    /// hub never received, and leave the device sheet a whole refresh interval behind. So the
+    /// sent content's hash is recorded, and the pending slot is cleared only if it still holds
+    /// that same object. Found in review.</summary>
+    public static void AckSent(JsonObject sent)
     {
         lock (Gate)
         {
-            if (_pending is null) return;
-            var hash = Hash(_pending.ToJsonString());
-            if (hash == _lastSentHash) return;
-            _lastSentHash = hash;
-            _pending = null;
+            _lastSentHash = Hash(sent.ToJsonString());
+            if (ReferenceEquals(_pending, sent)) _pending = null;
         }
     }
 

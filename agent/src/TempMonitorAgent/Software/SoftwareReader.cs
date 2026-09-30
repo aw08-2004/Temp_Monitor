@@ -134,7 +134,14 @@ public static class SoftwareReader
         }
 
         items.Sort((a, b) => string.Compare(a.Id, b.Id, StringComparison.Ordinal));
-        if (items.Count > MaxEntries) items.RemoveRange(MaxEntries, items.Count - MaxEntries);
+        if (items.Count > MaxEntries)
+        {
+            // Said in `error`, not just enforced: the sort puts every HKLM entry ahead of every
+            // per-user one, so a machine over the cap loses user installs first, and a list
+            // that silently stopped short would read as complete on the device sheet.
+            errors.Add($"truncated: {items.Count} entries, kept {MaxEntries}");
+            items.RemoveRange(MaxEntries, items.Count - MaxEntries);
+        }
         return new SoftwareReport(string.Join("; ", errors), items);
     }
 

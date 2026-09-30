@@ -224,7 +224,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // installed from that publisher any more" has to survive as a truthy payload --
             // and acknowledged only after this heartbeat succeeds, like `bitlocker` above.
             var installed = TempMonitorAgent.Software.SoftwareInventoryReporter.TakeIfChanged();
-            if (installed is not null) body["software"] = installed;
+            // DeepClone'd, because a JsonNode may have only one parent: attaching the
+            // reporter's own object would re-parent it, and after a FAILED heartbeat the retry
+            // would throw "the node already has a parent" on every attempt until the next
+            // scan replaced it. The original is what AckSent is handed.
+            if (installed is not null) body["software"] = installed.DeepClone();
             var patchInventory = TempMonitorAgent.Patch.PatchInventoryReporter.TakeIfChanged();
             if (patchInventory is not null) body["patches"] = patchInventory;
             // The process list, and the ONE payload here that is not change-only: a process
@@ -270,7 +274,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             if (encryption is not null)
                 TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
             if (installed is not null)
-                TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent();
+                TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent(installed);
 
             var text = await resp.Content.ReadAsStringAsync(ct);
             ApplyConfigFromHeartbeat(text);
