@@ -3686,11 +3686,13 @@ the first slice of the list below, because that slice touched the hub anyway.
    stays**: an old rule, and an operator who never changed the default, still arrive saying
    "powershell", and the result's first line still says what actually ran. The default is
    still `powershell`, because the fleet is overwhelmingly Windows and a default nothing there
-   understands would be the same bug pointed the other way. **The Windows agent's
-   `ResolveShell` should reject `"bash"` and `"sh"` before interpreter selection**,
-   returning a failed `CommandResult` with a clear unsupported-shell message, because
-   these values are Linux interpreters that cannot run on Windows. Preserve the existing
-   `powershell` and `cmd` behaviour for supported or legacy values.
+   understands would be the same bug pointed the other way. **The Windows agent now refuses
+   `"bash"` and `"sh"`** (`RunScriptExecutor.IsLinuxOnlyShell`, agent source, unreleased):
+   before, `ShellSessionManager` mapped every unknown shell to PowerShell, so a bash rule aimed
+   at the wrong machine ran through PowerShell, half-worked, and reported success. It now fails
+   with the reason before any shell is created; `powershell`, `cmd` and the `batch`/`bat`
+   aliases are unchanged. Rides the next Windows agent release; `RunScriptShellTests` compiles
+   from Linux and has not been run.
 2. **`_OS_MATCHES` missed the distributions that never say "Linux".** "Pop!_OS 22.04 LTS",
    "elementary OS", "Zorin OS", "NixOS", "EndeavourOS", "Deepin", "Solus", "KDE neon" and
    "Raspbian" all bucketed as `unknown`, which put managed machines in the Dashboard's

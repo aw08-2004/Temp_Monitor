@@ -48,6 +48,18 @@ public sealed class RunScriptExecutor : ICommandExecutor
         issuedBy.StartsWith("rule:", StringComparison.OrdinalIgnoreCase)
         || issuedBy.StartsWith("rules:", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Is this a shell only the Linux agent can run (roadmap #22)?
+    ///
+    /// The hub's <c>run_script</c> enum names four shells since hub 1.123.0, because a rule
+    /// aimed at a Linux box needs to be able to say <c>bash</c>. On Windows those two used to
+    /// fall straight through <see cref="ShellSessionManager"/>'s "anything that is not cmd is
+    /// PowerShell" and run a bash script through PowerShell -- which half-works often enough to
+    /// be dangerous (<c>echo</c>, <c>cd</c> and <c>rm</c> all mean something there) and reports
+    /// success on a script that did not do what it said. Refused up front instead, with the
+    /// reason in the result, before any shell is created.</summary>
+    public static bool IsLinuxOnlyShell(string shell) =>
+        shell.Trim().ToLowerInvariant() is "bash" or "sh";
+
     public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         var script = cmd.Params.GetString("script");
@@ -55,6 +67,10 @@ public sealed class RunScriptExecutor : ICommandExecutor
             return CommandResult.Fail("run_script requires params.script");
 
         var shell = (cmd.Params.GetString("shell") ?? "powershell").ToLowerInvariant();
+        if (IsLinuxOnlyShell(shell))
+            return CommandResult.Fail(
+                $"run_script: shell '{shell}' is a Linux shell and cannot run on this Windows " +
+                "machine; use powershell or cmd");
         var timeout = cmd.Params.GetInt("timeout_seconds", AgentConfig.ShellDefaultTimeoutSeconds);
         timeout = Math.Clamp(timeout, 1, 24 * 60 * 60);
         var email = string.IsNullOrEmpty(cmd.IssuedBy) ? "unknown" : cmd.IssuedBy;
