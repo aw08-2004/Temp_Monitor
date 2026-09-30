@@ -115,7 +115,15 @@ been committed (see #22, *The manifest is not in the repo*). **And 0.3.0 still h
 installed by hand once on every existing Linux box**: the `linux-agent-v0.2.0` tree has no
 `Update/SelfUpdater.cs`, so no installed machine can fetch anything. Re-running `install.sh`
 keeps the secret, the enrollment identity and the hub override. Release notes, which say
-exactly that to the operator, are at `agent-linux/release-notes/0.3.0.md`. Commit the generated manifests and `.sig` files **exactly as produced** -- the
+exactly that to the operator, are at `agent-linux/release-notes/0.3.0.md`.
+**Open decision before cutting it:** that re-run is unauthenticated. `install.sh` checks only
+that the download is an ELF file (`install.sh:224`), never the signed manifest, so the one-time
+upgrade of every enrolled box trusts GitHub and TLS, not the fleet key (review finding on PR
+#91, CWE-494). The note pins the script to the release tag and says so plainly. The real fix is
+the installer verifying `agent-linux.manifest.json` + `.sig` with the fleet's Ed25519 public
+key (`openssl pkeyutl -verify -rawin`, OpenSSL 3) and the binary's sha256 against it before
+installing -- worth doing before this upgrade reaches every Linux machine, and testable only
+against a real signed manifest. Commit the generated manifests and `.sig` files **exactly as produced** -- the
 `-text` pins in `.gitattributes` must stay. It carries live output streaming, patch inventory
 and the new process list. Also decide what to do with the unmerged
 `fix/linux-agent-web-installer` branch; its hand-made manifest commit must not be merged over a
