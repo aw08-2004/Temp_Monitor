@@ -44,6 +44,15 @@ public sealed class AgentCapabilities
     /// is offered the Windows agent's build.</summary>
     public const string PlatformLinux = "linux";
 
+    /// <summary>The non-command features this agent implements. `processes` is the Processes
+    /// card (roadmap #22): the hub's `MIN_PROCESS_AGENT` gate reads the Windows agent's number
+    /// line, which this agent's 0.x would always fail, so the console trusts this claim instead
+    /// for a machine that makes it. Kept beside the command list it complements rather than
+    /// in Program.cs, so the two halves of "what can this machine do" are read together.</summary>
+    public const string FeatureProcesses = "processes";
+
+    public static readonly IReadOnlyList<string> Implemented = [FeatureProcesses];
+
     public string Platform { get; }
 
     /// <summary>The command types this agent will actually route, sorted so the JSON is stable

@@ -86,8 +86,14 @@ FEATURE_USAGE_ACCESS = "usage_access"
 #: degrades without it. Reported so the console can say "this device is not fully managed"
 #: rather than letting a policy silently do nothing.
 FEATURE_DEVICE_OWNER = "device_owner"
+#: The agent samples its process list on demand for the Processes card (roadmap #22, the Linux
+#: agent's /proc walk). A feature rather than a command because the list rides the heartbeat
+#: while `processes_wanted` is true -- nothing is ever queued for it. The Windows agent has
+#: done this since 3.24.0 and never sends a capability report, which is why processes.js keeps
+#: its version gate for a machine that reports nothing and trusts this for one that does.
+FEATURE_PROCESSES = "processes"
 FEATURES = (FEATURE_LOCATE, FEATURE_APP_POLICY, FEATURE_TIME_POLICY, FEATURE_USAGE_ACCESS,
-            FEATURE_DEVICE_OWNER)
+            FEATURE_DEVICE_OWNER, FEATURE_PROCESSES)
 
 # ---------------------------------------------------------------- ingest caps
 #: Bounds a misbehaving or hostile agent, not a real one. The largest honest report is the

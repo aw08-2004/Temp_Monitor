@@ -142,7 +142,8 @@ public sealed class FleetClient : IDisposable, IOutputSink
     /// It still has to EXIST, and on the Windows cadence: this is what refreshes the hub's
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
     /// </summary>
-    public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null)
+    public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null,
+                                           JsonObject? processes = null)
     {
         if (!_identity.IsEnrolled) return false;
         try
@@ -176,14 +177,63 @@ public sealed class FleetClient : IDisposable, IOutputSink
             // re-parent it, and a heartbeat that then failed would leave the reporter holding
             // a node it can no longer serialise for the retry.
             if (patches is not null) body["patches"] = patches.DeepClone();
+            // The Processes card's list (roadmap #22), only ever present while the hub has
+            // said somebody is looking -- see ProcessReporter.
+            if (processes is not null) body["processes"] = processes;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
-            return resp.IsSuccessStatusCode;
+            if (!resp.IsSuccessStatusCode) return false;
+            // The reply's `processes_wanted` is how this agent learns to STOP sampling once
+            // the card is closed. The only thing read back from a heartbeat; see
+            // ApplyProcessesWanted for why a bad reply changes nothing.
+            ApplyProcessesWanted(await resp.Content.ReadAsStringAsync(ct));
+            return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Heartbeat failed: {Msg}", e.Message);
+            return false;
+        }
+    }
+
+    /// <summary>What the last heartbeat reply said about the Processes card, or null before
+    /// one has answered. Read by the process loop.</summary>
+    public bool? ProcessesWanted { get; private set; }
+
+    private void ApplyProcessesWanted(string reply)
+    {
+        try
+        {
+            if (JsonNode.Parse(reply)?["processes_wanted"] is JsonValue value
+                && value.TryGetValue<bool>(out var wanted))
+                ProcessesWanted = wanted;
+        }
+        catch
+        {
+            // One unparseable reply is not the hub saying "stop"; leave the watch as it was.
+        }
+    }
+
+    /// <summary>Ask whether anybody has this machine's Processes card open, without waiting
+    /// for a heartbeat. The Windows agent's reason applies unchanged: the heartbeat is a
+    /// ten-second tick, and an operator who opened the card would otherwise wait out one of
+    /// those plus a sampling window before the first row. False on any failure -- a hub that
+    /// cannot answer must not leave a machine sampling on the strength of an error.</summary>
+    public async Task<bool> PollProcessWatchAsync(CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return false;
+        try
+        {
+            using var req = Authorized(HttpMethod.Get, AgentConfig.ProcessesWantedUrl);
+            using var resp = await _http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) return false;
+            var wanted = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))?["wanted"];
+            return wanted is JsonValue v && v.TryGetValue<bool>(out var b) && b;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException
+                                      or System.Text.Json.JsonException)
+        {
             return false;
         }
     }

@@ -3602,9 +3602,10 @@ fixed:
 - `agents_outdated` counted every machine against the Windows manifest. **It now compares each
   machine against its own train.**
 - Every `MIN_*_AGENT` gate in `hub/static/js` still reads `0.1.0` as too old, which is what
-  keeps the console from offering a Linux machine the terminal, process list or file browser it
-  cannot answer. **Unchanged, and it is the only reason the number is still 0.1.0.** Those gates
-  move onto the capability report when there is something to gate.
+  keeps the console from offering a Linux machine the terminal or file browser it cannot
+  answer. **Unchanged, and it is the only reason the number is still 0.1.0.** Those gates
+  move onto the capability report when there is something to gate -- and the first one has:
+  the Processes card trusts a `processes` feature claim (hub 1.133.0, item 4 below).
 
 Enforced by `VersionGateTests`, not just written down: "bring the version in line with the other
 components" is a plausible change that would silently start offering features that do not exist.
@@ -3768,8 +3769,35 @@ is cut. Neither needed a hub change beyond the patch sources named below.
    - **Reboot-required is a kernel-package name match and nothing more.** Neither manager
      reports it before an install; `/var/run/reboot-required` is a fact about the machine
      afterwards. Flagging every `openssl` bump would train people to ignore the flag.
-4. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — a `/proc` walk, demand-driven like the
-   Windows one.
+4. ~~**Process list**~~ — done in source, unreleased (hub 1.133.0 for the console half).
+   `Telemetry/ProcessReader.cs` walks `/proc` and `ProcessReporter` samples only while the
+   hub says somebody is watching, through the same `/api/agent/processes/wanted` poll and
+   heartbeat flag the Windows agent uses; the wire shape is the Windows one field for field.
+   **Verified end to end in a container**: the real agent enrolled against a real hub,
+   reported the feature, and delivered 85 processes three seconds after a watch opened.
+   Decisions worth keeping:
+   - **The gate moved onto the capability report, as this entry said it would "when there
+     is something to gate".** The agent claims a `processes` feature
+     (`capabilities.FEATURE_PROCESSES`), and `processes.js` trusts the claim before it
+     consults `MIN_PROCESS_AGENT`; a Windows PC reports no capabilities, so it falls through
+     to the version check exactly as before. The version number was not touched, which is
+     the whole point of `VersionGateTests`.
+   - **CPU is a share of the whole machine** (process tick delta over the aggregate `cpu`
+     line's delta), the Task Manager meaning the Windows card already shows, so a Linux box
+     and a PC read the same on one card.
+   - **Identity is (pid, starttime)**, so a reused pid does not inherit its predecessor's
+     ticks; **comm is found by the last close paren**, because a process can name itself
+     `a) R 1 2 (` and a space split would shift every field after it. Both are tested.
+   - **Services come from the cgroup** (`.../system.slice/<unit>.service`), not D-Bus -- a
+     file read per process instead of a second IPC stack for a label.
+   - **The test caught a real bug before it shipped**: `/proc/<pid>/status` writes
+     `VmRSS:\t 5120 kB`, and splitting on spaces alone read every process as 0 MB.
+   - **Listing only.** `kill_process` / `restart_process` are not implemented, the capability
+     report does not claim them, and the card's context menu is now hidden for any machine
+     whose report leaves both out -- rather than offering End task and earning a refusal.
+   Owed: the Linux agent release (see *The manifest is not in the repo* above -- this rides
+   the same cut), and a look at the card against a real distribution with systemd, where the
+   services column fills in.
 5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
 6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
 

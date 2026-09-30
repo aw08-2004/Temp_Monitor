@@ -66,10 +66,11 @@ works against an unmodified hub.
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script`, with a running command's output streamed to the console as it is produced |
 | **Patch inventory** | What `apt` or `dnf` says is available, change-only on the heartbeat, six-hourly on its own loop. Reporting only — nothing here installs a package, and the capability report is what stops the hub queueing one |
+| **Process list** | The machine page's Processes card: a `/proc` walk (CPU as a share of the whole machine, resident memory, owner, executable path, systemd unit from the cgroup), sampled every five seconds **only while somebody has the card open** and idle otherwise. Listing only -- ending or restarting a process is not implemented, and the card offers no menu for it. Claimed as the `processes` feature, which is what lets the console show the card to a 0.x agent |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops measuring it against the Windows train and stops queueing work it can never perform. Derived from the dispatcher, not written out |
 | **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed before anything is written. systemd restarts the unit onto the new binary |
 
-Five concurrent loops — telemetry, heartbeat, commands, update, inventory — for the reason
+Six concurrent loops — telemetry, heartbeat, commands, update, inventory, processes — for the reason
 the Windows agent's six exist: in a serial loop the slowest step sets the latency of every
 other one. The inventory loop is the clearest case: an `apt` dependency solve is seconds of
 work and the hub calls a machine offline after ninety.
@@ -81,8 +82,9 @@ above). In rough order of what would be worth doing next:
 
 1. **Installing patches.** The inventory half reports; nothing applies an update. The
    executor and a call to `PatchInventoryReporter.Invalidate()` are what it needs.
-2. **Process list** (`MIN_PROCESS_AGENT` 3.24.0) — `/proc` walk, demand-driven like the Windows
-   one.
+2. **Ending and restarting processes** from the Processes card -- `kill_process` and
+   `restart_process` executors (a `kill(2)` and a `systemctl restart` of the unit). The list
+   itself is done.
 3. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
 4. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 

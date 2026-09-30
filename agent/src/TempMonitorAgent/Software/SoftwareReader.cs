@@ -138,7 +138,7 @@ public static class SoftwareReader
         return new SoftwareReport(string.Join("; ", errors), items);
     }
 
-    /// <summary>A real signed-in person's hive: <c>S-1-5-21-…</c>, and not its
+    /// <summary>A real signed-in person's hive: <c>S-1-5-21-...</c>, and not its
     /// <c>_Classes</c> twin. SYSTEM, LOCAL SERVICE and NETWORK SERVICE (S-1-5-18/19/20) and
     /// <c>.DEFAULT</c> are service accounts nobody installs anything as.</summary>
     public static bool IsProfileSid(string name) =>
