@@ -212,7 +212,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // ApplyEscrowRequestFromHeartbeat below and SubmitBitLockerKeysAsync.
             var encryption =
                 TempMonitorAgent.Security.BitLockerInventoryReporter.TakeIfChanged();
-            if (encryption is not null) body["bitlocker"] = encryption;
+            // DeepClone'd, because a JsonNode may have only one parent and this reporter
+            // KEEPS its payload until AckSent. Attaching the original shipped in 3.37.0: after
+            // one failed heartbeat the retry threw "the node already has a parent" before
+            // sending anything, every tick, so the PC read offline for up to an hour -- until
+            // the next scan put a fresh object in the slot. The original is what AckSent gets.
+            if (encryption is not null) body["bitlocker"] = encryption.DeepClone();
             // Available updates (roadmap #14). Change-only like its neighbours, with one
             // difference that matters: the payload is an OBJECT wrapping the list, so that a
             // machine with nothing left to install still sends something truthy. That report
@@ -222,7 +227,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // Installed programs (roadmap #25 B), the device sheet's Software section.
             // Object-wrapped like `patches` below and for the same reason -- "nothing
             // installed from that publisher any more" has to survive as a truthy payload --
-            // and acknowledged only after this heartbeat succeeds, like `bitlocker` above.
+            // and acknowledged only after this heartbeat succeeds, like `bitlocker` above,
+            // and cloned into the body for the same reason.
             var installed = TempMonitorAgent.Software.SoftwareInventoryReporter.TakeIfChanged();
             // DeepClone'd, because a JsonNode may have only one parent: attaching the
             // reporter's own object would re-parent it, and after a FAILED heartbeat the retry
@@ -272,7 +278,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             if (!resp.IsSuccessStatusCode) return false;
 
             if (encryption is not null)
-                TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
+                TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent(encryption);
 
             var text = await resp.Content.ReadAsStringAsync(ct);
             // A 200 is not proof the software list was stored: the hub keeps a heartbeat

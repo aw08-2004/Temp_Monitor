@@ -84,18 +84,23 @@ public static class BitLockerInventoryReporter
         }
     }
 
-    /// <summary>Mark the pending payload as delivered. Only clears <see cref="_pending"/> if
-    /// it still carries the same content (by hash), so a concurrent <see cref="RefreshIfDue"/>
-    /// that produced a newer payload is not silently discarded.</summary>
-    public static void AckSent()
+    /// <summary>Mark <paramref name="sent"/> -- the exact object <see cref="TakeIfChanged"/>
+    /// handed the heartbeat -- as delivered.
+    ///
+    /// **The object is passed in, not re-read from <see cref="_pending"/>.** The inventory loop
+    /// can replace the pending payload while a heartbeat is in flight, and the earlier
+    /// parameterless version acknowledged whatever was pending when the reply landed: the
+    /// NEWER scan, which the hub never received, was hashed as sent and dropped, and the
+    /// console kept the old posture until the next change on the machine. So the sent
+    /// content's hash is recorded, and the slot is cleared only if it still holds that same
+    /// object. The same bug was found in review in <c>SoftwareInventoryReporter</c>, which
+    /// copied this class.</summary>
+    public static void AckSent(JsonObject sent)
     {
         lock (Gate)
         {
-            if (_pending is null) return;
-            var hash = Hash(_pending.ToJsonString());
-            if (hash == _lastSentHash) return;          // already acked or replaced
-            _lastSentHash = hash;
-            _pending = null;
+            _lastSentHash = Hash(sent.ToJsonString());
+            if (ReferenceEquals(_pending, sent)) _pending = null;
         }
     }
 

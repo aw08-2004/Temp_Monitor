@@ -98,7 +98,9 @@ foreach ($tool in @("dotnet", "gh", "git", "python")) {
 $notesBody = ""
 if ($NotesFile) {
     if (-not (Test-Path $NotesFile)) { Die "Notes file not found: $NotesFile" }
-    $notesBody = Get-Content $NotesFile -Raw
+    # Read as UTF-8 explicitly: Get-Content on Windows PowerShell 5.1 assumes the ANSI codepage
+    # for a file without a BOM, and the dry-run preview mangled every dash and arrow.
+    $notesBody = [System.IO.File]::ReadAllText((Resolve-Path $NotesFile), [System.Text.Encoding]::UTF8)
 } elseif ($Notes) {
     $notesBody = $Notes
 } else {
@@ -122,15 +124,27 @@ if ($DryRun) {
 Step "Bumping the version pair"
 # Both files or neither. A csproj that disagrees with AgentConfig.Version is an agent that
 # reports one number and is built as another, and the hub believes the reported one.
-$config = Get-Content $ConfigCs -Raw
-$configNew = $config -replace '(public const string Version = ")[^"]+(")', "`${1}$Version`${2}"
-if ($configNew -eq $config) { Die "Could not find AgentConfig.Version in $ConfigCs" }
-Set-Content -Path $ConfigCs -Value $configNew -NoNewline -Encoding UTF8
+#
+# "Not found" is tested with -notmatch, not by comparing before and after: a re-run after a
+# later step failed finds both files already at $Version, the replace changes nothing, and the
+# old before/after check died here claiming the constant was missing -- so a release that broke
+# at step 3 could not be retried without hand-reverting two files first.
+#
+# Written with a BOM-less UTF-8 encoder, because `Set-Content -Encoding UTF8` on Windows
+# PowerShell 5.1 prepends a BOM, and every release then showed a one-character diff at the top
+# of AgentConfig.cs and the csproj that nobody wrote.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$configPattern = '(public const string Version = ")[^"]+(")'
+$config = [System.IO.File]::ReadAllText($ConfigCs, $utf8NoBom)
+if ($config -notmatch $configPattern) { Die "Could not find AgentConfig.Version in $ConfigCs" }
+$configNew = $config -replace $configPattern, "`${1}$Version`${2}"
+[System.IO.File]::WriteAllText($ConfigCs, $configNew, $utf8NoBom)
 
-$proj = Get-Content $Csproj -Raw
-$projNew = $proj -replace '(<Version>)[^<]+(</Version>)', "`${1}$Version`${2}"
-if ($projNew -eq $proj) { Die "Could not find <Version> in $Csproj" }
-Set-Content -Path $Csproj -Value $projNew -NoNewline -Encoding UTF8
+$projPattern = '(<Version>)[^<]+(</Version>)'
+$proj = [System.IO.File]::ReadAllText($Csproj, $utf8NoBom)
+if ($proj -notmatch $projPattern) { Die "Could not find <Version> in $Csproj" }
+$projNew = $proj -replace $projPattern, "`${1}$Version`${2}"
+[System.IO.File]::WriteAllText($Csproj, $projNew, $utf8NoBom)
 Ok "AgentConfig.cs and the csproj both say $Version"
 
 # ---------------------------------------------------------------- 2. publish
@@ -145,16 +159,50 @@ Ok ("published {0:N1} MB" -f ((Get-Item $BinPath).Length / 1MB))
 # ---------------------------------------------------------------- 3. release
 
 Step "Creating the GitHub release"
-$existing = & gh release view $Tag --repo $Repo 2>$null
-if ($LASTEXITCODE -eq 0) {
+# "release not found" on stderr is the EXPECTED answer for a new version, and on Windows
+# PowerShell 5.1 with $ErrorActionPreference = Stop, redirecting a native command's stderr turns
+# each line into a terminating NativeCommandError -- `2>$null` included. So the first real 0.3.0
+# run died here, before creating anything. The Windows agent's release.ps1 hit this long ago;
+# this copies its answer: relax the preference for this one call and read the exit code.
+$priorEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & gh release view $Tag --repo $Repo *> $null
+    $exists = ($LASTEXITCODE -eq 0)
+} catch {
+    $exists = $false
+} finally {
+    $ErrorActionPreference = $priorEap
+}
+
+if ($exists) {
     Warn "$Tag already exists; reusing it"
 } else {
-    $args = @("release", "create", $Tag, "--repo", $Repo, "--title", "Linux agent v$Version",
-              "--notes", $notesBody)
-    if ($IsBeta) { $args += "--prerelease" }
-    & gh @args | Out-Host
-    if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }
-    Ok "created $Tag"
+    # The notes reach gh through a FILE, never as `--notes <text>`. PowerShell re-quotes a
+    # string on its way to a native exe, and a double-quoted phrase inside the notes splits into
+    # extra arguments that `gh release create` reads as ASSET PATHS -- the Windows agent's 3.27.0
+    # release died of exactly that, and 0.3.0's notes quote console text in several places. See
+    # the long comment in agent/release.ps1 for the full history.
+    $tempNotes = $null
+    try {
+        if ($NotesFile) {
+            $notesPath = (Resolve-Path $NotesFile).Path
+        } else {
+            $tempNotes = Join-Path ([System.IO.Path]::GetTempPath()) "linux-agent-release-$Version.md"
+            [System.IO.File]::WriteAllText($tempNotes, $notesBody, $utf8NoBom)
+            $notesPath = $tempNotes
+        }
+        # $ghArgs, not $args: $args is PowerShell's automatic variable for a script's unbound
+        # arguments, and assigning to it works by accident rather than by design.
+        $ghArgs = @("release", "create", $Tag, "--repo", $Repo, "--title", "Linux agent v$Version",
+                    "--notes-file", $notesPath)
+        if ($IsBeta) { $ghArgs += "--prerelease" }
+        & gh @ghArgs | Out-Host
+        if ($LASTEXITCODE -ne 0) { Die "gh release create failed" }
+        Ok "created $Tag (notes from $notesPath)"
+    } finally {
+        if ($tempNotes) { Remove-Item $tempNotes -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # ---------------------------------------------------------------- 4. sign
