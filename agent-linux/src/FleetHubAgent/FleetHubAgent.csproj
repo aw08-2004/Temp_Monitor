@@ -24,7 +24,7 @@
          will get the same treatment: a release script that moves both, never a hand edit.
          0.x is deliberate and load-bearing; the reasoning is on AgentConfig.Version, and
          VersionGateTests is what enforces it. -->
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

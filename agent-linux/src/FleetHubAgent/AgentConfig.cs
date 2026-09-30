@@ -42,7 +42,7 @@ public static class AgentConfig
     /// Rejected alternative, and it is worth keeping: starting at 3.35.0 to "match" the
     /// Windows agent. That reads to the hub as a fully-featured agent on somebody else's
     /// train, and every one of those gates would pass on a lie.</summary>
-    public const string Version = "0.1.0";
+    public const string Version = "0.3.0";
 
     /// <summary>Reads a FLEETHUB_* setting. No TEMP_MONITOR_* fallback, unlike the Windows
     /// agent: that fallback exists for machines installed before the FleetHub rename, and
