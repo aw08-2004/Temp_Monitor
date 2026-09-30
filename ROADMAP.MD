@@ -101,17 +101,21 @@ It carries, all on `main` and unreleased:
   catalog (#25 B). The hub has **no** `MIN_SOFTWARE_AGENT` constant, so no number needs
   changing in `hub/static/js` whatever version this is cut as.
 - The `bash`/`sh` refusal in `run_script` (#22 hub-side gaps).
-- Whatever else the entries below already list as "agent unreleased" (re-enrollment after a
-  deleted machine, #3's retention/cadence picks). Read `git log agent/` since the 3.37.1 cut
-  before writing the release notes.
+- Nothing else: `git diff 8ef40a9..HEAD -- agent/src` (the 3.37.1 cut) shows only this
+  branch's changes. Entries below that still say "agent unreleased" for re-enrollment after a
+  deleted machine were already carried by 3.37.x -- the label is stale, not the code.
+- **Release notes are written:** `agent/release-notes/3.38.0.md`. Pass it with `-NotesFile`.
 - **Before cutting it:** `dotnet test agent/TempMonitorAgent.slnx` on Windows -- never run for
   `SoftwareInventoryTests` and `RunScriptShellTests` (compiled from Linux only), nor ever for
   `EventLogTests`. Then `git status` for rewritten `tests/fixtures/*.fhb` before staging.
 
 **2. Linux agent release -- `agent-linux/release.ps1 -Version 0.3.0` on the key machine (#22).**
 This is what makes Linux self-update exist at all: the four signed manifest files have never
-been committed, so every installed Linux box is stuck until then (see #22, *The manifest is not
-in the repo*). Commit the generated manifests and `.sig` files **exactly as produced** -- the
+been committed (see #22, *The manifest is not in the repo*). **And 0.3.0 still has to be
+installed by hand once on every existing Linux box**: the `linux-agent-v0.2.0` tree has no
+`Update/SelfUpdater.cs`, so no installed machine can fetch anything. Re-running `install.sh`
+keeps the secret, the enrollment identity and the hub override. Release notes, which say
+exactly that to the operator, are at `agent-linux/release-notes/0.3.0.md`. Commit the generated manifests and `.sig` files **exactly as produced** -- the
 `-text` pins in `.gitattributes` must stay. It carries live output streaming, patch inventory
 and the new process list. Also decide what to do with the unmerged
 `fix/linux-agent-web-installer` branch; its hand-made manifest commit must not be merged over a
@@ -5342,7 +5346,7 @@ one word that either hides the Terminal button fleet-wide or shows a Wipe button
 
 ---
 
-## ✅ Agent re-enrollment after a machine is deleted · hub 1.112.0 · agent unreleased
+## ✅ Agent re-enrollment after a machine is deleted · hub 1.112.0 · agent 3.37.x
 
 Delete a machine from the console, reinstall the agent on that PC with the same enrollment
 secret, and the console kept saying **not enrolled, telemetry only** — permanently, with
