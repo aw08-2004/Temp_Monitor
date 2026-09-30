@@ -93,6 +93,12 @@
     <button id="inventory-bulk-deploy" type="button" class="btn">{{ t('inventory.bulk.deploy') }}</button>
     {% endif %}
     <button id="inventory-bulk-export" type="button" class="btn btn--ghost">{{ t('inventory.bulk.export') }}</button>
+    {# The ticked rows as a device report (roadmap #25) -- a link rather than a request, so the
+       hand-off is the same /reports?machines= URL anybody could bookmark. #}
+    {% if cap.VIEW in user_capabilities %}
+    <button id="inventory-bulk-report" type="button" class="btn btn--ghost">{{ t('inventory.bulk.report') }}</button>
+    <a id="inventory-report-link" href="{{ url_for('reports.reports_page') }}" hidden></a>
+    {% endif %}
     <button id="inventory-bulk-clear" type="button" class="btn btn--ghost ml-auto">{{ t('inventory.bulk.clear') }}</button>
 </div>
 {% if cap.DEPLOY_PACKAGES in user_capabilities %}

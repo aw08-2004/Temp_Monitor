@@ -52,6 +52,7 @@ import processes
 import refusals
 import remote
 import settings
+import software
 import terminal
 import usage
 import wake
@@ -219,6 +220,16 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 apps.record_inventory(db_path, machine, data["apps"])
             except Exception as e:
                 print(f"[apps] Could not record the app inventory for {machine}: {e}")
+        # Installed programs on a Windows PC (roadmap #25 B). The same OBJECT-wrapped,
+        # `is not None` shape as `apps` directly above and `patches` below, for the same
+        # reason: "this PC now reports nothing installed" is a real report and must survive a
+        # truthiness check. Change-only on the agent, scanned on its inventory loop, never
+        # fatal here.
+        if data.get("software") is not None:
+            try:
+                software.record_inventory(db_path, machine, data["software"])
+            except Exception as e:
+                print(f"[software] Could not record the software inventory for {machine}: {e}")
         # What the device says it did with its app policy (roadmap #23 phase D). Sent after
         # an application attempt rather than on a cadence, and never fatal like everything
         # else here. `failed` is the field this exists for: setPackagesSuspended returns the

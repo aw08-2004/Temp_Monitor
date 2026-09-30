@@ -1,0 +1,93 @@
+/* The device sheet and the fleet report (roadmap #25).
+
+   Plain CSS rather than Tailwind utilities, on purpose: the sheet is drawn by script from
+   data, and a Tailwind class that appears only inside a JS string is one the next
+   tools/build_css.ps1 run has to be trusted to find. These rules cannot go missing that way. */
+
+.report-sheet__head {
+    margin-bottom: var(--space-5);
+}
+
+.report-sheet__title {
+    font-size: var(--text-xl);
+    font-weight: 600;
+    margin: 0 0 var(--space-1);
+}
+
+.report-section {
+    margin-bottom: var(--space-4);
+}
+
+.report-section__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.report-section__head .section-title {
+    margin-bottom: 0;
+}
+
+.report-facts {
+    display: grid;
+    grid-template-columns: minmax(10rem, max-content) 1fr;
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+}
+
+.report-facts dt {
+    color: var(--muted);
+}
+
+.report-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.report-table-wrap {
+    overflow-x: auto;
+}
+
+/* Paper. The sheet's own page is the one meant for this; the chrome goes, the colours go
+   dark-on-white whatever the theme, and a section is never split across a page break when
+   it fits on one. */
+@media print {
+    .sidebar,
+    .topbar,
+    .no-print {
+        display: none !important;
+    }
+
+    body,
+    .app-shell,
+    .app-shell__main,
+    .app-shell__content,
+    .card {
+        background: #fff !important;
+        color: #000 !important;
+        box-shadow: none !important;
+    }
+
+    .app-shell__content {
+        padding: 0 !important;
+    }
+
+    .report-section {
+        break-inside: avoid;
+        border: 1px solid #999;
+    }
+
+    .report-facts dt,
+    .stat-card__meta {
+        color: #333 !important;
+    }
+}
+
+/* The [hidden] caveat components.css records: .btn sets a display, which beats the UA
+   stylesheet's [hidden] rule, so the export links and the clear-selection button would never
+   go away without this. */
+.toolbar .btn[hidden] {
+    display: none;
+}

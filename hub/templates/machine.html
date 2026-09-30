@@ -3,6 +3,7 @@
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/reports.css') }}">
 {# The tool tabs came back to this page (hub 1.114.0), and their stylesheets with them. #}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
 {% if cap.ISSUE_COMMANDS in user_capabilities %}
@@ -135,6 +136,12 @@
                     id="tab-btn-files" data-tab-slug="files"
                     aria-controls="tool-files" aria-selected="false" tabindex="-1">{{ t('tools.tab.files') }}</button>
             {% endif %}
+            {# The device sheet (roadmap #25). No data-needs-command and no capability gate:
+               it asks the machine nothing, and every section on it is one this reader can
+               already open elsewhere on this page (reports.py). #}
+            <button class="tabs__tab" type="button" role="tab"
+                    id="tab-btn-report" data-tab-slug="report"
+                    aria-controls="tool-report" aria-selected="false" tabindex="-1">{{ t('report.tab') }}</button>
         </div>
         {# Said rather than left as an absence. A tab strip that is shorter than it was on the
            last machine reads as a broken page; one sentence turns it into a fact about the
@@ -591,6 +598,19 @@
 {% include "partials/_tool_network.html" %}
     </div>
 
+    <div class="tab-panel" id="tool-report" role="tabpanel" aria-labelledby="tab-btn-report" hidden>
+        {# Drawn by report-sheet.js on first show. Printing happens from the sheet's own page,
+           not here: a print of this page would carry the tab strip and every other panel's
+           chrome onto paper. #}
+        <div class="toolbar" style="margin-bottom: var(--space-4);">
+            <a class="btn" href="{{ url_for('reports.sheet_page', machine=machine) }}">{{ t('report.open_printable') }}</a>
+            <a class="btn btn--ghost" data-report-export="json" href="#" download>{{ t('report.export_json') }}</a>
+            <a class="btn btn--ghost" data-report-export="software" href="#" download>{{ t('report.export_software_csv') }}</a>
+            <span class="stat-card__meta" id="report-tab-status"></span>
+        </div>
+        <div id="report-tab-root" class="report-sheet"></div>
+    </div>
+
     {% if cap.ISSUE_COMMANDS in user_capabilities %}
     <div class="tab-panel" id="tool-files" role="tabpanel" aria-labelledby="tab-btn-files" hidden>
 {% include "partials/_tool_files.html" %}
@@ -670,6 +690,7 @@
 <script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-ask.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-bitlocker.js') }}"></script>
+<script src="{{ url_for('static', filename='js/report-sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-favorites.js') }}"></script>

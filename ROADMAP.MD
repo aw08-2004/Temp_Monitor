@@ -4258,11 +4258,83 @@ Rules page once #17's wording layer exists.
 
 ---
 
-## 📋 25. Inventory report — one device sheet, and the collection it still needs
+## 🚧 25. Inventory report — one device sheet, and the collection it still needs   ·   A + B hub 1.133.0 · B agent half in source, **release owed**
 
 Everything the hub knows about one PC, on one page, printable and exportable: what a Kaspersky
 export, a LOGINventory sheet or a PDQ Inventory report hands a helpdesk when somebody asks
 "what is this machine, and what is on it". Asked for directly, not from the PRD triage.
+
+### Built · hub 1.133.0 — phases A and B, and what is still owed
+
+**A (the sheet) and B (installed software) are built together on one branch, as planned, and
+the hub half is shipped in 1.133.0.** `reports.py` / `reports_web.py` join the tables below into
+one sheet per machine; `software.py` / `software_web.py` store and serve the Windows inventory;
+the agent half is `agent/src/TempMonitorAgent/Software/` (`SoftwareReader` +
+`SoftwareInventoryReporter`), wired into the inventory loop and the heartbeat, and
+`DeployPackageExecutor` invalidates it on every exit. Console: a **Report** tab on the machine
+page, a printable page at `/reports/machines/<machine>`, a **Reports** page at `/reports` (device
+group, search, or rows ticked on Devices → **Report selected**) with JSON and per-section CSV
+exports, and a fleet **software catalog** under it.
+
+**Owed, and none of it can be done from a Linux container:**
+
+1. **Cut the agent release** -- `agent/release.ps1 -Version 3.38.0` (or whatever MINOR is next
+   above the released number when it happens; 3.37.1 is current as of this entry). Until then
+   every PC's Software section reads *Waiting for a newer agent on this machine*, which is the
+   correct answer and the state A's wording was written for. Deploy order as always: hub first
+   (already true once 1.133.0 is on `main`), then the agent.
+2. **Run `dotnet test agent/TempMonitorAgent.slnx` on Windows.** `SoftwareInventoryTests.cs`
+   compiles clean from Linux (`-p:EnableWindowsTargeting=true`) and has never executed. Check
+   `git status` afterwards for rewritten `tests/fixtures/*.fhb`.
+3. **First contact on a real PC**: that HKU enumeration from LocalSystem sees every signed-in
+   profile, what an FSLogix or roaming profile looks like there, how long the walk takes on a
+   machine with thousands of registered MSI patches, and that the Programs-and-Features filter
+   lists what the Control Panel lists (compare the two side by side on one PC).
+4. **Print a sheet** from Chrome and Edge and check `reports.css`'s print rules on paper -- that
+   was checked in headless Chromium on screen only.
+
+**Decisions taken while building it, each with the alternative it beat:**
+
+- **No `MIN_SOFTWARE_AGENT` constant, and so no agent number written into the hub.** This entry
+  used to plan one, and then spent a paragraph on why naming the MINOR in advance is a trap.
+  The hub does not need it: `machine_software_state` has a row only once an agent has sent a
+  report, so "no row" IS "this agent is too old or has not checked in", exactly as
+  `machine-bitlocker.js` argues for its own card. A version constant would have to name a
+  release that has not been cut, and would be wrong for every Linux and Android machine
+  anyway. The capability-report route stays open for when a gate is genuinely needed.
+- **A state table beside the rows** (`machine_software_state`), rather than inferring
+  `reported_at` from the rows as `apps.py` does. On Android no device has zero packages; a
+  Windows report whose every entry was filtered out is rare but real, and inferring from rows
+  would make it indistinguishable from an agent that never spoke.
+- **Per-user software: loaded hives only** (was an open parameter below). Mounting every
+  `NTUSER.DAT` means mounting hives under profiles somebody may sign into mid-scan, which is
+  the thing `HiveMount` does carefully and only for a backup. A signed-out user's per-user
+  installs appear when they next sign in.
+- **A read that cannot open HKLM throws rather than reporting an empty list.** The hub stores
+  an empty list as "nothing installed", and one failed registry open must never send it.
+- **Every section carries a status** -- `ok`, `waiting` (with `agent_report`, `agent_update` or
+  `directory`) or `not_collected` (`phase_c`, `phase_d`) -- and the console words each one. The
+  Hardware and Security sections print the phase C / D sentence even when they have data,
+  because a sheet silent about DIMMs reads as a PC with none.
+- **Patches read `waiting`, not "none", when the list is empty.** `machine_patches` has no
+  per-machine "reported" marker, so an empty list cannot be told from a machine that never
+  scanned. Understating a fully patched PC is the cheap direction to be wrong; a state row like
+  software's would fix it and is a small follow-up in `patches.py`.
+- **Two things are left OFF the sheet** because their own pages gate them higher than `view`:
+  BitLocker escrow bookkeeping (`read_recovery_keys`) and backup history (`manage_backups`). The
+  sheet shows posture and "has a recovery password", never protector ids.
+- **CSV is built on the hub** (the browser never holds every sheet), neutralised cell by cell,
+  and an unreported count is **blank, not 0**, so a spreadsheet total does not count a silent PC
+  as patched. A selection over 1000 machines is refused rather than truncated.
+- **The print order is sent explicitly** (`order`): Flask's `jsonify` sorts object keys, and
+  the first version printed Capabilities above Identity.
+- **Plain CSS for the sheet** (`reports.css`), not Tailwind utilities: its markup is built in
+  JS strings, and a class that only appears there is one the next `build_css.ps1` run has to be
+  trusted to find.
+
+**Not done in this slice:** phases C and D; a Linux-agent or Android-agent software reader (the
+Android `apps` section already appears on a phone's sheet); a snapshot/diff of two sheets
+(still an open parameter); backup status on the sheet (gated, see above).
 
 **The hub already holds most of a device sheet and has nowhere to print it.** Nine tables carry
 per-machine facts, each behind the page that needed it, and no route joins them:
@@ -4407,9 +4479,8 @@ unencrypted is this feature's).
 
 ### Open parameters
 
-- Whether per-user installed software covers every profile on disk (loading each `NTUSER.DAT`)
-  or only the hives already loaded. The second is cheap and misses software installed by a user
-  who is logged off.
+- ~~Whether per-user installed software covers every profile on disk~~ -- **answered: loaded
+  hives only**, see *Built* above.
 - Whether a sheet is snapshotted so two dates can be diffed. Not in A; it is the only part of
   this feature with an unbounded storage cost.
 - Whether the Linux and Android agents fill the same sections or declare their own. Their
@@ -5506,6 +5577,11 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     are unallocated on purpose: this entry named 3.37.0 and 3.38.0 until 3.37.x shipped without
     either phase in it. Pulled forward of #16–#20 in practice: it is the only item on this
     board a helpdesk asks for by name.
+    **A and the hub half of B shipped in hub 1.133.0; B's agent half is in source and waits on
+    the next agent MINOR** -- see the entry's *Built* section for what is owed. "It does not
+    ship alone" was kept in substance rather than letter: the hub went first, as deploy order
+    requires anyway, and the Software section says *waiting for a newer agent* until the
+    release lands, which is the state the plan above designed the wording for.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.reports') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/reports.css') }}">
+{% endblock %}
+{% block content %}
+{# The fleet report (roadmap #25 A): a selection of machines as summary rows, the exports
+   behind them, and the fleet software catalog (#25 B). The selection is a device group, the
+   ticked rows handed over from Devices (?machines=a,b), or the whole visible fleet -- and the
+   search box narrows whichever it is. Everything is scoped by the hub, never here. #}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('reports.heading') }}</h1>
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('reports.intro') }}</p>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <select class="input" id="reports-group" aria-label="{{ t('reports.group_label') }}">
+        <option value="">{{ t('reports.group_all') }}</option>
+        {% for group in device_groups %}
+        <option value="{{ group.id }}">{{ group.name }}</option>
+        {% endfor %}
+    </select>
+    <input class="input" id="reports-search" type="search" autocomplete="off"
+           placeholder="{{ t('reports.search_placeholder') }}" style="min-width: 260px;">
+    <span class="stat-card__meta" id="reports-count"></span>
+    <button type="button" class="btn btn--ghost" id="reports-clear-selection" hidden>{{ t('reports.clear_selection') }}</button>
+</div>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <span class="stat-card__meta">{{ t('reports.export_label') }}</span>
+    <a class="btn btn--ghost" data-reports-export="json" href="#" download>{{ t('reports.export.json') }}</a>
+    <a class="btn btn--ghost" data-reports-export="summary" href="#" download>{{ t('reports.export.summary') }}</a>
+    <a class="btn btn--ghost" data-reports-export="software" href="#" download>{{ t('reports.export.software') }}</a>
+    <a class="btn btn--ghost" data-reports-export="patches" href="#" download>{{ t('reports.export.patches') }}</a>
+    <a class="btn btn--ghost" data-reports-export="network" href="#" download>{{ t('reports.export.network') }}</a>
+    <a class="btn btn--ghost" data-reports-export="volumes" href="#" download>{{ t('reports.export.volumes') }}</a>
+</div>
+
+<div class="card report-table-wrap" style="margin-bottom: var(--space-6);">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>{{ t('inventory.col.machine') }}</th>
+                <th>{{ t('inventory.col.model') }}</th>
+                <th>{{ t('inventory.col.os') }}</th>
+                <th>{{ t('reports.col.software') }}</th>
+                <th>{{ t('reports.col.patches') }}</th>
+                <th>{{ t('reports.col.unprotected') }}</th>
+                <th>{{ t('inventory.col.last_seen') }}</th>
+            </tr>
+        </thead>
+        <tbody id="reports-body">
+            <tr><td colspan="7" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<h2 class="section-title">{{ t('reports.catalog.heading') }}</h2>
+<p class="stat-card__meta" style="margin-bottom: var(--space-4);">{{ t('reports.catalog.intro') }}</p>
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <input class="input" id="catalog-search" type="search" autocomplete="off"
+           placeholder="{{ t('reports.catalog.search_placeholder') }}" style="min-width: 260px;">
+    <span class="stat-card__meta" id="catalog-count"></span>
+</div>
+<div class="card report-table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>{{ t('report.col.name') }}</th>
+                <th>{{ t('report.col.version') }}</th>
+                <th>{{ t('report.col.publisher') }}</th>
+                <th>{{ t('reports.catalog.col.machines') }}</th>
+            </tr>
+        </thead>
+        <tbody id="catalog-body">
+            <tr><td colspan="4" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/reports.js') }}"></script>
+{% endblock %}

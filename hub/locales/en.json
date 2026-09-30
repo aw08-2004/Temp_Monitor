@@ -46,7 +46,8 @@
       "admin": "Administration"
     },
     "events": "Events",
-    "watchdogs": "Watchdogs"
+    "watchdogs": "Watchdogs",
+    "reports": "Reports"
   },
   "hub_update": {
     "_note": [
@@ -258,7 +259,8 @@
       "wake": "Wake selected",
       "deploy": "Deploy a package…",
       "export": "Export selected",
-      "clear": "Clear selection"
+      "clear": "Clear selection",
+      "report": "Report selected"
     },
     "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
     "search_placeholder": "Search name, manufacturer, asset tag, serial, service tag…",
@@ -4171,5 +4173,164 @@
     "unreachable": "The hub could not be reached.",
     "key_for": "Recovery key for {volume}",
     "key_warning": "Reading this key has been recorded in the audit log. It disappears when you leave the page."
+  },
+  "report": {
+    "tab": "Report",
+    "open_printable": "Open printable sheet",
+    "export_json": "Export JSON",
+    "export_software_csv": "Export software (CSV)",
+    "page_title": "Device report: {machine}",
+    "back_to_machine": "Back to the machine",
+    "print": "Print",
+    "yes": "Yes",
+    "no": "No",
+    "empty": "Reported, and nothing to list.",
+    "no_groups": "Not in any device group.",
+    "generated": "Generated {when}",
+    "reported": "Reported {when}",
+    "load_failed": "Could not load the report.",
+    "software": {
+      "count": {
+        "one": "{count} program installed",
+        "other": "{count} programs installed"
+      }
+    },
+    "sessions": {
+      "summary": "{sessions} logon session(s) at the last report."
+    },
+    "section": {
+      "identity": "Identity",
+      "os": "Operating system",
+      "directory": "Directory",
+      "fields": "Custom fields",
+      "groups": "Device groups",
+      "hardware": "Hardware",
+      "firmware": "Firmware",
+      "volumes": "Volumes",
+      "network": "Network",
+      "security": "Security",
+      "software": "Installed software",
+      "apps": "Apps",
+      "patches": "Available updates",
+      "sessions": "Sessions",
+      "capabilities": "Agent capabilities",
+      "location": "Last known location"
+    },
+    "waiting": {
+      "agent_report": "Not reported yet. This fills in when the machine next checks in.",
+      "agent_update": "Waiting for a newer agent on this machine. This does not mean nothing is installed.",
+      "phase_c": "Memory modules, disks, monitors, chassis, TPM and battery are not collected by FleetHub yet.",
+      "phase_d": "Antivirus, firewall, local administrators and TPM state are not collected by FleetHub yet.",
+      "directory": "Not matched in the directory, or no directory sync has run yet."
+    },
+    "f": {
+      "manufacturer": "Manufacturer",
+      "model": "Model",
+      "serial_number": "Serial number",
+      "service_tag": "Service tag",
+      "asset_tag": "Asset tag",
+      "agent_version": "Agent version",
+      "update_channel": "Update channel",
+      "last_report": "Last report",
+      "os_caption": "Name",
+      "os_version": "Version",
+      "os_build": "Build",
+      "os_arch": "Architecture",
+      "last_boot": "Last boot",
+      "uptime": "Uptime",
+      "ad_dn": "Distinguished name",
+      "ad_ou": "OU",
+      "ad_owner": "Owner",
+      "ad_os": "Directory OS",
+      "ad_last_logon": "Last directory logon",
+      "ad_disabled": "Disabled in directory",
+      "ad_synced_at": "Directory synced",
+      "cpu": "Processor",
+      "gpu": "Graphics",
+      "memory_gb": "Memory (GB)",
+      "support": "Firmware management",
+      "vendor": "Vendor",
+      "interface": "Interface",
+      "bios_version": "BIOS version",
+      "password_set": "Setup password set",
+      "error": "Error",
+      "fast_startup": "Fast startup",
+      "bitlocker_support": "BitLocker",
+      "platform": "Platform",
+      "lat": "Latitude",
+      "lon": "Longitude",
+      "accuracy_m": "Accuracy (m)",
+      "fixed_at": "Located"
+    },
+    "col": {
+      "volume": "Volume",
+      "used_gb": "Used (GB)",
+      "total_gb": "Size (GB)",
+      "used_pct": "Used",
+      "adapter": "Adapter",
+      "mac": "MAC",
+      "ipv4": "IPv4",
+      "kind": "Kind",
+      "link": "Link up",
+      "protection": "Protection",
+      "method": "Method",
+      "recovery_password": "Recovery password",
+      "name": "Name",
+      "version": "Version",
+      "publisher": "Publisher",
+      "installed": "Installed",
+      "scope": "For",
+      "package": "Package",
+      "title": "Title",
+      "kb": "KB",
+      "source": "Source",
+      "reboot": "Needs restart"
+    },
+    "scope": {
+      "user": "One user",
+      "machine": "Everyone"
+    },
+    "no_fields": "No custom fields are set on this machine."
+  },
+  "reports": {
+    "heading": "Reports",
+    "intro": "Everything FleetHub knows about each machine, one sheet per PC. Pick a device group or narrow with the search, then open a sheet to print it or export the selection.",
+    "group_label": "Device group",
+    "group_all": "All machines",
+    "search_placeholder": "Search name, model, OS, serial, owner",
+    "clear_selection": "Show all machines",
+    "export_label": "Export:",
+    "export": {
+      "json": "Full sheets (JSON)",
+      "summary": "Summary (CSV)",
+      "software": "Software (CSV)",
+      "patches": "Updates (CSV)",
+      "network": "Network (CSV)",
+      "volumes": "Volumes (CSV)"
+    },
+    "col": {
+      "software": "Programs",
+      "patches": "Updates",
+      "unprotected": "Unencrypted volumes"
+    },
+    "count": {
+      "one": "{count} machine",
+      "other": "{count} machines"
+    },
+    "empty": "No machines in this selection.",
+    "catalog": {
+      "heading": "Software catalog",
+      "intro": "Every program and version reported across the machines you can see, with how many have it.",
+      "search_placeholder": "Search program or publisher",
+      "col": {
+        "machines": "Machines"
+      },
+      "count": {
+        "one": "{count} entry",
+        "other": "{count} entries"
+      },
+      "empty": "No software reported yet. Machines fill this in once their agent is new enough to collect it.",
+      "show_machines": "Show which machines"
+    }
   }
 }

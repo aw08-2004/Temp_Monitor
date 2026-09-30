@@ -1976,6 +1976,56 @@ unauthenticated `GET /provisioning/apk/<token>/fleethub-agent.apk`.
 > checksum the hub derives from the real signed APK has been confirmed byte-for-byte against
 > what `apksigner verify --print-certs` prints for it.
 
+## Device reports and installed software
+
+Everything the hub knows about one PC on one sheet, printable and exportable -- the thing a
+Kaspersky export or a PDQ Inventory report hands a helpdesk when somebody asks "what is this
+machine, and what is on it". Three ways in:
+
+- **The machine page's Report tab**, and **Open printable sheet** from there
+  (`/reports/machines/<machine>`), which is the page to print. Printing is the browser's own.
+- **Reports** in the sidebar (`/reports`): a device group, a search, or the rows ticked on
+  **Devices** (bulk bar → **Report selected**) as a summary table, with exports.
+- **The software catalog** at the bottom of Reports: every program and version reported across
+  the machines you can see, with how many have it. Click a count for the machines.
+
+**An empty section says why it is empty.** A printed sheet outlives the moment it was printed,
+and a blank Software heading on paper reads as "nothing installed". So each section says whether
+the machine has not checked in yet, whether its agent is too old to collect that (**Waiting for a
+newer agent on this machine**), or whether FleetHub does not collect it at all yet (memory
+modules, disks, monitors, antivirus and firewall state -- roadmap #25 C and D).
+
+**The report renders stored facts and never asks a machine for anything.** A sheet for a PC
+that has been offline for a week is exactly the one a helpdesk needs; each section shows when its
+facts were reported.
+
+**Installed software** is read by the Windows agent from the registry's Uninstall keys -- both
+the 64- and 32-bit views, plus the hive of every signed-in user -- and filtered the way Programs
+and Features filters it. It is re-read hourly and straight after a package deployment, and sent
+only when it changed. Per-user installs by somebody who is signed out appear once they sign in
+again. `Win32_Product` is deliberately not used: enumerating it makes Windows Installer repair
+every MSI on the machine.
+
+**Exports**: full sheets as JSON, and CSV per section -- `summary` (one row per machine),
+`software`, `patches`, `network`, `volumes` (one row per item). A count the machine has not
+reported is a **blank**, not a 0, so a spreadsheet summing the column does not count a silent PC
+as fully patched. Cells that look like spreadsheet formulas are prefixed with `'`.
+
+**Gating**: `view` + machine scope, the same as every page the sheet draws from. No new
+capability. Two things are left off the sheet because their own pages gate them higher: who has
+read a BitLocker recovery key (`read_recovery_keys`) and backup history (`manage_backups`).
+
+**Endpoints**: `GET /api/reports/machines/<machine>` (`?download=1` for a JSON file),
+`GET /api/reports/fleet`, `GET /api/reports/export.json`, `GET /api/reports/export.csv?section=`
+(each taking `machines=a,b` or `group=<id>`, default the whole visible fleet),
+`GET /api/software/machines/<machine>`, `GET /api/software/catalog?q=`,
+`GET /api/software/catalog/machines?name=&version=`. The inventory arrives on the existing
+`POST /api/agent/heartbeat` under a `software` key, change-only.
+
+> **Status:** hub 1.133.0. The Software section fills in once the agent release carrying
+> `SoftwareInventoryReporter` is cut (roadmap #25); until then every PC reads **Waiting for a
+> newer agent**. **Not yet exercised on hardware.**
+
 ## Signing releases
 
 One artifact in this repo is Ed25519-signed so a compromised hub or repo commit

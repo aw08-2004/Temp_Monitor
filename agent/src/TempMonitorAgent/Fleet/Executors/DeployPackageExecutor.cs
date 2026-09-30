@@ -165,6 +165,10 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // run by something else.
             try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
             catch (Exception e) { _log.LogDebug("Could not clean up {Path}: {Msg}", workDir, e.Message); }
+            // Also on every path: a deploy that failed halfway may still have installed
+            // something, and the device sheet (roadmap #25) should say what is actually there
+            // within one inventory pass rather than at the top of the next hour.
+            TempMonitorAgent.Software.SoftwareInventoryReporter.Invalidate();
         }
     }
 

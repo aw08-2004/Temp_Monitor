@@ -219,6 +219,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // -- "I am offering no updates" -- is the only honest evidence an install worked,
             // and it is what closes out a patch run on the hub. A bare array would be dropped
             // by the `if (x is not null)` shape above the moment it went empty.
+            // Installed programs (roadmap #25 B), the device sheet's Software section.
+            // Object-wrapped like `patches` below and for the same reason -- "nothing
+            // installed from that publisher any more" has to survive as a truthy payload --
+            // and acknowledged only after this heartbeat succeeds, like `bitlocker` above.
+            var installed = TempMonitorAgent.Software.SoftwareInventoryReporter.TakeIfChanged();
+            if (installed is not null) body["software"] = installed;
             var patchInventory = TempMonitorAgent.Patch.PatchInventoryReporter.TakeIfChanged();
             if (patchInventory is not null) body["patches"] = patchInventory;
             // The process list, and the ONE payload here that is not change-only: a process
@@ -263,6 +269,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
 
             if (encryption is not null)
                 TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent();
+            if (installed is not null)
+                TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent();
 
             var text = await resp.Content.ReadAsStringAsync(ct);
             ApplyConfigFromHeartbeat(text);
