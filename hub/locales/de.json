@@ -1250,6 +1250,10 @@
           "label": "Durchlauf aufgeben nach",
           "help": "Ein Durchlauf wird von einem PC ausgeführt, der wach ist und antwortet. Ein Bericht, der bis dahin nicht da ist, kommt nicht mehr."
         }
+      },
+      "security.genai_watchlist": {
+        "label": "Beobachtungsliste für generative KI",
+        "help": "Namensteile, die ein installiertes Programm oder eine App als Werkzeug für generative KI kennzeichnen. Ohne Beachtung der Groß-/Kleinschreibung irgendwo im Namen gesucht und auf der Seite Berichte aufgeführt. Nur Kennzeichnung – nichts wird gesperrt. Entfernen Sie einen Namen, um ein freigegebenes Werkzeug nicht mehr zu melden."
       }
     },
     "ai": {
@@ -4213,6 +4217,15 @@
       },
       "empty": "Noch keine Software gemeldet. Geräte füllen dies, sobald ihr Agent neu genug ist, um sie zu erfassen.",
       "show_machines": "Geräte anzeigen"
+    },
+    "genai": {
+      "heading": "Generative-KI-Apps",
+      "intro": "Installierte Programme und Apps, deren Name auf der Beobachtungsliste unter Einstellungen → Endgerätesicherheit steht. Das ist eine Liste, keine Sperre: Nichts hier verhindert, dass etwas läuft. Entfernen Sie einen Namen von der Liste, um ein freigegebenes Werkzeug nicht mehr zu melden.",
+      "watching": "Gesucht wird nach: {names}",
+      "empty": "Laut Inventar ist auf den für Sie sichtbaren Geräten nichts von der Beobachtungsliste installiert.",
+      "col": {
+        "matched": "Treffer"
+      }
     }
   }
 }

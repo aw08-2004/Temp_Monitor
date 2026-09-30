@@ -125,6 +125,33 @@ def main():
         check("reported_at_many answers only for machines that reported",
               set(software.reported_at_many(db, ["PC-01", "PC-99"])) == {"PC-01"})
 
+        print("\n== Shadow AI (roadmap #19) ==")
+        import apps
+        apps.init_apps_db(db)
+        software.record_inventory(db, "PC-AI", {"software": [
+            entry("ChatGPT", "1.2025"), entry("Ollama", "0.5"), entry("Notepad++", "8")]})
+        apps.record_inventory(db, "PHONE-1", {"apps": [
+            {"package": "com.anthropic.claude", "label": "Claude"},
+            {"package": "com.whatsapp", "label": "WhatsApp"}]})
+        found = software.genai_matches(db, ["chatgpt", "ollama", "claude"])
+        check("Windows and Android findings, nothing else",
+              {(f["machine"], f["name"]) for f in found}
+              == {("PC-AI", "ChatGPT"), ("PC-AI", "Ollama"), ("PHONE-1", "Claude")})
+        check("each names the fragment that matched",
+              next(f for f in found if f["name"] == "Ollama")["matched"] == "ollama")
+        check("Android rows say so", next(f for f in found if f["machine"] == "PHONE-1")
+              ["platform"] == "android")
+        check("matching is case-insensitive on the operator's side too",
+              len(software.genai_matches(db, ["CHATGPT"])) == 1)
+        check("a % in a fragment is literal, not a LIKE wildcard",
+              software.genai_matches(db, ["%"]) == [])
+        check("an empty watch list finds nothing", software.genai_matches(db, []) == [])
+        check("an empty scope finds nothing, never the fleet",
+              software.genai_matches(db, ["chatgpt"], machines=[]) == [])
+        check("a scope narrows", {f["machine"] for f in software.genai_matches(
+            db, ["chatgpt", "claude"], machines=["PHONE-1"])} == {"PHONE-1"})
+        software.forget_machine(db, "PC-AI")
+
         print("\n== Merge and forget ==")
         software.rename_machine(db, "PC-04", "PC-01")
         check("survivor wins: PC-01 keeps its own list",

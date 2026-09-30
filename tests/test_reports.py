@@ -241,7 +241,14 @@ def main():
               == {"=cmd|' /C calc'!A0", "7-Zip"})
         check("an out-of-scope machine's software is refused",
               c.get("/api/software/machines/PC-SECRET").status_code == 403)
+        settings.set_many(db, {"security.genai_watchlist": ["7-Zip"]})
+        settings.invalidate()
+        body = c.get("/api/software/genai").get_json()
+        check("shadow-AI findings match the watch list, and say what was searched for",
+              [(f["machine"], f["name"]) for f in body["findings"]] == [("PC-01", "7-Zip")]
+              and body["patterns"] == ["7-zip"])
         CURRENT_USER = "nobody@x.com"
+        check("no view, no shadow-AI findings", c.get("/api/software/genai").status_code == 403)
         check("no view capability, no fleet report", c.get("/api/reports/fleet").status_code == 403)
         check("...and no export", c.get("/api/reports/export.csv").status_code == 403)
         CURRENT_USER = "super@x.com"

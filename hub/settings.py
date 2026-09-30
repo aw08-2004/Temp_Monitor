@@ -173,6 +173,14 @@ DEFAULT_SENSOR_PREFERENCE = [
 DEFAULT_GPU_TEMP_PREFERENCE = ["gpu core", "gpu hot spot", "gpu package"]
 DEFAULT_GPU_LOAD_PREFERENCE = ["gpu core", "d3d 3d"]
 
+#: The shipped shadow-AI watch list (roadmap #19). Lowercase, because str_list normalises to
+#: lowercase and a default that differed from what an operator's save stores would read as a
+#: change on the Settings page.
+DEFAULT_GENAI_WATCHLIST = (
+    "chatgpt", "claude", "copilot", "gemini", "perplexity", "deepseek", "ollama", "lm studio",
+    "gpt4all", "anythingllm", "msty",
+)
+
 REGISTRY = (
     # ---------------- Computer: how a machine's telemetry is interpreted ----------------
     _s("computer.primary_sensor_preference", "computer", "str_list",
@@ -768,6 +776,20 @@ REGISTRY = (
     # see bitlocker.py; reading a checkbox as "destroy the keys" would be the most destructive
     # thing in this console.
     _s("security.escrow_bitlocker_keys", "security", "bool", True),
+    # Shadow-AI detection (roadmap #19): name fragments that mark an installed program or app
+    # as a generative-AI client. Matched case-insensitively as substrings against the Windows
+    # software inventory (#25 B) and the Android app inventory -- see software.genai_matches.
+    #
+    # **Removing an entry is how an operator sanctions a tool.** A separate "approved" list
+    # was the obvious shape and was turned down: two lists that must be read together are two
+    # places for a name to be misspelled, and "Copilot is approved here" is exactly "stop
+    # flagging Copilot". Fragments are deliberately long enough not to collide with ordinary
+    # software ("jan" for Jan.ai would flag every "Janitor"); a group that wants a short one
+    # can add it and live with what it matches.
+    #
+    # It flags, it does not block. A policy list is not an enforcement, and the console says
+    # so beside the findings.
+    _s("security.genai_watchlist", "security", "str_list", list(DEFAULT_GENAI_WATCHLIST)),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}

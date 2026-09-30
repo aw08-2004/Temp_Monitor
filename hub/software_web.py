@@ -13,15 +13,30 @@ so "how many PCs have TeamViewer" answers for the operator's scope and not for t
 operator whose scope is empty gets an empty catalog, never the unscoped one -- software.catalog
 reads an empty list as "nothing", and None only ever comes from an unrestricted caller.
 """
+import sqlite3
+
 from flask import Blueprint, jsonify, request
 
 import permissions
+import settings
 import software
 
 
 def create_software_blueprint(db_path, login_required, access):
     bp = Blueprint("software", __name__)
     can_view = access.require(permissions.VIEW)
+
+    def _all_reporting():
+        """Every machine either inventory has a row for -- Windows or Android."""
+        with software.get_conn(db_path) as conn:
+            names = {r["machine"] for r in conn.execute(
+                "SELECT machine FROM machine_software_state")}
+            try:
+                names |= {r["machine"] for r in conn.execute(
+                    "SELECT DISTINCT machine FROM machine_apps")}
+            except sqlite3.OperationalError:
+                pass
+        return sorted(names)
 
     def _visible_scope():
         """None for an unrestricted caller, else the visible machines that have reported."""
@@ -58,5 +73,20 @@ def create_software_blueprint(db_path, login_required, access):
         version = request.args.get("version")
         machines = access.filter_machines(software.machines_with(db_path, name, version))
         return jsonify({"machines": machines}), 200
+
+    @bp.route("/api/software/genai", methods=["GET"])
+    @login_required
+    @can_view
+    def genai_findings():
+        """Shadow-AI findings (roadmap #19) over the caller's scope, plus the watch list they
+        were matched against, so the page can say what it looked for. `view`, like the
+        catalog it is a filter of -- anybody who can see a machine's installed software can
+        already find ChatGPT in it by reading."""
+        patterns = settings.get(db_path, "security.genai_watchlist") or []
+        scope = None
+        if access.machine_filter() is not None:
+            scope = access.filter_machines(_all_reporting())
+        return jsonify({"patterns": list(patterns),
+                        "findings": software.genai_matches(db_path, patterns, scope)}), 200
 
     return bp

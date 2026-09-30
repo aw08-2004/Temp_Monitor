@@ -1322,6 +1322,10 @@
           "label": "Give up on a sweep after",
           "help": "A sweep is run by a PC that is awake and answering, so a report that has not arrived by this point is not coming."
         }
+      },
+      "security.genai_watchlist": {
+        "label": "Generative AI watch list",
+        "help": "Name fragments that mark an installed program or app as a generative-AI tool. Matched without regard to case anywhere in the name, and listed on the Reports page. Flagging only -- nothing is blocked. Remove a name to stop flagging a tool you have approved."
       }
     },
     "_choice": [
@@ -4331,6 +4335,15 @@
       },
       "empty": "No software reported yet. Machines fill this in once their agent is new enough to collect it.",
       "show_machines": "Show which machines"
+    },
+    "genai": {
+      "heading": "Generative AI apps",
+      "intro": "Installed programs and apps whose name matches the watch list in Settings → Endpoint Security. This is a list, not a block: nothing here stops anything from running. Remove a name from the watch list to stop flagging a tool you have approved.",
+      "watching": "Watching for: {names}",
+      "empty": "Nothing on the watch list is installed on the machines you can see, as far as their inventories say.",
+      "col": {
+        "matched": "Matched"
+      }
     }
   }
 }

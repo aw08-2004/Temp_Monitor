@@ -200,6 +200,49 @@
         }));
     }
 
+    // ---- shadow AI (roadmap #19) -----------------------------------------------------
+    // Loaded once. It is a filter over the same inventory as the catalog, which does not
+    // change while somebody is looking at this page.
+    async function loadGenai() {
+        const genaiBody = document.getElementById('genai-body');
+        const watching = document.getElementById('genai-watching');
+        if (!genaiBody) return;
+        let response;
+        try {
+            response = await fetch('/api/software/genai');
+        } catch (e) {
+            watching.textContent = t('report.load_failed');
+            return;
+        }
+        if (!response.ok) {
+            watching.textContent = t('report.load_failed');
+            return;
+        }
+        const data = await response.json();
+        watching.textContent = t('reports.genai.watching', { names: (data.patterns || []).join(', ') });
+        const findings = data.findings || [];
+        if (findings.length === 0) {
+            const tr = el('tr');
+            const td = el('td', 'stat-card__meta', t('reports.genai.empty'));
+            td.colSpan = 4;
+            tr.appendChild(td);
+            genaiBody.replaceChildren(tr);
+            return;
+        }
+        genaiBody.replaceChildren(...findings.map((f) => {
+            const tr = el('tr');
+            const cell = el('td');
+            const link = el('a', null, f.machine);
+            link.href = `/reports/machines/${encodeURIComponent(f.machine)}`;
+            cell.appendChild(link);
+            tr.appendChild(cell);
+            tr.appendChild(el('td', null, f.name));
+            tr.appendChild(el('td', null, f.version));
+            tr.appendChild(el('td', null, f.matched));
+            return tr;
+        }));
+    }
+
     groupEl.addEventListener('change', () => {
         handedOver = '';
         loadRows();
@@ -216,4 +259,5 @@
 
     loadRows();
     loadCatalog();
+    loadGenai();
 })();

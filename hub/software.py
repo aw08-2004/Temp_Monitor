@@ -308,6 +308,69 @@ def machines_with(db_path, name, version=None):
 
 
 # ================================
+# SHADOW AI (roadmap #19)
+# ================================
+def genai_matches(db_path, patterns, machines=None):
+    """Installed programs and Android apps whose name matches a watch-list fragment.
+
+    **A query over what the inventories already hold, and nothing else** -- the #19 entry's own
+    constraint: no new channel, no agent change. Windows rows come from machine_software, Android
+    rows from machine_apps (label and package both, because `com.openai.chatgpt` is how a
+    policy author knows the app and "ChatGPT" is how everybody else does).
+
+    Matched case-insensitively as a substring, in Python rather than SQL LIKE: the list is a
+    dozen fragments and an operator's fragment may contain `%` or `_`, which LIKE would read as
+    wildcards and quietly match everything.
+
+    `machines` narrows to a scope; None is the whole fleet and an EMPTY list is nothing, the
+    same contract as catalog(). Returns one row per (machine, program), naming the first
+    fragment that matched -- enough to tell an operator which list entry to remove if the
+    finding is a tool they have sanctioned.
+    """
+    needles = [str(p).strip().lower() for p in (patterns or []) if str(p or "").strip()]
+    if not needles:
+        return []
+    scope = None
+    if machines is not None:
+        scope = {str(m).strip() for m in machines if str(m or "").strip()}
+        if not scope:
+            return []
+
+    def first_match(*texts):
+        hay = " ".join(t.lower() for t in texts if t)
+        return next((n for n in needles if n in hay), None)
+
+    found = []
+    with get_conn(db_path) as conn:
+        for r in conn.execute("SELECT machine, name, version, publisher, scope, user_sid "
+                              "FROM machine_software"):
+            if scope is not None and r["machine"] not in scope:
+                continue
+            hit = first_match(r["name"])
+            if hit:
+                found.append({"machine": r["machine"], "platform": "windows", "name": r["name"],
+                              "version": r["version"], "publisher": r["publisher"],
+                              "scope": r["scope"], "matched": hit})
+        try:
+            android = conn.execute(
+                "SELECT machine, package, label, version FROM machine_apps").fetchall()
+        except sqlite3.OperationalError:
+            # A hub where apps.init_apps_db has not run (a test DB, a mid-upgrade start) has
+            # no Android inventory to search, which is not an error.
+            android = []
+        for r in android:
+            if scope is not None and r["machine"] not in scope:
+                continue
+            hit = first_match(r["label"], r["package"])
+            if hit:
+                found.append({"machine": r["machine"], "platform": "android",
+                              "name": r["label"] or r["package"], "version": r["version"],
+                              "publisher": r["package"], "scope": SCOPE_MACHINE, "matched": hit})
+    found.sort(key=lambda f: (f["machine"].casefold(), f["name"].casefold()))
+    return found
+
+
+# ================================
 # LIFECYCLE HOOKS
 # ================================
 def forget_machine(db_path, machine):

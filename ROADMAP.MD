@@ -3261,16 +3261,28 @@ finding #10's `NicReader` produced on first contact.
 
 ---
 
-## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0**
+## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0** · **shadow-AI detection hub 1.133.0**
 
 Three small things from FR-06 and FR-07 that share no code but are each about a day. The
-first is built; the other two are not.
+first two are built; remote session recording is not.
 
 - **BitLocker key escrow.** ✅ **Done, hub 1.131.0** — see below. Auto-enable is deliberately
   NOT part of it; see *Rejected alternatives*.
-- **Shadow-AI detection.** Flag unsanctioned GenAI apps. A query over installed software the
-  inventory already collects, plus a policy list — no new channel, and worth being honest in
-  the UI that a policy list is not an enforcement.
+- **Shadow-AI detection.** ✅ **Done, hub 1.133.0**, exactly as scoped: a query over the
+  inventories and a policy list, no new channel and no agent change. `software.genai_matches`
+  matches the `security.genai_watchlist` setting (name fragments, shipped with a default of
+  eleven: ChatGPT, Claude, Copilot, Gemini, Perplexity, DeepSeek, Ollama, LM Studio, GPT4All,
+  AnythingLLM, Msty) case-insensitively against the Windows software inventory (#25 B) and
+  Android's app labels and packages; `GET /api/software/genai` serves it at `view` + scope, and
+  the **Reports** page lists the findings under a sentence saying it blocks nothing.
+  Decisions: **removing a name from the watch list is how a tool is sanctioned** -- a second
+  "approved" list was turned down as two places to misspell one name; fragments are kept long
+  enough not to collide ("jan" for Jan.ai would flag every "Janitor"); matching is done in
+  Python rather than SQL LIKE so an operator's `%` or `_` is literal. **It depends on #25 B's
+  agent release for Windows findings** -- until that is cut, only Android devices can match.
+  Not done: an alert rule over findings (a `software.*` rules variable is the natural next
+  step, and should be built the way #16's `event.*` variables were), and browser-based AI use,
+  which no installed-software query can see.
 - **Remote session recording.** Video and keystroke capture for the audit trail, stored
   outside the hub DB. The one with real cost, and the one with a real question attached:
   recording a colleague's screen is a decision to take deliberately, not a default to leave

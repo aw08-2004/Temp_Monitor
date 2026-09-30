@@ -75,6 +75,28 @@
         </tbody>
     </table>
 </div>
+
+{# Shadow-AI detection (roadmap #19): the catalog above, filtered by the security.genai_watchlist
+   setting. Says in words that it does not block anything -- a list is not an enforcement, and
+   an operator who read this card as one would stop looking. #}
+<h2 class="section-title" style="margin-top: var(--space-6);">{{ t('reports.genai.heading') }}</h2>
+<p class="stat-card__meta" style="margin-bottom: var(--space-2);">{{ t('reports.genai.intro') }}</p>
+<p class="stat-card__meta" id="genai-watching" style="margin-bottom: var(--space-4);"></p>
+<div class="card report-table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>{{ t('inventory.col.machine') }}</th>
+                <th>{{ t('report.col.name') }}</th>
+                <th>{{ t('report.col.version') }}</th>
+                <th>{{ t('reports.genai.col.matched') }}</th>
+            </tr>
+        </thead>
+        <tbody id="genai-body">
+            <tr><td colspan="4" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+        </tbody>
+    </table>
+</div>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/reports.js') }}"></script>

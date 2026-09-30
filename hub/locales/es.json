@@ -1250,6 +1250,10 @@
           "label": "Abandonar un barrido tras",
           "help": "Un barrido lo ejecuta un PC encendido y respondiendo, así que un informe que no ha llegado para entonces ya no va a llegar."
         }
+      },
+      "security.genai_watchlist": {
+        "label": "Lista de vigilancia de IA generativa",
+        "help": "Fragmentos de nombre que identifican un programa o aplicación instalados como herramienta de IA generativa. Se buscan en cualquier parte del nombre sin distinguir mayúsculas y se listan en la página Informes. Solo se marca: no se bloquea nada. Quite un nombre para dejar de marcar una herramienta aprobada."
       }
     },
     "ai": {
@@ -4213,6 +4217,15 @@
       },
       "empty": "Aún no se ha informado software. Los equipos lo completan cuando su agente es lo bastante reciente para recopilarlo.",
       "show_machines": "Mostrar qué equipos"
+    },
+    "genai": {
+      "heading": "Aplicaciones de IA generativa",
+      "intro": "Programas y aplicaciones instalados cuyo nombre coincide con la lista de vigilancia en Configuración → Seguridad del endpoint. Es una lista, no un bloqueo: nada de esto impide que algo se ejecute. Quite un nombre de la lista para dejar de marcar una herramienta aprobada.",
+      "watching": "Se busca: {names}",
+      "empty": "Según los inventarios, no hay nada de la lista de vigilancia instalado en los equipos que puede ver.",
+      "col": {
+        "matched": "Coincidencia"
+      }
     }
   }
 }

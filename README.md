@@ -1999,6 +1999,11 @@ modules, disks, monitors, antivirus and firewall state -- roadmap #25 C and D).
 that has been offline for a week is exactly the one a helpdesk needs; each section shows when its
 facts were reported.
 
+**Generative AI apps**, at the bottom of Reports, is the software catalog filtered by the
+**Generative AI watch list** (Settings → Endpoint Security): name fragments matched anywhere in a
+Windows program's name or an Android app's label or package. It flags and blocks nothing. To
+sanction a tool, remove its name from the list.
+
 **Installed software** is read by the Windows agent from the registry's Uninstall keys -- both
 the 64- and 32-bit views, plus the hive of every signed-in user -- and filtered the way Programs
 and Features filters it. It is re-read hourly and straight after a package deployment, and sent
@@ -2019,7 +2024,7 @@ read a BitLocker recovery key (`read_recovery_keys`) and backup history (`manage
 `GET /api/reports/fleet`, `GET /api/reports/export.json`, `GET /api/reports/export.csv?section=`
 (each taking `machines=a,b` or `group=<id>`, default the whole visible fleet),
 `GET /api/software/machines/<machine>`, `GET /api/software/catalog?q=`,
-`GET /api/software/catalog/machines?name=&version=`. The inventory arrives on the existing
+`GET /api/software/catalog/machines?name=&version=`, `GET /api/software/genai`. The inventory arrives on the existing
 `POST /api/agent/heartbeat` under a `software` key, change-only.
 
 > **Status:** hub 1.133.0. The Software section fills in once the agent release carrying
