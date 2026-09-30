@@ -5,10 +5,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh \
 #     | sudo bash -s -- --secret 'THE-SECRET'
 #
-# The Linux counterpart of `irm .../install.ps1 | iex`, and it resolves the binary the same way
-# install.ps1 does: newest GitHub release whose tag matches the agent prefix, then the asset by
-# name. Nothing else about the two installers is shared, because nothing else needed to be --
-# systemd already does what WinSW and `sc failure` are there for on Windows.
+# The Linux counterpart of `irm .../install.ps1 | iex`. It finds the binary the way the agent's
+# own SelfUpdater does: the Ed25519-signed agent-linux.manifest.json, verified against the fleet
+# key compiled into both agents, then the download checked against the SIGNED sha256. See
+# "signed manifest" below for why, and for why install.ps1 does not (yet) do the same.
 #
 # WHY EVERYTHING IS INSIDE main(). This script is meant to be piped into bash, and a pipe is not
 # a file: bash reads it in chunks and executes what it has. If the connection drops halfway, a
@@ -27,7 +27,6 @@ set -euo pipefail
 
 REPO="aw08-2004/Temp_Monitor"
 BRANCH="main"
-RELEASE_TAG_PREFIX="linux-agent-v"
 ASSET_NAME="fleethub-agent"
 
 INSTALL_DIR=/opt/fleethub/agent
@@ -37,8 +36,19 @@ SERVICE=fleethub-agent
 
 UNIT_URL="https://raw.githubusercontent.com/$REPO/$BRANCH/agent-linux/packaging/fleethub-agent.service"
 
+# The manifest the agent's SelfUpdater reads (AgentConfig.StableManifestUrl) -- the same file, so
+# a machine is installed from exactly what it would later update from.
+MANIFEST_URL="https://raw.githubusercontent.com/$REPO/$BRANCH/agent-linux/agent-linux.manifest.json"
+
+# The fleet's release-signing public key. **Must equal AgentConfig.UpdatePublicKeyHex** in both
+# agents; tests/test_linux_installer.py fails if it drifts. Deliberately NOT overridable by flag
+# or environment, for the reason the agents give: --manifest-url may point anywhere, because
+# whatever it serves still has to be signed by a key only the offline signing machine holds.
+UPDATE_PUBLIC_KEY_HEX="9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c"
+
 BINARY=""
 AGENT_URL=""
+MANIFEST_URL_OVERRIDE=""
 UNIT_SRC=""
 SECRET=""
 SECRET_FILE=""
@@ -76,10 +86,12 @@ Options:
                      whichever name you already have exported will work.
   --secret-file PATH Read the secret from a file instead (not visible in the process list).
   --hub URL          Override the compiled-in hub base URL.
-  --agent-url URL    Download the binary from here instead of asking the GitHub releases API.
-                     Use this for an internal mirror, or when many machines behind one NAT
-                     would hit GitHub's unauthenticated rate limit (60 requests/hour/IP).
-  --binary PATH      Install a binary already on this machine; skips downloading entirely.
+  --manifest-url URL Read the signed manifest from here (an internal mirror). It is still
+                     verified against the fleet key, so a mirror cannot substitute a build.
+  --agent-url URL    Download the binary from here WITHOUT checking it against the signed
+                     manifest. Prints a warning. For a build nobody has signed yet.
+  --binary PATH      Install a binary already on this machine; skips downloading entirely,
+                     and like --agent-url is not checked against the fleet key.
   --unit PATH        Use a local copy of the systemd unit rather than fetching it.
   --uninstall        Stop, disable and remove the agent. Keeps /etc/fleethub so a reinstall
                      does not need the secret again; delete it by hand to remove that too.
@@ -169,55 +181,125 @@ and install it with --binary."
 
 # ---------------------------------------------------------------- download
 
-resolve_agent_url() {
-    [ -n "$AGENT_URL" ] && { printf '%s' "$AGENT_URL"; return; }
+# ---------------------------------------------------------------- signed manifest
+#
+# **The installer applies the check the agent's SelfUpdater applies**, and that is the whole
+# point of this section. Until it existed the installer asked the GitHub releases API for the
+# newest linux-agent-v* asset and checked only that the download began with the ELF magic --
+# so the fleet key, which every self-update verifies fail-closed, protected every step EXCEPT
+# the one that first runs the agent as root. Review on PR #91 caught that when the 0.3.0 note
+# made this installer the upgrade path for every enrolled box (0.1.0 and 0.2.0 have no updater).
+#
+# Mirrored step for step from agent-linux/src/FleetHubAgent/Update/SelfUpdater.cs:
+#   1. fetch the manifest and its detached .sig;
+#   2. verify the Ed25519 signature over the manifest's EXACT bytes with the pinned key;
+#   3. only then parse it for version, sha256 and url;
+#   4. download url and refuse it unless its sha256 equals the SIGNED value.
+# Fail closed at every step: nothing here falls back to an unverified download.
+#
+# **OpenSSL 3, and no fallback below it.** Ed25519 verification of a raw message needs
+# `pkeyutl -rawin`, which OpenSSL 1.1.1 does not have; the machine has no .NET yet to borrow
+# the agent's verifier from. Ubuntu 22.04+, Debian 12+ and RHEL 9 ship 3.x. An older box is told
+# so and pointed at --binary, rather than silently installed unverified.
+#
+# Rejected: keeping the releases-API lookup and verifying afterwards. The manifest already names
+# the one URL that is allowed, so asking the API as well would be a second source of truth for
+# the same fact, and the pagination and 60-requests-per-hour limits the API brought with it
+# disappear with it. Rejected too: a flag or variable to supply the key. That would make the
+# trust root something whoever runs the command chooses, which is the thing being removed.
+#
+# install.ps1 still does what this used to do -- no manifest check on a first Windows install.
+# Recorded in ROADMAP.MD rather than changed here, because that is the Windows fleet's front
+# door and deserves its own change.
 
-    # Same shape as install.ps1's Get-LatestAgentAssetUrl: newest release whose tag carries the
-    # agent prefix, then the asset matched by exact name. Parsed with grep rather than jq
-    # because jq is not installed by default on a server image and this is the one place the
-    # installer would otherwise need a package manager before it can do anything.
-    local api json url
-    # per_page=100, not the default 30.
-    #
-    # install.ps1 reads the first page unpaginated and gets away with it, because the releases
-    # it looks for -- agent-v* -- are the FREQUENT ones and are therefore always near the top.
-    # That parity does not carry to this side. Linux releases will be rare while Windows agent
-    # releases keep coming, so the newest linux-agent-v* sinks down the list over time, and on
-    # the day it falls past the page boundary this installer reports "no published release" for
-    # a release that plainly exists. A wrong answer, not a failure to answer -- the operator
-    # would go looking at the release rather than at the pagination.
-    #
-    # 100 is the API's maximum for one request. It is a horizon, not a fix; following the Link
-    # header would be the real one, and is not worth the shell it would take until this repo is
-    # anywhere near a hundred releases behind a Linux build.
-    api="https://api.github.com/repos/$REPO/releases?per_page=100"
-    json="$(http_get_stdout "$api" || true)"
-    [ -n "$json" ] || die "could not reach the GitHub releases API. Use --agent-url, or --binary \
-with a locally built file."
+hex_to_file() {
+    # Hex text on stdin -> raw bytes in $1. printf '%b' rather than xxd, which a minimal server
+    # image does not have.
+    local hex
+    hex="$(tr -d ' \t\r\n')"
+    case "$hex" in *[!0-9a-fA-F]*|'') return 1 ;; esac
+    [ $(( ${#hex} % 2 )) -eq 0 ] || return 1
+    printf '%b' "$(printf '%s' "$hex" | sed 's/../\\x&/g')" > "$1"
+}
 
-    url="$(printf '%s' "$json" \
-        | tr ',{' '\n\n' \
-        | grep -o "https://github.com/$REPO/releases/download/${RELEASE_TAG_PREFIX}[^\"]*/${ASSET_NAME}" \
-        | head -1 || true)"
+need_openssl3() {
+    have openssl || die "openssl is required to verify the agent against the fleet's signing key.
+  Install it (apt-get install -y openssl / dnf install -y openssl), or build the agent yourself
+  and install it with --binary."
+    local major
+    major="$(openssl version 2>/dev/null | sed -n 's/^OpenSSL \([0-9][0-9]*\)\..*/\1/p')"
+    [ -n "$major" ] && [ "$major" -ge 3 ] || die "verifying the agent needs OpenSSL 3 or newer; \
+this machine has '$(openssl version 2>/dev/null)'. Build the agent yourself and install it with \
+--binary, or install from a machine with a newer OpenSSL."
+}
 
-    [ -n "$url" ] || die "no published '${RELEASE_TAG_PREFIX}*' release with a '${ASSET_NAME}' asset. \
-Either none has been published, or the newest one has sunk past the first 100 releases -- see \
-agent-linux/README.md. Build locally and pass --binary, or name the asset with --agent-url."
+# verify_manifest MANIFEST SIGFILE WORKDIR -> exit 0 only if SIGFILE is a valid Ed25519
+# signature by UPDATE_PUBLIC_KEY_HEX over MANIFEST's exact bytes.
+verify_manifest() {
+    local manifest="$1" sigfile="$2" work="$3"
+    [ -s "$manifest" ] && [ -s "$sigfile" ] || return 1
+    [ "${#UPDATE_PUBLIC_KEY_HEX}" -eq 64 ] || return 1
+    # A raw 32-byte Ed25519 key wrapped in its fixed SubjectPublicKeyInfo DER prefix -- the
+    # form openssl reads -- rather than shipping a PEM that could drift from the hex the agents
+    # carry. The prefix is the same for every Ed25519 key.
+    printf '%s' "302a300506032b6570032100$UPDATE_PUBLIC_KEY_HEX" | hex_to_file "$work/pub.der" \
+        || return 1
+    hex_to_file "$work/sig.bin" < "$sigfile" || return 1
+    [ "$(wc -c < "$work/sig.bin")" -eq 64 ] || return 1
+    openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/pub.der" -rawin \
+        -in "$manifest" -sigfile "$work/sig.bin" >/dev/null 2>&1
+}
 
-    printf '%s' "$url"
+# manifest_field FILE NAME -> the string value of a top-level field. The manifest is
+# sign_release.py's compact one-line JSON, and it is only ever parsed AFTER its signature has
+# verified, so a field it does not contain is a signing bug, not an attack.
+manifest_field() {
+    grep -o "\"$2\" *: *\"[^\"]*\"" "$1" | head -1 | sed 's/.*: *"\(.*\)"/\1/'
+}
+
+fetch_verified_binary() {
+    local dest="$1" work="$2" url version want got
+    local manifest_url="${MANIFEST_URL_OVERRIDE:-$MANIFEST_URL}"
+    need_openssl3
+    http_get_file "$manifest_url" "$work/manifest.json" 2>/dev/null \
+        && http_get_file "$manifest_url.sig" "$work/manifest.json.sig" 2>/dev/null \
+        || die "could not fetch the signed Linux agent manifest from $manifest_url (or its .sig).
+  If no Linux release has been cut since signed manifests were introduced, there is nothing
+  verifiable to install yet: use --binary with a locally built agent, or --agent-url for an
+  unverified download."
+    verify_manifest "$work/manifest.json" "$work/manifest.json.sig" "$work" \
+        || die "the Linux agent manifest at $manifest_url is NOT signed by the fleet's key. \
+Refusing to install. Nothing on this machine was changed."
+    version="$(manifest_field "$work/manifest.json" version)"
+    want="$(manifest_field "$work/manifest.json" sha256 | tr 'A-F' 'a-f')"
+    url="$(manifest_field "$work/manifest.json" url)"
+    [ -n "$version" ] && [ -n "$url" ] && printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' \
+        || die "the signed manifest is missing its version, url or sha256 -- a release-signing bug."
+    say "manifest verified: version $version, signed by the fleet key"
+    say "binary  <- $url"
+    http_get_file "$url" "$dest" || die "download failed: $url"
+    got="$(sha256sum "$dest" | cut -d' ' -f1)"
+    [ "$got" = "$want" ] || die "the downloaded binary does not match the signed manifest \
+(sha256 $got, expected $want). Refusing to install."
+    say "binary  sha256 matches the signed manifest"
 }
 
 fetch_binary() {
-    local dest="$1" url
+    local dest="$1" work="$2" url
     if [ -n "$BINARY" ]; then
         [ -f "$BINARY" ] || die "no such file: $BINARY"
         cp "$BINARY" "$dest"
-        say "binary  <- $BINARY (local)"
+        say "binary  <- $BINARY (local, not checked against the fleet key)"
         return
     fi
-    url="$(resolve_agent_url)"
-    say "binary  <- $url"
-    http_get_file "$url" "$dest" || die "download failed: $url"
+    if [ -z "$AGENT_URL" ]; then
+        fetch_verified_binary "$dest" "$work"
+    else
+        url="$AGENT_URL"
+        warn "--agent-url: this download is NOT checked against the fleet's signing key"
+        say "binary  <- $url"
+        http_get_file "$url" "$dest" || die "download failed: $url"
+    fi
     # A proxy or a 404 page saved as the binary is the classic silent failure here: the file
     # exists, the installer says success, and systemd reports "Exec format error" much later.
     [ -s "$dest" ] || die "downloaded file is empty: $url"
@@ -265,6 +347,7 @@ main() {
             --secret-file) SECRET_FILE="${2:-}"; shift 2 ;;
             --hub)         HUB="${2:-}"; shift 2 ;;
             --agent-url)   AGENT_URL="${2:-}"; shift 2 ;;
+            --manifest-url) MANIFEST_URL_OVERRIDE="${2:-}"; shift 2 ;;
             --binary)      BINARY="${2:-}"; shift 2 ;;
             --unit)        UNIT_SRC="${2:-}"; shift 2 ;;
             --uninstall)   UNINSTALL=1; shift ;;
@@ -309,7 +392,7 @@ main() {
 
     # Downloaded BEFORE the running agent is stopped, so a failed or slow download leaves a
     # working agent running rather than a machine with none.
-    fetch_binary "$tmp/$ASSET_NAME"
+    fetch_binary "$tmp/$ASSET_NAME" "$tmp"
     fetch_unit "$tmp/unit"
 
     if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then

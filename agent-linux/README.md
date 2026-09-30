@@ -176,21 +176,28 @@ whichever one you already have exported is the right one — passing an env var 
 not read would otherwise be indistinguishable from passing none, and would leave a machine that
 installs cleanly and silently takes no commands.
 
-Other options: `--hub URL` to override the compiled-in hub, `--agent-url URL` for an internal
-mirror (or when a lot of machines behind one NAT would hit GitHub's 60/hour unauthenticated API
-limit), `--binary PATH` to install a locally built file with no download at all, `--unit PATH`
-for a local checkout's unit file, and `--uninstall`.
+Other options: `--hub URL` to override the compiled-in hub, `--manifest-url URL` to read the
+signed manifest from an internal mirror (still verified against the fleet key), `--agent-url URL`
+to download a binary **without** checking it against the manifest (it says so when it runs),
+`--binary PATH` to install a locally built file with no download at all, `--unit PATH` for a
+local checkout's unit file, and `--uninstall`.
 
-It resolves the binary exactly as `install.ps1` does — newest GitHub release tagged
-`linux-agent-v*`, asset named `fleethub-agent` — checks the architecture before it stops
-anything, downloads before it stops the running agent, verifies the download is really an ELF
-binary rather than a proxy's error page, and confirms `systemctl is-active` afterwards rather
-than trusting `enable --now`'s exit code.
+**It installs only what the fleet key has signed** -- the same check the agent's own
+`SelfUpdater` applies to every update. It fetches `agent-linux.manifest.json` and its `.sig`,
+verifies the Ed25519 signature over the manifest's exact bytes against the key compiled into
+both agents, downloads the URL the manifest names, and refuses the binary unless its sha256
+equals the signed one. That needs **OpenSSL 3** on the target (Ubuntu 22.04+, Debian 12+,
+RHEL 9); an older box is refused with a pointer to `--binary` rather than installed unverified.
+Until a Linux release has been cut with `release.ps1`, no signed manifest exists and the
+installer says so. It also checks the architecture before it stops anything, downloads before it
+stops the running agent, and confirms `systemctl is-active` afterwards rather than trusting
+`enable --now`'s exit code.
 
 ### Releases
 
-`linux-agent-v0.1.0` is published, so the one-liner above resolves. Installing without any
-release at all — a local build, or an air-gapped machine — stays supported:
+The one-liner installs whatever the committed, signed `agent-linux.manifest.json` names.
+Installing without any release at all — a local build, or an air-gapped machine — stays
+supported, and is the one path the fleet key does not cover:
 
 ```bash
 dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
@@ -198,24 +205,15 @@ scp dist/fleethub-agent user@target:/tmp/
 ssh user@target 'curl -fsSL .../install.sh | sudo bash -s -- --binary /tmp/fleethub-agent --secret "..."'
 ```
 
-To cut the next one — the tag prefix and the asset name are what `install.sh` matches on, so
-both must be exact:
-
-```bash
-dotnet publish src/FleetHubAgent/FleetHubAgent.csproj -c Release -o dist
-gh release create linux-agent-v0.2.0 dist/fleethub-agent \
-  --title "Linux agent v0.2.0" --notes "..."
-```
-
-The installer reads the releases list with `per_page=100` rather than the default 30. This repo
-already carries 50+ releases and Windows agent releases are frequent while Linux ones will be
-rare, so the newest `linux-agent-v*` sinks down the list — past a page boundary it would be
-reported as "no published release" for a release that plainly exists.
-
-`release.ps1` does all of that in one command, and should be used rather than the steps above:
+**Cut releases only with `release.ps1`.** A release made by hand with `gh release create`
+publishes a binary and no signed manifest, so neither the installer nor a running agent will
+ever take it. (The installer used to find the newest `linux-agent-v*` release through the GitHub
+API, reading `per_page=100` so the rare Linux release would not sink past a page of frequent
+Windows ones. The signed manifest replaced that lookup: it names the one URL allowed, and the
+pagination and 60-requests-per-hour limits went with the API.)
 
 ```powershell
-.\release.ps1 -Version 0.2.0 -NotesFile .\release-notes\0.2.0.md
+.\release.ps1 -Version 0.3.0 -NotesFile .\release-notes\0.3.0.md
 ```
 
 It bumps the two-file version pair, publishes, creates the release, signs
@@ -224,11 +222,12 @@ commits the manifest and its signature, and pushes. **Nothing reaches a machine 
 lands**, because the agent reads the manifest from `main` — an unpushed manifest is a release
 that exists on GitHub, is signed, and updates nobody.
 
-The trust root for an UPDATE is the fleet's offline Ed25519 key, the same one that signs the
-Windows agent's manifest and the client's: the download itself is untrusted, and the binary can
-come from anywhere as long as it hashes to the value inside a signed manifest. The trust root
-for a first INSTALL is still GitHub plus TLS, because `install.sh` has no key to check against
-and nothing to check it with.
+The trust root for an update AND for an install is the fleet's offline Ed25519 key, the same
+one that signs the Windows agent's manifest and the client's: the download itself is untrusted,
+and the binary can come from anywhere as long as it hashes to the value inside a signed
+manifest. What `install.sh` itself is fetched over is still HTTPS from GitHub -- pin the URL to a
+release tag rather than `main` when that matters, as the 0.3.0 release note does. `--binary` and
+`--agent-url` are the two ways around the key, and both say so when used.
 
 ## Running as root
 
