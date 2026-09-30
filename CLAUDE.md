@@ -18,6 +18,7 @@ Four canonical docs already exist. Go to them by question, not by default:
 | Is this planned or shipped, and what was rejected | `ROADMAP.MD` — features `#1`–`#22` |
 | Anything about a version number | `VERSIONING.md` — 120 lines, read it whole |
 | Auth, capabilities, threat model | `SECURITY.MD` |
+| What is waiting on Windows, a phone or the signing key | `ROADMAP.MD` → *Owed locally*, top of file -- surface it at the start of a local session |
 
 ## Search hygiene
 

@@ -82,6 +82,66 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-09-30
+
+**Read this first when working on the machine that holds the signing key.** Everything below
+was built, tested and pushed from a Linux container with no Windows, no Android device and no
+Ed25519 fleet key, so each item here is blocked on exactly one of those three. A session that
+opens this repo locally should surface this list before anything else, then tick items off
+here as they happen. The per-feature detail lives in each entry; this is the index.
+
+**0. Deploy order.** Hub **1.133.0** first (it is already the version on `main` once this
+branch merges, and the hub self-update picks it up). Only then cut the agents below. Every
+hub-side feature in this batch reads "waiting for a newer agent" until the agent arrives,
+which is correct and not a bug.
+
+**1. Windows agent release -- next MINOR above 3.37.1, so `agent/release.ps1 -Version 3.38.0`.**
+It carries, all on `main` and unreleased:
+- `SoftwareInventoryReporter` -- the device sheet's Software section and the software
+  catalog (#25 B). The hub has **no** `MIN_SOFTWARE_AGENT` constant, so no number needs
+  changing in `hub/static/js` whatever version this is cut as.
+- The `bash`/`sh` refusal in `run_script` (#22 hub-side gaps).
+- Whatever else the entries below already list as "agent unreleased" (re-enrollment after a
+  deleted machine, #3's retention/cadence picks). Read `git log agent/` since the 3.37.1 cut
+  before writing the release notes.
+- **Before cutting it:** `dotnet test agent/TempMonitorAgent.slnx` on Windows -- never run for
+  `SoftwareInventoryTests` and `RunScriptShellTests` (compiled from Linux only), nor ever for
+  `EventLogTests`. Then `git status` for rewritten `tests/fixtures/*.fhb` before staging.
+
+**2. Linux agent release -- `agent-linux/release.ps1 -Version 0.3.0` on the key machine (#22).**
+This is what makes Linux self-update exist at all: the four signed manifest files have never
+been committed, so every installed Linux box is stuck until then (see #22, *The manifest is not
+in the repo*). Commit the generated manifests and `.sig` files **exactly as produced** -- the
+`-text` pins in `.gitattributes` must stay. It carries live output streaming, patch inventory
+and the new process list. Also decide what to do with the unmerged
+`fix/linux-agent-web-installer` branch; its hand-made manifest commit must not be merged over a
+real one.
+
+**3. Android.** The whole of *Hardware validation still owed (roadmap #23)* near the end of
+this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchanged by this batch.
+
+**4. First contact on real machines, once 1 and 2 have propagated:**
+- **#25 software:** open a PC's Report tab and compare the Software list with Settings → Apps
+  on the same PC; sign in a second user and confirm their per-user installs appear; time the
+  walk on the machine with the most MSI patches.
+- **#25 printing:** print one sheet from Chrome and one from Edge (only ever checked on screen).
+- **#19 shadow AI:** a PC with ChatGPT or Claude desktop installed shows up under Reports →
+  Generative AI apps.
+- **#22 processes:** open the Processes card on a Linux box with systemd; the list should
+  appear within about five seconds and the Services column should name units.
+- **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
+  three shipped in agent 3.37.0 and none has been confirmed on a real machine.
+
+**5. Decisions only the owner can take** (left alone on purpose, not forgotten):
+- **#19 remote session recording** -- recording a colleague's screen is a policy call first.
+- **#18 Intune/Azure cross-reference** -- needs a Graph credential in the hub's secret store.
+- **#18 MAC vendor (OUI) lookup** -- needs a vendor table somebody commits to keeping current.
+- **#17's two residue columns** (adopted-document version, `last_error_at`) -- the entry says
+  they are better done with the agent half in hand, i.e. alongside a Windows agent release.
+- **#11** -- the Flutter client has still never talked to a live hub.
+
+---
+
 ## ✅ 6. History page
 
 Done. Per-machine multi-panel dashboard (Komodo-style): CPU load, memory (with total RAM
