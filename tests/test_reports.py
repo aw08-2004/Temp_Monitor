@@ -213,6 +213,17 @@ def main():
             {"id": "a", "name": "=cmd|' /C calc'!A0", "version": "1"},
             {"id": "b", "name": "7-Zip", "version": "23.01"}]}}, headers=one_auth)
 
+        print("\n== Patches: fully patched is not 'never scanned' ==")
+        check("before any scan, patches wait", reports.build_sheet(db, "PC-01")["sections"]
+              ["patches"]["status"] == "waiting")
+        c.post("/api/agent/heartbeat", json={"config_version": 0, "patches": {"updates": []}},
+               headers=one_auth)
+        sec = reports.build_sheet(db, "PC-01")["sections"]["patches"]
+        check("an empty scan is ok-and-empty -- a fully patched PC",
+              sec["status"] == "ok" and sec["data"] == [] and sec["reported_at"])
+        row = reports.summary_row(reports.build_sheet(db, "PC-01"))
+        check("...and its summary count is 0, not blank", row["pending_patches"] == 0)
+
         print("\n== Groups resolve live ==")
         device_groups.save_group(db, {"name": "Office", "target": {
             "include": [{"kind": "machines", "machines": ["PC-01"]}], "exclude": []}})

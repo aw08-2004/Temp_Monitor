@@ -4330,10 +4330,11 @@ exports, and a fleet **software catalog** under it.
   `directory`) or `not_collected` (`phase_c`, `phase_d`) -- and the console words each one. The
   Hardware and Security sections print the phase C / D sentence even when they have data,
   because a sheet silent about DIMMs reads as a PC with none.
-- **Patches read `waiting`, not "none", when the list is empty.** `machine_patches` has no
-  per-machine "reported" marker, so an empty list cannot be told from a machine that never
-  scanned. Understating a fully patched PC is the cheap direction to be wrong; a state row like
-  software's would fix it and is a small follow-up in `patches.py`.
+- **Patches got a scan marker** (`machine_patch_state`, `patches.scanned_at`). The first cut
+  printed a fully patched PC as "not reported yet", because `machine_patches` has zero rows for
+  both that and a PC that never scanned. Each ingest now records when it happened, including an
+  empty one, so the sheet can say "none pending" and the summary CSV writes 0 rather than blank.
+  Existing hubs have no markers until each machine's next scan (six-hourly at most).
 - **Two things are left OFF the sheet** because their own pages gate them higher than `view`:
   BitLocker escrow bookkeeping (`read_recovery_keys`) and backup history (`manage_backups`). The
   sheet shows posture and "has a recovery password", never protector ids.

@@ -292,15 +292,14 @@ def build_sheet(db_path, machine, hardware_probe=None, now=None):
     sections["apps"] = (_section(STATUS_OK, phone["apps"], reported_at=phone["reported_at"])
                         if phone["reported_at"] is not None else None)
 
-    pending = patches.list_machine_patches(db_path, machine)
-    # machine_patches has no per-machine "reported" marker of its own; a machine that has
-    # reported an empty patch list and one that has never reported look the same in it. So the
-    # section says "ok, none pending" only when the list is non-empty -- and "waiting" rather
-    # than "none" otherwise. Understating a fully patched PC is the cheap direction to be wrong.
+    # patches.scanned_at is what separates "fully patched" from "never scanned" -- both are an
+    # empty list in machine_patches, and the first version of this sheet printed the former as
+    # the latter.
+    scanned = patches.scanned_at(db_path, machine)
     sections["patches"] = (
-        _section(STATUS_OK, pending,
-                 reported_at=max((p["last_seen"] or 0 for p in pending), default=None))
-        if pending else _waiting(WAITING_AGENT_REPORT))
+        _waiting(WAITING_AGENT_REPORT) if scanned is None
+        else _section(STATUS_OK, patches.list_machine_patches(db_path, machine),
+                      reported_at=scanned))
 
     seats = remote.get_inventory(db_path, machine)
     sections["sessions"] = (_waiting(WAITING_AGENT_REPORT) if seats.get("reported_at") is None
