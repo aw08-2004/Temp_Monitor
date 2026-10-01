@@ -101,6 +101,7 @@
     // until then (and for a pre-3.2 agent that reports none) it falls back to the machine.
     function promptText() {
         const where = cwd || currentMachine();
+        if (shellEl.value === 'bash' || shellEl.value === 'sh') return `${where} $`;
         return shellEl.value === 'cmd' ? `${where}>` : `PS ${where}>`;
     }
 
@@ -356,12 +357,84 @@
         return false;
     }
 
+    // ---------------- Platform ----------------
+    // **The MIN_* gates below are numbers on the WINDOWS agent's line, and only on it**
+    // (roadmap #22, #23). The Linux agent is on its own 0.x train and the Android agent on
+    // another, so read against 3.1.0 a perfectly current Linux box was told it "needs v3.1.0"
+    // and would "refuse scripts until it self-updates" -- an update that does not exist. So
+    // the reported platform is asked FIRST, and a non-Windows machine never reaches a version
+    // gate at all. A machine that reports no platform is every Windows agent in the field
+    // (they do not send a capability block), so silence keeps the old path exactly.
+    //
+    // The capability list, not the platform, decides whether there is a terminal at all:
+    // Android disclaims run_script, Linux claims it. Asking the platform name would hardcode
+    // today's answer for both.
+    const SHELLS = {
+        windows: [['powershell', 'PowerShell'], ['cmd', 'cmd']],
+        // bash first: the Linux agent prefers it and falls back to sh itself when absent.
+        unix: [['bash', 'bash'], ['sh', 'sh']],
+    };
+
+    /** Rebuild the shell picker. Done per machine because the Tools page swaps machines
+     *  without a reload, and a Linux box picked after a PC must not keep offering cmd. */
+    function setShells(kind) {
+        if (!shellEl) return;
+        const list = SHELLS[kind] || SHELLS.windows;
+        if (shellEl.dataset.kind === kind) return;
+        shellEl.dataset.kind = kind;
+        shellEl.replaceChildren(...list.map(([value, label]) => {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = label;
+            return opt;
+        }));
+        shellEl.value = list[0][0];
+        updatePrompt();
+    }
+
+    function setInputEnabled(on) {
+        inputEl.disabled = !on;
+        runBtn.disabled = !on;
+    }
+
     async function refreshHint() {
         const base = t('machine.terminal.hint');
         hintEl.className = 'terminal__hint';
         hintEl.textContent = base;
+        setShells('windows');
+        setInputEnabled(true);
         try {
             const info = await FleetApi.getJson(`/api/machines/${encodeURIComponent(currentMachine())}`);
+            const platform = (info && info.platform) || '';
+            if (platform && platform !== 'windows') {
+                const commands = info.supported_commands;
+                // Has the machine explicitly said it cannot run scripts? Silence still means
+                // "maybe" -- same absent-report rule as capabilities.py -- but a stated list
+                // without run_script is a platform fact, and saying so up front beats a
+                // refusal from create_command after the operator has typed something.
+                if (Array.isArray(commands) && commands.indexOf('run_script') === -1) {
+                    setInteractive(false);
+                    setInputEnabled(false);
+                    hintEl.className = 'terminal__hint terminal__hint--warn';
+                    hintEl.textContent = platform === 'android'
+                        ? t('machine.terminal.hint_no_scripts_android')
+                        : t('machine.terminal.hint_no_scripts');
+                    return;
+                }
+                // Scripts, but one-shot: the Linux agent has no persistent shell, no stdin
+                // and no pseudoconsole, so Stop/Reset and the per-run session would only
+                // promise things nothing on the other end answers.
+                setShells('unix');
+                setInteractive(false);
+                // ...except the timeout, which the Linux executor does honour (1s to 24h).
+                if (timeoutEl) {
+                    timeoutEl.hidden = false;
+                    if (timeoutEl.previousElementSibling) timeoutEl.previousElementSibling.hidden = false;
+                }
+                hintEl.textContent = t('machine.terminal.hint_linux');
+                clearScrollback();
+                return;
+            }
             const version = info && info.companion_version;
             // A modern agent gets a REAL console (ConPTY + xterm.js) instead of any of this.
             // The decision lives here because this is the one place that looks the agent
