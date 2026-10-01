@@ -2272,6 +2272,7 @@
       "hint_old_streaming": "This machine reports agent v{version}. Live output and run_script need v{required} — it will refuse scripts until it self-updates. {base}",
       "hint_old_interactive": "This machine reports agent v{version}. A persistent shell (cd persistence, answering prompts) needs v{required}; until it self-updates, each command runs in a fresh process. {base}",
       "hint_linux": "Linux machine: scripts run as root under bash (sh where bash is missing), one command per process -- cd and variables do not carry over, and there is no stdin. Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears.",
+      "hint_linux_legacy": "This Linux machine runs agent v{version}, which is too old to report its platform or update itself -- re-run install.sh on it to move it to the current Linux agent. Scripts still run here as root under bash (sh where bash is missing), one command per process: cd and variables do not carry over, and there is no stdin.",
       "hint_no_scripts": "This machine reports that it cannot run scripts. That is a limit of its platform, not of its agent version, so an update will not change it.",
       "hint_no_scripts_android": "Android devices cannot run scripts -- there is no shell for an app to run one in. That is a limit of the platform, not of the agent version, so an update will not change it.",
       "running_favorite": "[running favorite \"{name}\" ({type})]",
