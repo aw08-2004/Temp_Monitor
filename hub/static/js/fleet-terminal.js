@@ -397,7 +397,32 @@
         runBtn.disabled = !on;
     }
 
+    /** The machine's platform: what it reported, or -- only when it reported nothing -- the
+     *  OS bucket of the caption its OWN agent sent.
+     *
+     *  **The fallback exists for Linux agents 0.1.0 and 0.2.0**, which predate the capability
+     *  report and have no self-updater, so they will say nothing here until somebody
+     *  reinstalls them. Without it the box fell straight through to the Windows version
+     *  gates and was told to wait for a 3.1.0 that will never come. This has bitten once
+     *  already: the platform-first fix shipped and a 0.1.0 box still showed the old warning.
+     *
+     *  capabilities.py is right that a caption must not drive ENFORCEMENT, and this does not:
+     *  it picks a shell list and a hint, and every route still re-decides. Only
+     *  `source: 'agent'` counts -- an AD directory caption describes what somebody typed into
+     *  AD, not what is running -- and the Windows agent never reports a Linux or Android
+     *  caption, so the old path for every PC in the field is unchanged. */
+    function platformOf(info) {
+        if (!info) return '';
+        if (info.platform) return info.platform;
+        const os = info.os;
+        if (os && os.source === 'agent' && (os.bucket === 'linux' || os.bucket === 'android')) {
+            return os.bucket;
+        }
+        return '';
+    }
+
     async function refreshHint() {
+        let legacyNote = false;
         const base = t('machine.terminal.hint');
         hintEl.className = 'terminal__hint';
         hintEl.textContent = base;
@@ -405,7 +430,7 @@
         setInputEnabled(true);
         try {
             const info = await FleetApi.getJson(`/api/machines/${encodeURIComponent(currentMachine())}`);
-            const platform = (info && info.platform) || '';
+            const platform = platformOf(info);
             if (platform && platform !== 'windows') {
                 const commands = info.supported_commands;
                 // Has the machine explicitly said it cannot run scripts? Silence still means
@@ -426,12 +451,17 @@
                 // promise things nothing on the other end answers.
                 setShells('unix');
                 setInteractive(false);
+                legacyNote = !info.platform;
                 // ...except the timeout, which the Linux executor does honour (1s to 24h).
                 if (timeoutEl) {
                     timeoutEl.hidden = false;
                     if (timeoutEl.previousElementSibling) timeoutEl.previousElementSibling.hidden = false;
                 }
-                hintEl.textContent = t('machine.terminal.hint_linux');
+                hintEl.textContent = legacyNote
+                    ? t('machine.terminal.hint_linux_legacy',
+                        { version: info.companion_version || '?' })
+                    : t('machine.terminal.hint_linux');
+                if (legacyNote) hintEl.className = 'terminal__hint terminal__hint--warn';
                 clearScrollback();
                 return;
             }

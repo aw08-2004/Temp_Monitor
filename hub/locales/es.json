@@ -2163,6 +2163,7 @@
       "hint_old_streaming": "Este equipo informa del agente v{version}. La salida en vivo y run_script necesitan la v{required}: rechazará los scripts hasta que se actualice solo. {base}",
       "hint_old_interactive": "Este equipo informa del agente v{version}. Una shell persistente (mantener cd, responder a preguntas) necesita la v{required}; hasta que se actualice solo, cada comando se ejecuta en un proceso nuevo. {base}",
       "hint_linux": "Equipo Linux: los scripts se ejecutan como root con bash (sh si no hay bash), un proceso por comando -- cd y las variables no se conservan y no hay stdin. Enter ejecuta · Mayús+Enter para una línea nueva · ↑/↓ historial · Ctrl+L limpia.",
+      "hint_linux_legacy": "Este equipo Linux ejecuta el agente v{version}, demasiado antiguo para informar su plataforma o actualizarse solo -- vuelve a ejecutar install.sh en él para pasar al agente Linux actual. Los scripts igual se ejecutan aquí como root con bash (sh si no hay bash), un proceso por comando: cd y las variables no se conservan y no hay stdin.",
       "hint_no_scripts": "Este equipo informa que no puede ejecutar scripts. Es un límite de su plataforma, no de la versión del agente, así que una actualización no lo cambiará.",
       "hint_no_scripts_android": "Los dispositivos Android no pueden ejecutar scripts -- no hay un shell en el que una app pueda ejecutarlos. Es un límite de la plataforma, no de la versión del agente, así que una actualización no lo cambiará.",
       "running_favorite": "[ejecutando el favorito «{name}» ({type})]",
