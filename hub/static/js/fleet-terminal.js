@@ -437,7 +437,13 @@
                 // "maybe" -- same absent-report rule as capabilities.py -- but a stated list
                 // without run_script is a platform fact, and saying so up front beats a
                 // refusal from create_command after the operator has typed something.
-                if (Array.isArray(commands) && commands.indexOf('run_script') === -1) {
+                // An Android device that has not reported (only reachable through the caption
+                // fallback in platformOf) gets the same answer: no Android agent runs scripts
+                // in any version, so there is no list it could send that would change it.
+                const disclaimed = Array.isArray(commands)
+                    ? commands.indexOf('run_script') === -1
+                    : platform === 'android';
+                if (disclaimed) {
                     setInteractive(false);
                     setInputEnabled(false);
                     hintEl.className = 'terminal__hint terminal__hint--warn';
@@ -451,7 +457,7 @@
                 // promise things nothing on the other end answers.
                 setShells('unix');
                 setInteractive(false);
-                legacyNote = !info.platform;
+                legacyNote = platform === 'linux' && !info.platform;
                 // ...except the timeout, which the Linux executor does honour (1s to 24h).
                 if (timeoutEl) {
                     timeoutEl.hidden = false;
