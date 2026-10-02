@@ -27,6 +27,7 @@ subscription can grow by thousands of rows an hour, so both bounds are pinned he
 per-report cap (which must count what it dropped rather than silently truncating) and the
 per-machine row cap (which must drop the OLDEST rows, not the newest).
 """
+import gc
 import os
 import sys
 import tempfile
@@ -256,6 +257,11 @@ def main():
         check("the events it collected are still there",
               len(events.list_events(db_path, machine="PC-1")) == before)
     finally:
+        # sqlite3.Connection's own statement cache references the connection, so a
+        # connection closed only by leaving a `with` block lives on in a reference cycle until
+        # the collector runs -- and Windows refuses to delete a file that is still open
+        # (WinError 32). Linux does not care, which is why this passed for months there.
+        gc.collect()
         os.unlink(db_path)
 
     print(f"\n==== {PASS} passed, {FAIL} failed ====")

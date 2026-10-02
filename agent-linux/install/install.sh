@@ -278,7 +278,11 @@ Refusing to install. Nothing on this machine was changed."
     say "manifest verified: version $version, signed by the fleet key"
     say "binary  <- $url"
     http_get_file "$url" "$dest" || die "download failed: $url"
-    got="$(sha256sum "$dest" | cut -d' ' -f1)"
+    # Hashed from stdin, never by name: GNU sha256sum prefixes its output with a backslash
+    # when the FILE NAME contains a backslash or a newline, and that prefix lands in $got --
+    # so a genuine binary under such a path was refused as tampered. Found on Windows, where
+    # every path has one; a Linux install directory can have one too.
+    got="$(sha256sum < "$dest" | cut -d' ' -f1)"
     [ "$got" = "$want" ] || die "the downloaded binary does not match the signed manifest \
 (sha256 $got, expected $want). Refusing to install."
     say "binary  sha256 matches the signed manifest"

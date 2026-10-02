@@ -243,6 +243,65 @@
         }));
     }
 
+    // ---- security posture (roadmap #25 D) ---------------------------------------------
+    // Loaded once, like the shadow-AI list: a posture is re-read hourly on each machine, and
+    // nothing about it changes while somebody is reading this page.
+    const FAILING_SHOWN = 10;
+
+    async function loadPosture() {
+        const body = document.getElementById('posture-fleet-body');
+        const coverage = document.getElementById('posture-coverage');
+        if (!body || !window.PostureLabels) return;
+        let response;
+        try {
+            response = await fetch('/api/posture/fleet');
+        } catch (e) {
+            coverage.textContent = t('report.load_failed');
+            return;
+        }
+        if (!response.ok) {
+            coverage.textContent = t('report.load_failed');
+            return;
+        }
+        const data = await response.json();
+        if (!data.reporting) {
+            const tr = el('tr');
+            const td = el('td', 'stat-card__meta', t('reports.posture.empty'));
+            td.colSpan = 6;
+            tr.appendChild(td);
+            body.replaceChildren(tr);
+            coverage.textContent = '';
+            return;
+        }
+        coverage.textContent = t('reports.posture.coverage', {
+            reporting: data.reporting, missing: data.not_reported,
+        });
+        body.replaceChildren(...(data.checks || []).map((row) => {
+            const tr = el('tr');
+            tr.appendChild(el('td', null, window.PostureLabels.checkTitle(row.id)));
+            tr.appendChild(el('td', null, row.cis || ''));
+            tr.appendChild(el('td', null, row.pass));
+            tr.appendChild(el('td', null, row.fail));
+            tr.appendChild(el('td', null, row.unknown));
+            // Each failing machine links to its sheet, which is where the detail is. The list
+            // is cut short on screen only; the count beside it is the whole number.
+            const cell = el('td');
+            (row.failing || []).slice(0, FAILING_SHOWN).forEach((machine, i) => {
+                if (i) cell.appendChild(document.createTextNode(', '));
+                const link = el('a', null, machine);
+                link.href = `/reports/machines/${encodeURIComponent(machine)}`;
+                cell.appendChild(link);
+            });
+            const more = (row.failing || []).length - FAILING_SHOWN;
+            if (more > 0) {
+                cell.appendChild(document.createTextNode(' '));
+                cell.appendChild(el('span', 'stat-card__meta', t('reports.posture.more', { count: more })));
+            }
+            tr.appendChild(cell);
+            return tr;
+        }));
+    }
+
     groupEl.addEventListener('change', () => {
         handedOver = '';
         loadRows();
@@ -260,4 +319,5 @@
     loadRows();
     loadCatalog();
     loadGenai();
+    loadPosture();
 })();

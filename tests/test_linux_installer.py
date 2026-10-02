@@ -38,6 +38,17 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALLER = os.path.join(ROOT, "agent-linux", "install", "install.sh")
 
+#: The bash every call runs, resolved through PATH the way a shell would resolve it.
+#:
+#: **Not the bare name `bash`.** On Windows, subprocess hands that to CreateProcess, which
+#: searches System32 BEFORE PATH -- and System32 holds the WSL launcher, which fails with
+#: "execvpe(/bin/bash) failed" on a machine with no distribution installed. Every call then
+#: exited non-zero before install.sh was even loaded, so the acceptance checks failed and,
+#: worse, every "is refused" check PASSED: they assert only a non-zero exit, and a shell that
+#: cannot start supplies one. shutil.which walks PATH, which finds Git for Windows' bash (and
+#: its OpenSSL 3) on a hub machine and /bin/bash everywhere else.
+BASH = shutil.which("bash") or "bash"
+
 PASS = 0
 FAIL = 0
 
@@ -81,7 +92,7 @@ def call(func, *args, key=None, manifest_url=None):
     env = dict(os.environ)
     for var in ("no_proxy", "NO_PROXY"):
         env[var] = ",".join(filter(None, ["127.0.0.1", "localhost", env.get(var, "")]))
-    return subprocess.run(["bash", "-c", script, "harness", func, *args],
+    return subprocess.run([BASH, "-c", script, "harness", func, *args],
                           capture_output=True, text=True, timeout=60, env=env)
 
 
@@ -98,6 +109,14 @@ def serve(directory):
 
 
 def main():
+    # A shell that cannot start makes every refusal below pass for the wrong reason (see
+    # BASH), so prove it loads the installer and runs a command before believing any of them.
+    probe = call("true")
+    if probe.returncode != 0:
+        print(f"  [XX] no usable bash at {BASH!r}: {(probe.stderr or '').strip()[:200]}")
+        print(f"\n==== {PASS} passed, 1 failed ====")
+        return 1
+
     print("\n== The installer's key is the agents' key ==")
     installer = read("agent-linux", "install", "install.sh")
     ours = re.search(r'^UPDATE_PUBLIC_KEY_HEX="([0-9a-f]{64})"', installer, re.M)

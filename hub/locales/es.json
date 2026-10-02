@@ -1254,6 +1254,18 @@
       "security.genai_watchlist": {
         "label": "Lista de vigilancia de IA generativa",
         "help": "Fragmentos de nombre que identifican un programa o aplicación instalados como herramienta de IA generativa. Se buscan en cualquier parte del nombre sin distinguir mayúsculas y se listan en la página Informes. Solo se marca: no se bloquea nada. Quite un nombre para dejar de marcar una herramienta aprobada."
+      },
+      "security.posture_signature_max_age_days": {
+        "label": "Las firmas del antivirus se consideran obsoletas tras",
+        "help": "Antigüedad máxima de las firmas de un antivirus en ejecución antes de que su comprobación de postura de seguridad falle (CIS 10.2). Todo producto habitual se actualiza varias veces al día; una semana sin actualizar indica un actualizador averiado."
+      },
+      "security.posture_lock_max_seconds": {
+        "label": "Tiempo de inactividad máximo antes de bloquear la pantalla",
+        "help": "Un equipo supera la comprobación de bloqueo de pantalla (CIS 4.3) cuando un límite de inactividad para todo el equipo, o el protector de pantalla con bloqueo de cada usuario con sesión iniciada, no supera este valor. CIS indica 15 minutos para un sistema operativo de uso general."
+      },
+      "security.posture_admin_allowlist": {
+        "label": "También autorizados como administradores locales",
+        "help": "Cuentas o grupos que pueden pertenecer al grupo local Administradores de un equipo sin que la comprobación falle (CIS 5.4). Indique un SID, DOMINIO\\nombre o solo el nombre. El Administrador integrado, los Administradores del dominio y los grupos de roles de Entra siempre están autorizados."
       }
     },
     "ai": {
@@ -4064,6 +4076,75 @@
     "key_for": "Clave de recuperación de {volume}",
     "key_warning": "Esta lectura quedó registrada en el registro de auditoría. La clave desaparece al salir de la página."
   },
+  "posture": {
+    "title": "Postura de seguridad",
+    "summary": "{pass} superadas, {fail} no superadas, {unknown} desconocidas",
+    "intro": "Evidencia de la salvaguarda IG1 de los CIS Controls indicada junto a cada comprobación, evaluada según los umbrales de Configuración, Seguridad. Esta vista no modifica el equipo.",
+    "reported": "Informado {when}",
+    "load_error": "No se pudo cargar la postura de seguridad.",
+    "unreachable": "No se pudo contactar con el hub.",
+    "retry": "Reintentar",
+    "col": {
+      "check": "Comprobación",
+      "result": "Resultado",
+      "detail": "Detalle",
+      "cis": "Salvaguarda CIS"
+    },
+    "status": {
+      "pass": "Superada",
+      "fail": "No superada",
+      "unknown": "Desconocida"
+    },
+    "check": {
+      "antivirus": "Antivirus en ejecución",
+      "signatures": "Firmas del antivirus actualizadas",
+      "autorun": "AutoRun y reproducción automática desactivados",
+      "firewall": "Firewall activado en todos los perfiles",
+      "session_lock": "La pantalla se bloquea por inactividad",
+      "default_accounts": "Cuentas predeterminadas deshabilitadas",
+      "admin_accounts": "Solo administradores autorizados",
+      "encryption": "Unidades cifradas",
+      "secure_boot": "Arranque seguro activado",
+      "tpm": "TPM listo"
+    },
+    "profile": {
+      "domain": "Dominio",
+      "private": "Privado",
+      "public": "Público"
+    },
+    "detail": {
+      "read_failed": "No se pudo leer: {error}",
+      "not_reported": "El equipo no ha informado de esto.",
+      "av_on": "En ejecución: {names}",
+      "av_off": "Registrado pero no en ejecución: {names}",
+      "av_none": "No hay ningún antivirus registrado en el Centro de seguridad de Windows.",
+      "sig_current": "Las firmas están actualizadas.",
+      "sig_stale": "Las firmas tienen {days} días; el límite es {max}.",
+      "sig_stale_product": "Desactualizado: {names}",
+      "autorun_off": "La reproducción automática está desactivada para todas las unidades y autorun.inf se ignora.",
+      "autorun_on": "La reproducción automática o AutoRun no está desactivada por directiva para todas las unidades.",
+      "fw_on": "Activado para los perfiles de dominio, privado y público.",
+      "fw_off": "Desactivado para: {profiles}",
+      "lock_ok": "Se bloquea tras {seconds} segundos de inactividad.",
+      "lock_too_long": "Se bloquea tras {seconds} segundos; el límite es {max}.",
+      "lock_missing": "Nada bloquea la sesión dentro de {max} segundos de inactividad.",
+      "lock_no_users": "No hay nadie con sesión iniciada y no hay un límite de inactividad para todo el equipo.",
+      "defaults_disabled": "Las cuentas integradas de Administrador e Invitado están deshabilitadas.",
+      "defaults_enabled": "Habilitadas: {names}",
+      "admins_ok": "Todos los miembros de Administradores están autorizados ({count}).",
+      "admins_extra": "No figuran en la lista de autorizados: {names}",
+      "enc_all": "Todos los volúmenes informados están protegidos por BitLocker ({count}).",
+      "enc_unprotected": "Sin protección: {volumes}",
+      "enc_unsupported": "Esta edición de Windows no incluye BitLocker.",
+      "enc_not_reported": "El equipo no ha informado de su estado de BitLocker.",
+      "secure_boot_on": "El arranque seguro está activado.",
+      "secure_boot_off": "El arranque seguro es compatible y está desactivado.",
+      "secure_boot_legacy": "El equipo arranca en modo BIOS heredado, que no tiene arranque seguro.",
+      "tpm_ready": "El TPM {version} está habilitado y activado.",
+      "tpm_missing": "No se encontró ningún TPM.",
+      "tpm_not_ready": "Hay un TPM, pero no está habilitado o no está activado."
+    }
+  },
   "report": {
     "tab": "Informe",
     "open_printable": "Abrir hoja imprimible",
@@ -4110,7 +4191,6 @@
       "agent_report": "Aún no informado. Se completa cuando el equipo vuelva a conectarse.",
       "agent_update": "Esperando un agente más reciente en este equipo. No significa que no haya nada instalado.",
       "phase_c": "FleetHub aún no recopila módulos de memoria, discos, monitores, chasis, TPM ni batería.",
-      "phase_d": "FleetHub aún no recopila antivirus, firewall, administradores locales ni estado del TPM.",
       "directory": "No encontrado en el directorio, o aún no se ha sincronizado el directorio."
     },
     "f": {
@@ -4229,6 +4309,19 @@
       "empty": "Según los inventarios, no hay nada de la lista de vigilancia instalado en los equipos que puede ver.",
       "col": {
         "matched": "Coincidencia"
+      }
+    },
+    "posture": {
+      "heading": "Postura de seguridad",
+      "intro": "Cuántos equipos de su ámbito superan cada comprobación. Evidencia de la salvaguarda IG1 de los CIS Controls indicada junto a cada una; esta vista no modifica ningún equipo.",
+      "coverage": "{reporting} equipos han informado de su postura; {missing} aún no.",
+      "empty": "Ningún equipo de su ámbito ha informado todavía de su postura de seguridad.",
+      "more": "y {count} más",
+      "col": {
+        "passed": "Superadas",
+        "failed": "No superadas",
+        "unknown": "Desconocidas",
+        "failing": "Equipos afectados"
       }
     }
   }

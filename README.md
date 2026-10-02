@@ -1993,7 +1993,7 @@ machine, and what is on it". Three ways in:
 and a blank Software heading on paper reads as "nothing installed". So each section says whether
 the machine has not checked in yet, whether its agent is too old to collect that (**Waiting for a
 newer agent on this machine**), or whether FleetHub does not collect it at all yet (memory
-modules, disks, monitors, antivirus and firewall state -- roadmap #25 C and D).
+modules, disks, monitors -- roadmap #25 C).
 
 **The report renders stored facts and never asks a machine for anything.** A sheet for a PC
 that has been offline for a week is exactly the one a helpdesk needs; each section shows when its
@@ -2003,6 +2003,30 @@ facts were reported.
 **Generative AI watch list** (Settings → Endpoint Security): name fragments matched anywhere in a
 Windows program's name or an Android app's label or package. It flags and blocks nothing. To
 sanction a tool, remove its name from the list.
+
+**Security posture** (roadmap #25 D) is a card on the machine page's Overview, a table in the
+sheet's Security section, and a fleet table on Reports: one row per check, each **Passed**,
+**Failed** or **Unknown**, labelled with the CIS Controls v8.1.2 IG1 safeguard it is evidence for.
+
+| Check | CIS | Passes when |
+|---|---|---|
+| Antivirus running | 10.1 | a product registered with Security Center is on (or Defender, on a Server) |
+| Antivirus signatures current | 10.2 | a running product reports current signatures, or Defender's are within the age limit |
+| AutoRun and AutoPlay off | 10.3 | `NoDriveTypeAutoRun = 255` and `NoAutorun = 1` by policy |
+| Firewall on for every profile | 4.4, 4.5 | domain, private and public are all on, as in force |
+| Screen locks when idle | 4.3 | a machine-wide inactivity limit, or every signed-in user's locking screen saver, is within the limit |
+| Default accounts disabled | 4.7 | the built-in Administrator and Guest are disabled |
+| Only sanctioned administrators | 5.4 | every member of local Administrators is the built-in Administrator, Domain Admins, an Entra role group, or on the allow list |
+| Drives encrypted | 3.6 | every volume BitLocker reports is protected |
+| Secure Boot on / TPM ready | -- | as named; not IG1 safeguards in their own right |
+
+The Windows agent reports the facts hourly and the hub judges them, against three settings under
+Settings → Endpoint Security: **signature age** (7 days), **idle time before the screen locks**
+(900 seconds, the CIS figure) and **also allowed as local administrators** (SID, `DOMAIN\name` or a
+bare name; empty by default, so a support group is a finding until somebody names it). A check the
+machine could not read is **Unknown** with the reason -- never counted as passed or failed -- and a
+PC whose agent predates 3.39.0 has no card at all. Nothing here changes a machine.
+`GET /api/posture/machines/<machine>` and `GET /api/posture/fleet` serve it, at `view` + scope.
 
 **Installed software** is read by the Windows agent from the registry's Uninstall keys -- both
 the 64- and 32-bit views, plus the hive of every signed-in user -- and filtered the way Programs

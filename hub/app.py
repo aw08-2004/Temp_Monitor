@@ -41,6 +41,7 @@ import remote
 import directory
 import bios
 import bitlocker
+import posture
 import software
 import channels
 import firmware
@@ -85,6 +86,7 @@ from bios_web import create_bios_blueprint
 import bitlocker_web
 from bitlocker_web import create_bitlocker_blueprint
 from software_web import create_software_blueprint
+from posture_web import create_posture_blueprint
 from reports_web import create_reports_blueprint
 from patches_web import create_patches_blueprint
 from discovery_web import create_discovery_blueprint
@@ -145,7 +147,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.133.2"
+HUB_VERSION = "1.134.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2435,6 +2437,12 @@ app.register_blueprint(create_bios_blueprint(DB_PATH, LOG_DIR, login_required, a
 # up to a bucket.
 app.register_blueprint(create_bitlocker_blueprint(DB_PATH, LOG_DIR, login_required, access))
 
+# Security posture (roadmap #25 D): antivirus, firewall, AutoRun, screen lock, accounts,
+# Secure Boot and TPM, judged against the security.posture_* thresholds as evidence for the
+# CIS Controls IG1 safeguards. `view` + scope like the encryption card above, whose report it
+# reads for the 3.6 check rather than collecting encryption twice.
+app.register_blueprint(create_posture_blueprint(DB_PATH, login_required, access))
+
 # Installed software (roadmap #25 B) and the device sheet that prints it (#25 A). Both `view`
 # + scope and no new capability -- see software_web.py and reports_web.py. The sheet's live
 # half (CPU and GPU names, memory, volumes) comes out of this module's sensor cache, so it is
@@ -3557,6 +3565,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Installed Windows software (roadmap #25 B), on the same survivor-wins rule and for the
     # same reason.
     software.rename_machine(DB_PATH, dropped, survivor)
+    # Security posture (roadmap #25 D), survivor-wins for the same reason: its agent is the
+    # one still reporting.
+    posture.rename_machine(DB_PATH, dropped, survivor)
     # Policy targets follow the survivor: it IS the merged-away device, and a policy that
     # stopped covering it would silently un-block apps somebody deliberately blocked.
     policy.rename_machine(DB_PATH, dropped, survivor)
@@ -4774,6 +4785,7 @@ capabilities.init_capabilities_db(DB_PATH)
 location.init_location_db(DB_PATH)
 apps.init_apps_db(DB_PATH)
 software.init_software_db(DB_PATH)
+posture.init_posture_db(DB_PATH)
 policy.init_policy_db(DB_PATH)
 usage.init_usage_db(DB_PATH)
 wipe.init_wipe_db(DB_PATH)
@@ -5740,6 +5752,9 @@ def delete_machine(machine):
     apps.forget_machine(DB_PATH, machine_name)
     # The Windows half of the same fact (roadmap #25 B), dropped on the same argument.
     software.forget_machine(DB_PATH, machine_name)
+    # And its security posture (roadmap #25 D). A leftover row would hand a reused hostname
+    # the old PC's firewall and administrator findings.
+    posture.forget_machine(DB_PATH, machine_name)
     # And drop it from every app policy that named it. A stale target is worse here than
     # elsewhere: a reused hostname would silently inherit a policy nobody aimed at it, and
     # the symptom is apps that will not open on a machine whose page shows no reason why.

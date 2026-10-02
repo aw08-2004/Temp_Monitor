@@ -235,6 +235,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // would throw "the node already has a parent" on every attempt until the next
             // scan replaced it. The original is what AckSent is handed.
             if (installed is not null) body["software"] = installed.DeepClone();
+            // Security posture (roadmap #25 D), on exactly the software block's terms: kept
+            // until the hub says it stored it, and so cloned into the body for the same
+            // one-parent reason.
+            var posture = TempMonitorAgent.Security.PostureInventoryReporter.TakeIfChanged();
+            if (posture is not null) body["posture"] = posture.DeepClone();
             var patchInventory = TempMonitorAgent.Patch.PatchInventoryReporter.TakeIfChanged();
             if (patchInventory is not null) body["patches"] = patchInventory;
             // The process list, and the ONE payload here that is not change-only: a process
@@ -287,6 +292,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // something was installed, leaving the device sheet stale. Found in review.
             if (installed is not null && !SoftwareRejected(text))
                 TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent(installed);
+            if (posture is not null && !PostureRejected(text))
+                TempMonitorAgent.Security.PostureInventoryReporter.AckSent(posture);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
             ApplyEscrowRequestFromHeartbeat(text);
@@ -306,11 +313,19 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// <summary>Did the hub say it could not store the software list this heartbeat carried?
     /// Unparseable text counts as no -- the heartbeat itself succeeded, and an agent that
     /// resent on every malformed reply would never settle.</summary>
-    internal static bool SoftwareRejected(string replyBody)
+    internal static bool SoftwareRejected(string replyBody) =>
+        ReplyFlag(replyBody, "software_rejected");
+
+    /// <summary>Did the hub say it could not store the posture this heartbeat carried
+    /// (roadmap #25 D)? Same reading as <see cref="SoftwareRejected"/>.</summary>
+    internal static bool PostureRejected(string replyBody) =>
+        ReplyFlag(replyBody, "posture_rejected");
+
+    private static bool ReplyFlag(string replyBody, string flag)
     {
         try
         {
-            return JsonNode.Parse(replyBody)?["software_rejected"]?.GetValue<bool>() == true;
+            return JsonNode.Parse(replyBody)?[flag]?.GetValue<bool>() == true;
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
         {

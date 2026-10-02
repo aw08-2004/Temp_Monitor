@@ -393,6 +393,10 @@ public sealed class Worker : BackgroundService
                 // profile hive. Cheap next to its neighbours, but still hundreds of registry
                 // opens, so here rather than in front of a heartbeat.
                 TempMonitorAgent.Software.SoftwareInventoryReporter.RefreshIfDue();
+                // Security posture (roadmap #25 D): antivirus, firewall, AutoRun, screen lock,
+                // local and administrator accounts, Secure Boot, TPM. Four WMI namespaces and
+                // a COM call, hourly, so here with the other slow local reads.
+                TempMonitorAgent.Security.PostureInventoryReporter.RefreshIfDue();
                 // Available updates (roadmap #14). The slowest scan on this loop by far --
                 // a Windows Update search contacts WSUS and winget refreshes its sources --
                 // which is exactly why it is here and not on the heartbeat path.

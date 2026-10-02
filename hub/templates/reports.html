@@ -97,7 +97,33 @@
         </tbody>
     </table>
 </div>
+
+{# Security posture (roadmap #25 D): one row per check across the machines in scope, with the
+   CIS Controls IG1 safeguard each is evidence for. Machines whose agent has not sent a
+   posture are counted in a sentence of their own rather than as unknown on every row, which
+   would bury the real unknowns under a rollout. #}
+<h2 class="section-title" style="margin-top: var(--space-6);">{{ t('reports.posture.heading') }}</h2>
+<p class="stat-card__meta" style="margin-bottom: var(--space-2);">{{ t('reports.posture.intro') }}</p>
+<p class="stat-card__meta" id="posture-coverage" style="margin-bottom: var(--space-4);"></p>
+<div class="card report-table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>{{ t('posture.col.check') }}</th>
+                <th>{{ t('posture.col.cis') }}</th>
+                <th>{{ t('reports.posture.col.passed') }}</th>
+                <th>{{ t('reports.posture.col.failed') }}</th>
+                <th>{{ t('reports.posture.col.unknown') }}</th>
+                <th>{{ t('reports.posture.col.failing') }}</th>
+            </tr>
+        </thead>
+        <tbody id="posture-fleet-body">
+            <tr><td colspan="6" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+        </tbody>
+    </table>
+</div>
 {% endblock %}
 {% block page_scripts %}
+<script src="{{ url_for('static', filename='js/posture-labels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/reports.js') }}"></script>
 {% endblock %}

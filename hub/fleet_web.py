@@ -48,6 +48,7 @@ import patches
 import permissions
 import permissions_web
 import policy
+import posture
 import processes
 import refusals
 import remote
@@ -239,6 +240,17 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             except Exception as e:
                 print(f"[software] Could not record the software inventory for {machine}: {e}")
                 payload["software_rejected"] = True
+        # Security posture (roadmap #25 D): antivirus, firewall, AutoRun, screen lock, local and
+        # administrator accounts, Secure Boot, TPM. Change-only on the agent and acknowledged
+        # on exactly the software block's terms, so a failed write answers `posture_rejected`
+        # rather than 500 -- the agent keeps the payload and the next heartbeat carries it.
+        # A payload that is not a posture at all stores nothing, which is not a failure.
+        if data.get("posture") is not None:
+            try:
+                posture.record_posture(db_path, machine, data["posture"])
+            except Exception as e:
+                print(f"[posture] Could not record the security posture for {machine}: {e}")
+                payload["posture_rejected"] = True
         # What the device says it did with its app policy (roadmap #23 phase D). Sent after
         # an application attempt rather than on a cadence, and never fatal like everything
         # else here. `failed` is the field this exists for: setPackagesSuspended returns the

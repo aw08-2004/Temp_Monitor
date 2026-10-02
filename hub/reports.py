@@ -15,7 +15,7 @@ three different things, and every section here carries which:
   * `waiting` -- no agent has told us yet. `waiting_for` names what would: an agent new enough
     to collect it (`agent_update`), or simply the machine's next check-in (`agent_report`);
   * `not_collected` -- nothing in this product collects it yet, and `waiting_for` names the
-    roadmap phase that would (#25 C and D).
+    roadmap phase that would (#25 C).
 
 An agent release reaches the fleet over about fifteen minutes, the Linux and Android agents
 answer none of the Windows questions, and a PC that has been offline for a week reports nothing
@@ -49,6 +49,7 @@ import capabilities
 import device_groups
 import location
 import patches
+import posture
 import remote
 import rules
 import software
@@ -67,8 +68,6 @@ WAITING_AGENT_REPORT = "agent_report"
 WAITING_AGENT_UPDATE = "agent_update"
 #: Nothing collects this at all yet; see ROADMAP.MD #25 phase C.
 WAITING_PHASE_C = "phase_c"
-#: See ROADMAP.MD #25 phase D.
-WAITING_PHASE_D = "phase_d"
 #: Not an agent fact at all: no directory sync has matched this machine (or none has run).
 WAITING_DIRECTORY = "directory"
 
@@ -99,7 +98,7 @@ SUMMARY_FIELDS = (
     "os_caption", "os_version", "os_build", "os_arch", "cpu", "gpu", "memory_gb",
     "bios_vendor", "bios_version", "ad_ou", "ad_owner", "groups", "software_count",
     "software_reported_at", "pending_patches", "encrypted_volumes", "unprotected_volumes",
-    "agent_version", "last_seen",
+    "posture_failed", "agent_version", "last_seen",
 )
 
 #: The repeating sections, one CSV file each -- a sheet is nested, and flattening software
@@ -251,7 +250,8 @@ def build_sheet(db_path, machine, hardware_probe=None, now=None):
                       reported_at=network.get("reported_at")))
 
     encryption = bitlocker.get_inventory(db_path, machine)
-    if encryption.get("support") is None:
+    stored_posture = posture.get_posture(db_path, machine)
+    if encryption.get("support") is None and stored_posture["posture"] is None:
         sections["security"] = _waiting(WAITING_AGENT_REPORT)
     else:
         # Posture only. Which protectors are escrowed, and who read them, is the encryption
@@ -267,13 +267,23 @@ def build_sheet(db_path, machine, hardware_probe=None, now=None):
                     p.get("kind") == bitlocker.PROTECTOR_RECOVERY_PASSWORD
                     for p in v.get("protectors") or []),
             })
-        sections["security"] = _section(
-            STATUS_OK,
-            {"bitlocker_support": encryption.get("support"),
-             "bitlocker_error": encryption.get("error"), "volumes": volumes,
-             # Antivirus, firewall, local admins and TPM state are #25 D.
-             "posture_waiting_for": WAITING_PHASE_D},
-            reported_at=encryption.get("reported_at"))
+        security = {"bitlocker_support": encryption.get("support"),
+                    "bitlocker_error": encryption.get("error"), "volumes": volumes,
+                    "checks": None, "posture_reported_at": stored_posture["reported_at"]}
+        # The posture checks (#25 D), judged exactly as the machine page judges them, so a
+        # printed sheet and the screen cannot disagree about whether a PC passed. Each check
+        # carries its own pass / fail / unknown; the section only says whether there are any.
+        if stored_posture["posture"] is not None:
+            security["checks"] = posture.evaluate(
+                stored_posture["posture"], posture.thresholds_from_settings(db_path), encryption)
+        else:
+            # The one half of this section that waits on an agent RELEASE: no agent before
+            # #25 D's cut sends a posture at all.
+            security["posture_waiting_for"] = WAITING_AGENT_UPDATE
+        stamps = [t for t in (encryption.get("reported_at"), stored_posture["reported_at"])
+                  if t is not None]
+        sections["security"] = _section(STATUS_OK, security,
+                                        reported_at=max(stamps) if stamps else None)
 
     installed = software.get_inventory(db_path, machine)
     if installed["reported_at"] is None:
@@ -358,11 +368,15 @@ def summary_row(sheet):
     pending = _data(sheet, "patches")
     software_section = (sheet.get("sections") or {}).get("software") or {}
 
-    encrypted = unprotected = ""
+    encrypted = unprotected = failed = ""
     if security is not None:
         vols = security.get("volumes") or []
-        encrypted = sum(1 for v in vols if v.get("protection") == "on")
-        unprotected = sum(1 for v in vols if v.get("protection") == "off")
+        if security.get("bitlocker_support") is not None:
+            encrypted = sum(1 for v in vols if v.get("protection") == "on")
+            unprotected = sum(1 for v in vols if v.get("protection") == "off")
+        # Blank, not 0, for a PC that has sent no posture -- the column rule above.
+        if security.get("checks") is not None:
+            failed = sum(1 for c in security["checks"] if c.get("status") == posture.STATUS_FAIL)
 
     return {
         "machine": sheet["machine"],
@@ -382,6 +396,7 @@ def summary_row(sheet):
         "pending_patches": "" if pending is None else len(pending),
         "encrypted_volumes": encrypted,
         "unprotected_volumes": unprotected,
+        "posture_failed": failed,
         "agent_version": identity.get("companion_version"),
         "last_seen": identity.get("updated_at"),
     }
