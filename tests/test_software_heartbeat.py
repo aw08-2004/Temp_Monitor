@@ -17,6 +17,7 @@ or on a heartbeat without a software block, would make every agent resend its wh
 on every heartbeat.
 """
 import functools
+import gc
 import os
 import sys
 import tempfile
@@ -102,6 +103,11 @@ def main():
         check("...and the reply tells the agent to keep the payload",
               r.get_json().get("software_rejected") is True)
     finally:
+        # sqlite3.Connection's own statement cache references the connection, so a
+        # connection closed only by leaving a `with` block lives on in a reference cycle until
+        # the collector runs -- and Windows refuses to delete a file that is still open
+        # (WinError 32). Linux does not care, which is why this passed for months there.
+        gc.collect()
         os.unlink(db_path)
 
     print(f"\n==== {PASS} passed, {FAIL} failed ====")

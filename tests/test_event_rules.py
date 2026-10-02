@@ -46,6 +46,7 @@ looking at when they chose it. `rules.py` cannot read settings (no model half do
 fallback constant in `events.py` has to match that setting's default -- two plausible numbers
 that differ by accident would be invisible, which is why it is pinned here.
 """
+import gc
 import os
 import sqlite3
 import sys
@@ -59,6 +60,18 @@ import settings
 
 PASS = 0
 FAIL = 0
+
+
+def _drop(path):
+    """Delete a test database.
+
+    sqlite3.Connection's own statement cache references the connection, so a
+    connection closed only by leaving a `with` block lives on in a reference cycle until
+    the collector runs -- and Windows refuses to delete a file that is still open
+    (WinError 32). Linux does not care, which is why this passed for months there.
+    """
+    gc.collect()
+    os.unlink(path)
 
 
 def check(name, cond):
@@ -190,7 +203,7 @@ def test_the_catalog_offers_what_is_subscribed_and_accepts_what_is_not():
         check("the catalog carries the event group",
               any(v.group == rules.GROUP_EVENT for v in rules.catalog(db)))
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_a_rule_survives_the_subscription_being_deleted():
@@ -214,7 +227,7 @@ def test_a_rule_survives_the_subscription_being_deleted():
         check("valid while it exists", during[0] is None)
         check("still valid once it is deleted", after[0] is None)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 # ------------------------------------------------------------------- unknown is not zero
@@ -239,7 +252,7 @@ def test_a_machine_that_never_reported_is_unknown_not_zero():
               rules.evaluate({"var": "event.error_count", "cmp": "is_known"},
                              resolved) is False)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_a_machine_that_reported_nothing_is_zero():
@@ -260,7 +273,7 @@ def test_a_machine_that_reported_nothing_is_zero():
               rules.evaluate({"var": "event.error_count", "cmp": "==", "value": 0},
                              resolved) is True)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_an_unsubscribed_id_is_absent_rather_than_zero():
@@ -288,7 +301,7 @@ def test_an_unsubscribed_id_is_absent_rather_than_zero():
         check("even though the machine is reporting fine",
               value_of(resolved, "event.count") == 3)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_a_subscribed_id_with_no_records_is_zero():
@@ -312,7 +325,7 @@ def test_a_subscribed_id_with_no_records_is_zero():
               rules.evaluate({"var": "event.id_4740.count", "cmp": "==", "value": 0},
                              resolved) is True)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 # ------------------------------------------------------------------------------- counting
@@ -336,7 +349,7 @@ def test_occurrences_are_counted_not_rows():
         check("the variable carries the occurrences",
               value_of(resolved, "event.id_4625.count") == 50)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_levels_are_counted_separately():
@@ -354,7 +367,7 @@ def test_levels_are_counted_separately():
         check("the total carries every level, information included",
               value_of(resolved, "event.count") == 16)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_another_machines_events_are_not_counted():
@@ -372,7 +385,7 @@ def test_another_machines_events_are_not_counted():
         check("PC-2 counts its own",
               value_of(resolve(db, "PC-2"), "event.id_4625.count") == 1)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_the_window_bounds_the_count():
@@ -399,7 +412,7 @@ def test_the_window_bounds_the_count():
         check("and the default window is the shorter answer",
               value_of(resolve(db, "PC-1"), "event.id_4625.count") == 2)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_the_default_window_matches_the_setting_the_console_uses():
@@ -420,7 +433,7 @@ def test_the_default_window_matches_the_setting_the_console_uses():
         check("while an explicit window wins",
               rules.event_context(db, 3600)["window_seconds"] == 3600)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 # ----------------------------------------------------------------------------- staleness
@@ -453,7 +466,7 @@ def test_a_stopped_collector_ages_out_to_unknown():
         check("the staleness bound is the console's own",
               rules.AGE_EVENT == events.STALE_AFTER_SECONDS)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_a_database_with_no_event_tables_resolves_rather_than_raising():
@@ -475,7 +488,7 @@ def test_a_database_with_no_event_tables_resolves_rather_than_raising():
         check("and the catalog is still readable",
               any(v.name == "event.count" for v in rules.catalog(db)))
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 # ------------------------------------------------------------------- the rule that started it
@@ -509,7 +522,7 @@ def test_the_roadmaps_own_example_is_writable():
               rules.render_template("{{event.id_4625.count}} failed logons",
                                     resolve(db, "PC-1")) == "35 failed logons")
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_a_collector_error_is_unknown_even_on_a_fresh_report():
@@ -556,7 +569,7 @@ def test_a_collector_error_is_unknown_even_on_a_fresh_report():
         check("and the per-id counter comes back",
               value_of(recovered, "event.id_4625.count") == 2)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_a_report_truncated_by_the_cap_is_unknown():
@@ -625,7 +638,7 @@ def test_a_report_truncated_by_the_cap_is_unknown():
         check("including the totals",
               value_of(recovered, "event.count") is not rules.UNKNOWN)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_an_id_subscribed_after_the_last_report_is_not_zero_yet():
@@ -671,7 +684,7 @@ def test_an_id_subscribed_after_the_last_report_is_not_zero_yet():
               rules.evaluate({"var": "event.id_4625.count", "cmp": "==", "value": 0},
                              adopted) is True)
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def test_an_older_subscription_keeps_an_id_trustworthy():
@@ -699,7 +712,7 @@ def test_an_older_subscription_keeps_an_id_trustworthy():
               events.subscribed_since(db)[4625] <=
               events.machine_state(db, "PC-1")["reported_at"])
     finally:
-        os.unlink(db)
+        _drop(db)
 
 
 def main():
