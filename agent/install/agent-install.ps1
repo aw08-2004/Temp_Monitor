@@ -439,6 +439,28 @@ if ($AgentExe) {
 Step "Installing agent binary"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
+# **Staged beside the exe and hashed again THERE, before the running agent is touched.** The
+# copy in %TEMP% sat in a directory any UNELEVATED process of this same user can write to, so
+# the bytes Get-VerifiedAgent hashed are not necessarily the bytes copied (CWE-367, review on
+# PR #96). $InstallDir inherits Program Files' ACL, which that process cannot write, so the
+# hash below covers what the service will start -- and because it runs before the stop, a
+# swapped file is refused with the old agent still running.
+# The first fix hashed $ExePath after the copy instead; review pointed out that a mismatch
+# there had already stopped the service and overwritten the exe, so refusing left the PC with
+# no agent at all. Under a custom -InstallDir outside Program Files the staging is only as
+# protected as that directory, which is also all the installed exe ever is.
+# `.incoming`, not `.new` or `.old`: SelfUpdater owns `.old` and clears it on its own schedule.
+$incoming = "$ExePath.incoming"
+Copy-Item -Path $source -Destination $incoming -Force
+if ($staged) { Remove-Item $staged -Force -ErrorAction SilentlyContinue }
+if ($signedSha256) {
+    $got = (Get-FileHash -Path $incoming -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($got -ne $signedSha256) {
+        Remove-Item $incoming -Force -ErrorAction SilentlyContinue
+        Die "the agent binary changed after it was verified (sha256 $got, signed $signedSha256). Refusing to install; the running agent was not touched."
+    }
+}
+
 # Stop an existing service before overwriting its exe.
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     & sc.exe stop $ServiceName | Out-Null
@@ -461,23 +483,9 @@ if ($InstallDir -ne $LegacyInstall -and (Test-Path $LegacyInstall)) {
     Ok "Moved agent to $InstallDir"
 }
 
-Copy-Item -Path $source -Destination $ExePath -Force
-# **Hashed again where it will run.** The staged file sat in this user's %TEMP%, which an
-# UNELEVATED process of the same user can write to, between the check in Get-VerifiedAgent and
-# this copy (CWE-367, review on PR #96). $ExePath is under Program Files, which it cannot, so
-# this is the check that covers the bytes the service will actually start. A mismatch leaves
-# the machine without an agent rather than with a substituted one -- the right way round.
-# Rejected: staging inside $InstallDir instead of %TEMP%, which would close the window too but
-# means creating it, and migrating a legacy install into it, before anything is verified.
-if ($signedSha256) {
-    $installed = (Get-FileHash -Path $ExePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($installed -ne $signedSha256) {
-        Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
-        if ($staged) { Remove-Item $staged -Force -ErrorAction SilentlyContinue }
-        Die "the installed binary changed after it was verified (sha256 $installed, signed $signedSha256). Removed it; refusing to install."
-    }
-}
-if ($staged) { Remove-Item $staged -Force -ErrorAction SilentlyContinue }
+# A rename within one directory: the verified bytes become the exe without passing through
+# anywhere writable by anyone else.
+Move-Item -Path $incoming -Destination $ExePath -Force
 Unblock-File -Path $ExePath -ErrorAction SilentlyContinue
 Ok "binary  -> $ExePath"
 

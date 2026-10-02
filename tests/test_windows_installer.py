@@ -289,10 +289,18 @@ def main():
           "-AgentUrl is NOT checked against the fleet's signing key" in script)
     check("-AgentExe is labelled as not checked",
           "local, not checked against the fleet key" in script)
-    copy = script.find("Copy-Item -Path $source -Destination $ExePath")
-    check("the installed copy is re-hashed against the signed sha256 (TOCTOU on %TEMP%)",
-          copy != -1 and "Get-FileHash -Path $ExePath" in script[copy:copy + 1500]
-          and "$installed -ne $signedSha256" in script[copy:copy + 1500])
+    stage = script.find("Copy-Item -Path $source -Destination $incoming")
+    rehash = script.find("Get-FileHash -Path $incoming")
+    stop = script.find("# Stop an existing service before overwriting its exe.")
+    check("the copy is staged inside the install directory, not run from %TEMP%",
+          '$incoming = "$ExePath.incoming"' in script and stage != -1
+          and "Copy-Item -Path $source -Destination $ExePath" not in script)
+    check("...re-hashed against the signed sha256 there (TOCTOU on %TEMP%)",
+          rehash > stage and "$got -ne $signedSha256" in script[rehash:rehash + 400])
+    check("...and BEFORE the running service is stopped, so a refusal leaves it running",
+          stage != -1 and rehash != -1 and rehash < stop)
+    check("the staged copy becomes the exe by a rename, after the stop",
+          script.find("Move-Item -Path $incoming -Destination $ExePath") > stop)
     check("the binary is fetched before the running service is stopped",
           script.index("Get-VerifiedAgent -Destination") < script.index(
               "# Stop an existing service before overwriting its exe."))
