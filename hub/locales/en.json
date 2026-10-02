@@ -1326,6 +1326,18 @@
       "security.genai_watchlist": {
         "label": "Generative AI watch list",
         "help": "Name fragments that mark an installed program or app as a generative-AI tool. Matched without regard to case anywhere in the name, and listed on the Reports page. Flagging only -- nothing is blocked. Remove a name to stop flagging a tool you have approved."
+      },
+      "security.posture_signature_max_age_days": {
+        "label": "Antivirus signatures count as stale after",
+        "help": "How old the signatures of a running antivirus product may be before its Security posture check fails (CIS 10.2). Every mainstream product updates several times a day, so a week without an update is an updater that is broken."
+      },
+      "security.posture_lock_max_seconds": {
+        "label": "Longest acceptable idle time before the screen locks",
+        "help": "A machine passes the screen-lock check (CIS 4.3) when a machine-wide inactivity limit, or every signed-in user's locking screen saver, is at or below this. CIS names 15 minutes for a general-purpose operating system."
+      },
+      "security.posture_admin_allowlist": {
+        "label": "Also allowed as local administrators",
+        "help": "Accounts or groups that may be members of a PC's local Administrators group without the check failing (CIS 5.4). Give a SID, DOMAIN\\name or a bare name. The built-in Administrator, Domain Admins and Entra role groups are always allowed."
       }
     },
     "_choice": [
@@ -4182,6 +4194,75 @@
     "key_for": "Recovery key for {volume}",
     "key_warning": "Reading this key has been recorded in the audit log. It disappears when you leave the page."
   },
+  "posture": {
+    "title": "Security posture",
+    "summary": "{pass} passed, {fail} failed, {unknown} unknown",
+    "intro": "Evidence for the CIS Controls IG1 safeguard named beside each check, judged against the thresholds under Settings, Security. Nothing here changes the machine.",
+    "reported": "Reported {when}",
+    "load_error": "The security posture could not be loaded.",
+    "unreachable": "The hub could not be reached.",
+    "retry": "Retry",
+    "col": {
+      "check": "Check",
+      "result": "Result",
+      "detail": "Detail",
+      "cis": "CIS safeguard"
+    },
+    "status": {
+      "pass": "Passed",
+      "fail": "Failed",
+      "unknown": "Unknown"
+    },
+    "check": {
+      "antivirus": "Antivirus running",
+      "signatures": "Antivirus signatures current",
+      "autorun": "AutoRun and AutoPlay off",
+      "firewall": "Firewall on for every profile",
+      "session_lock": "Screen locks when idle",
+      "default_accounts": "Default accounts disabled",
+      "admin_accounts": "Only sanctioned administrators",
+      "encryption": "Drives encrypted",
+      "secure_boot": "Secure Boot on",
+      "tpm": "TPM ready"
+    },
+    "profile": {
+      "domain": "Domain",
+      "private": "Private",
+      "public": "Public"
+    },
+    "detail": {
+      "read_failed": "Could not be read: {error}",
+      "not_reported": "The machine has not reported this.",
+      "av_on": "Running: {names}",
+      "av_off": "Registered but not running: {names}",
+      "av_none": "No antivirus product is registered with Windows Security Center.",
+      "sig_current": "Signatures are up to date.",
+      "sig_stale": "Signatures are {days} days old; the limit is {max}.",
+      "sig_stale_product": "Out of date: {names}",
+      "autorun_off": "AutoPlay is off for every drive and autorun.inf is ignored.",
+      "autorun_on": "AutoPlay or AutoRun is not turned off by policy for every drive.",
+      "fw_on": "On for the domain, private and public profiles.",
+      "fw_off": "Off for: {profiles}",
+      "lock_ok": "Locks after {seconds} seconds of inactivity.",
+      "lock_too_long": "Locks after {seconds} seconds; the limit is {max}.",
+      "lock_missing": "Nothing locks the session within {max} seconds of inactivity.",
+      "lock_no_users": "Nobody is signed in and no machine-wide inactivity limit is set.",
+      "defaults_disabled": "The built-in Administrator and Guest accounts are disabled.",
+      "defaults_enabled": "Enabled: {names}",
+      "admins_ok": "Every member of Administrators is sanctioned ({count}).",
+      "admins_extra": "Not on the allow list: {names}",
+      "enc_all": "Every reported volume is protected by BitLocker ({count}).",
+      "enc_unprotected": "Not protected: {volumes}",
+      "enc_unsupported": "This edition of Windows has no BitLocker.",
+      "enc_not_reported": "The machine has not reported its BitLocker state.",
+      "secure_boot_on": "Secure Boot is on.",
+      "secure_boot_off": "Secure Boot is supported and switched off.",
+      "secure_boot_legacy": "The machine boots in legacy BIOS mode, which has no Secure Boot.",
+      "tpm_ready": "TPM {version} is enabled and activated.",
+      "tpm_missing": "No TPM was found.",
+      "tpm_not_ready": "A TPM is present but not enabled or not activated."
+    }
+  },
   "report": {
     "tab": "Report",
     "open_printable": "Open printable sheet",
@@ -4228,7 +4309,6 @@
       "agent_report": "Not reported yet. This fills in when the machine next checks in.",
       "agent_update": "Waiting for a newer agent on this machine. This does not mean nothing is installed.",
       "phase_c": "Memory modules, disks, monitors, chassis, TPM and battery are not collected by FleetHub yet.",
-      "phase_d": "Antivirus, firewall, local administrators and TPM state are not collected by FleetHub yet.",
       "directory": "Not matched in the directory, or no directory sync has run yet."
     },
     "f": {
@@ -4347,6 +4427,19 @@
       "empty": "Nothing on the watch list is installed on the machines you can see, as far as their inventories say.",
       "col": {
         "matched": "Matched"
+      }
+    },
+    "posture": {
+      "heading": "Security posture",
+      "intro": "How many machines in your scope pass each check. Evidence for the CIS Controls IG1 safeguard named beside each one; nothing here changes any machine.",
+      "coverage": "{reporting} machines have reported a posture; {missing} have not yet.",
+      "empty": "No machine in your scope has reported a security posture yet.",
+      "more": "and {count} more",
+      "col": {
+        "passed": "Passed",
+        "failed": "Failed",
+        "unknown": "Unknown",
+        "failing": "Failing machines"
       }
     }
   }

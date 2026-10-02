@@ -82,7 +82,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-09-30
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-02
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -90,45 +90,41 @@ Ed25519 fleet key, so each item here is blocked on exactly one of those three. A
 opens this repo locally should surface this list before anything else, then tick items off
 here as they happen. The per-feature detail lives in each entry; this is the index.
 
-**0. Deploy order.** Hub **1.133.0** first (it is already the version on `main` once this
-branch merges, and the hub self-update picks it up). Only then cut the agents below. Every
-hub-side feature in this batch reads "waiting for a newer agent" until the agent arrives,
-which is correct and not a bug.
+**0. Deploy order.** Hub **1.134.0** first (it is the version on `main` once the #25 D branch
+merges, and the hub self-update picks it up). Only then cut the Windows agent below. The posture
+card reads as absent on every PC until that agent arrives, which is correct and not a bug.
 
-**1. Windows agent release -- next MINOR above 3.37.1, so `agent/release.ps1 -Version 3.38.0`.**
-It carries, all on `main` and unreleased:
-- `SoftwareInventoryReporter` -- the device sheet's Software section and the software
-  catalog (#25 B). The hub has **no** `MIN_SOFTWARE_AGENT` constant, so no number needs
-  changing in `hub/static/js` whatever version this is cut as.
-- The `bash`/`sh` refusal in `run_script` (#22 hub-side gaps).
-- Nothing else: `git diff 8ef40a9..HEAD -- agent/src` (the 3.37.1 cut) shows only this
-  branch's changes. Entries below that still say "agent unreleased" for re-enrollment after a
-  deleted machine were already carried by 3.37.x -- the label is stale, not the code.
-- **Release notes are written:** `agent/release-notes/3.38.0.md`. Pass it with `-NotesFile`.
-- **Before cutting it:** `dotnet test agent/TempMonitorAgent.slnx` on Windows -- never run for
-  `SoftwareInventoryTests` and `RunScriptShellTests` (compiled from Linux only), nor ever for
-  `EventLogTests`. Then `git status` for rewritten `tests/fixtures/*.fhb` before staging.
+**1. Windows agent release -- `agent/release.ps1 -Version 3.39.0 -NotesFile .\release-notes\3.39.0.md`.**
+3.38.0 was cut on 2026-09-30 (`f769f6e`, tag on `77dc40b`) with the software inventory (#25 B)
+and the `bash`/`sh` refusal. **It did NOT carry the BitLocker heartbeat fix** (`0b3d62a`, "Stop
+a pending BitLocker report from knocking a PC offline"): that commit was written on a parallel
+branch two minutes before the cut and merged afterwards in PR #92, together with a section in
+`3.38.0.md` describing it as shipped. The archive copy of `3.38.0.md` has been put back to what
+was released, and the fix is announced in 3.39.0's notes instead. 3.39.0 carries:
+- `PostureInventoryReporter` -- the Security posture card, the sheet's posture table and the
+  Reports fleet table (#25 D). No `MIN_*` constant: no posture row means "waiting".
+- The BitLocker fix above (`FleetClient` and `BitLockerInventoryReporter`).
+- Nothing else: `git diff f769f6e..HEAD -- agent/src` shows exactly those two.
+- **Before cutting it:** `dotnet test agent/TempMonitorAgent.slnx` -- the whole suite (537)
+  passed on Windows on 2026-10-02, including `PostureInventoryTests`, `SoftwareInventoryTests`,
+  `RunScriptShellTests` and `EventLogTests`. Then `git status` for rewritten
+  `tests/fixtures/*.fhb` before staging.
 
-**2. Linux agent release -- `agent-linux/release.ps1 -Version 0.3.0` on the key machine (#22).**
-This is what makes Linux self-update exist at all: the four signed manifest files have never
-been committed (see #22, *The manifest is not in the repo*). **And 0.3.0 still has to be
-installed by hand once on every existing Linux box**: the `linux-agent-v0.2.0` tree has no
-`Update/SelfUpdater.cs`, so no installed machine can fetch anything. Re-running `install.sh`
-keeps the secret, the enrollment identity and the hub override. Release notes, which say
-exactly that to the operator, are at `agent-linux/release-notes/0.3.0.md`.
-**The re-run is now verified** (was a review finding on PR #91, CWE-494): `install.sh`
-checks the signed manifest the way `SelfUpdater` does -- Ed25519 over the manifest's exact
-bytes with the pinned fleet key (`openssl pkeyutl -rawin`, so OpenSSL 3 on the target), then
-the binary against the signed sha256 -- and refuses otherwise. Tested against the repo's real
-Windows manifest (same key) and a local server; `tests/test_linux_installer.py`. **Consequence
-to plan for:** until 0.3.0 is cut and its manifest committed, there is no signed Linux manifest,
-so a *fresh* Linux install from `main` is refused with a pointer to `--binary`/`--agent-url`.
-Cut 0.3.0 soon after merging. **Still owed on Windows:** `install.ps1` / `agent-install.ps1`
-do not check `agent.manifest.json` on a first install either; the same change belongs there. Commit the generated manifests and `.sig` files **exactly as produced** -- the
-`-text` pins in `.gitattributes` must stay. It carries live output streaming, patch inventory
-and the new process list. Also decide what to do with the unmerged
-`fix/linux-agent-web-installer` branch; its hand-made manifest commit must not be merged over a
-real one.
+**2. Linux agent.** 0.3.0 was cut on 2026-09-30 (`2afb06d`) with its signed manifest committed,
+so Linux self-update exists and a fresh `install.sh` from `main` verifies against a real
+manifest. **Still owed:** 0.3.0 has to be installed by hand once on every Linux box that was on
+0.2.x -- that tree has no `Update/SelfUpdater.cs`, so those machines cannot fetch it themselves
+(re-running `install.sh` keeps the secret, the enrollment identity and the hub override; the
+operator wording is in `agent-linux/release-notes/0.3.0.md`). **Fixed 2026-10-02:** `install.sh`
+hashed the downloaded binary by file name, and GNU `sha256sum` prefixes its output with `\` when
+the name contains a backslash, so a genuine binary under such a path was refused as tampered. It
+now hashes from stdin. `tests/test_linux_installer.py` had hidden this on Windows by running the
+WSL launcher instead of Git's bash, which also made its refusal checks pass vacuously; the test
+now resolves bash through PATH and refuses to run without a working one. **Still owed on Windows:**
+`install.ps1` / `agent-install.ps1` do not check `agent.manifest.json` on a first install, the
+way `install.sh` now does (CWE-494, PR #91); the same change belongs there. And decide what to
+do with the unmerged `fix/linux-agent-web-installer` branch: its hand-made manifest commit must
+not be merged over the real one.
 
 **3. Android.** The whole of *Hardware validation still owed (roadmap #23)* near the end of
 this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchanged by this batch.
@@ -138,6 +134,10 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
   on the same PC; sign in a second user and confirm their per-user installs appear; time the
   walk on the machine with the most MSI patches.
 - **#25 printing:** print one sheet from Chrome and one from Edge (only ever checked on screen).
+- **#25 D posture, as LocalSystem:** `PostureReader` has only ever run unelevated, on one domain
+  PC (see the #25 D entry). Confirm the TPM row reads (it was "Access denied" unelevated), that
+  the firewall rows match `Get-NetFirewallProfile -PolicyStore ActiveStore`, and how long the
+  read takes on a DC-adjacent PC with a large Administrators group (5.3 s on the first one).
 - **#19 shadow AI:** a PC with ChatGPT or Claude desktop installed shows up under Reports →
   Generative AI apps.
 - **#22 processes:** open the Processes card on a Linux box with systemd; the list should
@@ -4373,7 +4373,7 @@ Rules page once #17's wording layer exists.
 
 ---
 
-## 🚧 25. Inventory report — one device sheet, and the collection it still needs   ·   A + B hub 1.133.0 · B agent half in source, **release owed**
+## 🚧 25. Inventory report — one device sheet, and the collection it still needs   ·   A + B hub 1.133.0 · B agent 3.38.0 · **D security posture hub 1.134.0**, agent half owed as 3.39.0
 
 Everything the hub knows about one PC, on one page, printable and exportable: what a Kaspersky
 export, a LOGINventory sheet or a PDQ Inventory report hands a helpdesk when somebody asks
@@ -4393,12 +4393,10 @@ exports, and a fleet **software catalog** under it.
 
 **Owed, and none of it can be done from a Linux container:**
 
-1. **Cut the agent release** -- `agent/release.ps1 -Version 3.38.0` (or whatever MINOR is next
-   above the released number when it happens; 3.37.1 is current as of this entry). Until then
-   every PC's Software section reads *Waiting for a newer agent on this machine*, which is the
-   correct answer and the state A's wording was written for. Deploy order as always: hub first
-   (already true once 1.133.0 is on `main`), then the agent.
-2. **Run `dotnet test agent/TempMonitorAgent.slnx` on Windows.** `SoftwareInventoryTests.cs`
+1. ~~**Cut the agent release**~~ -- **done: B shipped in agent 3.38.0 on 2026-09-30.** Phase D's
+   agent half is owed as 3.39.0; see *Owed locally* at the top.
+2. ~~**Run `dotnet test agent/TempMonitorAgent.slnx` on Windows.**~~ **Done 2026-10-02, all
+   537 passed.** The original note: `SoftwareInventoryTests.cs`
    compiles clean from Linux (`-p:EnableWindowsTargeting=true`) and has never executed. Check
    `git status` afterwards for rewritten `tests/fixtures/*.fhb`.
 3. **First contact on a real PC**: that HKU enumeration from LocalSystem sees every signed-in
@@ -4448,7 +4446,61 @@ exports, and a fleet **software catalog** under it.
   JS strings, and a class that only appears there is one the next `build_css.ps1` run has to be
   trusted to find.
 
-**Not done in this slice:** phases C and D; a Linux-agent or Android-agent software reader (the
+### Built · hub 1.134.0 — phase D, the security half
+
+**Security posture, as evidence for the CIS Controls v8.1.2 IG1 safeguards.** Asked for after a
+read of the CIS guide: of IG1's 56 safeguards about 26 are process and training, 5 belong to other
+products (identity-provider MFA, DNS filtering, network gear), and 25 are endpoint facts an RMM
+can evidence. About 15 of those were already covered (inventory, discovery, software, patching,
+BitLocker, backups, event logs); this closes most of the other ten. Gap 4 (licensing) is still
+open, so the entry stays 🚧.
+
+Agent: `Security/PostureReader.cs` + `PostureInventoryReporter.cs`, hourly on the inventory loop,
+change-only, acknowledged only once the hub stored it (`posture_rejected`, the software block's
+pattern). Hub: `posture.py` / `posture_web.py` over one `machine_posture` document per machine;
+a **Security posture** card on the machine page, a checks table in the sheet's Security section
+(replacing the "phase D" sentence), a fleet table on Reports, and a `posture_failed` column in
+the summary CSV. Ten checks: antivirus 10.1, signatures 10.2, AutoRun 10.3, firewall 4.4/4.5,
+screen lock 4.3, default accounts 4.7, administrators 5.4, encryption 3.6 (read from #19's
+BitLocker report, not collected twice), Secure Boot and TPM (no IG1 number).
+
+**Decisions, each with the alternative it beat:**
+
+- **The agent reports facts; the hub judges.** Thresholds are settings
+  (`security.posture_signature_max_age_days` 7, `security.posture_lock_max_seconds` 900,
+  `security.posture_admin_allowlist` empty). Judging on the agent would make tightening a policy
+  an agent release.
+- **Three results, never two.** `unknown` is grey and never counted as pass or fail; a machine
+  with no posture at all is counted once as "not reported" on Reports, not as ten unknowns.
+- **Antivirus is judged across every registered product.** The first real reading had Defender
+  "Not running" beside an enabled Kaspersky; judging Defender alone would have failed every PC
+  with a third-party product, and a passive Defender's stale signatures are not a finding.
+- **The firewall through `HNetCfg.FwPolicy2`, not `MSFT_NetFirewallProfile`.** The WMI class reads
+  the persistent store, not what a GPO puts in force.
+- **Administrators by SID and NetLocalGroupGetMembers**, not by name and not `Win32_GroupUser`:
+  the group is "Administradores" on a Spanish install, and the association class can walk a
+  whole domain.
+- **The allowlist is empty by default.** Built-in Administrator, Domain Admins (RID 512) and Entra
+  role groups (S-1-12-1, kind group) are always sanctioned; anything else is a finding until an
+  operator names it. A shipped default would be this product deciding who is trusted.
+- **An enabled built-in Administrator fails 4.7** even where LAPS manages its password. CIS
+  accepts "make it unusable" as an alternative; FleetHub cannot see LAPS, so it reports what it
+  can see and the operator decides.
+- **No capability of its own.** `view` + scope, like the encryption card and the sheet.
+
+**Rejected:** one "compliant" boolean per PC (hides which safeguard failed); enforcing from the
+reporter (changes PCs on a timer nobody approved -- Rules and Packages do that on purpose); a
+table per area (the posture is read, replaced and judged as one document, like `machine_bios`);
+a `software.*`-style rules variable in this slice (natural next step, built the way #16's
+`event.*` variables were).
+
+**First contact, on the build machine, unelevated:** Kaspersky enabled and current, Defender
+passive, private and public firewall profiles off, a 30-minute screen saver, the built-in
+Administrator enabled, two domain support groups in Administrators, Secure Boot on, TPM "Access
+denied" (LocalSystem will read it). Every one of those is a real finding the checks reported as
+expected. Read took 5.3 s.
+
+**Not done in this slice:** phase C; phase D's licensing half (gap 4); a Linux-agent or Android-agent software reader (the
 Android `apps` section already appears on a phone's sheet); a snapshot/diff of two sheets
 (still an open parameter); backup status on the sheet (gated, see above).
 

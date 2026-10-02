@@ -790,6 +790,25 @@ REGISTRY = (
     # It flags, it does not block. A policy list is not an enforcement, and the console says
     # so beside the findings.
     _s("security.genai_watchlist", "security", "str_list", list(DEFAULT_GENAI_WATCHLIST)),
+    # Security posture thresholds (roadmap #25 D). The agent reports raw facts -- a signature
+    # age in days, a lock timeout in seconds, the members of Administrators -- and posture.py
+    # judges them against these, so tightening a policy is a change here rather than an agent
+    # release. Defaults follow the CIS Controls v8.1.2 wording where it gives a number.
+    #
+    # A week of signature age: CIS 10.2 asks for automatic updates and gives no figure, and
+    # every mainstream product updates several times a day, so seven days without one is a
+    # machine whose updater is broken rather than one that is merely behind.
+    _s("security.posture_signature_max_age_days", "security", "int", 7,
+       minimum=1, maximum=90, unit="days"),
+    # Fifteen minutes is the figure CIS 4.3 names for a general-purpose operating system.
+    _s("security.posture_lock_max_seconds", "security", "int", 900,
+       minimum=60, maximum=86400, unit="seconds"),
+    # Who else may be a local administrator (CIS 5.4) without being reported. The built-in
+    # Administrator, Domain Admins and Entra role groups are always allowed -- see
+    # posture._admin_allowed -- so this is for a helpdesk's own support group. Empty by
+    # default on purpose: a group nobody named is a finding until somebody names it, and a
+    # default allowlist would be this product deciding who is trusted on a stranger's network.
+    _s("security.posture_admin_allowlist", "security", "str_list", []),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}

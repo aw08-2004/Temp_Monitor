@@ -18,5 +18,6 @@
 <div id="report-sheet-root" class="report-sheet" data-machine="{{ machine }}"></div>
 {% endblock %}
 {% block page_scripts %}
+<script src="{{ url_for('static', filename='js/posture-labels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/report-sheet.js') }}"></script>
 {% endblock %}

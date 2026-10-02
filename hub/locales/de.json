@@ -1254,6 +1254,18 @@
       "security.genai_watchlist": {
         "label": "Beobachtungsliste für generative KI",
         "help": "Namensteile, die ein installiertes Programm oder eine App als Werkzeug für generative KI kennzeichnen. Ohne Beachtung der Groß-/Kleinschreibung irgendwo im Namen gesucht und auf der Seite Berichte aufgeführt. Nur Kennzeichnung – nichts wird gesperrt. Entfernen Sie einen Namen, um ein freigegebenes Werkzeug nicht mehr zu melden."
+      },
+      "security.posture_signature_max_age_days": {
+        "label": "Virensignaturen gelten als veraltet nach",
+        "help": "Wie alt die Signaturen eines laufenden Virenschutzprodukts sein dürfen, bevor dessen Prüfung im Sicherheitsstatus fehlschlägt (CIS 10.2). Jedes gängige Produkt aktualisiert sich mehrmals täglich; eine Woche ohne Update bedeutet einen defekten Updater."
+      },
+      "security.posture_lock_max_seconds": {
+        "label": "Längste zulässige Leerlaufzeit bis zur Bildschirmsperre",
+        "help": "Ein Gerät besteht die Prüfung der Bildschirmsperre (CIS 4.3), wenn eine geräteweite Inaktivitätsgrenze oder der sperrende Bildschirmschoner jedes angemeldeten Benutzers höchstens diesen Wert hat. CIS nennt 15 Minuten für ein Allzweck-Betriebssystem."
+      },
+      "security.posture_admin_allowlist": {
+        "label": "Zusätzlich zulässige lokale Administratoren",
+        "help": "Konten oder Gruppen, die Mitglied der lokalen Administratorengruppe eines PCs sein dürfen, ohne dass die Prüfung fehlschlägt (CIS 5.4). Angabe als SID, DOMÄNE\\Name oder reiner Name. Das integrierte Administratorkonto, die Domänen-Admins und Entra-Rollengruppen sind immer zulässig."
       }
     },
     "ai": {
@@ -4064,6 +4076,75 @@
     "key_for": "Wiederherstellungsschlüssel für {volume}",
     "key_warning": "Das Lesen dieses Schlüssels wurde im Audit-Log festgehalten. Er verschwindet, sobald Sie die Seite verlassen."
   },
+  "posture": {
+    "title": "Sicherheitsstatus",
+    "summary": "{pass} bestanden, {fail} nicht bestanden, {unknown} unbekannt",
+    "intro": "Nachweis für die neben jeder Prüfung genannte IG1-Schutzmaßnahme der CIS Controls, bewertet anhand der Schwellenwerte unter Einstellungen, Sicherheit. Diese Ansicht ändert nichts am Gerät.",
+    "reported": "Gemeldet {when}",
+    "load_error": "Der Sicherheitsstatus konnte nicht geladen werden.",
+    "unreachable": "Der Hub ist nicht erreichbar.",
+    "retry": "Erneut versuchen",
+    "col": {
+      "check": "Prüfung",
+      "result": "Ergebnis",
+      "detail": "Details",
+      "cis": "CIS-Schutzmaßnahme"
+    },
+    "status": {
+      "pass": "Bestanden",
+      "fail": "Nicht bestanden",
+      "unknown": "Unbekannt"
+    },
+    "check": {
+      "antivirus": "Virenschutz aktiv",
+      "signatures": "Virensignaturen aktuell",
+      "autorun": "AutoRun und automatische Wiedergabe aus",
+      "firewall": "Firewall für jedes Profil an",
+      "session_lock": "Bildschirm sperrt bei Inaktivität",
+      "default_accounts": "Standardkonten deaktiviert",
+      "admin_accounts": "Nur freigegebene Administratoren",
+      "encryption": "Laufwerke verschlüsselt",
+      "secure_boot": "Secure Boot an",
+      "tpm": "TPM bereit"
+    },
+    "profile": {
+      "domain": "Domäne",
+      "private": "Privat",
+      "public": "Öffentlich"
+    },
+    "detail": {
+      "read_failed": "Konnte nicht gelesen werden: {error}",
+      "not_reported": "Das Gerät hat dies nicht gemeldet.",
+      "av_on": "Aktiv: {names}",
+      "av_off": "Registriert, aber nicht aktiv: {names}",
+      "av_none": "Im Windows-Sicherheitscenter ist kein Virenschutzprodukt registriert.",
+      "sig_current": "Die Signaturen sind aktuell.",
+      "sig_stale": "Die Signaturen sind {days} Tage alt; die Grenze liegt bei {max}.",
+      "sig_stale_product": "Veraltet: {names}",
+      "autorun_off": "Die automatische Wiedergabe ist für alle Laufwerke aus, und autorun.inf wird ignoriert.",
+      "autorun_on": "Automatische Wiedergabe oder AutoRun ist nicht per Richtlinie für alle Laufwerke deaktiviert.",
+      "fw_on": "An für das Domänen-, das private und das öffentliche Profil.",
+      "fw_off": "Aus für: {profiles}",
+      "lock_ok": "Sperrt nach {seconds} Sekunden Inaktivität.",
+      "lock_too_long": "Sperrt nach {seconds} Sekunden; die Grenze liegt bei {max}.",
+      "lock_missing": "Nichts sperrt die Sitzung innerhalb von {max} Sekunden Inaktivität.",
+      "lock_no_users": "Niemand ist angemeldet, und es ist keine geräteweite Inaktivitätsgrenze gesetzt.",
+      "defaults_disabled": "Das integrierte Administrator- und das Gastkonto sind deaktiviert.",
+      "defaults_enabled": "Aktiviert: {names}",
+      "admins_ok": "Jedes Mitglied der Administratoren ist freigegeben ({count}).",
+      "admins_extra": "Nicht auf der Freigabeliste: {names}",
+      "enc_all": "Jedes gemeldete Volume ist durch BitLocker geschützt ({count}).",
+      "enc_unprotected": "Nicht geschützt: {volumes}",
+      "enc_unsupported": "Diese Windows-Edition hat kein BitLocker.",
+      "enc_not_reported": "Das Gerät hat seinen BitLocker-Status nicht gemeldet.",
+      "secure_boot_on": "Secure Boot ist an.",
+      "secure_boot_off": "Secure Boot wird unterstützt und ist ausgeschaltet.",
+      "secure_boot_legacy": "Das Gerät startet im Legacy-BIOS-Modus, der kein Secure Boot kennt.",
+      "tpm_ready": "TPM {version} ist aktiviert und in Betrieb.",
+      "tpm_missing": "Es wurde kein TPM gefunden.",
+      "tpm_not_ready": "Ein TPM ist vorhanden, aber nicht aktiviert oder nicht in Betrieb."
+    }
+  },
   "report": {
     "tab": "Bericht",
     "open_printable": "Druckansicht öffnen",
@@ -4110,7 +4191,6 @@
       "agent_report": "Noch nicht gemeldet. Wird beim nächsten Melden des Geräts ausgefüllt.",
       "agent_update": "Wartet auf einen neueren Agenten auf diesem Gerät. Das heißt nicht, dass nichts installiert ist.",
       "phase_c": "Speichermodule, Datenträger, Monitore, Gehäuse, TPM und Akku werden von FleetHub noch nicht erfasst.",
-      "phase_d": "Virenschutz, Firewall, lokale Administratoren und TPM-Status werden von FleetHub noch nicht erfasst.",
       "directory": "Im Verzeichnis nicht gefunden, oder es lief noch keine Verzeichnissynchronisierung."
     },
     "f": {
@@ -4229,6 +4309,19 @@
       "empty": "Laut Inventar ist auf den für Sie sichtbaren Geräten nichts von der Beobachtungsliste installiert.",
       "col": {
         "matched": "Treffer"
+      }
+    },
+    "posture": {
+      "heading": "Sicherheitsstatus",
+      "intro": "Wie viele Geräte in Ihrem Bereich jede Prüfung bestehen. Nachweis für die jeweils genannte IG1-Schutzmaßnahme der CIS Controls; diese Ansicht ändert an keinem Gerät etwas.",
+      "coverage": "{reporting} Geräte haben einen Sicherheitsstatus gemeldet; {missing} noch nicht.",
+      "empty": "Noch kein Gerät in Ihrem Bereich hat einen Sicherheitsstatus gemeldet.",
+      "more": "und {count} weitere",
+      "col": {
+        "passed": "Bestanden",
+        "failed": "Nicht bestanden",
+        "unknown": "Unbekannt",
+        "failing": "Betroffene Geräte"
       }
     }
   }

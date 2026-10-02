@@ -66,7 +66,6 @@
         switch (code) {
             case 'agent_update': return t('report.waiting.agent_update');
             case 'phase_c': return t('report.waiting.phase_c');
-            case 'phase_d': return t('report.waiting.phase_d');
             case 'directory': return t('report.waiting.directory');
             default: return t('report.waiting.agent_report');
         }
@@ -226,7 +225,21 @@
                     { label: t('report.col.method'), get: (v) => v.method },
                     { label: t('report.col.recovery_password'), get: (v) => yesNo(v.has_recovery_password) },
                 ], data.volumes));
-                box.appendChild(el('p', 'stat-card__meta', waitingText(data.posture_waiting_for)));
+                // The posture checks (#25 D), worded by the same PostureLabels the machine
+                // page uses, so paper and screen cannot disagree about a result. A machine
+                // whose agent predates them says so rather than printing no rows: a sheet
+                // silent about the firewall reads as a PC whose firewall nobody questioned.
+                if (data.checks && window.PostureLabels) {
+                    const labels = window.PostureLabels;
+                    box.appendChild(table([
+                        { label: t('posture.col.check'), get: (c) => labels.checkTitle(c.id) },
+                        { label: t('posture.col.result'), get: (c) => labels.statusLabel(c.status) },
+                        { label: t('posture.col.detail'), get: (c) => labels.detailText(c) },
+                        { label: t('posture.col.cis'), get: (c) => c.cis || '' },
+                    ], data.checks));
+                } else if (data.posture_waiting_for) {
+                    box.appendChild(el('p', 'stat-card__meta', waitingText(data.posture_waiting_for)));
+                }
                 return box;
             }
             case 'software': {

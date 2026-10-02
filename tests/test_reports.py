@@ -11,8 +11,9 @@ tells every later reader "this PC has nothing installed". So the tests pin that:
 
   * a machine whose agent never sent software is `waiting` / `agent_update`, never `ok` with
     an empty list -- and once it reports an empty list, it is `ok` and empty;
-  * hardware detail and security posture that NOTHING collects yet are labelled as such
-    (phase_c / phase_d), not left blank;
+  * hardware detail that NOTHING collects yet is labelled as such (phase_c), and a security
+    posture the machine's agent is too old to send is labelled `agent_update` -- neither is
+    left blank;
   * the summary CSV writes a BLANK, not a 0, for an unreported count -- a spreadsheet summing
     that column must not count a silent machine as fully patched;
   * every CSV cell that looks like a formula is neutralised, because a software name is text
@@ -39,6 +40,7 @@ import fleet
 import location
 import patches
 import permissions
+import posture
 import remote
 import reports
 import rules
@@ -109,6 +111,7 @@ def main():
                      remote.init_remote_db, capabilities.init_capabilities_db,
                      location.init_location_db, rules.init_rules_db,
                      device_groups.init_device_groups_db, software.init_software_db,
+                     posture.init_posture_db,
                      permissions.init_permissions_db, settings.init_settings_db):
             init(db)
         settings.invalidate()
@@ -200,8 +203,31 @@ def main():
               sec["security"]["data"]["volumes"][0]["has_recovery_password"] is True)
         check("...but no protector ids or escrow bookkeeping",
               "{REC}" not in json.dumps(sec["security"]) and "read_count" not in json.dumps(sec))
-        check("...and names antivirus/firewall as phase D, not blank",
-              sec["security"]["data"]["posture_waiting_for"] == "phase_d")
+        check("...and says the posture waits on a newer agent, not blank",
+              sec["security"]["data"]["posture_waiting_for"] == "agent_update"
+              and sec["security"]["data"]["checks"] is None)
+
+        print("\n== A posture fills the checks, judged as the machine page judges them ==")
+        c.post("/api/agent/heartbeat", json={"config_version": 0, "posture": {
+            "firewall": {"profiles": [{"name": "domain", "enabled": True},
+                                      {"name": "private", "enabled": False},
+                                      {"name": "public", "enabled": True}], "error": ""},
+            "secure_boot": {"state": "on", "error": ""}}}, headers=one_auth)
+        sec = c.get("/api/reports/machines/PC-01").get_json()["sections"]
+        checks = {ch["id"]: ch for ch in sec["security"]["data"]["checks"]}
+        check("every posture check is on the sheet, in order",
+              [ch["id"] for ch in sec["security"]["data"]["checks"]] == list(posture.CHECK_IDS))
+        check("...the firewall fails and names the profile",
+              checks["firewall"]["status"] == "fail"
+              and checks["firewall"]["params"]["profiles"] == ["private"])
+        check("...encryption is judged from the BitLocker report above",
+              checks["encryption"]["status"] == "pass")
+        check("...an area the agent did not send is unknown, never failed",
+              checks["tpm"]["status"] == "unknown")
+        check("...and the waiting line is gone", "posture_waiting_for" not in sec["security"]["data"])
+        row = reports.summary_row(reports.build_sheet(db, "PC-01"))
+        failed = sum(1 for ch in checks.values() if ch["status"] == "fail")
+        check("the summary CSV counts failed checks", row["posture_failed"] == failed and failed >= 1)
 
         print("\n== An empty software report is ok-and-empty, not waiting ==")
         c.post("/api/agent/heartbeat", json={"config_version": 0, "software": {"software": []}},
@@ -278,6 +304,8 @@ def main():
         check("an unreported software count is BLANK, not 0",
               by_machine["PC-02"]["software_count"] == "")
         check("...and an unreported patch count too", by_machine["PC-02"]["pending_patches"] == "")
+        check("...and an unreported posture too -- never 0 failed",
+              by_machine["PC-02"]["posture_failed"] == "")
         check("a reported count is a number", by_machine["PC-01"]["software_count"] == "2")
 
         table = parse_csv(c.get("/api/reports/export.csv?section=software"))

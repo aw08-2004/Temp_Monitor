@@ -322,6 +322,22 @@
         </div>
     </details>
 
+    {# Security posture (roadmap #25 D): one row per check, each passed, failed or unknown and
+       labelled with the CIS Controls IG1 safeguard it is evidence for. Hidden on a machine
+       that has never sent a posture, the encryption card's rule above and for its reason: an
+       empty compliance card reads as a finding. Open by default, because "is this PC
+       compliant" is a question somebody came to this page with. #}
+    <details class="card sensor-browser fold" data-fold-key="machine:overview:posture"
+             id="card-posture" hidden open>
+        <summary class="sensor-browser__summary">
+            <span class="section-title" style="margin-bottom: 0;">{{ t('posture.title') }}</span>
+            <span class="stat-card__meta" id="posture-summary"></span>
+        </summary>
+        <p class="stat-card__meta">{{ t('posture.intro') }} <span id="posture-reported"></span></p>
+        <div class="table-scroll" id="posture-body"></div>
+        <p class="stat-card__meta" id="posture-error" hidden></p>
+    </details>
+
     <details class="card sensor-browser fold" data-fold-key="machine:overview:apps" id="card-apps" hidden>
         <summary class="sensor-browser__summary">
             <span class="section-title" style="margin-bottom: 0;">{{ t('machine.apps.title') }}</span>
@@ -690,6 +706,8 @@
 <script src="{{ url_for('static', filename='js/machine-secure.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-ask.js') }}"></script>
 <script src="{{ url_for('static', filename='js/machine-bitlocker.js') }}"></script>
+<script src="{{ url_for('static', filename='js/posture-labels.js') }}"></script>
+<script src="{{ url_for('static', filename='js/machine-posture.js') }}"></script>
 <script src="{{ url_for('static', filename='js/report-sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tool-panels.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
