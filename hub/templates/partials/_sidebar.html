@@ -76,6 +76,17 @@
                dismiss -- rendering it conditionally would leave nothing for the script to find. #}
             <span class="sidebar__badge" id="alerts-badge" {% if not open_alert_count %}hidden{% endif %}>{{ open_alert_count or '' }}</span>
         </a>
+        {# The assistant (roadmap #26). A link like the others: it opens /assistant as a section,
+           and the panel's Pin button docks it beside every page after that (shell.js). Shown
+           only while the AI switch and the assistant switch are both on -- the route answers
+           either way and says the feature is off, but a link to a switched-off feature is the
+           kind of promise this sidebar does not make. #}
+        {% if cap.VIEW in user_capabilities and assistant_enabled %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'assistant.page' else '' }}" data-nav-prefix="/assistant" href="{{ url_for('assistant.page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.4l-.8-1.9-1.9-.8 1.9-.8z"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.assistant') }}</span>
+        </a>
+        {% endif %}
         </div>
 
         {% if has_operate %}

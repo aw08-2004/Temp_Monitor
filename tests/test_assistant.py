@@ -1,0 +1,432 @@
+"""The console assistant (roadmap #26) -- driven through the real app with a scripted model.
+
+**The silent failures this file exists to catch:**
+
+  * **A confirm-tier call that runs without a click.** A model asked to "restart PC-01" that
+    queues the restart itself looks like a helpful assistant right up to the day it is talked
+    into a wipe. So a tool call for a command must leave NO command row, only a pending action
+    -- and the action must run once, for its owner, and never again.
+  * **A tool that reaches past the operator.** The assistant runs routes as the operator, so a
+    machine outside their scope must come back as a refusal, and a route they lack the
+    capability for must not even be listed to the model.
+  * **A link the model invented.** Only links the hub built from a link token, for a machine
+    the viewer can see, may reach the page. A hand-written markdown URL is reduced to its text.
+  * **A tier table that names a route that does not exist.** A typo in assistant_tools.py does
+    not raise -- the misspelled route simply falls through to the default tier. Every rule the
+    tables name is checked against the live url_map.
+
+Run from the repo root so `import app` resolves.
+"""
+import json
+import os
+import re
+import sqlite3
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+HUB = os.path.join(os.path.dirname(HERE), "hub")
+sys.path.insert(0, HUB)
+
+_TMPDIR = tempfile.mkdtemp(prefix="hub-assistant-test-")
+os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
+os.chdir(_TMPDIR)
+os.environ["ALLOWED_EMAILS"] = "tester@example.com"
+
+import ai
+import app
+import assistant
+import assistant_guide
+import assistant_tools
+import console_session
+import permissions
+import settings
+
+PASS = 0
+FAIL = 0
+
+
+def check(name, cond):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  [ok] {name}")
+    else:
+        FAIL += 1
+        print(f"  [XX] {name}")
+
+
+DB = app.DB_PATH
+
+# ---------------------------------------------------------------- the scripted provider
+SCRIPT = []          # responses, consumed in order; a callable is called with (messages)
+CALLS = []           # (messages, tool names) for every provider call
+
+
+def fake_complete_chat(config, messages, tools, **kwargs):
+    CALLS.append((messages, [t["function"]["name"] for t in tools or []]))
+    if not SCRIPT:
+        return None, {"content": "done", "tool_calls": []}
+    step = SCRIPT.pop(0)
+    if callable(step):
+        step = step(messages)
+    if isinstance(step, str):
+        return step, None                       # a provider error
+    return None, step
+
+
+def call(name, **arguments):
+    return {"content": "", "tool_calls": [{"id": f"c{len(CALLS)}", "name": name,
+                                           "arguments": json.dumps(arguments)}]}
+
+
+def say(text):
+    return {"content": text, "tool_calls": []}
+
+
+ai.complete_chat = fake_complete_chat
+
+
+# ---------------------------------------------------------------- fixtures
+def seed():
+    conn = sqlite3.connect(DB)
+    for name in ("PC-01", "PC-02"):
+        conn.execute("INSERT OR IGNORE INTO machine_info (machine) VALUES (?)", (name,))
+    conn.commit()
+    conn.close()
+    permissions.create_group(DB, "Sales operators",
+                             capabilities=[permissions.VIEW, permissions.ISSUE_COMMANDS,
+                                           permissions.WIPE_DEVICE],
+                             machines=["PC-01"], members=["scoped@x.com"])
+    permissions.create_group(DB, "Readers", capabilities=[permissions.VIEW],
+                             machines=["PC-01", "PC-02"], members=["viewer@x.com"])
+    settings.set_many(DB, {"ai.enabled": True, "ai.base_url": "http://127.0.0.1:9",
+                           "ai.model": "test-model", "ai.assistant_max_steps": 4}, "test")
+    settings.invalidate()
+
+
+def client_for(email):
+    client = app.app.test_client()
+    console_session.sign_in(client, email)
+    return client
+
+
+def converse(client, chat_id, text, context=None, timeout=10.0):
+    """Send one message and poll the run to the end. Returns (status, events)."""
+    r = client.post(f"/api/assistant/chats/{chat_id}/messages",
+                    json={"text": text, "context": context or {}})
+    if r.status_code != 202:
+        return r.status_code, [r.get_json()]
+    run_id = r.get_json()["run_id"]
+    deadline = time.time() + timeout
+    events, after = [], -1
+    while time.time() < deadline:
+        state = client.get(f"/api/assistant/runs/{run_id}?after_seq={after}").get_json()
+        for event in state["events"]:
+            events.append(event)
+            after = max(after, event["seq"])
+        if state["done"]:
+            return 202, events
+        time.sleep(0.02)
+    return 0, events
+
+
+def new_chat(client):
+    return client.post("/api/assistant/chats", json={}).get_json()["id"]
+
+
+def command_rows(machine):
+    conn = sqlite3.connect(DB)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM commands WHERE machine = ?",
+                            (machine,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def tool_messages(chat_id):
+    return [m for m in assistant.list_messages(DB, chat_id) if m["role"] == "tool"]
+
+
+# ---------------------------------------------------------------- the tier tables
+def test_every_named_route_exists():
+    print("\n-- every rule the tier tables and curated tools name is a real route --")
+    routes = {(m, r.rule) for r in app.app.url_map.iter_rules() for m in r.methods}
+    norm = {(m, re.sub(r"<[^>]+>", "<>", rule)) for m, rule in routes}
+    for table_name in ("DENIED_ROUTES", "READ_POSTS", "WRITE_ROUTES", "TYPED_CONFIRM_ROUTES"):
+        table = getattr(assistant_tools, table_name)
+        # Two spellings of one alert route are listed on purpose (converter or not); at least
+        # one of them must exist, and every other entry must exist exactly.
+        missing = [entry for entry in table
+                   if (entry[0], re.sub(r"<[^>]+>", "<>", entry[1])) not in norm]
+        check(f"{table_name}: every entry is a live route ({missing[:3]})", not missing)
+    missing = [name for name, (_d, method, path, _s) in assistant_tools.CURATED_BY_NAME.items()
+               if (method, re.sub(r"<[^>]+>", "<>", path)) not in norm]
+    check(f"every curated tool resolves to a live route ({missing[:3]})", not missing)
+    denied = [name for name, (_d, method, path, _s) in assistant_tools.CURATED_BY_NAME.items()
+              if assistant_tools.classify(method, re.sub(r"<[^>]+>", "<x>", path)) == "denied"]
+    check(f"no curated tool is denied by its own tier table ({denied})", not denied)
+
+
+def test_tiers_of_the_routes_that_matter():
+    print("\n-- the dangerous routes are in the tier they must be in --")
+    c = assistant_tools.classify
+    check("reading a machine runs at once", c("GET", "/api/machines/<machine>") == "read")
+    check("queueing a command waits for a click",
+          c("POST", "/api/fleet/commands") == "confirm")
+    check("a wipe waits for a click", c("POST", "/api/wipe/machines/<machine>/wipe") == "confirm")
+    check("...and for the machine's name to be typed",
+          assistant_tools.needs_typed_name("POST", "/api/wipe/machines/<machine>/wipe"))
+    check("revealing a BitLocker key is never reachable",
+          c("POST", "/api/bitlocker/<machine>/reveal") == "denied")
+    check("the interactive terminal is never reachable",
+          c("POST", "/api/fleet/pty/<sid>/input") == "denied")
+    check("agent routes are never reachable", c("POST", "/api/agent/commands") == "denied")
+    check("the assistant cannot call itself",
+          c("POST", "/api/assistant/chats/<chat_id>/messages") == "denied")
+    check("changing settings waits for a click", c("POST", "/api/settings") == "confirm")
+    check("an unlisted write route defaults to confirm, not write",
+          c("POST", "/api/some/new/route") == "confirm")
+    check("a page route is not callable", c("GET", "/machine/<machine>") == "denied")
+    check("the agents' ingest is denied", c("POST", "/api/report") == "denied")
+    check("...without swallowing the reports API",
+          c("GET", "/api/reports/machines/<machine>") == "read")
+    check("a fetched file's contents never reach the model",
+          c("GET", "/api/machines/<machine>/files/transfers/<transfer_id>/content") == "denied")
+
+
+def test_path_checks():
+    print("\n-- call_endpoint only takes a plain API path --")
+    bad = ["/api/../login", "//evil/api/x", "/api/x?y=1", "https://x/api/y", "/login",
+           "/api/x\\y"]
+    for path in bad:
+        check(f"refused: {path}", assistant_tools.check_path(path) is not None)
+    check("a plain path passes", assistant_tools.check_path("/api/machines/PC-01") is None)
+
+
+# ---------------------------------------------------------------- the guide
+def test_page_map_matches_the_app():
+    print("\n-- the assistant's page map and the sidebar agree --")
+    adapter = app.app.url_map.bind("localhost")
+    for key, path, _label, _cap, _about in assistant_guide.PAGES:
+        try:
+            adapter.match(path, method="GET")
+            ok = True
+        except Exception:
+            ok = False
+        check(f"page {key} ({path}) is a real GET route", ok)
+    with open(os.path.join(HUB, "templates", "partials", "_sidebar.html"),
+              encoding="utf-8") as handle:
+        sidebar = handle.read()
+    prefixes = re.findall(r'data-nav-prefix="([^"]+)"', sidebar)
+    paths = {p[1] for p in assistant_guide.PAGES}
+    missing = [p.split()[0] for p in prefixes if p.split()[0] not in paths]
+    check(f"every sidebar link is in the page map ({missing})", not missing)
+
+
+# ---------------------------------------------------------------- links
+def test_links_are_built_by_the_hub_only():
+    print("\n-- only hub-built links survive rendering --")
+
+    def resolve(kind, arg, opts):
+        return ("/machine/PC-01", "PC-01") if arg == "PC-01" else None
+
+    text, links = assistant.render_links(
+        "See [[machine:PC-01]], [[machine:PC-02]] and [click](https://evil.example/x) "
+        "or [here](/api/wipe/machines/PC-01/wipe).", resolve)
+    check("a resolvable token became a link", "[PC-01](/machine/PC-01)" in text)
+    check("an unresolvable token became plain text",
+          "PC-02" in text and "(/machine/PC-02)" not in text)
+    check("a hand-written external link lost its url", "evil.example" not in text)
+    check("a hand-written internal link lost its url too",
+          "/api/wipe" not in text and "here" in text)
+    check("exactly one link was emitted", links == ["/machine/PC-01"])
+
+
+def test_history_is_trimmed():
+    print("\n-- old tool results go back to the model trimmed --")
+    rows = [{"role": "tool", "content": "x" * 50, "tool_calls": [], "tool_call_id": "a",
+             "tool_name": "t"},
+            {"role": "user", "content": "hi", "tool_calls": [], "tool_call_id": "",
+             "tool_name": ""},
+            {"role": "tool", "content": "y" * 5000, "tool_calls": [], "tool_call_id": "b",
+             "tool_name": "t"}]
+    out = assistant.history_for_model(rows)
+    check("the window starts at a user message", out[0]["role"] == "user")
+    check("a long tool result is cut", len(out[1]["content"]) < 1000
+          and "call the tool again" in out[1]["content"])
+
+
+def test_actions_expire():
+    print("\n-- a pending action cannot be confirmed after it expires --")
+    chat = assistant.create_chat(DB, "unit@x.com")
+    action = assistant.create_action(DB, chat_id=chat["id"], owner="unit@x.com", tool="t",
+                                     method="POST", path="/api/x", rule="/api/x",
+                                     now=time.time() - assistant.ACTION_TTL_SECONDS - 5)
+    error, claimed = assistant.claim_action(DB, action["id"], "unit@x.com")
+    check("an expired action is refused", error is not None and claimed is None)
+    check("...and marked expired",
+          assistant.get_action(DB, action["id"], "unit@x.com")["state"] == "expired")
+
+
+# ---------------------------------------------------------------- end to end
+def test_a_command_waits_for_its_confirmation():
+    print("\n-- a restart is queued as an action, not as a command --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("run_command", machine="PC-01", type="restart"),
+                 say("Queued a restart of [[machine:PC-01|tab=overview]]. "
+                     "Details: [docs](https://evil.example)")]
+    status, events = converse(scoped, chat_id, "restart PC-01",
+                              context={"path": "/machine/PC-01", "machine": "PC-01"})
+    check("the turn finished", status == 202 and events and events[-1]["type"] == "done")
+    actions = [e["action"] for e in events if e.get("action")]
+    check("one action is pending", len(actions) == 1 and actions[0]["state"] == "pending")
+    check("NO command row exists yet", command_rows("PC-01") == 0)
+    finals = [e["content"] for e in events if e["type"] == "text"]
+    check("the answer links the machine through the hub",
+          any("[PC-01](/machine/PC-01?tab=overview)" in f for f in finals))
+    check("the model's own url is gone", not any("evil.example" in f for f in finals))
+    prompt = CALLS[-1][0][0]["content"]
+    check("the page context reached the prompt", "machine: PC-01" in prompt)
+
+    other = client_for("viewer@x.com")
+    action_id = actions[0]["id"]
+    check("another operator cannot confirm it",
+          other.post(f"/api/assistant/actions/{action_id}/confirm", json={}).status_code == 404)
+    check("...or read the conversation",
+          other.get(f"/api/assistant/chats/{chat_id}").status_code == 404)
+
+    r = scoped.post(f"/api/assistant/actions/{action_id}/confirm", json={})
+    body = r.get_json() or {}
+    check(f"the owner's confirm ran it (HTTP {r.status_code}, "
+          f"{(body.get('action') or {}).get('result')})",
+          (body.get("action") or {}).get("state") in ("done", "failed"))
+    if (body.get("action") or {}).get("state") == "done":
+        check("...and the command row exists now", command_rows("PC-01") == 1)
+    check("a second confirm is refused",
+          scoped.post(f"/api/assistant/actions/{action_id}/confirm", json={}).status_code == 409)
+    notes = [m for m in assistant.list_messages(DB, chat_id) if m["role"] == "note"]
+    check("the conversation records what the operator decided", len(notes) == 1)
+
+
+def test_scope_is_the_operators():
+    print("\n-- a machine outside scope is refused by the route itself --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("get_machine", machine="PC-02"), say("I cannot see PC-02.")]
+    converse(scoped, chat_id, "what about PC-02?")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    check("the tool came back refused", results and results[0]["ok"] is False
+          and results[0].get("status") == 403)
+    SCRIPT[:] = [call("run_command", machine="PC-02", type="restart"), say("ok")]
+    converse(scoped, chat_id, "restart PC-02")
+    pending = [a for a in assistant.list_actions(DB, chat_id) if a["machine"] == "PC-02"]
+    check("an out-of-scope command can be QUEUED as a card...", len(pending) == 1)
+    r = scoped.post(f"/api/assistant/actions/{pending[0]['id']}/confirm", json={})
+    check("...but confirming it is refused by the route, not run",
+          r.status_code == 400 and command_rows("PC-02") == 0)
+
+
+def test_denied_routes_stay_denied():
+    print("\n-- a denied route cannot be reached through call_endpoint --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("call_endpoint", method="POST", path="/api/bitlocker/PC-01/reveal"),
+                 call("call_endpoint", method="GET", path="/api/../logout"),
+                 say("no")]
+    converse(scoped, chat_id, "show me the bitlocker key")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    check("the reveal was refused as denied",
+          results[0]["ok"] is False and results[0].get("tier") == "denied")
+    check("the dot-segment path was refused", results[1]["ok"] is False)
+    check("no action was queued for either", not assistant.list_actions(DB, chat_id))
+
+
+def test_tools_follow_capabilities():
+    print("\n-- the model is only offered what the operator can use --")
+    viewer = client_for("viewer@x.com")
+    chat_id = new_chat(viewer)
+    SCRIPT[:] = [call("list_endpoints", q="fleet commands"), say("ok")]
+    converse(viewer, chat_id, "what can I run?")
+    offered = CALLS[-1][1]
+    check("a viewer is not offered run_command", "run_command" not in offered)
+    check("...but is offered get_machine", "get_machine" in offered)
+    listing = json.loads(tool_messages(chat_id)[0]["content"])["data"]
+    check("list_endpoints hides the command POST from a viewer",
+          not any(e["method"] == "POST" and e["rule"] == "/api/fleet/commands" for e in listing))
+    check("...and never names a denied route",
+          not any(e["tier"] == "denied" for e in listing))
+
+
+def test_wipe_needs_the_typed_name():
+    print("\n-- a wipe card needs the machine's name typed, not just a click --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("call_endpoint", method="POST", path="/api/wipe/machines/PC-01/wipe",
+                      body={"confirm": "PC-01"}),
+                 say("queued")]
+    converse(scoped, chat_id, "wipe PC-01")
+    action = assistant.list_actions(DB, chat_id)[0]
+    check("the action asks for the typed name", action["typed_name"] is True)
+    r = scoped.post(f"/api/assistant/actions/{action['id']}/confirm", json={"typed": "PC-1"})
+    check("a wrong name is refused", r.status_code == 400)
+    check("...and the action is still pending",
+          assistant.get_action(DB, action["id"], "scoped@x.com")["state"] == "pending")
+
+
+def test_the_loop_ends():
+    print("\n-- a model that never stops calling tools is stopped --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("fleet_summary") for _ in range(10)]
+    before = len(CALLS)
+    _status, events = converse(scoped, chat_id, "loop")
+    check("it stopped at the step limit", len(CALLS) - before == 4)
+    check("...and said so", any("step limit" in (e.get("content") or "") for e in events))
+    SCRIPT[:] = []
+
+    SCRIPT[:] = ["the AI provider could not be reached"]
+    _status, events = converse(scoped, chat_id, "hello")
+    check("a provider failure ends the turn with its sentence",
+          events and events[-1]["type"] == "error"
+          and "could not be reached" in events[-1]["error"])
+
+
+def test_off_switch():
+    print("\n-- the assistant switch is obeyed on the next request --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    settings.set_many(DB, {"ai.assistant_enabled": False}, "test")
+    settings.invalidate()
+    r = scoped.post(f"/api/assistant/chats/{chat_id}/messages", json={"text": "hi"})
+    check("a message is refused while it is off", r.status_code == 400)
+    check("the status says it is off",
+          scoped.get("/api/assistant/status").get_json()["ready"] is False)
+    settings.set_many(DB, {"ai.assistant_enabled": True}, "test")
+    settings.invalidate()
+
+
+def main():
+    seed()
+    test_every_named_route_exists()
+    test_tiers_of_the_routes_that_matter()
+    test_path_checks()
+    test_page_map_matches_the_app()
+    test_links_are_built_by_the_hub_only()
+    test_history_is_trimmed()
+    test_actions_expire()
+    test_a_command_waits_for_its_confirmation()
+    test_scope_is_the_operators()
+    test_denied_routes_stay_denied()
+    test_tools_follow_capabilities()
+    test_wipe_needs_the_typed_name()
+    test_the_loop_ends()
+    test_off_switch()
+    print(f"\n==== {PASS} passed, {FAIL} failed ====")
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

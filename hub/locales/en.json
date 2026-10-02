@@ -47,7 +47,8 @@
     },
     "events": "Events",
     "watchdogs": "Watchdogs",
-    "reports": "Reports"
+    "reports": "Reports",
+    "assistant": "Assistant"
   },
   "hub_update": {
     "_note": [
@@ -1250,11 +1251,23 @@
         },
         "send_machine_names": {
           "label": "Send machine names",
-          "help": "Off. A question about one PC would otherwise carry its name, its signed-in user and its serial number to the provider. The rule drafter never sends machine data either way."
+          "help": "Off. Applies to the Alert Brain's recommendations: a question about one PC would otherwise carry its name, its signed-in user and its serial number to the provider. The assistant always sends machine names; switch it off below to prevent that."
         },
         "draft_retention_days": {
           "label": "Keep unfinished drafts for",
           "help": "A drafted rule nobody committed is deleted after this. Committed rules are unaffected."
+        },
+        "assistant_enabled": {
+          "label": "Show the assistant",
+          "help": "The assistant panel in the sidebar. It sends real machine names and the data it reads to the provider above, whatever Send machine names says. Turn this off to keep AI to the Alert Brain only."
+        },
+        "assistant_max_steps": {
+          "label": "Assistant steps per message",
+          "help": "How many times the assistant may call a tool and ask the provider again for one message. Each step is one request to the provider."
+        },
+        "assistant_history_days": {
+          "label": "Keep assistant conversations for",
+          "help": "A conversation nobody has touched for this long is deleted."
         }
       },
       "provisioning": {
@@ -3396,6 +3409,47 @@
     "summary_run": "Build the report",
     "summary_running": "Working...",
     "summary_no_prose": "The figures below are complete. The covering note is missing: {error}"
+  },
+  "assistant": {
+    "heading": "Assistant",
+    "history": "Conversations",
+    "new_chat": "New",
+    "delete_chat": "Delete",
+    "delete_confirm": "Delete this conversation? This cannot be undone.",
+    "pin": "Pin to the side",
+    "unpin": "Unpin",
+    "resize": "Resize the assistant panel",
+    "intro": "Ask about anything you can see in this hub: a machine, the fleet, alerts, rules or where something is. The assistant knows which page you are on, links to the machines it names, and can do what your permissions allow. Anything that changes a machine or access waits for you to confirm it.",
+    "example_page": "What should I know about the page I'm on?",
+    "example_hot": "Which machines are running hot right now?",
+    "example_alerts": "Summarise today's open alerts and what to do first",
+    "example_rule": "Alert me when a PC has less than 10 GB free",
+    "privacy": "Machine names and the data the assistant reads are sent to the AI provider configured in Settings.",
+    "placeholder": "Ask the assistant...",
+    "send": "Send",
+    "stop": "Stop",
+    "context": "On: {page}",
+    "context_machine": "On machine: {machine}",
+    "off": "The assistant is not available: {reason}",
+    "thinking": "Thinking...",
+    "using_tool": "Reading {tool}...",
+    "tools_used": "Used: {tools}",
+    "action_title": "Waiting for your confirmation",
+    "action_title_machine": "Waiting for your confirmation on {machine}",
+    "state": {
+      "pending": "Not run yet. Confirm to run it, as you.",
+      "running": "Running...",
+      "done": "Done.",
+      "failed": "The hub refused or the action failed.",
+      "rejected": "Declined. Nothing was run.",
+      "expired": "Expired. Nothing was run."
+    },
+    "confirm": "Confirm",
+    "reject": "Decline",
+    "typed_placeholder": "Type {machine} to confirm",
+    "untitled": "Untitled conversation",
+    "error": "The assistant could not answer. Try again.",
+    "stopped": "Stopped."
   },
   "scripts": {
     "body": "Script",

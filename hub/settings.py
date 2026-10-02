@@ -758,6 +758,18 @@ REGISTRY = (
     # A draft is somebody's unfinished sentence. A week is long enough to come back to one
     # after a holiday and short enough that abandoned experiments do not accumulate.
     _s("ai.draft_retention_days", "ai", "int", 7, minimum=1, maximum=365, unit="days"),
+    # The console assistant (roadmap #26). On by default, because `ai.enabled` above is the
+    # control that decides whether anything leaves the building; this one only lets a hub that
+    # wants the provider for the Alert Brain and nothing else switch the panel off.
+    #
+    # **The assistant sends real machine names**, unlike the machine panel it replaced, and
+    # `ai.send_machine_names` does not apply to it -- linking machines is the feature. The
+    # label's help text says so, because that is where an admin turning this on will look.
+    _s("ai.assistant_enabled", "ai", "bool", True),
+    # Provider calls per operator message. Each tool step is one call; eight covers "find the
+    # hot ones, read the worst, check its processes, answer" with room for a retry.
+    _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1, maximum=20),
+    _s("ai.assistant_history_days", "ai", "int", 30, minimum=1, maximum=365, unit="days"),
 
     # ---------------- Endpoint security ----------------
     # BitLocker recovery-key escrow (roadmap #19). The keys themselves are absent from this

@@ -236,6 +236,21 @@ def test_shell_js_and_markup_agree():
     check("the active-link class matches the sidebar", "sidebar__link--active" in js)
     check("the prefix attribute matches the sidebar", "navPrefix" in js)
     check("Remote is the page kept alive", "'/remote'" in js)
+    # The assistant (roadmap #26) is the second persistent frame and the only one that can be
+    # docked beside another. If it ever stops being persistent, pinning it reloads the chat on
+    # every navigation; if show() stops sparing the dock, pinning hides it on the first click.
+    check("the assistant is kept alive too", "'/assistant'" in js and "PERSISTENT" in js)
+    check("show() spares the docked frame", "other !== dock" in js)
+    check("the docked class matches the stylesheet",
+          "app-frames__frame--dock" in js and ".app-frames__frame--dock" in css)
+    check("the resize handle is styled", ".app-frames__dock-handle" in css)
+    check("frames let go of the pointer while the dock is dragged",
+          ".app-frames--resizing .app-frames__frame" in css)
+    check("pages reach the shell through window.FleetShell",
+          "window.FleetShell" in js and "pageContext" in js)
+    assistant_js = read(STATIC, "js", "assistant.js")
+    check("the panel reads its context from the shell",
+          "FleetShell" in assistant_js and "pageContext" in assistant_js)
     # location.replace() is what keeps Back walking only the shell's own pushState entries.
     check("frames are moved with replace(), not src", "location.replace" in js)
     check("fullscreen is delegated to the frame", "allow" in js and "fullscreen" in js)

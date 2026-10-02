@@ -37,7 +37,8 @@
     },
     "events": "Ereignisse",
     "watchdogs": "Wächter",
-    "reports": "Berichte"
+    "reports": "Berichte",
+    "assistant": "Assistent"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -1178,11 +1179,23 @@
         },
         "send_machine_names": {
           "label": "PC-Namen senden",
-          "help": "Aus. Eine Frage zu einem PC würde sonst dessen Namen, die angemeldete Person und die Seriennummer an den Anbieter tragen. Der Regelentwurf sendet ohnehin keine Maschinendaten."
+          "help": "Aus. Gilt für die Empfehlungen des Alert Brain: Eine Frage zu einem PC würde sonst seinen Namen, den angemeldeten Benutzer und die Seriennummer an den Anbieter senden. Der Assistent sendet immer Gerätenamen; schalten Sie ihn unten aus, um das zu verhindern."
         },
         "draft_retention_days": {
           "label": "Unfertige Entwürfe aufbewahren",
           "help": "Eine entworfene Regel, die niemand übernommen hat, wird danach gelöscht. Übernommene Regeln bleiben unberührt."
+        },
+        "assistant_enabled": {
+          "label": "Assistenten anzeigen",
+          "help": "Das Assistenten-Panel in der Seitenleiste. Es sendet echte Gerätenamen und die gelesenen Daten an den oben gewählten Anbieter, unabhängig von „PC-Namen senden“. Schalten Sie es aus, um KI nur für das Alert Brain zu nutzen."
+        },
+        "assistant_max_steps": {
+          "label": "Assistenten-Schritte pro Nachricht",
+          "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter."
+        },
+        "assistant_history_days": {
+          "label": "Assistenten-Unterhaltungen aufbewahren für",
+          "help": "Eine Unterhaltung, die so lange niemand angefasst hat, wird gelöscht."
         }
       },
       "provisioning": {
@@ -3278,6 +3291,47 @@
     "summary_run": "Bericht erstellen",
     "summary_running": "Läuft...",
     "summary_no_prose": "Die Zahlen unten sind vollständig. Der begleitende Text fehlt: {error}"
+  },
+  "assistant": {
+    "heading": "Assistent",
+    "history": "Unterhaltungen",
+    "new_chat": "Neu",
+    "delete_chat": "Löschen",
+    "delete_confirm": "Diese Unterhaltung löschen? Das lässt sich nicht rückgängig machen.",
+    "pin": "An die Seite heften",
+    "unpin": "Lösen",
+    "resize": "Größe des Assistenten ändern",
+    "intro": "Fragen Sie nach allem, was Sie in diesem Hub sehen: ein Gerät, die Flotte, Warnungen, Regeln oder wo etwas zu finden ist. Der Assistent weiß, auf welcher Seite Sie sind, verlinkt die genannten Geräte und kann tun, was Ihre Berechtigungen erlauben. Alles, was ein Gerät oder Zugriffe ändert, wartet auf Ihre Bestätigung.",
+    "example_page": "Was sollte ich über die aktuelle Seite wissen?",
+    "example_hot": "Welche Geräte laufen gerade zu heiß?",
+    "example_alerts": "Fasse die offenen Warnungen von heute zusammen und sag mir, womit ich anfangen soll",
+    "example_rule": "Warne mich, wenn ein PC weniger als 10 GB frei hat",
+    "privacy": "Gerätenamen und die Daten, die der Assistent liest, werden an den in den Einstellungen konfigurierten KI-Anbieter gesendet.",
+    "placeholder": "Den Assistenten fragen...",
+    "send": "Senden",
+    "stop": "Stopp",
+    "context": "Auf: {page}",
+    "context_machine": "Auf Gerät: {machine}",
+    "off": "Der Assistent ist nicht verfügbar: {reason}",
+    "thinking": "Denkt nach...",
+    "using_tool": "Liest {tool}...",
+    "tools_used": "Verwendet: {tools}",
+    "action_title": "Wartet auf Ihre Bestätigung",
+    "action_title_machine": "Wartet auf Ihre Bestätigung für {machine}",
+    "state": {
+      "pending": "Noch nicht ausgeführt. Bestätigen Sie, um es als Sie auszuführen.",
+      "running": "Wird ausgeführt...",
+      "done": "Erledigt.",
+      "failed": "Der Hub hat abgelehnt oder die Aktion ist fehlgeschlagen.",
+      "rejected": "Abgelehnt. Es wurde nichts ausgeführt.",
+      "expired": "Abgelaufen. Es wurde nichts ausgeführt."
+    },
+    "confirm": "Bestätigen",
+    "reject": "Ablehnen",
+    "typed_placeholder": "Zum Bestätigen {machine} eingeben",
+    "untitled": "Unterhaltung ohne Titel",
+    "error": "Der Assistent konnte nicht antworten. Versuchen Sie es erneut.",
+    "stopped": "Angehalten."
   },
   "scripts": {
     "body": "Skript",

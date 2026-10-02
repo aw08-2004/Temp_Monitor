@@ -227,6 +227,7 @@ class Access:
                     return self._deny(
                         f"You do not have the '{capability}' permission.")
                 return view(*args, **kwargs)
+            _label(wrapped, view, capability)
             return wrapped
         return decorator
 
@@ -250,8 +251,22 @@ class Access:
                 if not self.can(capability) or not self.in_scope(machine):
                     return self._deny(f"You do not have access to {machine!r}.")
                 return view(*args, **kwargs)
+            _label(wrapped, view, capability)
             return wrapped
         return decorator
+
+
+def _label(wrapped, view, capability):
+    """Record on the view which capabilities its decorators demand. **A label, not a gate.**
+
+    The console assistant (roadmap #26) reads it to decide which routes are worth NAMING to a
+    model for this operator -- listing a route the operator would get a 403 from wastes a step
+    and invites a retry through a different one. Enforcement is still the wrapper above, which
+    runs whether or not anybody reads this. Stacked decorators accumulate, so a watchdog write
+    gated on two capabilities is labelled with both. functools.wraps copies __dict__, which is
+    what carries the label through login_required and the route decorator.
+    """
+    wrapped._fleethub_caps = tuple(getattr(view, "_fleethub_caps", ())) + (capability,)
 
 
 def create_access(db_path, superusers):

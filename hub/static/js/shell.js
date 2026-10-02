@@ -16,6 +16,14 @@
 //     only hidden. That is what keeps remote screens connected across a trip to Packages, and
 //     it is the list to add to when another page earns the same treatment.
 //
+// THE ASSISTANT IS THE SECOND PERSISTENT FRAME, and the one frame that can be on screen at the
+// same time as another (roadmap #26). Opened from the sidebar it is a section like any other;
+// PINNED, it is docked to the right of whatever page is showing and stays there across
+// navigation -- the same iframe, moved by a class, so the conversation in it is never
+// reloaded. Rejected: a second, docked copy of the chat UI in this document. Two
+// implementations of one panel drift, and this document deliberately renders no page content
+// (base.html loads no page stylesheet into it).
+//
 // The fleet consoles are deliberately NOT in that list: a PTY session already outlives its
 // page on the hub and re-attaches on return (see fleet-pty.js), so a frame kept alive for
 // them would cost memory to duplicate something the server already does properly.
@@ -34,7 +42,17 @@
 
     /** Paths whose frame is kept alive in the background. A path matches if it is equal to
      *  the entry or nested under it. */
-    const PERSISTENT = ['/remote'];
+    const PERSISTENT = ['/remote', '/assistant'];
+
+    /** The persistent frame that can be docked beside the others. */
+    const ASSISTANT = '/assistant';
+    const PIN_KEY = 'tempmonitor:assistant';
+    const WIDTH_KEY = 'tempmonitor:assistant:width';
+    const MIN_WIDTH = 320;
+    const MAX_WIDTH = 900;
+    // Docking needs a page left over beside the panel. Below this the panel is a section and
+    // nothing else, the same breakpoint the sidebar turns into a drawer at.
+    const narrow = window.matchMedia('(max-width: 900px)');
 
     /** Paths that must replace the shell rather than load inside it: they are not app pages.
      *  Signing out inside a frame would leave the chrome of a signed-in session wrapped
@@ -48,6 +66,25 @@
     /** key -> iframe. */
     const frames = new Map();
     let visible = null;
+    /** The last frame shown that was not the assistant -- what "the page I am on" means to
+     *  the assistant, and where pinning from the assistant's own section goes back to. */
+    let lastPage = null;
+    let pinned = readPinned();
+    let handle = null;
+
+    function readPinned() {
+        try { return localStorage.getItem(PIN_KEY) === 'pinned'; } catch (e) { return false; }
+    }
+
+    function savePinned() {
+        try { localStorage.setItem(PIN_KEY, pinned ? 'pinned' : 'open'); } catch (e) { /* ok */ }
+    }
+
+    function readWidth() {
+        let width = 420;
+        try { width = parseInt(localStorage.getItem(WIDTH_KEY), 10) || width; } catch (e) { /* ok */ }
+        return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
+    }
 
     // ---------------- Small helpers ----------------
     function startsWithPath(path, prefix) {
@@ -96,8 +133,10 @@
     // ---------------- Chrome that tracks the frame ----------------
     function syncNav(path) {
         for (const link of document.querySelectorAll('.sidebar__link[data-nav-prefix]')) {
-            const active = link.dataset.navPrefix.split(/\s+/)
-                .some((prefix) => startsWithPath(path, prefix));
+            const prefixes = link.dataset.navPrefix.split(/\s+/);
+            // A docked assistant is open whatever the page, so its link stays lit.
+            const active = prefixes.some((prefix) => startsWithPath(path, prefix))
+                || (prefixes.includes(ASSISTANT) && !!docked());
             link.classList.toggle('sidebar__link--active', active);
             if (active) link.setAttribute('aria-current', 'page');
             else link.removeAttribute('aria-current');
@@ -148,6 +187,8 @@
         frame.addEventListener('load', () => {
             applyTheme(frame);
             const doc = frameDoc(frame);
+            frame.__fleetContext = null;
+            if (frame !== frames.get(ASSISTANT)) notifyAssistant();
             if (doc) {
                 interceptLinks(doc);
                 // Ctrl+K pressed inside a page never reaches this document, so the palette
@@ -165,8 +206,10 @@
     }
 
     function show(frame, { focus = true } = {}) {
-        for (const other of frames.values()) other.hidden = other !== frame;
         visible = frame;
+        const dock = docked();
+        for (const other of frames.values()) other.hidden = other !== frame && other !== dock;
+        if (frame !== frames.get(ASSISTANT)) lastPage = frame;
         const doc = frameDoc(frame);
         if (doc && doc.title) document.title = doc.title;
         syncSocketPill();
@@ -178,10 +221,141 @@
         }
     }
 
+    // ---------------- The docked assistant ----------------
+    /** The assistant frame when it is docked right now, else null. */
+    function docked() {
+        if (!pinned || narrow.matches) return null;
+        const frame = frames.get(ASSISTANT);
+        return frame && frame !== visible ? frame : null;
+    }
+
+    function ensureHandle() {
+        if (handle) return handle;
+        handle = document.createElement('div');
+        handle.className = 'app-frames__dock-handle';
+        handle.setAttribute('role', 'separator');
+        handle.setAttribute('aria-orientation', 'vertical');
+        handle.setAttribute('aria-label', t('assistant.resize'));
+        handle.hidden = true;
+        handle.addEventListener('pointerdown', startResize);
+        host.appendChild(handle);
+        return handle;
+    }
+
+    /** Dragging over an iframe hands the pointer to the document inside it, and the drag
+     *  stops dead the moment it crosses the panel. So every frame stops taking pointer events
+     *  for the length of the drag (the --resizing class), and the drag is tracked out here. */
+    function startResize(e) {
+        e.preventDefault();
+        host.classList.add('app-frames--resizing');
+        const move = (ev) => {
+            const right = host.getBoundingClientRect().right;
+            const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, right - ev.clientX));
+            host.style.setProperty('--assistant-width', `${width}px`);
+        };
+        const up = () => {
+            host.classList.remove('app-frames--resizing');
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            const width = parseInt(host.style.getPropertyValue('--assistant-width'), 10);
+            try { if (width) localStorage.setItem(WIDTH_KEY, String(width)); } catch (err) { /* ok */ }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    }
+
+    /** Put the assistant frame where the pin state says, without touching anything else. */
+    function applyDock() {
+        const frame = frames.get(ASSISTANT);
+        const dock = docked();
+        ensureHandle().hidden = !dock;
+        if (frame) {
+            frame.classList.toggle('app-frames__frame--dock', !!dock);
+            if (frame !== visible) frame.hidden = !dock;
+        }
+        host.classList.toggle('app-frames--docked', !!dock);
+        host.style.setProperty('--assistant-width', `${readWidth()}px`);
+        syncNav(new URL(location.href).pathname);
+    }
+
+    function assistantFrame() {
+        let frame = frames.get(ASSISTANT);
+        if (!frame) {
+            frame = makeFrame(ASSISTANT);
+            frame.hidden = true;
+            frames.set(ASSISTANT, frame);
+        }
+        return frame;
+    }
+
+    function pin() {
+        if (narrow.matches) return;
+        pinned = true;
+        savePinned();
+        const frame = assistantFrame();
+        if (visible === frame) {
+            // Pinned from its own section: put the page it was opened over back beside it.
+            if (lastPage && lastPage !== frame) {
+                show(lastPage, { focus: false });
+                const href = frameHref(lastPage);
+                if (href !== location.href) history.pushState({}, '', href);
+            } else {
+                navigate('/', { push: true, focus: false });
+            }
+        }
+        applyDock();
+    }
+
+    function unpin() {
+        pinned = false;
+        savePinned();
+        applyDock();
+    }
+
+    /** What the operator is looking at, for the assistant. The visible page, or -- while the
+     *  assistant is open as a section -- the page it was opened from. */
+    function pageContext() {
+        const assistant = frames.get(ASSISTANT);
+        const frame = visible && visible !== assistant ? visible : lastPage;
+        if (!frame || frame === assistant) return { path: ASSISTANT };
+        const url = new URL(frameHref(frame), location.href);
+        const context = { path: url.pathname, query: url.search.slice(1), hash: url.hash.slice(1) };
+        const doc = frameDoc(frame);
+        if (doc && doc.title) context.title = doc.title;
+        const machine = url.pathname.match(/^\/(?:machine|reports\/machines)\/([^/]+)/);
+        if (machine) context.machine = decodeURIComponent(machine[1]);
+        else if (url.searchParams.get('machine')) context.machine = url.searchParams.get('machine');
+        if (url.searchParams.get('tab')) context.tab = url.searchParams.get('tab');
+        return Object.assign(context, frame.__fleetContext || {});
+    }
+
+    /** Called by a page (through window.parent) to add what its URL cannot say -- a
+     *  selection, an open folder. Cleared when that frame navigates. */
+    function setContext(win, extra) {
+        for (const frame of frames.values()) {
+            if (frame.contentWindow === win) frame.__fleetContext = Object.assign({}, extra || {});
+        }
+        notifyAssistant();
+    }
+
+    function notifyAssistant() {
+        const frame = frames.get(ASSISTANT);
+        if (!frame) return;
+        try {
+            frame.contentWindow.dispatchEvent(new CustomEvent('fleet:pagechange'));
+        } catch (e) { /* still loading */ }
+    }
+
     // ---------------- Navigation ----------------
     function navigate(href, { push = false, focus = true } = {}) {
         const url = new URL(href, location.href);
         const key = keyFor(url.pathname);
+        // Already docked: the sidebar link and every [[page:assistant]] link mean "go to the
+        // assistant", and it is right there. Moving it into the page area would unpin it.
+        if (key === ASSISTANT && docked()) {
+            try { frames.get(ASSISTANT).contentWindow.focus(); } catch (e) { /* ok */ }
+            return;
+        }
         let frame = frames.get(key);
         let landed = url.href;
 
@@ -205,6 +379,7 @@
         show(frame, { focus });
         if (push && landed !== location.href) history.pushState({}, '', landed);
         else if (!push) history.replaceState(history.state, '', landed);
+        applyDock();
         syncNav(new URL(landed, location.href).pathname);
     }
 
@@ -267,11 +442,22 @@
     // ---------------- Boot ----------------
     // The first frame is rendered by base.html rather than created here, so the page inside
     // it starts loading with the document instead of a script later. Adopt it as it stands.
+    window.FleetShell = {
+        pageContext, setContext, pin, unpin,
+        isPinned: () => !!docked(),
+        canPin: () => !narrow.matches,
+    };
+
     const first = host.querySelector('.app-frames__frame');
     if (first) {
         adopt(first);
         frames.set(keyFor(location.pathname), first);
         show(first, { focus: false });
     }
+    // Opening /assistant itself shows it as the section it asked for; the pin comes back the
+    // next time a page is shown beside it.
+    if (pinned && keyFor(location.pathname) !== ASSISTANT) assistantFrame();
+    narrow.addEventListener('change', applyDock);
+    applyDock();
     syncNav(location.pathname);
 })();
