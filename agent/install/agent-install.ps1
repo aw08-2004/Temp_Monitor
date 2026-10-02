@@ -266,7 +266,8 @@ function Test-ManifestSignature([byte[]]$Message, [string]$SignatureHex) {
 }
 
 # Fetch, verify and download into $Destination, or throw with the reason. $Destination exists
-# afterwards only if every check passed.
+# afterwards only if every check passed. Returns the signed version and sha256: the caller
+# re-hashes the installed copy against the latter (see "Installing agent binary").
 function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl) {
     if (-not $FromManifestUrl) { $FromManifestUrl = $StableManifestUrl }
     # The progress bar on 5.1 costs more than the transfer on an agent-sized download.
@@ -309,7 +310,7 @@ function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl) {
         }
         Write-Host "  binary  sha256 matches the signed manifest"
         Move-Item -Path $bPath -Destination $Destination -Force
-        return $m.version
+        return [pscustomobject]@{ Version = "$($m.version)"; Sha256 = $want }
     } finally {
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -411,6 +412,7 @@ if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
 # to stop the service first and download straight over the exe.)
 Step "Fetching agent binary"
 $staged = $null
+$signedSha256 = $null
 if ($AgentExe) {
     if (-not (Test-Path $AgentExe)) { Die "AgentExe not found: $AgentExe" }
     $source = $AgentExe
@@ -424,8 +426,9 @@ if ($AgentExe) {
         Warn "-AgentUrl is NOT checked against the fleet's signing key. Omit it to install the signed release."
     } else {
         try {
-            $version = Get-VerifiedAgent -Destination $staged -FromManifestUrl $ManifestUrl
-            Ok "Agent $version verified against the fleet key"
+            $verified = Get-VerifiedAgent -Destination $staged -FromManifestUrl $ManifestUrl
+            $signedSha256 = $verified.Sha256
+            Ok "Agent $($verified.Version) verified against the fleet key"
         } catch {
             Remove-Item $staged -Force -ErrorAction SilentlyContinue
             Die $_.Exception.Message
@@ -459,6 +462,21 @@ if ($InstallDir -ne $LegacyInstall -and (Test-Path $LegacyInstall)) {
 }
 
 Copy-Item -Path $source -Destination $ExePath -Force
+# **Hashed again where it will run.** The staged file sat in this user's %TEMP%, which an
+# UNELEVATED process of the same user can write to, between the check in Get-VerifiedAgent and
+# this copy (CWE-367, review on PR #96). $ExePath is under Program Files, which it cannot, so
+# this is the check that covers the bytes the service will actually start. A mismatch leaves
+# the machine without an agent rather than with a substituted one -- the right way round.
+# Rejected: staging inside $InstallDir instead of %TEMP%, which would close the window too but
+# means creating it, and migrating a legacy install into it, before anything is verified.
+if ($signedSha256) {
+    $installed = (Get-FileHash -Path $ExePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installed -ne $signedSha256) {
+        Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
+        if ($staged) { Remove-Item $staged -Force -ErrorAction SilentlyContinue }
+        Die "the installed binary changed after it was verified (sha256 $installed, signed $signedSha256). Removed it; refusing to install."
+    }
+}
 if ($staged) { Remove-Item $staged -Force -ErrorAction SilentlyContinue }
 Unblock-File -Path $ExePath -ErrorAction SilentlyContinue
 Ok "binary  -> $ExePath"

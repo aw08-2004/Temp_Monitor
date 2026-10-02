@@ -226,7 +226,8 @@ def battery(shell, work):
     def install(manifest_url, tag):
         dest = os.path.join(work, f"out-{tag}.exe")
         r = run_ps(shell, work,
-                   f"try {{ 'version=' + (Get-VerifiedAgent '{dest}' '{manifest_url}') }}\n"
+                   f"try {{ $v = Get-VerifiedAgent '{dest}' '{manifest_url}'; "
+                   "'version=' + $v.Version; 'sha256=' + $v.Sha256 }\n"
                    "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 3 }\n",
                    key=pub_hex)
         return r, dest
@@ -237,6 +238,8 @@ def battery(shell, work):
               and os.path.exists(dest) and open(dest, "rb").read() == binary)
         check("...and says it verified, and which version", "manifest verified" in r.stdout
               and "sha256 matches" in r.stdout and "version=3.99.0" in r.stdout)
+        check("...and hands back the SIGNED sha256 for the re-check after the copy",
+              f"sha256={hashlib.sha256(binary).hexdigest()}" in r.stdout)
 
         r, dest = install(publish("wrong-sha.json", "0" * 64), "wrong")
         check("a binary that differs from the signed sha256 is refused, and nothing is written",
@@ -286,6 +289,10 @@ def main():
           "-AgentUrl is NOT checked against the fleet's signing key" in script)
     check("-AgentExe is labelled as not checked",
           "local, not checked against the fleet key" in script)
+    copy = script.find("Copy-Item -Path $source -Destination $ExePath")
+    check("the installed copy is re-hashed against the signed sha256 (TOCTOU on %TEMP%)",
+          copy != -1 and "Get-FileHash -Path $ExePath" in script[copy:copy + 1500]
+          and "$installed -ne $signedSha256" in script[copy:copy + 1500])
     check("the binary is fetched before the running service is stopped",
           script.index("Get-VerifiedAgent -Destination") < script.index(
               "# Stop an existing service before overwriting its exe."))
