@@ -61,6 +61,7 @@ import rules
 import watchdogs
 import scripts
 import ai
+import assistant
 import correlate
 import notify
 import processes
@@ -102,6 +103,7 @@ from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from ai_web import create_ai_blueprint
+from assistant_web import RouteDispatcher, create_assistant_blueprint
 from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
 from watchdogs_web import create_watchdogs_blueprint
@@ -147,7 +149,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.134.0"
+HUB_VERSION = "1.135.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2629,6 +2631,23 @@ app.register_blueprint(create_correlate_blueprint(
     api_key=lambda: os.environ.get("AI_API_KEY", ""),
 ))
 
+# The console assistant (roadmap #26). Same provider seam again. Its tools run as internal
+# requests through THIS app's own routes with the operator's session (RouteDispatcher), so
+# every gate below applies to the assistant exactly as it does to a click -- see
+# assistant_web.py's docstring. The dispatcher reads the url_map lazily, so registering it
+# before the blueprints below still sees their routes. Lambdas for the helpers defined further
+# down this file.
+app.register_blueprint(create_assistant_blueprint(
+    DB_PATH, login_required, access,
+    lambda: _ai_config(),
+    api_key=lambda: os.environ.get("AI_API_KEY", ""),
+    dispatcher=RouteDispatcher(app),
+    machine_exists=lambda machine: machine_detail(machine) is not None,
+    translate=lambda key: i18n.translate(key, current_language()),
+    language=lambda: current_language(),
+    setting=lambda key: settings.get(DB_PATH, key),
+))
+
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
 # capability -- see auth_web.py for why this one is not delegable via manage_settings.
 app.register_blueprint(create_auth_blueprint(
@@ -4051,6 +4070,15 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} unfinished AI draft(s).")
             except Exception as e:
                 print(f"[retention] AI-draft prune failed: {e}")
+            # Assistant conversations (roadmap #26). Somebody's working notes, kept for
+            # `ai.assistant_history_days` after they were last touched. Its own try, as above.
+            try:
+                dropped = assistant.prune_chats(
+                    DB_PATH, settings.get_int(DB_PATH, "ai.assistant_history_days"))
+                if dropped:
+                    print(f"[retention] Pruned {dropped} assistant conversation(s).")
+            except Exception as e:
+                print(f"[retention] Assistant prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 
@@ -4803,6 +4831,7 @@ rules.init_rules_db(DB_PATH)
 watchdogs.init_watchdogs_db(DB_PATH)
 device_groups.init_device_groups_db(DB_PATH)
 ai.init_ai_db(DB_PATH)
+assistant.init_assistant_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
 # calls because it also owns a thread -- the rules evaluator hands messages to it and must
 # never block on a mail server that has stopped answering.
@@ -6295,6 +6324,14 @@ def _hub_update_notice_visible():
         return False
 
 
+def _assistant_switched_on():
+    try:
+        return (ai.is_enabled(_ai_config())
+                and bool(settings.get(DB_PATH, "ai.assistant_enabled")))
+    except Exception:
+        return False
+
+
 @app.context_processor
 def inject_nav_context():
     """Feed the sidebar on every page render: the Alerts badge, and which nav links the
@@ -6325,7 +6362,11 @@ def inject_nav_context():
                # CSRF token for the meta tag; _get_or_create_csrf_token is safe to
                # call on every render -- it only creates a token when the session
                # does not already carry one.
-               "csrf_token": _get_or_create_csrf_token()}
+               "csrf_token": _get_or_create_csrf_token(),
+               # Whether the sidebar offers the assistant (roadmap #26). Presentation only,
+               # like the capability set below: /assistant answers either way, and says the
+               # feature is off rather than 404ing.
+               "assistant_enabled": _assistant_switched_on()}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
         return context

@@ -385,6 +385,30 @@ A machine with less than an hour of history has no baseline yet, and the hub say
 rather than guessing. Baselines never raise alerts of their own, and an event is evidence
 inside a bundle -- it is never itself an alert.
 
+### The assistant
+
+**Assistant** in the sidebar opens a conversation with the AI provider configured in
+Settings → AI (both *Use AI assistance* and *Show the assistant* must be on; the second is off
+until an admin turns it on, including on a hub that already uses AI). **Pin to the side**
+docks it to the right of every page until you unpin it; drag its left edge to resize. It knows
+which page and which machine you are looking at, so "why is this PC slow?" on a machine page
+means that machine.
+
+It can read anything you can see and links every machine it names -- click a link and the page
+opens beside the panel. It can also act, with exactly your permissions:
+
+- Reading, dismissing an alert, waking a PC or drafting a rule (created switched off) happen at
+  once.
+- Changes that need confirmation -- restarting a machine, running scripts or deployments,
+  wiping, changing settings or permission groups -- appear as a card showing the exact request. Nothing runs until you press
+  **Confirm**; a wipe also asks you to type the machine's name. Cards expire after 10 minutes.
+- Recovery keys, API keys, device tokens and the interactive terminal are never available to it.
+
+Every confirmed action is in the audit log as `assistant.action_confirmed`, next to the row the
+action itself writes. **The assistant sends real machine names** and the data it reads to the
+provider; switch *Show the assistant* off to keep AI to the alert recommendations only.
+Conversations are private to you and deleted after *Keep assistant conversations for* (30 days).
+
 ### Audit log
 
 Every command issued, machine merged or deleted, package deployed, account or

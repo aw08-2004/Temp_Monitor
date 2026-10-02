@@ -195,8 +195,12 @@ KIND_REFINE_RULE = "refine_rule"
 KIND_MACHINE_ASK = "machine_ask"
 KIND_FLEET_QUERY = "fleet_query"
 KIND_SUMMARY = "summary"
+# One turn of the console assistant (roadmap #26). One row per provider CALL, not per turn: a
+# turn that takes four tool steps is four requests to the provider, and four is what the bill
+# says.
+KIND_ASSISTANT = "assistant"
 REQUEST_KINDS = (KIND_DRAFT_RULE, KIND_REFINE_RULE, KIND_MACHINE_ASK, KIND_FLEET_QUERY,
-                 KIND_SUMMARY)
+                 KIND_SUMMARY, KIND_ASSISTANT)
 
 OUTCOME_OK = "ok"
 OUTCOME_REFUSED = "refused"          # the model answered and the validators rejected it
@@ -478,44 +482,18 @@ def check_key_transport(url):
 # ---------------------------------------------------------------------------------------
 # The completion call
 # ---------------------------------------------------------------------------------------
-def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
-    """One completion. Returns (error, text), and NEVER raises.
+def _post_chat(resolved, headers, body, timeout, *, refused_status=None):
+    """POST one chat-completions body and return (error, parsed JSON). NEVER raises.
 
-    Never raising is not a defensive habit -- it is the contract every caller here is written
-    against. A provider is a third party on a network: it times out, it rate-limits, it returns
-    HTML from a proxy, it returns 200 with a body that has no choices in it. Each of those has
-    to become an error string an operator can read, because the alternative is a stack trace in
-    the hub log and a spinner that never stops in the console.
+    Lifted out of complete() unchanged when the assistant (roadmap #26) became its second
+    caller, so the size cap, the redirect refusal and the fixed error sentences below exist
+    exactly once. Two copies of a transport is how one of them ends up following a 302.
 
-    The response is read INCREMENTALLY and abandoned once it passes MAX_RESPONSE_BYTES. That
-    is the difference between a cap and a claim: `response.json()` buffers and parses the whole
-    body first, so truncating its result afterwards bounds what we keep and not what we read.
-    A provider answering with a gigabyte is either broken or hostile, and `base_url` is allowed
-    to point at something on the LAN by default -- so "the admin configured it" is a reason to
-    trust the intent, not the bytes.
+    `refused_status`, when given, is the sentence for an HTTP 400/422: the assistant sends a
+    `tools` list, and a model server that does not do tool calls answers that with a 400 --
+    "HTTP 400" tells an operator nothing, "this model does not support tool calls" tells them
+    which setting to change.
     """
-    error, resolved = provider_config(config)
-    if error:
-        return error, None
-
-    headers = {"Content-Type": "application/json", "User-Agent": "FleetHub-AI/1.0"}
-    # Straight from the parameter, not out of `resolved` -- see provider_config's docstring.
-    # This function and refresh_models are the only two places the key is read at all.
-    key = str(api_key or "")
-    if key:
-        error = check_key_transport(resolved["base_url"])
-        if error:
-            return error, None
-        headers["Authorization"] = f"Bearer {key}"
-    body = {
-        "model": resolved["model"],
-        "messages": list(messages or []),
-        "max_tokens": int(max_tokens or resolved["max_tokens"] or 1024),
-        # Zero, because this is a translation task with one right answer shape. A rule builder
-        # that returns a different expression for the same sentence twice is one nobody can
-        # learn to trust.
-        "temperature": 0,
-    }
     try:
         # stream=True so the body arrives in chunks we can stop taking. Closed either way by
         # the context manager, which a streamed response needs and a buffered one does not.
@@ -527,6 +505,8 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
                 # No redirects, for the reason notify.py gives: a 302 walks straight past
                 # every check check_provider_url just made.
                 allow_redirects=False) as response:
+            if response.status_code in (400, 422) and refused_status:
+                return refused_status, None
             if response.status_code >= 400:
                 return f"the AI provider returned HTTP {response.status_code}", None
             raw = bytearray()
@@ -550,14 +530,143 @@ def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
         return "the AI provider answered in a way this hub could not use", None
 
     try:
-        payload = json.loads(bytes(raw).decode("utf-8", "replace"))
+        return None, json.loads(bytes(raw).decode("utf-8", "replace"))
+    except ValueError:
+        return "the AI provider returned a response this hub could not read", None
+
+
+def _chat_headers(resolved, api_key):
+    """The request headers, or an error if the key may not travel to this address.
+
+    Straight from the parameter, not out of `resolved` -- see provider_config's docstring.
+    The chat calls and refresh_models are the only places the key is read at all.
+    """
+    headers = {"Content-Type": "application/json", "User-Agent": "FleetHub-AI/1.0"}
+    key = str(api_key or "")
+    if key:
+        error = check_key_transport(resolved["base_url"])
+        if error:
+            return error, None
+        headers["Authorization"] = f"Bearer {key}"
+    return None, headers
+
+
+def complete(config, messages, *, api_key="", max_tokens=None, timeout=None):
+    """One completion. Returns (error, text), and NEVER raises.
+
+    Never raising is not a defensive habit -- it is the contract every caller here is written
+    against. A provider is a third party on a network: it times out, it rate-limits, it returns
+    HTML from a proxy, it returns 200 with a body that has no choices in it. Each of those has
+    to become an error string an operator can read, because the alternative is a stack trace in
+    the hub log and a spinner that never stops in the console.
+
+    The response is read INCREMENTALLY and abandoned once it passes MAX_RESPONSE_BYTES. That
+    is the difference between a cap and a claim: `response.json()` buffers and parses the whole
+    body first, so truncating its result afterwards bounds what we keep and not what we read.
+    A provider answering with a gigabyte is either broken or hostile, and `base_url` is allowed
+    to point at something on the LAN by default -- so "the admin configured it" is a reason to
+    trust the intent, not the bytes.
+    """
+    error, resolved = provider_config(config)
+    if error:
+        return error, None
+
+    error, headers = _chat_headers(resolved, api_key)
+    if error:
+        return error, None
+    body = {
+        "model": resolved["model"],
+        "messages": list(messages or []),
+        "max_tokens": int(max_tokens or resolved["max_tokens"] or 1024),
+        # Zero, because this is a translation task with one right answer shape. A rule builder
+        # that returns a different expression for the same sentence twice is one nobody can
+        # learn to trust.
+        "temperature": 0,
+    }
+    error, payload = _post_chat(resolved, headers, body, timeout)
+    if error:
+        return error, None
+    try:
         text = payload["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError):
         return "the AI provider returned a response this hub could not read", None
     text = str(text or "")
     if not text.strip():
         return "the AI provider returned an empty response", None
     return None, text[:MAX_RESPONSE_CHARS]
+
+
+# What the assistant's tool loop gets back from one step. Bounded for the same reason the
+# answer text is: a model that emits two hundred tool calls in one message is not asking for
+# two hundred things, it is looping, and every one of those calls is a request to this hub.
+MAX_TOOL_CALLS_PER_STEP = 8
+MAX_TOOL_ARGUMENT_CHARS = 16000
+
+TOOLS_REFUSED = ("the AI provider refused the tool list -- this model or server does not "
+                 "support tool calls, which the assistant needs; pick a model that does")
+
+
+def complete_chat(config, messages, tools, *, api_key="", max_tokens=None, timeout=None):
+    """One step of a tool-calling conversation. Returns (error, message), and NEVER raises.
+
+    `message` is {"content": str, "tool_calls": [{"id", "name", "arguments"}]}, where
+    `arguments` is the provider's JSON STRING, unparsed -- parsing it is the tool layer's
+    job, because a malformed argument string is an answer to send back to the model ("your
+    arguments were not JSON"), not a transport failure to show the operator.
+
+    Same transport as complete() and the same contract: every failure is a sentence. The
+    temperature is not zero here, and that is deliberate rather than an oversight -- a rule
+    drafter has one right answer shape, a conversation does not, and at zero some local
+    models repeat the same tool call until the step limit stops them.
+    """
+    error, resolved = provider_config(config)
+    if error:
+        return error, None
+    error, headers = _chat_headers(resolved, api_key)
+    if error:
+        return error, None
+    body = {
+        "model": resolved["model"],
+        "messages": list(messages or []),
+        "max_tokens": int(max_tokens or resolved["max_tokens"] or 1024),
+        "temperature": 0.2,
+    }
+    if tools:
+        body["tools"] = list(tools)
+        body["tool_choice"] = "auto"
+    error, payload = _post_chat(resolved, headers, body, timeout, refused_status=TOOLS_REFUSED)
+    if error:
+        return error, None
+    try:
+        message = payload["choices"][0]["message"] or {}
+    except (KeyError, IndexError, TypeError):
+        return "the AI provider returned a response this hub could not read", None
+    if not isinstance(message, dict):
+        return "the AI provider returned a response this hub could not read", None
+
+    calls = []
+    for raw in (message.get("tool_calls") or [])[:MAX_TOOL_CALLS_PER_STEP]:
+        if not isinstance(raw, dict):
+            continue
+        function = raw.get("function") or {}
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str):
+            # Some servers hand back an object rather than the string the API specifies.
+            # Normalised here so the tool layer has one shape to parse.
+            try:
+                arguments = json.dumps(arguments if arguments is not None else {})
+            except (TypeError, ValueError):
+                arguments = "{}"
+        calls.append({"id": str(raw.get("id") or f"call_{len(calls)}")[:100],
+                      "name": name[:100],
+                      "arguments": arguments[:MAX_TOOL_ARGUMENT_CHARS]})
+    text = str(message.get("content") or "")[:MAX_RESPONSE_CHARS]
+    if not calls and not text.strip():
+        return "the AI provider returned an empty response", None
+    return None, {"content": text, "tool_calls": calls}
 
 
 # ---------------------------------------------------------------------------------------

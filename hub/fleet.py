@@ -747,6 +747,15 @@ ACTION_LEVELS = {
     "backup_hub_db_failed": LEVEL_INFO,
     "backup_restore": LEVEL_INFO,
     "backup_restore_failed": LEVEL_INFO,
+    # The console assistant (roadmap #26). A CONFIRMED action is security-level whatever it
+    # was: the row exists to answer "did a person press the button that ran this", which is
+    # the question an auditor has about anything a model proposed. The route the action ran
+    # writes its own row too (issue_command, wipe_device ...), so this one does not have to
+    # carry the detail. A low-risk tool the assistant ran by itself is notice, the level of
+    # the operator change it stands in for; a declined action is notice because nothing ran.
+    "assistant.action_confirmed": LEVEL_SECURITY,
+    "assistant.action_rejected": LEVEL_NOTICE,
+    "assistant.tool": LEVEL_NOTICE,
 }
 
 

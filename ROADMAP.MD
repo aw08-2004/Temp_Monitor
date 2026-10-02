@@ -153,6 +153,10 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
   Generative AI apps.
 - **#22 processes:** open the Processes card on a Linux box with systemd; the list should
   appear within about five seconds and the Services column should name units.
+- **#26 assistant, against a real provider:** only ever driven by a scripted stand-in. Point
+  Settings → AI at the provider in use and confirm it accepts the `tools` list (a model without
+  tool calls answers with a sentence saying so), that a "restart PC-x" request produces a card
+  and no command until Confirm, and that the pinned panel lays out on a phone and at 900-1100px.
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
 
@@ -4189,6 +4193,10 @@ Orphans a loop creates after the deploy are pruned whether or not a report touch
 
 ## ✅ 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0; **machine panel, fleet query and summary hub 1.120.0**
 
+> **Hub 1.135.0:** the embedded drafter, fleet-query, machine-question and summary cards moved
+> into the console assistant (#26). The routes and validators below are unchanged -- the
+> assistant's tools call them.
+
 A natural-language front end onto `rules.py`, not a second engine. The model is asked for the
 **one-line expression string the existing parser already accepts**, so `parse_expression` →
 `validate_condition` → `format_expression` hands back syntax checking, variable checking and a
@@ -4665,6 +4673,77 @@ unencrypted is this feature's).
 - Whether the Linux and Android agents fill the same sections or declare their own. Their
   capability rows already say what they can answer, so the sheet can be driven off
   `machine_capabilities` rather than off a platform check.
+
+---
+
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+
+The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
+one conversation that reaches all of them, and the rest of the hub, through tools. It is a
+sidebar link like any other (`/assistant`); its **Pin** button docks the same frame to the right
+of whatever page is showing, so it stays open across navigation. It knows the page it is pinned
+beside (the shell's `FleetShell.pageContext()`, sent with every message), links every machine it
+names, and can do what the signed-in operator can.
+
+### Built · hub 1.135.0
+- **Shell.** `/assistant` is the second entry in `shell.js`'s `PERSISTENT`, and the only frame
+  that may be on screen beside another: `show()` spares it while pinned, a drag handle resizes it
+  (`tempmonitor:assistant:width`), and the pin survives a reload (`tempmonitor:assistant`).
+  Below 900px it is a section only.
+- **Tools run as the operator.** `RouteDispatcher` replays every tool call through the app's
+  own test client with a copy of the operator's session and CSRF token, so `login_required`,
+  both `access` gates and every inline scope check apply unchanged. `access.require` /
+  `require_machine` now LABEL the view with the capability (`_fleethub_caps`) -- a label used
+  only to decide which routes to name to the model, never as the gate.
+- **Tiers** (`assistant_tools.classify`, fail closed): `read` runs at once; `write` (dismiss an
+  alert, wake, draft a rule -- created disabled) runs at once and is audited as
+  `assistant.tool`; everything else that changes something is `confirm` -- stored as a pending
+  action, rendered as a card from the stored row, run once by its owner within 10 minutes and
+  audited `assistant.action_confirmed` (security). A wipe also needs the machine's name typed.
+  `denied` routes -- key reveals, `/api/ai/key`, tokens, PTY input, agent and peer routes, the
+  assistant itself -- are never offered and never reachable.
+- **~24 curated tools** for the common work plus `list_endpoints` / `call_endpoint` over the
+  same tier table, so the rest of the API is reachable without a hand-written schema per route.
+- **Links are the hub's, never the model's.** The model writes `[[machine:PC-12|tab=terminal]]`,
+  `[[remote:..]]`, `[[report:..]]`, `[[page:alerts]]`; `render_links` resolves them for the
+  VIEWER's scope when the answer is shown, and reduces any markdown link the model wrote itself
+  to its label. `assistant.js` builds answers from text nodes and only links a relative `/path`.
+- **The four #24 surfaces moved here.** The drafter and fleet-query cards (Rules), the machine
+  question card (Machine) and the summary fold (Alerts) are gone; their `/api/ai/*` routes stay,
+  because the assistant's tools call them and their validators and tests are unchanged.
+- Settings: `ai.assistant_enabled` (**off by default**, so an upgrade of a hub that already uses
+  AI for the Alert Brain does not start sending machine names by itself), `ai.assistant_max_steps`
+  (8), `ai.assistant_history_days` (30). `ai.complete_chat` is the tool-calling twin of `ai.complete`, sharing its transport.
+
+### Decisions
+- **Reversing #24's "no conversation thread".** Still true that the readings move and a
+  transcript does not, so the transcript is not trusted: old tool results go back trimmed to
+  600 characters with a note to call the tool again, and the system prompt says a figure not
+  read this turn is not known.
+- **Real machine names go to the provider** (owner's decision, 2026-10-02). Linking machines is
+  the feature, and a pseudonym layer would have to round-trip every argument and link. The panel
+  and the `ai.assistant_enabled` help text say so; `ai.send_machine_names` now governs the Alert
+  Brain only.
+- **Act directly, confirm only what changes a machine or access** (owner's decision).
+- **Tiers are decided on the DECODED path**, the one the internal request actually routes. Review
+  found `PC-01%2Fdownload` classifying as a machine read and running as the denied download.
+
+### Rejected
+- **SSE or WebSocket streaming.** Every other transport here is polling; a turn is a run polled
+  with `after_seq`, the shape the command-output poll already has.
+- **A `use_assistant` capability** -- a second authorization model, which #8 warns against.
+- **Calling the model halves directly.** The gates live in the web halves, several of them
+  inline (the body scope check on `POST /api/fleet/commands`, watchdogs' two capabilities);
+  a tool layer would have to copy each one and the copy it forgot would be the hole.
+- **One hand-written tool per route** (~250 routes, a second API description that drifts).
+- **A deny-list as the only gate** -- silent about everything nobody thought of.
+- **A docked second copy of the chat in the shell document** -- two implementations drift, and
+  the shell deliberately renders no page content.
+
+### Open
+- Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the
+  Files tab's folder). The hook exists; no page calls it yet.
+- Whether `write`-tier routes should become an admin-editable list.
 
 ---
 

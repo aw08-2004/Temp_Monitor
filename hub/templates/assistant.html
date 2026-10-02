@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.assistant') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css') }}">
+{% endblock %}
+{% block content_class %} assistant-page{% endblock %}
+{% block content %}
+{#
+   The console assistant (roadmap #26). Structure only -- assistant.js builds the conversation
+   from /api/assistant/*.
+
+   ONE page for both places the panel appears. Opened from the sidebar it fills the page area
+   like any section; pinned, shell.js docks this same frame to the right of whatever page is
+   showing. Nothing here knows which, apart from the Pin button's label, so there is one
+   implementation of the chat and not two.
+
+   Every answer is rendered by assistant.js from text nodes. The model's text is never
+   innerHTML: the only links in it are ones the hub built from link tokens after checking the
+   machine is in the viewer's scope (assistant.render_links), and the renderer only turns a
+   relative /path into an anchor.
+#}
+<div class="assistant" id="assistant">
+    <header class="assistant__header">
+        <div class="assistant__title">
+            <h1 class="assistant__heading">{{ t('assistant.heading') }}</h1>
+            <span class="assistant__context" id="assistant-context" aria-live="polite"></span>
+        </div>
+        <div class="assistant__tools">
+            <label class="sr-only" for="assistant-history">{{ t('assistant.history') }}</label>
+            <select class="input assistant__history" id="assistant-history"></select>
+            <button class="btn btn--ghost" type="button" id="assistant-new"
+                    title="{{ t('assistant.new_chat') }}">{{ t('assistant.new_chat') }}</button>
+            <button class="btn btn--ghost" type="button" id="assistant-delete"
+                    title="{{ t('assistant.delete_chat') }}">{{ t('assistant.delete_chat') }}</button>
+            <button class="btn btn--ghost" type="button" id="assistant-pin" hidden
+                    aria-pressed="false">{{ t('assistant.pin') }}</button>
+        </div>
+    </header>
+
+    <div class="assistant__notice" id="assistant-off" hidden></div>
+
+    <div class="assistant__log" id="assistant-log" role="log" aria-live="polite">
+        <div class="assistant__empty" id="assistant-empty">
+            <p>{{ t('assistant.intro') }}</p>
+            <ul class="assistant__examples" id="assistant-examples">
+                <li><button type="button" class="assistant__example">{{ t('assistant.example_page') }}</button></li>
+                <li><button type="button" class="assistant__example">{{ t('assistant.example_hot') }}</button></li>
+                <li><button type="button" class="assistant__example">{{ t('assistant.example_alerts') }}</button></li>
+                <li><button type="button" class="assistant__example">{{ t('assistant.example_rule') }}</button></li>
+            </ul>
+            <p class="assistant__privacy">{{ t('assistant.privacy') }}</p>
+        </div>
+    </div>
+
+    <form class="assistant__composer" id="assistant-form">
+        <label class="sr-only" for="assistant-input">{{ t('assistant.placeholder') }}</label>
+        <textarea class="input assistant__input" id="assistant-input" rows="2"
+                  placeholder="{{ t('assistant.placeholder') }}" maxlength="4000"></textarea>
+        <div class="assistant__send">
+            <button class="btn btn--primary" type="submit" id="assistant-send">{{ t('assistant.send') }}</button>
+            <button class="btn btn--ghost" type="button" id="assistant-stop" hidden>{{ t('assistant.stop') }}</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/assistant.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,258 @@
+/* The console assistant (roadmap #26). One layout for both of its places: the page area, and
+   the docked column shell.js pins it into. It is written for the narrow one -- a 320px dock is
+   the hard case, and a chat that works there is merely roomy at full width -- so nothing here
+   assumes more than one column. BEM, like the sidebar, with colours from tokens.css only. */
+
+.app-shell__content.assistant-page {
+    /* The log scrolls, not the page: the composer has to stay on screen. */
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-4);
+    max-width: none;
+}
+
+.assistant {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.assistant__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+
+.assistant__title {
+    min-width: 0;
+}
+
+.assistant__heading {
+    font-size: var(--text-lg);
+    margin: 0;
+}
+
+.assistant__context {
+    display: block;
+    color: var(--muted);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.assistant__tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    align-items: center;
+}
+
+.assistant__history {
+    max-width: 180px;
+}
+
+.assistant__notice {
+    border: 1px solid var(--card-border);
+    background: var(--warning-bg);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    font-size: var(--text-sm);
+}
+
+.assistant__log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding-right: var(--space-1);
+}
+
+.assistant__empty {
+    color: var(--muted);
+    font-size: var(--text-sm);
+}
+
+.assistant__examples {
+    list-style: none;
+    padding: 0;
+    margin: var(--space-3) 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.assistant__example {
+    width: 100%;
+    text-align: left;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+    font: inherit;
+}
+
+.assistant__example:hover {
+    border-color: var(--accent);
+}
+
+.assistant__privacy {
+    font-size: var(--text-xs);
+}
+
+.assistant__msg {
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-base);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+}
+
+.assistant__msg--user {
+    align-self: flex-end;
+    background: var(--accent-soft);
+    white-space: pre-wrap;
+    max-width: 90%;
+}
+
+.assistant__msg--assistant {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+}
+
+.assistant__msg--note,
+.assistant__msg--error {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    background: transparent;
+    padding: 0 var(--space-1);
+}
+
+.assistant__msg--error {
+    color: var(--danger);
+}
+
+.assistant__msg p {
+    margin: 0 0 var(--space-2);
+}
+
+.assistant__msg p:last-child,
+.assistant__msg ul:last-child {
+    margin-bottom: 0;
+}
+
+.assistant__msg ul,
+.assistant__msg ol {
+    margin: 0 0 var(--space-2);
+    padding-left: var(--space-5, 20px);
+}
+
+.assistant__msg code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.92em;
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 0 3px;
+}
+
+.assistant__msg pre {
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+    overflow-x: auto;
+    white-space: pre;
+    margin: 0 0 var(--space-2);
+}
+
+.assistant__msg a {
+    color: var(--accent);
+}
+
+.assistant__tools-used {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    margin-top: var(--space-1);
+}
+
+.assistant__thinking {
+    font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+/* A queued action. Built from the hub's stored row, never from the model's prose, so what it
+   says is what the Confirm button runs. */
+.assistant__action {
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    background: var(--card);
+    font-size: var(--text-sm);
+}
+
+.assistant__action--done {
+    border-color: var(--success);
+}
+
+.assistant__action--failed,
+.assistant__action--rejected,
+.assistant__action--expired {
+    border-color: var(--card-border);
+    opacity: 0.8;
+}
+
+.assistant__action-title {
+    font-weight: 600;
+    margin-bottom: var(--space-1);
+}
+
+.assistant__action-detail {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: var(--text-xs);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+    margin: var(--space-2) 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.assistant__action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+.assistant__composer {
+    display: flex;
+    gap: var(--space-2);
+    align-items: flex-end;
+}
+
+.assistant__input {
+    flex: 1;
+    resize: vertical;
+    min-height: 44px;
+    max-height: 40vh;
+}
+
+.assistant__send {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}

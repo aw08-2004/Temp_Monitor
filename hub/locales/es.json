@@ -37,7 +37,8 @@
     },
     "events": "Eventos",
     "watchdogs": "Vigilantes",
-    "reports": "Informes"
+    "reports": "Informes",
+    "assistant": "Asistente"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -1178,11 +1179,23 @@
         },
         "send_machine_names": {
           "label": "Enviar nombres de equipos",
-          "help": "Desactivado. Una pregunta sobre un PC llevaría de otro modo su nombre, la persona conectada y el número de serie al proveedor. El redactor de reglas no envía datos de equipos en ningún caso."
+          "help": "Desactivado. Se aplica a las recomendaciones del Alert Brain: una pregunta sobre un PC enviaría su nombre, el usuario conectado y su número de serie al proveedor. El asistente siempre envía los nombres de los equipos; desactívelo abajo para evitarlo."
         },
         "draft_retention_days": {
           "label": "Conservar borradores sin terminar",
           "help": "Una regla redactada que nadie ha confirmado se elimina después de este plazo. Las reglas confirmadas no se ven afectadas."
+        },
+        "assistant_enabled": {
+          "label": "Mostrar el asistente",
+          "help": "El panel del asistente en la barra lateral. Envía los nombres reales de los equipos y los datos que lee al proveedor de arriba, diga lo que diga «Enviar nombres de equipos». Desactívelo para usar la IA solo en el Alert Brain."
+        },
+        "assistant_max_steps": {
+          "label": "Pasos del asistente por mensaje",
+          "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor."
+        },
+        "assistant_history_days": {
+          "label": "Conservar las conversaciones del asistente durante",
+          "help": "Se elimina una conversación que nadie ha tocado durante este tiempo."
         }
       },
       "provisioning": {
@@ -3278,6 +3291,47 @@
     "summary_run": "Generar el informe",
     "summary_running": "Trabajando...",
     "summary_no_prose": "Las cifras de abajo están completas. Falta la nota de presentación: {error}"
+  },
+  "assistant": {
+    "heading": "Asistente",
+    "history": "Conversaciones",
+    "new_chat": "Nueva",
+    "delete_chat": "Eliminar",
+    "delete_confirm": "¿Eliminar esta conversación? No se puede deshacer.",
+    "pin": "Fijar al lateral",
+    "unpin": "Desfijar",
+    "resize": "Cambiar el tamaño del panel del asistente",
+    "intro": "Pregunte por cualquier cosa que pueda ver en este hub: un equipo, la flota, alertas, reglas o dónde está algo. El asistente sabe en qué página está, enlaza los equipos que nombra y puede hacer lo que sus permisos permiten. Todo lo que cambie un equipo o los accesos espera su confirmación.",
+    "example_page": "¿Qué debería saber sobre la página en la que estoy?",
+    "example_hot": "¿Qué equipos están demasiado calientes ahora mismo?",
+    "example_alerts": "Resume las alertas abiertas de hoy y qué hacer primero",
+    "example_rule": "Avísame cuando un PC tenga menos de 10 GB libres",
+    "privacy": "Los nombres de los equipos y los datos que lee el asistente se envían al proveedor de IA configurado en Ajustes.",
+    "placeholder": "Pregunte al asistente...",
+    "send": "Enviar",
+    "stop": "Detener",
+    "context": "En: {page}",
+    "context_machine": "En el equipo: {machine}",
+    "off": "El asistente no está disponible: {reason}",
+    "thinking": "Pensando...",
+    "using_tool": "Leyendo {tool}...",
+    "tools_used": "Usado: {tools}",
+    "action_title": "Esperando su confirmación",
+    "action_title_machine": "Esperando su confirmación en {machine}",
+    "state": {
+      "pending": "Aún no se ha ejecutado. Confirme para ejecutarlo como usted.",
+      "running": "Ejecutando...",
+      "done": "Hecho.",
+      "failed": "El hub lo rechazó o la acción falló.",
+      "rejected": "Rechazado. No se ejecutó nada.",
+      "expired": "Caducado. No se ejecutó nada."
+    },
+    "confirm": "Confirmar",
+    "reject": "Rechazar",
+    "typed_placeholder": "Escriba {machine} para confirmar",
+    "untitled": "Conversación sin título",
+    "error": "El asistente no pudo responder. Inténtelo de nuevo.",
+    "stopped": "Detenido."
   },
   "scripts": {
     "body": "Script",

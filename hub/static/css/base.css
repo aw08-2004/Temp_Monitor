@@ -126,6 +126,47 @@ button, select, input {
     display: none;
 }
 
+/* The pinned assistant (roadmap #26): the same persistent frame, docked right of the page.
+   `order` rather than DOM position, because shell.js creates frames in the order they are
+   first visited and the dock must be last whatever that order was. Hidden below 900px by
+   shell.js itself (the panel is a section there), so no media query here. */
+.app-frames__frame--dock {
+    flex: 0 0 var(--assistant-width, 420px);
+    width: var(--assistant-width, 420px);
+    order: 2;
+    border-left: 1px solid var(--card-border);
+    background: var(--surface);
+}
+
+.app-frames__dock-handle {
+    order: 1;
+    flex: 0 0 6px;
+    margin-right: -6px;     /* sits over the dock's border, not beside it */
+    position: relative;
+    z-index: 1;
+    cursor: col-resize;
+}
+
+.app-frames__dock-handle:hover,
+.app-frames--resizing .app-frames__dock-handle {
+    background: var(--accent);
+    opacity: 0.4;
+}
+
+.app-frames__dock-handle[hidden] {
+    display: none;
+}
+
+/* Every frame lets go of the pointer while the dock is dragged -- see startResize(). */
+.app-frames--resizing .app-frames__frame {
+    pointer-events: none;
+}
+
+.app-frames--resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+
 /* The same page rendered inside that frame. The chrome is already on screen around it, so
    the grid has one column and no sidebar to reserve room for; everything else about the
    content column is unchanged, which is why pages need no framed-only styles of their own. */
