@@ -491,7 +491,7 @@
         if (!runId) return;
         fetch(`/api/assistant/runs/${runId}/cancel`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-        });
+        }).catch(() => toast(t('assistant.error'), { kind: 'error' }));
     });
 
     for (const button of document.querySelectorAll('.assistant__example')) {

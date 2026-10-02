@@ -102,7 +102,8 @@ def seed():
     permissions.create_group(DB, "Readers", capabilities=[permissions.VIEW],
                              machines=["PC-01", "PC-02"], members=["viewer@x.com"])
     settings.set_many(DB, {"ai.enabled": True, "ai.base_url": "http://127.0.0.1:9",
-                           "ai.model": "test-model", "ai.assistant_max_steps": 4}, "test")
+                           "ai.model": "test-model", "ai.assistant_max_steps": 4,
+                           "ai.assistant_enabled": True}, "test")
     settings.invalidate()
 
 
@@ -408,7 +409,97 @@ def test_off_switch():
     settings.invalidate()
 
 
+
+
+# ---------------------------------------------------------------- found in review (PR #97)
+def test_assistant_is_off_until_turned_on():
+    print("\n-- the assistant is off by default, even on a hub that already uses AI --")
+    check("ai.assistant_enabled defaults to False",
+          settings.BY_KEY["ai.assistant_enabled"].default is False)
+
+
+def test_an_encoded_slash_cannot_change_the_route():
+    """The tier was decided on the encoded path while the test client routed the decoded
+    one, so `PC-01%2Fdownload` classified as a machine read and ran as a backup download."""
+    print("\n-- an encoded slash is classified as the route it decodes to --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("call_endpoint", method="GET",
+                      path="/api/backups/machines/PC-01%2Fdownload"),
+                 call("get_machine", machine="PC-01/download"),
+                 say("no")]
+    converse(scoped, chat_id, "download the backup")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    check("the encoded download path is denied, not read",
+          results[0]["ok"] is False and results[0].get("tier") == "denied")
+    check("...and a slash smuggled into a curated tool's argument is refused too",
+          results[1]["ok"] is False and results[1].get("tier") in ("denied", None)
+          and "data" not in results[1])
+    rule, _args = app.app.blueprints["assistant"].dispatcher.resolve(
+        "GET", "/api/machines/PC-01%2F..%2F..%2Flogin")
+    check("an encoded dot segment resolves to nothing", rule is None)
+
+
+def test_find_page_works_from_the_worker():
+    print("\n-- find_page runs on the worker thread, where there is no request --")
+    viewer = client_for("viewer@x.com")
+    chat_id = new_chat(viewer)
+    SCRIPT[:] = [call("find_page", topic="alerts"), say("there")]
+    converse(viewer, chat_id, "where are alerts?")
+    result = json.loads(tool_messages(chat_id)[0]["content"])
+    check("find_page answered", result["ok"] is True)
+    check("...with the translated label",
+          any(p["key"] == "alerts" and p["label"] == "Alerts" for p in result["data"]))
+
+
+def test_a_second_poll_keeps_the_links():
+    print("\n-- polling the same event twice renders it the same way twice --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [say("See [[machine:PC-01]].")]
+    r = scoped.post(f"/api/assistant/chats/{chat_id}/messages", json={"text": "hi"})
+    run_id = r.get_json()["run_id"]
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if scoped.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json()["done"]:
+            break
+        time.sleep(0.02)
+    texts = []
+    for _ in range(2):
+        events = scoped.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json()["events"]
+        texts.append([e["content"] for e in events if e["type"] == "text"][0])
+    check("the first poll has the link", "[PC-01](/machine/PC-01)" in texts[0])
+    check("...and so does the second", texts[0] == texts[1])
+
+
+def test_a_stop_mid_step_answers_every_call():
+    """An assistant message whose tool_calls have no replies is refused by OpenAI-compatible
+    servers, on this turn and every later one."""
+    print("\n-- stopping between two tool calls still answers both --")
+    chat = assistant.create_chat(DB, "unit-stop@x.com")
+    flags = {"stop": False}
+
+    def execute(name, arguments):
+        flags["stop"] = True
+        return {"ok": True, "data": {}}
+
+    def step(messages, tools):
+        return None, {"content": "", "tool_calls": [
+            {"id": "a", "name": "fleet_summary", "arguments": "{}"},
+            {"id": "b", "name": "list_alerts", "arguments": "{}"}]}
+
+    events = []
+    assistant.run_turn(DB, chat["id"], system_prompt="s", user_text="go", complete_step=step,
+                       tools=[], execute=execute, emit=events.append,
+                       cancelled=lambda: flags["stop"])
+    replies = {m["tool_call_id"] for m in assistant.list_messages(DB, chat["id"])
+               if m["role"] == "tool"}
+    check("the turn reported that it stopped", events[-1].get("error") == "stopped")
+    check("both call ids have a reply", replies == {"a", "b"})
+
+
 def main():
+    test_assistant_is_off_until_turned_on()
     seed()
     test_every_named_route_exists()
     test_tiers_of_the_routes_that_matter()
@@ -424,6 +515,10 @@ def main():
     test_wipe_needs_the_typed_name()
     test_the_loop_ends()
     test_off_switch()
+    test_an_encoded_slash_cannot_change_the_route()
+    test_find_page_works_from_the_worker()
+    test_a_second_poll_keeps_the_links()
+    test_a_stop_mid_step_answers_every_call()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

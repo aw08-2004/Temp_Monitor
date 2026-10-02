@@ -465,8 +465,16 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
         if not calls:
             emit({"type": "done"})
             return
-        for call in calls:
+        for index, call in enumerate(calls):
             if cancelled():
+                # Answer every call this step still owes before stopping. An assistant
+                # message whose tool_calls have no replies is a conversation an
+                # OpenAI-compatible server refuses with a 400 -- on this turn and on every
+                # later one, since the message stays in the history window.
+                for pending in calls[index:]:
+                    append_message(db_path, chat_id, ROLE_TOOL,
+                                   json.dumps({"ok": False, "error": "stopped by the operator"}),
+                                   tool_call_id=pending["id"], tool_name=pending["name"])
                 emit({"type": "error", "error": "stopped"})
                 return
             emit({"type": "tool", "name": call["name"], "state": "started"})

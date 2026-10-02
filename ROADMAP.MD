@@ -4711,8 +4711,9 @@ names, and can do what the signed-in operator can.
 - **The four #24 surfaces moved here.** The drafter and fleet-query cards (Rules), the machine
   question card (Machine) and the summary fold (Alerts) are gone; their `/api/ai/*` routes stay,
   because the assistant's tools call them and their validators and tests are unchanged.
-- Settings: `ai.assistant_enabled`, `ai.assistant_max_steps` (8), `ai.assistant_history_days`
-  (30). `ai.complete_chat` is the tool-calling twin of `ai.complete`, sharing its transport.
+- Settings: `ai.assistant_enabled` (**off by default**, so an upgrade of a hub that already uses
+  AI for the Alert Brain does not start sending machine names by itself), `ai.assistant_max_steps`
+  (8), `ai.assistant_history_days` (30). `ai.complete_chat` is the tool-calling twin of `ai.complete`, sharing its transport.
 
 ### Decisions
 - **Reversing #24's "no conversation thread".** Still true that the readings move and a
@@ -4724,6 +4725,8 @@ names, and can do what the signed-in operator can.
   and the `ai.assistant_enabled` help text say so; `ai.send_machine_names` now governs the Alert
   Brain only.
 - **Act directly, confirm only what changes a machine or access** (owner's decision).
+- **Tiers are decided on the DECODED path**, the one the internal request actually routes. Review
+  found `PC-01%2Fdownload` classifying as a machine read and running as the denied download.
 
 ### Rejected
 - **SSE or WebSocket streaming.** Every other transport here is polling; a turn is a run polled

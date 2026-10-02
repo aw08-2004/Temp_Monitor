@@ -257,11 +257,15 @@
             host.classList.remove('app-frames--resizing');
             window.removeEventListener('pointermove', move);
             window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', up);
             const width = parseInt(host.style.getPropertyValue('--assistant-width'), 10);
             try { if (width) localStorage.setItem(WIDTH_KEY, String(width)); } catch (err) { /* ok */ }
         };
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up);
+        // A touch or pen drag can end in pointercancel rather than pointerup, and missing it
+        // leaves every frame at pointer-events: none until the page is reloaded.
+        window.addEventListener('pointercancel', up);
     }
 
     /** Put the assistant frame where the pin state says, without touching anything else. */

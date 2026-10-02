@@ -31,7 +31,7 @@ import datetime
 import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from flask import Blueprint, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
@@ -66,10 +66,20 @@ class RouteDispatcher:
 
     def resolve(self, method, path):
         """(rule, view_args) the path lands on, or (None, None). Never follows a redirect:
-        a strict-slashes redirect is a different path, and the tier was decided on this one."""
+        a strict-slashes redirect is a different path, and the tier was decided on this one.
+
+        **Matched on the DECODED path**, because that is what call() routes: the test client
+        percent-decodes PATH_INFO before the url_map sees it. Matching the encoded string
+        instead let `/api/backups/machines/PC-01%2Fdownload` classify as the read-tier machine
+        route and then run as the denied download (found in review, PR #97). A decoded path
+        that grows a dot segment or an empty segment is refused rather than normalised."""
+        decoded = unquote(str(path or ""))
+        if any(seg in (".", "..") for seg in decoded.split("/")) or "//" in decoded \
+                or "\\" in decoded:
+            return None, None
         adapter = self.app.url_map.bind("localhost")
         try:
-            rule, args = adapter.match(path, method=method, return_rule=True)
+            rule, args = adapter.match(decoded, method=method, return_rule=True)
         except HTTPException:
             return None, None
         except Exception:                               # noqa: BLE001 -- RequestRedirect et al.
@@ -199,6 +209,11 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
 
     def _make_executor(*, chat_id, owner, session_data, caps):
         catalog = dispatcher.catalog()
+        # Resolved NOW, inside the request: `execute` runs on a pool thread with no Flask
+        # context, and translate() reads the language off `g`. Called from there it raised on
+        # every find_page, which the loop reported to the model as a hub failure.
+        labels = {label_key: translate(label_key)
+                  for _key, _path, label_key, _cap, _about in assistant_guide.PAGES}
 
         def execute(name, raw_arguments):
             error, args = assistant_tools.parse_arguments(raw_arguments)
@@ -206,8 +221,8 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 return {"ok": False, "error": error}
             if name == "find_page":
                 return {"ok": True, "tier": assistant_tools.TIER_READ,
-                        "data": assistant_guide.find_pages(args.get("topic"), caps,
-                                                           translate)}
+                        "data": assistant_guide.find_pages(
+                            args.get("topic"), caps, lambda key: labels.get(key, key))}
             if name == "list_endpoints":
                 found = assistant_tools.matching_endpoints(
                     catalog, args.get("q"), lambda e: all(c in caps for c in e["caps"]))
@@ -421,9 +436,13 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         state = runs.read(run_id, _owner(), after)
         if state is None:
             return jsonify({"error": "no such run"}), 404
-        for event in state["events"]:
-            if event.get("type") == "text":
-                event["content"] = _render(event.get("content", ""))
+        # Copies. runs.read() hands back the stored dicts, and rendering one in place meant a
+        # second poll of the same event (a retry, a re-poll from -1) rendered it AGAIN --
+        # render_links() first reduces every markdown link to its label, hub-built ones
+        # included, so the links vanished.
+        state["events"] = [dict(event, content=_render(event.get("content", "")))
+                           if event.get("type") == "text" else dict(event)
+                           for event in state["events"]]
         return jsonify(state), 200
 
     @bp.route("/api/assistant/runs/<run_id>/cancel", methods=["POST"])
