@@ -534,18 +534,6 @@ function Ensure-Python {
     return $py
 }
 
-function Get-LatestAgentAssetUrl {
-    try {
-        $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Headers @{ "User-Agent" = "FleetHub-Installer" } -TimeoutSec 15
-        $rel = $rels | Where-Object { $_.tag_name -like "agent-v*" } | Select-Object -First 1
-        if ($rel) {
-            $asset = $rel.assets | Where-Object { $_.name -eq "TempMonitorAgent.exe" } | Select-Object -First 1
-            if ($asset) { return $asset.browser_download_url }
-        }
-    } catch { }
-    return $null
-}
-
 function Show-Menu {
     # Loops rather than recursing on a rejected answer: every "ask again" used to be another
     # `return Show-Menu` stack frame, so enough invalid input (or a redirected stdin handing
@@ -723,11 +711,12 @@ function Install-Agent {
 
         if (-not $resolvedExe) {
             # No prompt: the latest release is what an operator wants in every case except an
-            # explicit pin, and -AgentUrl / -AgentExe already cover the pin.
-            Say "Looking up the latest agent release on GitHub..."
-            $resolvedUrl = Get-LatestAgentAssetUrl
-            if (-not $resolvedUrl) { Die "No agent URL available. Re-run with -AgentUrl <url> or -AgentExe <path>." }
-            Ok "Agent download: $resolvedUrl"
+            # explicit pin, and -AgentUrl / -AgentExe already cover the pin. Passing neither
+            # makes agent-install.ps1 read the SIGNED manifest and verify the download against
+            # the fleet key. This used to ask the GitHub releases API for the newest agent-v*
+            # asset and install it unchecked -- the one agent binary in the fleet's life that no
+            # signature covered (CWE-494; install.sh had the same gap, closed in PR #91).
+            Say "Agent download: the signed release manifest (verified against the fleet key)"
         }
     }
 
@@ -752,7 +741,7 @@ function Install-Agent {
     }
 
     $agentArgs = @{}
-    if ($resolvedExe) { $agentArgs.AgentExe = $resolvedExe } else { $agentArgs.AgentUrl = $resolvedUrl }
+    if ($resolvedExe) { $agentArgs.AgentExe = $resolvedExe } elseif ($resolvedUrl) { $agentArgs.AgentUrl = $resolvedUrl }
     if ($resolvedSecret) { $agentArgs.EnrollmentSecret = $resolvedSecret }
     if ($resolvedHubUrl) { $agentArgs.HubUrl = $resolvedHubUrl }
     # Keep hub and agent under one root. Passed explicitly so a downloaded agent-install.ps1
