@@ -96,6 +96,23 @@
     window.addEventListener('resize', syncPin);
 
     // ---------------- Rendering ----------------
+    /** A path on THIS hub, rebuilt from its parsed parts, or null. Parsed rather than only
+     *  pattern-matched because `//host` and `/\host` both look relative and both leave the
+     *  hub; the URL parser resolves them the way the browser will, and only a same-origin
+     *  result is kept. The anchor gets the parser's own pathname, search and hash, never the
+     *  string the text carried. */
+    function hubPath(href) {
+        if (!/^\/(?![/\\])/.test(href)) return null;
+        let url;
+        try {
+            url = new URL(href, location.origin);
+        } catch (e) {
+            return null;
+        }
+        if (url.origin !== location.origin) return null;
+        return url.pathname + url.search + url.hash;
+    }
+
     /** Inline: `code`, **bold**, and [label](/path). Everything else is text. */
     function renderInline(parent, text) {
         const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\[([^\]\n]+)\]\((\/[^)\s]*)\))/g;
@@ -108,13 +125,10 @@
             } else if (match[2]) {
                 parent.appendChild(el('strong', null, match[2].slice(2, -2)));
             } else {
-                const href = match[5];
-                // Relative to this hub and nothing else. `//host` is protocol-relative and
-                // would leave the hub, and browsers read `/\host` the same way, so both stay
-                // text.
-                if (/^\/(?![/\\])/.test(href)) {
+                const safe = hubPath(match[5]);
+                if (safe) {
                     const a = el('a', null, match[4]);
-                    a.href = href;
+                    a.setAttribute('href', safe);
                     parent.appendChild(a);
                 } else {
                     parent.appendChild(document.createTextNode(match[4]));
@@ -177,11 +191,25 @@
         log.scrollTop = log.scrollHeight;
     }
 
-    function addMessage(role, content, tools) {
+    /** Text the operator typed, an error, or a hub note: always plain text. Kept apart from
+     *  addAnswer() so nothing typed into this page can reach the markdown renderer. One
+     *  function switching on `role` was flagged by CodeQL (code scanning #158), because the
+     *  analysis cannot see the switch, and a renderer reachable from an input box is one
+     *  refactor away from rendering it. */
+    function addMessage(role, content) {
         empty.hidden = true;
         const node = el('div', `assistant__msg assistant__msg--${role}`);
-        if (role === 'assistant') node.appendChild(renderMarkdown(content));
-        else node.textContent = content;
+        node.textContent = content;
+        log.appendChild(node);
+        scrollDown();
+        return node;
+    }
+
+    /** An answer from the server, after assistant.render_links() built its links. */
+    function addAnswer(content, tools) {
+        empty.hidden = true;
+        const node = el('div', 'assistant__msg assistant__msg--assistant');
+        node.appendChild(renderMarkdown(content));
         if (tools && tools.length) {
             node.appendChild(el('div', 'assistant__tools-used',
                 t('assistant.tools_used', { tools: tools.join(', ') })));
@@ -339,7 +367,8 @@
         ].sort((x, y) => x.at - y.at);
         for (const item of items) {
             if (item.kind === 'action') renderAction(item.a);
-            else addMessage(item.m.role, item.m.content, item.m.tools);
+            else if (item.m.role === 'assistant') addAnswer(item.m.content, item.m.tools);
+            else addMessage(item.m.role, item.m.content);
         }
     }
 
@@ -389,7 +418,7 @@
             afterSeq = Math.max(afterSeq, event.seq);
             if (event.type === 'text') {
                 setThinking(null);
-                addMessage('assistant', event.content);
+                addAnswer(event.content);
                 if (!event.final) setThinking(t('assistant.thinking'));
             } else if (event.type === 'tool') {
                 if (event.action) renderAction(event.action);
