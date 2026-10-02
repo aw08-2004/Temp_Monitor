@@ -90,12 +90,12 @@ Ed25519 fleet key, so each item here is blocked on exactly one of those three. A
 opens this repo locally should surface this list before anything else, then tick items off
 here as they happen. The per-feature detail lives in each entry; this is the index.
 
-**0. Deploy order.** Hub **1.134.0** first (it is the version on `main` once the #25 D branch
-merges, and the hub self-update picks it up). Only then cut the Windows agent below. The posture
-card reads as absent on every PC until that agent arrives, which is correct and not a bug.
+**0. Deploy order.** ~~Hub **1.134.0** first, then the Windows agent.~~ **Done in that order on
+2026-10-02:** 1.134.0 merged in PR #95 (`6fd03a7`), agent 3.39.0 cut after it (`d3a221c`).
 
-**1. Windows agent release -- `agent/release.ps1 -Version 3.39.0 -NotesFile .\release-notes\3.39.0.md`.**
-3.38.0 was cut on 2026-09-30 (`f769f6e`, tag on `77dc40b`) with the software inventory (#25 B)
+**1. ~~Windows agent release 3.39.0~~ -- released 2026-10-02**, tag `agent-v3.39.0` on `6fd03a7`,
+manifest committed in `d3a221c`. What remains is item 4's first contact. History kept below
+because the 3.38.0 notes once claimed a fix it did not carry. 3.38.0 was cut on 2026-09-30 (`f769f6e`, tag on `77dc40b`) with the software inventory (#25 B)
 and the `bash`/`sh` refusal. **It did NOT carry the BitLocker heartbeat fix** (`0b3d62a`, "Stop
 a pending BitLocker report from knocking a PC offline"): that commit was written on a parallel
 branch two minutes before the cut and merged afterwards in PR #92, together with a section in
@@ -120,11 +120,22 @@ hashed the downloaded binary by file name, and GNU `sha256sum` prefixes its outp
 the name contains a backslash, so a genuine binary under such a path was refused as tampered. It
 now hashes from stdin. `tests/test_linux_installer.py` had hidden this on Windows by running the
 WSL launcher instead of Git's bash, which also made its refusal checks pass vacuously; the test
-now resolves bash through PATH and refuses to run without a working one. **Still owed on Windows:**
-`install.ps1` / `agent-install.ps1` do not check `agent.manifest.json` on a first install, the
-way `install.sh` now does (CWE-494, PR #91); the same change belongs there. And decide what to
-do with the unmerged `fix/linux-agent-web-installer` branch: its hand-made manifest commit must
-not be merged over the real one.
+now resolves bash through PATH and refuses to run without a working one. ~~**Still owed on
+Windows:** the first install is not checked against `agent.manifest.json`.~~ **Done 2026-10-02**
+(CWE-494, the Windows half of PR #91): with neither `-AgentExe` nor `-AgentUrl`,
+`agent-install.ps1` verifies the signed stable manifest against the fleet key and the download
+against the signed sha256, and `install.ps1` no longer asks the GitHub releases API for "the
+newest agent-v*" (which could also have handed back a beta). The binary is now fetched *before*
+the running service is stopped. Windows PowerShell 5.1 has no Ed25519, so the verifier is RFC
+8032 over `BigInteger`, compiled with `Add-Type`; `tests/test_windows_installer.py` checks it
+on 5.1 and 7 against the production signature and against `cryptography` on random keys,
+including the refusals. *Rejected:* bundling BouncyCastle.dll beside the script (a second
+download from the same place, verifying the first), Authenticode (the agent is not
+Authenticode-signed and the trust root is the offline key, not a CA), and a key parameter.
+**Owed:** one real install from the web on a clean PC -- only a local server has been used,
+never the GitHub release redirect. Still to decide: the unmerged
+`fix/linux-agent-web-installer` branch -- its hand-made manifest commit must not be merged
+over the real one.
 
 **3. Android.** The whole of *Hardware validation still owed (roadmap #23)* near the end of
 this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchanged by this batch.

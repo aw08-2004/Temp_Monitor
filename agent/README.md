@@ -154,11 +154,19 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
 
 ## Install (elevated PowerShell)
 ```powershell
+agent/install/agent-install.ps1 -EnrollmentSecret <secret> -HubUrl https://your.hub.url
 agent/install/agent-install.ps1 -AgentExe .\dist\TempMonitorAgent.exe -EnrollmentSecret <secret>
 agent/install/agent-install.ps1 -AgentUrl <release-url> -EnrollmentSecret <secret> `
     -HubUrl https://your.hub.url
 agent/install/agent-install.ps1 -Uninstall
 ```
+With neither `-AgentExe` nor `-AgentUrl`, the installer reads the signed stable manifest,
+verifies it against the fleet key and checks the download against the signed sha256 -- the
+same checks `SelfUpdater` applies -- and refuses to install otherwise. `-ManifestUrl` reads
+the manifest from a mirror (still verified). `-AgentExe` and `-AgentUrl` are **not** checked
+against the key, and say so. The binary is fetched before the running service is stopped,
+so a refused download leaves the old agent running.
+
 `-InstallDir` defaults to `C:\Program Files\FleetHub\Agent`. The Windows service is
 still registered as **`TempMonitorAgent`** on purpose: .NET takes the service name from
 the assembly, and a self-updating agent swaps its binary without re-registering, so

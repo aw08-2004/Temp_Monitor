@@ -8,7 +8,7 @@
 # The Linux counterpart of `irm .../install.ps1 | iex`. It finds the binary the way the agent's
 # own SelfUpdater does: the Ed25519-signed agent-linux.manifest.json, verified against the fleet
 # key compiled into both agents, then the download checked against the SIGNED sha256. See
-# "signed manifest" below for why, and for why install.ps1 does not (yet) do the same.
+# "signed manifest" below for why. agent/install/agent-install.ps1 does the same on Windows.
 #
 # WHY EVERYTHING IS INSIDE main(). This script is meant to be piped into bash, and a pipe is not
 # a file: bash reads it in chunks and executes what it has. If the connection drops halfway, a
@@ -208,9 +208,9 @@ and install it with --binary."
 # disappear with it. Rejected too: a flag or variable to supply the key. That would make the
 # trust root something whoever runs the command chooses, which is the thing being removed.
 #
-# install.ps1 still does what this used to do -- no manifest check on a first Windows install.
-# Recorded in ROADMAP.MD rather than changed here, because that is the Windows fleet's front
-# door and deserves its own change.
+# The Windows installer closed the same gap separately (agent/install/agent-install.ps1, its
+# "signed manifest" region), because that is the Windows fleet's front door and deserved its
+# own change.
 
 hex_to_file() {
     # Hex text on stdin -> raw bytes in $1. printf '%b' rather than xxd, which a minimal server

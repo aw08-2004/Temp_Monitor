@@ -64,8 +64,11 @@ powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https
 
 Note `-HubUrl` — the address of the hub the agent reports to. `-AgentUrl` is a
 different thing: the download URL of a *specific* agent release asset, only
-needed to pin a version. Left out, the installer resolves the latest release
-itself. A `-AgentUrl` that isn't a `.exe`/`.zip` asset is assumed to be the hub
+needed to pin a version, and **not checked against the fleet's signing key**.
+Left out, the installer reads the signed `agent/agent.manifest.json`, verifies
+it against the fleet key and installs only a binary whose sha256 matches the
+signed one -- the same check every self-update applies. A local `-AgentExe` is
+not checked either. A `-AgentUrl` that isn't a `.exe`/`.zip` asset is assumed to be the hub
 URL and used as such, with a warning.
 
 **From a local clone:**
