@@ -205,7 +205,7 @@ def clean_posture(payload):
     def err(area):
         return _text(area.get("error"), MAX_ERROR_CHARS)
 
-    return {
+    cleaned = {
         "antivirus": {"supported": _bool(av.get("supported")), "products": products,
                       "error": err(av)},
         "defender": {"present": _bool(defender.get("present")),
@@ -227,6 +227,14 @@ def clean_posture(payload):
                 "activated": _bool(tpm.get("activated")),
                 "spec_version": _text(tpm.get("spec_version"), 40), "error": err(tpm)},
     }
+    # Whether the agent sent each area at all. **Without this an absent area is
+    # indistinguishable from one that was read and found empty** -- both clean to nulls, empty
+    # lists and no error -- and two checks turn that emptiness into a verdict: AutoRun's "key
+    # read, nothing configured" is a fail, and an Administrators group with nobody in it read
+    # as a pass. Found in review of #25 D.
+    for name in AREAS:
+        cleaned[name]["reported"] = isinstance(payload.get(name), dict)
+    return cleaned
 
 
 def record_posture(db_path, machine, payload, now=None):
@@ -296,6 +304,12 @@ def _verdict(status, detail, **params):
     return {"status": status, "detail": detail, "params": params}
 
 
+def _sent(area):
+    """Whether the agent sent this area. A stored document without the marker reads as not
+    sent: the only safe direction, since the marker is what separates "empty" from "absent"."""
+    return area.get("reported") is True
+
+
 def _unknown(area):
     """Unknown, and why: the provider's own error when it gave one."""
     if area.get("error"):
@@ -345,7 +359,7 @@ def _check_signatures(p, t):
 
 def _check_autorun(p, _t):
     a = p["autorun"]
-    if a["error"]:
+    if a["error"] or not _sent(a):
         return _unknown(a)
     if a["no_drive_type_autorun"] == AUTORUN_ALL_DRIVES and a["no_autorun"] == 1:
         return _verdict(STATUS_PASS, "autorun_off")
@@ -369,6 +383,8 @@ def _check_firewall(p, _t):
 
 def _check_session_lock(p, t):
     s = p["session_lock"]
+    if not _sent(s):
+        return _unknown(s)
     limit = t["lock_max_seconds"]
     machine = s["machine_inactivity_seconds"]
     if machine is not None and 0 < machine <= limit:
@@ -436,9 +452,11 @@ def _check_admin_accounts(p, t):
     a = p["accounts"]
     members = a["administrators"]
     if not members:
-        # Administrators always has somebody in it on a working PC, so an empty list next to
-        # an error is a read that failed, not a group that is empty.
-        return _unknown(a) if a["error"] else _verdict(STATUS_PASS, "admins_ok", count=0)
+        # Administrators always has somebody in it on a working PC, so an empty list is a read
+        # that failed or an area that was never sent -- with or without an error -- and never a
+        # group that is empty. It used to pass when no error came with it, which put a green
+        # 5.4 row on a machine that had not answered. Found in review.
+        return _unknown(a)
     extra = [m["name"] or m["sid"] for m in members if not _admin_allowed(m, t["admin_allowlist"])]
     if extra:
         return _verdict(STATUS_FAIL, "admins_extra", names=", ".join(extra))

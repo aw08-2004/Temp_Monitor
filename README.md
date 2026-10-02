@@ -2022,8 +2022,7 @@ sheet's Security section, and a fleet table on Reports: one row per check, each 
 
 The Windows agent reports the facts hourly and the hub judges them, against three settings under
 Settings → Endpoint Security: **signature age** (7 days), **idle time before the screen locks**
-(900 seconds, the CIS figure) and **also allowed as local administrators** (SID, `DOMAIN
-ame` or a
+(900 seconds, the CIS figure) and **also allowed as local administrators** (SID, `DOMAIN\name` or a
 bare name; empty by default, so a support group is a finding until somebody names it). A check the
 machine could not read is **Unknown** with the reason -- never counted as passed or failed -- and a
 PC whose agent predates 3.39.0 has no card at all. Nothing here changes a machine.

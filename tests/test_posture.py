@@ -95,6 +95,17 @@ def main():
           v["firewall"]["status"] == "unknown")
     check("an area the agent did not send at all is unknown", v["tpm"]["status"] == "unknown")
     check("...and so is antivirus", v["antivirus"]["status"] == "unknown")
+    # Found in review: an absent area cleans to the same nulls and empty lists as one that was
+    # read and found empty, and these two checks turned that into a verdict.
+    check("AutoRun not sent is unknown -- not 'AutoRun on'", v["autorun"]["status"] == "unknown")
+    check("Administrators not sent is unknown -- not a green 5.4",
+          v["admin_accounts"]["status"] == "unknown")
+    check("screen lock not sent is unknown, and says not reported",
+          v["session_lock"]["status"] == "unknown"
+          and v["session_lock"]["detail"] == "not_reported")
+    v = verdicts(report(accounts={"local": [], "administrators": [], "error": ""}))
+    check("an Administrators list that came back empty is unknown, even with no error",
+          v["admin_accounts"]["status"] == "unknown")
     v = verdicts(report(tpm={"present": None, "enabled": None, "activated": None,
                              "spec_version": "", "error": "ManagementException: Access denied"}))
     check("a provider error is unknown and carries the error",
