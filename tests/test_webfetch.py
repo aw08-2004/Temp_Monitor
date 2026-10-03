@@ -69,6 +69,7 @@ DNS = {
     "nat64-public.example": ["64:ff9b::808:808"],  # NAT64 wrapping 8.8.8.8
     "sixtofour.example": ["2002:a00:1::1"],
     "teredo.example": ["2001:0:4136:e378:8000:63bf:3fff:fdd2"],
+    "xn--bcher-kva.example": ["93.184.216.50"],     # bücher.example, as IDNA
 }
 DEAD = {"93.184.216.40"}     # addresses whose connection fails
 PAGES = {}           # (host, path) -> (status, headers, body)
@@ -143,6 +144,11 @@ def test_addresses():
           not refused("https://nat64-public.example/"))
     check("6to4 wrapping a LAN address is refused", refused("https://sixtofour.example/"))
     check("Teredo is refused", refused("https://teredo.example/"))
+    parsed, _addresses = webfetch.check_url("https://bücher.example/")
+    check("an internationalized host is sent as its IDNA form",
+          parsed.hostname == "xn--bcher-kva.example")
+    check("a host name that cannot be encoded is a refusal, not a crash",
+          refused("https://a b.example/") or refused("https://" + "x" * 70 + ".example/"))
 
 
 def test_pinning_and_redirects():

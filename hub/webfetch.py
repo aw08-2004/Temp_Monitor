@@ -168,6 +168,16 @@ def check_url(url):
     if port not in (None, 443):
         raise FetchError("only the standard https port (443) can be fetched")
     host = parsed.hostname
+    if not host.isascii():
+        # An internationalized name goes on the wire as its IDNA (xn--) form. Converted here,
+        # once, so SNI, the Host header and the resolver all see the same ASCII name -- left
+        # raw, urllib3 raised UnicodeError past every refusal and the route answered 500
+        # (PR #106 review).
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise FetchError("the address has a host name that is not valid")
+        parsed = parsed._replace(netloc=host)
     try:
         literal = ipaddress.ip_address(host)
     except ValueError:
@@ -596,6 +606,11 @@ def run_download(root, staging_id, max_bytes):
             os.remove(part)
         except OSError:
             pass
+        if _cancelled(root, staging_id):
+            # Discarded while it ran, then failed anyway: finish the discard rather than leave
+            # a hidden folder for the 24-hour prune (PR #106 review).
+            shutil.rmtree(folder, ignore_errors=True)
+            return None
         meta.update(status=STATUS_FAILED,
                     error=str(exc) if isinstance(exc, FetchError)
                     else f"the download failed: {type(exc).__name__}")
