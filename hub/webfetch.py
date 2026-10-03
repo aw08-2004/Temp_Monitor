@@ -120,10 +120,26 @@ class FetchError(ValueError):
 # ---------------------------------------------------------------------------------------
 # The address check, and the one way out
 # ---------------------------------------------------------------------------------------
+_NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+
 def _unwrap(address):
-    """An IPv4-mapped IPv6 address (::ffff:10.0.0.1) judged as the IPv4 it is."""
-    mapped = getattr(address, "ipv4_mapped", None)
-    return mapped or address
+    """An IPv6 address that carries an IPv4 one, judged as the IPv4 it reaches.
+
+    IPv4-mapped (::ffff:10.0.0.1), 6to4 (2002:0a00:0001::) and NAT64 (64:ff9b::10.0.0.1). The
+    last is the one that mattered: Python's is_global calls the well-known NAT64 prefix global
+    whatever it embeds, so on a NAT64 network 64:ff9b::a00:1 was 10.0.0.1 with a public face
+    (PR #106 review). Teredo is refused outright -- it embeds a server and a client, and an
+    installer download has no business tunnelling through either.
+    """
+    if address.version == 4:
+        return address
+    if address.teredo:
+        return ipaddress.ip_address("0.0.0.0")          # not global: refused by the caller
+    embedded = address.ipv4_mapped or address.sixtofour
+    if embedded is None and any(address in net for net in _NAT64):
+        embedded = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return embedded or address
 
 
 def _resolve(host, port):

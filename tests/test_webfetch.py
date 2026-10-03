@@ -65,6 +65,10 @@ DNS = {
     "raw.githubusercontent.com": ["185.199.108.133"],
     # AAAA listed first, as getaddrinfo commonly does; its IPv4 address is unreachable here.
     "dual.example": ["2606:2800:220:1::1", "93.184.216.40"],
+    "nat64.example": ["64:ff9b::a00:1"],          # NAT64 wrapping 10.0.0.1
+    "nat64-public.example": ["64:ff9b::808:808"],  # NAT64 wrapping 8.8.8.8
+    "sixtofour.example": ["2002:a00:1::1"],
+    "teredo.example": ["2001:0:4136:e378:8000:63bf:3fff:fdd2"],
 }
 DEAD = {"93.184.216.40"}     # addresses whose connection fails
 PAGES = {}           # (host, path) -> (status, headers, body)
@@ -133,6 +137,12 @@ def test_addresses():
     check("an unresolvable name is refused", refused("https://nowhere.example/"))
     check("IPv6 loopback is refused", refused("https://[::1]/"))
     check("a file: URL is refused", refused("file:///C:/Windows/win.ini"))
+    # PR #106 review: is_global calls the NAT64 prefix global whatever IPv4 it embeds.
+    check("NAT64 wrapping a LAN address is refused", refused("https://nat64.example/"))
+    check("...while NAT64 wrapping a public one is allowed",
+          not refused("https://nat64-public.example/"))
+    check("6to4 wrapping a LAN address is refused", refused("https://sixtofour.example/"))
+    check("Teredo is refused", refused("https://teredo.example/"))
 
 
 def test_pinning_and_redirects():

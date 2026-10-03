@@ -959,9 +959,9 @@ MODE_PROMPTS = {
 # deploy_packages, the only one offered the tools. It was first stated to everyone so a model
 # could say "you would need deploy_packages"; review on PR #106 pointed out that it is ~400
 # tokens on every provider step for everyone else, and the capability list in the prompt
-# already lets the model say that. The switches are the ones each installer framework documents; the model is told
-# to SAY which it assumed, because a wrong silent switch shows up as a deployment stuck on a
-# dialog nobody can see, on every target at once.
+# already lets the model say that. The switches are the ones each installer framework
+# documents; the model is told to SAY which it assumed, because a wrong silent switch shows up
+# as a deployment stuck on a dialog nobody can see, on every target at once.
 PACKAGING_PROMPT = (
     "## Building packages",
     "When asked to make a package for some software, do it in this order:",
