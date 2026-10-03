@@ -156,7 +156,8 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
             meta = webfetch.get_staged(staging, staging_id)
             if meta is None:
                 return jsonify({"error": "no such download"}), 404
-            if meta["status"] != webfetch.STATUS_DOWNLOADING or time.monotonic() >= deadline:
+            running = meta["status"] in (webfetch.STATUS_QUEUED, webfetch.STATUS_DOWNLOADING)
+            if not running or time.monotonic() >= deadline:
                 return jsonify(meta), 200
             time.sleep(1)
 

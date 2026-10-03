@@ -166,6 +166,14 @@ def test_pinning_and_redirects():
           _raises(lambda: webfetch.fetch_text("https://vendor.example/missing")))
 
 
+def _raises_value(fn):
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+
 def _raises(fn):
     try:
         fn()
@@ -243,7 +251,10 @@ def test_staging(root, blob_dir):
           and webfetch.list_staged(root) == [])
 
     meta = webfetch.begin_download(root, "https://vendor.example/latest", "a@x")
-    check("a new download starts as downloading", meta["status"] == "downloading")
+    check("a new download starts queued", meta["status"] == "queued")
+    check("...and a queued one is never judged stalled",
+          webfetch._read_meta(root, meta["id"],
+                              now=time.time() + webfetch.STALL_SECONDS + 5)["status"] == "queued")
     done = webfetch.run_download(root, meta["id"], 10 * 1024 * 1024)
     check("it finishes", done["status"] == "done")
     check("the sha256 is of the bytes received",
@@ -264,12 +275,23 @@ def test_staging(root, blob_dir):
           webfetch.run_download(root, empty["id"], 1000)["status"] == "failed")
 
     stalled = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
+    record = webfetch._read_meta(root, stalled["id"])
+    webfetch._write_meta(root, stalled["id"], dict(record, status="downloading"))
     later = time.time() + webfetch.STALL_SECONDS + 5
     check("a download nobody is running any more reads as failed",
           webfetch._read_meta(root, stalled["id"], now=later)["status"] == "failed")
 
     check("an unfinished download cannot be promoted",
           _raises(lambda: webfetch.promote(root, capped["id"], blob_dir, 10 ** 9)))
+    os.replace(os.path.join(root, meta["id"], "file"),
+               os.path.join(root, meta["id"], "file.promoting"))
+    check("a promote that loses the race is refused with a sentence, not an OSError",
+          _raises(lambda: webfetch.promote(root, meta["id"], blob_dir, 10 ** 9)))
+    os.replace(os.path.join(root, meta["id"], "file.promoting"),
+               os.path.join(root, meta["id"], "file"))
+    check("a promote the store refuses puts the file back",
+          _raises_value(lambda: webfetch.promote(root, meta["id"], blob_dir, 10))
+          and os.path.exists(os.path.join(root, meta["id"], "file")))
     source = webfetch.promote(root, meta["id"], blob_dir, 10 ** 9)
     check("promoting puts it in the package store under its hash",
           os.path.exists(packages.blob_path(blob_dir, source["sha256"]))

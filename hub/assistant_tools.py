@@ -306,7 +306,7 @@ CURATED = (
      "follow it with staged_download and wait_seconds.",
      "POST", "/api/webfetch/downloads",
      _params(["url"], url={"type": "string", "description": "An https:// address."})),
-    ("staged_download", "One staged download: status (downloading, done, failed, promoted), "
+    ("staged_download", "One staged download: status (queued, downloading, done, failed, promoted), "
      "file name, size, sha256 and the URL it finally came from. Pass wait_seconds (up to 60) "
      "to wait while it is still downloading.",
      "GET", "/api/webfetch/downloads/<staging_id>",

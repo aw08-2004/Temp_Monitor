@@ -80,6 +80,12 @@ STALL_SECONDS = 180
 CHUNK = 1024 * 1024
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
+# `queued` until a worker picks the record up. Distinct from `downloading` because only a
+# RUNNING download can stall: with two workers busy on large files, a third record waits in
+# the pool for minutes, and judging it by the stall clock reported it failed while it was
+# about to start -- and an operator who "started it again" got the file twice (PR #106
+# review).
+STATUS_QUEUED = "queued"
 STATUS_DOWNLOADING = "downloading"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
@@ -403,19 +409,44 @@ def _dir(root, staging_id):
     return folder
 
 
+# **Windows will not replace a file another thread has open, and will not open one mid-
+# replace.** The worker rewrites meta.json every couple of seconds while a poll reads it, so
+# either side can get a PermissionError for a few milliseconds. Unhandled, a poll read that
+# as "no such download" (a 404 for a download that was running fine) and the worker's final
+# write could fail and leave the record saying `downloading` forever -- found by the route
+# test, which only lost the race inside the full suite. A short retry, on both sides.
+_SHARING_RETRIES = 20
+_SHARING_PAUSE = 0.025
+
+
 def _write_meta(root, staging_id, meta):
     folder = _dir(root, staging_id)
     tmp = os.path.join(folder, f".meta-{uuid.uuid4().hex}.tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(meta, fh)
-    os.replace(tmp, os.path.join(folder, "meta.json"))
+    for attempt in range(_SHARING_RETRIES):
+        try:
+            os.replace(tmp, os.path.join(folder, "meta.json"))
+            return
+        except PermissionError:
+            if attempt == _SHARING_RETRIES - 1:
+                raise
+            time.sleep(_SHARING_PAUSE)
 
 
 def _read_meta(root, staging_id, now=None):
-    try:
-        with open(os.path.join(_dir(root, staging_id), "meta.json"), encoding="utf-8") as fh:
-            meta = json.load(fh)
-    except (OSError, ValueError):
+    path = os.path.join(_dir(root, staging_id), "meta.json")
+    meta = None
+    for attempt in range(_SHARING_RETRIES):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+            break
+        except PermissionError:
+            time.sleep(_SHARING_PAUSE)
+        except (OSError, ValueError):
+            return None
+    if meta is None:
         return None
     now = time.time() if now is None else now
     if meta.get("status") == STATUS_DOWNLOADING and \
@@ -452,7 +483,7 @@ def begin_download(root, url, actor):
     os.makedirs(_dir(root, staging_id), exist_ok=True)
     now = time.time()
     meta = {"id": staging_id, "url": str(url).strip(), "final_url": None,
-            "status": STATUS_DOWNLOADING, "file_name": None, "size": 0, "sha256": None,
+            "status": STATUS_QUEUED, "file_name": None, "size": 0, "sha256": None,
             "error": None, "actor": actor, "started_at": now, "updated_at": now,
             "finished_at": None}
     _write_meta(root, staging_id, meta)
@@ -465,6 +496,9 @@ def run_download(root, staging_id, max_bytes):
     meta = _read_meta(root, staging_id) or {}
     folder = _dir(root, staging_id)
     part = os.path.join(folder, "file.part")
+    # The stall clock starts here, not when the record was queued.
+    meta.update(status=STATUS_DOWNLOADING, updated_at=time.time())
+    _write_meta(root, staging_id, meta)
     try:
         final_url, response = open_url(meta.get("url"))
         meta.update(final_url=final_url, file_name=_name_from(response, final_url))
@@ -535,9 +569,22 @@ def promote(root, staging_id, blob_dir, max_bytes):
     if meta.get("status") != STATUS_DONE:
         raise FetchError(f"download {staging_id} is {meta.get('status')}, not done")
     path = os.path.join(_dir(root, staging_id), "file")
-    with open(path, "rb") as fh:
-        sha256, size = packages.store_blob(blob_dir, fh, max_bytes)
-    os.remove(path)
+    # Claimed by a rename, which exactly one of two concurrent promotes can win. Checking the
+    # status above is not enough on its own: both can read `done` before either writes
+    # `promoted`, and the loser then opened a file that was gone -- an OSError, so a 500
+    # instead of a sentence (PR #106 review).
+    claimed = path + ".promoting"
+    try:
+        os.replace(path, claimed)
+    except FileNotFoundError:
+        raise FetchError(f"download {staging_id} is already being promoted")
+    try:
+        with open(claimed, "rb") as fh:
+            sha256, size = packages.store_blob(blob_dir, fh, max_bytes)
+    except Exception:
+        os.replace(claimed, path)
+        raise
+    os.remove(claimed)
     meta.update(status=STATUS_PROMOTED, sha256=sha256, size=size, updated_at=time.time())
     _write_meta(root, staging_id, meta)
     return {"kind": packages.SOURCE_UPLOAD, "sha256": sha256, "file_size": size,
