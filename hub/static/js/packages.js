@@ -1126,10 +1126,83 @@ function renderDeployments(list) {
     deploymentsPane.appendChild(card);
 }
 
+/** The machines the Dashboard's "Deployments in flight" tile counts, across every deployment
+ *  however old (roadmap #26). The deployment list below shows the newest hundred deployments
+ *  with a tally each, and a target stuck in an older -- or nominally finished -- one was
+ *  invisible from here; this is where the tile now links. Rendered only when there is one. */
+function renderActiveTargets(targets) {
+    if (!targets.length) return null;
+    const card = el('div', 'card');
+    card.id = 'active-targets';
+    card.style.marginBottom = 'var(--space-4)';
+    card.appendChild(el('h2', 'section-title', t('packages.deployments.active.title')));
+    card.appendChild(el('p', 'stat-card__meta', t('packages.deployments.active.intro')));
+    const table = el('table', 'data-table');
+    const headRow = el('tr');
+    [t('packages.deployments.active.col.machine'), t('packages.deployments.active.col.package'),
+     t('packages.deployments.active.col.status'), t('packages.deployments.active.col.since'),
+     t('packages.deployments.active.col.detail'), ''].forEach((label) => {
+        headRow.appendChild(el('th', null, label));
+    });
+    const head = el('thead');
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = el('tbody');
+    targets.forEach((target) => {
+        const tr = el('tr');
+        const machine = el('td');
+        const link = el('a', null, target.machine);
+        link.href = '/machine/' + encodeURIComponent(target.machine);
+        machine.appendChild(link);
+        tr.appendChild(machine);
+
+        const pkg = el('td');
+        pkg.appendChild(el('div', null,
+            target.package_name || t('packages.deployments.deleted_package')));
+        pkg.appendChild(el('div', 'stat-card__meta', t('packages.deployments.active.deployment',
+            { status: statusLabel(target.deployment_status) })));
+        tr.appendChild(pkg);
+
+        const status = el('td');
+        status.appendChild(el('div', null, statusLabel(target.status)));
+        status.appendChild(el('div', 'stat-card__meta', t('packages.deployments.active.attempts',
+            { attempts: target.attempts, max: target.max_attempts })));
+        tr.appendChild(status);
+
+        tr.appendChild(el('td', null, fmtTime(target.updated_at)));
+
+        const detail = el('td');
+        if (target.last_error) detail.appendChild(el('div', 'pkg-target-error', target.last_error));
+        else if (target.next_attempt_at) {
+            detail.appendChild(el('div', 'stat-card__meta',
+                t('packages.deployments.retries_at', { when: fmtTime(target.next_attempt_at) })));
+        }
+        tr.appendChild(detail);
+
+        const actions = el('td', 'data-table__actions');
+        const view = el('button', 'btn', t('packages.deployments.view'));
+        view.type = 'button';
+        view.addEventListener('click', () => openProgress(target.deployment_id));
+        actions.appendChild(view);
+        tr.appendChild(actions);
+        body.appendChild(tr);
+    });
+    table.appendChild(body);
+    const scroll = el('div', 'table-scroll');
+    scroll.appendChild(table);
+    card.appendChild(scroll);
+    return card;
+}
+
 async function loadDeployments() {
     try {
-        const doc = await api('/api/deployments');
+        const [doc, active] = await Promise.all([
+            api('/api/deployments'),
+            api('/api/deployments/targets').catch(() => ({ targets: [] })),
+        ]);
         renderDeployments(doc.deployments);
+        const card = renderActiveTargets(active.targets || []);
+        if (card) deploymentsPane.prepend(card);
     } catch (e) {
         deploymentsPane.replaceChildren(el('p', 'setting__error', e.message));
     }

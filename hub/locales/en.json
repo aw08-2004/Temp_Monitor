@@ -1777,7 +1777,20 @@
         "attempts": "Attempts",
         "detail": "Detail"
       },
-      "tally": "{status}: {count}"
+      "tally": "{status}: {count}",
+      "active": {
+        "title": "Waiting or running now",
+        "intro": "Every machine a deployment has not finished with, from any deployment however old -- the number the Dashboard shows as deployments in flight. Longest-waiting first.",
+        "col": {
+          "machine": "Machine",
+          "package": "Package",
+          "status": "Status",
+          "since": "Unchanged since",
+          "detail": "Detail"
+        },
+        "deployment": "Deployment: {status}",
+        "attempts": "Attempt {attempts} of {max}"
+      }
     },
     "_status": [
       "Deployment and per-machine statuses. These are shown in tables and in the tally",
@@ -3423,7 +3436,6 @@
     "example_page": "What should I know about the page I'm on?",
     "example_hot": "Which machines are running hot right now?",
     "example_alerts": "Summarise today's open alerts and what to do first",
-    "example_rule": "Alert me when a PC has less than 10 GB free",
     "privacy": "Machine names and the data the assistant reads are sent to the AI provider configured in Settings.",
     "placeholder": "Ask the assistant...",
     "send": "Send",
@@ -3449,7 +3461,12 @@
     "typed_placeholder": "Type {machine} to confirm",
     "untitled": "Untitled conversation",
     "error": "The assistant could not answer. Try again.",
-    "stopped": "Stopped."
+    "stopped": "Stopped.",
+    "greeting": "How can I help?",
+    "fold": "Hide conversations",
+    "no_chats": "No conversations yet.",
+    "chat_running": "Still answering",
+    "example_stuck": "Is any deployment stuck, and on which machine?"
   },
   "scripts": {
     "body": "Script",

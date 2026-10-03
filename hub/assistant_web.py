@@ -329,7 +329,10 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     @login_required
     @can_view
     def chats():
-        return jsonify({"chats": assistant.list_chats(db_path, _owner())}), 200
+        owner = _owner()
+        running = runs.active_chats(owner)
+        return jsonify({"chats": [dict(c, running=c["id"] in running)
+                                  for c in assistant.list_chats(db_path, owner)]}), 200
 
     @bp.route("/api/assistant/chats", methods=["POST"])
     @login_required
@@ -350,14 +353,22 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 continue
             if message["role"] == assistant.ROLE_ASSISTANT and not message["content"]:
                 continue
+            # `step`: an assistant message that called tools is the model thinking aloud on
+            # its way to an answer, and the panel shows it smaller than the answer itself.
             shown.append({"id": message["id"], "role": message["role"],
+                          "step": bool(message["tool_calls"]),
                           "content": (_render(message["content"])
                                       if message["role"] == assistant.ROLE_ASSISTANT
                                       else message["content"]),
                           "tools": [c["name"] for c in message["tool_calls"]],
                           "created_at": message["created_at"]})
         actions = [_public_action(a) for a in assistant.list_actions(db_path, chat_id)]
-        return jsonify({"chat": chat, "messages": shown, "actions": actions}), 200
+        # A turn still answering: the panel renders what is stored, then polls the run from
+        # `seq` on, so nothing already shown arrives twice.
+        active = runs.active(chat_id, _owner())
+        run = {"id": active[0], "seq": active[1]} if active else None
+        return jsonify({"chat": chat, "messages": shown, "actions": actions,
+                        "run": run}), 200
 
     @bp.route("/api/assistant/chats/<chat_id>", methods=["DELETE"])
     @login_required

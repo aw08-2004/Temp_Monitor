@@ -4676,7 +4676,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
@@ -4759,6 +4759,24 @@ names, and can do what the signed-in operator can.
 - **A deny-list as the only gate** -- silent about everything nobody thought of.
 - **A docked second copy of the chat in the shell document** -- two implementations drift, and
   the shell deliberately renders no page content.
+
+### Hub 1.135.3 · finding what a number counts, and the panel redesigned
+- **`GET /api/deployments/targets`** lists deployment TARGETS by status across every deployment,
+  scoped -- exactly what the Dashboard's "Deployments in flight" tile counts. Before it there
+  was nothing to click and nothing for the assistant to find: the only list was of the newest
+  hundred deployments, and a target stuck for weeks sat in an old one whose own status said
+  `complete`. The tile now links to a "Waiting or running now" table on Packages →
+  Deployments, and the assistant has `deployment_targets`. Rejected: filters alone -- the
+  assistant still could not see past the newest hundred.
+- **`where` operators** (`>`, `>=`, `<`, `<=`, `!=`, `in`, `exists`): a status with zero
+  targets is absent from a tally, so equality to a number was the wrong question.
+- **A turn belongs to its chat.** Switching conversations used to stop the panel listening for
+  good, and the chat then refused new messages as "still answering". The chat list marks a
+  chat that is still answering, and opening it resumes the run from where the stored part ends.
+- **Layout after Claude's own chat, in the hub's colours** (owner's choice): answers as plain
+  text, the operator in a bubble, working steps small and grey, a rounded composer. History in
+  a foldable column on the Assistant page; a drawer behind the clock button when pinned or
+  narrow. Rejected: Claude's warm palette, which would have made one page unlike the rest.
 
 ### Open
 - Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the

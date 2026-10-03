@@ -10,10 +10,15 @@
 // Action cards are built from the hub's STORED action row (method, path, body), not from
 // anything the model said about it, so the card describes exactly what Confirm will run.
 //
+// A turn belongs to its CHAT, not to the page. The hub keeps answering in its worker pool
+// whatever the browser does, so leaving a chat that is mid-answer only stops this page
+// LISTENING: the history shows a spinner on it, and opening it again renders what is stored
+// and resumes polling the run from where the stored part ends. The first version stopped
+// polling on a switch and never resumed, and the chat then refused every new message.
+//
 // Page context comes from the shell (window.parent.FleetShell.pageContext) and is sent with
 // every message rather than stored, because "this PC" means whatever is on screen when the
-// question is asked. In a classic, unframed page there is no shell and the context is this
-// page itself, which is the honest answer.
+// question is asked.
 //
 // IIFE-wrapped, classic script, no bundler -- same as every other file in static/js.
 (function () {
@@ -24,24 +29,49 @@
 
     const $ = (id) => document.getElementById(id);
     const log = $('assistant-log');
+    const thread = $('assistant-thread');
     const empty = $('assistant-empty');
     const form = $('assistant-form');
     const input = $('assistant-input');
     const sendBtn = $('assistant-send');
     const stopBtn = $('assistant-stop');
-    const history = $('assistant-history');
+    const chatsEl = $('assistant-chats');
     const pinBtn = $('assistant-pin');
     const contextEl = $('assistant-context');
+    const headingEl = $('assistant-heading');
     const offEl = $('assistant-off');
+    const scrim = $('assistant-scrim');
+    const historyToggle = $('assistant-history-toggle');
 
     const CHAT_KEY = 'tempmonitor:assistant:chat';
+    const FOLD_KEY = 'tempmonitor:assistant:side';
     const POLL_MS = 800;
+    const LIST_POLL_MS = 4000;
+    // Below this the frame has no room for a history column: it is the docked panel, or a
+    // narrow window, and the history becomes a drawer.
+    const COMPACT_PX = 720;
 
     let chatId = null;
-    let runId = null;
-    let afterSeq = -1;
-    let pollTimer = null;
+    let chats = [];
+    let ready = true;
+    // The run this page is LISTENING to. Always the open chat's; a run in another chat goes on
+    // without anybody polling it.
+    let run = null;          // { id, chatId, after, timer }
+    let listTimer = null;
+    let turn = null;         // the assistant turn being written to
     let thinking = null;
+
+    // ---------------- Storage (per-viewer conveniences only) ----------------
+    function remember(key, value) {
+        try {
+            if (value) localStorage.setItem(key, value);
+            else localStorage.removeItem(key);
+        } catch (e) { /* private window: forget it */ }
+    }
+
+    function recall(key) {
+        try { return localStorage.getItem(key); } catch (e) { return null; }
+    }
 
     // ---------------- The shell ----------------
     function shell() {
@@ -78,8 +108,10 @@
             return;
         }
         const pinned = s.isPinned();
+        const label = pinned ? t('assistant.unpin') : t('assistant.pin');
         pinBtn.hidden = false;
-        pinBtn.textContent = pinned ? t('assistant.unpin') : t('assistant.pin');
+        pinBtn.title = label;
+        pinBtn.setAttribute('aria-label', label);
         pinBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
     }
 
@@ -88,12 +120,58 @@
         if (!s) return;
         if (s.isPinned()) s.unpin();
         else s.pin();
-        syncPin();
+        applyWidth();
         showContext();
     });
 
-    window.addEventListener('fleet:pagechange', () => { showContext(); syncPin(); });
-    window.addEventListener('resize', syncPin);
+    window.addEventListener('fleet:pagechange', () => { showContext(); applyWidth(); });
+
+    // ---------------- Layout: history column or drawer ----------------
+    function compact() {
+        return root.classList.contains('asst--compact');
+    }
+
+    function setDrawer(open) {
+        root.classList.toggle('asst--drawer', open);
+        scrim.hidden = !open;
+        historyToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function setFolded(folded) {
+        root.classList.toggle('asst--folded', folded);
+        remember(FOLD_KEY, folded ? 'folded' : null);
+        historyToggle.setAttribute('aria-expanded', folded ? 'false' : 'true');
+    }
+
+    function applyWidth() {
+        const narrow = root.clientWidth < COMPACT_PX;
+        root.classList.toggle('asst--compact', narrow);
+        if (narrow) {
+            root.classList.remove('asst--folded');
+            setDrawer(false);
+        } else {
+            setDrawer(false);
+            setFolded(recall(FOLD_KEY) === 'folded');
+        }
+        // The toggle is only needed where the column is not already on screen.
+        historyToggle.hidden = !narrow && !root.classList.contains('asst--folded');
+        syncPin();
+    }
+
+    function toggleHistory() {
+        if (compact()) setDrawer(!root.classList.contains('asst--drawer'));
+        else setFolded(!root.classList.contains('asst--folded'));
+        historyToggle.hidden = !compact() && !root.classList.contains('asst--folded');
+    }
+
+    historyToggle.addEventListener('click', toggleHistory);
+    $('assistant-fold').addEventListener('click', toggleHistory);
+    scrim.addEventListener('click', () => setDrawer(false));
+    // Both, deliberately: a ResizeObserver callback runs in the browser's rendering step,
+    // which a frame being moved into the dock may not reach before the operator looks; the
+    // window resize event and the explicit calls after pin/unpin are the backstop.
+    if (window.ResizeObserver) new ResizeObserver(applyWidth).observe(root);
+    window.addEventListener('resize', applyWidth);
 
     // ---------------- Rendering ----------------
     /** A path on THIS hub, rebuilt from its parsed parts, or null. Parsed rather than only
@@ -142,6 +220,8 @@
     function renderMarkdown(text) {
         const out = document.createDocumentFragment();
         const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+        const bullet = /^\s*[-*]\s+(.*)$/;
+        const numbered = /^\s*\d+[.)]\s+(.*)$/;
         let i = 0;
         while (i < lines.length) {
             const line = lines[i];
@@ -155,8 +235,6 @@
                 out.appendChild(pre);
                 continue;
             }
-            const bullet = /^\s*[-*]\s+(.*)$/;
-            const numbered = /^\s*\d+[.)]\s+(.*)$/;
             if (bullet.test(line) || numbered.test(line)) {
                 const ordered = numbered.test(line) && !bullet.test(line);
                 const list = el(ordered ? 'ol' : 'ul');
@@ -191,32 +269,74 @@
         log.scrollTop = log.scrollHeight;
     }
 
-    /** Text the operator typed, an error, or a hub note: always plain text. Kept apart from
-     *  addAnswer() so nothing typed into this page can reach the markdown renderer. One
-     *  function switching on `role` was flagged by CodeQL (code scanning #158), because the
-     *  analysis cannot see the switch, and a renderer reachable from an input box is one
-     *  refactor away from rendering it. */
-    function addMessage(role, content) {
-        empty.hidden = true;
-        const node = el('div', `assistant__msg assistant__msg--${role}`);
-        node.textContent = content;
-        log.appendChild(node);
-        scrollDown();
-        return node;
+    function markIcon() {
+        const mark = el('div', 'asst__mark');
+        mark.setAttribute('aria-hidden', 'true');
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', 'M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z');
+        svg.appendChild(path);
+        mark.appendChild(svg);
+        return mark;
     }
 
-    /** An answer from the server, after assistant.render_links() built its links. */
-    function addAnswer(content, tools) {
-        empty.hidden = true;
-        const node = el('div', 'assistant__msg assistant__msg--assistant');
-        node.appendChild(renderMarkdown(content));
-        if (tools && tools.length) {
-            node.appendChild(el('div', 'assistant__tools-used',
-                t('assistant.tools_used', { tools: tools.join(', ') })));
+    /** The assistant's turn: its mark, then steps, cards and the answer underneath. One per
+     *  operator message, so everything the model did for that message reads as one block. */
+    function turnBody() {
+        if (!turn) {
+            empty.hidden = true;
+            const node = el('div', 'asst__turn');
+            node.appendChild(markIcon());
+            turn = el('div', 'asst__turn-body');
+            node.appendChild(turn);
+            thread.appendChild(node);
         }
-        log.appendChild(node);
+        return turn;
+    }
+
+    function keepThinkingLast() {
+        if (thinking && turn) turn.appendChild(thinking);
+    }
+
+    /** Text the operator typed, or a hub note: always plain text. Kept apart from the
+     *  markdown path so nothing typed into this page can reach the renderer -- one function
+     *  switching on a role was flagged by CodeQL (code scanning #158). */
+    function addUser(text) {
+        empty.hidden = true;
+        turn = null;
+        const node = el('div', 'asst__msg--user');
+        node.textContent = text;
+        thread.appendChild(node);
         scrollDown();
-        return node;
+    }
+
+    function toolsChip(tools) {
+        return el('div', 'asst__tools', t('assistant.tools_used', { tools: tools.join(', ') }));
+    }
+
+    /** An answer, or a working step, from the server after render_links() built its links. */
+    function addAnswer(content, { tools = [], step = false } = {}) {
+        const body = turnBody();
+        if (content) {
+            const node = el('div', step ? 'asst__step' : 'asst__answer');
+            node.appendChild(renderMarkdown(content));
+            body.appendChild(node);
+        }
+        if (tools.length) body.appendChild(toolsChip(tools));
+        keepThinkingLast();
+        scrollDown();
+    }
+
+    function addPlain(className, text) {
+        const node = el('div', className, text);
+        turnBody().appendChild(node);
+        keepThinkingLast();
+        scrollDown();
     }
 
     function setThinking(text) {
@@ -226,11 +346,13 @@
             return;
         }
         if (!thinking) {
-            thinking = el('div', 'assistant__thinking');
-            log.appendChild(thinking);
+            thinking = el('div', 'asst__thinking');
+            const dots = el('span', 'asst__dots');
+            dots.append(el('i'), el('i'), el('i'));
+            thinking.append(dots, el('span'));
         }
-        thinking.textContent = text;
-        log.appendChild(thinking);   // keep it last
+        thinking.lastChild.textContent = text;
+        turnBody().appendChild(thinking);
         scrollDown();
     }
 
@@ -252,23 +374,20 @@
     }
 
     function renderAction(action, existing) {
-        empty.hidden = true;
         const card = existing || el('div');
-        card.className = `assistant__action assistant__action--${action.state}`;
+        card.className = `asst__action asst__action--${action.state}`;
         card.dataset.actionId = action.id;
         card.replaceChildren();
-        card.appendChild(el('div', 'assistant__action-title', action.machine
+        card.appendChild(el('div', 'asst__action-title', action.machine
             ? t('assistant.action_title_machine', { machine: action.machine })
             : t('assistant.action_title')));
-        card.appendChild(el('div', 'assistant__action-detail', actionDetail(action)));
+        card.appendChild(el('div', 'asst__action-detail', actionDetail(action)));
         const state = el('div', 'stat-card__meta', t(STATE_KEYS[action.state] || 'assistant.state.pending'));
-        if (action.result && action.result.status) {
-            state.textContent += ` (HTTP ${action.result.status})`;
-        }
+        if (action.result && action.result.status) state.textContent += ` (HTTP ${action.result.status})`;
         card.appendChild(state);
 
         if (action.state === 'pending') {
-            const buttons = el('div', 'assistant__action-buttons');
+            const buttons = el('div', 'asst__action-buttons');
             let typed = null;
             if (action.typed_name) {
                 typed = el('input', 'input');
@@ -282,12 +401,12 @@
             reject.type = 'button';
             confirm.addEventListener('click', () => decide(action, 'confirm', card, typed));
             reject.addEventListener('click', () => decide(action, 'reject', card, null));
-            buttons.appendChild(confirm);
-            buttons.appendChild(reject);
+            buttons.append(confirm, reject);
             card.appendChild(buttons);
         }
         if (!existing) {
-            log.appendChild(card);
+            turnBody().appendChild(card);
+            keepThinkingLast();
             scrollDown();
         }
         return card;
@@ -313,133 +432,203 @@
         }
     }
 
-    // ---------------- Conversations ----------------
-    function rememberChat(id) {
-        try {
-            if (id) localStorage.setItem(CHAT_KEY, id);
-            else localStorage.removeItem(CHAT_KEY);
-        } catch (e) { /* per-viewer convenience only */ }
-    }
-
-    function savedChat() {
-        try { return localStorage.getItem(CHAT_KEY); } catch (e) { return null; }
-    }
-
-    async function loadHistory(selectId) {
-        const response = await fetch('/api/assistant/chats');
-        const data = await response.json().catch(() => ({ chats: [] }));
-        history.replaceChildren();
-        const fresh = el('option', null, t('assistant.new_chat'));
-        fresh.value = '';
-        history.appendChild(fresh);
-        for (const chat of data.chats || []) {
-            const option = el('option', null, chat.title || t('assistant.untitled'));
-            option.value = chat.id;
-            history.appendChild(option);
+    // ---------------- History ----------------
+    function trashIcon() {
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('aria-hidden', 'true');
+        for (const d of ['M3 6h18', 'M8 6V4h8v2', 'M6 6l1 14h10l1-14']) {
+            const path = document.createElementNS(ns, 'path');
+            path.setAttribute('d', d);
+            svg.appendChild(path);
         }
-        history.value = selectId && [...history.options].some((o) => o.value === selectId)
-            ? selectId : '';
+        return svg;
     }
 
-    function clearLog() {
-        for (const node of [...log.children]) if (node !== empty) node.remove();
+    function renderChats() {
+        chatsEl.replaceChildren();
+        if (!chats.length) {
+            chatsEl.appendChild(el('div', 'asst__chats-empty', t('assistant.no_chats')));
+            return;
+        }
+        for (const chat of chats) {
+            const row = el('div', 'asst__chat' + (chat.id === chatId ? ' asst__chat--active' : ''));
+            const open = el('button', 'asst__chat-open', chat.title || t('assistant.untitled'));
+            open.type = 'button';
+            open.title = chat.title || t('assistant.untitled');
+            open.addEventListener('click', () => {
+                setDrawer(false);
+                if (chat.id !== chatId) openChat(chat.id);
+            });
+            row.appendChild(open);
+            if (chat.running) {
+                const spin = el('span', 'asst__spinner');
+                spin.title = t('assistant.chat_running');
+                spin.setAttribute('aria-label', t('assistant.chat_running'));
+                row.appendChild(spin);
+            }
+            const del = el('button', 'asst__icon asst__chat-delete');
+            del.type = 'button';
+            del.title = t('assistant.delete_chat');
+            del.setAttribute('aria-label', t('assistant.delete_chat'));
+            del.appendChild(trashIcon());
+            del.addEventListener('click', () => deleteChat(chat.id));
+            row.appendChild(del);
+            chatsEl.appendChild(row);
+        }
+    }
+
+    function setHeading() {
+        const chat = chats.find((c) => c.id === chatId);
+        headingEl.textContent = (chat && chat.title) || t('assistant.heading');
+    }
+
+    /** The history, and whether any chat other than the open one is still answering. While
+     *  one is, the list is re-read every few seconds so its spinner stops when it is done. */
+    async function loadChats() {
+        try {
+            const response = await fetch('/api/assistant/chats');
+            const data = await response.json();
+            chats = data.chats || [];
+        } catch (e) {
+            chats = [];
+        }
+        renderChats();
+        setHeading();
+        clearTimeout(listTimer);
+        if (chats.some((c) => c.running && c.id !== chatId)) {
+            listTimer = setTimeout(loadChats, LIST_POLL_MS);
+        }
+    }
+
+    function clearThread() {
+        for (const node of [...thread.children]) if (node !== empty) node.remove();
         empty.hidden = false;
+        turn = null;
         thinking = null;
     }
 
     async function openChat(id) {
-        stopPolling();
-        clearLog();
+        stopListening();
+        clearThread();
         chatId = id || null;
-        rememberChat(chatId);
+        remember(CHAT_KEY, chatId);
+        renderChats();
+        setHeading();
         if (!chatId) return;
-        const response = await fetch(`/api/assistant/chats/${encodeURIComponent(chatId)}`);
-        if (!response.ok) {
+        let data;
+        try {
+            const response = await fetch(`/api/assistant/chats/${encodeURIComponent(chatId)}`);
+            if (!response.ok) throw new Error('gone');
+            data = await response.json();
+        } catch (e) {
             chatId = null;
-            rememberChat(null);
-            history.value = '';
+            remember(CHAT_KEY, null);
+            renderChats();
             return;
         }
-        const data = await response.json();
+        if (chatId !== id) return;      // another chat was opened meanwhile
         const items = [
-            ...data.messages.map((m) => ({ at: m.created_at, kind: 'message', m })),
-            ...data.actions.map((a) => ({ at: a.created_at, kind: 'action', a })),
+            ...data.messages.map((m) => ({ at: m.created_at, m })),
+            ...data.actions.map((a) => ({ at: a.created_at, a })),
         ].sort((x, y) => x.at - y.at);
         for (const item of items) {
-            if (item.kind === 'action') renderAction(item.a);
-            else if (item.m.role === 'assistant') addAnswer(item.m.content, item.m.tools);
-            else addMessage(item.m.role, item.m.content);
+            if (item.a) renderAction(item.a);
+            else if (item.m.role === 'user') addUser(item.m.content);
+            else if (item.m.role === 'assistant') {
+                addAnswer(item.m.content, { tools: item.m.tools, step: item.m.step });
+            } else addPlain('asst__step', item.m.content);
         }
+        if (data.run) listen(data.run.id, data.run.seq);
+        scrollDown();
     }
 
-    history.addEventListener('change', () => openChat(history.value));
+    async function deleteChat(id) {
+        if (!window.confirm(t('assistant.delete_confirm'))) return;
+        await fetch(`/api/assistant/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (id === chatId) await openChat(null);
+        await loadChats();
+    }
 
-    $('assistant-new').addEventListener('click', async () => {
-        await openChat(null);
-        history.value = '';
+    function newChat() {
+        setDrawer(false);
+        openChat(null);
         input.focus();
-    });
-
-    $('assistant-delete').addEventListener('click', async () => {
-        if (!chatId || !window.confirm(t('assistant.delete_confirm'))) return;
-        await fetch(`/api/assistant/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' });
-        await openChat(null);
-        await loadHistory(null);
-    });
-
-    // ---------------- Sending and polling ----------------
-    function busy(on) {
-        sendBtn.disabled = on;
-        stopBtn.hidden = !on;
-        input.disabled = on;
     }
 
-    function stopPolling() {
-        if (pollTimer) clearTimeout(pollTimer);
-        pollTimer = null;
-        runId = null;
+    $('assistant-new').addEventListener('click', newChat);
+    $('assistant-new-compact').addEventListener('click', newChat);
+
+    // ---------------- Listening to a run ----------------
+    function busy(on) {
+        sendBtn.hidden = on;
+        stopBtn.hidden = !on;
+    }
+
+    /** Stop polling. The run itself goes on in the hub; see the file comment. */
+    function stopListening() {
+        if (run) clearTimeout(run.timer);
+        run = null;
         busy(false);
         setThinking(null);
     }
 
+    function listen(runId, after) {
+        stopListening();
+        run = { id: runId, chatId, after, timer: null };
+        busy(true);
+        setThinking(t('assistant.thinking'));
+        run.timer = setTimeout(poll, 300);
+    }
+
     async function poll() {
-        if (!runId) return;
+        const current = run;
+        if (!current) return;
         let data;
         try {
-            const response = await fetch(`/api/assistant/runs/${runId}?after_seq=${afterSeq}`);
+            const response = await fetch(`/api/assistant/runs/${current.id}?after_seq=${current.after}`);
             data = await response.json();
             if (!response.ok) throw new Error(data.error || 'poll');
         } catch (e) {
-            addMessage('error', t('assistant.error'));
-            stopPolling();
+            if (run !== current) return;
+            addPlain('asst__error', t('assistant.error'));
+            stopListening();
             return;
         }
+        // The operator switched chats while this request was out: its events belong to a
+        // chat no longer on screen, and will be read from storage when that chat is opened.
+        if (run !== current) return;
         for (const event of data.events || []) {
-            afterSeq = Math.max(afterSeq, event.seq);
+            current.after = Math.max(current.after, event.seq);
             if (event.type === 'text') {
-                setThinking(null);
-                addAnswer(event.content);
-                if (!event.final) setThinking(t('assistant.thinking'));
+                addAnswer(event.content, { step: !event.final });
             } else if (event.type === 'tool') {
                 if (event.action) renderAction(event.action);
-                setThinking(event.state === 'started'
-                    ? t('assistant.using_tool', { tool: event.name })
-                    : t('assistant.thinking'));
+                if (event.state === 'started') {
+                    setThinking(t('assistant.using_tool', { tool: event.name }));
+                } else {
+                    setThinking(t('assistant.thinking'));
+                }
             } else if (event.type === 'error') {
-                addMessage('error', event.error === 'stopped' ? t('assistant.stopped') : event.error);
+                addPlain('asst__error',
+                    event.error === 'stopped' ? t('assistant.stopped') : event.error);
             }
         }
         if (data.done) {
-            stopPolling();
-            input.focus();
+            stopListening();
+            loadChats();
             return;
         }
-        pollTimer = setTimeout(poll, POLL_MS);
+        current.timer = setTimeout(poll, POLL_MS);
     }
 
     async function send(text) {
         text = String(text || '').trim();
-        if (!text || runId) return;
+        if (!text || run || !ready) return;
         busy(true);
         try {
             if (!chatId) {
@@ -449,10 +638,11 @@
                 const chat = await created.json();
                 if (!created.ok) throw new Error(chat.error || 'create');
                 chatId = chat.id;
-                rememberChat(chatId);
+                remember(CHAT_KEY, chatId);
             }
-            addMessage('user', text);
+            addUser(text);
             input.value = '';
+            autosize();
             const response = await fetch(`/api/assistant/chats/${encodeURIComponent(chatId)}/messages`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -460,20 +650,24 @@
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
-                addMessage('error', data.error || t('assistant.error'));
+                addPlain('asst__error', data.error || t('assistant.error'));
                 busy(false);
                 return;
             }
-            runId = data.run_id;
-            afterSeq = -1;
-            setThinking(t('assistant.thinking'));
-            pollTimer = setTimeout(poll, 300);
-            loadHistory(chatId);
+            listen(data.run_id, -1);
+            loadChats();
         } catch (e) {
-            addMessage('error', t('assistant.error'));
+            addPlain('asst__error', t('assistant.error'));
             busy(false);
         }
     }
+
+    function autosize() {
+        input.style.height = 'auto';
+        input.style.height = `${input.scrollHeight}px`;
+    }
+
+    input.addEventListener('input', autosize);
 
     form.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -488,33 +682,34 @@
     });
 
     stopBtn.addEventListener('click', () => {
-        if (!runId) return;
-        fetch(`/api/assistant/runs/${runId}/cancel`, {
+        if (!run) return;
+        fetch(`/api/assistant/runs/${run.id}/cancel`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
         }).catch(() => toast(t('assistant.error'), { kind: 'error' }));
     });
 
-    for (const button of document.querySelectorAll('.assistant__example')) {
+    for (const button of document.querySelectorAll('.asst__example')) {
         button.addEventListener('click', () => send(button.textContent));
     }
 
     // ---------------- Boot ----------------
     async function boot() {
+        applyWidth();
         showContext();
-        syncPin();
         try {
             const response = await fetch('/api/assistant/status');
             const status = await response.json();
             if (!status.ready) {
+                ready = false;
                 offEl.hidden = false;
                 offEl.textContent = t('assistant.off', { reason: status.error || '' });
                 sendBtn.disabled = true;
                 input.disabled = true;
             }
         } catch (e) { /* the first send will say what is wrong */ }
-        const saved = savedChat();
-        await loadHistory(saved);
-        if (saved && history.value === saved) await openChat(saved);
+        await loadChats();
+        const saved = recall(CHAT_KEY);
+        if (saved && chats.some((c) => c.id === saved)) await openChat(saved);
     }
 
     boot();
