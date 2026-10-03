@@ -1211,6 +1211,8 @@ def test_package_building_follows_the_modes():
     check("the package tools are offered to an operator who can deploy",
           {"web_read", "winget_manifest", "download_installer", "promote_download",
            "create_package"} <= set(CALLS[-1][1]))
+    check("...with the packaging playbook in their prompt",
+          "## Building packages" in CALLS[-1][0][0]["content"])
 
     admin.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "auto"})
     SCRIPT[:] = [download, say("downloading")]
@@ -1261,6 +1263,8 @@ def test_package_building_follows_the_modes():
     converse(viewer, new_chat(viewer), "hi")
     check("...and not offered without deploy_packages",
           not {"web_read", "download_installer", "create_package"} & set(CALLS[-1][1]))
+    check("...nor the playbook sent, which would cost tokens on every step",
+          "## Building packages" not in CALLS[-1][0][0]["content"])
     settings.set_many(DB, {"ai.assistant_web_enabled": False}, "test")
     settings.invalidate()
 
