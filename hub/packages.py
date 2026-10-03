@@ -1311,6 +1311,50 @@ def list_deployments(db_path, limit=100, machine=None):
     return deployments
 
 
+# What the Dashboard's "Deployments in flight" tile counts: a target is unresolved while it is
+# waiting for its turn or has a command out.
+TARGET_ACTIVE = (TARGET_PENDING, TARGET_IN_FLIGHT)
+MAX_TARGET_ROWS = 500
+
+
+def list_targets(db_path, statuses=TARGET_ACTIVE, machines=None, limit=MAX_TARGET_ROWS):
+    """Deployment TARGETS in the given statuses, across every deployment, longest-waiting first.
+
+    The Dashboard tile counts targets (count_deployment_states), and the only list that existed
+    was of DEPLOYMENTS -- the newest hundred, each with a tally. A target stuck for weeks sits
+    in an old deployment below that cut, or in one whose own status says `complete` or
+    `cancelled`, so an operator looking at "1 in flight" had nowhere to click and nothing to
+    find, and neither did the assistant (roadmap #26). This is that list: the same rows the
+    tile counts, joined to their deployment and package so each one says what it is.
+
+    `machines` is the caller's scope, as count_deployment_states takes it: None for
+    unrestricted, an empty collection for nothing.
+    """
+    statuses = [s for s in statuses if s in TARGET_STATUSES] or list(TARGET_ACTIVE)
+    clauses = [f"t.status IN ({','.join('?' for _ in statuses)})"]
+    params = list(statuses)
+    if machines is not None:
+        scope = [_clean(m) for m in machines]
+        if not scope:
+            return []
+        clauses.append(f"t.machine IN ({','.join('?' for _ in scope)})")
+        params.extend(scope)
+    params.append(max(1, min(int(limit or MAX_TARGET_ROWS), MAX_TARGET_ROWS)))
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT t.deployment_id, t.machine, t.status, t.attempts, t.last_error, "
+            "       t.command_id, t.next_attempt_at, t.updated_at, "
+            "       d.status AS deployment_status, d.created_at AS deployment_created_at, "
+            "       d.created_by, d.window_start, d.window_end, d.max_attempts, "
+            "       p.name AS package_name, p.version AS package_version "
+            "FROM deployment_targets t "
+            "JOIN deployments d ON d.id = t.deployment_id "
+            "LEFT JOIN packages p ON p.id = d.package_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY t.updated_at ASC, t.machine COLLATE NOCASE LIMIT ?", params).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_deployment(db_path, deployment_id):
     """One deployment with every target row -- the progress view."""
     with get_conn(db_path) as conn:

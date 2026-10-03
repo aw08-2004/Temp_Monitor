@@ -736,6 +736,125 @@ def test_every_read_route_survives_narrowing_and_trimming():
           not sliced)
 
 
+def test_a_stuck_deployment_target_can_be_found():
+    """The Dashboard counted one deployment target in flight for weeks, and there was no list
+    of targets to find it in: the only list was of the newest deployments, and this target sat
+    in one whose own status said `complete`. The assistant ran out of steps looking."""
+    print("\n-- the target behind 'Deployments in flight' is listed, wherever it is --")
+    import packages
+    pkg = packages.create_package(
+        DB, name="7-Zip", source={"kind": packages.SOURCE_UPLOAD, "sha256": "a" * 64,
+                                  "file_name": "7z.msi", "file_size": 1234},
+        install_command="msiexec.exe", install_args='/i "{file}" /qn', actor="test")
+    dep = packages.create_deployment(DB, package_id=pkg, machines=["PC-01", "PC-02"],
+                                     created_by="test")
+    weeks_ago = int(time.time()) - 21 * 86400
+    with packages.get_conn(DB) as conn:
+        conn.execute("UPDATE deployments SET status = 'complete' WHERE id = ?", (dep,))
+        conn.execute("UPDATE deployment_targets SET status = 'succeeded' "
+                     "WHERE deployment_id = ? AND machine = 'PC-02'", (dep,))
+        conn.execute("UPDATE deployment_targets SET updated_at = ? "
+                     "WHERE deployment_id = ? AND machine = 'PC-01'", (weeks_ago, dep))
+    check("the Dashboard counts it",
+          packages.count_deployment_states(DB)["running"] >= 1)
+
+    admin = client_for("tester@example.com")
+    r = admin.get("/api/deployments/targets")
+    rows = [t for t in (r.get_json() or {}).get("targets", []) if t["deployment_id"] == dep]
+    check("the targets route lists it", r.status_code == 200 and len(rows) == 1
+          and rows[0]["machine"] == "PC-01" and rows[0]["status"] == "pending")
+    check("...with its deployment's own status and package",
+          rows and rows[0]["deployment_status"] == "complete"
+          and rows[0]["package_name"] == "7-Zip")
+    check("an unknown status is refused",
+          admin.get("/api/deployments/targets?status=bogus").status_code == 400)
+    check("an operator without deploy_packages is refused",
+          client_for("viewer@x.com").get("/api/deployments/targets").status_code == 403)
+
+    permissions.create_group(DB, "Deployers PC-02",
+                             capabilities=[permissions.VIEW, permissions.DEPLOY_PACKAGES],
+                             machines=["PC-02"], members=["deployer@x.com"])
+    scoped = client_for("deployer@x.com").get("/api/deployments/targets").get_json()
+    check("a scoped deployer does not see a machine outside their scope",
+          not any(t["machine"] == "PC-01" for t in scoped["targets"]))
+
+    chat_id = new_chat(admin)
+    SCRIPT[:] = [call("deployment_targets"), say("PC-01 is stuck.")]
+    converse(admin, chat_id, "It says 1 deployment is in flight. Which one?")
+    result = json.loads(tool_messages(chat_id)[0]["content"])
+    check("the assistant finds it in one call",
+          result["ok"] and any(t["machine"] == "PC-01" and t["deployment_id"] == dep
+                               for t in result["data"]["targets"]))
+    check("the assistant is offered the tool",
+          "deployment_targets" in CALLS[-1][1])
+
+    dashboard = admin.get("/", headers={"Sec-Fetch-Dest": "iframe"}).get_data(as_text=True)
+    check("the Dashboard knows this operator may follow the tile",
+          'data-can-deploy="yes"' in dashboard)
+    viewer_page = client_for("viewer@x.com").get(
+        "/", headers={"Sec-Fetch-Dest": "iframe"}).get_data(as_text=True)
+    check("...and that a viewer may not", 'data-can-deploy=""' in viewer_page)
+
+
+def test_where_operators():
+    print("\n-- where takes >, in, exists --")
+    rows = {"deployments": [{"id": 1, "target_counts": {"pending": 1}},
+                            {"id": 2, "target_counts": {"succeeded": 3}},
+                            {"id": 3, "status": "done", "target_counts": {"in_flight": 2}}]}
+    pick = lambda where: [d["id"] for d in assistant_tools.narrow(rows, {"where": where})
+                          ["deployments"]]
+    check("> 0 finds a count that is present", pick({"target_counts.pending": {">": 0}}) == [1])
+    check("...and not one that is absent", pick({"target_counts.failed": {">": 0}}) == [])
+    check("in matches any of a list, case-insensitively",
+          pick({"status": {"in": ["DONE", "x"]}}) == [3])
+    check("exists false finds the entries without the key",
+          pick({"status": {"exists": False}}) == [1, 2])
+    check("!= excludes", pick({"status": {"!=": "done"}}) == [])
+
+
+def test_a_chat_keeps_answering_after_you_leave_it():
+    """Switching chats used to stop the panel listening, never resume, and leave the chat
+    refusing new messages as 'still answering'. The run goes on in the hub; the panel has to
+    be able to find it again."""
+    print("\n-- a chat that is answering can be left and picked up again --")
+    import threading
+    admin = client_for("tester@example.com")
+    gate = threading.Event()
+
+    def slow(messages):
+        gate.wait(10)
+        return say("finished while you were away")
+
+    SCRIPT[:] = [slow]
+    chat_a = new_chat(admin)
+    r = admin.post(f"/api/assistant/chats/{chat_a}/messages", json={"text": "take your time"})
+    run_id = r.get_json()["run_id"]
+    time.sleep(0.2)
+    listed = {c["id"]: c for c in admin.get("/api/assistant/chats").get_json()["chats"]}
+    check("the history shows it still answering", listed[chat_a]["running"] is True)
+    opened = admin.get(f"/api/assistant/chats/{chat_a}").get_json()
+    check("opening it again hands back the run to listen to",
+          opened["run"] and opened["run"]["id"] == run_id)
+    chat_b = new_chat(admin)
+    SCRIPT.append(say("b answered"))
+    status_b, events_b = converse(admin, chat_b, "meanwhile, in another chat")
+    check("another chat can be used meanwhile",
+          status_b == 202 and events_b[-1]["type"] == "done")
+    gate.set()
+    deadline = time.time() + 10
+    while time.time() < deadline and admin.get(f"/api/assistant/chats/{chat_a}").get_json()["run"]:
+        time.sleep(0.05)
+    opened = admin.get(f"/api/assistant/chats/{chat_a}").get_json()
+    check("when it finishes the answer is stored in the chat",
+          opened["run"] is None
+          and any("finished while you were away" in m["content"] for m in opened["messages"]))
+    listed = {c["id"]: c for c in admin.get("/api/assistant/chats").get_json()["chats"]}
+    check("...and the history stops showing it as running", listed[chat_a]["running"] is False)
+    SCRIPT[:] = [say("again")]
+    status, _events = converse(admin, chat_a, "and now?")
+    check("the chat takes new messages again", status == 202)
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -764,6 +883,9 @@ def main():
     test_narrowing_reaches_nested_lists()
     test_trimming_reaches_nested_lists()
     test_every_read_route_survives_narrowing_and_trimming()
+    test_a_stuck_deployment_target_can_be_found()
+    test_where_operators()
+    test_a_chat_keeps_answering_after_you_leave_it()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

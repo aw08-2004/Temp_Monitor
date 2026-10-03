@@ -10,57 +10,97 @@
    from /api/assistant/*.
 
    ONE page for both places the panel appears. Opened from the sidebar it fills the page area
-   like any section; pinned, shell.js docks this same frame to the right of whatever page is
-   showing. Nothing here knows which, apart from the Pin button's label, so there is one
-   implementation of the chat and not two.
+   like any section and shows its conversation history in a column on the left, which folds
+   away. Pinned, shell.js docks this same frame to the right of whatever page is showing; the
+   frame is then too narrow for a column, so the history becomes a drawer behind the clock
+   button. Which of the two is decided by the frame's own WIDTH (assistant.js toggles
+   .asst--compact), not by asking the shell, so a wide dock and a narrow window both get the
+   layout that fits them.
+
+   Laid out after Claude's own chat: answers as plain text rather than boxes, the operator's
+   messages in a soft bubble, the model's working steps small and grey above its answer, and a
+   rounded composer at the foot. Colours are the hub's tokens, so it matches the console in
+   both themes.
 
    Every answer is rendered by assistant.js from text nodes. The model's text is never
    innerHTML: the only links in it are ones the hub built from link tokens after checking the
    machine is in the viewer's scope (assistant.render_links), and the renderer only turns a
-   relative /path into an anchor.
+   same-origin /path into an anchor.
 #}
-<div class="assistant" id="assistant">
-    <header class="assistant__header">
-        <div class="assistant__title">
-            <h1 class="assistant__heading">{{ t('assistant.heading') }}</h1>
-            <span class="assistant__context" id="assistant-context" aria-live="polite"></span>
+<div class="asst" id="assistant">
+    <aside class="asst__side" id="assistant-side" aria-label="{{ t('assistant.history') }}">
+        <div class="asst__side-head">
+            <button class="asst__new" type="button" id="assistant-new">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                <span>{{ t('assistant.new_chat') }}</span>
+            </button>
+            <button class="asst__icon" type="button" id="assistant-fold"
+                    title="{{ t('assistant.fold') }}" aria-label="{{ t('assistant.fold') }}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+            </button>
         </div>
-        <div class="assistant__tools">
-            <label class="sr-only" for="assistant-history">{{ t('assistant.history') }}</label>
-            <select class="input assistant__history" id="assistant-history"></select>
-            <button class="btn btn--ghost" type="button" id="assistant-new"
-                    title="{{ t('assistant.new_chat') }}">{{ t('assistant.new_chat') }}</button>
-            <button class="btn btn--ghost" type="button" id="assistant-delete"
-                    title="{{ t('assistant.delete_chat') }}">{{ t('assistant.delete_chat') }}</button>
-            <button class="btn btn--ghost" type="button" id="assistant-pin" hidden
-                    aria-pressed="false">{{ t('assistant.pin') }}</button>
-        </div>
-    </header>
+        <div class="asst__side-label">{{ t('assistant.history') }}</div>
+        <nav class="asst__chats" id="assistant-chats"></nav>
+    </aside>
+    <div class="asst__scrim" id="assistant-scrim" hidden></div>
 
-    <div class="assistant__notice" id="assistant-off" hidden></div>
+    <section class="asst__main">
+        <header class="asst__bar">
+            <button class="asst__icon" type="button" id="assistant-history-toggle"
+                    title="{{ t('assistant.history') }}" aria-label="{{ t('assistant.history') }}"
+                    aria-controls="assistant-side" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+            </button>
+            <div class="asst__title">
+                <h1 class="asst__heading" id="assistant-heading">{{ t('assistant.heading') }}</h1>
+                <span class="asst__context" id="assistant-context" aria-live="polite"></span>
+            </div>
+            <button class="asst__icon asst__compact-only" type="button" id="assistant-new-compact"
+                    title="{{ t('assistant.new_chat') }}" aria-label="{{ t('assistant.new_chat') }}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+            </button>
+            <button class="asst__icon" type="button" id="assistant-pin" hidden aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+            </button>
+        </header>
 
-    <div class="assistant__log" id="assistant-log" role="log" aria-live="polite">
-        <div class="assistant__empty" id="assistant-empty">
-            <p>{{ t('assistant.intro') }}</p>
-            <ul class="assistant__examples" id="assistant-examples">
-                <li><button type="button" class="assistant__example">{{ t('assistant.example_page') }}</button></li>
-                <li><button type="button" class="assistant__example">{{ t('assistant.example_hot') }}</button></li>
-                <li><button type="button" class="assistant__example">{{ t('assistant.example_alerts') }}</button></li>
-                <li><button type="button" class="assistant__example">{{ t('assistant.example_rule') }}</button></li>
-            </ul>
-            <p class="assistant__privacy">{{ t('assistant.privacy') }}</p>
-        </div>
-    </div>
+        <div class="asst__notice" id="assistant-off" hidden></div>
 
-    <form class="assistant__composer" id="assistant-form">
-        <label class="sr-only" for="assistant-input">{{ t('assistant.placeholder') }}</label>
-        <textarea class="input assistant__input" id="assistant-input" rows="2"
-                  placeholder="{{ t('assistant.placeholder') }}" maxlength="4000"></textarea>
-        <div class="assistant__send">
-            <button class="btn btn--primary" type="submit" id="assistant-send">{{ t('assistant.send') }}</button>
-            <button class="btn btn--ghost" type="button" id="assistant-stop" hidden>{{ t('assistant.stop') }}</button>
+        <div class="asst__log" id="assistant-log" role="log" aria-live="polite">
+            <div class="asst__thread" id="assistant-thread">
+                <div class="asst__empty" id="assistant-empty">
+                    <div class="asst__mark asst__mark--big" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.4l-.8-1.9-1.9-.8 1.9-.8z"/></svg>
+                    </div>
+                    <h2 class="asst__greeting">{{ t('assistant.greeting') }}</h2>
+                    <p class="asst__intro">{{ t('assistant.intro') }}</p>
+                    <div class="asst__examples">
+                        <button type="button" class="asst__example">{{ t('assistant.example_page') }}</button>
+                        <button type="button" class="asst__example">{{ t('assistant.example_hot') }}</button>
+                        <button type="button" class="asst__example">{{ t('assistant.example_alerts') }}</button>
+                        <button type="button" class="asst__example">{{ t('assistant.example_stuck') }}</button>
+                    </div>
+                </div>
+            </div>
         </div>
-    </form>
+
+        <form class="asst__composer" id="assistant-form">
+            <div class="asst__box">
+                <label class="sr-only" for="assistant-input">{{ t('assistant.placeholder') }}</label>
+                <textarea class="asst__input" id="assistant-input" rows="1"
+                          placeholder="{{ t('assistant.placeholder') }}" maxlength="4000"></textarea>
+                <button class="asst__send" type="submit" id="assistant-send"
+                        title="{{ t('assistant.send') }}" aria-label="{{ t('assistant.send') }}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                </button>
+                <button class="asst__send asst__send--stop" type="button" id="assistant-stop" hidden
+                        title="{{ t('assistant.stop') }}" aria-label="{{ t('assistant.stop') }}">
+                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+                </button>
+            </div>
+            <p class="asst__fine">{{ t('assistant.privacy') }}</p>
+        </form>
+    </section>
 </div>
 {% endblock %}
 {% block page_scripts %}

@@ -1691,7 +1691,21 @@
         "attempts": "Versuche",
         "detail": "Detail"
       },
-      "tally": "{status}: {count}"
+      "tally": "{status}: {count}",
+      "active": {
+        "title": "Wartet oder läuft gerade",
+        "intro": "Jedes Gerät, mit dem eine Verteilung noch nicht fertig ist, aus jeder noch so alten Verteilung -- die Zahl, die das Dashboard als laufende Verteilungen zeigt. Am längsten wartende zuerst.",
+        "col": {
+          "machine": "Gerät",
+          "package": "Paket",
+          "status": "Status",
+          "since": "Unverändert seit",
+          "detail": "Details"
+        },
+        "deployment": "Verteilung: {status}",
+        "attempts": "Versuch {attempts} von {max}",
+        "load_failed": "Die wartenden oder laufenden Geräte konnten nicht geladen werden. Laden Sie die Seite neu, um es erneut zu versuchen."
+      }
     },
     "status": {
       "scheduled": "geplant",
@@ -3305,7 +3319,6 @@
     "example_page": "Was sollte ich über die aktuelle Seite wissen?",
     "example_hot": "Welche Geräte laufen gerade zu heiß?",
     "example_alerts": "Fasse die offenen Warnungen von heute zusammen und sag mir, womit ich anfangen soll",
-    "example_rule": "Warne mich, wenn ein PC weniger als 10 GB frei hat",
     "privacy": "Gerätenamen und die Daten, die der Assistent liest, werden an den in den Einstellungen konfigurierten KI-Anbieter gesendet.",
     "placeholder": "Den Assistenten fragen...",
     "send": "Senden",
@@ -3331,7 +3344,12 @@
     "typed_placeholder": "Zum Bestätigen {machine} eingeben",
     "untitled": "Unterhaltung ohne Titel",
     "error": "Der Assistent konnte nicht antworten. Versuchen Sie es erneut.",
-    "stopped": "Angehalten."
+    "stopped": "Angehalten.",
+    "greeting": "Wobei kann ich helfen?",
+    "fold": "Unterhaltungen ausblenden",
+    "no_chats": "Noch keine Unterhaltungen.",
+    "chat_running": "Antwortet noch",
+    "example_stuck": "Hängt eine Verteilung fest, und auf welchem Gerät?"
   },
   "scripts": {
     "body": "Skript",

@@ -418,6 +418,25 @@ class RunLog:
             run = self._runs.get(run_id)
             return bool(run and run["cancel"])
 
+    def active(self, chat_id, owner):
+        """The run still answering in this chat, as (run_id, last seq), or None.
+
+        What lets the panel leave a chat that is answering and come back to it: the run goes on
+        in the pool whatever the browser does, and before this the panel simply forgot it --
+        it stopped polling on a switch, never resumed, and the chat then refused every new
+        message as "still answering" (seen on a real hub).
+        """
+        with self._lock:
+            for run_id, run in self._runs.items():
+                if run["chat_id"] == chat_id and run["owner"] == owner and not run["done"]:
+                    return run_id, len(run["events"]) - 1
+        return None
+
+    def active_chats(self, owner):
+        with self._lock:
+            return {run["chat_id"] for run in self._runs.values()
+                    if run["owner"] == owner and not run["done"]}
+
     def read(self, run_id, owner, after_seq=-1):
         with self._lock:
             run = self._runs.get(run_id)
@@ -725,9 +744,19 @@ def system_prompt(*, operator, capabilities, scope, pages, context, today, langu
         "applied to ONE list in the answer at any depth: `list` names it as a dotted path "
         "(metrics.temp, sections.software.data); without it the largest list is used. The "
         "answer's `_narrowed` says which list it was and names the others. Use them FIRST on "
-        "anything that may be long: e.g. list_deployments with where "
-        "{\"target_counts.in_flight\": 1}, or fields [\"id\", \"name\"]. If a result says "
-        "`truncated`, call it again narrowed -- do not repeat the same call.",
+        "anything that may be long, e.g. fields [\"id\", \"name\"]. `where` values may be "
+        "operators: {\">\": 0}, {\"in\": [...]}, {\"exists\": true}; a count of zero is "
+        "usually ABSENT, so ask for {\">\": 0}, never for 1. If a result says `truncated`, "
+        "call it again narrowed -- never repeat the same call, and never retry the same "
+        "filter more than once.",
+        "",
+        "## Numbers on a page",
+        "When the operator asks about a number they can see, find the LIST behind it before "
+        "anything else, with the tool that lists exactly what the number counts:",
+        "- Dashboard 'Deployments in flight' -> deployment_targets (machines still pending or "
+        "in_flight, in any deployment however old; longest-waiting first). Then get_deployment "
+        "for the one it belongs to, and command_output for its command_id.",
+        "- open alerts -> list_alerts; machines offline or hot -> list_machines with `where`.",
         "",
         "## Doing things",
         "Read-only tools run at once. Low-risk changes (dismiss an alert, wake a PC, draft a "

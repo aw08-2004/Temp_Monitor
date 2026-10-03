@@ -68,8 +68,11 @@
      * red just because the tile is about failures, so callers pass a tone only when the
      * value itself is the news.
      */
-    function tile(label, value, { tone = null, hint = null } = {}) {
-        const node = el('div', 'tile');
+    function tile(label, value, { tone = null, hint = null, href = null } = {}) {
+        // A link when there is somewhere to go: a number nobody can drill into is how
+        // "1 deployment in flight" sat unexplained for weeks (roadmap #26).
+        const node = el(href ? 'a' : 'div', href ? 'tile tile--link' : 'tile');
+        if (href) node.href = href;
         const v = el('div', 'tile__value', num(value));
         if (tone) v.classList.add(`tile__value--${tone}`);
         node.append(v, el('div', 'tile__label', label));
@@ -159,7 +162,9 @@
     function renderActivity(summary) {
         const a = summary.activity;
         activityEl.replaceChildren(
-            tile(t('dashboard.activity.deployments_running'), a.deployments_running),
+            tile(t('dashboard.activity.deployments_running'), a.deployments_running,
+                 { href: a.deployments_running && activityEl.dataset.canDeploy
+                     ? '/packages#deployments-pane' : null }),
             tile(t('dashboard.activity.deployments_failed'), a.deployments_failed_24h,
                  { tone: a.deployments_failed_24h ? 'bad' : null }),
             tile(t('dashboard.activity.backups_ok'), a.backups_ok_24h),

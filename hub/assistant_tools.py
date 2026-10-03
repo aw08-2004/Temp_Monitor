@@ -252,6 +252,13 @@ CURATED = (
      "count of targets per status (pending, in_flight, succeeded, failed, expired, "
      "cancelled). Optionally for one machine.",
      "GET", "/api/deployments", _params(machine=_MACHINE)),
+    ("deployment_targets", "The individual machines of deployments that are still waiting "
+     "(pending) or running (in_flight), across EVERY deployment however old, longest-waiting "
+     "first -- exactly what the Dashboard's 'Deployments in flight' tile counts. Each row has "
+     "the machine, its status, attempts, last error, when it last changed, and its deployment "
+     "and package. Start here for 'what is stuck'. `status` is a comma list to ask for others.",
+     "GET", "/api/deployments/targets",
+     _params(status={"type": "string"}, machine=_MACHINE)),
     ("get_deployment", "One deployment with every target machine: status, attempts, last "
      "error, the command it is waiting on, and when it was last updated.",
      "GET", "/api/deployments/<deployment_id>",
@@ -324,7 +331,11 @@ NARROW_PROPS = {
     "where": {"type": "object",
               "description": "Keep only list entries whose keys match: text matches as a "
                              "case-insensitive substring, anything else must be equal. "
-                             "Dotted paths work here too."},
+                             "Dotted paths work here too. A value may be an operator object: "
+                             "{\">\": 0}, {\">=\": 2}, {\"<\": 5}, {\"<=\": 5}, {\"!=\": "
+                             "\"done\"}, {\"in\": [\"pending\", \"in_flight\"]}, "
+                             "{\"exists\": true}. A count that is zero is often simply "
+                             "absent, so use {\">\": 0} rather than 1."},
     "limit": {"type": "integer", "description": "At most this many list entries."},
 }
 
@@ -343,9 +354,55 @@ def _get(item, path, default=None):
     return value
 
 
+OPERATORS = (">", ">=", "<", "<=", "!=", "in", "exists")
+
+
+def _number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _operator_matches(actual, spec):
+    """One `{op: operand}` condition. Every operator in the object must hold.
+
+    Added after a real conversation where the model filtered `{"target_counts.in_flight": 1}`
+    and matched nothing: the count it wanted was `pending`, and a status with zero targets is
+    not in the tally at all, so equality to one number was the wrong question. "More than
+    zero" and "any of these" are the questions it actually has.
+    """
+    for op, operand in spec.items():
+        if op == "exists":
+            if (actual is not _MISSING) != bool(operand):
+                return False
+            continue
+        if actual is _MISSING:
+            return False
+        if op == "in":
+            options = operand if isinstance(operand, list) else [operand]
+            if not any(_matches({"v": actual}, {"v": o}) for o in options):
+                return False
+        elif op == "!=":
+            if _matches({"v": actual}, {"v": operand}):
+                return False
+        else:
+            left, right = _number(actual), _number(operand)
+            if left is None or right is None:
+                return False
+            if not {">": left > right, ">=": left >= right,
+                    "<": left < right, "<=": left <= right}[op]:
+                return False
+    return True
+
+
 def _matches(item, where):
     for key, wanted in where.items():
         actual = _get(item, key, _MISSING)
+        if isinstance(wanted, dict) and wanted and set(wanted) <= set(OPERATORS):
+            if not _operator_matches(actual, wanted):
+                return False
+            continue
         if actual is _MISSING:
             return False
         if isinstance(wanted, str) and isinstance(actual, str):
