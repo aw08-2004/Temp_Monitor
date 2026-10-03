@@ -201,7 +201,12 @@
             if (match[1]) {
                 parent.appendChild(el('code', null, match[1].slice(1, -1)));
             } else if (match[2]) {
-                parent.appendChild(el('strong', null, match[2].slice(2, -2)));
+                // Rendered, not set as text: a model that bolds a machine name bolds its
+                // LINK too (`**[PC-12](/machine/PC-12)**`), and as text the brackets and the
+                // path showed on screen instead of a link.
+                const strong = el('strong');
+                renderInline(strong, match[2].slice(2, -2));
+                parent.appendChild(strong);
             } else {
                 const safe = hubPath(match[5]);
                 if (safe) {
@@ -303,15 +308,87 @@
         if (thinking && turn) turn.appendChild(thinking);
     }
 
+    function iconSvg(paths) {
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('aria-hidden', 'true');
+        for (const d of paths) {
+            const path = document.createElementNS(ns, 'path');
+            path.setAttribute('d', d);
+            svg.appendChild(path);
+        }
+        return svg;
+    }
+
+    const ICON_COPY = ['M9 9h11v11H9z', 'M5 15H4V4h11v1'];
+    const ICON_CHECK = ['M5 12l5 5L20 7'];
+    const ICON_PENCIL = ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'];
+    const ICON_TRASH = ['M3 6h18', 'M8 6V4h8v2', 'M6 6l1 14h10l1-14'];
+
+    /** The clipboard API first; the old textarea route where the frame was not granted it
+     *  (a classic, unframed page in an older browser). Returns whether it worked. */
+    async function copyText(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (e) {
+            const area = el('textarea');
+            area.value = text;
+            area.setAttribute('readonly', '');
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+            area.remove();
+            return ok;
+        }
+    }
+
+    /** A copy button for one message. `getText` is read at click time, so an answer copies
+     *  the text as it reads on screen -- link labels, not the paths behind them. */
+    function messageActions(getText) {
+        const row = el('div', 'asst__msg-actions');
+        const button = el('button', 'asst__icon asst__copy');
+        button.type = 'button';
+        const label = t('assistant.copy');
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.appendChild(iconSvg(ICON_COPY));
+        button.addEventListener('click', async () => {
+            if (!(await copyText(getText()))) {
+                toast(t('assistant.error'), { kind: 'error' });
+                return;
+            }
+            button.replaceChildren(iconSvg(ICON_CHECK));
+            button.title = t('assistant.copied');
+            button.setAttribute('aria-label', t('assistant.copied'));
+            setTimeout(() => {
+                button.replaceChildren(iconSvg(ICON_COPY));
+                button.title = label;
+                button.setAttribute('aria-label', label);
+            }, 1500);
+        });
+        row.appendChild(button);
+        return row;
+    }
+
     /** Text the operator typed, or a hub note: always plain text. Kept apart from the
      *  markdown path so nothing typed into this page can reach the renderer -- one function
      *  switching on a role was flagged by CodeQL (code scanning #158). */
     function addUser(text) {
         empty.hidden = true;
         turn = null;
+        const wrap = el('div', 'asst__user');
         const node = el('div', 'asst__msg--user');
         node.textContent = text;
-        thread.appendChild(node);
+        wrap.append(node, messageActions(() => text));
+        thread.appendChild(wrap);
         scrollDown();
     }
 
@@ -326,6 +403,9 @@
             const node = el('div', step ? 'asst__step' : 'asst__answer');
             node.appendChild(renderMarkdown(content));
             body.appendChild(node);
+            // Answers only: a working step ("let me check the deployments") is not text
+            // anybody wants to paste into a ticket.
+            if (!step) body.appendChild(messageActions(() => node.innerText.trim()));
         }
         if (tools.length) body.appendChild(toolsChip(tools));
         keepThinkingLast();
@@ -433,23 +513,87 @@
     }
 
     // ---------------- History ----------------
-    function trashIcon() {
-        const ns = 'http://www.w3.org/2000/svg';
-        const svg = document.createElementNS(ns, 'svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('fill', 'none');
-        svg.setAttribute('stroke', 'currentColor');
-        svg.setAttribute('stroke-width', '2');
-        svg.setAttribute('aria-hidden', 'true');
-        for (const d of ['M3 6h18', 'M8 6V4h8v2', 'M6 6l1 14h10l1-14']) {
-            const path = document.createElementNS(ns, 'path');
-            path.setAttribute('d', d);
-            svg.appendChild(path);
-        }
-        return svg;
+    // A rename in progress. The list is not redrawn under it: a re-render would throw the
+    // half-typed name away (the list re-reads itself while another chat is answering).
+    let renaming = false;
+
+    function rowButton(className, label, paths, onClick) {
+        const button = el('button', `asst__icon ${className}`);
+        button.type = 'button';
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.appendChild(iconSvg(paths));
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
+    /** Swap the row's title for a text box. Enter or leaving it saves; Escape cancels. */
+    function startRename(row, chat, open) {
+        renaming = true;
+        const box = el('input', 'input asst__rename');
+        box.value = chat.title || '';
+        box.maxLength = 80;
+        box.setAttribute('aria-label', t('assistant.rename'));
+        row.replaceChild(box, open);
+        box.focus();
+        box.select();
+        let finished = false;
+        const finish = async (save) => {
+            if (finished) return;
+            finished = true;
+            const title = box.value.trim();
+            if (save && title && title !== chat.title) {
+                try {
+                    const response = await fetch(`/api/assistant/chats/${encodeURIComponent(chat.id)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title }),
+                    });
+                    if (!response.ok) throw new Error(String(response.status));
+                } catch (e) {
+                    toast(t('assistant.error'), { kind: 'error' });
+                }
+            }
+            renaming = false;
+            await loadChats();
+        };
+        box.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        box.addEventListener('blur', () => finish(true));
+    }
+
+    const deleteDialog = $('assistant-delete-dialog');
+
+    /** The console's own modal instead of the browser's confirm(). Resolves to whether the
+     *  operator chose Delete; Escape and Cancel both resolve false.
+     *
+     *  Decided on the form's `submit` (which carries the button pressed, synchronously) and the
+     *  dialog's `cancel` (Escape), not on `close`: `close` is queued as a later task, and a
+     *  first version that waited for it never deleted anything in a frame the browser was
+     *  not drawing. Both listeners come off again, so a dialog opened twice answers once. */
+    function confirmDelete(chat) {
+        return new Promise((resolve) => {
+            const form = deleteDialog.querySelector('form');
+            $('assistant-delete-body').textContent = t('assistant.delete_body',
+                { title: chat.title || t('assistant.untitled') });
+            const done = (ok) => {
+                form.removeEventListener('submit', onSubmit);
+                deleteDialog.removeEventListener('cancel', onCancel);
+                resolve(ok);
+            };
+            const onSubmit = (e) => done(!!(e.submitter && e.submitter.value === 'delete'));
+            const onCancel = () => done(false);
+            form.addEventListener('submit', onSubmit);
+            deleteDialog.addEventListener('cancel', onCancel);
+            deleteDialog.showModal();
+            $('assistant-delete-confirm').focus();
+        });
     }
 
     function renderChats() {
+        if (renaming) return;
         chatsEl.replaceChildren();
         if (!chats.length) {
             chatsEl.appendChild(el('div', 'asst__chats-empty', t('assistant.no_chats')));
@@ -471,13 +615,10 @@
                 spin.setAttribute('aria-label', t('assistant.chat_running'));
                 row.appendChild(spin);
             }
-            const del = el('button', 'asst__icon asst__chat-delete');
-            del.type = 'button';
-            del.title = t('assistant.delete_chat');
-            del.setAttribute('aria-label', t('assistant.delete_chat'));
-            del.appendChild(trashIcon());
-            del.addEventListener('click', () => deleteChat(chat.id));
-            row.appendChild(del);
+            row.appendChild(rowButton('asst__chat-action', t('assistant.rename'), ICON_PENCIL,
+                                      () => startRename(row, chat, open)));
+            row.appendChild(rowButton('asst__chat-action', t('assistant.delete_chat'), ICON_TRASH,
+                                      () => deleteChat(chat)));
             chatsEl.appendChild(row);
         }
     }
@@ -547,8 +688,9 @@
         scrollDown();
     }
 
-    async function deleteChat(id) {
-        if (!window.confirm(t('assistant.delete_confirm'))) return;
+    async function deleteChat(chat) {
+        if (!(await confirmDelete(chat))) return;
+        const id = chat.id;
         try {
             const response = await fetch(`/api/assistant/chats/${encodeURIComponent(id)}`,
                                          { method: 'DELETE' });
@@ -625,14 +767,42 @@
             } else if (event.type === 'error') {
                 addPlain('asst__error',
                     event.error === 'stopped' ? t('assistant.stopped') : event.error);
+            } else if (event.type === 'title') {
+                // The model named the conversation (assistant_web.name_it): show it now
+                // rather than at the end of the turn -- unless the operator renamed it while
+                // the event was in flight; the hub kept their name, and so does the page.
+                const chat = chats.find((c) => c.id === current.chatId);
+                if (chat && chat.title_source !== 'manual') {
+                    chat.title = event.title;
+                    chat.title_source = 'ai';
+                    renderChats();
+                    setHeading();
+                }
             }
         }
         if (data.done) {
             stopListening();
-            loadChats();
+            await loadChats();
+            awaitName(current.chatId, NAME_CHECKS);
             return;
         }
         current.timer = setTimeout(poll, POLL_MS);
+    }
+
+    // How many times, 2.5 s apart, the list is re-read for a conversation's name after its
+    // first answer. One look was not enough: a slow provider names it after that look, and
+    // nothing else would have refreshed the list (found in review, PR #101).
+    const NAME_CHECKS = 8;
+
+    /** Re-read the list until this chat's name is no longer the first-message placeholder,
+     *  or the checks run out -- a provider that never answers leaves the placeholder. */
+    function awaitName(id, left) {
+        const chat = chats.find((c) => c.id === id);
+        if (!chat || chat.title_source !== 'auto' || left <= 0) return;
+        setTimeout(async () => {
+            await loadChats();
+            awaitName(id, left - 1);
+        }, 2500);
     }
 
     async function send(text) {

@@ -396,7 +396,9 @@ means that machine.
 
 Your conversations are listed on the left of the Assistant page (fold the column away with the
 panel button), and behind the clock button when it is pinned. A conversation keeps answering if
-you switch to another one; it shows a spinner in the list until it is done.
+you switch to another one; it shows a spinner in the list until it is done. Each conversation is
+named after what you asked for in its first message; rename it with the pencil beside it, and
+your name is kept. Every message and answer has a copy button underneath.
 
 It can read anything you can see and links every machine it names -- click a link and the page
 opens beside the panel. It can also act, with exactly your permissions:

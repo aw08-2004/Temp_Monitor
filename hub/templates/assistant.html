@@ -101,6 +101,25 @@
             <p class="asst__fine">{{ t('assistant.privacy') }}</p>
         </form>
     </section>
+
+    {# The delete confirmation, in the page rather than the browser's own prompt: the console's
+       modal, so it looks like the rest of the hub and names the conversation it will delete. #}
+    <dialog class="modal asst__dialog" id="assistant-delete-dialog"
+            aria-labelledby="assistant-delete-title">
+        <form method="dialog">
+            <div class="modal__head">
+                <h2 class="modal__title" id="assistant-delete-title">{{ t('assistant.delete_title') }}</h2>
+            </div>
+            <div class="modal__body">
+                <p id="assistant-delete-body"></p>
+            </div>
+            <div class="modal__foot">
+                <button class="btn" type="submit" value="cancel">{{ t('common.cancel') }}</button>
+                <button class="btn btn--danger" type="submit" value="delete"
+                        id="assistant-delete-confirm">{{ t('assistant.delete_chat') }}</button>
+            </div>
+        </form>
+    </dialog>
 </div>
 {% endblock %}
 {% block page_scripts %}

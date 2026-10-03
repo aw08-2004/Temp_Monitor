@@ -4,8 +4,15 @@
    assistant.js adds .asst--compact and the history becomes a drawer. BEM, like the sidebar. */
 
 .app-shell__content.assistant-page {
-    /* The log scrolls, not the page: the composer has to stay on screen. */
+    /* The log scrolls, not the page: the history column and the composer have to stay on
+       screen. `height` alone was not enough -- base.css gives this element `flex: 1` in a
+       column whose items default to `min-height: auto`, so it grew to the whole conversation
+       and the PAGE scrolled, taking the column and the composer with it. Fixed size, allowed
+       to be smaller than its content, and the overflow is the log's to handle. */
+    flex: 0 0 100vh;
     height: 100vh;
+    min-height: 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     padding: 0;
@@ -116,16 +123,31 @@
     white-space: nowrap;
 }
 
-/* Faded, not `visibility: hidden`: a hidden button leaves the tab order, and the only way to
-   delete a conversation from the keyboard went with it. Shown on hover and whenever focus is
-   anywhere in the row. */
-.asst__chat-delete {
+/* Rename and delete. Faded, not `visibility: hidden`: a hidden button leaves the tab order,
+   and the only way to delete a conversation from the keyboard went with it. Shown on hover and
+   whenever focus is anywhere in the row. */
+.asst__chat-action {
     opacity: 0;
+    width: 26px;
+    height: 26px;
 }
 
-.asst__chat:hover .asst__chat-delete,
-.asst__chat:focus-within .asst__chat-delete {
+.asst__chat-action svg {
+    width: 15px;
+    height: 15px;
+}
+
+.asst__chat:hover .asst__chat-action,
+.asst__chat:focus-within .asst__chat-action {
     opacity: 1;
+}
+
+.asst__rename {
+    flex: 1;
+    min-width: 0;
+    margin: 3px 0;
+    padding: 4px var(--space-2);
+    font-size: var(--text-sm);
 }
 
 .asst__chats-empty {
@@ -345,10 +367,16 @@
     height: 26px;
 }
 
-/* The operator: a soft bubble on the right. */
-.asst__msg--user {
+/* The operator: a soft bubble on the right, its copy button under it. */
+.asst__user {
     align-self: flex-end;
     max-width: 85%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.asst__msg--user {
     background: var(--accent-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-2) var(--space-4);
@@ -435,6 +463,35 @@
 
 /* Working steps: the model thinking aloud on the way to its answer. Small and grey, so the
    answer is what the eye lands on. */
+/* Copy, under a message. Quiet until the message is pointed at, like Claude's own. */
+.asst__msg-actions {
+    display: flex;
+    gap: var(--space-1);
+    margin-top: 2px;
+    opacity: 0.35;
+    transition: opacity 0.15s;
+}
+
+.asst__user:hover .asst__msg-actions,
+.asst__turn-body:hover .asst__msg-actions,
+.asst__msg-actions:focus-within {
+    opacity: 1;
+}
+
+.asst__msg-actions .asst__icon {
+    width: 26px;
+    height: 26px;
+}
+
+.asst__msg-actions .asst__icon svg {
+    width: 15px;
+    height: 15px;
+}
+
+.asst__dialog {
+    width: min(440px, 92vw);
+}
+
 .asst__step {
     font-size: var(--text-sm);
     color: var(--muted);

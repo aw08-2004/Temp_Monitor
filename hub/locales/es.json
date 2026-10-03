@@ -3311,7 +3311,6 @@
     "history": "Conversaciones",
     "new_chat": "Nueva",
     "delete_chat": "Eliminar",
-    "delete_confirm": "¿Eliminar esta conversación? No se puede deshacer.",
     "pin": "Fijar al lateral",
     "unpin": "Desfijar",
     "resize": "Cambiar el tamaño del panel del asistente",
@@ -3349,7 +3348,12 @@
     "fold": "Ocultar conversaciones",
     "no_chats": "Aún no hay conversaciones.",
     "chat_running": "Aún respondiendo",
-    "example_stuck": "¿Hay algún despliegue atascado y en qué equipo?"
+    "example_stuck": "¿Hay algún despliegue atascado y en qué equipo?",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "rename": "Cambiar nombre",
+    "delete_title": "¿Eliminar la conversación?",
+    "delete_body": "Se eliminará «{title}» con todo su contenido. No se puede deshacer."
   },
   "scripts": {
     "body": "Script",
