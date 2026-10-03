@@ -149,7 +149,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.135.4"
+HUB_VERSION = "1.135.5"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2646,6 +2646,7 @@ app.register_blueprint(create_assistant_blueprint(
     translate=lambda key: i18n.translate(key, current_language()),
     language=lambda: current_language(),
     setting=lambda key: settings.get(DB_PATH, key),
+    public_url=HUB_URL,
 ))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any

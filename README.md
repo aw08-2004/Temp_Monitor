@@ -410,6 +410,21 @@ opens beside the panel. It can also act, with exactly your permissions:
   **Confirm**; a wipe also asks you to type the machine's name. Cards expire after 10 minutes.
 - Recovery keys, API keys, device tokens and the interactive terminal are never available to it.
 
+Each conversation has a **mode**, chosen with the pill under the message box. New
+conversations always start in **Ask**:
+
+- **Ask** -- everything above: an action that changes a machine waits for your Confirm.
+- **Auto** -- the AI judges each action as routine or critical and says what it will do. Routine
+  ones (a registry query, a gpupdate) run at once; critical ones still show a card with its
+  judgement on it.
+- **Bypass** -- every action you are allowed to do runs at once.
+
+In every mode a wipe still asks for the machine's name, and keys, tokens and the terminal stay out
+of reach. Switching to Auto or Bypass shows a warning first, and every action that ran without
+asking is shown in the chat and logged as `assistant.action_auto`, with the mode and the AI's
+judgement. After you confirm an action, the assistant reads its outcome and reports back on its
+own.
+
 Every confirmed action is in the audit log as `assistant.action_confirmed`, next to the row the
 action itself writes. **The assistant sends real machine names** and the data it reads to the
 provider; switch *Show the assistant* off to keep AI to the alert recommendations only.

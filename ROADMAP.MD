@@ -4683,7 +4683,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4, modes hub 1.135.5   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
@@ -4801,6 +4801,24 @@ names, and can do what the signed-in operator can.
   the default `min-height: auto`, so it grew to the whole conversation and the page scrolled
   the history column and the composer away. The Settings section list is sticky for the same
   complaint (not below 720px, where it is a horizontal strip).
+
+### Hub 1.135.5 · command modes, and the outcome of a confirmed action
+- **Ask / Auto / Bypass, per conversation** (owner's decisions: any operator may choose; new
+  conversations start in Ask; Auto is the model's judgement, not a list). Every action tool
+  takes `risk` (routine/critical) and `impact`; Auto runs `routine` at once, Bypass runs
+  everything. A wipe keeps its card and typed name in every mode; denied routes stay denied.
+  Mode changes and actions run without asking are security-level audit rows
+  (`assistant.mode_changed`, `assistant.action_auto`) carrying the mode and the judgement.
+  Rejected: a fixed list of routine command TYPES -- `reg query` and `reg delete` are both
+  `run_script`. The mode is read per action, so switching back to Ask mid-answer is obeyed.
+- **A confirmed action is followed up.** Confirming used to queue the command and stop; on a
+  real hub the operator asked "did it work?" five times in one conversation. The confirm now
+  starts a turn that reads the outcome: `command_output` takes `wait_seconds` (up to 90), and
+  `find` / `tail` to read a long output instead of running the command again. Long text keeps
+  its first 3,000 and last 1,500 characters before the 300-character cut.
+- Absolute links to this hub (`https://hub/machine/X`) are read back like relative ones;
+  answers render tables and rules. `command_id` was typed as an integer in the tool schema;
+  it is a hex string.
 
 ### Open
 - Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the
