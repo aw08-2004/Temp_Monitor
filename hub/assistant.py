@@ -45,9 +45,10 @@ import assistant_guide
 # ---------------------------------------------------------------------------------------
 MAX_USER_CHARS = 4000
 MAX_TITLE_CHARS = 80
-# How much of ONE tool result the model sees in the turn that called it. A machine's full
-# report is ~6 KB; a fleet listing for a large scope is far more, and past this the model is
-# reading a truncation notice rather than drowning a small context window.
+# How much of ONE tool result the model sees in the turn that called it, unless
+# `ai.assistant_result_chars` says otherwise. A machine's full report is ~6 KB; a fleet listing
+# for a large scope is far more, and past this the model is reading a truncation notice rather
+# than drowning a small context window.
 MAX_TOOL_RESULT_CHARS = 12000
 # How much of an OLD tool result goes back into a later turn. Small on purpose -- see the
 # module docstring: a figure from three turns ago is a figure to re-read, not to quote.
@@ -759,7 +760,8 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
 
 
 def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools, execute,
-             emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS):
+             emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS,
+             result_chars=MAX_TOOL_RESULT_CHARS):
     """One operator message through to a final answer. Writes every message as it goes.
 
     `complete_step(messages, tools)` -> (error, {"content", "tool_calls"}) is ai.complete_chat
@@ -815,7 +817,7 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
                 # with a missing reply is a conversation no server will continue.
                 print(f"[assistant] tool {call['name']} raised: {exc!r}")
                 result = {"ok": False, "error": "the hub failed while running this tool"}
-            content = fit_result(result)
+            content = fit_result(result, limit=result_chars)
             append_message(db_path, chat_id, ROLE_TOOL, content, tool_call_id=call["id"],
                            tool_name=call["name"])
             event = {"type": "tool", "name": call["name"], "state": "finished",

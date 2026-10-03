@@ -1193,6 +1193,10 @@
           "label": "Pasos del asistente por mensaje",
           "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor."
         },
+        "assistant_result_chars": {
+          "label": "Tamaño de resultado del asistente",
+          "help": "Cuántos caracteres de una respuesta de herramienta lee el asistente, unos cuatro por token. Más le permite ver a la vez una parte mayor de una lista larga o de la salida de un comando, pero cada paso posterior la reenvía, así que cada solicitud es más lenta y cuesta más, y la ventana de contexto de un modelo pequeño puede desbordarse. Lo que se recorta se nombra en la respuesta."
+        },
         "assistant_history_days": {
           "label": "Conservar las conversaciones del asistente durante",
           "help": "Se elimina una conversación que nadie ha tocado durante este tiempo."

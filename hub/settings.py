@@ -771,6 +771,12 @@ REGISTRY = (
     # Provider calls per operator message. Each tool step is one call; eight covers "find the
     # hot ones, read the worst, check its processes, answer" with room for a retry.
     _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1, maximum=20),
+    # Characters of ONE tool result the model reads (hub 1.135.6). 12,000 is about 3,000 tokens
+    # and suits a small local model; a large hosted one can take far more, and an operator
+    # whose answers keep arriving cut can raise it here. The floor keeps one machine's report
+    # whole; the ceiling is where a single result starts crowding the conversation out of even
+    # a large context window, since every later step resends it.
+    _s("ai.assistant_result_chars", "ai", "int", 12000, minimum=4000, maximum=100000),
     _s("ai.assistant_history_days", "ai", "int", 30, minimum=1, maximum=365, unit="days"),
 
     # ---------------- Endpoint security ----------------

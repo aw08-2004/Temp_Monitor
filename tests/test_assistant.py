@@ -732,6 +732,21 @@ def test_the_last_machine_by_name_is_found():
     check("...but a key that exists is not called unknown",
           "unknown_keys" not in out["_narrowed"])
 
+    # The cap is the operator's to set (ai.assistant_result_chars): a turn must use it.
+    for chars in (4000, 100000):
+        settings.set_many(DB, {"ai.assistant_result_chars": chars})
+        chat_id = new_chat(super_client)
+        SCRIPT[:] = [call("list_machines", fields=["machine", "diagnostics", "os"]), say("ok")]
+        converse(super_client, chat_id, "list everything")
+        content = tool_messages(chat_id)[-1]["content"]
+        if chars == 4000:
+            check("a small result size cuts the answer to it",
+                  len(content) <= 4000 and "truncated" in json.loads(content))
+        else:
+            check("a large result size lets the whole answer through",
+                  len(content) > 12000 and "truncated" not in json.loads(content))
+    settings.set_many(DB, {"ai.assistant_result_chars": 12000})
+
     # A name that grows when escaped as JSON must not push the result over its limit.
     escaped = [{"machine": "\x01" * 60 + str(i), "note": "n" * 200} for i in range(200)]
     content = assistant.fit_result({"ok": True, "data": escaped}, limit=6000)
