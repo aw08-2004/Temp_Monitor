@@ -105,6 +105,11 @@ def init_assistant_db(db_path):
         if "title_source" not in columns:
             conn.execute("ALTER TABLE assistant_chats ADD COLUMN title_source TEXT NOT NULL "
                          "DEFAULT 'auto'")
+        # The conversation's command mode (hub 1.135.5) -- see MODES. Per conversation, and a
+        # new one starts in `ask`, so a Bypass chosen for one job never carries into the next.
+        if "mode" not in columns:
+            conn.execute("ALTER TABLE assistant_chats ADD COLUMN mode TEXT NOT NULL "
+                         "DEFAULT 'ask'")
         conn.execute("""CREATE TABLE IF NOT EXISTS assistant_messages (
                             id           INTEGER PRIMARY KEY AUTOINCREMENT,
                             chat_id      TEXT NOT NULL,
@@ -137,6 +142,16 @@ def init_assistant_db(db_path):
                         )""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_assistant_actions_chat "
                      "ON assistant_actions(chat_id, id)")
+        # What the model said the action would do, how risky it judged it, and whether it ran
+        # without a click (hub 1.135.5). Kept on the row, so the card and the audit trail both
+        # show the reasoning an Auto-mode action ran on.
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(assistant_actions)")}
+        for column, ddl in (("risk", "TEXT NOT NULL DEFAULT ''"),
+                            ("impact", "TEXT NOT NULL DEFAULT ''"),
+                            ("auto", "INTEGER NOT NULL DEFAULT 0"),
+                            ("mode", "TEXT NOT NULL DEFAULT 'ask'")):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE assistant_actions ADD COLUMN {column} {ddl}")
 
 
 # ---------------------------------------------------------------------------------------
@@ -146,20 +161,41 @@ TITLE_AUTO = "auto"
 TITLE_AI = "ai"
 TITLE_MANUAL = "manual"
 
+# Command modes (hub 1.135.5), chosen per conversation by the operator:
+#   ask    -- every confirm-tier action is a card. The default, and every new conversation's.
+#   auto   -- the MODEL judges each action: one it marks `routine` runs at once, one it marks
+#             `critical` (or does not judge) is a card showing its judgement.
+#   bypass -- every action the operator may do runs at once.
+# In every mode a wipe keeps its card and its typed machine name, and the denied routes stay
+# denied: no mode reaches a key, a token or the interactive terminal. Rejected: a fixed list
+# of "routine" commands for Auto -- the operator asked for the model's judgement, which can
+# tell `reg query` from `reg delete` where a list of command TYPES (both are run_script)
+# cannot. What keeps that judgement honest is that it is shown: on the card, in the chat for
+# an action that ran without asking, and in the audit row.
+MODE_ASK = "ask"
+MODE_AUTO = "auto"
+MODE_BYPASS = "bypass"
+MODES = (MODE_ASK, MODE_AUTO, MODE_BYPASS)
+RISK_ROUTINE = "routine"
+RISK_CRITICAL = "critical"
+
 
 def _chat_row(row):
+    keys = row.keys()
     return {"id": row["id"], "title": row["title"], "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-            "title_source": row["title_source"] if "title_source" in row.keys() else TITLE_AUTO}
+            "title_source": row["title_source"] if "title_source" in keys else TITLE_AUTO,
+            "mode": row["mode"] if "mode" in keys else MODE_ASK}
 
 
-def create_chat(db_path, owner, title="", now=None):
+def create_chat(db_path, owner, title="", now=None, mode=MODE_ASK):
     now = float(now or time.time())
     chat_id = uuid.uuid4().hex
+    mode = mode if mode in MODES else MODE_ASK
     with get_conn(db_path) as conn:
-        conn.execute("INSERT INTO assistant_chats (id, owner, title, created_at, updated_at) "
-                     "VALUES (?,?,?,?,?)",
-                     (chat_id, str(owner), str(title or "")[:MAX_TITLE_CHARS], now, now))
+        conn.execute("INSERT INTO assistant_chats (id, owner, title, created_at, updated_at, "
+                     "mode) VALUES (?,?,?,?,?,?)",
+                     (chat_id, str(owner), str(title or "")[:MAX_TITLE_CHARS], now, now, mode))
         # A bound, not a retention policy: the oldest conversations beyond it go, so one
         # operator who never clears anything cannot grow the table without limit between
         # prunes.
@@ -265,6 +301,16 @@ def rename_chat(db_path, chat_id, owner, title, source=TITLE_MANUAL):
     return get_chat(db_path, chat_id, owner)
 
 
+def set_mode(db_path, chat_id, owner, mode):
+    """Set a conversation's command mode. Returns the chat, or None if not the owner's."""
+    if mode not in MODES:
+        return None
+    with get_conn(db_path) as conn:
+        conn.execute("UPDATE assistant_chats SET mode = ? WHERE id = ? AND owner = ?",
+                     (mode, str(chat_id), str(owner)))
+    return get_chat(db_path, chat_id, owner)
+
+
 def title_messages(user_text, language):
     """The prompt that names a conversation from its first message.
 
@@ -343,24 +389,32 @@ def _action_row(row):
             "body": json.loads(row["body"]) if row["body"] else None,
             "machine": row["machine"], "typed_name": bool(row["typed_name"]),
             "state": row["state"],
+            "risk": row["risk"] if "risk" in row.keys() else "",
+            "impact": row["impact"] if "impact" in row.keys() else "",
+            "auto": bool(row["auto"]) if "auto" in row.keys() else False,
+            "mode": row["mode"] if "mode" in row.keys() else MODE_ASK,
             "result": json.loads(row["result"]) if row["result"] else None,
             "created_at": row["created_at"], "expires_at": row["expires_at"]}
 
 
 def create_action(db_path, *, chat_id, owner, tool, method, path, rule, query=None,
-                  body=None, machine="", typed_name=False, now=None):
-    """Store a confirm-tier call. **This is the whole of what a model can do to a machine on
-    its own: write a row nobody has acted on.**"""
+                  body=None, machine="", typed_name=False, risk="", impact="",
+                  mode=MODE_ASK, auto=False, now=None):
+    """Store a confirm-tier call. In Ask mode **this is the whole of what a model can do to a
+    machine on its own: write a row nobody has acted on.** In Auto and Bypass the web layer
+    stores the row first and runs it at once (`auto`), so an action that ran without asking
+    has the same record as one that was clicked."""
     now = float(now or time.time())
     with get_conn(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO assistant_actions (chat_id, owner, tool, method, path, rule, query, "
-            "body, machine, typed_name, state, created_at, expires_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "body, machine, typed_name, state, created_at, expires_at, risk, impact, mode, "
+            "auto) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(chat_id), str(owner), str(tool), str(method), str(path), str(rule),
              json.dumps(query) if query else "", json.dumps(body) if body is not None else "",
              str(machine or ""), 1 if typed_name else 0, ACTION_PENDING, now,
-             now + ACTION_TTL_SECONDS))
+             now + ACTION_TTL_SECONDS, str(risk or "")[:20], str(impact or "")[:600],
+             mode if mode in MODES else MODE_ASK, 1 if auto else 0))
         action_id = cur.lastrowid
     return get_action(db_path, action_id, owner)
 
@@ -528,22 +582,37 @@ def _size(value):
     return len(json.dumps(value, default=str))
 
 
-def _compact(value, key=""):
-    """A value with every long string in it cut, at any depth -- except an id's.
+# A long text keeps this much -- its start AND its end -- before the hard cut to
+# COMPACT_TEXT_CHARS. Command output is the case: `gpresult /r` is several thousand
+# characters and the part an operator asked about is anywhere in it, and the first version cut
+# every long string to 300 characters, so the model reported "the result was truncated" and
+# ran the command again.
+LONG_TEXT_HEAD = 3000
+LONG_TEXT_TAIL = 1500
+
+
+def _compact(value, key="", limit=COMPACT_TEXT_CHARS):
+    """A value with every long string in it cut to `limit`, at any depth -- except an id's.
 
     Recursive because the text that makes an entry too big is often nested (a target's
     `result.stdout`, a deployment's `package.notes`), and an entry whose only problem is one
-    long nested note should lose the note, not be dropped whole along with its id.
+    long nested note should lose the note, not be dropped whole along with its id. A limit
+    above COMPACT_TEXT_CHARS keeps the head and the tail of the text, where a command's
+    output usually says what happened.
     """
     is_id = key == "id" or str(key).endswith("_id")
     if isinstance(value, str):
-        if len(value) > COMPACT_TEXT_CHARS and not is_id:
-            return value[:COMPACT_TEXT_CHARS] + "...[cut]"
-        return value
+        if len(value) <= limit or is_id:
+            return value
+        if limit > COMPACT_TEXT_CHARS:
+            head, tail = LONG_TEXT_HEAD, LONG_TEXT_TAIL
+            return (value[:head] + f"\n...[{len(value) - head - tail} characters cut; use "
+                    "`find` or `tail` to read them]...\n" + value[-tail:])
+        return value[:limit] + "...[cut]"
     if isinstance(value, dict):
-        return {k: _compact(v, str(k)) for k, v in value.items()}
+        return {k: _compact(v, str(k), limit) for k, v in value.items()}
     if isinstance(value, list):
-        return [_compact(v, key) for v in value]
+        return [_compact(v, key, limit) for v in value]
     return value
 
 
@@ -583,8 +652,12 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
     if len(content) <= limit or not isinstance(result, dict) or "data" not in result:
         return content if len(content) <= limit else (
             content[:limit] + ' ..."[truncated: narrow the request]"')
-    # A copy we may cut, with long text already shortened everywhere (ids excepted).
-    data = _compact(json.loads(json.dumps(result["data"], default=str)))
+    # A copy we may cut, with long text already shortened everywhere (ids excepted): first
+    # to its head and tail, and to the hard cut only if that still does not fit.
+    copy = json.loads(json.dumps(result["data"], default=str))
+    data = _compact(copy, limit=LONG_TEXT_HEAD + LONG_TEXT_TAIL)
+    if len(json.dumps(dict(result, data=data), default=str)) > limit:
+        data = _compact(copy)
     cut = {}
 
     def render():
@@ -656,8 +729,12 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
     The step bound is what ends a model that keeps calling tools without converging. It ends
     with a sentence, not a silent stop, so the operator can tell "it gave up" from "it hung".
     """
-    append_message(db_path, chat_id, ROLE_USER, user_text)
-    set_title_if_empty(db_path, chat_id, user_text)
+    # No `user_text` is a FOLLOW-UP turn: the hub starts one after the operator confirms an
+    # action, so the model reads the outcome instead of waiting to be asked. The note saying
+    # what was confirmed is already in the transcript (assistant_web.confirm).
+    if user_text is not None:
+        append_message(db_path, chat_id, ROLE_USER, user_text)
+        set_title_if_empty(db_path, chat_id, user_text)
     for step in range(max(1, int(max_steps))):
         if cancelled():
             emit({"type": "error", "error": "stopped"})
@@ -730,7 +807,7 @@ def _token_options(raw):
     return opts
 
 
-def token_for_href(href):
+def token_for_href(href, own_hosts=()):
     """A hand-written hub link as the token it should have been: (kind, arg, opts) or None.
 
     Models write `[PC-12](/machine/PC-12)` despite being told to use tokens -- one answering
@@ -745,7 +822,11 @@ def token_for_href(href):
     except ValueError:
         return None
     if parsed.scheme or parsed.netloc:
-        return None
+        # An absolute link to THIS hub (models copy the address they were told about, e.g.
+        # https://hub.example/machine/PC-12) is a hub link; any other host is not.
+        if parsed.scheme not in ("http", "https") \
+                or parsed.netloc.lower() not in {h.lower() for h in own_hosts if h}:
+            return None
     parts = [unquote(p) for p in parsed.path.split("/") if p]
     query = parse_qs(parsed.query)
     if len(parts) == 2 and parts[0] == "machine":
@@ -761,7 +842,7 @@ def token_for_href(href):
     return None
 
 
-def render_links(text, resolve):
+def render_links(text, resolve, own_hosts=()):
     """Replace link tokens with markdown links this hub built. Returns (text, links).
 
     `resolve(kind, arg, opts)` -> (href, label) or None, supplied by the web layer, which is
@@ -784,7 +865,7 @@ def render_links(text, resolve):
 
     def raw(match):
         label = match.group(1)
-        token = token_for_href(match.group(2))
+        token = token_for_href(match.group(2), own_hosts)
         if not token:
             return label
         kind, arg, opts = token
@@ -814,8 +895,25 @@ def _context_lines(context):
     return lines or ["- (unknown)"]
 
 
+MODE_PROMPTS = {
+    MODE_ASK: "The operator chose ASK mode for this conversation: every such action is a "
+              "card they confirm.",
+    MODE_AUTO: "The operator chose AUTO mode for this conversation: an action you mark "
+               "risk=routine runs at once, WITHOUT a card; one you mark risk=critical becomes "
+               "a card. Judge every action honestly. Routine: it only reads (reg query, "
+               "gpresult, Get-*, dir, ipconfig), or it is a small, reversible change the "
+               "operator explicitly asked for on one machine. Critical: it can lose data, "
+               "interrupt a signed-in user (restart, shutdown, logoff, killing their "
+               "programs), touch many machines, change security, access or hub settings, or "
+               "cannot be undone. When unsure, it is critical.",
+    MODE_BYPASS: "The operator chose BYPASS mode for this conversation: every action runs at "
+                 "once without a card (except a wipe). Be exact: there is no click between "
+                 "your call and the machine. Still give risk and impact; they are recorded.",
+}
+
+
 def system_prompt(*, operator, capabilities, scope, pages, context, today, language,
-                  tools_note=""):
+                  tools_note="", mode=MODE_ASK):
     """Everything the model is told up front. Rebuilt on every step, never stored.
 
     Rebuilt because it carries the page the operator is on NOW and their permissions NOW; a
@@ -872,9 +970,19 @@ def system_prompt(*, operator, capabilities, scope, pages, context, today, langu
         "## Doing things",
         "Read-only tools run at once. Low-risk changes (dismiss an alert, wake a PC, draft a "
         "rule) run at once too. Anything that changes a machine, runs code, or changes "
-        "access returns `pending_confirmation`: the operator sees a card and decides. Tell "
-        "them what you queued and that it waits for their click; do not claim it ran. Never "
+        "access may need the operator's confirmation. Every such call takes `risk` "
+        "(routine or critical) and `impact` (one sentence: what it does to the machine and "
+        "its user) -- fill both, always.",
+        MODE_PROMPTS.get(mode, MODE_PROMPTS[MODE_ASK]),
+        "A result of `pending_confirmation` means it did NOT run: say what you queued and that "
+        "it waits for their click. A result with `ran_without_asking` means it ran. Never "
         "queue an action the operator did not ask for.",
+        "A fleet command runs on the machine LATER: queuing it returns a command_id, not a "
+        "result. To know what happened, call command_output with that id and wait_seconds "
+        "(e.g. 60), and report the outcome. When the hub notes that the operator confirmed an "
+        "action, do exactly that before anything else. Read-only checks (reg query, "
+        "gpresult, Get-*) are commands too: use `find` or `tail` on command_output to read "
+        "the part that matters instead of running them again.",
         tools_note,
         "",
         "## Untrusted data",

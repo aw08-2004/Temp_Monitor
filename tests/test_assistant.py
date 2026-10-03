@@ -149,6 +149,29 @@ def converse(client, chat_id, text, context=None, timeout=10.0):
     return 0, events
 
 
+def wait_run(client, run_id, timeout=15.0):
+    """Poll a run to its end and return its events. Used after a confirm, whose follow-up
+    turn shares SCRIPT with whatever the next test sets."""
+    deadline = time.time() + timeout
+    events = []
+    while time.time() < deadline:
+        state = client.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json() or {}
+        events = state.get("events", [])
+        if state.get("done"):
+            break
+        time.sleep(0.02)
+    return events
+
+
+def audit_rows():
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT action, level FROM audit_log")]
+    finally:
+        conn.close()
+
+
 def new_chat(client):
     return client.post("/api/assistant/chats", json={}).get_json()["id"]
 
@@ -338,6 +361,8 @@ def test_a_command_waits_for_its_confirmation():
 
     r = scoped.post(f"/api/assistant/actions/{action_id}/confirm", json={})
     body = r.get_json() or {}
+    if body.get("run_id"):
+        wait_run(scoped, body["run_id"])
     check(f"the owner's confirm ran it (HTTP {r.status_code}, "
           f"{(body.get('action') or {}).get('result')})",
           (body.get("action") or {}).get("state") in ("done", "failed"))
@@ -363,6 +388,8 @@ def test_scope_is_the_operators():
     pending = [a for a in assistant.list_actions(DB, chat_id) if a["machine"] == "PC-02"]
     check("an out-of-scope command can be QUEUED as a card...", len(pending) == 1)
     r = scoped.post(f"/api/assistant/actions/{pending[0]['id']}/confirm", json={})
+    if (r.get_json() or {}).get("run_id"):
+        wait_run(scoped, r.get_json()["run_id"])
     check("...but confirming it is refused by the route, not run",
           r.status_code == 400 and command_rows("PC-02") == 0)
 
@@ -591,6 +618,8 @@ def test_disabling_a_rule_by_name():
     check("...and has not run", rules_module.get_rule(DB, rule_id)["enabled"] is True)
     action_id = results[1]["action"]["id"]
     r = super_client.post(f"/api/assistant/actions/{action_id}/confirm", json={})
+    if (r.get_json() or {}).get("run_id"):
+        wait_run(super_client, r.get_json()["run_id"])
     check("confirming it switches the rule off",
           r.status_code == 200 and rules_module.get_rule(DB, rule_id)["enabled"] is False)
 
@@ -950,6 +979,131 @@ def test_conversations_are_named_by_what_they_were_for():
           chat["title"] == "Which machines are hot right now?" and chat["title_source"] == "auto")
 
 
+def test_modes_decide_what_runs_unasked():
+    """Command modes (hub 1.135.5). The silent failure is an action running without a click
+    in a mode that should have asked -- or a wipe running unasked in ANY mode."""
+    print("\n-- Ask / Auto / Bypass decide what runs without a click --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    check("a new conversation starts in Ask",
+          scoped.get(f"/api/assistant/chats/{chat_id}").get_json()["chat"]["mode"] == "ask")
+    check("an unknown mode is refused",
+          scoped.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "yolo"}).status_code == 400)
+    check("another operator cannot change it",
+          client_for("viewer@x.com").patch(f"/api/assistant/chats/{chat_id}",
+                                           json={"mode": "bypass"}).status_code == 404)
+
+    r = scoped.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "auto"})
+    check("the owner switches to Auto", r.status_code == 200 and r.get_json()["mode"] == "auto")
+    check("...and the switch is in the audit log at security level",
+          any(e["action"] == "assistant.mode_changed" and e["level"] == "security"
+              for e in audit_rows()))
+    before = command_rows("PC-01")
+    SCRIPT[:] = [call("run_command", machine="PC-01", type="run_script",
+                      params={"script": "reg query HKLM\\Software"}, risk="routine",
+                      impact="Reads one registry key; changes nothing."),
+                 call("run_command", machine="PC-01", type="restart", risk="critical",
+                      impact="Restarts PC-01 and closes the signed-in user's programs."),
+                 call("run_command", machine="PC-01", type="gpupdate"),
+                 say("done")]
+    converse(scoped, chat_id, "check the key, then restart it, then gpupdate")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    check("Auto runs what the model marked routine, at once",
+          results[0].get("ran_without_asking") is True and results[0]["ok"]
+          and command_rows("PC-01") == before + 1)
+    check("...recording its judgement on the action",
+          results[0]["action"]["risk"] == "routine"
+          and "registry" in results[0]["action"]["impact"]
+          and results[0]["action"]["auto"] is True)
+    check("...and in the audit log",
+          any(e["action"] == "assistant.action_auto" for e in audit_rows()))
+    check("Auto still asks for what the model marked critical",
+          results[1].get("status") == "pending_confirmation"
+          and results[1]["action"]["impact"].startswith("Restarts"))
+    check("...and for an action the model did not judge at all",
+          results[2].get("status") == "pending_confirmation")
+    check("neither of those ran", command_rows("PC-01") == before + 1)
+    prompt = CALLS[-1][0][0]["content"]
+    check("the model is told which mode it is in", "AUTO mode" in prompt)
+
+    scoped.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "bypass"})
+    SCRIPT[:] = [call("run_command", machine="PC-01", type="restart"),
+                 call("call_endpoint", method="POST", path="/api/wipe/machines/PC-01/wipe",
+                      body={"confirm": "PC-01"}, risk="routine"),
+                 say("done")]
+    converse(scoped, chat_id, "restart and wipe")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)][-2:]
+    check("Bypass runs an action without a judgement or a click",
+          results[0].get("ran_without_asking") is True)
+    check("...but a wipe keeps its card and typed name in every mode",
+          results[1].get("status") == "pending_confirmation"
+          and results[1]["action"]["typed_name"] is True)
+
+    fresh = new_chat(scoped)
+    check("a NEW conversation is back in Ask",
+          scoped.get(f"/api/assistant/chats/{fresh}").get_json()["chat"]["mode"] == "ask")
+    created = scoped.post("/api/assistant/chats", json={"mode": "auto"}).get_json()
+    check("a conversation can be created in a chosen mode", created["mode"] == "auto")
+
+
+def test_a_confirmed_action_is_followed_up():
+    """Confirming used to queue the command and stop: the operator had to ask "did it work?"
+    every time. The hub now starts a turn that reads the outcome."""
+    print("\n-- confirming an action starts a turn that reads its outcome --")
+    scoped = client_for("scoped@x.com")
+    chat_id = new_chat(scoped)
+    SCRIPT[:] = [call("run_command", machine="PC-01", type="restart", risk="critical",
+                      impact="Restarts PC-01."), say("Queued.")]
+    converse(scoped, chat_id, "restart PC-01")
+    action = assistant.list_actions(DB, chat_id)[-1]
+
+    def read_output(messages):
+        note = [m for m in messages if m["role"] == "user"
+                and m["content"].startswith(assistant.NOTE_PREFIX)]
+        command_id = (action_now()["result"] or {}).get("data", {}).get("command_id", "")
+        return call("command_output", command_id=command_id, wait_seconds=1) if note \
+            else say("no note")
+
+    def action_now():
+        return assistant.get_action(DB, action["id"], "scoped@x.com")
+
+    SCRIPT[:] = [read_output, say("It has not run yet; PC-01 has not picked it up.")]
+    r = scoped.post(f"/api/assistant/actions/{action['id']}/confirm", json={})
+    data = r.get_json()
+    check("the confirm answers with a follow-up run", r.status_code == 200 and data["run_id"])
+    events = wait_run(scoped, data["run_id"])
+    output = [json.loads(m["content"]) for m in tool_messages(chat_id)][-1]
+    check("the follow-up read the command's outcome",
+          output["ok"] and output["data"]["status"] == "pending"
+          and output["data"]["finished"] is False)
+    check("...and reported back",
+          any("has not run yet" in (e.get("content") or "") for e in events))
+
+    shaped = assistant_tools.shape_command_output(
+        {"status": "done", "chunks": [], "truncated": False,
+         "result": {"success": 1, "output": "a\nNoDriveTypeAutorun 0xff\nb\nc", "completed_at": 1}},
+        {"find": "autorun"})
+    check("find keeps the lines that matter",
+          shaped["output"] == "NoDriveTypeAutorun 0xff" and shaped["lines_total"] == 4)
+    long_output = {"ok": True, "data": {"status": "done",
+                                        "output": "x" * 2000 + "MIDDLE" + "y" * 9000 + "END"}}
+    parsed = json.loads(assistant.fit_result(long_output, limit=8000))
+    check("long output keeps its start and its end",
+          parsed["data"]["output"].startswith("x" * 100)
+          and parsed["data"]["output"].endswith("END"))
+
+
+def test_absolute_links_to_this_hub():
+    print("\n-- an absolute link to this hub is read back; another host is not --")
+    resolve = lambda kind, arg, opts: (("/machine/PC-01", opts.get("label") or arg)
+                                       if arg == "PC-01" else None)
+    text, _ = assistant.render_links(
+        "[PC-01](https://temp.example.net/machine/PC-01) and "
+        "[x](https://evil.example/machine/PC-01)", resolve, {"temp.example.net"})
+    check("this hub's absolute link resolves", "[PC-01](/machine/PC-01)" in text)
+    check("another host's does not", "evil.example" not in text and " x" in text)
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -982,6 +1136,9 @@ def main():
     test_where_operators()
     test_a_chat_keeps_answering_after_you_leave_it()
     test_conversations_are_named_by_what_they_were_for()
+    test_modes_decide_what_runs_unasked()
+    test_a_confirmed_action_is_followed_up()
+    test_absolute_links_to_this_hub()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

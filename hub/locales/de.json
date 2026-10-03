@@ -3353,7 +3353,25 @@
     "copied": "Kopiert",
     "rename": "Umbenennen",
     "delete_title": "Unterhaltung löschen?",
-    "delete_body": "„{title}“ wird mit allem darin gelöscht. Das lässt sich nicht rückgängig machen."
+    "delete_body": "„{title}“ wird mit allem darin gelöscht. Das lässt sich nicht rückgängig machen.",
+    "mode": {
+      "ask": "Fragen",
+      "auto": "Auto",
+      "bypass": "Umgehen",
+      "ask_desc": "Jede Aktion, die ein Gerät verändert, wartet auf Ihre Bestätigung.",
+      "auto_desc": "Die KI bewertet jede Aktion: Routine läuft sofort, Kritisches fragt weiterhin.",
+      "bypass_desc": "Jede Aktion, die Sie ausführen dürfen, läuft sofort. Nur das Löschen eines Geräts fragt noch.",
+      "warn_title": "Die KI ohne Rückfrage handeln lassen?",
+      "warn_auto": "Im Auto-Modus entscheidet die KI, welche Aktionen Routine sind, und führt diese sofort ohne Karte aus -- zum Beispiel eine Registry-Abfrage, ein gpupdate oder ein Skript, das sie für harmlos hält. Aktionen, die sie für kritisch hält, warten weiterhin auf Ihre Bestätigung.",
+      "warn_bypass": "Im Umgehen-Modus läuft jede Aktion, die Sie ausführen dürfen, sofort: Neustarts, Herunterfahren, Skripte, Verteilungen, Einstellungen und Berechtigungsänderungen. Nur das Löschen eines Geräts fragt noch, mit dem Gerätenamen.",
+      "warn_common": "Die KI kann sich irren, und Text auf den Geräten, den sie liest -- Namen, Warnungen, Befehlsausgaben -- kann versuchen, sie zu lenken. Alles, was sie ausführt, wird unter Ihrem Namen im Audit-Log festgehalten. Das gilt nur für diese Unterhaltung; neue Unterhaltungen beginnen im Modus Fragen.",
+      "warn_accept": "Zu {mode} wechseln"
+    },
+    "risk": {
+      "routine": "Routine",
+      "critical": "Kritisch"
+    },
+    "action_auto_title": "Ohne Rückfrage ausgeführt ({mode})"
   },
   "scripts": {
     "body": "Skript",

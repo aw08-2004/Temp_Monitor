@@ -29,9 +29,10 @@ and ROADMAP #8 explain why a second authorization model is the thing to avoid.
 """
 import datetime
 import re
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlparse
 
 from flask import Blueprint, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
@@ -124,7 +125,8 @@ class RouteDispatcher:
 
 def create_assistant_blueprint(db_path, login_required, access, ai_config, *, api_key,
                                dispatcher, machine_exists, translate, language, setting,
-                               audit=fleet.audit, workers=4):
+                               audit=fleet.audit, workers=4, public_url="",
+                               wait_interval=2.0):
     """Build the assistant Blueprint.
 
     `dispatcher` is a RouteDispatcher over the real app (a fake in tests); `machine_exists`,
@@ -180,8 +182,17 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
             return f"/machine/{slug}?tab={tab}", label
         return f"/machine/{slug}", label
 
+    def _own_hosts():
+        """The names this hub answers to, for reading back an absolute link the model wrote
+        (https://hub.example/machine/PC-12). This request's host, and the public URL the hub
+        was configured with, which is the one the model has seen."""
+        hosts = {request.host}
+        if public_url:
+            hosts.add(urlparse(public_url).netloc)
+        return hosts
+
     def _render(text):
-        rendered, _links = assistant.render_links(text, _resolve_link)
+        rendered, _links = assistant.render_links(text, _resolve_link, _own_hosts())
         return rendered
 
     def _public_action(action):
@@ -189,7 +200,8 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
             return None
         return {key: action[key] for key in ("id", "tool", "method", "path", "machine",
                                              "query", "body", "typed_name", "state",
-                                             "result", "created_at", "expires_at")}
+                                             "result", "created_at", "expires_at",
+                                             "risk", "impact", "auto", "mode")}
 
     # ---------------- Tools ----------------
 
@@ -207,7 +219,45 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 names.add(name)
         return names
 
-    def _make_executor(*, chat_id, owner, session_data, caps):
+    def _wait_for_command(session_data, path, query, seconds, cancelled):
+        """Poll a command's output route until the command has finished, or `seconds` pass.
+
+        A fleet command runs when the agent next polls, seconds to minutes after it was
+        queued, so a model that reads the output straight away sees `pending` and nothing
+        else. Waiting here, a step at a time, is what lets the follow-up after a confirmed
+        action report the outcome instead of "it was queued"."""
+        deadline = time.monotonic() + max(0, min(int(seconds),
+                                                 assistant_tools.MAX_WAIT_SECONDS))
+        while True:
+            status, payload = dispatcher.call(session_data, "GET", path, query, None)
+            finished = isinstance(payload, dict) and payload.get("status") in (
+                "done", "failed", "expired")
+            if status >= 400 or finished or time.monotonic() >= deadline or cancelled():
+                return status, payload
+            time.sleep(wait_interval)
+
+    def _run_action_now(action, session_data, owner):
+        """Run a stored action at once (Auto said routine, or Bypass). Same record as a click:
+        claimed once, run as the operator, its result and an audit row written."""
+        error, claimed = assistant.claim_action(db_path, action["id"], owner)
+        if error:
+            return None, None, error
+        try:
+            status, payload = dispatcher.call(session_data, claimed["method"], claimed["path"],
+                                              claimed["query"], claimed["body"])
+        except Exception:                               # noqa: BLE001
+            print(f"[assistant] action run without asking failed:\n{traceback.format_exc()}")
+            status, payload = 500, {"error": GENERIC_ERROR}
+        done = assistant.finish_action(db_path, claimed["id"], owner, status < 400,
+                                       {"status": status, "data": payload})
+        audit(db_path, actor=owner, action="assistant.action_auto",
+              target=done["machine"] or done["path"],
+              detail={"action": done["id"], "tool": done["tool"], "method": done["method"],
+                      "rule": done["rule"], "status": status, "mode": done["mode"],
+                      "risk": done["risk"], "impact": done["impact"]})
+        return done, (status, payload), None
+
+    def _make_executor(*, chat_id, owner, session_data, caps, cancelled=lambda: False):
         catalog = dispatcher.catalog()
         # Resolved NOW, inside the request: `execute` runs on a pool thread with no Flask
         # context, and translate() reads the language off `g`. Called from there it raised on
@@ -258,14 +308,50 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                         "error": "the assistant may not use this route; the operator can "
                                  "do it in the console"}
             if tier == assistant_tools.TIER_CONFIRM:
+                # The conversation's mode, read NOW rather than when the turn began: an
+                # operator who switches back to Ask mid-answer is obeyed from the next action.
+                chat_now = assistant.get_chat(db_path, chat_id, owner) or {}
+                mode = chat_now.get("mode", assistant.MODE_ASK)
+                risk = str(local.get("risk") or "").lower()
+                typed = assistant_tools.needs_typed_name(method, rule)
                 action = assistant.create_action(
                     db_path, chat_id=chat_id, owner=owner, tool=name, method=method,
                     path=path, rule=rule, query=query, body=body, machine=machine,
-                    typed_name=assistant_tools.needs_typed_name(method, rule))
-                return {"ok": True, "tier": tier, "status": "pending_confirmation",
-                        "action": _public_action(action),
-                        "note": "Not run. The operator sees a confirmation card and decides."}
-            status, payload = dispatcher.call(session_data, method, path, query, body)
+                    typed_name=typed, risk=risk, impact=str(local.get("impact") or ""),
+                    mode=mode, auto=False)
+                # A wipe keeps its card and its typed name in every mode (owner's decision).
+                run_now = not typed and (mode == assistant.MODE_BYPASS or (
+                    mode == assistant.MODE_AUTO and risk == assistant.RISK_ROUTINE))
+                if not run_now:
+                    return {"ok": True, "tier": tier, "status": "pending_confirmation",
+                            "action": _public_action(action),
+                            "note": "Not run. The operator sees a confirmation card and "
+                                    "decides."}
+                with assistant.get_conn(db_path) as conn:
+                    conn.execute("UPDATE assistant_actions SET auto = 1 WHERE id = ?",
+                                 (action["id"],))
+                done, outcome, error = _run_action_now(action, session_data, owner)
+                if error:
+                    return {"ok": False, "tier": tier, "error": error}
+                status, payload = outcome
+                result = {"ok": status < 400, "tier": tier, "status": status,
+                          "ran_without_asking": True, "mode": mode,
+                          "action": _public_action(done)}
+                if status >= 400:
+                    result["error"] = (payload.get("error") if isinstance(payload, dict)
+                                       else None) or f"HTTP {status}"
+                else:
+                    result["data"] = payload
+                return result
+            if name == "command_output" and local.get("wait_seconds"):
+                try:
+                    seconds = int(local.get("wait_seconds") or 0)
+                except (TypeError, ValueError):
+                    seconds = 0
+                status, payload = _wait_for_command(session_data, path, query, seconds,
+                                                    cancelled)
+            else:
+                status, payload = dispatcher.call(session_data, method, path, query, body)
             if status < 400:
                 payload = assistant_tools.shape(name, payload, local)
             if tier == assistant_tools.TIER_WRITE:
@@ -298,12 +384,12 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
             out.pop("machine")
         return out
 
-    def _prompt(perms, context):
+    def _prompt(perms, context, mode=assistant.MODE_ASK):
         caps = sorted(perms.get("capabilities") or ())
         return assistant.system_prompt(
             operator=_owner(), capabilities=caps, scope=perms.get("machines"),
             pages=assistant_guide.pages_for(set(caps), translate), context=context,
-            today=datetime.date.today().isoformat(), language=language())
+            today=datetime.date.today().isoformat(), language=language(), mode=mode)
 
     # ---------------- Routes ----------------
 
@@ -338,7 +424,20 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     @login_required
     @can_view
     def new_chat():
-        return jsonify(assistant.create_chat(db_path, _owner())), 201
+        body = request.get_json(silent=True) or {}
+        mode = str(body.get("mode") or assistant.MODE_ASK)
+        if mode not in assistant.MODES:
+            return jsonify({"error": "unknown mode"}), 400
+        chat = assistant.create_chat(db_path, _owner(), mode=mode)
+        if mode != assistant.MODE_ASK:
+            _audit_mode(chat, mode)
+        return jsonify(chat), 201
+
+    def _audit_mode(chat, mode):
+        """Security level: the row an auditor needs is "who let the model act unasked, and
+        when", for every conversation where it could."""
+        audit(db_path, actor=_owner(), action="assistant.mode_changed", target=chat["id"],
+              detail={"mode": mode, "title": chat.get("title", "")})
 
     @bp.route("/api/assistant/chats/<chat_id>", methods=["GET"])
     @login_required
@@ -374,14 +473,27 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     @login_required
     @can_view
     def rename(chat_id):
-        """Rename a conversation. The operator's title is final: the model never replaces it."""
+        """Rename a conversation, or set its command mode. The operator's title is final: the
+        model never replaces it. A mode is the operator's own choice for this conversation
+        (any operator may choose any mode; their permissions still bound what runs)."""
         body = request.get_json(silent=True) or {}
-        title = str(body.get("title") or "")
-        if not assistant.clean_title(title):
-            return jsonify({"error": "type a name for the conversation"}), 400
-        chat = assistant.rename_chat(db_path, chat_id, _owner(), title)
-        if not chat:
+        owner = _owner()
+        if not assistant.get_chat(db_path, chat_id, owner):
             return jsonify({"error": "no such conversation"}), 404
+        chat = None
+        if "mode" in body:
+            mode = str(body.get("mode") or "")
+            if mode not in assistant.MODES:
+                return jsonify({"error": "unknown mode"}), 400
+            chat = assistant.set_mode(db_path, chat_id, owner, mode)
+            _audit_mode(chat, mode)
+        if "title" in body:
+            title = str(body.get("title") or "")
+            if not assistant.clean_title(title):
+                return jsonify({"error": "type a name for the conversation"}), 400
+            chat = assistant.rename_chat(db_path, chat_id, owner, title)
+        if chat is None:
+            return jsonify({"error": "nothing to change"}), 400
         return jsonify(chat), 200
 
     @bp.route("/api/assistant/chats/<chat_id>", methods=["DELETE"])
@@ -392,38 +504,31 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
             return jsonify({"error": "no such conversation"}), 404
         return jsonify({"status": "deleted"}), 200
 
-    @bp.route("/api/assistant/chats/<chat_id>/messages", methods=["POST"])
-    @login_required
-    @can_view
-    def send(chat_id):
-        owner = _owner()
-        chat = assistant.get_chat(db_path, chat_id, owner)
-        if not chat:
-            return jsonify({"error": "no such conversation"}), 404
+    def _start_turn(chat, owner, text, context):
+        """Start one turn in the pool. Returns (error, status, run_id).
+
+        `text` None is a FOLLOW-UP turn with no operator message: the one the hub starts after
+        an action is confirmed, so the model reads the outcome without being asked. It runs
+        with the session of the request that started it -- the operator's, either way.
+        """
+        chat_id = chat["id"]
         config = ai_config()
         if not _enabled(config):
-            return jsonify({"error": "the assistant is switched off in Settings, under AI"}), 400
+            return "the assistant is switched off in Settings, under AI", 400, None
         error, _resolved = ai.provider_config(config)
         if error:
-            return jsonify({"error": error}), 400
-        body = request.get_json(silent=True) or {}
-        text = str(body.get("text") or "").strip()
-        if not text:
-            return jsonify({"error": "type a message first"}), 400
-        if len(text) > assistant.MAX_USER_CHARS:
-            return jsonify({"error": f"that message is too long (limit "
-                                     f"{assistant.MAX_USER_CHARS} characters)"}), 400
+            return error, 400, None
         run_id = runs.start(chat_id, owner)
         if not run_id:
-            return jsonify({"error": "the assistant is still answering in this "
-                                     "conversation"}), 409
+            return "the assistant is still answering in this conversation", 409, None
 
         perms = access.current() or {}
         caps = set(perms.get("capabilities") or ())
-        prompt = _prompt(perms, _context(body.get("context")))
+        prompt = _prompt(perms, _context(context), chat.get("mode", assistant.MODE_ASK))
         tools = assistant_tools.tool_specs(_offered_curated(caps))
         execute = _make_executor(chat_id=chat_id, owner=owner,
-                                 session_data=dict(session), caps=caps)
+                                 session_data=dict(session), caps=caps,
+                                 cancelled=lambda: runs.cancelled(run_id))
         key = _key()
         try:
             max_steps = int(setting("ai.assistant_max_steps") or assistant.DEFAULT_MAX_STEPS)
@@ -468,18 +573,38 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                                   error=error or "")
                 if error:
                     return
-                chat = assistant.rename_chat(db_path, chat_id, owner, raw,
-                                             source=assistant.TITLE_AI)
-                if chat and chat["title_source"] == assistant.TITLE_AI:
-                    runs.emit(run_id, {"type": "title", "title": chat["title"]})
+                named = assistant.rename_chat(db_path, chat_id, owner, raw,
+                                              source=assistant.TITLE_AI)
+                if named and named["title_source"] == assistant.TITLE_AI:
+                    runs.emit(run_id, {"type": "title", "title": named["title"]})
             except Exception:                           # noqa: BLE001
                 print(f"[assistant] naming a conversation failed:\n{traceback.format_exc()}")
 
         language_now = language()
         pool.submit(work)
-        if chat.get("title_source", assistant.TITLE_AUTO) == assistant.TITLE_AUTO \
+        if text and chat.get("title_source", assistant.TITLE_AUTO) == assistant.TITLE_AUTO \
                 and not chat.get("title"):
             pool.submit(name_it)
+        return None, 202, run_id
+
+    @bp.route("/api/assistant/chats/<chat_id>/messages", methods=["POST"])
+    @login_required
+    @can_view
+    def send(chat_id):
+        owner = _owner()
+        chat = assistant.get_chat(db_path, chat_id, owner)
+        if not chat:
+            return jsonify({"error": "no such conversation"}), 404
+        body = request.get_json(silent=True) or {}
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return jsonify({"error": "type a message first"}), 400
+        if len(text) > assistant.MAX_USER_CHARS:
+            return jsonify({"error": f"that message is too long (limit "
+                                     f"{assistant.MAX_USER_CHARS} characters)"}), 400
+        error, status, run_id = _start_turn(chat, owner, text, body.get("context"))
+        if error:
+            return jsonify({"error": error}), status
         return jsonify({"run_id": run_id}), 202
 
     @bp.route("/api/assistant/runs/<run_id>", methods=["GET"])
@@ -550,8 +675,18 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         assistant.append_message(
             db_path, action["chat_id"], assistant.ROLE_NOTE,
             f"The operator confirmed action {action['id']} ({action['method']} "
-            f"{action['path']}). The hub answered HTTP {status_code}: {summary}")
-        return jsonify({"action": _public_action(action)}), (200 if ok else 400)
+            f"{action['path']}). The hub answered HTTP {status_code}: {summary}. "
+            "Find out what happened now -- for a fleet command, command_output with its "
+            "command_id and wait_seconds -- and tell the operator.")
+        # The follow-up turn: confirming used to queue the command and stop there, so the
+        # operator had to ask "did it work?" every time (seen on a real hub, five times in
+        # one conversation). The model now reads the outcome on its own. Started for a
+        # refusal too, so the model can say why it did not run.
+        follow_up = None
+        chat = assistant.get_chat(db_path, action["chat_id"], owner)
+        if chat:
+            _error, _status, follow_up = _start_turn(chat, owner, None, body.get("context"))
+        return jsonify({"action": _public_action(action), "run_id": follow_up}),             (200 if ok else 400)
 
     @bp.route("/api/assistant/actions/<action_id>/reject", methods=["POST"])
     @login_required

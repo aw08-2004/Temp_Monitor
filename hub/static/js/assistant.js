@@ -60,6 +60,9 @@
     let listTimer = null;
     let turn = null;         // the assistant turn being written to
     let thinking = null;
+    // This conversation's command mode (hub 1.135.5). A conversation not created yet keeps
+    // its chosen mode here and is created with it.
+    let mode = 'ask';
 
     // ---------------- Storage (per-viewer conveniences only) ----------------
     function remember(key, value) {
@@ -238,6 +241,45 @@
                 const pre = el('pre');
                 pre.appendChild(el('code', null, code.join('\n')));
                 out.appendChild(pre);
+                continue;
+            }
+            // A table: a header row, a |---| separator, then rows. Models reach for one
+            // whenever they compare things, and as text it was a wall of pipes.
+            if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length
+                    && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+                const cells = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '')
+                    .split('|').map((c) => c.trim());
+                const table = el('table', 'asst__table');
+                const head = el('tr');
+                for (const cell of cells(line)) {
+                    const th = el('th');
+                    renderInline(th, cell);
+                    head.appendChild(th);
+                }
+                const thead = el('thead');
+                thead.appendChild(head);
+                table.appendChild(thead);
+                const tbody = el('tbody');
+                i += 2;
+                while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+                    const tr = el('tr');
+                    for (const cell of cells(lines[i])) {
+                        const td = el('td');
+                        renderInline(td, cell);
+                        tr.appendChild(td);
+                    }
+                    tbody.appendChild(tr);
+                    i += 1;
+                }
+                table.appendChild(tbody);
+                const scroll = el('div', 'asst__table-wrap');
+                scroll.appendChild(table);
+                out.appendChild(scroll);
+                continue;
+            }
+            if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+                out.appendChild(el('hr'));
+                i += 1;
                 continue;
             }
             if (bullet.test(line) || numbered.test(line)) {
@@ -458,9 +500,23 @@
         card.className = `asst__action asst__action--${action.state}`;
         card.dataset.actionId = action.id;
         card.replaceChildren();
-        card.appendChild(el('div', 'asst__action-title', action.machine
-            ? t('assistant.action_title_machine', { machine: action.machine })
-            : t('assistant.action_title')));
+        let title;
+        if (action.auto) title = t('assistant.action_auto_title', { mode: modeName(action.mode) });
+        else if (action.machine) title = t('assistant.action_title_machine', { machine: action.machine });
+        else title = t('assistant.action_title');
+        card.appendChild(el('div', 'asst__action-title', title));
+        if (action.impact || action.risk) {
+            // The model's own judgement, as the hub stored it with the action: what it
+            // said this would do, and how risky it called it. In Auto mode this is the
+            // reasoning the action ran (or did not run) on.
+            const judged = el('div', 'asst__action-impact');
+            if (action.risk) {
+                judged.appendChild(el('span', `asst__risk asst__risk--${action.risk === 'routine' ? 'routine' : 'critical'}`,
+                    action.risk === 'routine' ? t('assistant.risk.routine') : t('assistant.risk.critical')));
+            }
+            if (action.impact) judged.appendChild(el('span', null, action.impact));
+            card.appendChild(judged);
+        }
         card.appendChild(el('div', 'asst__action-detail', actionDetail(action)));
         const state = el('div', 'stat-card__meta', t(STATE_KEYS[action.state] || 'assistant.state.pending'));
         if (action.result && action.result.status) state.textContent += ` (HTTP ${action.result.status})`;
@@ -498,10 +554,14 @@
             const response = await fetch(`/api/assistant/actions/${action.id}/${verb}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(typed ? { typed: typed.value } : {}),
+                body: JSON.stringify(Object.assign({ context: pageContext() },
+                                                   typed ? { typed: typed.value } : {})),
             });
             const data = await response.json().catch(() => ({}));
             if (data.action) renderAction(data.action, card);
+            // The hub starts a follow-up turn after a confirmed action, so the model reads
+            // the outcome and reports it without being asked.
+            if (data.run_id) listen(data.run_id, -1);
             if (!response.ok) {
                 toast(data.error || t('assistant.error'), { kind: 'error' });
                 if (!data.action) for (const button of card.querySelectorAll('button')) button.disabled = false;
@@ -657,6 +717,10 @@
         stopListening();
         clearThread();
         chatId = id || null;
+        // A new conversation starts in Ask, always (owner's decision): a Bypass chosen for
+        // one job must not carry into the next.
+        mode = 'ask';
+        renderMode();
         remember(CHAT_KEY, chatId);
         renderChats();
         setHeading();
@@ -673,6 +737,8 @@
             return;
         }
         if (chatId !== id) return;      // another chat was opened meanwhile
+        mode = (data.chat && data.chat.mode) || 'ask';
+        renderMode();
         const items = [
             ...data.messages.map((m) => ({ at: m.created_at, m })),
             ...data.actions.map((a) => ({ at: a.created_at, a })),
@@ -795,7 +861,8 @@
         try {
             if (!chatId) {
                 const created = await fetch('/api/assistant/chats', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode }),
                 });
                 const chat = await created.json();
                 if (!created.ok) throw new Error(chat.error || 'create');
@@ -854,8 +921,94 @@
         button.addEventListener('click', () => send(button.textContent));
     }
 
+    // ---------------- Command mode ----------------
+    const modeBtn = $('assistant-mode');
+    const modeMenu = $('assistant-mode-menu');
+    const modeDialog = $('assistant-mode-dialog');
+    const MODE_NAMES = {
+        ask: () => t('assistant.mode.ask'),
+        auto: () => t('assistant.mode.auto'),
+        bypass: () => t('assistant.mode.bypass'),
+    };
+    const MODE_WARNINGS = {
+        auto: () => t('assistant.mode.warn_auto'),
+        bypass: () => t('assistant.mode.warn_bypass'),
+    };
+
+    function modeName(value) {
+        return (MODE_NAMES[value] || MODE_NAMES.ask)();
+    }
+
+    function renderMode() {
+        $('assistant-mode-label').textContent = modeName(mode);
+        modeBtn.className = `asst__mode asst__mode--${mode}`;
+        for (const option of modeMenu.querySelectorAll('[data-mode]')) {
+            option.setAttribute('aria-checked', option.dataset.mode === mode ? 'true' : 'false');
+        }
+    }
+
+    function setMenu(open) {
+        modeMenu.hidden = !open;
+        modeBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    /** The warning for leaving Ask. Decided on the form's submit, like the delete dialog,
+     *  and nothing changes unless the operator presses the switch button. */
+    function confirmMode(target) {
+        return new Promise((resolve) => {
+            const form = modeDialog.querySelector('form');
+            $('assistant-mode-warning').textContent = MODE_WARNINGS[target]();
+            $('assistant-mode-confirm').textContent = t('assistant.mode.warn_accept',
+                                                        { mode: modeName(target) });
+            const done = (ok) => {
+                form.removeEventListener('submit', onSubmit);
+                modeDialog.removeEventListener('cancel', onCancel);
+                resolve(ok);
+            };
+            const onSubmit = (e) => done(!!(e.submitter && e.submitter.value === 'switch'));
+            const onCancel = () => done(false);
+            form.addEventListener('submit', onSubmit);
+            modeDialog.addEventListener('cancel', onCancel);
+            modeDialog.showModal();
+        });
+    }
+
+    async function chooseMode(target) {
+        setMenu(false);
+        if (target === mode) return;
+        if (target !== 'ask' && !(await confirmMode(target))) return;
+        if (chatId) {
+            try {
+                const response = await fetch(`/api/assistant/chats/${encodeURIComponent(chatId)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: target }),
+                });
+                if (!response.ok) throw new Error(String(response.status));
+            } catch (e) {
+                toast(t('assistant.error'), { kind: 'error' });
+                return;
+            }
+        }
+        mode = target;
+        renderMode();
+        input.focus();
+    }
+
+    modeBtn.addEventListener('click', () => setMenu(modeMenu.hidden));
+    for (const option of modeMenu.querySelectorAll('[data-mode]')) {
+        option.addEventListener('click', () => chooseMode(option.dataset.mode));
+    }
+    document.addEventListener('click', (e) => {
+        if (!modeMenu.hidden && !e.target.closest('.asst__mode-wrap')) setMenu(false);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modeMenu.hidden) { setMenu(false); modeBtn.focus(); }
+    });
+
     // ---------------- Boot ----------------
     async function boot() {
+        renderMode();
         applyWidth();
         showContext();
         try {
