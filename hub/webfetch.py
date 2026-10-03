@@ -199,7 +199,7 @@ def _request(parsed, address):
         raise FetchError(f"could not reach {parsed.hostname}: {type(exc).__name__}")
 
 
-def open_url(url):
+def open_url(url, on_hop=None):
     """GET `url`, following redirects by hand. Returns (final_url, response).
 
     Every hop goes back through check_url -- see the module docstring. The caller reads the
@@ -207,6 +207,8 @@ def open_url(url):
     """
     current = str(url or "").strip()
     for _hop in range(MAX_REDIRECTS + 1):
+        if on_hop:
+            on_hop()
         parsed, addresses = check_url(current)
         response, failure = None, None
         for address in addresses:
@@ -537,7 +539,14 @@ def run_download(root, staging_id, max_bytes):
     meta.update(status=STATUS_DOWNLOADING, updated_at=time.time())
     _write_meta(root, staging_id, meta)
     try:
-        final_url, response = open_url(meta.get("url"))
+        def heartbeat():
+            # Each hop can take a connect timeout per address plus a read timeout before any
+            # byte arrives; without this a slow redirect chain outran STALL_SECONDS and read
+            # as failed while its worker was still connecting (PR #106 review).
+            meta.update(updated_at=time.time())
+            _write_meta(root, staging_id, meta)
+
+        final_url, response = open_url(meta.get("url"), on_hop=heartbeat)
         meta.update(final_url=final_url, file_name=_name_from(response, final_url))
         digest, size, last_note = hashlib.sha256(), 0, time.time()
         try:
