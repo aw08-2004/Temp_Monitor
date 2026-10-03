@@ -45,9 +45,10 @@ import assistant_guide
 # ---------------------------------------------------------------------------------------
 MAX_USER_CHARS = 4000
 MAX_TITLE_CHARS = 80
-# How much of ONE tool result the model sees in the turn that called it. A machine's full
-# report is ~6 KB; a fleet listing for a large scope is far more, and past this the model is
-# reading a truncation notice rather than drowning a small context window.
+# How much of ONE tool result the model sees in the turn that called it, unless
+# `ai.assistant_result_chars` says otherwise. A machine's full report is ~6 KB; a fleet listing
+# for a large scope is far more, and past this the model is reading a truncation notice rather
+# than drowning a small context window.
 MAX_TOOL_RESULT_CHARS = 12000
 # How much of an OLD tool result goes back into a later turn. Small on purpose -- see the
 # module docstring: a figure from three turns ago is a figure to re-read, not to quote.
@@ -635,6 +636,20 @@ def _all_lists(value, path="", out=None):
     return out
 
 
+# The keys that say which entry a cut-off entry was, in order of preference, and how many
+# such names one cut list carries -- never more than a quarter of the result, or naming the
+# cut entries would itself push the result over and cut more of them.
+LABEL_KEYS = ("machine", "id", "name")
+MAX_CUT_NAMES = 100
+
+
+def _label(item):
+    for key in LABEL_KEYS:
+        if item.get(key) not in (None, ""):
+            return item[key]
+    return None
+
+
 def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
     """One tool result as JSON of at most `limit` characters, cut at WHOLE ENTRIES.
 
@@ -648,7 +663,8 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
     objects keeps its first entries. A list of values -- a time series -- is thinned EVENLY
     and keeps its last point, because the first half of a temperature history is the wrong
     half to keep. Every list that was cut is named under `truncated` with how many it shows of
-    how many, and the hint names the arguments that would have avoided the cut.
+    how many and, for a list of objects, the name of each entry it left out, and the hint
+    names the arguments that would have avoided the cut.
     """
     content = json.dumps(result, default=str)
     if len(content) <= limit or not isinstance(result, dict) or "data" not in result:
@@ -661,13 +677,15 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
     if len(json.dumps(dict(result, data=data), default=str)) > limit:
         data = _compact(copy)
     cut = {}
+    originals = {}
 
     def render():
         out = dict(result, data=data)
         if cut:
             out["truncated"] = {
                 "lists": cut,
-                "hint": "too large to show whole: call again with `list` to pick a list, "
+                "hint": "too large to show whole: entries named under `not_shown` exist but "
+                        "are not in this answer. Call again with `list` to pick a list, "
                         "`where` to keep matching entries, `fields` to keep only the keys you "
                         "need, or `limit`"}
         return json.dumps(out, default=str)
@@ -691,7 +709,8 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
             break
         path, holder, key = best
         items = data if holder is None else holder[key]
-        record = cut.setdefault(path or "(the answer itself)", {"total": len(items)})
+        record_path = path or "(the answer itself)"
+        record = cut.setdefault(record_path, {"total": len(items)})
         # Shrink in proportion to how far over the limit the answer is, not by a fixed half:
         # halving a 4,000-point series down to fit took a dozen passes, each re-serialising
         # the whole answer, and every tool result goes through here. Never less than half,
@@ -702,6 +721,27 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
                           len(items) - 1))
         if all(isinstance(i, dict) for i in items):
             shorter = items[:keep]
+            # Name what was cut. "Showing 6 of 11" let the model say a machine that was in
+            # entries 7-11 did not exist (a real VOSTRO-LAPTOP, last by name). A name it
+            # can see is one it can narrow to.
+            first = originals.setdefault(record_path, items)
+            names = []
+            room = limit // 4 - sum(_size(r.get("not_shown", [])) for p, r in cut.items()
+                                    if p != record_path)
+            for entry in first[len(shorter):][:MAX_CUT_NAMES]:
+                name = _label(entry)
+                if name is None:
+                    continue
+                name = str(name)[:COMPACT_TEXT_CHARS // 4]
+                # Measured as JSON, not as raw text: a control character in a name is six
+                # characters once escaped, and the result has to fit as JSON.
+                if _size(names + [name]) > room:
+                    break
+                names.append(name)
+            if names:
+                record["not_shown"] = names
+            else:
+                record.pop("not_shown", None)
         else:
             # Evenly spaced points, counted back from the LAST, so the newest reading
             # always survives.
@@ -720,7 +760,8 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
 
 
 def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools, execute,
-             emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS):
+             emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS,
+             result_chars=MAX_TOOL_RESULT_CHARS):
     """One operator message through to a final answer. Writes every message as it goes.
 
     `complete_step(messages, tools)` -> (error, {"content", "tool_calls"}) is ai.complete_chat
@@ -776,7 +817,7 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
                 # with a missing reply is a conversation no server will continue.
                 print(f"[assistant] tool {call['name']} raised: {exc!r}")
                 result = {"ok": False, "error": "the hub failed while running this tool"}
-            content = fit_result(result)
+            content = fit_result(result, limit=result_chars)
             append_message(db_path, chat_id, ROLE_TOOL, content, tool_call_id=call["id"],
                            tool_name=call["name"])
             event = {"type": "tool", "name": call["name"], "state": "finished",

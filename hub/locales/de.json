@@ -1193,6 +1193,10 @@
           "label": "Assistenten-Schritte pro Nachricht",
           "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter."
         },
+        "assistant_result_chars": {
+          "label": "Ergebnisgröße des Assistenten",
+          "help": "Wie viele Zeichen einer Werkzeugantwort der Assistent liest, etwa vier pro Token. Mehr zeigt ihm einen größeren Teil einer langen Liste oder Befehlsausgabe auf einmal, aber jeder weitere Schritt sendet sie erneut, sodass jede Anfrage langsamer und teurer wird und das Kontextfenster eines kleinen Modells überlaufen kann. Die Antwort weist auf gekürzte Inhalte hin."
+        },
         "assistant_history_days": {
           "label": "Assistenten-Unterhaltungen aufbewahren für",
           "help": "Eine Unterhaltung, die so lange niemand angefasst hat, wird gelöscht."

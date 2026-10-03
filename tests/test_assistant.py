@@ -674,6 +674,86 @@ def test_any_answer_can_be_narrowed():
           results[1]["data"].get("items") == [{"machine": "PC-01"}])
 
 
+def test_the_last_machine_by_name_is_found():
+    """A real hub asked to "install VLC on VOSTRO-LAPTOP" answered that no such machine
+    existed: the full /api/machines rows ran past the result cap, the cut kept the first
+    machines by name, and VOSTRO sorts last. A filter on `name` -- the key is `machine` --
+    then matched nothing and said nothing about why."""
+    print("\n-- the whole fleet fits, and a filter on a missing key says so --")
+    conn = sqlite3.connect(DB)
+    names = [f"FLEET-{i:02d}" for i in range(40)] + ["VOSTRO-LAPTOP"]
+    for name in names:
+        conn.execute("INSERT OR IGNORE INTO machine_info (machine, manufacturer, model, "
+                     "os_caption, serial_number) VALUES (?, 'Dell Inc.', 'Vostro 5490', "
+                     "'Microsoft Windows 11 Pro', 'CJ0JQT2')", (name,))
+    conn.commit()
+    conn.close()
+    super_client = client_for("tester@example.com")
+    chat_id = new_chat(super_client)
+    SCRIPT[:] = [call("list_machines"),
+                 call("list_machines", where={"name": "VOSTRO-LAPTOP"}),
+                 call("list_machines", fields=["machine", "diagnostics.has_sensors"],
+                      where={"machine": "vostro"}),
+                 say("ok")]
+    converse(super_client, chat_id, "install VLC on VOSTRO-LAPTOP")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)][-3:]
+    rows = results[0]["data"]
+    shown = [r["machine"] for r in rows]
+    not_shown = (results[0].get("truncated") or {}).get("lists", {}).get(
+        "(the answer itself)", {}).get("not_shown", [])
+    check("short rows without the live diagnostics",
+          all("diagnostics" not in r and "machine" in r for r in rows))
+    check("...fit far more machines than the full rows did", len(shown) >= 30)
+    check("the last machine by name is shown, or named as cut",
+          "VOSTRO-LAPTOP" in shown or "VOSTRO-LAPTOP" in not_shown)
+    check("...and every machine is accounted for",
+          set(names) <= set(shown) | set(not_shown))
+    narrowed = results[1]["data"]["_narrowed"]
+    check("a filter on a key no row has names the key and the real ones",
+          narrowed["matched"] == 0 and narrowed["unknown_keys"] == ["name"]
+          and "machine" in narrowed["keys"])
+    check("asking for fields still reaches the full row",
+          results[2]["data"]["items"] == [{"machine": "VOSTRO-LAPTOP",
+                                           "diagnostics.has_sensors": False}])
+
+    # Shortening the rows before the filter dropped the key the filter was on.
+    rows = [{"machine": "PC-A", "diagnostics": {"has_sensors": True}, "status": "online"},
+            {"machine": "PC-B", "diagnostics": {"has_sensors": False}, "status": "online"}]
+    out = assistant_tools.shape("list_machines", rows,
+                                {"where": {"diagnostics.has_sensors": True}})
+    check("a filter on a reading the short row leaves out still matches",
+          [r["machine"] for r in out["items"]] == ["PC-A"]
+          and "diagnostics" not in out["items"][0] and out["_narrowed"]["matched"] == 1)
+    out = assistant_tools.narrow(rows, {"where": {"diagnostics.nope": True}})
+    check("an unknown dotted key is reported even when its parent exists",
+          out["_narrowed"].get("unknown_keys") == ["diagnostics.nope"])
+    out = assistant_tools.narrow(rows + [{"machine": "PC-C", "diagnostics": None}],
+                                 {"where": {"diagnostics.has_sensors": "maybe"}})
+    check("...but a key that exists is not called unknown",
+          "unknown_keys" not in out["_narrowed"])
+
+    # The cap is the operator's to set (ai.assistant_result_chars): a turn must use it.
+    for chars in (4000, 100000):
+        settings.set_many(DB, {"ai.assistant_result_chars": chars})
+        chat_id = new_chat(super_client)
+        SCRIPT[:] = [call("list_machines", fields=["machine", "diagnostics", "os"]), say("ok")]
+        converse(super_client, chat_id, "list everything")
+        content = tool_messages(chat_id)[-1]["content"]
+        if chars == 4000:
+            check("a small result size cuts the answer to it",
+                  len(content) <= 4000 and "truncated" in json.loads(content))
+        else:
+            check("a large result size lets the whole answer through",
+                  len(content) > 12000 and "truncated" not in json.loads(content))
+    settings.set_many(DB, {"ai.assistant_result_chars": 12000})
+
+    # A name that grows when escaped as JSON must not push the result over its limit.
+    escaped = [{"machine": "\x01" * 60 + str(i), "note": "n" * 200} for i in range(200)]
+    content = assistant.fit_result({"ok": True, "data": escaped}, limit=6000)
+    check("names that grow when escaped still leave valid JSON within the limit",
+          len(content) <= 6000 and json.loads(content)["truncated"]["lists"])
+
+
 def test_trimming_never_cuts_an_id():
     print("\n-- trimming cuts long text, never an id --")
     long_id = "d" * 400
@@ -1143,6 +1223,7 @@ def main():
     test_modes_decide_what_runs_unasked()
     test_a_confirmed_action_is_followed_up()
     test_absolute_links_to_this_hub()
+    test_the_last_machine_by_name_is_found()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 
