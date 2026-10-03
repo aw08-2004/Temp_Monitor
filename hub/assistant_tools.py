@@ -227,9 +227,14 @@ CURATED = (
      _params(["alert_id"], alert_id={"type": "integer"})),
     ("list_commands", "Recent fleet commands, optionally for one machine.",
      "GET", "/api/fleet/commands", _params(machine=_MACHINE)),
-    ("command_output", "Status, result and output of one command.",
+    ("command_output", "Status and output of one fleet command. Queuing a command only "
+     "returns its command_id; it runs on the machine later. Pass wait_seconds (up to 90) to "
+     "wait for it to finish, and `find` (lines containing this text) or `tail` (the last N "
+     "lines) to read the part of a long output that matters.",
      "GET", "/api/fleet/commands/<command_id>/output",
-     _params(["command_id"], command_id={"type": "integer"})),
+     _params(["command_id"], command_id={"type": "string"},
+             wait_seconds={"type": "integer"}, find={"type": "string"},
+             tail={"type": "integer"})),
     ("run_command", "Queue a command on a machine: restart, shutdown, rename, gpupdate, "
      "install_app, run_script, show_message and others. Needs the operator's confirmation.",
      "POST", "/api/fleet/commands",
@@ -306,7 +311,25 @@ GENERIC = (
 
 # Arguments a curated tool takes that the ROUTE does not: they are kept out of the request and
 # applied to its answer by the tool's SHAPER below.
-LOCAL_PARAMS = {"list_rules": ("q", "enabled")}
+LOCAL_PARAMS = {"list_rules": ("q", "enabled"),
+                "command_output": ("wait_seconds", "find", "tail")}
+
+# Every tool that can change something takes these two, and they never reach the route: the
+# model's own judgement of the call (hub 1.135.5). `risk` decides whether Auto mode runs it
+# without a card; `impact` is shown on the card and kept on the action row in every mode, so
+# an operator confirming -- or reading back what ran without asking -- sees what the model
+# thought the action would do.
+RISK_KEYS = ("risk", "impact")
+RISK_PROPS = {
+    "risk": {"type": "string", "enum": ["routine", "critical"],
+             "description": "routine: only reads, or a small reversible change the operator "
+                            "asked for on one machine. critical: can lose data, interrupt a "
+                            "signed-in user, touch many machines, change security or access, "
+                            "or cannot be undone. When unsure: critical."},
+    "impact": {"type": "string",
+               "description": "One sentence: what this does to the machine and its user."},
+}
+MAX_WAIT_SECONDS = 90
 
 # ---------------------------------------------------------------------------------------
 # Narrowing -- any read tool, any route
@@ -546,13 +569,48 @@ def shape_rules(payload, local):
             "actions_enabled": payload.get("actions_enabled")}
 
 
-SHAPERS = {"list_rules": shape_rules}
+def shape_command_output(payload, local):
+    """GET /api/fleet/commands/<id>/output, as one text the model can read.
+
+    The route answers the console's live view: the output in chunks, plus the final result.
+    A model reading it saw a list of fragments, and a long `gpresult` came back cut. Here the
+    output is one string -- the stored result's when the command has finished, the chunks
+    joined while it runs -- and `find` / `tail` pick the lines that matter from it.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    result = payload.get("result") or {}
+    text = result.get("output")
+    if text is None:
+        text = "".join(str(c.get("text") or "") for c in payload.get("chunks") or [])
+    lines = str(text or "").splitlines()
+    total = len(lines)
+    needle = str(local.get("find") or "").strip().lower()
+    if needle:
+        lines = [line for line in lines if needle in line.lower()]
+    try:
+        tail = int(local.get("tail") or 0)
+    except (TypeError, ValueError):
+        tail = 0
+    if tail > 0:
+        lines = lines[-tail:]
+    out = {"status": payload.get("status"),
+           "finished": payload.get("status") in ("done", "failed", "expired"),
+           "success": result.get("success") if result else None,
+           "completed_at": result.get("completed_at") if result else None,
+           "output": "\n".join(lines), "lines_total": total, "lines_shown": len(lines)}
+    if payload.get("truncated"):
+        out["note"] = "the hub kept only part of this command's live output"
+    return out
+
+
+SHAPERS = {"list_rules": shape_rules, "command_output": shape_command_output}
 
 
 def split_local(name, args):
     """(args for the route, args for the shaper and the narrowing)."""
     args = dict(args or {})
-    keys = tuple(LOCAL_PARAMS.get(name, ())) + NARROW_KEYS
+    keys = tuple(LOCAL_PARAMS.get(name, ())) + NARROW_KEYS + RISK_KEYS
     local = {key: args.pop(key) for key in keys if key in args}
     return args, local
 
@@ -576,20 +634,23 @@ def _with_narrowing(schema):
     return dict(schema, properties=dict(schema["properties"], **NARROW_PROPS))
 
 
+def _with_risk(schema):
+    return dict(schema, properties=dict(schema["properties"], **RISK_PROPS))
+
+
 def tool_specs(curated_names):
     """The OpenAI-shape `tools` list for the names this operator is offered. Every GET tool
     and call_endpoint also take NARROW_PROPS."""
     specs = []
     for name, desc, method, _path, schema in CURATED:
         if name in curated_names:
-            if method == "GET":
-                schema = _with_narrowing(schema)
+            schema = _with_narrowing(schema) if method == "GET" else _with_risk(schema)
             specs.append({"type": "function",
                           "function": {"name": name, "description": desc,
                                        "parameters": schema}})
     for name, desc, schema in GENERIC:
         if name == "call_endpoint":
-            schema = _with_narrowing(schema)
+            schema = _with_risk(_with_narrowing(schema))
         specs.append({"type": "function",
                       "function": {"name": name, "description": desc, "parameters": schema}})
     return specs

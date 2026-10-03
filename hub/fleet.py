@@ -754,6 +754,11 @@ ACTION_LEVELS = {
     # carry the detail. A low-risk tool the assistant ran by itself is notice, the level of
     # the operator change it stands in for; a declined action is notice because nothing ran.
     "assistant.action_confirmed": LEVEL_SECURITY,
+    # Hub 1.135.5: an action that ran WITHOUT a click (Auto said routine, or Bypass), and the
+    # operator's choice of mode that allowed it. Both security: together they answer "who let
+    # the model act unasked, on what, and why did it think that was fine".
+    "assistant.action_auto": LEVEL_SECURITY,
+    "assistant.mode_changed": LEVEL_SECURITY,
     "assistant.action_rejected": LEVEL_NOTICE,
     "assistant.tool": LEVEL_NOTICE,
 }

@@ -98,12 +98,60 @@
                     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
                 </button>
             </div>
-            <p class="asst__fine">{{ t('assistant.privacy') }}</p>
+            <div class="asst__under">
+                {# The command mode of this conversation (hub 1.135.5). A menu, not a cycle
+                   button: each mode says what it does before it is chosen, and leaving Ask
+                   goes through the warning below. #}
+                <div class="asst__mode-wrap">
+                    <button class="asst__mode" type="button" id="assistant-mode"
+                            aria-haspopup="menu" aria-expanded="false"
+                            aria-controls="assistant-mode-menu">
+                        <span class="asst__mode-dot" aria-hidden="true"></span>
+                        <span id="assistant-mode-label">{{ t('assistant.mode.ask') }}</span>
+                    </button>
+                    <div class="asst__mode-menu" id="assistant-mode-menu" role="menu" hidden>
+                        <button type="button" role="menuitemradio" class="asst__mode-option" data-mode="ask">
+                            <strong>{{ t('assistant.mode.ask') }}</strong>
+                            <span>{{ t('assistant.mode.ask_desc') }}</span>
+                        </button>
+                        <button type="button" role="menuitemradio" class="asst__mode-option" data-mode="auto">
+                            <strong>{{ t('assistant.mode.auto') }}</strong>
+                            <span>{{ t('assistant.mode.auto_desc') }}</span>
+                        </button>
+                        <button type="button" role="menuitemradio" class="asst__mode-option" data-mode="bypass">
+                            <strong>{{ t('assistant.mode.bypass') }}</strong>
+                            <span>{{ t('assistant.mode.bypass_desc') }}</span>
+                        </button>
+                    </div>
+                </div>
+                <p class="asst__fine">{{ t('assistant.privacy') }}</p>
+            </div>
         </form>
     </section>
 
     {# The delete confirmation, in the page rather than the browser's own prompt: the console's
        modal, so it looks like the rest of the hub and names the conversation it will delete. #}
+    {# Leaving Ask. Says, in this conversation's words, what will now happen without a
+       click -- and that the model can be wrong or talked into things by text on the
+       machines it reads. Nothing changes until the operator presses the switch button. #}
+    <dialog class="modal asst__dialog" id="assistant-mode-dialog"
+            aria-labelledby="assistant-mode-title">
+        <form method="dialog">
+            <div class="modal__head">
+                <h2 class="modal__title" id="assistant-mode-title">{{ t('assistant.mode.warn_title') }}</h2>
+            </div>
+            <div class="modal__body">
+                <p id="assistant-mode-warning"></p>
+                <p class="asst__dialog-note">{{ t('assistant.mode.warn_common') }}</p>
+            </div>
+            <div class="modal__foot">
+                <button class="btn" type="submit" value="cancel">{{ t('common.cancel') }}</button>
+                <button class="btn btn--danger" type="submit" value="switch"
+                        id="assistant-mode-confirm"></button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog class="modal asst__dialog" id="assistant-delete-dialog"
             aria-labelledby="assistant-delete-title">
         <form method="dialog">
