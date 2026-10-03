@@ -4676,7 +4676,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
@@ -4709,7 +4709,14 @@ names, and can do what the signed-in operator can.
   "disable the high temperature alerts" spent all eight steps re-asking an unfilterable route.
   `set_rule_enabled` (confirm tier) finishes that job in a second call.
 - **An oversized tool result is cut at a whole list entry** (`assistant.fit_result`) and says
-  how many it shows of how many, instead of slicing the JSON mid-object.
+  how many it shows of how many, instead of slicing the JSON mid-object. Long text inside an
+  entry is cut first; ids never are.
+- **Any read can be narrowed by the model** (hub 1.135.2): every GET tool and `call_endpoint`
+  take `fields`, `where` (dotted paths, case-insensitive text) and `limit`, applied to every list
+  in the answer (`assistant_tools.narrow`). The per-route shaper of 1.135.1 fixed one question;
+  "which deployment is stuck?" then ran out of steps the same way against `/api/deployments`.
+  Rejected: another shaped tool per route. `list_deployments`, `get_deployment` and
+  `list_packages` were added as curated reads, but narrowing is what reaches the rest.
 - **Links are the hub's, never the model's.** The model writes `[[machine:PC-12|tab=terminal]]`,
   `[[remote:..]]`, `[[report:..]]`, `[[page:alerts]]`; `render_links` resolves them for the
   VIEWER's scope when the answer is shown, and reduces any markdown link the model wrote itself

@@ -231,6 +231,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                                  for e in found]}
             local = {}
             if name == "call_endpoint":
+                args, local = assistant_tools.split_local(name, args)
                 method = str(args.get("method") or "GET").upper()
                 path = str(args.get("path") or "")
                 error = assistant_tools.check_path(path)
@@ -265,7 +266,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                         "action": _public_action(action),
                         "note": "Not run. The operator sees a confirmation card and decides."}
             status, payload = dispatcher.call(session_data, method, path, query, body)
-            if status < 400 and name in assistant_tools.SHAPERS:
+            if status < 400:
                 payload = assistant_tools.shape(name, payload, local)
             if tier == assistant_tools.TIER_WRITE:
                 audit(db_path, actor=owner, action="assistant.tool", target=machine or path,

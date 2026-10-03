@@ -248,6 +248,16 @@ CURATED = (
      "POST", "/api/ai/query", _params(["text"], text={"type": "string"})),
     ("fleet_report", "Alerts raised, cleared and open over a window of days.",
      "POST", "/api/ai/summary", _params(window_days={"type": "integer"})),
+    ("list_deployments", "Package deployments, newest first, each with its package and a "
+     "count of targets per status (pending, in_flight, succeeded, failed, expired, "
+     "cancelled). Optionally for one machine.",
+     "GET", "/api/deployments", _params(machine=_MACHINE)),
+    ("get_deployment", "One deployment with every target machine: status, attempts, last "
+     "error, the command it is waiting on, and when it was last updated.",
+     "GET", "/api/deployments/<deployment_id>",
+     _params(["deployment_id"], deployment_id={"type": "string"})),
+    ("list_packages", "The software packages that can be deployed.",
+     "GET", "/api/packages", _params()),
     ("list_rules", "The rules engine's rules, one short line each: id, name, enabled, the "
      "condition as text, and how many machines match it now. Filter with `q` (words that must "
      "all appear in the name, description or condition) and `enabled`. Use get_rule for one "
@@ -291,6 +301,94 @@ GENERIC = (
 # applied to its answer by the tool's SHAPER below.
 LOCAL_PARAMS = {"list_rules": ("q", "enabled")}
 
+# ---------------------------------------------------------------------------------------
+# Narrowing -- any read tool, any route
+# ---------------------------------------------------------------------------------------
+# Every read tool and call_endpoint take these three, and the executor applies them to the
+# route's answer before it reaches the model. Rejected: a hand-shaped tool per route, which
+# list_rules was. It fixed one question ("disable the high temperature alerts") and the next
+# one ("which deployment is stuck?") ran out of steps the same way, against a different route
+# with no filter of its own. A model that can say which fields and which rows it wants can
+# narrow ANY answer, including routes nobody has written a tool for.
+NARROW_KEYS = ("fields", "where", "limit")
+NARROW_PROPS = {
+    "fields": {"type": "array", "items": {"type": "string"},
+               "description": "Keep only these keys in each list entry. Dotted paths reach "
+                              "into nested objects, e.g. target_counts.pending."},
+    "where": {"type": "object",
+              "description": "Keep only list entries whose keys match: text matches as a "
+                             "case-insensitive substring, anything else must be equal. "
+                             "Dotted paths work here too."},
+    "limit": {"type": "integer", "description": "At most this many list entries."},
+}
+
+
+def _get(item, path):
+    value = item
+    for part in str(path).split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _matches(item, where):
+    for key, wanted in where.items():
+        actual = _get(item, key)
+        if isinstance(wanted, str) and isinstance(actual, str):
+            if wanted.lower() not in actual.lower():
+                return False
+        elif isinstance(wanted, str) and actual is not None and not isinstance(actual, str):
+            # The model wrote `"pending": "1"` for a number; compare as text rather than
+            # silently matching nothing.
+            if str(actual).lower() != wanted.lower():
+                return False
+        elif actual != wanted:
+            return False
+    return True
+
+
+def narrow(payload, local):
+    """Apply `fields` / `where` / `limit` to every list of objects in a route's answer.
+
+    The lists are the payload itself or its top-level values, which is where every list route
+    in this hub puts them ({"deployments": [...]}, {"rules": [...]}, a bare list). Each list
+    that was narrowed is reported under `_narrowed` with how many entries it had and kept, so
+    "0 matched" reads as an answer and not as an empty table.
+    """
+    local = local or {}
+    fields = [str(f) for f in (local.get("fields") or []) if str(f).strip()]
+    where = local.get("where") if isinstance(local.get("where"), dict) else None
+    try:
+        limit = max(1, int(local["limit"])) if local.get("limit") else None
+    except (TypeError, ValueError):
+        limit = None
+    if not (fields or where or limit):
+        return payload
+    report = {}
+
+    def apply(name, items):
+        if not items or not all(isinstance(i, dict) for i in items):
+            return items
+        kept = [i for i in items if _matches(i, where)] if where else list(items)
+        matched = len(kept)
+        if limit:
+            kept = kept[:limit]
+        if fields:
+            kept = [{f: _get(i, f) for f in fields} for i in kept]
+        report[name] = {"total": len(items), "matched": matched, "shown": len(kept)}
+        return kept
+
+    if isinstance(payload, list):
+        out = apply("data", payload)
+        return {"items": out, "_narrowed": report} if report else out
+    if isinstance(payload, dict):
+        out = {k: (apply(k, v) if isinstance(v, list) else v) for k, v in payload.items()}
+        if report:
+            out["_narrowed"] = report
+        return out
+    return payload
+
 
 def _words(text):
     return [w for w in re.split(r"\s+", str(text or "").lower()) if w]
@@ -332,15 +430,19 @@ SHAPERS = {"list_rules": shape_rules}
 
 
 def split_local(name, args):
-    """(args for the route, args for the shaper)."""
+    """(args for the route, args for the shaper and the narrowing)."""
     args = dict(args or {})
-    local = {key: args.pop(key) for key in LOCAL_PARAMS.get(name, ()) if key in args}
+    keys = tuple(LOCAL_PARAMS.get(name, ())) + NARROW_KEYS
+    local = {key: args.pop(key) for key in keys if key in args}
     return args, local
 
 
 def shape(name, payload, local):
+    """The tool's own shaper, if it has one, then the model's narrowing."""
     shaper = SHAPERS.get(name)
-    return shaper(payload, local or {}) if shaper else payload
+    if shaper:
+        payload = shaper(payload, local or {})
+    return narrow(payload, local)
 
 
 CURATED_BY_NAME = {name: (desc, method, path, schema)
@@ -350,15 +452,24 @@ GENERIC_NAMES = {name for name, _desc, _schema in GENERIC}
 _SEGMENT = re.compile(r"<(?:[a-z_]+:)?([a-z_]+)>")
 
 
+def _with_narrowing(schema):
+    return dict(schema, properties=dict(schema["properties"], **NARROW_PROPS))
+
+
 def tool_specs(curated_names):
-    """The OpenAI-shape `tools` list for the names this operator is offered."""
+    """The OpenAI-shape `tools` list for the names this operator is offered. Every GET tool
+    and call_endpoint also take NARROW_PROPS."""
     specs = []
-    for name, desc, _method, _path, schema in CURATED:
+    for name, desc, method, _path, schema in CURATED:
         if name in curated_names:
+            if method == "GET":
+                schema = _with_narrowing(schema)
             specs.append({"type": "function",
                           "function": {"name": name, "description": desc,
                                        "parameters": schema}})
     for name, desc, schema in GENERIC:
+        if name == "call_endpoint":
+            schema = _with_narrowing(schema)
         specs.append({"type": "function",
                       "function": {"name": name, "description": desc, "parameters": schema}})
     return specs

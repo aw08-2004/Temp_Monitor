@@ -557,6 +557,65 @@ def test_disabling_a_rule_by_name():
           r.status_code == 200 and rules_module.get_rule(DB, rule_id)["enabled"] is False)
 
 
+def test_any_answer_can_be_narrowed():
+    """'Which deployment is stuck?' ran out of steps against a route with no filter, the same
+    way the rules question had. Narrowing is now the model's to apply to any read."""
+    print("\n-- fields / where / limit narrow any list in any answer --")
+    payload = {"deployments": [
+        {"id": "a1", "package_name": "7-Zip", "target_counts": {"succeeded": 40}},
+        {"id": "b2", "package_name": "Chrome", "target_counts": {"in_flight": 1, "succeeded": 9}},
+        {"id": "c3", "package_name": "chrome beta", "target_counts": {"failed": 2}}],
+        "can_manage": True}
+    out = assistant_tools.narrow(payload, {"where": {"target_counts.in_flight": 1},
+                                           "fields": ["id", "package_name"]})
+    check("a dotted where finds the stuck one",
+          out["deployments"] == [{"id": "b2", "package_name": "Chrome"}])
+    check("...and reports how many it kept of how many",
+          out["_narrowed"]["deployments"] == {"total": 3, "matched": 1, "shown": 1})
+    check("other keys of the answer are kept", out["can_manage"] is True)
+    out = assistant_tools.narrow(payload, {"where": {"package_name": "CHROME"}})
+    check("text matches case-insensitively as a substring", len(out["deployments"]) == 2)
+    out = assistant_tools.narrow(payload, {"where": {"target_counts.failed": "2"}})
+    check("a number written as text still matches", [d["id"] for d in out["deployments"]] == ["c3"])
+    out = assistant_tools.narrow(payload, {"limit": 1})
+    check("limit keeps the first entries", len(out["deployments"]) == 1)
+    check("no narrowing leaves the answer untouched",
+          assistant_tools.narrow(payload, {}) is payload)
+
+    specs = {s["function"]["name"]: s["function"]["parameters"]["properties"]
+             for s in assistant_tools.tool_specs({"list_deployments", "run_command"})}
+    check("GET tools are described with fields/where/limit",
+          {"fields", "where", "limit"} <= set(specs["list_deployments"]))
+    check("...and so is call_endpoint", "where" in specs["call_endpoint"])
+    check("...but not a write tool", "where" not in specs["run_command"])
+
+    viewer = client_for("viewer@x.com")
+    chat_id = new_chat(viewer)
+    SCRIPT[:] = [call("list_machines", where={"machine": "PC-02"}, fields=["machine"]),
+                 call("call_endpoint", method="GET", path="/api/machines",
+                      where={"machine": "PC-01"}, fields=["machine"]),
+                 say("ok")]
+    converse(viewer, chat_id, "find PC-02")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    check("a curated tool narrows the real route's answer",
+          results[0]["data"].get("items") == [{"machine": "PC-02"}])
+    check("...and so does call_endpoint",
+          results[1]["data"].get("items") == [{"machine": "PC-01"}])
+
+
+def test_trimming_never_cuts_an_id():
+    print("\n-- trimming cuts long text, never an id --")
+    long_id = "d" * 400
+    rows = [{"id": long_id, "deployment_id": long_id, "note": "n" * 2000} for _ in range(30)]
+    parsed = json.loads(assistant.fit_result({"ok": True, "data": {"rows": rows}}, limit=8000))
+    kept = parsed["data"]["rows"]
+    check("ids survive whole", kept and all(r["id"] == long_id and r["deployment_id"] == long_id
+                                            for r in kept))
+    check("long text is cut", all(len(r["note"]) < 400 for r in kept))
+    check("the hint names the narrowing arguments",
+          "`where`" in parsed["truncated"]["hint"] and "`fields`" in parsed["truncated"]["hint"])
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -580,6 +639,8 @@ def main():
     test_a_stop_mid_step_answers_every_call()
     test_long_results_keep_whole_entries()
     test_disabling_a_rule_by_name()
+    test_any_answer_can_be_narrowed()
+    test_trimming_never_cuts_an_id()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

@@ -433,6 +433,25 @@ class RunLog:
             del self._runs[run_id]
 
 
+COMPACT_TEXT_CHARS = 300
+
+
+def _compact(item):
+    """One list entry with its long text cut, its ids and short values untouched."""
+    if not isinstance(item, dict):
+        return item
+    out = {}
+    for key, value in item.items():
+        is_id = key == "id" or key.endswith("_id")
+        if isinstance(value, str) and len(value) > COMPACT_TEXT_CHARS and not is_id:
+            out[key] = value[:COMPACT_TEXT_CHARS] + "...[cut]"
+        elif isinstance(value, list) and len(value) > 10:
+            out[key] = value[:10] + [f"...{len(value) - 10} more"]
+        else:
+            out[key] = value
+    return out
+
+
 def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
     """One tool result as JSON of at most `limit` characters, cut at a WHOLE ENTRY.
 
@@ -456,13 +475,19 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
             holder = data
             key = max(lists, key=lambda kv: len(json.dumps(kv[1], default=str)))[0]
     if holder is not None:
-        items = holder[key]
+
+        # Long text inside an entry goes first, so more whole entries fit. Never an id: a
+        # cut id is a reference the model will pass back to a tool and get a 404 for, which
+        # is exactly how one real conversation lost its last steps ("the ID was truncated").
+        items = [_compact(item) for item in holder[key]]
 
         def build(count):
             trimmed = dict(holder, **{key: items[:count]})
             out = dict(result, data=trimmed) if holder is data else dict(trimmed)
             out["truncated"] = {"shown": count, "total": len(items),
-                                "hint": "only the first entries fit; filter to see the rest"}
+                                "hint": "too large to show whole: call the tool again with "
+                                        "`fields` to keep only the keys you need, `where` to "
+                                        "keep only matching entries, or `limit`"}
             return json.dumps(out, default=str)
 
         low, high = 0, len(items)
@@ -640,6 +665,13 @@ def system_prompt(*, operator, capabilities, scope, pages, context, today, langu
         "Always call a tool for figures (temperatures, disk, alerts, status). Never repeat a "
         "number from earlier in this conversation as current -- earlier tool results are "
         "trimmed and out of date. If you have not called a tool this turn, you do not know.",
+        "",
+        "## Large answers",
+        "Every read tool and call_endpoint accept `fields`, `where` and `limit` and apply them "
+        "to the lists in the answer. Use them FIRST on anything that may be long: e.g. "
+        "list_deployments with where {\"target_counts.pending\": 1}, or fields "
+        "[\"id\", \"name\"]. If a result says `truncated`, call it again narrowed -- do not "
+        "repeat the same call.",
         "",
         "## Doing things",
         "Read-only tools run at once. Low-risk changes (dismiss an alert, wake a PC, draft a "
