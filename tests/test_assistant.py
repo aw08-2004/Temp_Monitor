@@ -1242,6 +1242,19 @@ def test_package_building_follows_the_modes():
           created.get("status") == "pending_confirmation")
     check("POST /api/deployments is still confirm-tier",
           assistant_tools.classify("POST", "/api/deployments") == "confirm")
+    # PR #106 review: a page read is an outbound request to a URL the model chose, from a
+    # conversation full of fleet data -- read-tier would let an injected page exfiltrate it.
+    check("reading a web page follows the mode (confirm), not read-tier",
+          assistant_tools.classify("POST", "/api/webfetch/read") == "confirm")
+    check("...while a winget lookup, which only reaches GitHub, stays read-tier",
+          assistant_tools.classify("POST", "/api/webfetch/winget") == "read")
+    SCRIPT[:] = [call("web_read", url="https://vendor.example/?d=PC-01", risk="critical",
+                      impact="Reads a page."), say("waiting")]
+    admin.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "auto"})
+    converse(admin, chat_id, "read that page")
+    read = json.loads(tool_messages(chat_id)[-1]["content"])
+    check("Auto: a page read the model marked critical waits for a click",
+          read.get("status") == "pending_confirmation")
 
     viewer = client_for("viewer@x.com")
     SCRIPT[:] = [say("hello")]

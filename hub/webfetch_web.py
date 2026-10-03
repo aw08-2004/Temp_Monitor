@@ -35,7 +35,12 @@ import refusals
 import settings
 import webfetch
 
-MAX_WAIT_SECONDS = 60
+# Bounded like fleet.command_push_hold_seconds (25), for the same reason: a direct caller
+# parks one waitress worker for the whole wait, out of the fixed pool install.ps1 sizes
+# (--threads 32). The assistant's own calls do NOT -- RouteDispatcher replays routes in-process
+# through test_client on the assistant's 4-worker pool -- so the model's polling cannot starve
+# the console; only a browser or API client looping on this could, and 25 s is that cost.
+MAX_WAIT_SECONDS = 25
 STORE_FAILED = ("The hub could not write the file to its disk; the hub log says why. Check free "
                 "space and permissions on the log directory.")
 OFF_MESSAGE = ("Web access for the assistant is switched off. An admin can turn it on in "
@@ -146,7 +151,7 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
     @can_deploy
     @_gate
     def get_download(staging_id):
-        """One staged download. `wait_seconds` (up to 60) waits while it is still running."""
+        """One staged download. `wait_seconds` (up to 25) waits while it is still running."""
         try:
             wait = max(0, min(int(request.args.get("wait_seconds") or 0), MAX_WAIT_SECONDS))
         except ValueError:

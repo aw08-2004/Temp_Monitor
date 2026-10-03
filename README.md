@@ -436,8 +436,9 @@ package that installs VS Code". The assistant looks the software up in the winge
 repository or on the vendor's site, either uses winget directly or downloads the installer into
 a staging folder on the hub (`<log dir>/staging`), picks the silent-install switches, and
 creates the package with a detection rule. It tells you which switches it assumed. It never
-deploys what it built: schedule the deployment yourself on the Packages page. Starting a download
-and creating the package follow the conversation's mode like any other action. Only https
+deploys what it built: schedule the deployment yourself on the Packages page. Reading a web page,
+starting a download and creating the package follow the conversation's mode like any other
+action, so in Ask you see each address before the hub fetches it. Only https
 addresses on the public internet are fetched, never this network; the hub never runs a
 downloaded file; the size limit is *Largest package file*. Staged downloads nobody turned into a
 package are deleted after *Keep staged downloads for* (24 hours). The hub needs a direct
