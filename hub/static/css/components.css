@@ -938,6 +938,16 @@
     align-items: flex-start;
 }
 
+/* The section list stays in view while a long section scrolls past it, instead of scrolling
+   away with the page and leaving the operator to scroll back up to change section. Its own
+   scrollbar only appears on a screen too short for every section name. */
+.settings-layout > .tabs--vertical {
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100vh - 2 * var(--space-4));
+    overflow-y: auto;
+}
+
 /* min-width:0 so a wide field inside a panel can't push the flex item past the
    viewport instead of shrinking. */
 .settings-layout__panels {
@@ -949,6 +959,12 @@
    to be reverted explicitly, since these rules are more specific than the base ones. */
 @media (max-width: 720px) {
     .settings-layout { display: block; }
+
+    .settings-layout > .tabs--vertical {
+        position: static;
+        max-height: none;
+        overflow-y: visible;
+    }
 
     .tabs--vertical {
         flex-direction: row;

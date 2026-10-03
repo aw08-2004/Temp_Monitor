@@ -3429,7 +3429,6 @@
     "history": "Conversations",
     "new_chat": "New",
     "delete_chat": "Delete",
-    "delete_confirm": "Delete this conversation? This cannot be undone.",
     "pin": "Pin to the side",
     "unpin": "Unpin",
     "resize": "Resize the assistant panel",
@@ -3467,7 +3466,12 @@
     "fold": "Hide conversations",
     "no_chats": "No conversations yet.",
     "chat_running": "Still answering",
-    "example_stuck": "Is any deployment stuck, and on which machine?"
+    "example_stuck": "Is any deployment stuck, and on which machine?",
+    "copy": "Copy",
+    "copied": "Copied",
+    "rename": "Rename",
+    "delete_title": "Delete conversation?",
+    "delete_body": "“{title}” and everything in it will be deleted. This cannot be undone."
   },
   "scripts": {
     "body": "Script",

@@ -3311,7 +3311,6 @@
     "history": "Unterhaltungen",
     "new_chat": "Neu",
     "delete_chat": "Löschen",
-    "delete_confirm": "Diese Unterhaltung löschen? Das lässt sich nicht rückgängig machen.",
     "pin": "An die Seite heften",
     "unpin": "Lösen",
     "resize": "Größe des Assistenten ändern",
@@ -3349,7 +3348,12 @@
     "fold": "Unterhaltungen ausblenden",
     "no_chats": "Noch keine Unterhaltungen.",
     "chat_running": "Antwortet noch",
-    "example_stuck": "Hängt eine Verteilung fest, und auf welchem Gerät?"
+    "example_stuck": "Hängt eine Verteilung fest, und auf welchem Gerät?",
+    "copy": "Kopieren",
+    "copied": "Kopiert",
+    "rename": "Umbenennen",
+    "delete_title": "Unterhaltung löschen?",
+    "delete_body": "„{title}“ wird mit allem darin gelöscht. Das lässt sich nicht rückgängig machen."
   },
   "scripts": {
     "body": "Skript",
