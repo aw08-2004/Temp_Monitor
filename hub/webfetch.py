@@ -390,9 +390,17 @@ def staging_root(log_dir):
 
 
 def _dir(root, staging_id):
+    """The folder of one staging record. `staging_id` arrives in a URL, so two checks: it must
+    be one of our 32-hex ids, and the normalized result must still sit inside `root`. The
+    first alone is enough today; the second is what keeps it true if the id format ever
+    widens, and is the containment check CodeQL's py/path-injection recognizes (PR #106)."""
     if not _STAGING_ID.match(str(staging_id or "")):
         raise KeyError(staging_id)
-    return os.path.join(root, staging_id)
+    base = os.path.realpath(root)
+    folder = os.path.realpath(os.path.join(base, staging_id))
+    if not folder.startswith(base + os.sep):
+        raise KeyError(staging_id)
+    return folder
 
 
 def _write_meta(root, staging_id, meta):

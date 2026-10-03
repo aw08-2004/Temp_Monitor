@@ -36,6 +36,8 @@ import settings
 import webfetch
 
 MAX_WAIT_SECONDS = 60
+STORE_FAILED = ("The hub could not write the file to its disk; the hub log says why. Check free "
+                "space and permissions on the log directory.")
 OFF_MESSAGE = ("Web access for the assistant is switched off. An admin can turn it on in "
                "Settings -> AI (Let the assistant use the internet).")
 
@@ -130,7 +132,10 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
         except webfetch.FetchError as e:
             return refusals.refuse(e)
         except OSError as e:
-            return jsonify({"error": f"Could not create the staging folder: {e}"}), 500
+            # The OS's text goes to the log, not the response -- see refusals.py on
+            # py/stack-trace-exposure; a hand-built response is the case it rightly flags.
+            print(f"[webfetch] could not create a staging folder: {e}")
+            return jsonify({"error": STORE_FAILED}), 500
         pool.submit(webfetch.run_download, staging, meta["id"], _max_bytes())
         _audit("webfetch.download", url, {"staging_id": meta["id"]})
         return jsonify(dict(meta, note="Downloading in the background; read it back with "
@@ -168,7 +173,8 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
         except ValueError as e:
             return refusals.refuse(e)
         except OSError as e:
-            return jsonify({"error": f"Could not store the file: {e}"}), 500
+            print(f"[webfetch] could not promote {staging_id}: {e}")
+            return jsonify({"error": STORE_FAILED}), 500
         _audit("webfetch.promote", source.get("file_name"),
                {"staging_id": staging_id, "sha256": source["sha256"],
                 "bytes": source["file_size"]})
