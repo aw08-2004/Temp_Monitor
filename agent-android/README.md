@@ -14,7 +14,10 @@ A15, Android 16); most device-owner features have not yet been exercised on hard
 verified, and what still is not, is stated exactly in *Build, test, run*.
 
 It reports telemetry, enrolls, heartbeats, and executes five command types: `rename`,
-`locate_device`, `lock_device`, `wipe_device` and `show_message`. See *What it does not do*.
+`locate_device`, `lock_device`, `wipe_device` and `show_message`. `lock_device` and
+`wipe_device` need the device to be enrolled as **device owner** (QR provisioning, see *Fully
+managed*); on any other device they fail with "not fully managed" rather than pretending to have
+run. See *What it does not do*.
 
 ---
 
