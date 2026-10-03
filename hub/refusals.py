@@ -23,18 +23,36 @@ hardening. What changes is that there is now a single place to tighten this if t
 ever made -- a message allowlist, a length cap, a distinction between our own refusals and
 someone else's ValueError -- instead of one edit per route.
 
-**On CodeQL's py/stack-trace-exposure.** It flags every one of these, here and in every other
-Flask app, because it cannot tell an exception carrying an authored sentence from one
-carrying a traceback. Nothing reaching a client through this function is a traceback: the
-exception types the routes catch are the hub's own refusal classes plus ValueError and
-PermissionError from its own validators. The alert is a true statement about the shape of the
-code and a false one about the risk, and it is worth having said in one place that a reviewer
-can read rather than at every call site, where nobody reads it twice.
+**On CodeQL's py/stack-trace-exposure (alert #133).** It flagged this function for as long as
+it rendered `str(exc)`: the exception object itself flowing into a response, which is the
+shape a traceback leak has. The risk was never real -- the routes catch the hub's own refusal
+classes and its validators' ValueError and PermissionError -- but "nothing leaks because every
+caller is careful" was a promise kept by 129 call sites rather than by this function. So the
+function now keeps it itself (PR #106):
+
+  * **It renders the sentence that was written, not the exception.** `exc.args[0]`, and only
+    when that is a str. An exception constructed from something else -- another exception,
+    a dict, a path object -- answers with the generic sentence, and its repr goes to the log.
+  * **A traceback cannot get through.** A message containing "Traceback (most recent call
+    last)" or a `File "...", line N` frame is replaced, whatever caught it.
+  * **A cap.** A refusal is a sentence; anything past MAX_MESSAGE_CHARS is cut, so an
+    exception that swallowed a whole HTTP body or file cannot be echoed wholesale.
+
+Every message the validators actually write passes through byte-identical, which
+tests/test_refusals.py pins. Rejected: rendering only the hub's own refusal classes and
+genericising ValueError -- that is most of the 129 call sites, and the sentences are the
+product, as the paragraph above says.
 
 Flask-dependent by design, unlike the modules whose refusals it renders -- it IS the HTTP
 layer, and jsonify is the thing it exists to call.
 """
+import re
+
 from flask import jsonify
+
+GENERIC_REFUSAL = "That request was refused."
+MAX_MESSAGE_CHARS = 1000
+_TRACEBACK = re.compile(r"Traceback \(most recent call last\)|File \"[^\"]*\", line \d+")
 
 
 def refuse(exc, status=400):
@@ -52,11 +70,27 @@ def refuse(exc, status=400):
     hub depends on would not answer. Guessing that from the exception type would be a lookup
     table that lies the first time a module raises ValueError for a conflict.
     """
-    message = str(exc).strip()
+    return jsonify({"error": _authored_message(exc)}), status
+
+
+def _authored_message(exc):
+    """The sentence a validator wrote into `exc`, or the generic one. See the module
+    docstring for why this reads `args[0]` rather than `str(exc)`."""
+    args = getattr(exc, "args", None) or ()
+    written = args[0] if args else ""
+    if not isinstance(written, str):
+        print(f"[refusals] refused with a non-text message from {type(exc).__name__}; "
+              "answered generically")
+        return GENERIC_REFUSAL
+    message = written.strip()
+    if _TRACEBACK.search(message):
+        print(f"[refusals] a {type(exc).__name__} carried a traceback; answered generically")
+        return GENERIC_REFUSAL
     # An exception raised with no message at all -- ValueError() -- would otherwise answer
     # with an empty string, which renders in the console as a refusal with no reason and
-    # reads as a broken hub rather than a rejected request. This is the one case where the
-    # message is invented here, because there is none to pass on.
+    # reads as a broken hub rather than a rejected request.
     if not message:
-        message = "That request was refused."
-    return jsonify({"error": message}), status
+        return GENERIC_REFUSAL
+    if len(message) > MAX_MESSAGE_CHARS:
+        return message[:MAX_MESSAGE_CHARS].rstrip() + "..."
+    return message
