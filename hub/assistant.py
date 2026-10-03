@@ -274,10 +274,12 @@ def clean_title(text):
     """One line, no surrounding quotes or trailing full stop, at most MAX_TITLE_CHARS. Empty if
     nothing usable is left -- the caller then keeps the title it had."""
     text = " ".join(str(text or "").split())
-    text = text.strip().strip("\"'`*#").strip()
+    marks = "\"'`*#"
+    text = text.strip().strip(marks).strip()
     if text.lower().startswith("title:"):
-        text = text[6:].strip()
-    return text.rstrip(".").strip()[:MAX_TITLE_CHARS]
+        # Again after the prefix: `Title: "Stuck deployment."` kept its quotes otherwise.
+        text = text[6:].strip().strip(marks).strip()
+    return text.rstrip(".").strip().strip(marks).strip()[:MAX_TITLE_CHARS]
 
 
 def rename_chat(db_path, chat_id, owner, title, source=TITLE_MANUAL):
