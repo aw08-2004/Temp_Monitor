@@ -498,6 +498,65 @@ def test_a_stop_mid_step_answers_every_call():
     check("both call ids have a reply", replies == {"a", "b"})
 
 
+def test_long_results_keep_whole_entries():
+    """The first cut sliced the JSON at the limit: half an object, and a note to narrow a
+    request the tool could not narrow."""
+    print("\n-- an oversized result is shortened to whole entries --")
+    result = {"ok": True, "data": {"rules": [{"id": i, "name": "x" * 200} for i in range(500)],
+                                   "total": 500}}
+    content = assistant.fit_result(result, limit=5000)
+    parsed = json.loads(content)
+    check("the shortened result is still valid JSON", isinstance(parsed, dict))
+    check("it fits the limit", len(content) <= 5000)
+    shown = parsed["truncated"]["shown"]
+    check("it keeps whole entries and says how many",
+          parsed["truncated"]["total"] == 500 and len(parsed["data"]["rules"]) == shown > 0)
+    small = {"ok": True, "data": [1, 2, 3]}
+    check("a result that fits is untouched", assistant.fit_result(small) == json.dumps(small))
+
+
+def test_disabling_a_rule_by_name():
+    """The question that ran out of steps on a real hub: 'disable the high temperature
+    alerts'. Two tool calls now -- a filtered list, then a confirmed switch."""
+    print("\n-- finding and disabling a rule takes one list and one confirmed switch --")
+    import rules as rules_module
+    hot = [r for r in rules_module.list_rules(DB) if "temperature" in r["name"].lower()]
+    check("the hub has a temperature rule to find", bool(hot))
+    if not hot:
+        return
+    rule_id = hot[0]["id"]
+    rules_module.set_rule_enabled(DB, rule_id, True, actor="test")
+    for n in range(40):
+        rules_module.save_rule(DB, {"name": f"Filler {n}", "description": "y" * 300,
+                                    "condition_text": "metric.cpu_temp > 1000",
+                                    "target": {"include": [{"kind": "all"}]},
+                                    "actions": [{"type": "alert", "params": {"text": "z"}}],
+                                    "for_seconds": 0, "cooldown_seconds": 3600},
+                               actor="test")
+    super_client = client_for("tester@example.com")
+    chat_id = new_chat(super_client)
+    SCRIPT[:] = [call("list_rules", q="temperature"),
+                 call("set_rule_enabled", rule_id=rule_id, enabled=False),
+                 say("Queued switching it off.")]
+    converse(super_client, chat_id, "Can you disable the high temperature alerts?")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    listing = results[0]["data"]
+    check("the filtered list fits without trimming", "truncated" not in results[0])
+    check("...and holds only the temperature rule(s)",
+          listing["matched"] >= 1 and listing["total"] > listing["matched"]
+          and all("temperature" in (r["name"] + r["condition"]).lower()
+                  for r in listing["rules"]))
+    check("each row is short: no condition AST, no target",
+          all(set(r) == {"id", "name", "enabled", "condition", "actions", "matching",
+                         "blocked"} for r in listing["rules"]))
+    check("the switch waits for a click", results[1].get("status") == "pending_confirmation")
+    check("...and has not run", rules_module.get_rule(DB, rule_id)["enabled"] is True)
+    action_id = results[1]["action"]["id"]
+    r = super_client.post(f"/api/assistant/actions/{action_id}/confirm", json={})
+    check("confirming it switches the rule off",
+          r.status_code == 200 and rules_module.get_rule(DB, rule_id)["enabled"] is False)
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -519,6 +578,8 @@ def main():
     test_find_page_works_from_the_worker()
     test_a_second_poll_keeps_the_links()
     test_a_stop_mid_step_answers_every_call()
+    test_long_results_keep_whole_entries()
+    test_disabling_a_rule_by_name()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 
