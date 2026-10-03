@@ -4,13 +4,20 @@ An Android counterpart to `agent/` — the C#/.NET Windows Service on every mana
 sibling to `agent-linux/`. Same hub, same wire protocol, same house rules; a much smaller
 feature set, and unlike the other two, most of what is missing can never be added.
 
-**Status: early, but it has now run.** It compiles to a release-signed APK, its protocol half
-has 214 tests, and it has enrolled, reported telemetry and taken a command on a real device
-(Samsung Galaxy A15, Android 16). Nothing has been released and no fleet runs it. What is
+**Status: released, early on hardware.** `0.2.3` (2026-09-15) is the current stable release and
+what `agent-android.manifest.json` points at; `0.2.0`–`0.2.2` went out as betas. **0.2.1 and
+0.2.2 could not enroll at all** (see *Full trimming switched off System.Text.Json reflection* in
+`ROADMAP.MD` #23), so a device left on either, or on the pre-self-update `0.1.0`, needs a hand
+install of 0.2.3. `release-notes/0.3.0.md` is written for the next release, which has not been
+cut. It has enrolled, reported telemetry and taken a command on a real device (Samsung Galaxy
+A15, Android 16); most device-owner features have not yet been exercised on hardware. What is
 verified, and what still is not, is stated exactly in *Build, test, run*.
 
-It reports telemetry, enrolls, heartbeats, and executes one command type. See *What it does not
-do*.
+It reports telemetry, enrolls, heartbeats, and executes five command types: `rename`,
+`locate_device`, `lock_device`, `wipe_device` and `show_message`. `lock_device` and
+`wipe_device` need the device to be enrolled as **device owner** (QR provisioning, see *Fully
+managed*); on any other device they fail with "not fully managed" rather than pretending to have
+run. See *What it does not do*.
 
 ---
 
@@ -45,14 +52,20 @@ rather than shared with them, for exactly the reason that file gives.
 
 ## The version number is a safety mechanism
 
-`AgentConfig.Version` is `0.1.0`, and it must stay below `3.0.0`. The hub's
-`AGENT_TRAIN_MIN_VERSION` is what makes this work, and three separate things key off it:
+`AgentConfig.Version` is on its own `0.x` line (`0.2.3` at the time of writing), and it must
+stay below `3.0.0`. The hub's `AGENT_TRAIN_MIN_VERSION` used to key three separate things off
+that floor; the hub now reads a machine's reported **platform** first (roadmap #22, `VERSIONING.md`),
+which retired two of them and left the third:
 
-| Below 3.0.0 | What that buys |
+| Was (below 3.0.0) | Is |
 |---|---|
-| `get_advertised_version()` returns nothing | The hub never points this agent at the **Windows** agent's signed manifest — a `win-x64` binary an Android device cannot execute at all |
-| Every `MIN_*_AGENT` gate in `hub/static/js` reads it as too old | The console does not offer a phone a terminal, a process list or a file browser. Unlike on Linux, these are not merely unimplemented: the platform forbids them, so there is no future version that could answer |
-| `agents_outdated` skips sub-3.0 machines | A shelf of tablets does not read as permanently "behind" on a release train it is not on |
+| `get_advertised_version()` returned nothing, so the hub never pointed this agent at the **Windows** manifest — a `win-x64` binary an Android device cannot execute | It picks a manifest by platform, so this agent is offered `agent-android.manifest.json` and can have a version line at all |
+| `agents_outdated` skipped sub-3.0 machines, so a shelf of tablets did not read as permanently "behind" | Each machine is compared against its own train |
+| Every `MIN_*_AGENT` gate in `hub/static/js` reads it as too old | **Unchanged, and still why the floor exists.** The console does not offer a phone a terminal, a process list or a file browser. Unlike on Linux, these are not merely unimplemented: the platform forbids them, so there is no future version that could answer |
+
+*History worth keeping:* this section once said the version was `0.1.0` and would stay there.
+It moved as soon as releases began (`0.2.0` through `0.2.3`), which is fine — only crossing
+`3.0.0` is not.
 
 This is the **fifth** version line in the repo — hub, agent, client, agent-linux, agent-android —
 and it has **three** files to keep in step rather than the usual two: `AgentConfig.Version`, the
@@ -61,8 +74,10 @@ the phone's own app-info screen shows). `VersionGateTests` holds all three toget
 deliberately does *not* tie `<ApplicationVersion>` to any of them — that is the integer Android
 sorts upgrades by, a build counter with no relationship to a dotted version.
 
-**No hub change was needed to support this agent.** That is the property the whole design rests
-on, and it survived contact with Android intact.
+**No hub change was needed for this agent to report and take commands.** That is the property
+the whole design rests on, and it survived contact with Android intact. The hub changes that
+followed were about presentation and policy rather than protocol: an `android` Dashboard bucket
+(hub 1.98.0) and the device-owner features (locate, app policy, lock and wipe, provisioning).
 
 ## What it does
 
@@ -207,13 +222,15 @@ Two things about it matter on this side:
   from a database backup re-learns the fleet without anybody reinstalling an app. An agent
   holding its own "already sent" flag would stay silent instead.
 
-`AgentCapabilities` also names the feature slugs the later phases will report (`locate`,
-`app_policy`, `time_policy`, `device_owner`) so each is added in one place rather than as a
-string the hub has never heard of and silently ignores. None is reported today.
+`AgentCapabilities` also names the feature slugs (`locate`, `app_policy`, `time_policy`,
+`device_owner`) so each is added in one place rather than as a string the hub has never heard of
+and silently ignores. All four are reported now: the first three from `AgentService`, and
+`device_owner` only when the device actually is one (`Policy/DeviceOwner.cs`).
 
-This is also what lets `AgentConfig.Version` stay at `0.1.0` permanently: the version identifies
-a release train, capabilities describe a feature set, and the console no longer has to infer the
-second from the first.
+This is also what lets `AgentConfig.Version` number its own `0.x` line freely: the version
+identifies a release train, capabilities describe a feature set, and the hub no longer has to
+infer the second from the first. (The console's `MIN_*_AGENT` gates still read the number, which
+is the one reason the line stays below `3.0.0`.)
 
 The Dashboard's `_OS_MATCHES` gained an `android` bucket in the same release, ordered before
 `linux` -- an Android device really is running a Linux kernel, and a caption mentioning both
@@ -695,10 +712,12 @@ and sign even the pilot build with it.
 
 ### Releases
 
-None yet, but the machinery exists. `release.ps1` does the whole flow in one command:
+Released through `release.ps1`: `android-agent-v0.2.0-beta`, `-v0.2.1-beta`, `-v0.2.2-beta` and
+`android-agent-v0.2.3` (stable). The whole flow is one command:
 
 ```powershell
-.\release.ps1 -Version 0.2.0 -NotesFile .\release-notes\0.2.0.md
+.\release.ps1 -Version 0.3.0 -NotesFile .\release-notes\0.3.0.md
+.\release.ps1 -Version 0.3.0 -Channel beta     # pilot ring first (roadmap #21)
 ```
 
 It bumps the version in all three places (this agent's pair is a triple — AgentConfig, the Core
