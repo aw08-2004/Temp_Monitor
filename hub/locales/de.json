@@ -1195,7 +1195,7 @@
         },
         "assistant_result_chars": {
           "label": "Ergebnisgröße des Assistenten",
-          "help": "Wie viele Zeichen einer Werkzeugantwort der Assistent liest, etwa vier pro Token. Mehr zeigt ihm einen größeren Teil einer langen Liste oder Befehlsausgabe auf einmal, aber jeder weitere Schritt sendet sie erneut, sodass jede Anfrage langsamer und teurer wird und das Kontextfenster eines kleinen Modells überlaufen kann. Was gekürzt wird, nennt die Antwort."
+          "help": "Wie viele Zeichen einer Werkzeugantwort der Assistent liest, etwa vier pro Token. Mehr zeigt ihm einen größeren Teil einer langen Liste oder Befehlsausgabe auf einmal, aber jeder weitere Schritt sendet sie erneut, sodass jede Anfrage langsamer und teurer wird und das Kontextfenster eines kleinen Modells überlaufen kann. Die Antwort weist auf gekürzte Inhalte hin."
         },
         "assistant_history_days": {
           "label": "Assistenten-Unterhaltungen aufbewahren für",

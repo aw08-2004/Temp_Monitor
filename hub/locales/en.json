@@ -1267,7 +1267,7 @@
         },
         "assistant_result_chars": {
           "label": "Assistant result size",
-          "help": "How many characters of one tool answer the assistant reads, about four to a token. Larger lets it see more of a long list or command output at once, but every later step resends it, so each request is slower and costs more, and a small model's context window can overflow. Anything cut is named in the answer."
+          "help": "How many characters of one tool answer the assistant reads, about four to a token. Larger lets it see more of a long list or command output at once, but every later step resends it, so each request is slower and costs more, and a small model's context window can overflow. The answer says when something was cut."
         },
         "assistant_history_days": {
           "label": "Keep assistant conversations for",
