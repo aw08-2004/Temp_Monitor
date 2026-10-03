@@ -116,13 +116,16 @@
     white-space: nowrap;
 }
 
+/* Faded, not `visibility: hidden`: a hidden button leaves the tab order, and the only way to
+   delete a conversation from the keyboard went with it. Shown on hover and whenever focus is
+   anywhere in the row. */
 .asst__chat-delete {
-    visibility: hidden;
+    opacity: 0;
 }
 
 .asst__chat:hover .asst__chat-delete,
-.asst__chat-delete:focus-visible {
-    visibility: visible;
+.asst__chat:focus-within .asst__chat-delete {
+    opacity: 1;
 }
 
 .asst__chats-empty {

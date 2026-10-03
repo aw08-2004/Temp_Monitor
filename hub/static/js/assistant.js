@@ -549,7 +549,16 @@
 
     async function deleteChat(id) {
         if (!window.confirm(t('assistant.delete_confirm'))) return;
-        await fetch(`/api/assistant/chats/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        try {
+            const response = await fetch(`/api/assistant/chats/${encodeURIComponent(id)}`,
+                                         { method: 'DELETE' });
+            // 404 is "already gone", which is what the operator asked for. Anything else
+            // failed, and the conversation is still there: keep it open and say so.
+            if (!response.ok && response.status !== 404) throw new Error(String(response.status));
+        } catch (e) {
+            toast(t('assistant.error'), { kind: 'error' });
+            return;
+        }
         if (id === chatId) await openChat(null);
         await loadChats();
     }

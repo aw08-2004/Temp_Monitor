@@ -1703,7 +1703,8 @@
           "detail": "Details"
         },
         "deployment": "Verteilung: {status}",
-        "attempts": "Versuch {attempts} von {max}"
+        "attempts": "Versuch {attempts} von {max}",
+        "load_failed": "Die wartenden oder laufenden Geräte konnten nicht geladen werden. Laden Sie die Seite neu, um es erneut zu versuchen."
       }
     },
     "status": {

@@ -1198,9 +1198,15 @@ async function loadDeployments() {
     try {
         const [doc, active] = await Promise.all([
             api('/api/deployments'),
-            api('/api/deployments/targets').catch(() => ({ targets: [] })),
+            api('/api/deployments/targets').catch(() => ({ targets: [], failed: true })),
         ]);
         renderDeployments(doc.deployments);
+        // Said, not swallowed: the Dashboard links here BECAUSE a target is in flight, and an
+        // empty table after a failed request reads as "nothing is stuck".
+        if (active.failed) {
+            deploymentsPane.prepend(el('p', 'setting__error',
+                t('packages.deployments.active.load_failed')));
+        }
         const card = renderActiveTargets(active.targets || []);
         if (card) deploymentsPane.prepend(card);
     } catch (e) {

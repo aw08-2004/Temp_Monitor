@@ -1789,7 +1789,8 @@
           "detail": "Detail"
         },
         "deployment": "Deployment: {status}",
-        "attempts": "Attempt {attempts} of {max}"
+        "attempts": "Attempt {attempts} of {max}",
+        "load_failed": "Could not load the machines that are waiting or running. Reload the page to try again."
       }
     },
     "_status": [
