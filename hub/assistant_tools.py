@@ -199,7 +199,8 @@ def needs_typed_name(method, rule):
 # model's description of the arguments, not a validator -- the route validates, and its
 # refusal goes back to the model verbatim.
 
-_MACHINE = {"type": "string", "description": "The machine's name exactly as the hub lists it."}
+_MACHINE = {"type": "string", "description": "The machine's name exactly as the hub lists it: "
+                                            "the `machine` field of list_machines."}
 
 
 def _params(required=(), **props):
@@ -209,7 +210,10 @@ def _params(required=(), **props):
 CURATED = (
     ("fleet_summary", "Counts across the fleet: online, offline, alerts, versions.",
      "GET", "/api/fleet/summary", _params()),
-    ("list_machines", "Every machine the operator can see, with status and key readings.",
+    ("list_machines", "Every machine the operator can see, one short row each. A row's "
+     "`machine` is the machine's name: find one with where {\"machine\": \"part of the "
+     "name\"}, and pass that value to every tool that takes a machine. get_machine has one "
+     "machine's full readings.",
      "GET", "/api/machines", _params()),
     ("get_machine", "Everything the hub knows about one machine right now.",
      "GET", "/api/machines/<machine>", _params(["machine"], machine=_MACHINE)),
@@ -582,6 +586,20 @@ def narrow(payload, local):
         if where:
             kept = [i for i in kept if _matches(i, where)]
     report["matched"] = len(kept)
+    if where and not kept and items:
+        # A key no entry has matches nothing, and "0 matched" reads as "there is no such
+        # thing". The same real conversation filtered machines on `name` -- the hostname is
+        # `machine` -- and reported the operator's laptop missing. Say which keys exist.
+        present = set()
+        for item in items:
+            present.update(item)
+        # The whole dotted path, not its first segment: `diagnostics.nope` is unknown even
+        # though every row has a `diagnostics`.
+        unknown = [k for k in where
+                   if not any(_get(item, k, _MISSING) is not _MISSING for item in items)]
+        if unknown:
+            report["unknown_keys"] = unknown
+            report["keys"] = sorted(present)
     if limit:
         kept = kept[:limit]
     if fields:
@@ -670,7 +688,49 @@ def shape_command_output(payload, local):
     return out
 
 
-SHAPERS = {"list_rules": shape_rules, "command_output": shape_command_output}
+# What one machine is, without what it is reading right now. get_machine has the rest.
+MACHINE_ROW_KEYS = ("machine", "status", "enrolled", "os_label", "manufacturer", "model",
+                    "asset_tag", "serial_number", "service_tag", "companion_version", "temp",
+                    "uptime_seconds", "updated_at")
+
+
+def shape_machines(payload, local):
+    """GET /api/machines, one short row per machine.
+
+    The route answers the Dashboard, so every row carries the machine's whole live
+    `diagnostics` block and an `os` object -- well over a thousand characters each. Eleven
+    machines already ran past the tool-result cap, the cut kept the FIRST rows by name, and on
+    a real hub the model asked to "install VLC on VOSTRO-LAPTOP" was shown every machine but
+    that one, read "11 total", and told the operator no such machine existed. Short rows fit
+    a whole fleet. Rejected: raising the cap -- the fleet only grows, and the last machine by
+    name is the one that falls off whichever cap is picked.
+
+    A model that asks for `fields` gets the full rows to pick from, so a reading the short
+    row leaves out is still one argument away rather than a second tool. **The narrowing runs
+    here, on the full rows, and only what it kept is shortened**: shortening first made
+    `where {"diagnostics.has_sensors": true}` match nothing, because the key it filtered on
+    had already been dropped.
+    """
+    out = narrow(payload, local)
+    if not isinstance(payload, list) or local.get("fields"):
+        return out
+
+    def short(rows):
+        return [{key: row.get(key) for key in MACHINE_ROW_KEYS} if isinstance(row, dict)
+                else row for row in rows]
+
+    if isinstance(out, list):
+        return short(out)
+    if isinstance(out, dict) and isinstance(out.get("items"), list):
+        return dict(out, items=short(out["items"]))
+    return out
+
+
+SHAPERS = {"list_rules": shape_rules, "command_output": shape_command_output,
+           "list_machines": shape_machines}
+# Shapers that apply the model's narrowing themselves, because they must see the route's
+# rows before they cut them down.
+SELF_NARROWING = {"list_machines"}
 
 
 def split_local(name, args):
@@ -686,6 +746,8 @@ def shape(name, payload, local):
     shaper = SHAPERS.get(name)
     if shaper:
         payload = shaper(payload, local or {})
+        if name in SELF_NARROWING:
+            return payload
     return narrow(payload, local)
 
 

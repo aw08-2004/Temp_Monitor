@@ -546,6 +546,11 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
             max_steps = int(setting("ai.assistant_max_steps") or assistant.DEFAULT_MAX_STEPS)
         except (TypeError, ValueError):
             max_steps = assistant.DEFAULT_MAX_STEPS
+        try:
+            result_chars = int(setting("ai.assistant_result_chars")
+                               or assistant.MAX_TOOL_RESULT_CHARS)
+        except (TypeError, ValueError):
+            result_chars = assistant.MAX_TOOL_RESULT_CHARS
 
         def step(messages, tool_specs):
             error, message = ai.complete_chat(config, messages, tool_specs, api_key=key)
@@ -564,7 +569,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                                    complete_step=step, tools=tools, execute=execute,
                                    emit=lambda e: runs.emit(run_id, e),
                                    cancelled=lambda: runs.cancelled(run_id),
-                                   max_steps=max_steps)
+                                   max_steps=max_steps, result_chars=result_chars)
             except Exception:                           # noqa: BLE001
                 print(f"[assistant] turn failed:\n{traceback.format_exc()}")
                 runs.emit(run_id, {"type": "error", "error": GENERIC_ERROR})

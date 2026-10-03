@@ -1265,6 +1265,10 @@
           "label": "Assistant steps per message",
           "help": "How many times the assistant may call a tool and ask the provider again for one message. Each step is one request to the provider."
         },
+        "assistant_result_chars": {
+          "label": "Assistant result size",
+          "help": "How many characters of one tool answer the assistant reads, about four to a token. Larger lets it see more of a long list or command output at once, but every later step resends it, so each request is slower and costs more, and a small model's context window can overflow. The answer says when something was cut."
+        },
         "assistant_history_days": {
           "label": "Keep assistant conversations for",
           "help": "A conversation nobody has touched for this long is deleted."
