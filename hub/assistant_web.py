@@ -52,6 +52,14 @@ MAX_SELECTION = 50
 ASSISTANT_HEADER = "X-FleetHub-Assistant"
 
 
+def _json_body():
+    """The request's JSON body as a dict, or an empty one. A JSON array or a bare string is
+    valid JSON and `get_json` returns it as such; `.get` on it raised, and the route answered
+    500 instead of its own validation message (found in review, PR #101)."""
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 def _norm(rule):
     """A rule with its converters erased: `/api/x/<int:id>` and `/api/x/<id>` compare equal."""
     return re.sub(r"<[^>]+>", "<>", str(rule or ""))
@@ -138,6 +146,10 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     # Bounded, so a burst of messages queues instead of opening a provider connection each.
     pool = ThreadPoolExecutor(max_workers=max(1, int(workers)),
                               thread_name_prefix="assistant")
+    # Naming a conversation has its own two workers. On the answer pool a burst of new
+    # conversations queued their names in front of other operators' answers, for a feature
+    # that is cosmetic; here it can only ever wait behind other names.
+    namer = ThreadPoolExecutor(max_workers=2, thread_name_prefix="assistant-name")
 
     def _key():
         value = api_key() if callable(api_key) else api_key
@@ -329,7 +341,10 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     @login_required
     @can_view
     def chats():
-        return jsonify({"chats": assistant.list_chats(db_path, _owner())}), 200
+        owner = _owner()
+        running = runs.active_chats(owner)
+        return jsonify({"chats": [dict(c, running=c["id"] in running)
+                                  for c in assistant.list_chats(db_path, owner)]}), 200
 
     @bp.route("/api/assistant/chats", methods=["POST"])
     @login_required
@@ -350,14 +365,36 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 continue
             if message["role"] == assistant.ROLE_ASSISTANT and not message["content"]:
                 continue
+            # `step`: an assistant message that called tools is the model thinking aloud on
+            # its way to an answer, and the panel shows it smaller than the answer itself.
             shown.append({"id": message["id"], "role": message["role"],
+                          "step": bool(message["tool_calls"]),
                           "content": (_render(message["content"])
                                       if message["role"] == assistant.ROLE_ASSISTANT
                                       else message["content"]),
                           "tools": [c["name"] for c in message["tool_calls"]],
                           "created_at": message["created_at"]})
         actions = [_public_action(a) for a in assistant.list_actions(db_path, chat_id)]
-        return jsonify({"chat": chat, "messages": shown, "actions": actions}), 200
+        # A turn still answering: the panel renders what is stored, then polls the run from
+        # `seq` on, so nothing already shown arrives twice.
+        active = runs.active(chat_id, _owner())
+        run = {"id": active[0], "seq": active[1]} if active else None
+        return jsonify({"chat": chat, "messages": shown, "actions": actions,
+                        "run": run}), 200
+
+    @bp.route("/api/assistant/chats/<chat_id>", methods=["PATCH"])
+    @login_required
+    @can_view
+    def rename(chat_id):
+        """Rename a conversation. The operator's title is final: the model never replaces it."""
+        body = _json_body()
+        title = str(body.get("title") or "")
+        if not assistant.clean_title(title):
+            return jsonify({"error": "type a name for the conversation"}), 400
+        chat = assistant.rename_chat(db_path, chat_id, _owner(), title)
+        if not chat:
+            return jsonify({"error": "no such conversation"}), 404
+        return jsonify(chat), 200
 
     @bp.route("/api/assistant/chats/<chat_id>", methods=["DELETE"])
     @login_required
@@ -381,7 +418,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         error, _resolved = ai.provider_config(config)
         if error:
             return jsonify({"error": error}), 400
-        body = request.get_json(silent=True) or {}
+        body = _json_body()
         text = str(body.get("text") or "").strip()
         if not text:
             return jsonify({"error": "type a message first"}), 400
@@ -427,7 +464,34 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 print(f"[assistant] turn failed:\n{traceback.format_exc()}")
                 runs.emit(run_id, {"type": "error", "error": GENERIC_ERROR})
 
+        def name_it():
+            """Name the conversation from its first message, beside the answer rather than
+            after it, so the reply is not kept waiting. Only a title that is still the
+            first-message placeholder is replaced (assistant.rename_chat), and a provider that
+            fails leaves that placeholder in place -- a worse title, not an error."""
+            try:
+                error, raw = ai.complete(config, assistant.title_messages(text, language_now),
+                                         api_key=key, max_tokens=40)
+                ai.record_request(db_path, actor=owner, kind=ai.KIND_ASSISTANT,
+                                  provider=str(config.get("provider") or ""),
+                                  model=str(config.get("model") or ""),
+                                  prompt_chars=len(text),
+                                  outcome=ai.OUTCOME_PROVIDER_ERROR if error else ai.OUTCOME_OK,
+                                  error=error or "")
+                if error:
+                    return
+                chat = assistant.rename_chat(db_path, chat_id, owner, raw,
+                                             source=assistant.TITLE_AI)
+                if chat and chat["title_source"] == assistant.TITLE_AI:
+                    runs.emit(run_id, {"type": "title", "title": chat["title"]})
+            except Exception:                           # noqa: BLE001
+                print(f"[assistant] naming a conversation failed:\n{traceback.format_exc()}")
+
+        language_now = language()
         pool.submit(work)
+        if chat.get("title_source", assistant.TITLE_AUTO) == assistant.TITLE_AUTO \
+                and not chat.get("title"):
+            namer.submit(name_it)
         return jsonify({"run_id": run_id}), 202
 
     @bp.route("/api/assistant/runs/<run_id>", methods=["GET"])
@@ -467,7 +531,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         action = assistant.get_action(db_path, action_id, owner)
         if not action:
             return jsonify({"error": "no such action"}), 404
-        body = request.get_json(silent=True) or {}
+        body = _json_body()
         if action["typed_name"]:
             typed = str(body.get("typed") or "").strip()
             if not action["machine"] or typed.lower() != action["machine"].lower():

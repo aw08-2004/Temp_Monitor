@@ -307,6 +307,30 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         deployment["targets"] = access.filter_rows(deployment["targets"])
         return deployment
 
+    @bp.route("/api/deployments/targets", methods=["GET"])
+    @login_required
+    @can_deploy
+    def list_deployment_targets():
+        """Targets by status across every deployment -- what the Dashboard tile counts.
+
+        `status` is a comma list and defaults to the unresolved ones (pending, in_flight).
+        Scoped like count_deployment_states: the caller's machines only, applied in the query
+        so a machine outside it is never read.
+        """
+        statuses = [s.strip() for s in (request.args.get("status") or "").split(",")
+                    if s.strip()] or list(packages.TARGET_ACTIVE)
+        unknown = [s for s in statuses if s not in packages.TARGET_STATUSES]
+        if unknown:
+            return jsonify({"error": f"unknown target status: {', '.join(unknown)}"}), 400
+        machine = (request.args.get("machine") or "").strip()
+        if machine and not access.in_scope(machine):
+            return jsonify({"error": "You do not have access to that machine."}), 403
+        scope = access.current().get("machines")
+        if machine:
+            scope = [machine]
+        targets = packages.list_targets(db_path, statuses=statuses, machines=scope)
+        return jsonify({"targets": targets, "statuses": statuses}), 200
+
     @bp.route("/api/deployments/<deployment_id>", methods=["GET"])
     @login_required
     @can_deploy

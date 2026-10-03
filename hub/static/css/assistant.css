@@ -1,46 +1,242 @@
-/* The console assistant (roadmap #26). One layout for both of its places: the page area, and
-   the docked column shell.js pins it into. It is written for the narrow one -- a 320px dock is
-   the hard case, and a chat that works there is merely roomy at full width -- so nothing here
-   assumes more than one column. BEM, like the sidebar, with colours from tokens.css only. */
+/* The console assistant (roadmap #26), laid out after Claude's own chat and coloured from
+   tokens.css so it matches the console in both themes. One page in two places: the page area
+   (history column on the left, foldable) and the docked column shell.js pins it into, where
+   assistant.js adds .asst--compact and the history becomes a drawer. BEM, like the sidebar. */
 
 .app-shell__content.assistant-page {
-    /* The log scrolls, not the page: the composer has to stay on screen. */
+    /* The log scrolls, not the page: the history column and the composer have to stay on
+       screen. `height` alone was not enough -- base.css gives this element `flex: 1` in a
+       column whose items default to `min-height: auto`, so it grew to the whole conversation
+       and the PAGE scrolled, taking the column and the composer with it. Fixed size, allowed
+       to be smaller than its content, and the overflow is the log's to handle. */
+    flex: 0 0 100vh;
     height: 100vh;
+    min-height: 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    padding: var(--space-4);
+    padding: 0;
     max-width: none;
 }
 
-.assistant {
+.asst {
+    --asst-side: 260px;
+    --asst-col: 760px;
+    position: relative;
     flex: 1;
     min-height: 0;
     display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    max-width: 960px;
-    width: 100%;
-    margin: 0 auto;
 }
 
-.assistant__header {
+/* ---------------------------------------------------------------- history column */
+.asst__side {
+    flex: 0 0 var(--asst-side);
+    width: var(--asst-side);
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--card-border);
+    background: var(--surface);
+    padding: var(--space-3);
     gap: var(--space-2);
 }
 
-.assistant__title {
+.asst--folded .asst__side {
+    display: none;
+}
+
+.asst__side-head {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+.asst__new {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--card-border);
+    background: var(--card);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+}
+
+.asst__new:hover {
+    border-color: var(--accent);
+}
+
+.asst__new svg,
+.asst__icon svg {
+    width: 18px;
+    height: 18px;
+    flex: none;
+}
+
+.asst__side-label {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: var(--space-2) var(--space-2) 0;
+}
+
+.asst__chats {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.asst__chat {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-1) 0 var(--space-2);
+}
+
+.asst__chat:hover,
+.asst__chat--active {
+    background: var(--accent-soft);
+}
+
+.asst__chat-open {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    background: none;
+    border: 0;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    padding: var(--space-2) 0;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Rename and delete. Faded, not `visibility: hidden`: a hidden button leaves the tab order,
+   and the only way to delete a conversation from the keyboard went with it. Shown on hover and
+   whenever focus is anywhere in the row. */
+.asst__chat-action {
+    opacity: 0;
+    width: 26px;
+    height: 26px;
+}
+
+.asst__chat-action svg {
+    width: 15px;
+    height: 15px;
+}
+
+.asst__chat:hover .asst__chat-action,
+.asst__chat:focus-within .asst__chat-action {
+    opacity: 1;
+}
+
+.asst__rename {
+    flex: 1;
+    min-width: 0;
+    margin: 3px 0;
+    padding: 4px var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.asst__chats-empty {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    padding: var(--space-2);
+}
+
+/* A conversation still answering after you left it. */
+.asst__spinner {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid var(--card-border);
+    border-top-color: var(--accent);
+    animation: asst-spin 0.9s linear infinite;
+}
+
+@keyframes asst-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Compact (docked, or a narrow window): the column becomes a drawer over the chat. */
+.asst--compact .asst__side {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 3;
+    width: min(var(--asst-side), 85%);
+    box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+    display: none;
+}
+
+.asst--compact.asst--drawer .asst__side {
+    display: flex;
+}
+
+.asst__scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgb(0 0 0 / 0.35);
+}
+
+.asst__scrim[hidden] {
+    display: none;
+}
+
+/* Two classes, to outrank `.asst__icon`'s display, which is declared further down. */
+.asst__icon.asst__compact-only {
+    display: none;
+}
+
+.asst--compact .asst__icon.asst__compact-only {
+    display: inline-flex;
+}
+
+/* ---------------------------------------------------------------- conversation */
+.asst__main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.asst__bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--card-border);
+}
+
+.asst__title {
+    flex: 1;
     min-width: 0;
 }
 
-.assistant__heading {
-    font-size: var(--text-lg);
+.asst__heading {
+    font-size: var(--text-base);
+    font-weight: 600;
     margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.assistant__context {
+.asst__context {
     display: block;
     color: var(--muted);
     font-size: var(--text-xs);
@@ -49,152 +245,325 @@
     white-space: nowrap;
 }
 
-.assistant__tools {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
+.asst__icon {
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    border-radius: var(--radius-sm);
+    border: 0;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
 }
 
-.assistant__history {
-    max-width: 180px;
+.asst__icon:hover,
+.asst__icon[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--text);
 }
 
-.assistant__notice {
+.asst__icon[hidden] {
+    display: none;
+}
+
+.asst__notice {
+    margin: var(--space-3) auto 0;
+    max-width: var(--asst-col);
+    width: calc(100% - 2 * var(--space-4));
     border: 1px solid var(--card-border);
     background: var(--warning-bg);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     padding: var(--space-3);
     font-size: var(--text-sm);
 }
 
-.assistant__log {
+.asst__log {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+}
+
+.asst__thread {
+    max-width: var(--asst-col);
+    margin: 0 auto;
+    padding: var(--space-5, 20px) var(--space-4) var(--space-6, 24px);
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
-    padding-right: var(--space-1);
+    gap: var(--space-4);
 }
 
-.assistant__empty {
+.asst__empty {
+    text-align: center;
+    padding-top: 8vh;
     color: var(--muted);
-    font-size: var(--text-sm);
 }
 
-.assistant__examples {
-    list-style: none;
-    padding: 0;
-    margin: var(--space-3) 0;
+.asst__greeting {
+    color: var(--text);
+    font-size: var(--text-lg);
+    font-weight: 500;
+    margin: var(--space-3) 0 var(--space-2);
+}
+
+.asst__intro {
+    font-size: var(--text-sm);
+    max-width: 520px;
+    margin: 0 auto;
+    line-height: 1.5;
+}
+
+.asst__examples {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-2);
+    margin-top: var(--space-5, 20px);
+    text-align: left;
+}
+
+.asst__example {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    line-height: 1.4;
+}
+
+.asst__example:hover {
+    border-color: var(--accent);
+}
+
+.asst__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.asst__mark svg {
+    width: 16px;
+    height: 16px;
+}
+
+.asst__mark--big {
+    width: 48px;
+    height: 48px;
+}
+
+.asst__mark--big svg {
+    width: 26px;
+    height: 26px;
+}
+
+/* The operator: a soft bubble on the right, its copy button under it. */
+.asst__user {
+    align-self: flex-end;
+    max-width: 85%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.asst__msg--user {
+    background: var(--accent-soft);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2) var(--space-4);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+
+/* The assistant: plain text beside its mark, no box. */
+.asst__turn {
+    display: flex;
+    gap: var(--space-3);
+    align-items: flex-start;
+}
+
+.asst__turn-body {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
 }
 
-.assistant__example {
-    width: 100%;
-    text-align: left;
-    background: var(--card);
-    color: var(--text);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius-sm);
-    padding: var(--space-2) var(--space-3);
-    cursor: pointer;
-    font: inherit;
-}
-
-.assistant__example:hover {
-    border-color: var(--accent);
-}
-
-.assistant__privacy {
-    font-size: var(--text-xs);
-}
-
-.assistant__msg {
-    border-radius: var(--radius-md);
-    padding: var(--space-2) var(--space-3);
-    font-size: var(--text-base);
-    line-height: 1.5;
+.asst__answer {
+    line-height: 1.6;
     overflow-wrap: anywhere;
-    max-width: 100%;
 }
 
-.assistant__msg--user {
-    align-self: flex-end;
-    background: var(--accent-soft);
-    white-space: pre-wrap;
-    max-width: 90%;
+.asst__answer p {
+    margin: 0 0 var(--space-3);
 }
 
-.assistant__msg--assistant {
-    background: var(--card);
-    border: 1px solid var(--card-border);
-}
-
-.assistant__msg--note,
-.assistant__msg--error {
-    font-size: var(--text-sm);
-    color: var(--muted);
-    background: transparent;
-    padding: 0 var(--space-1);
-}
-
-.assistant__msg--error {
-    color: var(--danger);
-}
-
-.assistant__msg p {
-    margin: 0 0 var(--space-2);
-}
-
-.assistant__msg p:last-child,
-.assistant__msg ul:last-child {
+.asst__answer p:last-child,
+.asst__answer ul:last-child,
+.asst__answer ol:last-child,
+.asst__answer pre:last-child {
     margin-bottom: 0;
 }
 
-.assistant__msg ul,
-.assistant__msg ol {
-    margin: 0 0 var(--space-2);
-    padding-left: var(--space-5, 20px);
+.asst__answer ul,
+.asst__answer ol {
+    margin: 0 0 var(--space-3);
+    padding-left: 22px;
 }
 
-.assistant__msg code {
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    font-size: 0.92em;
-    background: var(--surface);
-    border-radius: 4px;
-    padding: 0 3px;
-}
-
-.assistant__msg pre {
-    background: var(--surface);
-    border-radius: var(--radius-sm);
-    padding: var(--space-2);
-    overflow-x: auto;
-    white-space: pre;
-    margin: 0 0 var(--space-2);
-}
-
-.assistant__msg a {
-    color: var(--accent);
-}
-
-.assistant__tools-used {
-    font-size: var(--text-xs);
-    color: var(--muted);
+.asst__answer li + li {
     margin-top: var(--space-1);
 }
 
-.assistant__thinking {
+.asst__answer code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--surface);
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    padding: 0 4px;
+}
+
+.asst__answer pre {
+    background: var(--surface);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    overflow-x: auto;
+    white-space: pre;
+    margin: 0 0 var(--space-3);
+}
+
+.asst__answer pre code {
+    border: 0;
+    padding: 0;
+    background: none;
+}
+
+.asst__answer a {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.asst__answer a:hover {
+    text-decoration: underline;
+}
+
+/* Working steps: the model thinking aloud on the way to its answer. Small and grey, so the
+   answer is what the eye lands on. */
+/* Copy, under a message. Quiet until the message is pointed at, like Claude's own. */
+.asst__msg-actions {
+    display: flex;
+    gap: var(--space-1);
+    margin-top: 2px;
+    opacity: 0.35;
+    transition: opacity 0.15s;
+}
+
+.asst__user:hover .asst__msg-actions,
+.asst__turn-body:hover .asst__msg-actions,
+.asst__msg-actions:focus-within {
+    opacity: 1;
+}
+
+.asst__msg-actions .asst__icon {
+    width: 26px;
+    height: 26px;
+}
+
+.asst__msg-actions .asst__icon svg {
+    width: 15px;
+    height: 15px;
+}
+
+.asst__dialog {
+    width: min(440px, 92vw);
+}
+
+.asst__step {
     font-size: var(--text-sm);
     color: var(--muted);
+    line-height: 1.5;
+}
+
+.asst__step p {
+    margin: 0;
+}
+
+.asst__tools {
+    font-size: var(--text-xs);
+    color: var(--muted);
+}
+
+.asst__tools summary {
+    cursor: pointer;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-2);
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+}
+
+.asst__tools summary::-webkit-details-marker {
+    display: none;
+}
+
+.asst__tools ul {
+    margin: var(--space-1) 0 0;
+    padding-left: 18px;
+}
+
+.asst__thinking {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+.asst__dots {
+    display: inline-flex;
+    gap: 3px;
+}
+
+.asst__dots i {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: asst-dot 1.2s infinite ease-in-out;
+}
+
+.asst__dots i:nth-child(2) { animation-delay: 0.15s; }
+.asst__dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes asst-dot {
+    0%, 80%, 100% { opacity: 0.25; }
+    40% { opacity: 1; }
+}
+
+.asst__error {
+    color: var(--danger);
+    font-size: var(--text-sm);
 }
 
 /* A queued action. Built from the hub's stored row, never from the model's prose, so what it
    says is what the Confirm button runs. */
-.assistant__action {
+.asst__action {
     border: 1px solid var(--warning);
     border-radius: var(--radius-md);
     padding: var(--space-3);
@@ -202,23 +571,23 @@
     font-size: var(--text-sm);
 }
 
-.assistant__action--done {
+.asst__action--done {
     border-color: var(--success);
 }
 
-.assistant__action--failed,
-.assistant__action--rejected,
-.assistant__action--expired {
+.asst__action--failed,
+.asst__action--rejected,
+.asst__action--expired {
     border-color: var(--card-border);
     opacity: 0.8;
 }
 
-.assistant__action-title {
+.asst__action-title {
     font-weight: 600;
     margin-bottom: var(--space-1);
 }
 
-.assistant__action-detail {
+.asst__action-detail {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     font-size: var(--text-xs);
     white-space: pre-wrap;
@@ -231,28 +600,100 @@
     overflow-y: auto;
 }
 
-.assistant__action-buttons {
+.asst__action-buttons {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
     align-items: center;
+    margin-top: var(--space-2);
 }
 
-.assistant__composer {
+/* ---------------------------------------------------------------- composer */
+.asst__composer {
+    padding: 0 var(--space-4) var(--space-3);
+}
+
+.asst__box {
+    max-width: var(--asst-col);
+    margin: 0 auto;
     display: flex;
-    gap: var(--space-2);
     align-items: flex-end;
+    gap: var(--space-2);
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.12);
 }
 
-.assistant__input {
+.asst__box:focus-within {
+    border-color: var(--accent);
+}
+
+.asst__input {
     flex: 1;
-    resize: vertical;
-    min-height: 44px;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-base);
+    line-height: 1.5;
+    resize: none;
     max-height: 40vh;
+    padding: 6px 0;
 }
 
-.assistant__send {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
+.asst__send {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: var(--radius-md);
+    border: 0;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    cursor: pointer;
+}
+
+.asst__send svg {
+    width: 18px;
+    height: 18px;
+}
+
+.asst__send:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.asst__send--stop {
+    background: var(--text);
+    color: var(--card);
+}
+
+.asst__send[hidden] {
+    display: none;
+}
+
+.asst__fine {
+    max-width: var(--asst-col);
+    margin: var(--space-2) auto 0;
+    text-align: center;
+    color: var(--muted);
+    font-size: var(--text-xs);
+}
+
+.asst--compact .asst__thread {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+}
+
+.asst--compact .asst__composer {
+    padding: 0 var(--space-3) var(--space-3);
+}
+
+.asst--compact .asst__fine {
+    display: none;
 }

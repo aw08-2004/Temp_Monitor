@@ -1691,7 +1691,21 @@
         "attempts": "Intentos",
         "detail": "Detalle"
       },
-      "tally": "{status}: {count}"
+      "tally": "{status}: {count}",
+      "active": {
+        "title": "En espera o en curso",
+        "intro": "Cada equipo con el que un despliegue aún no ha terminado, de cualquier despliegue por antiguo que sea -- la cifra que el panel muestra como despliegues en curso. Los que más esperan, primero.",
+        "col": {
+          "machine": "Equipo",
+          "package": "Paquete",
+          "status": "Estado",
+          "since": "Sin cambios desde",
+          "detail": "Detalle"
+        },
+        "deployment": "Despliegue: {status}",
+        "attempts": "Intento {attempts} de {max}",
+        "load_failed": "No se pudieron cargar los equipos en espera o en curso. Recargue la página para volver a intentarlo."
+      }
     },
     "status": {
       "scheduled": "programado",
@@ -3297,7 +3311,6 @@
     "history": "Conversaciones",
     "new_chat": "Nueva",
     "delete_chat": "Eliminar",
-    "delete_confirm": "¿Eliminar esta conversación? No se puede deshacer.",
     "pin": "Fijar al lateral",
     "unpin": "Desfijar",
     "resize": "Cambiar el tamaño del panel del asistente",
@@ -3305,7 +3318,6 @@
     "example_page": "¿Qué debería saber sobre la página en la que estoy?",
     "example_hot": "¿Qué equipos están demasiado calientes ahora mismo?",
     "example_alerts": "Resume las alertas abiertas de hoy y qué hacer primero",
-    "example_rule": "Avísame cuando un PC tenga menos de 10 GB libres",
     "privacy": "Los nombres de los equipos y los datos que lee el asistente se envían al proveedor de IA configurado en Ajustes.",
     "placeholder": "Pregunte al asistente...",
     "send": "Enviar",
@@ -3331,7 +3343,17 @@
     "typed_placeholder": "Escriba {machine} para confirmar",
     "untitled": "Conversación sin título",
     "error": "El asistente no pudo responder. Inténtelo de nuevo.",
-    "stopped": "Detenido."
+    "stopped": "Detenido.",
+    "greeting": "¿En qué puedo ayudar?",
+    "fold": "Ocultar conversaciones",
+    "no_chats": "Aún no hay conversaciones.",
+    "chat_running": "Aún respondiendo",
+    "example_stuck": "¿Hay algún despliegue atascado y en qué equipo?",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "rename": "Cambiar nombre",
+    "delete_title": "¿Eliminar la conversación?",
+    "delete_body": "Se eliminará «{title}» con todo su contenido. No se puede deshacer."
   },
   "scripts": {
     "body": "Script",

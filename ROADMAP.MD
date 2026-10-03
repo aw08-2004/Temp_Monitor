@@ -4683,7 +4683,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
@@ -4766,6 +4766,41 @@ names, and can do what the signed-in operator can.
 - **A deny-list as the only gate** -- silent about everything nobody thought of.
 - **A docked second copy of the chat in the shell document** -- two implementations drift, and
   the shell deliberately renders no page content.
+
+### Hub 1.135.3 · finding what a number counts, and the panel redesigned
+- **`GET /api/deployments/targets`** lists deployment TARGETS by status across every deployment,
+  scoped -- exactly what the Dashboard's "Deployments in flight" tile counts. Before it there
+  was nothing to click and nothing for the assistant to find: the only list was of the newest
+  hundred deployments, and a target stuck for weeks sat in an old one whose own status said
+  `complete`. The tile now links to a "Waiting or running now" table on Packages →
+  Deployments, and the assistant has `deployment_targets`. Rejected: filters alone -- the
+  assistant still could not see past the newest hundred.
+- **`where` operators** (`>`, `>=`, `<`, `<=`, `!=`, `in`, `exists`): a status with zero
+  targets is absent from a tally, so equality to a number was the wrong question.
+- **A turn belongs to its chat.** Switching conversations used to stop the panel listening for
+  good, and the chat then refused new messages as "still answering". The chat list marks a
+  chat that is still answering, and opening it resumes the run from where the stored part ends.
+- **Layout after Claude's own chat, in the hub's colours** (owner's choice): answers as plain
+  text, the operator in a bubble, working steps small and grey, a rounded composer. History in
+  a foldable column on the Assistant page; a drawer behind the clock button when pinned or
+  narrow. Rejected: Claude's warm palette, which would have made one page unlike the rest.
+
+### Hub 1.135.4 · titles, copy, rename, in-page delete, forgiving links
+- **A conversation is named for its purpose**, by the model, from its first message, in a
+  call beside the answer. `title_source` (`auto` / `ai` / `manual`) records who named it; the
+  model only ever replaces `auto`, so a name the operator typed (PATCH, pencil in the list) is
+  final. A provider that fails leaves the first message as the name.
+- **Copy** under every message and answer (not under working steps). **Delete** asks in the
+  console's own modal, decided on the form's `submit` -- a first version waited for the
+  dialog's `close`, a later task, and in a frame the browser was not drawing never deleted.
+- **Links the model wrote by hand** (`[PC-12](/machine/PC-12)`, seen in every German answer)
+  are read back into tokens and resolved with the same scope check instead of being reduced to
+  text; anything that is not a hub page shape still is. A bolded link renders as a link.
+- Events after a run's `done` are dropped; a late conversation name is picked up by the list.
+- **Only the conversation scrolls.** The page area was `height: 100vh` but also `flex: 1` with
+  the default `min-height: auto`, so it grew to the whole conversation and the page scrolled
+  the history column and the composer away. The Settings section list is sticky for the same
+  complaint (not below 720px, where it is a horizontal strip).
 
 ### Open
 - Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the

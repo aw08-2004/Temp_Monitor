@@ -57,7 +57,10 @@
     <summary class="fold__summary">
         <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.activity.title') }}</span>
     </summary>
-    <div class="tile-grid" id="activity-tiles"></div>
+    {# data-can-deploy, not a field of /api/fleet/summary: that answer is cached per SCOPE,
+       and two operators with the same machines but different capabilities share it. #}
+    <div class="tile-grid" id="activity-tiles"
+         data-can-deploy="{{ 'yes' if cap.DEPLOY_PACKAGES in user_capabilities else '' }}"></div>
     <div id="activity-alerts"></div>
 </details>
 

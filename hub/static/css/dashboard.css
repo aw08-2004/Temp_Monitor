@@ -17,6 +17,17 @@
     background: var(--control-bg);
 }
 
+a.tile--link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+}
+
+a.tile--link:hover,
+a.tile--link:focus-visible {
+    border-color: var(--accent);
+}
+
 .tile__value {
     font-size: var(--text-xl);
     font-weight: 600;

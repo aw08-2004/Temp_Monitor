@@ -87,6 +87,22 @@ def say(text):
 
 ai.complete_chat = fake_complete_chat
 
+# The conversation-naming call (assistant_web.name_it). A str is the title the "model" answers
+# with, None is a provider failure; consumed in order, last one repeated.
+TITLES = ["Test conversation"]
+TITLE_CALLS = []
+
+
+def fake_complete(config, messages, **kwargs):
+    TITLE_CALLS.append(messages)
+    answer = TITLES.pop(0) if len(TITLES) > 1 else TITLES[0]
+    if answer is None:
+        return "the AI provider could not be reached", None
+    return None, answer
+
+
+ai.complete = fake_complete
+
 
 # ---------------------------------------------------------------- fixtures
 def seed():
@@ -243,6 +259,27 @@ def test_links_are_built_by_the_hub_only():
     check("a hand-written internal link lost its url too",
           "/api/wipe" not in text and "here" in text)
     check("exactly one link was emitted", links == ["/machine/PC-01"])
+
+    # Seen in German answers: the model wrote its links by hand, and bolded them.
+    text, links = assistant.render_links(
+        "**[[machine:PC-01]]** und [PC-01](/machine/PC-01) und [PC-02](/machine/PC-02) "
+        "und [Warnungen](/alerts)",
+        lambda kind, arg, opts: (("/machine/PC-01", opts.get("label") or arg)
+                                 if kind == "machine" and arg == "PC-01"
+                                 else ("/alerts", opts.get("label") or "Alerts")
+                                 if kind == "page" and arg == "alerts" else None))
+    check("a bolded token still becomes a hub link", "**[PC-01](/machine/PC-01)**" in text)
+    check("a hand-written link to a hub page is read back and checked like a token",
+          "[PC-01](/machine/PC-01) und" in text and "[Warnungen](/alerts)" in text)
+    check("...and one the resolver refuses is reduced to its label",
+          "(/machine/PC-02)" not in text and "PC-02" in text)
+    check("token_for_href reads the hub's link shapes",
+          assistant.token_for_href("/machine/PC-1?tab=network") == ("machine", "PC-1",
+                                                                     {"tab": "network"})
+          and assistant.token_for_href("/reports/machines/PC-1") == ("report", "PC-1", {})
+          and assistant.token_for_href("/remote?machine=PC-1") == ("remote", "PC-1", {})
+          and assistant.token_for_href("//evil.example/machine/x") is None
+          and assistant.token_for_href("/api/machines/PC-1") is None)
 
 
 def test_history_is_trimmed():
@@ -736,6 +773,187 @@ def test_every_read_route_survives_narrowing_and_trimming():
           not sliced)
 
 
+def test_a_stuck_deployment_target_can_be_found():
+    """The Dashboard counted one deployment target in flight for weeks, and there was no list
+    of targets to find it in: the only list was of the newest deployments, and this target sat
+    in one whose own status said `complete`. The assistant ran out of steps looking."""
+    print("\n-- the target behind 'Deployments in flight' is listed, wherever it is --")
+    import packages
+    pkg = packages.create_package(
+        DB, name="7-Zip", source={"kind": packages.SOURCE_UPLOAD, "sha256": "a" * 64,
+                                  "file_name": "7z.msi", "file_size": 1234},
+        install_command="msiexec.exe", install_args='/i "{file}" /qn', actor="test")
+    dep = packages.create_deployment(DB, package_id=pkg, machines=["PC-01", "PC-02"],
+                                     created_by="test")
+    weeks_ago = int(time.time()) - 21 * 86400
+    with packages.get_conn(DB) as conn:
+        conn.execute("UPDATE deployments SET status = 'complete' WHERE id = ?", (dep,))
+        conn.execute("UPDATE deployment_targets SET status = 'succeeded' "
+                     "WHERE deployment_id = ? AND machine = 'PC-02'", (dep,))
+        conn.execute("UPDATE deployment_targets SET updated_at = ? "
+                     "WHERE deployment_id = ? AND machine = 'PC-01'", (weeks_ago, dep))
+    check("the Dashboard counts it",
+          packages.count_deployment_states(DB)["running"] >= 1)
+
+    admin = client_for("tester@example.com")
+    r = admin.get("/api/deployments/targets")
+    rows = [t for t in (r.get_json() or {}).get("targets", []) if t["deployment_id"] == dep]
+    check("the targets route lists it", r.status_code == 200 and len(rows) == 1
+          and rows[0]["machine"] == "PC-01" and rows[0]["status"] == "pending")
+    check("...with its deployment's own status and package",
+          rows and rows[0]["deployment_status"] == "complete"
+          and rows[0]["package_name"] == "7-Zip")
+    check("an unknown status is refused",
+          admin.get("/api/deployments/targets?status=bogus").status_code == 400)
+    check("an operator without deploy_packages is refused",
+          client_for("viewer@x.com").get("/api/deployments/targets").status_code == 403)
+
+    permissions.create_group(DB, "Deployers PC-02",
+                             capabilities=[permissions.VIEW, permissions.DEPLOY_PACKAGES],
+                             machines=["PC-02"], members=["deployer@x.com"])
+    scoped = client_for("deployer@x.com").get("/api/deployments/targets").get_json()
+    check("a scoped deployer does not see a machine outside their scope",
+          not any(t["machine"] == "PC-01" for t in scoped["targets"]))
+
+    chat_id = new_chat(admin)
+    SCRIPT[:] = [call("deployment_targets"), say("PC-01 is stuck.")]
+    converse(admin, chat_id, "It says 1 deployment is in flight. Which one?")
+    result = json.loads(tool_messages(chat_id)[0]["content"])
+    check("the assistant finds it in one call",
+          result["ok"] and any(t["machine"] == "PC-01" and t["deployment_id"] == dep
+                               for t in result["data"]["targets"]))
+    check("the assistant is offered the tool",
+          "deployment_targets" in CALLS[-1][1])
+
+    dashboard = admin.get("/", headers={"Sec-Fetch-Dest": "iframe"}).get_data(as_text=True)
+    check("the Dashboard knows this operator may follow the tile",
+          'data-can-deploy="yes"' in dashboard)
+    viewer_page = client_for("viewer@x.com").get(
+        "/", headers={"Sec-Fetch-Dest": "iframe"}).get_data(as_text=True)
+    check("...and that a viewer may not", 'data-can-deploy=""' in viewer_page)
+
+
+def test_where_operators():
+    print("\n-- where takes >, in, exists --")
+    rows = {"deployments": [{"id": 1, "target_counts": {"pending": 1}},
+                            {"id": 2, "target_counts": {"succeeded": 3}},
+                            {"id": 3, "status": "done", "target_counts": {"in_flight": 2}}]}
+    pick = lambda where: [d["id"] for d in assistant_tools.narrow(rows, {"where": where})
+                          ["deployments"]]
+    check("> 0 finds a count that is present", pick({"target_counts.pending": {">": 0}}) == [1])
+    check("...and not one that is absent", pick({"target_counts.failed": {">": 0}}) == [])
+    check("in matches any of a list, case-insensitively",
+          pick({"status": {"in": ["DONE", "x"]}}) == [3])
+    check("exists false finds the entries without the key",
+          pick({"status": {"exists": False}}) == [1, 2])
+    check("!= excludes", pick({"status": {"!=": "done"}}) == [])
+
+
+def test_a_chat_keeps_answering_after_you_leave_it():
+    """Switching chats used to stop the panel listening, never resume, and leave the chat
+    refusing new messages as 'still answering'. The run goes on in the hub; the panel has to
+    be able to find it again."""
+    print("\n-- a chat that is answering can be left and picked up again --")
+    import threading
+    admin = client_for("tester@example.com")
+    gate = threading.Event()
+    entered = threading.Event()
+
+    def slow(messages):
+        entered.set()
+        gate.wait(10)
+        return say("finished while you were away")
+
+    SCRIPT[:] = [slow]
+    chat_a = new_chat(admin)
+    r = admin.post(f"/api/assistant/chats/{chat_a}/messages", json={"text": "take your time"})
+    run_id = r.get_json()["run_id"]
+    # Wait for chat A to TAKE the slow step before chat B is given its own: SCRIPT is shared,
+    # and a sleep here once let chat B's worker reach the slow step first.
+    check("chat A is answering", entered.wait(5))
+    listed = {c["id"]: c for c in admin.get("/api/assistant/chats").get_json()["chats"]}
+    check("the history shows it still answering", listed[chat_a]["running"] is True)
+    opened = admin.get(f"/api/assistant/chats/{chat_a}").get_json()
+    check("opening it again hands back the run to listen to",
+          opened["run"] and opened["run"]["id"] == run_id)
+    chat_b = new_chat(admin)
+    SCRIPT.append(say("b answered"))
+    status_b, events_b = converse(admin, chat_b, "meanwhile, in another chat")
+    check(f"another chat can be used meanwhile ({status_b}, {events_b[-2:]})",
+          status_b == 202 and events_b[-1]["type"] == "done")
+    gate.set()
+    deadline = time.time() + 10
+    while time.time() < deadline and admin.get(f"/api/assistant/chats/{chat_a}").get_json()["run"]:
+        time.sleep(0.05)
+    opened = admin.get(f"/api/assistant/chats/{chat_a}").get_json()
+    check("when it finishes the answer is stored in the chat",
+          opened["run"] is None
+          and any("finished while you were away" in m["content"] for m in opened["messages"]))
+    listed = {c["id"]: c for c in admin.get("/api/assistant/chats").get_json()["chats"]}
+    check("...and the history stops showing it as running", listed[chat_a]["running"] is False)
+    SCRIPT[:] = [say("again")]
+    status, _events = converse(admin, chat_a, "and now?")
+    check("the chat takes new messages again", status == 202)
+
+
+def test_conversations_are_named_by_what_they_were_for():
+    """The first message used to BE the title -- a cut-off sentence, unreadable in a list.
+    The model names the conversation once, from that message, and never over a name the
+    operator typed."""
+    print("\n-- a conversation is named for its purpose, and a typed name sticks --")
+    admin = client_for("tester@example.com")
+    TITLES[:] = ["\"Stuck deployment on PC-01.\""]
+    chat_id = new_chat(admin)
+    SCRIPT[:] = [say("Looking into it.")]
+    _status, events = converse(admin, chat_id,
+                               "It says 1 deployment is in flight but I cannot find it")
+    deadline = time.time() + 5
+    while time.time() < deadline and assistant.get_chat(
+            DB, chat_id, "tester@example.com")["title_source"] != "ai":
+        time.sleep(0.02)
+    chat = assistant.get_chat(DB, chat_id, "tester@example.com")
+    check("the model's name replaces the first message, cleaned",
+          chat["title"] == "Stuck deployment on PC-01" and chat["title_source"] == "ai")
+    check("the panel is told without waiting for the list",
+          any(e["type"] == "title" for e in events)
+          or chat["title_source"] == "ai")
+    asked = len(TITLE_CALLS)
+    TITLES[:] = ["Something else entirely"]
+    SCRIPT[:] = [say("ok")]
+    converse(admin, chat_id, "and the second question")
+    time.sleep(0.2)
+    check("only the FIRST message names it", len(TITLE_CALLS) == asked
+          and assistant.get_chat(DB, chat_id, "tester@example.com")["title"]
+          == "Stuck deployment on PC-01")
+
+    r = admin.patch(f"/api/assistant/chats/{chat_id}", json={"title": "  My ticket 4711 "})
+    check("the operator can rename it", r.status_code == 200
+          and r.get_json()["title"] == "My ticket 4711"
+          and r.get_json()["title_source"] == "manual")
+    assistant.rename_chat(DB, chat_id, "tester@example.com", "Model's idea",
+                          source=assistant.TITLE_AI)
+    check("...and the model never overwrites a typed name",
+          assistant.get_chat(DB, chat_id, "tester@example.com")["title"] == "My ticket 4711")
+    check("an empty name is refused",
+          admin.patch(f"/api/assistant/chats/{chat_id}", json={"title": "  "}).status_code == 400)
+    check("a JSON body that is not an object is refused, not a 500",
+          admin.patch(f"/api/assistant/chats/{chat_id}", json=["x"]).status_code == 400)
+    check("a prefixed, quoted title is cleaned",
+          assistant.clean_title('Title: "Stuck deployment."') == "Stuck deployment")
+    check("another operator cannot rename it",
+          client_for("viewer@x.com").patch(f"/api/assistant/chats/{chat_id}",
+                                           json={"title": "x"}).status_code == 404)
+
+    TITLES[:] = [None]          # the provider fails
+    other = new_chat(admin)
+    SCRIPT[:] = [say("ok")]
+    converse(admin, other, "Which machines are hot right now?")
+    time.sleep(0.3)
+    chat = assistant.get_chat(DB, other, "tester@example.com")
+    check("a provider that fails leaves the first message as the title",
+          chat["title"] == "Which machines are hot right now?" and chat["title_source"] == "auto")
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -764,6 +982,10 @@ def main():
     test_narrowing_reaches_nested_lists()
     test_trimming_reaches_nested_lists()
     test_every_read_route_survives_narrowing_and_trimming()
+    test_a_stuck_deployment_target_can_be_found()
+    test_where_operators()
+    test_a_chat_keeps_answering_after_you_leave_it()
+    test_conversations_are_named_by_what_they_were_for()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 
