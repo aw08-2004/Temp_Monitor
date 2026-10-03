@@ -433,6 +433,51 @@ class RunLog:
             del self._runs[run_id]
 
 
+def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
+    """One tool result as JSON of at most `limit` characters, cut at a WHOLE ENTRY.
+
+    The first version cut the JSON string at the limit, which hands the model half an object
+    and a note to narrow a request it often has no way to narrow. Now the longest list in the
+    result is shortened to as many complete entries as fit, and the result says how many it
+    shows of how many, so the model can tell "there are more" from "this is everything" and
+    filter if the tool lets it. The character cut remains as the fallback for a result with
+    no list to shorten.
+    """
+    content = json.dumps(result, default=str)
+    if len(content) <= limit:
+        return content
+    data = result.get("data") if isinstance(result, dict) else None
+    holder, key = None, None
+    if isinstance(data, list):
+        holder, key = result, "data"
+    elif isinstance(data, dict):
+        lists = [(k, v) for k, v in data.items() if isinstance(v, list) and v]
+        if lists:
+            holder = data
+            key = max(lists, key=lambda kv: len(json.dumps(kv[1], default=str)))[0]
+    if holder is not None:
+        items = holder[key]
+
+        def build(count):
+            trimmed = dict(holder, **{key: items[:count]})
+            out = dict(result, data=trimmed) if holder is data else dict(trimmed)
+            out["truncated"] = {"shown": count, "total": len(items),
+                                "hint": "only the first entries fit; filter to see the rest"}
+            return json.dumps(out, default=str)
+
+        low, high = 0, len(items)
+        while low < high:
+            mid = (low + high + 1) // 2
+            if len(build(mid)) <= limit:
+                low = mid
+            else:
+                high = mid - 1
+        candidate = build(low)
+        if len(candidate) <= limit:
+            return candidate
+    return content[:limit] + ' ..."[truncated: narrow the request]"'
+
+
 def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools, execute,
              emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS):
     """One operator message through to a final answer. Writes every message as it goes.
@@ -486,10 +531,7 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
                 # with a missing reply is a conversation no server will continue.
                 print(f"[assistant] tool {call['name']} raised: {exc!r}")
                 result = {"ok": False, "error": "the hub failed while running this tool"}
-            content = json.dumps(result, default=str)
-            if len(content) > MAX_TOOL_RESULT_CHARS:
-                content = (content[:MAX_TOOL_RESULT_CHARS]
-                           + ' ..."[truncated: narrow the request]"')
+            content = fit_result(result)
             append_message(db_path, chat_id, ROLE_TOOL, content, tool_call_id=call["id"],
                            tool_name=call["name"])
             event = {"type": "tool", "name": call["name"], "state": "finished",

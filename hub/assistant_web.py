@@ -229,6 +229,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 return {"ok": True, "tier": assistant_tools.TIER_READ,
                         "data": [{k: e[k] for k in ("method", "rule", "tier", "summary")}
                                  for e in found]}
+            local = {}
             if name == "call_endpoint":
                 method = str(args.get("method") or "GET").upper()
                 path = str(args.get("path") or "")
@@ -238,6 +239,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 query = args.get("query") if isinstance(args.get("query"), dict) else None
                 body = args.get("body") if isinstance(args.get("body"), dict) else None
             elif name in assistant_tools.CURATED_BY_NAME:
+                args, local = assistant_tools.split_local(name, args)
                 error, method, path, query, body = assistant_tools.build_request(name, args)
                 if error:
                     return {"ok": False, "error": error}
@@ -263,6 +265,8 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                         "action": _public_action(action),
                         "note": "Not run. The operator sees a confirmation card and decides."}
             status, payload = dispatcher.call(session_data, method, path, query, body)
+            if status < 400 and name in assistant_tools.SHAPERS:
+                payload = assistant_tools.shape(name, payload, local)
             if tier == assistant_tools.TIER_WRITE:
                 audit(db_path, actor=owner, action="assistant.tool", target=machine or path,
                       detail={"tool": name, "method": method, "rule": rule,

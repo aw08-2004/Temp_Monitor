@@ -248,8 +248,18 @@ CURATED = (
      "POST", "/api/ai/query", _params(["text"], text={"type": "string"})),
     ("fleet_report", "Alerts raised, cleared and open over a window of days.",
      "POST", "/api/ai/summary", _params(window_days={"type": "integer"})),
-    ("list_rules", "The rules engine's rules.",
-     "GET", "/api/rules", _params()),
+    ("list_rules", "The rules engine's rules, one short line each: id, name, enabled, the "
+     "condition as text, and how many machines match it now. Filter with `q` (words that must "
+     "all appear in the name, description or condition) and `enabled`. Use get_rule for one "
+     "rule's full definition.",
+     "GET", "/api/rules", _params(q={"type": "string"}, enabled={"type": "boolean"})),
+    ("get_rule", "One rule's full definition: target, condition, actions, timing.",
+     "GET", "/api/rules/<rule_id>", _params(["rule_id"], rule_id={"type": "integer"})),
+    ("set_rule_enabled", "Switch a rule on or off. Switching one off also clears the alerts "
+     "it raised. Needs the operator's confirmation.",
+     "PUT", "/api/rules/<rule_id>/enabled",
+     _params(["rule_id", "enabled"], rule_id={"type": "integer"},
+             enabled={"type": "boolean"})),
     ("draft_rule", "Draft a monitoring rule from an English sentence. Returns a draft id and "
      "the staged rules; nothing is saved yet.",
      "POST", "/api/ai/rules/draft", _params(["text"], text={"type": "string"})),
@@ -276,6 +286,62 @@ GENERIC = (
                                                                     "PATCH", "DELETE"]},
              path={"type": "string"}, query={"type": "object"}, body={"type": "object"})),
 )
+
+# Arguments a curated tool takes that the ROUTE does not: they are kept out of the request and
+# applied to its answer by the tool's SHAPER below.
+LOCAL_PARAMS = {"list_rules": ("q", "enabled")}
+
+
+def _words(text):
+    return [w for w in re.split(r"\s+", str(text or "").lower()) if w]
+
+
+def shape_rules(payload, local):
+    """GET /api/rules, cut down to what a model needs to pick a rule.
+
+    The route answers the Rules page, so every rule arrives whole -- target, condition AST,
+    actions, timing, live counters -- and a few dozen of them run far past what one tool result
+    may carry. The model was then told to "narrow the request" against a route that has no
+    filter, and spent its whole step budget asking the same question again (seen on a real hub
+    asked to disable the high-temperature alerts). So the filter lives here, and the full
+    definition is one get_rule call away.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("rules"), list):
+        return payload
+    words = _words(local.get("q"))
+    want = local.get("enabled")
+    rows = []
+    for rule in payload["rules"]:
+        hay = " ".join(str(rule.get(k) or "") for k in ("name", "description",
+                                                       "condition_text")).lower()
+        if words and not all(w in hay for w in words):
+            continue
+        if isinstance(want, bool) and bool(rule.get("enabled")) != want:
+            continue
+        rows.append({"id": rule.get("id"), "name": rule.get("name"),
+                     "enabled": bool(rule.get("enabled")),
+                     "condition": rule.get("condition_text") or "",
+                     "actions": [a.get("type") for a in (rule.get("actions") or [])
+                                 if isinstance(a, dict)],
+                     "matching": rule.get("matching"), "blocked": rule.get("blocked")})
+    return {"rules": rows, "total": len(payload["rules"]), "matched": len(rows),
+            "actions_enabled": payload.get("actions_enabled")}
+
+
+SHAPERS = {"list_rules": shape_rules}
+
+
+def split_local(name, args):
+    """(args for the route, args for the shaper)."""
+    args = dict(args or {})
+    local = {key: args.pop(key) for key in LOCAL_PARAMS.get(name, ()) if key in args}
+    return args, local
+
+
+def shape(name, payload, local):
+    shaper = SHAPERS.get(name)
+    return shaper(payload, local or {}) if shaper else payload
+
 
 CURATED_BY_NAME = {name: (desc, method, path, schema)
                    for name, desc, method, path, schema in CURATED}
