@@ -63,7 +63,10 @@ DNS = {
     "metadata.example": ["169.254.169.254"],
     "api.github.com": ["140.82.112.6"],
     "raw.githubusercontent.com": ["185.199.108.133"],
+    # AAAA listed first, as getaddrinfo commonly does; its IPv4 address is unreachable here.
+    "dual.example": ["2606:2800:220:1::1", "93.184.216.40"],
 }
+DEAD = {"93.184.216.40"}     # addresses whose connection fails
 PAGES = {}           # (host, path) -> (status, headers, body)
 REQUESTS = []        # (hostname, address, path) for every connection made
 
@@ -95,6 +98,8 @@ def fake_request(parsed, address):
     if parsed.query:
         path += "?" + parsed.query
     REQUESTS.append((parsed.hostname, address, path))
+    if address in DEAD:
+        raise webfetch.FetchError(f"could not reach {parsed.hostname}: ConnectTimeoutError")
     status, headers, body = PAGES.get((parsed.hostname, path), (404, {}, b""))
     return FakeResponse(status, headers, body)
 
@@ -138,6 +143,12 @@ def test_pinning_and_redirects():
     check("a plain-text page is read", page["text"] == "hello")
     check("the connection went to the address that was checked",
           REQUESTS == [("vendor.example", "93.184.216.34", "/page")])
+
+    PAGES[("dual.example", "/page")] = (200, {"Content-Type": "text/plain"}, b"dual")
+    REQUESTS.clear()
+    check("an unreachable address falls back to the next checked one",
+          webfetch.fetch_text("https://dual.example/page")["text"] == "dual"
+          and [a for _h, a, _p in REQUESTS] == ["93.184.216.40", "2606:2800:220:1::1"])
 
     PAGES[("vendor.example", "/go-inside")] = (302, {"Location": "https://inside.example/admin"},
                                                b"")
@@ -281,6 +292,21 @@ def test_staging(root, blob_dir):
     check("a download nobody is running any more reads as failed",
           webfetch._read_meta(root, stalled["id"], now=later)["status"] == "failed")
 
+    orphan = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
+    record = webfetch._read_meta(root, orphan["id"])
+    webfetch._write_meta(root, orphan["id"], dict(record, process="a-previous-hub"))
+    after = webfetch.get_staged(root, orphan["id"])
+    check("a queued record left by a previous hub process reads as failed, not queued",
+          after["status"] == "failed" and "restarted" in after["error"])
+    check("...and no worker picks it up", webfetch.run_download(
+        root, orphan["id"], 10 ** 9)["status"] == "failed"
+          and not os.path.exists(os.path.join(root, orphan["id"], "file")))
+
+    gone = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
+    webfetch.discard(root, gone["id"])
+    check("a download discarded while queued is skipped by its worker",
+          webfetch.run_download(root, gone["id"], 10 ** 9) is None)
+
     check("an unfinished download cannot be promoted",
           _raises(lambda: webfetch.promote(root, capped["id"], blob_dir, 10 ** 9)))
     os.replace(os.path.join(root, meta["id"], "file"),
@@ -302,6 +328,13 @@ def test_staging(root, blob_dir):
     check("a staging id that is not one is unknown, not a path",
           webfetch.get_staged(root, "..\\..\\hub.db") is None)
 
+    real_read = webfetch._read_meta
+    webfetch._read_meta = lambda *a, **k: None          # every read loses the sharing race
+    try:
+        check("pruning never deletes a record it could not read right now",
+              webfetch.prune_staging(root, 24, now=time.time() + 25 * 3600) == 0)
+    finally:
+        webfetch._read_meta = real_read
     before = len(webfetch.list_staged(root))
     check("pruning keeps recent records", webfetch.prune_staging(root, 24) == 0)
     removed = webfetch.prune_staging(root, 24, now=time.time() + 25 * 3600)

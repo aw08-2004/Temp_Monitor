@@ -86,6 +86,12 @@ REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 # about to start -- and an operator who "started it again" got the file twice (PR #106
 # review).
 STATUS_QUEUED = "queued"
+# Which hub PROCESS owns a record's work. The queue is an in-memory ThreadPoolExecutor, so a
+# restart (self-update does one) drops every queued job while its meta.json still says
+# `queued`, and nothing would ever move it on (PR #106 review, twice). A record whose token is
+# not this process's is known to have no worker, exactly -- no age guess, which would also
+# fail a job that is legitimately waiting minutes behind two large downloads.
+PROCESS_TOKEN = uuid.uuid4().hex
 STATUS_DOWNLOADING = "downloading"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
@@ -156,7 +162,12 @@ def check_url(url):
         if not address.is_global or address.is_multicast:
             raise FetchError(f"{host} resolves to {address}, which is not on the public "
                              "internet; the hub only fetches public addresses")
-    return parsed, str(addresses[0]).split("%")[0]
+    # EVERY checked address, IPv4 first, so open_url can fall back. Pinning only the first
+    # failed every host on a hub without a working IPv6 route, because getaddrinfo commonly
+    # lists the AAAA record first (PR #106 review).
+    cleaned = list(dict.fromkeys(str(raw).split("%")[0] for raw in addresses))
+    cleaned.sort(key=lambda a: ipaddress.ip_address(a).version)
+    return parsed, cleaned
 
 
 def _request(parsed, address):
@@ -188,8 +199,16 @@ def open_url(url):
     """
     current = str(url or "").strip()
     for _hop in range(MAX_REDIRECTS + 1):
-        parsed, address = check_url(current)
-        response = _request(parsed, address)
+        parsed, addresses = check_url(current)
+        response, failure = None, None
+        for address in addresses:
+            try:
+                response = _request(parsed, address)
+                break
+            except FetchError as exc:
+                failure = exc
+        if response is None:
+            raise failure
         if response.status in REDIRECT_STATUSES:
             location = response.headers.get("Location") or ""
             response.release_conn()
@@ -449,6 +468,10 @@ def _read_meta(root, staging_id, now=None):
     if meta is None:
         return None
     now = time.time() if now is None else now
+    if meta.get("status") in (STATUS_QUEUED, STATUS_DOWNLOADING) and \
+            meta.get("process") != PROCESS_TOKEN:
+        return dict(meta, status=STATUS_FAILED,
+                    error="the hub restarted before this download finished; start it again")
     if meta.get("status") == STATUS_DOWNLOADING and \
             now - float(meta.get("updated_at") or 0) > STALL_SECONDS:
         meta = dict(meta, status=STATUS_FAILED,
@@ -485,7 +508,7 @@ def begin_download(root, url, actor):
     meta = {"id": staging_id, "url": str(url).strip(), "final_url": None,
             "status": STATUS_QUEUED, "file_name": None, "size": 0, "sha256": None,
             "error": None, "actor": actor, "started_at": now, "updated_at": now,
-            "finished_at": None}
+            "finished_at": None, "process": PROCESS_TOKEN}
     _write_meta(root, staging_id, meta)
     return meta
 
@@ -493,7 +516,10 @@ def begin_download(root, url, actor):
 def run_download(root, staging_id, max_bytes):
     """Stream one staged download to disk, hashing as it goes. Never raises: the outcome is
     written to the record, which is what the operator and the model read."""
-    meta = _read_meta(root, staging_id) or {}
+    meta = _read_meta(root, staging_id)
+    if not meta or meta.get("status") != STATUS_QUEUED:
+        # Discarded (or otherwise settled) while it waited in the queue: nothing to do.
+        return meta
     folder = _dir(root, staging_id)
     part = os.path.join(folder, "file.part")
     # The stall clock starts here, not when the record was queued.
@@ -614,11 +640,17 @@ def prune_staging(root, max_age_hours, now=None):
     for name in names:
         if not _STAGING_ID.match(name):
             continue
-        meta = _read_meta(root, name, now) or {}
-        touched = float(meta.get("updated_at") or 0)
+        folder = os.path.join(root, name)
+        meta = _read_meta(root, name, now)
+        if meta is None and os.path.exists(os.path.join(folder, "meta.json")):
+            # Unreadable right now (the worker is rewriting it), not absent. The folder's own
+            # mtime does not move when files inside it are rewritten, so falling back to it
+            # could delete a download that is still running (PR #106 review). Next prune.
+            continue
+        touched = float((meta or {}).get("updated_at") or 0)
         if not touched:
             try:
-                touched = os.path.getmtime(os.path.join(root, name))
+                touched = os.path.getmtime(folder)
             except OSError:
                 continue
         if touched < cutoff:

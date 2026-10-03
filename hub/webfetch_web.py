@@ -141,7 +141,14 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
             # py/stack-trace-exposure; a hand-built response is the case it rightly flags.
             print(f"[webfetch] could not create a staging folder: {e}")
             return jsonify({"error": STORE_FAILED}), 500
-        pool.submit(webfetch.run_download, staging, meta["id"], _max_bytes())
+        try:
+            pool.submit(webfetch.run_download, staging, meta["id"], _max_bytes())
+        except RuntimeError as e:
+            # The pool refuses work once it is shut down (interpreter exit). Without this the
+            # record would sit `queued` with no worker to move it (PR #106 review).
+            print(f"[webfetch] could not queue a download: {e}")
+            webfetch.discard(staging, meta["id"])
+            return jsonify({"error": STORE_FAILED}), 500
         _audit("webfetch.download", url, {"staging_id": meta["id"]})
         return jsonify(dict(meta, note="Downloading in the background; read it back with "
                                        "wait_seconds to follow it.")), 202
