@@ -936,6 +936,10 @@ def test_conversations_are_named_by_what_they_were_for():
           assistant.get_chat(DB, chat_id, "tester@example.com")["title"] == "My ticket 4711")
     check("an empty name is refused",
           admin.patch(f"/api/assistant/chats/{chat_id}", json={"title": "  "}).status_code == 400)
+    check("a JSON body that is not an object is refused, not a 500",
+          admin.patch(f"/api/assistant/chats/{chat_id}", json=["x"]).status_code == 400)
+    check("a prefixed, quoted title is cleaned",
+          assistant.clean_title('Title: "Stuck deployment."') == "Stuck deployment")
     check("another operator cannot rename it",
           client_for("viewer@x.com").patch(f"/api/assistant/chats/{chat_id}",
                                            json={"title": "x"}).status_code == 404)

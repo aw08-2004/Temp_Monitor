@@ -52,6 +52,14 @@ MAX_SELECTION = 50
 ASSISTANT_HEADER = "X-FleetHub-Assistant"
 
 
+def _json_body():
+    """The request's JSON body as a dict, or an empty one. A JSON array or a bare string is
+    valid JSON and `get_json` returns it as such; `.get` on it raised, and the route answered
+    500 instead of its own validation message (found in review, PR #101)."""
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 def _norm(rule):
     """A rule with its converters erased: `/api/x/<int:id>` and `/api/x/<id>` compare equal."""
     return re.sub(r"<[^>]+>", "<>", str(rule or ""))
@@ -138,6 +146,10 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     # Bounded, so a burst of messages queues instead of opening a provider connection each.
     pool = ThreadPoolExecutor(max_workers=max(1, int(workers)),
                               thread_name_prefix="assistant")
+    # Naming a conversation has its own two workers. On the answer pool a burst of new
+    # conversations queued their names in front of other operators' answers, for a feature
+    # that is cosmetic; here it can only ever wait behind other names.
+    namer = ThreadPoolExecutor(max_workers=2, thread_name_prefix="assistant-name")
 
     def _key():
         value = api_key() if callable(api_key) else api_key
@@ -375,7 +387,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
     @can_view
     def rename(chat_id):
         """Rename a conversation. The operator's title is final: the model never replaces it."""
-        body = request.get_json(silent=True) or {}
+        body = _json_body()
         title = str(body.get("title") or "")
         if not assistant.clean_title(title):
             return jsonify({"error": "type a name for the conversation"}), 400
@@ -406,7 +418,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         error, _resolved = ai.provider_config(config)
         if error:
             return jsonify({"error": error}), 400
-        body = request.get_json(silent=True) or {}
+        body = _json_body()
         text = str(body.get("text") or "").strip()
         if not text:
             return jsonify({"error": "type a message first"}), 400
@@ -479,7 +491,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         pool.submit(work)
         if chat.get("title_source", assistant.TITLE_AUTO) == assistant.TITLE_AUTO \
                 and not chat.get("title"):
-            pool.submit(name_it)
+            namer.submit(name_it)
         return jsonify({"run_id": run_id}), 202
 
     @bp.route("/api/assistant/runs/<run_id>", methods=["GET"])
@@ -519,7 +531,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         action = assistant.get_action(db_path, action_id, owner)
         if not action:
             return jsonify({"error": "no such action"}), 404
-        body = request.get_json(silent=True) or {}
+        body = _json_body()
         if action["typed_name"]:
             typed = str(body.get("typed") or "").strip()
             if not action["machine"] or typed.lower() != action["machine"].lower():

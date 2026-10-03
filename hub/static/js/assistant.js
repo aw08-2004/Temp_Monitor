@@ -769,23 +769,40 @@
                     event.error === 'stopped' ? t('assistant.stopped') : event.error);
             } else if (event.type === 'title') {
                 // The model named the conversation (assistant_web.name_it): show it now
-                // rather than at the end of the turn.
+                // rather than at the end of the turn -- unless the operator renamed it while
+                // the event was in flight; the hub kept their name, and so does the page.
                 const chat = chats.find((c) => c.id === current.chatId);
-                if (chat) chat.title = event.title;
-                renderChats();
-                setHeading();
+                if (chat && chat.title_source !== 'manual') {
+                    chat.title = event.title;
+                    chat.title_source = 'ai';
+                    renderChats();
+                    setHeading();
+                }
             }
         }
         if (data.done) {
             stopListening();
             await loadChats();
-            // The conversation's name is chosen beside the answer and can land just after it.
-            // One more look, only while the title is still the first-message placeholder.
-            const chat = chats.find((c) => c.id === current.chatId);
-            if (chat && chat.title_source === 'auto') setTimeout(loadChats, 2500);
+            awaitName(current.chatId, NAME_CHECKS);
             return;
         }
         current.timer = setTimeout(poll, POLL_MS);
+    }
+
+    // How many times, 2.5 s apart, the list is re-read for a conversation's name after its
+    // first answer. One look was not enough: a slow provider names it after that look, and
+    // nothing else would have refreshed the list (found in review, PR #101).
+    const NAME_CHECKS = 8;
+
+    /** Re-read the list until this chat's name is no longer the first-message placeholder,
+     *  or the checks run out -- a provider that never answers leaves the placeholder. */
+    function awaitName(id, left) {
+        const chat = chats.find((c) => c.id === id);
+        if (!chat || chat.title_source !== 'auto' || left <= 0) return;
+        setTimeout(async () => {
+            await loadChats();
+            awaitName(id, left - 1);
+        }, 2500);
     }
 
     async function send(text) {
