@@ -310,8 +310,14 @@ LOCAL_PARAMS = {"list_rules": ("q", "enabled")}
 # one ("which deployment is stuck?") ran out of steps the same way, against a different route
 # with no filter of its own. A model that can say which fields and which rows it wants can
 # narrow ANY answer, including routes nobody has written a tool for.
-NARROW_KEYS = ("fields", "where", "limit")
+# `list`, not `path`: call_endpoint's own `path` is the route, and the first draft named this
+# `path` too -- splitting the narrowing arguments off then took the route away from every call.
+NARROW_KEYS = ("list", "fields", "where", "limit")
 NARROW_PROPS = {
+    "list": {"type": "string",
+             "description": "Which list in the answer to narrow, as a dotted path, e.g. "
+                            "metrics.temp or sections.software.data. Omitted: the largest "
+                            "list. The result names every list it found under _narrowed."},
     "fields": {"type": "array", "items": {"type": "string"},
                "description": "Keep only these keys in each list entry. Dotted paths reach "
                               "into nested objects, e.g. target_counts.pending."},
@@ -323,18 +329,25 @@ NARROW_PROPS = {
 }
 
 
-def _get(item, path):
+# An absent key, told apart from a key whose value IS null: `where {"finished_at": null}`
+# means "not finished yet", and must not also match every entry that has no such key at all.
+_MISSING = object()
+
+
+def _get(item, path, default=None):
     value = item
     for part in str(path).split("."):
         if not isinstance(value, dict) or part not in value:
-            return None
+            return default
         value = value[part]
     return value
 
 
 def _matches(item, where):
     for key, wanted in where.items():
-        actual = _get(item, key)
+        actual = _get(item, key, _MISSING)
+        if actual is _MISSING:
+            return False
         if isinstance(wanted, str) and isinstance(actual, str):
             if wanted.lower() not in actual.lower():
                 return False
@@ -348,13 +361,45 @@ def _matches(item, where):
     return True
 
 
-def narrow(payload, local):
-    """Apply `fields` / `where` / `limit` to every list of objects in a route's answer.
+def find_lists(value, path=""):
+    """Every list reachable through dicts, as {dotted path: list}. The payload itself is ""
+    when it is a list. Lists inside list entries are not walked: `where` on an outer list is
+    the way to reach those, and a path through `[3]` is not one a model can be expected to
+    write back."""
+    found = {}
+    if isinstance(value, list):
+        found[path] = value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            found.update(find_lists(item, f"{path}.{key}" if path else str(key)))
+    return found
 
-    The lists are the payload itself or its top-level values, which is where every list route
-    in this hub puts them ({"deployments": [...]}, {"rules": [...]}, a bare list). Each list
-    that was narrowed is reported under `_narrowed` with how many entries it had and kept, so
-    "0 matched" reads as an answer and not as an empty table.
+
+def _size(value):
+    return len(json.dumps(value, default=str))
+
+
+def _set(payload, path, value):
+    """A copy of `payload` with the list at `path` replaced. Copies only along the path."""
+    if not path:
+        return value
+    head, _dot, rest = path.partition(".")
+    out = dict(payload)
+    out[head] = _set(payload[head], rest, value)
+    return out
+
+
+def narrow(payload, local):
+    """Apply `fields` / `where` / `limit` to ONE list in a route's answer, at any depth.
+
+    Which list: the one `list` names, or else the largest. The first version narrowed every
+    TOP-LEVEL list, and an audit of all 121 read routes found the big ones a level or two
+    down -- a machine's history under `metrics.<name>`, the report sheet under
+    `sections.<name>.data`, a backup manifest under `result.files` -- where it did nothing.
+
+    The answer carries `_narrowed`: the list it narrowed, how many entries it had, matched and
+    kept, and the size of every other list in the answer, so the model can aim the next call.
+    `where` and `fields` need a list of objects; `limit` works on any list, a series included.
     """
     local = local or {}
     fields = [str(f) for f in (local.get("fields") or []) if str(f).strip()]
@@ -363,31 +408,49 @@ def narrow(payload, local):
         limit = max(1, int(local["limit"])) if local.get("limit") else None
     except (TypeError, ValueError):
         limit = None
-    if not (fields or where or limit):
+    wanted = str(local.get("list") or "").strip().strip(".")
+    if not (fields or where or limit or wanted):
         return payload
-    report = {}
 
-    def apply(name, items):
-        if not items or not all(isinstance(i, dict) for i in items):
-            return items
-        kept = [i for i in items if _matches(i, where)] if where else list(items)
-        matched = len(kept)
-        if limit:
-            kept = kept[:limit]
-        if fields:
-            kept = [{f: _get(i, f) for f in fields} for i in kept]
-        report[name] = {"total": len(items), "matched": matched, "shown": len(kept)}
-        return kept
+    lists = find_lists(payload)
+    if wanted:
+        if wanted not in lists:
+            return {"error": f"there is no list at `{wanted}`",
+                    "lists": {p: len(v) for p, v in lists.items()}}
+        target = wanted
+    else:
+        candidates = [p for p, v in lists.items() if v]
+        if not candidates:
+            return payload
+        objects = [p for p in candidates if all(isinstance(i, dict) for i in lists[p])]
+        target = max(objects or candidates, key=lambda p: _size(lists[p]))
+    items = lists[target]
+    report = {"path": target or "(the answer itself)", "total": len(items)}
 
-    if isinstance(payload, list):
-        out = apply("data", payload)
-        return {"items": out, "_narrowed": report} if report else out
-    if isinstance(payload, dict):
-        out = {k: (apply(k, v) if isinstance(v, list) else v) for k, v in payload.items()}
-        if report:
-            out["_narrowed"] = report
-        return out
-    return payload
+    kept = list(items)
+    if where or fields:
+        if not all(isinstance(i, dict) for i in items):
+            return {"error": f"`where` and `fields` need a list of objects; `{target}` is "
+                             "not one. Use `limit` on it, or pick another `list`.",
+                    "lists": {p: len(v) for p, v in lists.items()}}
+        if where:
+            kept = [i for i in kept if _matches(i, where)]
+    report["matched"] = len(kept)
+    if limit:
+        kept = kept[:limit]
+    if fields:
+        kept = [{f: _get(i, f) for f in fields} for i in kept]
+    report["shown"] = len(kept)
+    others = {p: len(v) for p, v in lists.items() if p != target and len(v) > 1}
+    if others:
+        report["other_lists"] = others
+
+    if not target:
+        return {"items": kept, "_narrowed": report}
+    out = _set(payload, target, kept)
+    if isinstance(out, dict):
+        out = dict(out, _narrowed=report)
+    return out
 
 
 def _words(text):

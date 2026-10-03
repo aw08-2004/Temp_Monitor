@@ -4717,6 +4717,13 @@ names, and can do what the signed-in operator can.
   "which deployment is stuck?" then ran out of steps the same way against `/api/deployments`.
   Rejected: another shaped tool per route. `list_deployments`, `get_deployment` and
   `list_packages` were added as curated reads, but narrowing is what reaches the rest.
+- **At any depth.** An audit of all 121 read routes (95 callable without an id) found the
+  large lists one or two levels down: a machine's history under `metrics.<name>`, the device
+  sheet under `sections.<name>.data`, a backup manifest under `result.files`. Narrowing takes a
+  `list` path (largest list when omitted) and reports the others; trimming shrinks the largest
+  list anywhere, thins a time series evenly keeping its newest point, and cuts long text at any
+  depth except an id. `test_every_read_route_survives_narrowing_and_trimming` inflates every
+  callable read route's answer and checks it never falls back to a character slice.
 - **Links are the hub's, never the model's.** The model writes `[[machine:PC-12|tab=terminal]]`,
   `[[remote:..]]`, `[[report:..]]`, `[[page:alerts]]`; `render_links` resolves them for the
   VIEWER's scope when the answer is shown, and reduces any markdown link the model wrote itself
