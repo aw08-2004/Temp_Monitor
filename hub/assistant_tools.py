@@ -527,7 +527,10 @@ def narrow(payload, local):
         present = set()
         for item in items:
             present.update(item)
-        unknown = [k for k in where if str(k).split(".")[0] not in present]
+        # The whole dotted path, not its first segment: `diagnostics.nope` is unknown even
+        # though every row has a `diagnostics`.
+        unknown = [k for k in where
+                   if not any(_get(item, k, _MISSING) is not _MISSING for item in items)]
         if unknown:
             report["unknown_keys"] = unknown
             report["keys"] = sorted(present)
@@ -637,16 +640,31 @@ def shape_machines(payload, local):
     name is the one that falls off whichever cap is picked.
 
     A model that asks for `fields` gets the full rows to pick from, so a reading the short
-    row leaves out is still one argument away rather than a second tool.
+    row leaves out is still one argument away rather than a second tool. **The narrowing runs
+    here, on the full rows, and only what it kept is shortened**: shortening first made
+    `where {"diagnostics.has_sensors": true}` match nothing, because the key it filtered on
+    had already been dropped.
     """
+    out = narrow(payload, local)
     if not isinstance(payload, list) or local.get("fields"):
-        return payload
-    return [{key: row.get(key) for key in MACHINE_ROW_KEYS} if isinstance(row, dict) else row
-            for row in payload]
+        return out
+
+    def short(rows):
+        return [{key: row.get(key) for key in MACHINE_ROW_KEYS} if isinstance(row, dict)
+                else row for row in rows]
+
+    if isinstance(out, list):
+        return short(out)
+    if isinstance(out, dict) and isinstance(out.get("items"), list):
+        return dict(out, items=short(out["items"]))
+    return out
 
 
 SHAPERS = {"list_rules": shape_rules, "command_output": shape_command_output,
            "list_machines": shape_machines}
+# Shapers that apply the model's narrowing themselves, because they must see the route's
+# rows before they cut them down.
+SELF_NARROWING = {"list_machines"}
 
 
 def split_local(name, args):
@@ -662,6 +680,8 @@ def shape(name, payload, local):
     shaper = SHAPERS.get(name)
     if shaper:
         payload = shaper(payload, local or {})
+        if name in SELF_NARROWING:
+            return payload
     return narrow(payload, local)
 
 

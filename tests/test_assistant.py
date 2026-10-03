@@ -716,6 +716,28 @@ def test_the_last_machine_by_name_is_found():
           results[2]["data"]["items"] == [{"machine": "VOSTRO-LAPTOP",
                                            "diagnostics.has_sensors": False}])
 
+    # Shortening the rows before the filter dropped the key the filter was on.
+    rows = [{"machine": "PC-A", "diagnostics": {"has_sensors": True}, "status": "online"},
+            {"machine": "PC-B", "diagnostics": {"has_sensors": False}, "status": "online"}]
+    out = assistant_tools.shape("list_machines", rows,
+                                {"where": {"diagnostics.has_sensors": True}})
+    check("a filter on a reading the short row leaves out still matches",
+          [r["machine"] for r in out["items"]] == ["PC-A"]
+          and "diagnostics" not in out["items"][0] and out["_narrowed"]["matched"] == 1)
+    out = assistant_tools.narrow(rows, {"where": {"diagnostics.nope": True}})
+    check("an unknown dotted key is reported even when its parent exists",
+          out["_narrowed"].get("unknown_keys") == ["diagnostics.nope"])
+    out = assistant_tools.narrow(rows + [{"machine": "PC-C", "diagnostics": None}],
+                                 {"where": {"diagnostics.has_sensors": "maybe"}})
+    check("...but a key that exists is not called unknown",
+          "unknown_keys" not in out["_narrowed"])
+
+    # A name that grows when escaped as JSON must not push the result over its limit.
+    escaped = [{"machine": "\x01" * 60 + str(i), "note": "n" * 200} for i in range(200)]
+    content = assistant.fit_result({"ok": True, "data": escaped}, limit=6000)
+    check("names that grow when escaped still leave valid JSON within the limit",
+          len(content) <= 6000 and json.loads(content)["truncated"]["lists"])
+
 
 def test_trimming_never_cuts_an_id():
     print("\n-- trimming cuts long text, never an id --")

@@ -732,8 +732,9 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
                 if name is None:
                     continue
                 name = str(name)[:COMPACT_TEXT_CHARS // 4]
-                room -= len(name) + 4
-                if room < 0:
+                # Measured as JSON, not as raw text: a control character in a name is six
+                # characters once escaped, and the result has to fit as JSON.
+                if _size(names + [name]) > room:
                     break
                 names.append(name)
             if names:
