@@ -4676,7 +4676,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
