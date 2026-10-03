@@ -772,6 +772,17 @@ REGISTRY = (
     # hot ones, read the worst, check its processes, answer" with room for a retry.
     _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1, maximum=20),
     _s("ai.assistant_history_days", "ai", "int", 30, minimum=1, maximum=365, unit="days"),
+    # Package building (roadmap #26): the assistant reading public web pages, looking up winget
+    # manifests and downloading installers into <LOG_DIR>/staging. **Off by default, and
+    # separate from `ai.assistant_enabled`**: a hub that agreed to a model reading its fleet has
+    # not thereby agreed to the hub opening outbound connections wherever a model asks. See
+    # webfetch.py for what is refused regardless (anything but public https). There is no
+    # download size setting of its own -- `deploy.max_upload_mb` is the cap, because a staged
+    # file only exists to become a package and would be refused at that limit anyway.
+    _s("ai.assistant_web_enabled", "ai", "bool", False),
+    # A staged installer nobody turned into a package. Installers are large, and nothing else
+    # ever deletes one; a day is long enough to come back to a half-finished conversation.
+    _s("ai.assistant_staging_hours", "ai", "int", 24, minimum=1, maximum=720, unit="hours"),
 
     # ---------------- Endpoint security ----------------
     # BitLocker recovery-key escrow (roadmap #19). The keys themselves are absent from this

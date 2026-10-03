@@ -62,6 +62,7 @@ import watchdogs
 import scripts
 import ai
 import assistant
+import webfetch
 import correlate
 import notify
 import processes
@@ -104,6 +105,7 @@ from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
 from ai_web import create_ai_blueprint
 from assistant_web import RouteDispatcher, create_assistant_blueprint
+from webfetch_web import create_webfetch_blueprint
 from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
 from watchdogs_web import create_watchdogs_blueprint
@@ -149,7 +151,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.135.5"
+HUB_VERSION = "1.136.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2399,6 +2401,11 @@ app.register_blueprint(create_audit_blueprint(DB_PATH, login_required, access))
 app.register_blueprint(create_packages_blueprint(
     DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
 ))
+# Package building for the assistant (roadmap #26): public web reads, winget lookups and
+# installer downloads into <LOG_DIR>/staging. Ordinary routes, so the assistant reaches them
+# through the same tier table and gates as everything else -- see webfetch_web.py. LOG_DIR
+# because staging sits beside the package store a finished download is promoted into.
+app.register_blueprint(create_webfetch_blueprint(DB_PATH, LOG_DIR, login_required, access))
 # Backup destinations, the encryption key, and the hub-database backup itself. LOG_DIR
 # holds the encrypted credential store and the scratch space a snapshot is built in;
 # ENV_PATH is where the master key is written, and must be the same file load_dotenv read.
@@ -4080,6 +4087,16 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} assistant conversation(s).")
             except Exception as e:
                 print(f"[retention] Assistant prune failed: {e}")
+            # Staged installers (webfetch.py) nobody turned into a package. Large files, and
+            # nothing else deletes them. Its own try, as above.
+            try:
+                dropped = webfetch.prune_staging(
+                    webfetch.staging_root(LOG_DIR),
+                    settings.get_int(DB_PATH, "ai.assistant_staging_hours"))
+                if dropped:
+                    print(f"[retention] Pruned {dropped} staged download(s).")
+            except Exception as e:
+                print(f"[retention] Staged-download prune failed: {e}")
             last_run = time.monotonic()
         time.sleep(PRUNE_TICK_SECONDS)
 

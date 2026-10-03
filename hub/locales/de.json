@@ -1196,6 +1196,14 @@
         "assistant_history_days": {
           "label": "Assistenten-Unterhaltungen aufbewahren für",
           "help": "Eine Unterhaltung, die so lange niemand angefasst hat, wird gelöscht."
+        },
+        "assistant_web_enabled": {
+          "label": "Dem Assistenten Internetzugriff erlauben",
+          "help": "Erlaubt dem Assistenten, öffentliche Webseiten zu lesen, winget-Pakete nachzuschlagen und Installationsprogramme in einen Staging-Ordner auf dem Hub herunterzuladen, damit er Pakete für Sie erstellen kann. Abgerufen werden nur https-Adressen im öffentlichen Internet, nie dieses Netzwerk. Der Hub führt nichts aus, was er herunterlädt; ein Paket zu verteilen ist immer ein eigener Schritt."
+        },
+        "assistant_staging_hours": {
+          "label": "Bereitgestellte Downloads aufbewahren für",
+          "help": "Ein Installationsprogramm, das der Assistent heruntergeladen hat und aus dem niemand ein Paket gemacht hat, wird danach gelöscht."
         }
       },
       "provisioning": {
