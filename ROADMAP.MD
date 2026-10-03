@@ -4702,8 +4702,14 @@ names, and can do what the signed-in operator can.
   audited `assistant.action_confirmed` (security). A wipe also needs the machine's name typed.
   `denied` routes -- key reveals, `/api/ai/key`, tokens, PTY input, agent and peer routes, the
   assistant itself -- are never offered and never reachable.
-- **~24 curated tools** for the common work plus `list_endpoints` / `call_endpoint` over the
+- **~26 curated tools** for the common work plus `list_endpoints` / `call_endpoint` over the
   same tier table, so the rest of the API is reachable without a hand-written schema per route.
+  A curated tool may SHAPE its route's answer: `list_rules` returns one short row per rule and
+  filters with `q`, because the Rules page's full payload ran past one tool result and a real
+  "disable the high temperature alerts" spent all eight steps re-asking an unfilterable route.
+  `set_rule_enabled` (confirm tier) finishes that job in a second call.
+- **An oversized tool result is cut at a whole list entry** (`assistant.fit_result`) and says
+  how many it shows of how many, instead of slicing the JSON mid-object.
 - **Links are the hub's, never the model's.** The model writes `[[machine:PC-12|tab=terminal]]`,
   `[[remote:..]]`, `[[report:..]]`, `[[page:alerts]]`; `render_links` resolves them for the
   VIEWER's scope when the answer is shown, and reduces any markdown link the model wrote itself
