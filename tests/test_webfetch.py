@@ -307,6 +307,32 @@ def test_staging(root, blob_dir):
     check("a download discarded while queued is skipped by its worker",
           webfetch.run_download(root, gone["id"], 10 ** 9) is None)
 
+    running = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
+
+    class DiscardMidway(FakeResponse):
+        """Discards its own download after the first chunk, as an operator would mid-run."""
+        def stream(self, size):
+            yield b"MZ" * 100
+            check("discarding a running download asks its worker to stop",
+                  webfetch.discard(root, running["id"]) == "cancelling")
+            check("...and it is gone from the API at once",
+                  webfetch.get_staged(root, running["id"]) is None)
+            yield b"Z" * 100
+
+    real_request = webfetch._request
+    webfetch._request = lambda parsed, address: DiscardMidway(200, {}, b"")
+    try:
+        webfetch.run_download(root, running["id"], 10 ** 9)
+    finally:
+        webfetch._request = real_request
+    check("...and the worker removes the folder once its file is closed, so it cannot reappear",
+          not os.path.exists(os.path.join(root, running["id"])))
+    finished = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
+    webfetch.run_download(root, finished["id"], 10 ** 9)
+    check("discarding a finished download deletes it outright",
+          webfetch.discard(root, finished["id"]) == "deleted"
+          and not os.path.exists(os.path.join(root, finished["id"])))
+
     check("an unfinished download cannot be promoted",
           _raises(lambda: webfetch.promote(root, capped["id"], blob_dir, 10 ** 9)))
     os.replace(os.path.join(root, meta["id"], "file"),

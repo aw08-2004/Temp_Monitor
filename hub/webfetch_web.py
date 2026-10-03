@@ -201,11 +201,11 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
     def discard_download(staging_id):
         """Delete a staged download."""
         try:
-            webfetch.discard(staging, staging_id)
+            outcome = webfetch.discard(staging, staging_id)
         except KeyError:
             return jsonify({"error": "no such download"}), 404
-        _audit("webfetch.discard", staging_id, {})
-        return jsonify({"status": "deleted"}), 200
+        _audit("webfetch.discard", staging_id, {"outcome": outcome})
+        return jsonify({"status": outcome}), 200
 
     bp.staging_dir = staging
     bp.pool = pool

@@ -77,7 +77,15 @@ MAX_LINKS = 150
 # almost always a hub restart mid-download. Reported as failed rather than "downloading"
 # forever.
 STALL_SECONDS = 180
-CHUNK = 1024 * 1024
+# Small enough that a slow server still moves the stall clock: urllib3's stream(amt) blocks
+# until it has `amt` bytes, so at 1 MB a server under ~6 KB/s read as stalled while it was
+# still sending (PR #106 review). 64 KB puts that floor near 0.4 KB/s.
+CHUNK = 64 * 1024
+# Dropped into a record's folder by discard() while a worker owns it. The worker holds
+# file.part open, and on Windows rmtree cannot remove an open file: deleting under it left the
+# folder behind and let the worker's next _write_meta resurrect a discarded download (PR #106
+# review). So the worker is ASKED to stop, and removes the folder itself once its file is shut.
+CANCEL_MARK = "cancel"
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
 # `queued` until a worker picks the record up. Distinct from `downloading` because only a
@@ -517,10 +525,13 @@ def run_download(root, staging_id, max_bytes):
     """Stream one staged download to disk, hashing as it goes. Never raises: the outcome is
     written to the record, which is what the operator and the model read."""
     meta = _read_meta(root, staging_id)
+    folder = _dir(root, staging_id)
+    if meta and _cancelled(root, staging_id):
+        shutil.rmtree(folder, ignore_errors=True)
+        return None
     if not meta or meta.get("status") != STATUS_QUEUED:
         # Discarded (or otherwise settled) while it waited in the queue: nothing to do.
         return meta
-    folder = _dir(root, staging_id)
     part = os.path.join(folder, "file.part")
     # The stall clock starts here, not when the record was queued.
     meta.update(status=STATUS_DOWNLOADING, updated_at=time.time())
@@ -539,6 +550,8 @@ def run_download(root, staging_id, max_bytes):
                             "limit (Settings -> Deploy, largest package file)")
                     digest.update(chunk)
                     fh.write(chunk)
+                    if _cancelled(root, staging_id):
+                        raise _Cancelled()
                     if time.time() - last_note > 2:
                         meta.update(size=size, updated_at=time.time())
                         _write_meta(root, staging_id, meta)
@@ -549,6 +562,10 @@ def run_download(root, staging_id, max_bytes):
             raise FetchError("the server sent an empty file")
         os.replace(part, os.path.join(folder, "file"))
         meta.update(status=STATUS_DONE, size=size, sha256=digest.hexdigest())
+    except _Cancelled:
+        # The file is closed by now (the `with` has exited), so the folder can really go.
+        shutil.rmtree(folder, ignore_errors=True)
+        return None
     except Exception as exc:                            # noqa: BLE001 -- recorded, not raised
         try:
             os.remove(part)
@@ -563,8 +580,19 @@ def run_download(root, staging_id, max_bytes):
     return meta
 
 
+def _cancelled(root, staging_id):
+    return os.path.exists(os.path.join(_dir(root, staging_id), CANCEL_MARK))
+
+
+class _Cancelled(Exception):
+    pass
+
+
 def get_staged(root, staging_id):
+    """One record, or None -- including for one discarded while its worker winds down."""
     try:
+        if _cancelled(root, staging_id):
+            return None
         return _read_meta(root, staging_id)
     except KeyError:
         return None
@@ -618,10 +646,18 @@ def promote(root, staging_id, blob_dir, max_bytes):
 
 
 def discard(root, staging_id):
+    """Delete a staged download. Returns "deleted", or "cancelling" for one a worker still
+    owns -- that worker removes the folder once its file is closed (see CANCEL_MARK)."""
     folder = _dir(root, staging_id)
-    if not os.path.isdir(folder):
+    if not os.path.isdir(folder) or _cancelled(root, staging_id):
         raise KeyError(staging_id)
+    meta = _read_meta(root, staging_id) or {}
+    if meta.get("status") in (STATUS_QUEUED, STATUS_DOWNLOADING):
+        with open(os.path.join(folder, CANCEL_MARK), "w", encoding="utf-8") as fh:
+            fh.write("discarded")
+        return "cancelling"
     shutil.rmtree(folder, ignore_errors=True)
+    return "deleted"
 
 
 def prune_staging(root, max_age_hours, now=None):
