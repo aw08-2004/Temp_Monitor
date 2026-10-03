@@ -3353,7 +3353,25 @@
     "copied": "Copiado",
     "rename": "Cambiar nombre",
     "delete_title": "¿Eliminar la conversación?",
-    "delete_body": "Se eliminará «{title}» con todo su contenido. No se puede deshacer."
+    "delete_body": "Se eliminará «{title}» con todo su contenido. No se puede deshacer.",
+    "mode": {
+      "ask": "Preguntar",
+      "auto": "Auto",
+      "bypass": "Sin confirmar",
+      "ask_desc": "Cada acción que cambia un equipo espera su confirmación.",
+      "auto_desc": "La IA evalúa cada acción: las rutinarias se ejecutan al instante, las críticas siguen preguntando.",
+      "bypass_desc": "Toda acción que usted puede hacer se ejecuta al instante. Solo el borrado de un equipo sigue preguntando.",
+      "warn_title": "¿Dejar que la IA actúe sin preguntar?",
+      "warn_auto": "En modo Auto la IA decide qué acciones son rutinarias y las ejecuta al instante, sin tarjeta -- por ejemplo una consulta al registro, un gpupdate o un script que considere inofensivo. Las acciones que considere críticas siguen esperando su confirmación.",
+      "warn_bypass": "En modo Sin confirmar toda acción que usted puede hacer se ejecuta al instante: reinicios, apagados, scripts, despliegues, cambios de configuración y de permisos. Solo el borrado de un equipo sigue preguntando, con el nombre del equipo.",
+      "warn_common": "La IA puede equivocarse, y el texto de los equipos que lee -- nombres, alertas, salida de comandos -- puede intentar dirigirla. Todo lo que ejecuta queda registrado a su nombre en el registro de auditoría. Esto se aplica solo a esta conversación; las nuevas empiezan en Preguntar.",
+      "warn_accept": "Cambiar a {mode}"
+    },
+    "risk": {
+      "routine": "Rutinaria",
+      "critical": "Crítica"
+    },
+    "action_auto_title": "Ejecutada sin preguntar ({mode})"
   },
   "scripts": {
     "body": "Script",

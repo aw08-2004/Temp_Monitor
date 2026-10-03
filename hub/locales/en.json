@@ -3471,7 +3471,25 @@
     "copied": "Copied",
     "rename": "Rename",
     "delete_title": "Delete conversation?",
-    "delete_body": "“{title}” and everything in it will be deleted. This cannot be undone."
+    "delete_body": "“{title}” and everything in it will be deleted. This cannot be undone.",
+    "mode": {
+      "ask": "Ask",
+      "auto": "Auto",
+      "bypass": "Bypass",
+      "ask_desc": "Every action that changes a machine waits for your Confirm.",
+      "auto_desc": "The AI judges each action: routine ones run at once, critical ones still ask.",
+      "bypass_desc": "Every action you are allowed to do runs at once. Only a wipe still asks.",
+      "warn_title": "Let the AI act without asking?",
+      "warn_auto": "In Auto mode the AI decides which actions are routine and runs those at once, without a card -- for example a registry query, a gpupdate or a script it judges harmless. Actions it judges critical still wait for your Confirm.",
+      "warn_bypass": "In Bypass mode every action you are allowed to do runs at once: restarts, shutdowns, scripts, deployments, settings and permission changes. Only a wipe still asks, with the machine's name.",
+      "warn_common": "The AI can be wrong, and text on the machines it reads -- names, alerts, command output -- can try to steer it. Everything it runs is recorded under your name in the audit log. This applies to this conversation only; new conversations start in Ask.",
+      "warn_accept": "Switch to {mode}"
+    },
+    "risk": {
+      "routine": "Routine",
+      "critical": "Critical"
+    },
+    "action_auto_title": "Ran without asking ({mode})"
   },
   "scripts": {
     "body": "Script",
