@@ -1177,6 +1177,98 @@ def test_a_confirmed_action_is_followed_up():
           and parsed["data"]["output"].endswith("END"))
 
 
+def test_package_building_follows_the_modes():
+    """Package building (hub 1.136.0). The silent failures: a download that starts in Ask mode
+    without a click, a package created unasked in Auto, and the web tools offered to an
+    operator who cannot define packages. DNS and HTTP are faked at webfetch's seams."""
+    print("\n-- package building: downloads follow the mode, packages wait in Auto --")
+    import webfetch
+
+    class Response:
+        status, headers = 200, {"Content-Type": "application/octet-stream"}
+
+        def stream(self, size):
+            yield b"MZ" * 64
+
+        def release_conn(self):
+            pass
+
+    webfetch._resolve = lambda host, port: ["93.184.216.34"]
+    webfetch._request = lambda parsed, address: Response()
+    settings.set_many(DB, {"ai.assistant_web_enabled": True}, "test")
+    settings.invalidate()
+    staging = webfetch.staging_root(app.LOG_DIR)
+    admin = client_for("tester@example.com")
+    chat_id = new_chat(admin)
+    download = call("download_installer", url="https://vendor.example/app.exe", risk="routine",
+                    impact="Downloads an installer to the hub; nothing runs anywhere.")
+
+    SCRIPT[:] = [download, say("waiting for you")]
+    converse(admin, chat_id, "make a package for app")
+    result = json.loads(tool_messages(chat_id)[-1]["content"])
+    check("Ask: a download is a card", result.get("status") == "pending_confirmation")
+    check("...and nothing was downloaded", webfetch.list_staged(staging) == [])
+    check("the package tools are offered to an operator who can deploy",
+          {"web_read", "winget_manifest", "download_installer", "promote_download",
+           "create_package"} <= set(CALLS[-1][1]))
+    check("...with the packaging playbook in their prompt",
+          "## Building packages" in CALLS[-1][0][0]["content"])
+
+    admin.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "auto"})
+    SCRIPT[:] = [download, say("downloading")]
+    converse(admin, chat_id, "download it")
+    result = json.loads(tool_messages(chat_id)[-1]["content"])
+    staging_id = (result.get("data") or {}).get("id")
+    check("Auto: a routine download runs unasked",
+          result.get("ran_without_asking") is True and bool(staging_id))
+    deadline = time.time() + 10
+    while time.time() < deadline and (webfetch.get_staged(staging, staging_id) or {}).get(
+            "status") == "downloading":
+        time.sleep(0.05)
+    check("...and finishes in the staging folder",
+          (webfetch.get_staged(staging, staging_id) or {}).get("status") == "done")
+
+    SCRIPT[:] = [call("promote_download", staging_id=staging_id),
+                 # By hand: call()'s own first parameter is `name`, which create_package takes.
+                 {"content": "", "tool_calls": [{"id": "pkg", "name": "create_package",
+                                                 "arguments": json.dumps({
+                     "name": "App", "sources": [{"kind": "upload"}],
+                     "install_command": "{file}", "install_args": "/S", "risk": "critical",
+                     "impact": "Defines a package; installs nothing."})}]},
+                 say("built")]
+    converse(admin, chat_id, "build the package")
+    promoted, created = [json.loads(m["content"]) for m in tool_messages(chat_id)[-2:]]
+    check("promoting into the store runs at once",
+          promoted.get("ok") and promoted["data"]["source"]["kind"] == "upload")
+    check("creating a package marked critical still waits in Auto",
+          created.get("status") == "pending_confirmation")
+    check("POST /api/deployments is still confirm-tier",
+          assistant_tools.classify("POST", "/api/deployments") == "confirm")
+    # PR #106 review: a page read is an outbound request to a URL the model chose, from a
+    # conversation full of fleet data -- read-tier would let an injected page exfiltrate it.
+    check("reading a web page follows the mode (confirm), not read-tier",
+          assistant_tools.classify("POST", "/api/webfetch/read") == "confirm")
+    check("...while a winget lookup, which only reaches GitHub, stays read-tier",
+          assistant_tools.classify("POST", "/api/webfetch/winget") == "read")
+    SCRIPT[:] = [call("web_read", url="https://vendor.example/?d=PC-01", risk="critical",
+                      impact="Reads a page."), say("waiting")]
+    admin.patch(f"/api/assistant/chats/{chat_id}", json={"mode": "auto"})
+    converse(admin, chat_id, "read that page")
+    read = json.loads(tool_messages(chat_id)[-1]["content"])
+    check("Auto: a page read the model marked critical waits for a click",
+          read.get("status") == "pending_confirmation")
+
+    viewer = client_for("viewer@x.com")
+    SCRIPT[:] = [say("hello")]
+    converse(viewer, new_chat(viewer), "hi")
+    check("...and not offered without deploy_packages",
+          not {"web_read", "download_installer", "create_package"} & set(CALLS[-1][1]))
+    check("...nor the playbook sent, which would cost tokens on every step",
+          "## Building packages" not in CALLS[-1][0][0]["content"])
+    settings.set_many(DB, {"ai.assistant_web_enabled": False}, "test")
+    settings.invalidate()
+
+
 def test_absolute_links_to_this_hub():
     print("\n-- an absolute link to this hub is read back; another host is not --")
     resolve = lambda kind, arg, opts: (("/machine/PC-01", opts.get("label") or arg)
@@ -1222,6 +1314,7 @@ def main():
     test_conversations_are_named_by_what_they_were_for()
     test_modes_decide_what_runs_unasked()
     test_a_confirmed_action_is_followed_up()
+    test_package_building_follows_the_modes()
     test_absolute_links_to_this_hub()
     test_the_last_machine_by_name_is_found()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")

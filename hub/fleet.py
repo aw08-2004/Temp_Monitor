@@ -761,6 +761,14 @@ ACTION_LEVELS = {
     "assistant.mode_changed": LEVEL_SECURITY,
     "assistant.action_rejected": LEVEL_NOTICE,
     "assistant.tool": LEVEL_NOTICE,
+    # Package building (webfetch.py). A page read is info: the hub fetched public text and
+    # nothing changed. A download is notice, the level of upload_package_file -- bytes that
+    # could become a package arrived, and the URL they came from is the thing worth finding
+    # later. Promoting one into the store is the same event as an upload; discarding is info.
+    "webfetch.read": LEVEL_INFO,
+    "webfetch.download": LEVEL_NOTICE,
+    "webfetch.promote": LEVEL_NOTICE,
+    "webfetch.discard": LEVEL_INFO,
 }
 
 

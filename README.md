@@ -430,6 +430,20 @@ action itself writes. **The assistant sends real machine names** and the data it
 provider; switch *Show the assistant* off to keep AI to the alert recommendations only.
 Conversations are private to you and deleted after *Keep assistant conversations for* (30 days).
 
+**Building packages.** With *Let the assistant use the internet* switched on (Settings → AI,
+off by default) and the `deploy_packages` permission, you can ask for a package: "make a
+package that installs VS Code". The assistant looks the software up in the winget community
+repository or on the vendor's site, either uses winget directly or downloads the installer into
+a staging folder on the hub (`<log dir>/staging`), picks the silent-install switches, and
+creates the package with a detection rule. It tells you which switches it assumed. It never
+deploys what it built: schedule the deployment yourself on the Packages page. Reading a web page,
+starting a download and creating the package follow the conversation's mode like any other
+action, so in Ask you see each address before the hub fetches it. Only https
+addresses on the public internet are fetched, never this network; the hub never runs a
+downloaded file; the size limit is *Largest package file*. Staged downloads nobody turned into a
+package are deleted after *Keep staged downloads for* (24 hours). The hub needs a direct
+connection to the internet for this, not one through a proxy.
+
 ### Audit log
 
 Every command issued, machine merged or deleted, package deployed, account or

@@ -1272,6 +1272,14 @@
         "assistant_history_days": {
           "label": "Keep assistant conversations for",
           "help": "A conversation nobody has touched for this long is deleted."
+        },
+        "assistant_web_enabled": {
+          "label": "Let the assistant use the internet",
+          "help": "Lets the assistant read public web pages, look up winget packages and download installers into a staging folder on the hub, so it can build packages for you. Only https addresses on the public internet are fetched, never this network. The hub never runs what it downloads; deploying a package is always a separate step."
+        },
+        "assistant_staging_hours": {
+          "label": "Keep staged downloads for",
+          "help": "An installer the assistant downloaded but nobody turned into a package is deleted after this."
         }
       },
       "provisioning": {

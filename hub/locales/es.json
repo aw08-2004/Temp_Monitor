@@ -1200,6 +1200,14 @@
         "assistant_history_days": {
           "label": "Conservar las conversaciones del asistente durante",
           "help": "Se elimina una conversación que nadie ha tocado durante este tiempo."
+        },
+        "assistant_web_enabled": {
+          "label": "Permitir que el asistente use internet",
+          "help": "Permite que el asistente lea páginas web públicas, consulte paquetes de winget y descargue instaladores en una carpeta de preparación del hub, para que pueda crear paquetes por usted. Solo se obtienen direcciones https de internet pública, nunca de esta red. El hub nunca ejecuta lo que descarga; implementar un paquete es siempre un paso aparte."
+        },
+        "assistant_staging_hours": {
+          "label": "Conservar las descargas preparadas durante",
+          "help": "Se elimina después de este tiempo un instalador que el asistente descargó y que nadie convirtió en paquete."
         }
       },
       "provisioning": {

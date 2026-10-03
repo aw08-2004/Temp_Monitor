@@ -98,10 +98,34 @@ def test_an_exception_with_no_message():
     check("a whitespace-only message counts as none", payload["error"].strip() != "")
 
 
+def test_only_the_written_sentence_gets_out():
+    """CodeQL py/stack-trace-exposure, alert #133 (PR #106). The silent failure is a refusal
+    that echoes something nobody wrote as a sentence -- a traceback, an exception's repr, a
+    swallowed HTTP body -- to whoever made the request."""
+    print("\n== Only a sentence somebody wrote reaches the client ==")
+    leak = ('Traceback (most recent call last):\n  File "C:/FleetHub/hub/app.py", '
+            'line 12, in x\nKeyError: secret')
+    payload, _ = answer(ValueError(leak))
+    check("a traceback in a message is replaced",
+          "Traceback" not in payload["error"] and "app.py" not in payload["error"])
+    payload, _ = answer(ValueError('bad input at File "x.py", line 3'))
+    check("...and so is a lone stack frame", "x.py" not in payload["error"])
+    payload, _ = answer(ValueError(OSError(2, "No such file", "C:/secret/key.pem")))
+    check("an exception built from a non-text value answers generically",
+          "secret" not in payload["error"] and payload["error"] == refusals.GENERIC_REFUSAL)
+    payload, _ = answer(ValueError("x" * 5000))
+    check("an overlong message is capped",
+          len(payload["error"]) <= refusals.MAX_MESSAGE_CHARS + 3)
+    payload, _ = answer(ValueError("the file must be a .pem, not C:/work/x.txt"))
+    check("an ordinary sentence mentioning a path still gets through unaltered",
+          payload["error"] == "the file must be a .pem, not C:/work/x.txt")
+
+
 def main():
     test_the_message_is_what_reaches_the_operator()
     test_the_status_is_the_callers_to_choose()
     test_an_exception_with_no_message()
+    test_only_the_written_sentence_gets_out()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
 

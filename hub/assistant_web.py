@@ -694,7 +694,8 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
             f"The operator confirmed action {action['id']} ({action['method']} "
             f"{action['path']}). The hub answered HTTP {status_code}: {summary}. "
             "Find out what happened now -- for a fleet command, command_output with its "
-            "command_id and wait_seconds -- and tell the operator.")
+            "command_id and wait_seconds; for a download, staged_download with its id and "
+            "wait_seconds -- and tell the operator.")
         # The follow-up turn: confirming used to queue the command and stop there, so the
         # operator had to ask "did it work?" every time (seen on a real hub, five times in
         # one conversation). The model now reads the outcome on its own. Started for a

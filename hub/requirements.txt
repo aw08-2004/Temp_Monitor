@@ -1,4 +1,10 @@
 requests
+# webfetch.py (roadmap #26) connects to a PINNED address with urllib3 directly -- requests
+# cannot be told which IP to use -- and verifies TLS against certifi's bundle. Both already
+# arrive with requests, so these are newly explicit rather than new downloads, for the same
+# reason as cryptography below: the SSRF guard must not depend on another package's tree.
+urllib3>=2
+certifi
 Authlib
 python-dotenv
 Flask
