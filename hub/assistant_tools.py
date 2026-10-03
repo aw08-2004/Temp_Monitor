@@ -248,6 +248,16 @@ CURATED = (
      "POST", "/api/ai/query", _params(["text"], text={"type": "string"})),
     ("fleet_report", "Alerts raised, cleared and open over a window of days.",
      "POST", "/api/ai/summary", _params(window_days={"type": "integer"})),
+    ("list_deployments", "Package deployments, newest first, each with its package and a "
+     "count of targets per status (pending, in_flight, succeeded, failed, expired, "
+     "cancelled). Optionally for one machine.",
+     "GET", "/api/deployments", _params(machine=_MACHINE)),
+    ("get_deployment", "One deployment with every target machine: status, attempts, last "
+     "error, the command it is waiting on, and when it was last updated.",
+     "GET", "/api/deployments/<deployment_id>",
+     _params(["deployment_id"], deployment_id={"type": "string"})),
+    ("list_packages", "The software packages that can be deployed.",
+     "GET", "/api/packages", _params()),
     ("list_rules", "The rules engine's rules, one short line each: id, name, enabled, the "
      "condition as text, and how many machines match it now. Filter with `q` (words that must "
      "all appear in the name, description or condition) and `enabled`. Use get_rule for one "
@@ -291,6 +301,157 @@ GENERIC = (
 # applied to its answer by the tool's SHAPER below.
 LOCAL_PARAMS = {"list_rules": ("q", "enabled")}
 
+# ---------------------------------------------------------------------------------------
+# Narrowing -- any read tool, any route
+# ---------------------------------------------------------------------------------------
+# Every read tool and call_endpoint take these three, and the executor applies them to the
+# route's answer before it reaches the model. Rejected: a hand-shaped tool per route, which
+# list_rules was. It fixed one question ("disable the high temperature alerts") and the next
+# one ("which deployment is stuck?") ran out of steps the same way, against a different route
+# with no filter of its own. A model that can say which fields and which rows it wants can
+# narrow ANY answer, including routes nobody has written a tool for.
+# `list`, not `path`: call_endpoint's own `path` is the route, and the first draft named this
+# `path` too -- splitting the narrowing arguments off then took the route away from every call.
+NARROW_KEYS = ("list", "fields", "where", "limit")
+NARROW_PROPS = {
+    "list": {"type": "string",
+             "description": "Which list in the answer to narrow, as a dotted path, e.g. "
+                            "metrics.temp or sections.software.data. Omitted: the largest "
+                            "list. The result names every list it found under _narrowed."},
+    "fields": {"type": "array", "items": {"type": "string"},
+               "description": "Keep only these keys in each list entry. Dotted paths reach "
+                              "into nested objects, e.g. target_counts.pending."},
+    "where": {"type": "object",
+              "description": "Keep only list entries whose keys match: text matches as a "
+                             "case-insensitive substring, anything else must be equal. "
+                             "Dotted paths work here too."},
+    "limit": {"type": "integer", "description": "At most this many list entries."},
+}
+
+
+# An absent key, told apart from a key whose value IS null: `where {"finished_at": null}`
+# means "not finished yet", and must not also match every entry that has no such key at all.
+_MISSING = object()
+
+
+def _get(item, path, default=None):
+    value = item
+    for part in str(path).split("."):
+        if not isinstance(value, dict) or part not in value:
+            return default
+        value = value[part]
+    return value
+
+
+def _matches(item, where):
+    for key, wanted in where.items():
+        actual = _get(item, key, _MISSING)
+        if actual is _MISSING:
+            return False
+        if isinstance(wanted, str) and isinstance(actual, str):
+            if wanted.lower() not in actual.lower():
+                return False
+        elif isinstance(wanted, str) and actual is not None and not isinstance(actual, str):
+            # The model wrote `"pending": "1"` for a number; compare as text rather than
+            # silently matching nothing.
+            if str(actual).lower() != wanted.lower():
+                return False
+        elif actual != wanted:
+            return False
+    return True
+
+
+def find_lists(value, path=""):
+    """Every list reachable through dicts, as {dotted path: list}. The payload itself is ""
+    when it is a list. Lists inside list entries are not walked: `where` on an outer list is
+    the way to reach those, and a path through `[3]` is not one a model can be expected to
+    write back."""
+    found = {}
+    if isinstance(value, list):
+        found[path] = value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            found.update(find_lists(item, f"{path}.{key}" if path else str(key)))
+    return found
+
+
+def _size(value):
+    return len(json.dumps(value, default=str))
+
+
+def _set(payload, path, value):
+    """A copy of `payload` with the list at `path` replaced. Copies only along the path."""
+    if not path:
+        return value
+    head, _dot, rest = path.partition(".")
+    out = dict(payload)
+    out[head] = _set(payload[head], rest, value)
+    return out
+
+
+def narrow(payload, local):
+    """Apply `fields` / `where` / `limit` to ONE list in a route's answer, at any depth.
+
+    Which list: the one `list` names, or else the largest. The first version narrowed every
+    TOP-LEVEL list, and an audit of all 121 read routes found the big ones a level or two
+    down -- a machine's history under `metrics.<name>`, the report sheet under
+    `sections.<name>.data`, a backup manifest under `result.files` -- where it did nothing.
+
+    The answer carries `_narrowed`: the list it narrowed, how many entries it had, matched and
+    kept, and the size of every other list in the answer, so the model can aim the next call.
+    `where` and `fields` need a list of objects; `limit` works on any list, a series included.
+    """
+    local = local or {}
+    fields = [str(f) for f in (local.get("fields") or []) if str(f).strip()]
+    where = local.get("where") if isinstance(local.get("where"), dict) else None
+    try:
+        limit = max(1, int(local["limit"])) if local.get("limit") else None
+    except (TypeError, ValueError):
+        limit = None
+    wanted = str(local.get("list") or "").strip().strip(".")
+    if not (fields or where or limit or wanted):
+        return payload
+
+    lists = find_lists(payload)
+    if wanted:
+        if wanted not in lists:
+            return {"error": f"there is no list at `{wanted}`",
+                    "lists": {p: len(v) for p, v in lists.items()}}
+        target = wanted
+    else:
+        candidates = [p for p, v in lists.items() if v]
+        if not candidates:
+            return payload
+        objects = [p for p in candidates if all(isinstance(i, dict) for i in lists[p])]
+        target = max(objects or candidates, key=lambda p: _size(lists[p]))
+    items = lists[target]
+    report = {"path": target or "(the answer itself)", "total": len(items)}
+
+    kept = list(items)
+    if where or fields:
+        if not all(isinstance(i, dict) for i in items):
+            return {"error": f"`where` and `fields` need a list of objects; `{target}` is "
+                             "not one. Use `limit` on it, or pick another `list`.",
+                    "lists": {p: len(v) for p, v in lists.items()}}
+        if where:
+            kept = [i for i in kept if _matches(i, where)]
+    report["matched"] = len(kept)
+    if limit:
+        kept = kept[:limit]
+    if fields:
+        kept = [{f: _get(i, f) for f in fields} for i in kept]
+    report["shown"] = len(kept)
+    others = {p: len(v) for p, v in lists.items() if p != target and len(v) > 1}
+    if others:
+        report["other_lists"] = others
+
+    if not target:
+        return {"items": kept, "_narrowed": report}
+    out = _set(payload, target, kept)
+    if isinstance(out, dict):
+        out = dict(out, _narrowed=report)
+    return out
+
 
 def _words(text):
     return [w for w in re.split(r"\s+", str(text or "").lower()) if w]
@@ -332,15 +493,19 @@ SHAPERS = {"list_rules": shape_rules}
 
 
 def split_local(name, args):
-    """(args for the route, args for the shaper)."""
+    """(args for the route, args for the shaper and the narrowing)."""
     args = dict(args or {})
-    local = {key: args.pop(key) for key in LOCAL_PARAMS.get(name, ()) if key in args}
+    keys = tuple(LOCAL_PARAMS.get(name, ())) + NARROW_KEYS
+    local = {key: args.pop(key) for key in keys if key in args}
     return args, local
 
 
 def shape(name, payload, local):
+    """The tool's own shaper, if it has one, then the model's narrowing."""
     shaper = SHAPERS.get(name)
-    return shaper(payload, local or {}) if shaper else payload
+    if shaper:
+        payload = shaper(payload, local or {})
+    return narrow(payload, local)
 
 
 CURATED_BY_NAME = {name: (desc, method, path, schema)
@@ -350,15 +515,24 @@ GENERIC_NAMES = {name for name, _desc, _schema in GENERIC}
 _SEGMENT = re.compile(r"<(?:[a-z_]+:)?([a-z_]+)>")
 
 
+def _with_narrowing(schema):
+    return dict(schema, properties=dict(schema["properties"], **NARROW_PROPS))
+
+
 def tool_specs(curated_names):
-    """The OpenAI-shape `tools` list for the names this operator is offered."""
+    """The OpenAI-shape `tools` list for the names this operator is offered. Every GET tool
+    and call_endpoint also take NARROW_PROPS."""
     specs = []
-    for name, desc, _method, _path, schema in CURATED:
+    for name, desc, method, _path, schema in CURATED:
         if name in curated_names:
+            if method == "GET":
+                schema = _with_narrowing(schema)
             specs.append({"type": "function",
                           "function": {"name": name, "description": desc,
                                        "parameters": schema}})
     for name, desc, schema in GENERIC:
+        if name == "call_endpoint":
+            schema = _with_narrowing(schema)
         specs.append({"type": "function",
                       "function": {"name": name, "description": desc, "parameters": schema}})
     return specs

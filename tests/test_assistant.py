@@ -508,9 +508,10 @@ def test_long_results_keep_whole_entries():
     parsed = json.loads(content)
     check("the shortened result is still valid JSON", isinstance(parsed, dict))
     check("it fits the limit", len(content) <= 5000)
-    shown = parsed["truncated"]["shown"]
+    shown = parsed["truncated"]["lists"]["rules"]["shown"]
     check("it keeps whole entries and says how many",
-          parsed["truncated"]["total"] == 500 and len(parsed["data"]["rules"]) == shown > 0)
+          parsed["truncated"]["lists"]["rules"]["total"] == 500
+          and len(parsed["data"]["rules"]) == shown > 0)
     small = {"ok": True, "data": [1, 2, 3]}
     check("a result that fits is untouched", assistant.fit_result(small) == json.dumps(small))
 
@@ -557,6 +558,184 @@ def test_disabling_a_rule_by_name():
           r.status_code == 200 and rules_module.get_rule(DB, rule_id)["enabled"] is False)
 
 
+def test_any_answer_can_be_narrowed():
+    """'Which deployment is stuck?' ran out of steps against a route with no filter, the same
+    way the rules question had. Narrowing is now the model's to apply to any read."""
+    print("\n-- fields / where / limit narrow any list in any answer --")
+    payload = {"deployments": [
+        {"id": "a1", "package_name": "7-Zip", "target_counts": {"succeeded": 40}},
+        {"id": "b2", "package_name": "Chrome", "target_counts": {"in_flight": 1, "succeeded": 9}},
+        {"id": "c3", "package_name": "chrome beta", "target_counts": {"failed": 2}}],
+        "can_manage": True}
+    out = assistant_tools.narrow(payload, {"where": {"target_counts.in_flight": 1},
+                                           "fields": ["id", "package_name"]})
+    check("a dotted where finds the stuck one",
+          out["deployments"] == [{"id": "b2", "package_name": "Chrome"}])
+    check("...and reports how many it kept of how many",
+          out["_narrowed"] == {"path": "deployments", "total": 3, "matched": 1, "shown": 1})
+    check("other keys of the answer are kept", out["can_manage"] is True)
+    out = assistant_tools.narrow(payload, {"where": {"package_name": "CHROME"}})
+    check("text matches case-insensitively as a substring", len(out["deployments"]) == 2)
+    out = assistant_tools.narrow(payload, {"where": {"target_counts.failed": "2"}})
+    check("a number written as text still matches", [d["id"] for d in out["deployments"]] == ["c3"])
+    nulls = {"rows": [{"id": 1, "finished_at": None}, {"id": 2}, {"id": 3, "finished_at": 5}]}
+    out = assistant_tools.narrow(nulls, {"where": {"finished_at": None}})
+    check("where null matches an explicit null, not a missing key",
+          [r["id"] for r in out["rows"]] == [1])
+    out = assistant_tools.narrow(payload, {"limit": 1})
+    check("limit keeps the first entries", len(out["deployments"]) == 1)
+    check("no narrowing leaves the answer untouched",
+          assistant_tools.narrow(payload, {}) is payload)
+
+    specs = {s["function"]["name"]: s["function"]["parameters"]["properties"]
+             for s in assistant_tools.tool_specs({"list_deployments", "run_command"})}
+    check("GET tools are described with fields/where/limit",
+          {"fields", "where", "limit"} <= set(specs["list_deployments"]))
+    check("...and so is call_endpoint", "where" in specs["call_endpoint"])
+    check("...but not a write tool", "where" not in specs["run_command"])
+
+    viewer = client_for("viewer@x.com")
+    chat_id = new_chat(viewer)
+    SCRIPT[:] = [call("list_machines", where={"machine": "PC-02"}, fields=["machine"]),
+                 call("call_endpoint", method="GET", path="/api/machines",
+                      where={"machine": "PC-01"}, fields=["machine"]),
+                 say("ok")]
+    converse(viewer, chat_id, "find PC-02")
+    results = [json.loads(m["content"]) for m in tool_messages(chat_id)]
+    check("a curated tool narrows the real route's answer",
+          results[0]["data"].get("items") == [{"machine": "PC-02"}])
+    check("...and so does call_endpoint",
+          results[1]["data"].get("items") == [{"machine": "PC-01"}])
+
+
+def test_trimming_never_cuts_an_id():
+    print("\n-- trimming cuts long text, never an id --")
+    long_id = "d" * 400
+    rows = [{"id": long_id, "deployment_id": long_id, "note": "n" * 2000} for _ in range(30)]
+    parsed = json.loads(assistant.fit_result({"ok": True, "data": {"rows": rows}}, limit=8000))
+    kept = parsed["data"]["rows"]
+    check("ids survive whole", kept and all(r["id"] == long_id and r["deployment_id"] == long_id
+                                            for r in kept))
+    check("long text is cut", all(len(r["note"]) < 400 for r in kept))
+    check("the hint names the narrowing arguments",
+          "`where`" in parsed["truncated"]["hint"] and "`fields`" in parsed["truncated"]["hint"])
+
+
+def test_narrowing_reaches_nested_lists():
+    """An audit of every read route found the big lists a level or more down -- a history
+    series, a report section, a backup manifest -- where top-level narrowing did nothing."""
+    print("\n-- narrowing reaches a list at any depth --")
+    history = {"machine": "PC-01", "metrics": {
+        "temp": [[t, 40 + t % 30] for t in range(500)],
+        "cpu_load": [[t, t % 100] for t in range(500)]}}
+    out = assistant_tools.narrow(history, {"list": "metrics.temp", "limit": 5})
+    check("path picks a nested series", out["metrics"]["temp"] == [[t, 40 + t % 30]
+                                                                   for t in range(5)])
+    check("...leaves its neighbours alone", len(out["metrics"]["cpu_load"]) == 500)
+    check("...and names the other lists",
+          out["_narrowed"]["other_lists"] == {"metrics.cpu_load": 500})
+    out = assistant_tools.narrow(history, {"list": "metrics.temp", "where": {"x": 1}})
+    check("where on a series says why it cannot",
+          "error" in out and "metrics.temp" in out["lists"])
+    out = assistant_tools.narrow(history, {"list": "metrics.nope", "limit": 1})
+    check("an unknown path lists the real ones", set(out["lists"]) == {"metrics.temp",
+                                                                      "metrics.cpu_load"})
+
+    sheet = {"machine": "PC-01", "sections": {
+        "hardware": {"data": {"cpu": "x"}},
+        "software": {"data": [{"name": f"App {i}", "version": "1"} for i in range(300)]
+                     + [{"name": "Google Chrome", "version": "120"}]},
+        "groups": {"data": [{"name": "Sales"}]}}}
+    out = assistant_tools.narrow(sheet, {"where": {"name": "chrome"}})
+    check("without a path the largest list of objects is narrowed",
+          out["_narrowed"]["path"] == "sections.software.data"
+          and out["sections"]["software"]["data"] == [{"name": "Google Chrome",
+                                                       "version": "120"}])
+    check("...and the original answer is not modified",
+          len(sheet["sections"]["software"]["data"]) == 301)
+
+
+def test_trimming_reaches_nested_lists():
+    print("\n-- trimming shrinks the largest list wherever it is --")
+    history = {"ok": True, "data": {"machine": "PC-01", "metrics": {
+        name: [[t, t * 1.5] for t in range(4000)] for name in ("temp", "cpu_load", "memory")}}}
+    content = assistant.fit_result(history, limit=6000)
+    parsed = json.loads(content)
+    series = parsed["data"]["metrics"]["temp"]
+    check("a history answer fits and stays valid JSON", len(content) <= 6000)
+    check("every series survives, thinned", all(parsed["data"]["metrics"][n]
+                                                for n in ("temp", "cpu_load", "memory")))
+    check("...evenly, keeping the newest point", series[-1] == [3999, 5998.5]
+          and series[0][0] < 200)
+    cut = parsed["truncated"]["lists"]
+    check("...and says it sampled each one",
+          cut["metrics.temp"]["sampled"] is True and cut["metrics.temp"]["total"] == 4000)
+
+    sheet = {"ok": True, "data": {"sections": {"software": {"data": [
+        {"id": i, "name": f"App {i}", "publisher": "p" * 900} for i in range(400)]}}}}
+    parsed = json.loads(assistant.fit_result(sheet, limit=8000))
+    rows = parsed["data"]["sections"]["software"]["data"]
+    check("a nested list of objects keeps its first whole entries",
+          rows and [r["id"] for r in rows] == list(range(len(rows))))
+    check("...with long text cut inside them",
+          all(len(r["publisher"]) < 400 for r in rows))
+    nested = {"ok": True, "data": {"targets": [
+        {"id": "t1", "result": {"stdout": "x" * 20000, "run_id": "r" * 500}}]}}
+    parsed = json.loads(assistant.fit_result(nested, limit=3000))
+    entry = parsed["data"]["targets"][0] if parsed["data"]["targets"] else {}
+    check("an entry whose nested note is too long keeps the entry, not just the id",
+          entry.get("id") == "t1" and len(entry["result"]["stdout"]) < 400
+          and entry["result"]["run_id"] == "r" * 500)
+
+
+def test_every_read_route_survives_narrowing_and_trimming():
+    """The property, against the real routes: whatever shape a read answers with, inflating
+    every list in it a hundredfold and passing it through narrow() and fit_result() gives
+    valid JSON inside the limit, cut at entries -- never the raw character slice."""
+    print("\n-- every read route's answer can be narrowed and trimmed --")
+    admin = client_for("tester@example.com")
+    fill = {"machine": "PC-01"}
+    tried, sliced, crashed = 0, [], []
+
+    def inflate(value, inside_list=False):
+        # A hundredfold at the FIRST list level only. Inflating every level compounds -- a
+        # list inside a list became 10,000x -- and turned /api/settings into a 1.7 GB answer
+        # that took four minutes to trim, which tested nothing a real route can return.
+        if isinstance(value, list):
+            items = [inflate(v, True) for v in value]
+            return items * 100 if items and not inside_list else items
+        if isinstance(value, dict):
+            return {k: inflate(v, inside_list) for k, v in value.items()}
+        return value
+
+    for rule in app.app.url_map.iter_rules():
+        if "GET" not in rule.methods or not rule.rule.startswith("/api/"):
+            continue
+        if assistant_tools.classify("GET", rule.rule) != "read":
+            continue
+        if set(rule.arguments) - set(fill):
+            continue
+        path = re.sub(r"<(?:[a-z_]+:)?([a-z_]+)>", lambda m: fill[m.group(1)], rule.rule)
+        body = admin.get(path).get_json(silent=True)
+        if body is None:
+            continue
+        tried += 1
+        try:
+            big = inflate(body)
+            narrowed = assistant_tools.narrow(big, {"limit": 3})
+            for candidate in (big, narrowed):
+                content = assistant.fit_result({"ok": True, "data": candidate}, limit=4000)
+                json.loads(content)
+                if len(content) > 4000 + 40 or content.endswith('narrow the request]"'):
+                    sliced.append(rule.rule)
+        except Exception as exc:                        # noqa: BLE001
+            crashed.append(f"{rule.rule}: {type(exc).__name__} {exc}")
+    check(f"read routes exercised ({tried})", tried >= 80)
+    check(f"no route's answer crashes narrow/fit ({crashed[:3]})", not crashed)
+    check(f"no route's answer falls back to a character slice ({sorted(set(sliced))[:5]})",
+          not sliced)
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -580,6 +759,11 @@ def main():
     test_a_stop_mid_step_answers_every_call()
     test_long_results_keep_whole_entries()
     test_disabling_a_rule_by_name()
+    test_any_answer_can_be_narrowed()
+    test_trimming_never_cuts_an_id()
+    test_narrowing_reaches_nested_lists()
+    test_trimming_reaches_nested_lists()
+    test_every_read_route_survives_narrowing_and_trimming()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

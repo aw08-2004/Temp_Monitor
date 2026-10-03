@@ -433,48 +433,127 @@ class RunLog:
             del self._runs[run_id]
 
 
-def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
-    """One tool result as JSON of at most `limit` characters, cut at a WHOLE ENTRY.
+COMPACT_TEXT_CHARS = 300
+MAX_TRIM_PASSES = 200
 
-    The first version cut the JSON string at the limit, which hands the model half an object
-    and a note to narrow a request it often has no way to narrow. Now the longest list in the
-    result is shortened to as many complete entries as fit, and the result says how many it
-    shows of how many, so the model can tell "there are more" from "this is everything" and
-    filter if the tool lets it. The character cut remains as the fallback for a result with
-    no list to shorten.
+
+def _size(value):
+    return len(json.dumps(value, default=str))
+
+
+def _compact(value, key=""):
+    """A value with every long string in it cut, at any depth -- except an id's.
+
+    Recursive because the text that makes an entry too big is often nested (a target's
+    `result.stdout`, a deployment's `package.notes`), and an entry whose only problem is one
+    long nested note should lose the note, not be dropped whole along with its id.
+    """
+    is_id = key == "id" or str(key).endswith("_id")
+    if isinstance(value, str):
+        if len(value) > COMPACT_TEXT_CHARS and not is_id:
+            return value[:COMPACT_TEXT_CHARS] + "...[cut]"
+        return value
+    if isinstance(value, dict):
+        return {k: _compact(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_compact(v, key) for v in value]
+    return value
+
+
+def _all_lists(value, path="", out=None):
+    """Every list in a JSON value, inside dicts AND inside list entries, as (path, holder,
+    key). Holder is the container the list sits in, so it can be replaced in place."""
+    if out is None:
+        out = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            sub = f"{path}.{key}" if path else str(key)
+            if isinstance(item, list):
+                out.append((sub, value, key))
+            _all_lists(item, sub, out)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _all_lists(item, f"{path}[{index}]", out)
+    return out
+
+
+def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
+    """One tool result as JSON of at most `limit` characters, cut at WHOLE ENTRIES.
+
+    The first version sliced the JSON at the limit: half an object, and an id cut in two that
+    the model then passed back to a tool. The second shortened one top-level list, and an
+    audit of the read routes found the large lists a level or more down (a machine's history
+    series, the report sheet's sections, a backup manifest), so it fell back to slicing.
+
+    Now: long text inside every entry is cut first (never an id), then the LARGEST list
+    anywhere in the answer is halved, again and again, until the whole fits. A list of
+    objects keeps its first entries. A list of values -- a time series -- is thinned EVENLY
+    and keeps its last point, because the first half of a temperature history is the wrong
+    half to keep. Every list that was cut is named under `truncated` with how many it shows of
+    how many, and the hint names the arguments that would have avoided the cut.
     """
     content = json.dumps(result, default=str)
+    if len(content) <= limit or not isinstance(result, dict) or "data" not in result:
+        return content if len(content) <= limit else (
+            content[:limit] + ' ..."[truncated: narrow the request]"')
+    # A copy we may cut, with long text already shortened everywhere (ids excepted).
+    data = _compact(json.loads(json.dumps(result["data"], default=str)))
+    cut = {}
+
+    def render():
+        out = dict(result, data=data)
+        if cut:
+            out["truncated"] = {
+                "lists": cut,
+                "hint": "too large to show whole: call again with `list` to pick a list, "
+                        "`where` to keep matching entries, `fields` to keep only the keys you "
+                        "need, or `limit`"}
+        return json.dumps(out, default=str)
+
+    content = render()
+    for _ in range(MAX_TRIM_PASSES):
+        if len(content) <= limit:
+            return content
+        if isinstance(data, list) and len(data) > 1:
+            candidates = [("", None, None)] + _all_lists(data)
+        else:
+            candidates = _all_lists(data)
+        best, best_size = None, 0
+        for path, holder, key in candidates:
+            items = data if holder is None else holder[key]
+            if len(items) > 1:
+                size = _size(items)
+                if size > best_size:
+                    best, best_size = (path, holder, key), size
+        if best is None:
+            break
+        path, holder, key = best
+        items = data if holder is None else holder[key]
+        record = cut.setdefault(path or "(the answer itself)", {"total": len(items)})
+        # Shrink in proportion to how far over the limit the answer is, not by a fixed half:
+        # halving a 4,000-point series down to fit took a dozen passes, each re-serialising
+        # the whole answer, and every tool result goes through here. Never less than half,
+        # so a list that is only part of the excess is not emptied on the first pass.
+        overshoot = len(content) - limit
+        ratio = max(0.0, 1.0 - overshoot / max(1, best_size))
+        keep = max(1, min(len(items) // 2 if ratio < 0.5 else int(len(items) * ratio),
+                          len(items) - 1))
+        if all(isinstance(i, dict) for i in items):
+            shorter = items[:keep]
+        else:
+            # Evenly spaced points, counted back from the LAST, so the newest reading
+            # always survives.
+            step = -(-len(items) // keep)
+            shorter = items[len(items) - 1::-step][::-1]
+            record["sampled"] = True
+        record["shown"] = len(shorter)
+        if holder is None:
+            data = shorter
+        else:
+            holder[key] = shorter
+        content = render()
     if len(content) <= limit:
         return content
-    data = result.get("data") if isinstance(result, dict) else None
-    holder, key = None, None
-    if isinstance(data, list):
-        holder, key = result, "data"
-    elif isinstance(data, dict):
-        lists = [(k, v) for k, v in data.items() if isinstance(v, list) and v]
-        if lists:
-            holder = data
-            key = max(lists, key=lambda kv: len(json.dumps(kv[1], default=str)))[0]
-    if holder is not None:
-        items = holder[key]
-
-        def build(count):
-            trimmed = dict(holder, **{key: items[:count]})
-            out = dict(result, data=trimmed) if holder is data else dict(trimmed)
-            out["truncated"] = {"shown": count, "total": len(items),
-                                "hint": "only the first entries fit; filter to see the rest"}
-            return json.dumps(out, default=str)
-
-        low, high = 0, len(items)
-        while low < high:
-            mid = (low + high + 1) // 2
-            if len(build(mid)) <= limit:
-                low = mid
-            else:
-                high = mid - 1
-        candidate = build(low)
-        if len(candidate) <= limit:
-            return candidate
     return content[:limit] + ' ..."[truncated: narrow the request]"'
 
 
@@ -640,6 +719,15 @@ def system_prompt(*, operator, capabilities, scope, pages, context, today, langu
         "Always call a tool for figures (temperatures, disk, alerts, status). Never repeat a "
         "number from earlier in this conversation as current -- earlier tool results are "
         "trimmed and out of date. If you have not called a tool this turn, you do not know.",
+        "",
+        "## Large answers",
+        "Every read tool and call_endpoint accept `list`, `fields`, `where` and `limit`, "
+        "applied to ONE list in the answer at any depth: `list` names it as a dotted path "
+        "(metrics.temp, sections.software.data); without it the largest list is used. The "
+        "answer's `_narrowed` says which list it was and names the others. Use them FIRST on "
+        "anything that may be long: e.g. list_deployments with where "
+        "{\"target_counts.in_flight\": 1}, or fields [\"id\", \"name\"]. If a result says "
+        "`truncated`, call it again narrowed -- do not repeat the same call.",
         "",
         "## Doing things",
         "Read-only tools run at once. Low-risk changes (dismiss an alert, wake a PC, draft a "
