@@ -3,8 +3,12 @@
 A Linux counterpart to `agent/` — the C#/.NET Windows Service on every managed PC. Same hub,
 same wire protocol, same house rules; a much smaller feature set, on purpose.
 
-**Status: early. Nothing has been released, and nothing in the field runs this.** It reports
-telemetry, enrolls, heartbeats, and executes four command types. See *What it does not do*.
+**Status: released, and small on purpose.** `0.3.0` (2026-09-30) is the current release, the
+first with a signed `agent-linux.manifest.json` and therefore the first that updates itself.
+`0.1.0` and `0.2.0` were tagged without a manifest and have no self-updater, so a box still on
+either one has to be moved to 0.3.0 by hand once (re-run `install.sh`; see
+`release-notes/0.3.0.md`). It reports telemetry, enrolls, heartbeats, and executes four command
+types. See *What it does not do*.
 
 ---
 
@@ -32,7 +36,7 @@ has a release train of its own. What keeps the duplicated wire shapes honest in 
 the hub: the field names are the hub's, so drift shows up as a machine reporting nothing rather
 than as a silent disagreement.
 
-## The version number, and why it is still 0.1.0
+## The version number, and why it stays below 3.0.0
 
 This agent has its own version line and its own release train. It did not always: every agent
 reports into the same `companion_version` field, and the hub used to read every value in it as
@@ -46,12 +50,18 @@ now, so:
 |---|---|
 | `get_advertised_version()` would have offered this agent the **Windows** manifest — a `win-x64` binary it has no idea what to do with | It picks a manifest by platform, so this agent is offered its own, and can therefore have a version at all |
 | `agents_outdated` counted every machine against the Windows manifest | Each machine is compared against its own train |
-| Every `MIN_*_AGENT` gate in `hub/static/js` reads `0.1.0` as too old | **Unchanged.** Those gates still read a version number, and this one is what keeps the console from offering a Linux box a terminal or a file browser this agent cannot answer |
+| Every `MIN_*_AGENT` gate in `hub/static/js` reads a `0.x` version as too old | **Unchanged.** Those gates still read a version number, and this one is what keeps the console from offering a Linux box a terminal or a file browser this agent cannot answer |
 
-So the number stays at `0.1.0` for the third reason only, and it moves when the console's gates
-read the capability report instead. `VersionGateTests` enforces the floor rather than merely
-documenting it — a well-meaning "bring the version in line with the other components" change
-would silently start offering features that do not exist.
+So the line is free to move — it went `0.1.0` → `0.2.0` → `0.3.0` through `release.ps1` — but
+it must stay **below `3.0.0`** for the third reason, until the console's gates read the
+capability report instead. `VersionGateTests` enforces that floor rather than merely documenting
+it — a well-meaning "bring the version in line with the other components" change would silently
+start offering features that do not exist.
+
+*History worth keeping:* this section used to say the number stayed at `0.1.0`, and for a while
+the source did while `linux-agent-v0.2.0` was tagged without it — drift, not a decision, because
+the two-file pair only moves through `release.ps1` and that tag was cut by hand. 0.3.0 was the
+first release cut through the script, which is also why it is the first with a manifest.
 
 **One hub change was needed, and it was the point.** Everything else about this agent still
 works against an unmodified hub.
@@ -188,8 +198,8 @@ verifies the Ed25519 signature over the manifest's exact bytes against the key c
 both agents, downloads the URL the manifest names, and refuses the binary unless its sha256
 equals the signed one. That needs **OpenSSL 3** on the target (Ubuntu 22.04+, Debian 12+,
 RHEL 9); an older box is refused with a pointer to `--binary` rather than installed unverified.
-Until a Linux release has been cut with `release.ps1`, no signed manifest exists and the
-installer says so. It also checks the architecture before it stops anything, downloads before it
+A missing manifest is refused with a message rather than treated as "nothing to install" — the
+state `main` was in until 0.3.0. It also checks the architecture before it stops anything, downloads before it
 stops the running agent, and confirms `systemctl is-active` afterwards rather than trusting
 `enable --now`'s exit code.
 
@@ -213,7 +223,8 @@ Windows ones. The signed manifest replaced that lookup: it names the one URL all
 pagination and 60-requests-per-hour limits went with the API.)
 
 ```powershell
-.\release.ps1 -Version 0.3.0 -NotesFile .\release-notes\0.3.0.md
+.\release.ps1 -Version 0.3.1 -NotesFile .\release-notes\0.3.1.md
+.\release.ps1 -Version 0.4.0 -Channel beta     # pilot ring first (roadmap #21)
 ```
 
 It bumps the two-file version pair, publishes, creates the release, signs

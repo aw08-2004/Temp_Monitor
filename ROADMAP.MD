@@ -3648,7 +3648,14 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, tagged 0.1.0 and 0.2.0 · self-update not live
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0
+
+> **Status update (2026-09-30) — supersedes the opening below and *The manifest is not in the
+> repo*.** `0.3.0` was cut through `release.ps1` (`2afb06d`) with `agent-linux.manifest.json` and
+> its `.sig` committed, so a 0.3.0 box updates itself and `install.sh` verifies against a real
+> manifest. Machines still on 0.1.0/0.2.0 have no updater and need one hand install (see *Owed
+> locally* at the top). Still 🚧 because patch install, process end/restart and a PTY terminal
+> are not built. The text below is kept as the history of how the gap went unnoticed.
 
 A Linux counterpart to the Windows agent, in `agent-linux/`. Started 2026-09-05 on
 `feat/linux-agent`. Two releases are tagged — `linux-agent-v0.1.0` ("First cut. Unsigned,
