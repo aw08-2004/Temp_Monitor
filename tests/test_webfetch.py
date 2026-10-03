@@ -343,6 +343,21 @@ def test_staging(root, blob_dir):
         webfetch._request = real_request
     check("...and the worker removes the folder once its file is closed, so it cannot reappear",
           not os.path.exists(os.path.join(root, running["id"])))
+    late = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
+
+    class DiscardAfterLastChunk(FakeResponse):
+        """Discards once the last chunk is in -- after the worker's in-loop check has run."""
+        def stream(self, size):
+            yield b"MZ" * 100
+            webfetch.discard(root, late["id"])
+
+    webfetch._request = lambda parsed, address: DiscardAfterLastChunk(200, {}, b"")
+    try:
+        webfetch.run_download(root, late["id"], 10 ** 9)
+    finally:
+        webfetch._request = real_request
+    check("a discard landing after the last chunk still removes the finished file",
+          not os.path.exists(os.path.join(root, late["id"])))
     finished = webfetch.begin_download(root, "https://cdn.example/app-1.0.exe", "a@x")
     webfetch.run_download(root, finished["id"], 10 ** 9)
     check("discarding a finished download deletes it outright",

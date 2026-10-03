@@ -4831,7 +4831,7 @@ names, and can do what the signed-in operator can.
   `web_read` (a public page as text + links), `winget_manifest` (versions and the installer
   manifest from `microsoft/winget-pkgs`, via the GitHub contents API), `download_installer`
   (into `<LOG_DIR>/staging`, in the background), `staged_download` (follow it, `wait_seconds`
-  up to 60), `promote_download` (into the package store through `packages.store_blob`, so the
+  up to 25), `promote_download` (into the package store through `packages.store_blob`, so the
   hash is the store's own). `create_package` and `get_package` wrap the existing routes. The
   system prompt carries the order (winget id first, else download; machine-scope x64, MSI
   over EXE; switches by `InstallerType`; always a detection rule) and asks the model to say

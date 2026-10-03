@@ -147,7 +147,9 @@ def create_webfetch_blueprint(db_path, log_dir, login_required, access, *, worke
             # The pool refuses work once it is shut down (interpreter exit). Without this the
             # record would sit `queued` with no worker to move it (PR #106 review).
             print(f"[webfetch] could not queue a download: {e}")
-            webfetch.discard(staging, meta["id"])
+            # forget, not discard: discard would hand the folder to a worker that does not
+            # exist, and it would sit hidden until the prune (PR #106 review).
+            webfetch.forget(staging, meta["id"])
             return jsonify({"error": STORE_FAILED}), 500
         _audit("webfetch.download", url, {"staging_id": meta["id"]})
         return jsonify(dict(meta, note="Downloading in the background; read it back with "

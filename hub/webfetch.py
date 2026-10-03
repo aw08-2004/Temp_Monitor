@@ -595,6 +595,9 @@ def run_download(root, staging_id, max_bytes):
             response.release_conn()
         if size == 0:
             raise FetchError("the server sent an empty file")
+        if _cancelled(root, staging_id):
+            # Discarded during the last chunk, after the in-loop check (PR #106 review).
+            raise _Cancelled()
         os.replace(part, os.path.join(folder, "file"))
         meta.update(status=STATUS_DONE, size=size, sha256=digest.hexdigest())
     except _Cancelled:
@@ -617,6 +620,12 @@ def run_download(root, staging_id, max_bytes):
     now = time.time()
     meta.update(updated_at=now, finished_at=now)
     _write_meta(root, staging_id, meta)
+    if _cancelled(root, staging_id):
+        # The last window: discarded between the check above and this write. discard() has
+        # already answered "cancelling" and the record is hidden, so the worker must finish it
+        # or a full-size installer sits invisible until the prune.
+        forget(root, staging_id)
+        return None
     return meta
 
 
@@ -683,6 +692,11 @@ def promote(root, staging_id, blob_dir, max_bytes):
     _write_meta(root, staging_id, meta)
     return {"kind": packages.SOURCE_UPLOAD, "sha256": sha256, "file_size": size,
             "file_name": meta.get("file_name")}
+
+
+def forget(root, staging_id):
+    """Remove a record's folder outright. Only for one no worker owns -- see discard()."""
+    shutil.rmtree(_dir(root, staging_id), ignore_errors=True)
 
 
 def discard(root, staging_id):
