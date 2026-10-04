@@ -472,7 +472,17 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
         # would be two user messages in a row, which some strict servers refuse (review,
         # PR #107).
         out[0] = dict(out[0], content=NOTE_PREFIX + DROPPED_NOTE + "\n\n" + out[0]["content"])
-    return out
+    # Two user messages in a row, merged for the same reason. They arise wherever a turn left
+    # no assistant text behind -- stopped, or failed at the provider -- and wherever a hub note
+    # lands next to the operator's message; a collapsed turn makes the first case common
+    # (review, PR #107). A plain user message carries only content, so merging loses nothing.
+    merged = []
+    for message in out:
+        if merged and message["role"] == "user" and merged[-1]["role"] == "user":
+            merged[-1]["content"] += "\n\n" + (message["content"] or "")
+        else:
+            merged.append(message)
+    return merged
 
 
 # ---------------------------------------------------------------------------------------

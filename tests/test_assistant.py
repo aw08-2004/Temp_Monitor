@@ -381,6 +381,18 @@ def test_history_budget_drops_whole_turns():
           len(out) == 3 and out[1]["content"] == '"' * 5990
           and assistant.DROPPED_NOTE not in out[0]["content"])
 
+    # A turn that left no answer (the provider failed) followed by a note and a new question:
+    # three user messages in a row, which strict servers refuse. They go as one.
+    rows = [_row("user", "first"), _row("note", "the operator confirmed action 3"),
+            _row("user", "second")]
+    out = assistant.history_for_model(rows)
+    check("adjacent user messages are merged into one",
+          len(out) == 1 and out[0]["role"] == "user"
+          and "first" in out[0]["content"] and "second" in out[0]["content"]
+          and "confirmed action 3" in out[0]["content"])
+    check("...and no two user messages are ever adjacent",
+          all(not (a["role"] == b["role"] == "user") for a, b in zip(out, out[1:])))
+
 
 def test_actions_expire():
     print("\n-- a pending action cannot be confirmed after it expires --")
