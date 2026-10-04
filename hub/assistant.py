@@ -433,10 +433,11 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
       * The CURRENT turn is always sent whole in structure. Its tool results go back in full,
         newest first, until they have spent the budget; older ones in it are trimmed. Trimming
         them all, as the first version did, meant the model read only 600 characters of the
-        result it asked for one step ago, whatever `ai.assistant_result_chars` said. A newest
-        result too big for the budget on its own (`ai.assistant_result_chars` set above
-        `ai.assistant_context_chars`) is cut to the room left, not to 600: sending it whole
-        broke the budget, which is the one figure sized to the provider's context window.
+        result it asked for one step ago, whatever `ai.assistant_result_chars` said. When the
+        turn as a whole is still over the budget (a long question, or `ai.assistant_result_chars`
+        set above `ai.assistant_context_chars`), older results go to 600 first and the newest is
+        then cut to the room left, not to 600: sending it whole broke the budget, which is the
+        one figure sized to the provider's context window.
       * Each EARLIER turn, newest first, goes back with its tool results trimmed (see the
         module docstring on stale figures); if that does not fit, collapsed to what was said;
         if even that does not fit, it and every older turn are left out, and the model is told.
@@ -461,13 +462,26 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
         if spent > budget:
             break
         limits[index] = None
-    if newest_first and newest_first[0] not in limits:
-        # The newest result does not fit even alone. It is the one the model is about to read,
-        # so it gets every character the rest of the turn leaves -- never fewer than an old
-        # result keeps.
+
+    def turn_chars():
+        return sum(_message_chars(m) for m in _render_turn(current, limits=limits))
+
+    # Measured on the WHOLE rendered turn, not on its tool results alone: the operator's
+    # message, the call arguments and the trimmed older results count too, and a newest result
+    # that fit by itself still pushed the turn past the budget (review, PR #107). Given up in
+    # order: older full results go back to 600 characters, oldest first; then the newest is cut.
+    for index in reversed(newest_first[1:]):
+        if turn_chars() <= budget:
+            break
+        limits.pop(index, None)
+    # A newest result missing from `limits` did not fit even alone, and turn_chars() measures it
+    # as already trimmed to 600 -- so it is cut to the room left whatever that says.
+    if newest_first and (newest_first[0] not in limits or turn_chars() > budget):
+        # It is the one the model is about to read, so it keeps every character the rest of
+        # the turn leaves -- never fewer than an old result keeps.
         newest = newest_first[0]
-        others = sum(_message_chars(m) for m in _render_turn(current)) \
-            - len(_trim_tool(current[newest]["content"]))
+        limits.pop(newest, None)
+        others = turn_chars() - len(_trim_tool(current[newest]["content"]))
         limits[newest] = max(HISTORY_TOOL_CHARS, budget - others - len(_CUT_TO_FIT))
     tail = _render_turn(current, limits=limits)
     room = budget - sum(_message_chars(m) for m in tail)

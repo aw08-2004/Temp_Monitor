@@ -365,6 +365,27 @@ def test_history_current_turn_results_are_whole():
     check("...and keeps far more than an old result's 600",
           tool.startswith("1" * 9000) and "cut to fit" in tool)
 
+    # A newest result that fits the budget BY ITSELF, after a long question: the tool results
+    # alone were under budget, so nothing was cut and the turn went over.
+    def chars(messages):
+        return sum(len(m.get("content") or "") for m in messages) + sum(
+            len(c["function"]["name"]) + len(c["function"]["arguments"])
+            for m in messages for c in m.get("tool_calls") or ())
+
+    rows = [_row("user", "q" * 4000), *_step(1, 3000), *_step(2, 9000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    tools = [m["content"] for m in out if m["role"] == "tool"]
+    check("the whole turn, question included, stays within the budget", chars(out) <= 10000)
+    check("...the older result went to 600 first",
+          len(tools[0]) < 1000 and "call the tool again" in tools[0])
+    check("...and the newest kept the rest of the room",
+          tools[1].startswith("2" * 5000) and "cut to fit" in tools[1])
+
+    rows = [_row("user", "q" * 4000), *_step(1, 2000), *_step(2, 3000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a turn that fits whole is left whole",
+          [m["content"] for m in out if m["role"] == "tool"] == ["1" * 2000, "2" * 3000])
+
 
 def test_history_budget_drops_whole_turns():
     print("\n-- past the budget, old turns collapse and then drop, never mid-step --")
