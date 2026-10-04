@@ -401,6 +401,14 @@ def test_history_current_turn_results_are_whole():
     check("...and assembling it twice does not change the current turn",
           assistant.history_for_model(rows, budget=10000) == out)
 
+    # The current turn alone fills the budget, so every earlier turn is dropped and the note
+    # has no earlier turn left to make room for it: the current turn must leave that room.
+    rows = [_row("user", "old question " + "o" * 1000), _row("assistant", "old answer"),
+            _row("user", "go"), *_step(1, 30000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a current turn that fills the budget still leaves room for the note",
+          chars(out) <= 10000 and assistant.DROPPED_NOTE in out[0]["content"])
+
     rows = [_row("user", "q" * 4000), *_step(1, 2000), *_step(2, 3000)]
     out = assistant.history_for_model(rows, budget=10000)
     check("a turn that fits whole is left whole",

@@ -380,6 +380,14 @@ def _message_chars(message):
         for c in message.get("tool_calls") or ())
 
 
+def _messages_chars(messages):
+    """Raw characters in a list of provider messages AS SENT: two adjacent user messages are
+    merged with a blank line between them (history_for_model), so each pair costs two more."""
+    pairs = sum(1 for a, b in zip(messages, messages[1:])
+                if a["role"] == b["role"] == "user")
+    return sum(_message_chars(m) for m in messages) + 2 * pairs
+
+
 def _render_turn(rows, *, limits=None, collapse=False):
     """One turn's rows as provider messages. `limits` maps a tool row's index to how much of
     its result goes back: None for all of it, a number for that many characters; a row not in
@@ -453,6 +461,13 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
     turns = [rows[a:b] for a, b in bounds]
     budget = max(1, int(budget or DEFAULT_CONTEXT_CHARS))
 
+    # Room for the dropped-history note, kept back from the current turn whenever there are
+    # earlier turns that might be dropped: the note is folded into the first message AFTER the
+    # turns are fitted, and when the current turn alone has used the budget there is no earlier
+    # turn left to give up for it (review, PR #107). Two more for its blank line.
+    reserve = len(NOTE_PREFIX + DROPPED_NOTE) + 2 if len(turns) > 1 else 0
+    full_budget, budget = budget, max(1, budget - reserve)
+
     current = turns[-1]
     newest_first = [i for i in range(len(current) - 1, -1, -1)
                     if current[i]["role"] == ROLE_TOOL]
@@ -464,7 +479,7 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
         limits[index] = None
 
     def turn_chars():
-        return sum(_message_chars(m) for m in _render_turn(current, limits=limits))
+        return _messages_chars(_render_turn(current, limits=limits))
 
     # Measured on the WHOLE rendered turn, not on its tool results alone: the operator's
     # message, the call arguments and the trimmed older results count too, and a newest result
@@ -484,14 +499,16 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
         others = turn_chars() - len(_trim_tool(current[newest]["content"]))
         limits[newest] = max(HISTORY_TOOL_CHARS, budget - others - len(_CUT_TO_FIT))
     tail = _render_turn(current, limits=limits)
-    room = budget - sum(_message_chars(m) for m in tail)
+    # Earlier turns may use what the note did not need: the note only appears if one is dropped.
+    budget = full_budget
+    room = budget - _messages_chars(tail)
 
     kept, dropped = [], False
     for turn in reversed(turns[:-1]):
         rendered = None
         for collapse in (False, True):
             candidate = _render_turn(turn, collapse=collapse)
-            size = sum(_message_chars(m) for m in candidate)
+            size = _messages_chars(candidate)
             if size <= room:
                 rendered = candidate
                 break
@@ -527,7 +544,7 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
     # measured, and the oldest kept turn goes until it fits (review, PR #107). Only earlier
     # turns are given up here; the current turn was fitted above.
     merged = assemble()
-    while kept and sum(_message_chars(m) for m in merged) > budget:
+    while kept and _messages_chars(merged) > budget:
         kept.pop()                                      # newest first, so this is the oldest
         dropped = True
         merged = assemble()
