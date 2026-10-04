@@ -366,7 +366,11 @@ def _trim_tool(content):
     return content
 
 
-def _size(message):
+def _message_chars(message):
+    """Raw characters in one provider message. Not `_size`: fit_result's helper of that name
+    is defined further down, and as the later module-level binding it replaced this one, so the
+    budget was measured as JSON with every quote in a tool result counted twice (review, PR
+    #107)."""
     return len(message.get("content") or "") + sum(
         len(c["function"]["name"]) + len(c["function"]["arguments"] or "")
         for c in message.get("tool_calls") or ())
@@ -446,14 +450,14 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
         if not full or spent <= budget:
             full.add(index)
     tail = _render_turn(current, full_tools=full)
-    room = budget - sum(_size(m) for m in tail)
+    room = budget - sum(_message_chars(m) for m in tail)
 
     kept, dropped = [], False
     for turn in reversed(turns[:-1]):
         rendered = None
         for collapse in (False, True):
             candidate = _render_turn(turn, collapse=collapse)
-            size = sum(_size(m) for m in candidate)
+            size = sum(_message_chars(m) for m in candidate)
             if size <= room:
                 rendered = candidate
                 break

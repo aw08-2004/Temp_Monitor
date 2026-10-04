@@ -372,6 +372,15 @@ def test_history_budget_drops_whole_turns():
     check("the result fits the budget, near enough",
           sum(len(m.get("content") or "") for m in out) < 8000 + 3100)
 
+    # The budget is RAW characters. A turn that fits by raw count must be kept whole; when a
+    # later `_size` (JSON length) shadowed the history helper, the JSON overhead tipped this
+    # exact fit over and the turn was dropped.
+    rows = [_row("user", "x" * 4000), _row("assistant", '"' * 5990), _row("user", "now")]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a turn that fits the budget by raw characters is kept whole",
+          len(out) == 3 and out[1]["content"] == '"' * 5990
+          and assistant.DROPPED_NOTE not in out[0]["content"])
+
 
 def test_actions_expire():
     print("\n-- a pending action cannot be confirmed after it expires --")
