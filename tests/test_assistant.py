@@ -388,6 +388,19 @@ def test_history_current_turn_results_are_whole():
     check("a note after the results is counted against the budget", chars(out) <= 10000
           and "cut to fit" in next(m["content"] for m in out if m["role"] == "tool"))
 
+    # The dropped-history note and the merge separators are added AFTER the turns are fitted.
+    # Here three earlier turns fill the room exactly and a fourth does not fit, so the note is
+    # folded in on top -- the final list must still be within the budget.
+    rows = []
+    for n in range(4):
+        rows += [_row("user", f"{n}" * 2000), _row("assistant", "a" * 1000)]
+    rows += [_row("user", "now" + "x" * 997)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("the final history, note and separators included, stays within the budget",
+          chars(out) <= 10000 and assistant.DROPPED_NOTE in out[0]["content"])
+    check("...and assembling it twice does not change the current turn",
+          assistant.history_for_model(rows, budget=10000) == out)
+
     rows = [_row("user", "q" * 4000), *_step(1, 2000), *_step(2, 3000)]
     out = assistant.history_for_model(rows, budget=10000)
     check("a turn that fits whole is left whole",

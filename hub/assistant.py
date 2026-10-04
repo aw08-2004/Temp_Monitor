@@ -500,22 +500,37 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
             break
         room -= size
         kept.append(rendered)
-    out = [dict(m) for turn in reversed(kept) for m in turn] + tail
-    if dropped:
-        # Folded into the first message, which is always the operator's: a separate note
-        # would be two user messages in a row, which some strict servers refuse (review,
-        # PR #107).
-        out[0] = dict(out[0], content=NOTE_PREFIX + DROPPED_NOTE + "\n\n" + out[0]["content"])
-    # Two user messages in a row, merged for the same reason. They arise wherever a turn left
-    # no assistant text behind -- stopped, or failed at the provider -- and wherever a hub note
-    # lands next to the operator's message; a collapsed turn makes the first case common
-    # (review, PR #107). A plain user message carries only content, so merging loses nothing.
-    merged = []
-    for message in out:
-        if merged and message["role"] == "user" and merged[-1]["role"] == "user":
-            merged[-1]["content"] += "\n\n" + (message["content"] or "")
-        else:
-            merged.append(message)
+
+    def assemble():
+        # Copies of every message, the current turn's too: the merge below appends to a
+        # message in place, and this may run more than once.
+        out = [dict(m) for turn in reversed(kept) for m in turn] + [dict(m) for m in tail]
+        if dropped:
+            # Folded into the first message, which is always the operator's: a separate note
+            # would be two user messages in a row, which some strict servers refuse (review,
+            # PR #107).
+            out[0]["content"] = NOTE_PREFIX + DROPPED_NOTE + "\n\n" + out[0]["content"]
+        # Two user messages in a row, merged for the same reason. They arise wherever a turn
+        # left no assistant text behind -- stopped, or failed at the provider -- and wherever a
+        # hub note lands next to the operator's message; a collapsed turn makes the first case
+        # common (review, PR #107). A plain user message carries only content, so merging
+        # loses nothing.
+        merged = []
+        for message in out:
+            if merged and message["role"] == "user" and merged[-1]["role"] == "user":
+                merged[-1]["content"] += "\n\n" + (message["content"] or "")
+            else:
+                merged.append(message)
+        return merged
+
+    # The note and the separators are added after the turns were fitted, so the FINAL list is
+    # measured, and the oldest kept turn goes until it fits (review, PR #107). Only earlier
+    # turns are given up here; the current turn was fitted above.
+    merged = assemble()
+    while kept and sum(_message_chars(m) for m in merged) > budget:
+        kept.pop()                                      # newest first, so this is the oldest
+        dropped = True
+        merged = assemble()
     return merged
 
 
