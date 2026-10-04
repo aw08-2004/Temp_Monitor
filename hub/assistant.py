@@ -38,6 +38,7 @@ import time
 import uuid
 from urllib.parse import parse_qs, unquote, urlparse
 
+import ai
 import assistant_guide
 
 # ---------------------------------------------------------------------------------------
@@ -247,11 +248,8 @@ def delete_chat(db_path, chat_id, owner):
 
 def prune_chats(db_path, retention_days, now=None):
     """Drop conversations untouched for longer than the retention window."""
-    # Not a plain subtraction: the setting has no ceiling, and a window longer than the time
-    # since 1970 keeps everything rather than overflowing a float -- see ai.retention_cutoff.
-    now = float(now or time.time())
-    age = max(1, int(retention_days or 30)) * 86400
-    cutoff = now - age if age < now else 0.0
+    # Not a plain subtraction: the setting has no ceiling -- see ai.retention_cutoff.
+    cutoff = ai.retention_cutoff(now, max(1, int(retention_days or 30)) * 86400)
     with get_conn(db_path) as conn:
         old = [r["id"] for r in conn.execute(
             "SELECT id FROM assistant_chats WHERE updated_at < ?", (cutoff,))]
