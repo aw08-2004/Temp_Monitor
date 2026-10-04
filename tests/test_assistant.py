@@ -381,6 +381,13 @@ def test_history_current_turn_results_are_whole():
     check("...and the newest kept the rest of the room",
           tools[1].startswith("2" * 5000) and "cut to fit" in tools[1])
 
+    # A confirmation follow-up: the hub's note comes AFTER the tool results, and the newest
+    # result fits alone. The note counts too.
+    rows = [_row("user", "go"), *_step(1, 8000), _row("note", "n" * 3000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a note after the results is counted against the budget", chars(out) <= 10000
+          and "cut to fit" in next(m["content"] for m in out if m["role"] == "tool"))
+
     rows = [_row("user", "q" * 4000), *_step(1, 2000), *_step(2, 3000)]
     out = assistant.history_for_model(rows, budget=10000)
     check("a turn that fits whole is left whole",
