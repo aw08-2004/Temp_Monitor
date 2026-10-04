@@ -305,18 +305,195 @@ def test_links_are_built_by_the_hub_only():
           and assistant.token_for_href("/api/machines/PC-1") is None)
 
 
+def _row(role, content="", calls=None, call_id=""):
+    return {"role": role, "content": content, "tool_calls": calls or [],
+            "tool_call_id": call_id, "tool_name": "t" if role == "tool" else ""}
+
+
+def _step(n, size):
+    """One model step: an assistant message calling one tool, and that tool's answer."""
+    return [_row("assistant", "", [{"id": f"c{n}", "name": "t", "arguments": "{}"}]),
+            _row("tool", str(n) * size, call_id=f"c{n}")]
+
+
 def test_history_is_trimmed():
     print("\n-- old tool results go back to the model trimmed --")
-    rows = [{"role": "tool", "content": "x" * 50, "tool_calls": [], "tool_call_id": "a",
-             "tool_name": "t"},
-            {"role": "user", "content": "hi", "tool_calls": [], "tool_call_id": "",
-             "tool_name": ""},
-            {"role": "tool", "content": "y" * 5000, "tool_calls": [], "tool_call_id": "b",
-             "tool_name": "t"}]
+    rows = [_row("tool", "x" * 50, call_id="a"),
+            _row("user", "hi"), *_step(1, 5000), _row("assistant", "done"),
+            _row("user", "and now?")]
     out = assistant.history_for_model(rows)
     check("the window starts at a user message", out[0]["role"] == "user")
-    check("a long tool result is cut", len(out[1]["content"]) < 1000
-          and "call the tool again" in out[1]["content"])
+    check("a long tool result from an EARLIER turn is cut",
+          len(out[2]["content"]) < 1000 and "call the tool again" in out[2]["content"])
+
+
+def test_history_survives_a_long_turn():
+    """The silent failure: a turn of more than sixty rows used to leave the window with no
+    user message, and the model was sent the system prompt alone -- it forgot the question
+    and the whole conversation mid-answer."""
+    print("\n-- a long turn keeps its question and the conversation before it --")
+    rows = [_row("user", "remember the word pelican"), _row("assistant", "noted"),
+            _row("user", "check every PC")]
+    for n in range(40):
+        rows += _step(n, 200)
+    out = assistant.history_for_model(rows)
+    texts = [m.get("content") or "" for m in out]
+    check("the current question is still sent", "check every PC" in texts)
+    check("...and so is the earlier conversation", "remember the word pelican" in texts)
+    check("every tool reply still follows its call",
+          sum(1 for m in out if m["role"] == "tool") == 40)
+
+
+def test_history_current_turn_results_are_whole():
+    print("\n-- the result the model just asked for goes back whole --")
+    rows = [_row("user", "go"), *_step(1, 9000), *_step(2, 9000)]
+    out = assistant.history_for_model(rows, budget=12000)
+    tools = [m["content"] for m in out if m["role"] == "tool"]
+    check("the newest result is whole", tools[-1] == "2" * 9000)
+    check("an older one past the budget is trimmed", "call the tool again" in tools[0])
+
+    # A newest result bigger than the whole budget (result size set above the memory size):
+    # sent whole it broke the budget; trimmed to 600 the model lost what it asked for. It gets
+    # the room the turn leaves.
+    rows = [_row("user", "go"), *_step(1, 30000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    tool = next(m["content"] for m in out if m["role"] == "tool")
+    total = sum(len(m.get("content") or "") for m in out) + sum(
+        len(c["function"]["name"]) + len(c["function"]["arguments"])
+        for m in out for c in m.get("tool_calls") or ())
+    check("an oversized newest result is cut to the budget, not past it", total <= 10000)
+    check("...and keeps far more than an old result's 600",
+          tool.startswith("1" * 9000) and "cut to fit" in tool)
+
+    # A newest result that fits the budget BY ITSELF, after a long question: the tool results
+    # alone were under budget, so nothing was cut and the turn went over.
+    def chars(messages):
+        return sum(len(m.get("content") or "") for m in messages) + sum(
+            len(c["function"]["name"]) + len(c["function"]["arguments"])
+            for m in messages for c in m.get("tool_calls") or ())
+
+    rows = [_row("user", "q" * 4000), *_step(1, 3000), *_step(2, 9000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    tools = [m["content"] for m in out if m["role"] == "tool"]
+    check("the whole turn, question included, stays within the budget", chars(out) <= 10000)
+    check("...the older result went to 600 first",
+          len(tools[0]) < 1000 and "call the tool again" in tools[0])
+    check("...and the newest kept the rest of the room",
+          tools[1].startswith("2" * 5000) and "cut to fit" in tools[1])
+
+    # A confirmation follow-up: the hub's note comes AFTER the tool results, and the newest
+    # result fits alone. The note counts too.
+    rows = [_row("user", "go"), *_step(1, 8000), _row("note", "n" * 3000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a note after the results is counted against the budget", chars(out) <= 10000
+          and "cut to fit" in next(m["content"] for m in out if m["role"] == "tool"))
+
+    # The dropped-history note and the merge separators are added AFTER the turns are fitted.
+    # Here three earlier turns fill the room exactly and a fourth does not fit, so the note is
+    # folded in on top -- the final list must still be within the budget.
+    rows = []
+    for n in range(4):
+        rows += [_row("user", f"{n}" * 2000), _row("assistant", "a" * 1000)]
+    rows += [_row("user", "now" + "x" * 997)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("the final history, note and separators included, stays within the budget",
+          chars(out) <= 10000 and assistant.DROPPED_NOTE in out[0]["content"])
+    check("...and assembling it twice does not change the current turn",
+          assistant.history_for_model(rows, budget=10000) == out)
+
+    # The current turn alone fills the budget, so every earlier turn is dropped and the note
+    # has no earlier turn left to make room for it: the current turn must leave that room.
+    rows = [_row("user", "old question " + "o" * 1000), _row("assistant", "old answer"),
+            _row("user", "go"), *_step(1, 30000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a current turn that fills the budget still leaves room for the note",
+          chars(out) <= 10000 and assistant.DROPPED_NOTE in out[0]["content"])
+
+    rows = [_row("user", "q" * 4000), *_step(1, 2000), *_step(2, 3000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a turn that fits whole is left whole",
+          [m["content"] for m in out if m["role"] == "tool"] == ["1" * 2000, "2" * 3000])
+
+
+def test_history_budget_drops_whole_turns():
+    print("\n-- past the budget, old turns collapse and then drop, never mid-step --")
+    rows = []
+    for n in range(30):
+        rows += [_row("user", f"question {n} " + "q" * 400), *_step(n, 3000),
+                 _row("assistant", f"answer {n}")]
+    out = assistant.history_for_model(rows, budget=8000)
+    check("the newest question survives",
+          any((m.get("content") or "").startswith("question 29") for m in out))
+    check("the oldest question was dropped",
+          not any((m.get("content") or "").startswith("question 0 ") for m in out))
+    check("the model is told something was left out",
+          any(assistant.DROPPED_NOTE in (m.get("content") or "") for m in out))
+    calls = {c["id"] for m in out for c in m.get("tool_calls") or ()}
+    check("no tool reply is left without its call",
+          all(m["tool_call_id"] in calls for m in out if m["role"] == "tool"))
+    check("the result fits the budget, near enough",
+          sum(len(m.get("content") or "") for m in out) < 8000 + 3100)
+
+    # The budget is RAW characters. A turn that fits by raw count must be kept whole; when a
+    # later `_size` (JSON length) shadowed the history helper, the JSON overhead tipped this
+    # exact fit over and the turn was dropped.
+    rows = [_row("user", "x" * 4000), _row("assistant", '"' * 5990), _row("user", "now")]
+    out = assistant.history_for_model(rows, budget=10000)
+    check("a turn that fits the budget by raw characters is kept whole",
+          len(out) == 3 and out[1]["content"] == '"' * 5990
+          and assistant.DROPPED_NOTE not in out[0]["content"])
+
+    # A turn that left no answer (the provider failed) followed by a note and a new question:
+    # three user messages in a row, which strict servers refuse. They go as one.
+    rows = [_row("user", "first"), _row("note", "the operator confirmed action 3"),
+            _row("user", "second")]
+    out = assistant.history_for_model(rows)
+    check("adjacent user messages are merged into one",
+          len(out) == 1 and out[0]["role"] == "user"
+          and "first" in out[0]["content"] and "second" in out[0]["content"]
+          and "confirmed action 3" in out[0]["content"])
+    check("...and no two user messages are ever adjacent",
+          all(not (a["role"] == b["role"] == "user") for a, b in zip(out, out[1:])))
+
+
+def test_unbounded_retention_keeps_everything():
+    """The AI retention settings have no ceiling. A window of 10**400 days used to overflow a
+    float in every pruner, and app.py's per-prune `try` then logged "prune failed" every cycle
+    while nothing was pruned -- the right outcome by accident, and a log full of noise."""
+    print("\n-- a retention window of any length keeps everything, without raising --")
+    import ai
+    import tempfile
+    import webfetch
+    huge = 10 ** 400
+    chat = assistant.create_chat(DB, "prune@x.com")
+    try:
+        kept = assistant.prune_chats(DB, huge) == 0
+    except OverflowError:
+        kept = False
+    check("prune_chats keeps every conversation", kept
+          and assistant.get_chat(DB, chat["id"], "prune@x.com") is not None)
+    try:
+        ok = ai.prune_drafts(DB, huge) == 0
+    except OverflowError:
+        ok = False
+    check("prune_drafts keeps every draft", ok)
+    try:
+        ok = webfetch.prune_staging(tempfile.mkdtemp(), huge) == 0
+    except OverflowError:
+        ok = False
+    check("prune_staging keeps every download", ok)
+    check("retention_cutoff of a window past 1970 is 0.0, not an OverflowError",
+          ai.retention_cutoff(1_000_000.0, huge) == 0.0
+          and ai.retention_cutoff(1_000_000.0, 1000) == 999_000.0)
+    check("...a fractional window is kept, not truncated to nothing",
+          ai.retention_cutoff(1_000_000.0, 0.5 * 3600) == 1_000_000.0 - 1800)
+    check("...a float window too large for a float keeps everything",
+          ai.retention_cutoff(1_000_000.0, 1e308 * 3600) == 0.0)
+    check("...and now=0 is honoured, not read as unset",
+          ai.retention_cutoff(0, 10) == 0.0 and ai.retention_cutoff(0.0, 0) == 0.0)
+    check("an enormous AI timeout reaches the socket as one it accepts",
+          ai._timeout({"timeout_seconds": huge}) == ai.MAX_SOCKET_TIMEOUT
+          and ai._timeout({"timeout_seconds": 90}) == 90)
 
 
 def test_actions_expire():
@@ -1289,6 +1466,10 @@ def main():
     test_page_map_matches_the_app()
     test_links_are_built_by_the_hub_only()
     test_history_is_trimmed()
+    test_history_survives_a_long_turn()
+    test_history_current_turn_results_are_whole()
+    test_history_budget_drops_whole_turns()
+    test_unbounded_retention_keeps_everything()
     test_actions_expire()
     test_a_command_waits_for_its_confirmation()
     test_scope_is_the_operators()

@@ -290,6 +290,26 @@ def test_range_validation():
         check("out-of-range message states the bound", "100" in str(e))
 
 
+def test_ai_numbers_have_floors_but_no_ceilings():
+    """The AI settings lost their maximums on purpose (hub 1.137.0): each was a guess about a
+    provider the hub does not choose. The silent failure this pins is a ceiling quietly coming
+    back -- an admin's 50-step limit refused with a message that reads like a typo of theirs."""
+    print("\n-- AI numbers keep their floors and have no ceilings --")
+    db = fresh_db()
+    big = {"ai.assistant_max_steps": 500, "ai.max_tokens": 200000,
+           "ai.timeout_seconds": 3600, "ai.assistant_result_chars": 1000000,
+           "ai.assistant_context_chars": 2000000, "ai.draft_retention_days": 3650,
+           "ai.assistant_history_days": 3650, "ai.assistant_staging_hours": 8760}
+    for key, value in big.items():
+        check(f"{key} accepts {value}", _accepts(db, {key: value}))
+        check(f"...and the form puts no max on it", _field(db, "ai", key).get("max") is None)
+    check("the context budget's floor is accepted",
+          _accepts(db, {"ai.assistant_context_chars": 8000}))
+    check("...and below it is refused",
+          _rejects(db, {"ai.assistant_context_chars": 7999}))
+    check("a step limit of zero is still refused", _rejects(db, {"ai.assistant_max_steps": 0}))
+
+
 def test_set_many_is_all_or_nothing():
     print("\n-- one bad field rejects the whole batch --")
     db = fresh_db()
@@ -604,6 +624,7 @@ if __name__ == "__main__":
     test_set_and_reset()
     test_coercion()
     test_range_validation()
+    test_ai_numbers_have_floors_but_no_ceilings()
     test_set_many_is_all_or_nothing()
     test_unknown_keys()
     test_cache_invalidation()

@@ -38,6 +38,7 @@ import time
 import uuid
 from urllib.parse import parse_qs, unquote, urlparse
 
+import ai
 import assistant_guide
 
 # ---------------------------------------------------------------------------------------
@@ -53,7 +54,13 @@ MAX_TOOL_RESULT_CHARS = 12000
 # How much of an OLD tool result goes back into a later turn. Small on purpose -- see the
 # module docstring: a figure from three turns ago is a figure to re-read, not to quote.
 HISTORY_TOOL_CHARS = 600
-MAX_HISTORY_ROWS = 60
+# Characters of transcript sent with each provider call, unless `ai.assistant_context_chars`
+# says otherwise (hub 1.137.0). Replaced MAX_HISTORY_ROWS = 60, a ROW count: one step with
+# three tool calls is four rows, so a long turn pushed its own question out of the window, and
+# the cut-at-a-user-message rule then dropped every remaining row -- the model was sent the
+# system prompt and nothing else, and "forgot" the conversation mid-answer. Operators saw it
+# as the assistant resetting itself after about twenty tool calls.
+DEFAULT_CONTEXT_CHARS = 60000
 DEFAULT_MAX_STEPS = 8
 ACTION_TTL_SECONDS = 600
 MAX_CHATS_PER_OWNER = 200
@@ -241,7 +248,8 @@ def delete_chat(db_path, chat_id, owner):
 
 def prune_chats(db_path, retention_days, now=None):
     """Drop conversations untouched for longer than the retention window."""
-    cutoff = float(now or time.time()) - max(1, int(retention_days or 30)) * 86400
+    # Not a plain subtraction: the setting has no ceiling -- see ai.retention_cutoff.
+    cutoff = ai.retention_cutoff(now, max(1, int(retention_days or 30)) * 86400)
     with get_conn(db_path) as conn:
         old = [r["id"] for r in conn.execute(
             "SELECT id FROM assistant_chats WHERE updated_at < ?", (cutoff,))]
@@ -348,23 +356,62 @@ def list_messages(db_path, chat_id):
 NOTE_PREFIX = "[hub note, not written by the operator] "
 
 
-def history_for_model(messages):
-    """Stored rows as the OpenAI message list, trimmed. See the module docstring on why old
-    tool results are cut so hard.
+DROPPED_NOTE = ("Earlier messages in this conversation were left out to fit the context "
+                 "budget. If the operator refers to something you cannot see, say so and ask.")
+_TRIMMED = " ...[trimmed; call the tool again for current data]"
+_CUT_TO_FIT = (" ...[cut to fit the conversation budget; call again narrowed with `list`, "
+               "`fields`, `where` or `limit`]")
 
-    The window is cut at a USER message, never in the middle of a step: a `tool` message whose
-    `tool_calls` parent fell off the front is a request some servers reject outright.
-    """
-    rows = list(messages)[-MAX_HISTORY_ROWS:]
-    while rows and rows[0]["role"] != ROLE_USER:
-        rows.pop(0)
+
+def _trim_tool(content):
+    content = content or ""
+    if len(content) > HISTORY_TOOL_CHARS:
+        return content[:HISTORY_TOOL_CHARS] + _TRIMMED
+    return content
+
+
+def _message_chars(message):
+    """Raw characters in one provider message. Not `_size`: fit_result's helper of that name
+    is defined further down, and as the later module-level binding it replaced this one, so the
+    budget was measured as JSON with every quote in a tool result counted twice (review, PR
+    #107)."""
+    return len(message.get("content") or "") + sum(
+        len(c["function"]["name"]) + len(c["function"]["arguments"] or "")
+        for c in message.get("tool_calls") or ())
+
+
+def _messages_chars(messages):
+    """Raw characters in a list of provider messages AS SENT: two adjacent user messages are
+    merged with a blank line between them (history_for_model), so each pair costs two more."""
+    pairs = sum(1 for a, b in zip(messages, messages[1:])
+                if a["role"] == b["role"] == "user")
+    return sum(_message_chars(m) for m in messages) + 2 * pairs
+
+
+def _render_turn(rows, *, limits=None, collapse=False):
+    """One turn's rows as provider messages. `limits` maps a tool row's index to how much of
+    its result goes back: None for all of it, a number for that many characters; a row not in
+    it is trimmed to HISTORY_TOOL_CHARS. `collapse` drops the tool plumbing and keeps what was
+    SAID -- the operator's words, the hub's notes and the answers -- which is the part of an
+    old turn the conversation actually depends on."""
+    limits = limits or {}
     out = []
-    for r in rows:
+    for index, r in enumerate(rows):
         if r["role"] == ROLE_USER:
             out.append({"role": "user", "content": r["content"]})
         elif r["role"] == ROLE_NOTE:
             out.append({"role": "user", "content": NOTE_PREFIX + r["content"]})
         elif r["role"] == ROLE_ASSISTANT:
+            if collapse:
+                if not r["content"]:
+                    continue
+                # Two assistant texts in a row (a step's "let me check" and the answer) are
+                # merged, so a collapsed turn still alternates user/assistant.
+                if out and out[-1]["role"] == "assistant":
+                    out[-1]["content"] += "\n\n" + r["content"]
+                else:
+                    out.append({"role": "assistant", "content": r["content"]})
+                continue
             message = {"role": "assistant", "content": r["content"] or ""}
             if r["tool_calls"]:
                 message["tool_calls"] = [
@@ -372,14 +419,136 @@ def history_for_model(messages):
                      "function": {"name": c["name"], "arguments": c["arguments"]}}
                     for c in r["tool_calls"]]
             out.append(message)
-        elif r["role"] == ROLE_TOOL:
+        elif r["role"] == ROLE_TOOL and not collapse:
             content = r["content"] or ""
-            if len(content) > HISTORY_TOOL_CHARS:
-                content = (content[:HISTORY_TOOL_CHARS]
-                           + " ...[trimmed; call the tool again for current data]")
+            if index not in limits:
+                content = _trim_tool(content)
+            elif limits[index] is not None and len(content) > limits[index]:
+                content = content[:limits[index]] + _CUT_TO_FIT
             out.append({"role": "tool", "tool_call_id": r["tool_call_id"],
                         "content": content})
     return out
+
+
+def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
+    """Stored rows as the OpenAI message list, fitted to about `budget` characters.
+
+    **Cut by TURN, never by row.** A turn is one operator message and everything the model did
+    for it. The window used to be the last sixty rows, which a single long turn could fill on
+    its own -- and then it held no user message at all and was emptied (DEFAULT_CONTEXT_CHARS
+    has the history). Now, in order of what is given up first:
+
+      * The CURRENT turn is always sent whole in structure. Its tool results go back in full,
+        newest first, until they have spent the budget; older ones in it are trimmed. Trimming
+        them all, as the first version did, meant the model read only 600 characters of the
+        result it asked for one step ago, whatever `ai.assistant_result_chars` said. When the
+        turn as a whole is still over the budget (a long question, or `ai.assistant_result_chars`
+        set above `ai.assistant_context_chars`), older results go to 600 first and the newest is
+        then cut to the room left, not to 600: sending it whole broke the budget, which is the
+        one figure sized to the provider's context window.
+      * Each EARLIER turn, newest first, goes back with its tool results trimmed (see the
+        module docstring on stale figures); if that does not fit, collapsed to what was said;
+        if even that does not fit, it and every older turn are left out, and the model is told.
+
+    Never starts mid-step: a `tool` message whose `tool_calls` parent fell off the front is a
+    request some servers reject outright, so only whole turns are ever dropped.
+    """
+    rows = list(messages)
+    starts = [i for i, r in enumerate(rows) if r["role"] == ROLE_USER]
+    if not starts:
+        return []
+    bounds = list(zip(starts, starts[1:] + [len(rows)]))
+    turns = [rows[a:b] for a, b in bounds]
+    budget = max(1, int(budget or DEFAULT_CONTEXT_CHARS))
+
+    # Room for the dropped-history note, kept back from the current turn whenever there are
+    # earlier turns that might be dropped: the note is folded into the first message AFTER the
+    # turns are fitted, and when the current turn alone has used the budget there is no earlier
+    # turn left to give up for it (review, PR #107). Two more for its blank line.
+    reserve = len(NOTE_PREFIX + DROPPED_NOTE) + 2 if len(turns) > 1 else 0
+    full_budget, budget = budget, max(1, budget - reserve)
+
+    current = turns[-1]
+    newest_first = [i for i in range(len(current) - 1, -1, -1)
+                    if current[i]["role"] == ROLE_TOOL]
+    limits, spent = {}, 0
+    for index in newest_first:
+        spent += len(current[index]["content"] or "")
+        if spent > budget:
+            break
+        limits[index] = None
+
+    def turn_chars():
+        return _messages_chars(_render_turn(current, limits=limits))
+
+    # Measured on the WHOLE rendered turn, not on its tool results alone: the operator's
+    # message, the call arguments and the trimmed older results count too, and a newest result
+    # that fit by itself still pushed the turn past the budget (review, PR #107). Given up in
+    # order: older full results go back to 600 characters, oldest first; then the newest is cut.
+    for index in reversed(newest_first[1:]):
+        if turn_chars() <= budget:
+            break
+        limits.pop(index, None)
+    # A newest result missing from `limits` did not fit even alone, and turn_chars() measures it
+    # as already trimmed to 600 -- so it is cut to the room left whatever that says.
+    if newest_first and (newest_first[0] not in limits or turn_chars() > budget):
+        # It is the one the model is about to read, so it keeps every character the rest of
+        # the turn leaves -- never fewer than an old result keeps.
+        newest = newest_first[0]
+        limits.pop(newest, None)
+        others = turn_chars() - len(_trim_tool(current[newest]["content"]))
+        limits[newest] = max(HISTORY_TOOL_CHARS, budget - others - len(_CUT_TO_FIT))
+    tail = _render_turn(current, limits=limits)
+    # Earlier turns may use what the note did not need: the note only appears if one is dropped.
+    budget = full_budget
+    room = budget - _messages_chars(tail)
+
+    kept, dropped = [], False
+    for turn in reversed(turns[:-1]):
+        rendered = None
+        for collapse in (False, True):
+            candidate = _render_turn(turn, collapse=collapse)
+            size = _messages_chars(candidate)
+            if size <= room:
+                rendered = candidate
+                break
+        if rendered is None:
+            dropped = True
+            break
+        room -= size
+        kept.append(rendered)
+
+    def assemble():
+        # Copies of every message, the current turn's too: the merge below appends to a
+        # message in place, and this may run more than once.
+        out = [dict(m) for turn in reversed(kept) for m in turn] + [dict(m) for m in tail]
+        if dropped:
+            # Folded into the first message, which is always the operator's: a separate note
+            # would be two user messages in a row, which some strict servers refuse (review,
+            # PR #107).
+            out[0]["content"] = NOTE_PREFIX + DROPPED_NOTE + "\n\n" + out[0]["content"]
+        # Two user messages in a row, merged for the same reason. They arise wherever a turn
+        # left no assistant text behind -- stopped, or failed at the provider -- and wherever a
+        # hub note lands next to the operator's message; a collapsed turn makes the first case
+        # common (review, PR #107). A plain user message carries only content, so merging
+        # loses nothing.
+        merged = []
+        for message in out:
+            if merged and message["role"] == "user" and merged[-1]["role"] == "user":
+                merged[-1]["content"] += "\n\n" + (message["content"] or "")
+            else:
+                merged.append(message)
+        return merged
+
+    # The note and the separators are added after the turns were fitted, so the FINAL list is
+    # measured, and the oldest kept turn goes until it fits (review, PR #107). Only earlier
+    # turns are given up here; the current turn was fitted above.
+    merged = assemble()
+    while kept and _messages_chars(merged) > budget:
+        kept.pop()                                      # newest first, so this is the oldest
+        dropped = True
+        merged = assemble()
+    return merged
 
 
 # ---------------------------------------------------------------------------------------
@@ -761,7 +930,7 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
 
 def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools, execute,
              emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS,
-             result_chars=MAX_TOOL_RESULT_CHARS):
+             result_chars=MAX_TOOL_RESULT_CHARS, context_chars=DEFAULT_CONTEXT_CHARS):
     """One operator message through to a final answer. Writes every message as it goes.
 
     `complete_step(messages, tools)` -> (error, {"content", "tool_calls"}) is ai.complete_chat
@@ -783,7 +952,7 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
             emit({"type": "error", "error": "stopped"})
             return
         messages = ([{"role": "system", "content": system_prompt}]
-                    + history_for_model(list_messages(db_path, chat_id)))
+                    + history_for_model(list_messages(db_path, chat_id), context_chars))
         error, message = complete_step(messages, tools)
         if error:
             emit({"type": "error", "error": error})
