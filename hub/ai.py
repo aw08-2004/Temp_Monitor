@@ -1422,9 +1422,12 @@ def retention_cutoff(now, age_seconds):
     since 1970 keeps everything, so it is cut off at 0; the subtraction is never done on such
     a value, because a big enough int turned into a float raises OverflowError, and the pruner
     then logged "prune failed" on every cycle instead of keeping everything quietly. Comparing
-    an int with a float is exact in Python and cannot overflow."""
-    now = float(now or time.time())
-    age_seconds = int(age_seconds)
+    an int with a float is exact in Python and cannot overflow.
+
+    `age_seconds` keeps its type: an int stays exact however large, and a float cannot overflow
+    (at worst it is inf, which keeps everything). An int() here truncated half an hour to
+    nothing and deleted every staged download (review, PR #107). `now` of 0 is honoured."""
+    now = time.time() if now is None else float(now)
     return now - age_seconds if age_seconds < now else 0.0
 
 

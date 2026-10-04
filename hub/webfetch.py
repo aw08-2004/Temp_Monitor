@@ -724,7 +724,7 @@ def prune_staging(root, max_age_hours, now=None):
     now = time.time() if now is None else now
     # Not a plain subtraction: `ai.assistant_staging_hours` has no ceiling -- see
     # ai.retention_cutoff.
-    cutoff = ai.retention_cutoff(now, int(max_age_hours) * 3600)
+    cutoff = ai.retention_cutoff(now, max_age_hours * 3600)
     removed = 0
     try:
         names = os.listdir(root)

@@ -485,6 +485,12 @@ def test_unbounded_retention_keeps_everything():
     check("retention_cutoff of a window past 1970 is 0.0, not an OverflowError",
           ai.retention_cutoff(1_000_000.0, huge) == 0.0
           and ai.retention_cutoff(1_000_000.0, 1000) == 999_000.0)
+    check("...a fractional window is kept, not truncated to nothing",
+          ai.retention_cutoff(1_000_000.0, 0.5 * 3600) == 1_000_000.0 - 1800)
+    check("...a float window too large for a float keeps everything",
+          ai.retention_cutoff(1_000_000.0, 1e308 * 3600) == 0.0)
+    check("...and now=0 is honoured, not read as unset",
+          ai.retention_cutoff(0, 10) == 0.0 and ai.retention_cutoff(0.0, 0) == 0.0)
     check("an enormous AI timeout reaches the socket as one it accepts",
           ai._timeout({"timeout_seconds": huge}) == ai.MAX_SOCKET_TIMEOUT
           and ai._timeout({"timeout_seconds": 90}) == 90)
