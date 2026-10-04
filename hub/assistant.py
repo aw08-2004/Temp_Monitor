@@ -448,7 +448,7 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
     tail = _render_turn(current, full_tools=full)
     room = budget - sum(_size(m) for m in tail)
 
-    kept = []
+    kept, dropped = [], False
     for turn in reversed(turns[:-1]):
         rendered = None
         for collapse in (False, True):
@@ -458,11 +458,17 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
                 rendered = candidate
                 break
         if rendered is None:
-            kept.append([{"role": "user", "content": NOTE_PREFIX + DROPPED_NOTE}])
+            dropped = True
             break
         room -= size
         kept.append(rendered)
-    return [m for turn in reversed(kept) for m in turn] + tail
+    out = [dict(m) for turn in reversed(kept) for m in turn] + tail
+    if dropped:
+        # Folded into the first message, which is always the operator's: a separate note
+        # would be two user messages in a row, which some strict servers refuse (review,
+        # PR #107).
+        out[0] = dict(out[0], content=NOTE_PREFIX + DROPPED_NOTE + "\n\n" + out[0]["content"])
+    return out
 
 
 # ---------------------------------------------------------------------------------------

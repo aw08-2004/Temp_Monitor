@@ -1171,7 +1171,7 @@
         },
         "timeout_seconds": {
           "label": "Aufgeben nach",
-          "help": "Wie lange auf eine Antwort gewartet wird. Ein Modell auf dieser Maschine antwortet in Sekunden; ein gehostetes über eine langsame Leitung kann deutlich länger brauchen."
+          "help": "Wie lange auf eine Antwort gewartet wird. Ein Modell auf dieser Maschine antwortet in Sekunden; ein gehostetes über eine langsame Leitung kann deutlich länger brauchen. Es gibt keine Obergrenze, und eine Anfrage, die nie antwortet, belegt so lange einen Arbeitsthread des Assistenten."
         },
         "allow_private_endpoint": {
           "label": "Anbieter in diesem Netz erlauben",
@@ -1191,7 +1191,7 @@
         },
         "assistant_max_steps": {
           "label": "Assistenten-Schritte pro Nachricht",
-          "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter."
+          "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter. Es gibt keine Obergrenze: Ein sehr großer Wert lässt ein Modell, das zu keinem Ergebnis kommt, weiter fragen und Kosten verursachen, bis jemand Stopp drückt."
         },
         "assistant_result_chars": {
           "label": "Ergebnisgröße des Assistenten",

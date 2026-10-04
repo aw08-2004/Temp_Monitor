@@ -1171,7 +1171,7 @@
         },
         "timeout_seconds": {
           "label": "Abandonar tras",
-          "help": "Cuánto esperar una respuesta. Un modelo en esta máquina responde en segundos; uno alojado tras un enlace lento puede tardar mucho más."
+          "help": "Cuánto esperar una respuesta. Un modelo en esta máquina responde en segundos; uno alojado tras un enlace lento puede tardar mucho más. No hay límite superior, y una solicitud que nunca responde ocupa un proceso del asistente durante todo ese tiempo."
         },
         "allow_private_endpoint": {
           "label": "Permitir un proveedor en esta red",
@@ -1191,7 +1191,7 @@
         },
         "assistant_max_steps": {
           "label": "Pasos del asistente por mensaje",
-          "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor."
+          "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor. No hay límite superior: un valor muy grande permite que un modelo que nunca concluye siga preguntando, y generando costes, hasta que alguien pulse Detener."
         },
         "assistant_result_chars": {
           "label": "Tamaño de resultado del asistente",

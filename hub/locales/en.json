@@ -1243,7 +1243,7 @@
         },
         "timeout_seconds": {
           "label": "Give up after",
-          "help": "How long to wait for a reply. A model on this machine answers in seconds; a hosted one over a slow link can take much longer."
+          "help": "How long to wait for a reply. A model on this machine answers in seconds; a hosted one over a slow link can take much longer. There is no upper limit, and a request that never answers holds an assistant worker for this whole time."
         },
         "allow_private_endpoint": {
           "label": "Allow a provider on this network",
@@ -1263,7 +1263,7 @@
         },
         "assistant_max_steps": {
           "label": "Assistant steps per message",
-          "help": "How many times the assistant may call a tool and ask the provider again for one message. Each step is one request to the provider."
+          "help": "How many times the assistant may call a tool and ask the provider again for one message. Each step is one request to the provider. There is no upper limit: a very large value lets a model that never settles keep asking, and paying, until somebody presses Stop."
         },
         "assistant_result_chars": {
           "label": "Assistant result size",
