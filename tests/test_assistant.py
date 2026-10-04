@@ -482,6 +482,9 @@ def test_unbounded_retention_keeps_everything():
     except OverflowError:
         ok = False
     check("prune_staging keeps every download", ok)
+    check("retention_cutoff of a window past 1970 is 0.0, not an OverflowError",
+          ai.retention_cutoff(1_000_000.0, huge) == 0.0
+          and ai.retention_cutoff(1_000_000.0, 1000) == 999_000.0)
     check("an enormous AI timeout reaches the socket as one it accepts",
           ai._timeout({"timeout_seconds": huge}) == ai.MAX_SOCKET_TIMEOUT
           and ai._timeout({"timeout_seconds": 90}) == 90)
