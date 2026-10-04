@@ -394,6 +394,37 @@ def test_history_budget_drops_whole_turns():
           all(not (a["role"] == b["role"] == "user") for a, b in zip(out, out[1:])))
 
 
+def test_unbounded_retention_keeps_everything():
+    """The AI retention settings have no ceiling. A window of 10**400 days used to overflow a
+    float in every pruner, and app.py's per-prune `try` then logged "prune failed" every cycle
+    while nothing was pruned -- the right outcome by accident, and a log full of noise."""
+    print("\n-- a retention window of any length keeps everything, without raising --")
+    import ai
+    import tempfile
+    import webfetch
+    huge = 10 ** 400
+    chat = assistant.create_chat(DB, "prune@x.com")
+    try:
+        kept = assistant.prune_chats(DB, huge) == 0
+    except OverflowError:
+        kept = False
+    check("prune_chats keeps every conversation", kept
+          and assistant.get_chat(DB, chat["id"], "prune@x.com") is not None)
+    try:
+        ok = ai.prune_drafts(DB, huge) == 0
+    except OverflowError:
+        ok = False
+    check("prune_drafts keeps every draft", ok)
+    try:
+        ok = webfetch.prune_staging(tempfile.mkdtemp(), huge) == 0
+    except OverflowError:
+        ok = False
+    check("prune_staging keeps every download", ok)
+    check("an enormous AI timeout reaches the socket as one it accepts",
+          ai._timeout({"timeout_seconds": huge}) == ai.MAX_SOCKET_TIMEOUT
+          and ai._timeout({"timeout_seconds": 90}) == 90)
+
+
 def test_actions_expire():
     print("\n-- a pending action cannot be confirmed after it expires --")
     chat = assistant.create_chat(DB, "unit@x.com")
@@ -1367,6 +1398,7 @@ def main():
     test_history_survives_a_long_turn()
     test_history_current_turn_results_are_whole()
     test_history_budget_drops_whole_turns()
+    test_unbounded_retention_keeps_everything()
     test_actions_expire()
     test_a_command_waits_for_its_confirmation()
     test_scope_is_the_operators()

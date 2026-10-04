@@ -330,9 +330,20 @@ def provider_config(config):
         "base_url": base_url,
         "model": model,
         "max_tokens": int(config.get("max_tokens") or 1024),
-        "timeout": int(config.get("timeout_seconds") or 60),
+        "timeout": _timeout(config),
         "send_machine_names": bool(config.get("send_machine_names")),
     }
+
+
+# The longest wait handed to a socket. `ai.timeout_seconds` has no ceiling (hub 1.137.0), but a
+# socket refuses a timeout past roughly 292 years with "timeout value is too large", so an
+# admin's extra zeros would fail every request instead of waiting longer. A billion seconds is
+# 31 years -- the same as forever for a request -- so nobody can observe this bound.
+MAX_SOCKET_TIMEOUT = 10 ** 9
+
+
+def _timeout(config):
+    return min(int(config.get("timeout_seconds") or 60), MAX_SOCKET_TIMEOUT)
 
 
 def _unwrap_v4(address):
@@ -382,7 +393,7 @@ def endpoint_config(config):
         "provider": preset.name,
         "wire": preset.wire,
         "base_url": base_url,
-        "timeout": int(config.get("timeout_seconds") or 60),
+        "timeout": _timeout(config),
     }
 
 
@@ -1399,9 +1410,22 @@ def prune_drafts(db_path, retention_days, now=None):
     Called from the same background pruner as everything else in `data`, so a hub that is
     never restarted does not accumulate a year of abandoned drafts.
     """
-    cutoff = float(now or time.time()) - max(1, int(retention_days or 7)) * 86400
+    cutoff = retention_cutoff(now, max(1, int(retention_days or 7)) * 86400)
     with get_conn(db_path) as conn:
         return conn.execute("DELETE FROM ai_drafts WHERE updated_at < ?", (cutoff,)).rowcount
+
+
+def retention_cutoff(now, age_seconds):
+    """`now - age_seconds` as a float timestamp, for a window of ANY length.
+
+    The AI retention settings have no ceiling (hub 1.137.0). A window longer than the time
+    since 1970 keeps everything, so it is cut off at 0; the subtraction is never done on such
+    a value, because a big enough int turned into a float raises OverflowError, and the pruner
+    then logged "prune failed" on every cycle instead of keeping everything quietly. Comparing
+    an int with a float is exact in Python and cannot overflow."""
+    now = float(now or time.time())
+    age_seconds = int(age_seconds)
+    return now - age_seconds if age_seconds < now else 0.0
 
 
 def record_request(db_path, *, actor="", kind="", provider="", model="", machine="",

@@ -721,7 +721,11 @@ def prune_staging(root, max_age_hours, now=None):
     installers are large; nothing else ever deletes one.
     """
     now = time.time() if now is None else now
-    cutoff = now - float(max_age_hours) * 3600
+    # `ai.assistant_staging_hours` has no ceiling (hub 1.137.0): a window longer than the time
+    # since 1970 keeps everything, and float() on such a value would raise instead -- see
+    # ai.retention_cutoff.
+    age = int(max_age_hours) * 3600
+    cutoff = now - age if age < now else 0.0
     removed = 0
     try:
         names = os.listdir(root)
