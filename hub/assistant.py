@@ -361,6 +361,8 @@ NOTE_PREFIX = "[hub note, not written by the operator] "
 DROPPED_NOTE = ("Earlier messages in this conversation were left out to fit the context "
                  "budget. If the operator refers to something you cannot see, say so and ask.")
 _TRIMMED = " ...[trimmed; call the tool again for current data]"
+_CUT_TO_FIT = (" ...[cut to fit the conversation budget; call again narrowed with `list`, "
+               "`fields`, `where` or `limit`]")
 
 
 def _trim_tool(content):
@@ -380,11 +382,13 @@ def _message_chars(message):
         for c in message.get("tool_calls") or ())
 
 
-def _render_turn(rows, *, full_tools=(), collapse=False):
-    """One turn's rows as provider messages. `full_tools` is the set of row indexes whose tool
-    result goes back whole; every other is trimmed. `collapse` drops the tool plumbing and
-    keeps what was SAID -- the operator's words, the hub's notes and the answers -- which is
-    the part of an old turn the conversation actually depends on."""
+def _render_turn(rows, *, limits=None, collapse=False):
+    """One turn's rows as provider messages. `limits` maps a tool row's index to how much of
+    its result goes back: None for all of it, a number for that many characters; a row not in
+    it is trimmed to HISTORY_TOOL_CHARS. `collapse` drops the tool plumbing and keeps what was
+    SAID -- the operator's words, the hub's notes and the answers -- which is the part of an
+    old turn the conversation actually depends on."""
+    limits = limits or {}
     out = []
     for index, r in enumerate(rows):
         if r["role"] == ROLE_USER:
@@ -410,8 +414,11 @@ def _render_turn(rows, *, full_tools=(), collapse=False):
                     for c in r["tool_calls"]]
             out.append(message)
         elif r["role"] == ROLE_TOOL and not collapse:
-            content = ((r["content"] or "") if index in full_tools
-                       else _trim_tool(r["content"]))
+            content = r["content"] or ""
+            if index not in limits:
+                content = _trim_tool(content)
+            elif limits[index] is not None and len(content) > limits[index]:
+                content = content[:limits[index]] + _CUT_TO_FIT
             out.append({"role": "tool", "tool_call_id": r["tool_call_id"],
                         "content": content})
     return out
@@ -428,7 +435,10 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
       * The CURRENT turn is always sent whole in structure. Its tool results go back in full,
         newest first, until they have spent the budget; older ones in it are trimmed. Trimming
         them all, as the first version did, meant the model read only 600 characters of the
-        result it asked for one step ago, whatever `ai.assistant_result_chars` said.
+        result it asked for one step ago, whatever `ai.assistant_result_chars` said. A newest
+        result too big for the budget on its own (`ai.assistant_result_chars` set above
+        `ai.assistant_context_chars`) is cut to the room left, not to 600: sending it whole
+        broke the budget, which is the one figure sized to the provider's context window.
       * Each EARLIER turn, newest first, goes back with its tool results trimmed (see the
         module docstring on stale figures); if that does not fit, collapsed to what was said;
         if even that does not fit, it and every older turn are left out, and the model is told.
@@ -445,15 +455,23 @@ def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
     budget = max(1, int(budget or DEFAULT_CONTEXT_CHARS))
 
     current = turns[-1]
-    full, spent = set(), 0
-    for index in range(len(current) - 1, -1, -1):
-        if current[index]["role"] != ROLE_TOOL:
-            continue
+    newest_first = [i for i in range(len(current) - 1, -1, -1)
+                    if current[i]["role"] == ROLE_TOOL]
+    limits, spent = {}, 0
+    for index in newest_first:
         spent += len(current[index]["content"] or "")
-        # The newest result always goes back whole: it is the one the model is about to read.
-        if not full or spent <= budget:
-            full.add(index)
-    tail = _render_turn(current, full_tools=full)
+        if spent > budget:
+            break
+        limits[index] = None
+    if newest_first and newest_first[0] not in limits:
+        # The newest result does not fit even alone. It is the one the model is about to read,
+        # so it gets every character the rest of the turn leaves -- never fewer than an old
+        # result keeps.
+        newest = newest_first[0]
+        others = sum(_message_chars(m) for m in _render_turn(current)) \
+            - len(_trim_tool(current[newest]["content"]))
+        limits[newest] = max(HISTORY_TOOL_CHARS, budget - others - len(_CUT_TO_FIT))
+    tail = _render_turn(current, limits=limits)
     room = budget - sum(_message_chars(m) for m in tail)
 
     kept, dropped = [], False

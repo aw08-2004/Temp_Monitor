@@ -352,6 +352,19 @@ def test_history_current_turn_results_are_whole():
     check("the newest result is whole", tools[-1] == "2" * 9000)
     check("an older one past the budget is trimmed", "call the tool again" in tools[0])
 
+    # A newest result bigger than the whole budget (result size set above the memory size):
+    # sent whole it broke the budget; trimmed to 600 the model lost what it asked for. It gets
+    # the room the turn leaves.
+    rows = [_row("user", "go"), *_step(1, 30000)]
+    out = assistant.history_for_model(rows, budget=10000)
+    tool = next(m["content"] for m in out if m["role"] == "tool")
+    total = sum(len(m.get("content") or "") for m in out) + sum(
+        len(c["function"]["name"]) + len(c["function"]["arguments"])
+        for m in out for c in m.get("tool_calls") or ())
+    check("an oversized newest result is cut to the budget, not past it", total <= 10000)
+    check("...and keeps far more than an old result's 600",
+          tool.startswith("1" * 9000) and "cut to fit" in tool)
+
 
 def test_history_budget_drops_whole_turns():
     print("\n-- past the budget, old turns collapse and then drop, never mid-step --")
