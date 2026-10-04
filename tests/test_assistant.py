@@ -305,18 +305,72 @@ def test_links_are_built_by_the_hub_only():
           and assistant.token_for_href("/api/machines/PC-1") is None)
 
 
+def _row(role, content="", calls=None, call_id=""):
+    return {"role": role, "content": content, "tool_calls": calls or [],
+            "tool_call_id": call_id, "tool_name": "t" if role == "tool" else ""}
+
+
+def _step(n, size):
+    """One model step: an assistant message calling one tool, and that tool's answer."""
+    return [_row("assistant", "", [{"id": f"c{n}", "name": "t", "arguments": "{}"}]),
+            _row("tool", str(n) * size, call_id=f"c{n}")]
+
+
 def test_history_is_trimmed():
     print("\n-- old tool results go back to the model trimmed --")
-    rows = [{"role": "tool", "content": "x" * 50, "tool_calls": [], "tool_call_id": "a",
-             "tool_name": "t"},
-            {"role": "user", "content": "hi", "tool_calls": [], "tool_call_id": "",
-             "tool_name": ""},
-            {"role": "tool", "content": "y" * 5000, "tool_calls": [], "tool_call_id": "b",
-             "tool_name": "t"}]
+    rows = [_row("tool", "x" * 50, call_id="a"),
+            _row("user", "hi"), *_step(1, 5000), _row("assistant", "done"),
+            _row("user", "and now?")]
     out = assistant.history_for_model(rows)
     check("the window starts at a user message", out[0]["role"] == "user")
-    check("a long tool result is cut", len(out[1]["content"]) < 1000
-          and "call the tool again" in out[1]["content"])
+    check("a long tool result from an EARLIER turn is cut",
+          len(out[2]["content"]) < 1000 and "call the tool again" in out[2]["content"])
+
+
+def test_history_survives_a_long_turn():
+    """The silent failure: a turn of more than sixty rows used to leave the window with no
+    user message, and the model was sent the system prompt alone -- it forgot the question
+    and the whole conversation mid-answer."""
+    print("\n-- a long turn keeps its question and the conversation before it --")
+    rows = [_row("user", "remember the word pelican"), _row("assistant", "noted"),
+            _row("user", "check every PC")]
+    for n in range(40):
+        rows += _step(n, 200)
+    out = assistant.history_for_model(rows)
+    texts = [m.get("content") or "" for m in out]
+    check("the current question is still sent", "check every PC" in texts)
+    check("...and so is the earlier conversation", "remember the word pelican" in texts)
+    check("every tool reply still follows its call",
+          sum(1 for m in out if m["role"] == "tool") == 40)
+
+
+def test_history_current_turn_results_are_whole():
+    print("\n-- the result the model just asked for goes back whole --")
+    rows = [_row("user", "go"), *_step(1, 9000), *_step(2, 9000)]
+    out = assistant.history_for_model(rows, budget=12000)
+    tools = [m["content"] for m in out if m["role"] == "tool"]
+    check("the newest result is whole", tools[-1] == "2" * 9000)
+    check("an older one past the budget is trimmed", "call the tool again" in tools[0])
+
+
+def test_history_budget_drops_whole_turns():
+    print("\n-- past the budget, old turns collapse and then drop, never mid-step --")
+    rows = []
+    for n in range(30):
+        rows += [_row("user", f"question {n} " + "q" * 400), *_step(n, 3000),
+                 _row("assistant", f"answer {n}")]
+    out = assistant.history_for_model(rows, budget=8000)
+    check("the newest question survives",
+          any((m.get("content") or "").startswith("question 29") for m in out))
+    check("the oldest question was dropped",
+          not any((m.get("content") or "").startswith("question 0 ") for m in out))
+    check("the model is told something was left out",
+          any(assistant.DROPPED_NOTE in (m.get("content") or "") for m in out))
+    calls = {c["id"] for m in out for c in m.get("tool_calls") or ()}
+    check("no tool reply is left without its call",
+          all(m["tool_call_id"] in calls for m in out if m["role"] == "tool"))
+    check("the result fits the budget, near enough",
+          sum(len(m.get("content") or "") for m in out) < 8000 + 3100)
 
 
 def test_actions_expire():
@@ -1289,6 +1343,9 @@ def main():
     test_page_map_matches_the_app()
     test_links_are_built_by_the_hub_only()
     test_history_is_trimmed()
+    test_history_survives_a_long_turn()
+    test_history_current_turn_results_are_whole()
+    test_history_budget_drops_whole_turns()
     test_actions_expire()
     test_a_command_waits_for_its_confirmation()
     test_scope_is_the_operators()

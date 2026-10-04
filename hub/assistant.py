@@ -53,7 +53,13 @@ MAX_TOOL_RESULT_CHARS = 12000
 # How much of an OLD tool result goes back into a later turn. Small on purpose -- see the
 # module docstring: a figure from three turns ago is a figure to re-read, not to quote.
 HISTORY_TOOL_CHARS = 600
-MAX_HISTORY_ROWS = 60
+# Characters of transcript sent with each provider call, unless `ai.assistant_context_chars`
+# says otherwise (hub 1.137.0). Replaced MAX_HISTORY_ROWS = 60, a ROW count: one step with
+# three tool calls is four rows, so a long turn pushed its own question out of the window, and
+# the cut-at-a-user-message rule then dropped every remaining row -- the model was sent the
+# system prompt and nothing else, and "forgot" the conversation mid-answer. Operators saw it
+# as the assistant resetting itself after about twenty tool calls.
+DEFAULT_CONTEXT_CHARS = 60000
 DEFAULT_MAX_STEPS = 8
 ACTION_TTL_SECONDS = 600
 MAX_CHATS_PER_OWNER = 200
@@ -348,23 +354,46 @@ def list_messages(db_path, chat_id):
 NOTE_PREFIX = "[hub note, not written by the operator] "
 
 
-def history_for_model(messages):
-    """Stored rows as the OpenAI message list, trimmed. See the module docstring on why old
-    tool results are cut so hard.
+DROPPED_NOTE = ("Earlier messages in this conversation were left out to fit the context "
+                 "budget. If the operator refers to something you cannot see, say so and ask.")
+_TRIMMED = " ...[trimmed; call the tool again for current data]"
 
-    The window is cut at a USER message, never in the middle of a step: a `tool` message whose
-    `tool_calls` parent fell off the front is a request some servers reject outright.
-    """
-    rows = list(messages)[-MAX_HISTORY_ROWS:]
-    while rows and rows[0]["role"] != ROLE_USER:
-        rows.pop(0)
+
+def _trim_tool(content):
+    content = content or ""
+    if len(content) > HISTORY_TOOL_CHARS:
+        return content[:HISTORY_TOOL_CHARS] + _TRIMMED
+    return content
+
+
+def _size(message):
+    return len(message.get("content") or "") + sum(
+        len(c["function"]["name"]) + len(c["function"]["arguments"] or "")
+        for c in message.get("tool_calls") or ())
+
+
+def _render_turn(rows, *, full_tools=(), collapse=False):
+    """One turn's rows as provider messages. `full_tools` is the set of row indexes whose tool
+    result goes back whole; every other is trimmed. `collapse` drops the tool plumbing and
+    keeps what was SAID -- the operator's words, the hub's notes and the answers -- which is
+    the part of an old turn the conversation actually depends on."""
     out = []
-    for r in rows:
+    for index, r in enumerate(rows):
         if r["role"] == ROLE_USER:
             out.append({"role": "user", "content": r["content"]})
         elif r["role"] == ROLE_NOTE:
             out.append({"role": "user", "content": NOTE_PREFIX + r["content"]})
         elif r["role"] == ROLE_ASSISTANT:
+            if collapse:
+                if not r["content"]:
+                    continue
+                # Two assistant texts in a row (a step's "let me check" and the answer) are
+                # merged, so a collapsed turn still alternates user/assistant.
+                if out and out[-1]["role"] == "assistant":
+                    out[-1]["content"] += "\n\n" + r["content"]
+                else:
+                    out.append({"role": "assistant", "content": r["content"]})
+                continue
             message = {"role": "assistant", "content": r["content"] or ""}
             if r["tool_calls"]:
                 message["tool_calls"] = [
@@ -372,14 +401,68 @@ def history_for_model(messages):
                      "function": {"name": c["name"], "arguments": c["arguments"]}}
                     for c in r["tool_calls"]]
             out.append(message)
-        elif r["role"] == ROLE_TOOL:
-            content = r["content"] or ""
-            if len(content) > HISTORY_TOOL_CHARS:
-                content = (content[:HISTORY_TOOL_CHARS]
-                           + " ...[trimmed; call the tool again for current data]")
+        elif r["role"] == ROLE_TOOL and not collapse:
+            content = ((r["content"] or "") if index in full_tools
+                       else _trim_tool(r["content"]))
             out.append({"role": "tool", "tool_call_id": r["tool_call_id"],
                         "content": content})
     return out
+
+
+def history_for_model(messages, budget=DEFAULT_CONTEXT_CHARS):
+    """Stored rows as the OpenAI message list, fitted to about `budget` characters.
+
+    **Cut by TURN, never by row.** A turn is one operator message and everything the model did
+    for it. The window used to be the last sixty rows, which a single long turn could fill on
+    its own -- and then it held no user message at all and was emptied (DEFAULT_CONTEXT_CHARS
+    has the history). Now, in order of what is given up first:
+
+      * The CURRENT turn is always sent whole in structure. Its tool results go back in full,
+        newest first, until they have spent the budget; older ones in it are trimmed. Trimming
+        them all, as the first version did, meant the model read only 600 characters of the
+        result it asked for one step ago, whatever `ai.assistant_result_chars` said.
+      * Each EARLIER turn, newest first, goes back with its tool results trimmed (see the
+        module docstring on stale figures); if that does not fit, collapsed to what was said;
+        if even that does not fit, it and every older turn are left out, and the model is told.
+
+    Never starts mid-step: a `tool` message whose `tool_calls` parent fell off the front is a
+    request some servers reject outright, so only whole turns are ever dropped.
+    """
+    rows = list(messages)
+    starts = [i for i, r in enumerate(rows) if r["role"] == ROLE_USER]
+    if not starts:
+        return []
+    bounds = list(zip(starts, starts[1:] + [len(rows)]))
+    turns = [rows[a:b] for a, b in bounds]
+    budget = max(1, int(budget or DEFAULT_CONTEXT_CHARS))
+
+    current = turns[-1]
+    full, spent = set(), 0
+    for index in range(len(current) - 1, -1, -1):
+        if current[index]["role"] != ROLE_TOOL:
+            continue
+        spent += len(current[index]["content"] or "")
+        # The newest result always goes back whole: it is the one the model is about to read.
+        if not full or spent <= budget:
+            full.add(index)
+    tail = _render_turn(current, full_tools=full)
+    room = budget - sum(_size(m) for m in tail)
+
+    kept = []
+    for turn in reversed(turns[:-1]):
+        rendered = None
+        for collapse in (False, True):
+            candidate = _render_turn(turn, collapse=collapse)
+            size = sum(_size(m) for m in candidate)
+            if size <= room:
+                rendered = candidate
+                break
+        if rendered is None:
+            kept.append([{"role": "user", "content": NOTE_PREFIX + DROPPED_NOTE}])
+            break
+        room -= size
+        kept.append(rendered)
+    return [m for turn in reversed(kept) for m in turn] + tail
 
 
 # ---------------------------------------------------------------------------------------
@@ -761,7 +844,7 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
 
 def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools, execute,
              emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS,
-             result_chars=MAX_TOOL_RESULT_CHARS):
+             result_chars=MAX_TOOL_RESULT_CHARS, context_chars=DEFAULT_CONTEXT_CHARS):
     """One operator message through to a final answer. Writes every message as it goes.
 
     `complete_step(messages, tools)` -> (error, {"content", "tool_calls"}) is ai.complete_chat
@@ -783,7 +866,7 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
             emit({"type": "error", "error": "stopped"})
             return
         messages = ([{"role": "system", "content": system_prompt}]
-                    + history_for_model(list_messages(db_path, chat_id)))
+                    + history_for_model(list_messages(db_path, chat_id), context_chars))
         error, message = complete_step(messages, tools)
         if error:
             emit({"type": "error", "error": error})

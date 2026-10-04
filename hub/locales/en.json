@@ -1269,6 +1269,10 @@
           "label": "Assistant result size",
           "help": "How many characters of one tool answer the assistant reads, about four to a token. Larger lets it see more of a long list or command output at once, but every later step resends it, so each request is slower and costs more, and a small model's context window can overflow. The answer says when something was cut."
         },
+        "assistant_context_chars": {
+          "label": "Assistant memory size",
+          "help": "How many characters of the conversation are sent with each request, about four to a token. When a conversation outgrows it, old tool results are shortened first, then old turns are reduced to what was said, and only then are the oldest messages left out. Raise it for a model with a large context window; lower it if a small model starts failing on long conversations."
+        },
         "assistant_history_days": {
           "label": "Keep assistant conversations for",
           "help": "A conversation nobody has touched for this long is deleted."

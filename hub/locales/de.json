@@ -1197,6 +1197,10 @@
           "label": "Ergebnisgröße des Assistenten",
           "help": "Wie viele Zeichen einer Werkzeugantwort der Assistent liest, etwa vier pro Token. Mehr zeigt ihm einen größeren Teil einer langen Liste oder Befehlsausgabe auf einmal, aber jeder weitere Schritt sendet sie erneut, sodass jede Anfrage langsamer und teurer wird und das Kontextfenster eines kleinen Modells überlaufen kann. Die Antwort weist auf gekürzte Inhalte hin."
         },
+        "assistant_context_chars": {
+          "label": "Gedächtnisgröße des Assistenten",
+          "help": "Wie viele Zeichen der Unterhaltung mit jeder Anfrage gesendet werden, etwa vier pro Token. Wird eine Unterhaltung länger, werden zuerst alte Werkzeugergebnisse gekürzt, dann alte Runden auf das Gesagte reduziert und erst danach die ältesten Nachrichten weggelassen. Für ein Modell mit großem Kontextfenster erhöhen; senken, wenn ein kleines Modell bei langen Unterhaltungen scheitert."
+        },
         "assistant_history_days": {
           "label": "Assistenten-Unterhaltungen aufbewahren für",
           "help": "Eine Unterhaltung, die so lange niemand angefasst hat, wird gelöscht."
