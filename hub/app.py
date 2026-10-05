@@ -154,7 +154,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.138.0"
+HUB_VERSION = "1.138.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -5103,6 +5103,9 @@ def report_temp():
         client_ts = int(client_ts) if client_ts is not None else None
     except (TypeError, ValueError):
         client_ts = None
+    # Kept before the range check below nulls an out-of-range stamp: the disk-usage point
+    # further down must know the report was a stale backfill even when its stamp was discarded.
+    reported_ts = client_ts
     if client_ts is not None:
         now_epoch = int(time.time())
         # Bounded by data.ingest_max_backdate_days, NOT by the retention window. They
@@ -5119,8 +5122,11 @@ def report_temp():
     # One daily point per volume for the disk-usage forecast (roadmap #27). Live reports
     # only: the agent stamps every report with client_ts, and one older than ten minutes is a
     # reconnect backfill describing a past moment. Filing that under today would put last
-    # week's disk on today's point.
-    if sensors and (client_ts is None or client_ts >= int(time.time()) - 600):
+    # week's disk on today's point. Read from the stamp as REPORTED, not from client_ts: a
+    # backfill older than data.ingest_max_backdate_days has had client_ts nulled above, and
+    # testing that would file the oldest backfills of all as live. Found in review. No stamp
+    # at all (an agent too old to send one) still counts as live.
+    if sensors and (reported_ts is None or reported_ts >= int(time.time()) - 600):
         _record_disk_points(machine, sensors)
     # Keep an enrolled agent's online/offline status fresh off its ordinary temp
     # reports too, so it doesn't read offline between dedicated heartbeats.
