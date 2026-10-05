@@ -1171,7 +1171,7 @@
         },
         "timeout_seconds": {
           "label": "Abandonar tras",
-          "help": "Cuánto esperar una respuesta. Un modelo en esta máquina responde en segundos; uno alojado tras un enlace lento puede tardar mucho más."
+          "help": "Cuánto esperar una respuesta. Un modelo en esta máquina responde en segundos; uno alojado tras un enlace lento puede tardar mucho más. No hay límite superior, y una solicitud que nunca responde ocupa un proceso del asistente durante todo ese tiempo."
         },
         "allow_private_endpoint": {
           "label": "Permitir un proveedor en esta red",
@@ -1191,11 +1191,15 @@
         },
         "assistant_max_steps": {
           "label": "Pasos del asistente por mensaje",
-          "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor."
+          "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor. No hay límite superior: un valor muy grande permite que un modelo que nunca concluye siga preguntando, y generando costes, hasta que alguien pulse Detener."
         },
         "assistant_result_chars": {
           "label": "Tamaño de resultado del asistente",
           "help": "Cuántos caracteres de una respuesta de herramienta lee el asistente, unos cuatro por token. Más le permite ver a la vez una parte mayor de una lista larga o de la salida de un comando, pero cada paso posterior la reenvía, así que cada solicitud es más lenta y cuesta más, y la ventana de contexto de un modelo pequeño puede desbordarse. La respuesta indica cuándo se recorta el contenido."
+        },
+        "assistant_context_chars": {
+          "label": "Tamaño de memoria del asistente",
+          "help": "Cuántos caracteres de la conversación se envían con cada solicitud, unos cuatro por token. Cuando una conversación lo supera, primero se acortan los resultados de herramientas antiguos, luego las rondas antiguas se reducen a lo que se dijo y solo entonces se omiten los mensajes más antiguos. Auméntelo para un modelo con una ventana de contexto grande; redúzcalo si un modelo pequeño empieza a fallar en conversaciones largas."
         },
         "assistant_history_days": {
           "label": "Conservar las conversaciones del asistente durante",

@@ -1171,7 +1171,7 @@
         },
         "timeout_seconds": {
           "label": "Aufgeben nach",
-          "help": "Wie lange auf eine Antwort gewartet wird. Ein Modell auf dieser Maschine antwortet in Sekunden; ein gehostetes über eine langsame Leitung kann deutlich länger brauchen."
+          "help": "Wie lange auf eine Antwort gewartet wird. Ein Modell auf dieser Maschine antwortet in Sekunden; ein gehostetes über eine langsame Leitung kann deutlich länger brauchen. Es gibt keine Obergrenze, und eine Anfrage, die nie antwortet, belegt so lange einen Arbeitsthread des Assistenten."
         },
         "allow_private_endpoint": {
           "label": "Anbieter in diesem Netz erlauben",
@@ -1191,11 +1191,15 @@
         },
         "assistant_max_steps": {
           "label": "Assistenten-Schritte pro Nachricht",
-          "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter."
+          "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter. Es gibt keine Obergrenze: Ein sehr großer Wert lässt ein Modell, das zu keinem Ergebnis kommt, weiter fragen und Kosten verursachen, bis jemand Stopp drückt."
         },
         "assistant_result_chars": {
           "label": "Ergebnisgröße des Assistenten",
           "help": "Wie viele Zeichen einer Werkzeugantwort der Assistent liest, etwa vier pro Token. Mehr zeigt ihm einen größeren Teil einer langen Liste oder Befehlsausgabe auf einmal, aber jeder weitere Schritt sendet sie erneut, sodass jede Anfrage langsamer und teurer wird und das Kontextfenster eines kleinen Modells überlaufen kann. Die Antwort weist auf gekürzte Inhalte hin."
+        },
+        "assistant_context_chars": {
+          "label": "Gedächtnisgröße des Assistenten",
+          "help": "Wie viele Zeichen der Unterhaltung mit jeder Anfrage gesendet werden, etwa vier pro Token. Wird eine Unterhaltung länger, werden zuerst alte Werkzeugergebnisse gekürzt, dann alte Runden auf das Gesagte reduziert und erst danach die ältesten Nachrichten weggelassen. Für ein Modell mit großem Kontextfenster erhöhen; senken, wenn ein kleines Modell bei langen Unterhaltungen scheitert."
         },
         "assistant_history_days": {
           "label": "Assistenten-Unterhaltungen aufbewahren für",

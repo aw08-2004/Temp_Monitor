@@ -62,6 +62,7 @@ from urllib.parse import quote, urljoin, urlparse
 import certifi
 import urllib3
 
+import ai
 import packages
 
 USER_AGENT = "FleetHub-Assistant/1.0 (+package builder)"
@@ -721,7 +722,9 @@ def prune_staging(root, max_age_hours, now=None):
     installers are large; nothing else ever deletes one.
     """
     now = time.time() if now is None else now
-    cutoff = now - float(max_age_hours) * 3600
+    # Not a plain subtraction: `ai.assistant_staging_hours` has no ceiling -- see
+    # ai.retention_cutoff.
+    cutoff = ai.retention_cutoff(now, max_age_hours * 3600)
     removed = 0
     try:
         names = os.listdir(root)

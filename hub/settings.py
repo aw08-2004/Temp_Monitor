@@ -748,8 +748,12 @@ REGISTRY = (
     # lives in settings-ai.js, which suggests the cached ids over this field while leaving it
     # typable, so the list is an aid rather than a gate.
     _s("ai.model", "ai", "str", ""),
-    _s("ai.max_tokens", "ai", "int", 1024, minimum=64, maximum=32768),
-    _s("ai.timeout_seconds", "ai", "int", 60, minimum=5, maximum=600, unit="seconds"),
+    # **No ceilings on the AI numbers** (hub 1.137.0). Each had one -- 20 steps, 32,768 tokens,
+    # 600 seconds -- and each was a guess about a provider this hub does not choose: a large
+    # hosted model takes far more than any of them, and the admin paying for it is the one who
+    # knows. A floor stays where a value below it is broken rather than merely expensive.
+    _s("ai.max_tokens", "ai", "int", 1024, minimum=64),
+    _s("ai.timeout_seconds", "ai", "int", 60, minimum=5, unit="seconds"),
     # TRUE, which is the opposite of the equivalent webhook switch, and the reason
     # ai.check_provider_url exists rather than reusing notify.check_webhook_url. A webhook
     # aimed at a private address is almost always an SSRF attempt; a model server aimed at one
@@ -764,7 +768,7 @@ REGISTRY = (
     _s("ai.send_machine_names", "ai", "bool", False),
     # A draft is somebody's unfinished sentence. A week is long enough to come back to one
     # after a holiday and short enough that abandoned experiments do not accumulate.
-    _s("ai.draft_retention_days", "ai", "int", 7, minimum=1, maximum=365, unit="days"),
+    _s("ai.draft_retention_days", "ai", "int", 7, minimum=1, unit="days"),
     # The console assistant (roadmap #26). **Off by default**, even though `ai.enabled` above
     # already decides whether anything leaves the building: a hub that turned AI on for the
     # Alert Brain agreed to redacted prompts, and an upgrade that switched this on by itself
@@ -777,14 +781,18 @@ REGISTRY = (
     _s("ai.assistant_enabled", "ai", "bool", False),
     # Provider calls per operator message. Each tool step is one call; eight covers "find the
     # hot ones, read the worst, check its processes, answer" with room for a retry.
-    _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1, maximum=20),
+    _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1),
     # Characters of ONE tool result the model reads (hub 1.135.6). 12,000 is about 3,000 tokens
     # and suits a small local model; a large hosted one can take far more, and an operator
     # whose answers keep arriving cut can raise it here. The floor keeps one machine's report
-    # whole; the ceiling is where a single result starts crowding the conversation out of even
-    # a large context window, since every later step resends it.
-    _s("ai.assistant_result_chars", "ai", "int", 12000, minimum=4000, maximum=100000),
-    _s("ai.assistant_history_days", "ai", "int", 30, minimum=1, maximum=365, unit="days"),
+    # whole. Every later step resends it, so a large value costs on every request.
+    _s("ai.assistant_result_chars", "ai", "int", 12000, minimum=4000),
+    # Characters of conversation sent with each provider call (hub 1.137.0) -- see
+    # assistant.history_for_model for what is given up first when it is reached. 60,000 is
+    # about 15,000 tokens; raise it for a large-context model, lower it for a small local one.
+    # The floor leaves room for one tool result beside the question.
+    _s("ai.assistant_context_chars", "ai", "int", 60000, minimum=8000),
+    _s("ai.assistant_history_days", "ai", "int", 30, minimum=1, unit="days"),
     # Package building (roadmap #26): the assistant reading public web pages, looking up winget
     # manifests and downloading installers into <LOG_DIR>/staging. **Off by default, and
     # separate from `ai.assistant_enabled`**: a hub that agreed to a model reading its fleet has
@@ -795,7 +803,7 @@ REGISTRY = (
     _s("ai.assistant_web_enabled", "ai", "bool", False),
     # A staged installer nobody turned into a package. Installers are large, and nothing else
     # ever deletes one; a day is long enough to come back to a half-finished conversation.
-    _s("ai.assistant_staging_hours", "ai", "int", 24, minimum=1, maximum=720, unit="hours"),
+    _s("ai.assistant_staging_hours", "ai", "int", 24, minimum=1, unit="hours"),
 
     # ---------------- Endpoint security ----------------
     # BitLocker recovery-key escrow (roadmap #19). The keys themselves are absent from this

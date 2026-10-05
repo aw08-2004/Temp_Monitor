@@ -4713,7 +4713,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4, modes hub 1.135.5, package building hub 1.136.0   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4, modes hub 1.135.5, package building hub 1.136.0, turn-based history hub 1.137.0   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
@@ -4895,6 +4895,31 @@ names, and can do what the signed-in operator can.
   YAML (no YAML dependency, and the model reads it as text); a separate download size setting.
 - Known limit: a hub that reaches the internet only through an HTTP proxy cannot use this,
   because pinning the address means connecting directly.
+
+### Hub 1.137.0 · a conversation that survives a long answer, and AI settings without ceilings
+- **The history window is cut by TURN under a character budget**, not by row. It was the last
+  60 stored rows; a turn of about twenty tool calls filled that on its own, the window then held
+  no user message, and the cut-at-a-user-message rule emptied it -- the model was sent the
+  system prompt alone and forgot the question and the conversation mid-answer. Operators saw
+  the assistant "reset". Now (`assistant.history_for_model`): the current turn goes back whole,
+  its newest tool results in full; earlier turns go back with results trimmed to 600, then
+  collapsed to what was said, then dropped -- only ever whole turns, and the model is told.
+  Every tool result used to be trimmed on the very next step too, so the model read 600
+  characters of what it had just asked for whatever `ai.assistant_result_chars` said.
+- New setting `ai.assistant_context_chars` (60,000, about 15,000 tokens; floor 8,000), measured
+  in raw characters. Adjacent user messages (a stopped turn, a hub note) are merged, because
+  strict OpenAI-compatible servers refuse two in a row.
+- **The `ai.*` numbers have floors and no ceilings** (owner's decision): steps, tokens, timeout,
+  result and context size, and the three retention windows. Each ceiling was a guess about a
+  provider the hub does not choose. The help texts for steps and timeout say what a huge value
+  costs. A window longer than the time since 1970 keeps everything instead of overflowing a
+  float in the pruners, and the socket timeout is held under the ~292 years a socket accepts.
+  `test_ai_numbers_have_floors_but_no_ceilings` pins it.
+- Rejected: raising `MAX_HISTORY_ROWS`. Any row count can be filled by one long enough turn,
+  and when it is, the failure is total. Rejected: keeping ceilings on the retention windows
+  (PR #107 review) -- no input breaks once the arithmetic is guarded, and a ceiling there is the
+  same guess the owner asked to remove. The non-AI settings keep theirs: most are real bounds
+  (a percentage, map zoom, the 60 s push hold), not guesses.
 
 ### Open
 - Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the
