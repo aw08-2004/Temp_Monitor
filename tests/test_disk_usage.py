@@ -304,6 +304,14 @@ def at(days_ago, hour=12):
     return int(disk_usage.datetime(d.year, d.month, d.day, hour).timestamp())
 
 
+def _raises(call):
+    try:
+        call()
+    except ValueError:
+        return True
+    return False
+
+
 def test_history():
     print("\n== Full-depth history: every folder and file ==")
     root = tempfile.mkdtemp(prefix="disk-history-")
@@ -406,11 +414,39 @@ def test_history():
         listing = {e["name"] for e in disk_history.browse(
             root, "PC-2", "C:", "C:\\", disk_history.day_number(day3))["entries"]}
         check("only the well-formed line on this volume is stored", listing == {"ok.txt"})
+        check("an upload with no length is refused",
+              disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""), 0)
+              == "no_length")
+        check("an upload over the cap is refused before its body is read",
+              disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""),
+                                  disk_history.MAX_UPLOAD_BYTES + 1) == "too_large")
+        check("a volume that is not a letter cannot become a path",
+              _raises(lambda: disk_history.volume_path(root, "PC-2", "..")))
+
+        print("\n== The spool is bounded ==")
+        spool_root = tempfile.mkdtemp(prefix="disk-history-spool-")
         try:
-            disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""), 0)
-            check("an upload with no length is refused", False)
-        except ValueError:
-            check("an upload with no length is refused", True)
+            def queue(when, base, full):
+                body = delta([entry("C:\\x.txt", when)])
+                return disk_history.accept(spool_root, "PC-Q", "C:", when, base, full,
+                                           io.BytesIO(body), len(body))
+            check("a full tree is spooled", queue(100, None, True) == "stored")
+            check("a retry of it while it is still waiting is a duplicate, not a second copy",
+                  queue(100, None, True) == "duplicate")
+            check("a delta on the queued scan is accepted", queue(200, 100, False) == "stored")
+            check("a third upload waiting for one volume is refused as busy",
+                  queue(300, 200, False) == "busy")
+            disk_history.process_spool(spool_root)
+            check("...and accepted once the worker has caught up",
+                  queue(300, 200, False) == "stored")
+            limit = disk_history.MAX_SPOOL_BYTES
+            try:
+                disk_history.MAX_SPOOL_BYTES = 1
+                check("a full spool turns new uploads away", queue(400, 300, False) == "busy")
+            finally:
+                disk_history.MAX_SPOOL_BYTES = limit
+        finally:
+            shutil.rmtree(spool_root, ignore_errors=True)
 
         print("\n== Retention folds, never cuts ==")
         prune_root = tempfile.mkdtemp(prefix="disk-history-prune-")

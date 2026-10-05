@@ -171,12 +171,21 @@ def create_disk_usage_blueprint(db_path, history_root, login_required, access):
         try:
             outcome = disk_history.accept(history_root, machine, volume, scanned_at, base, full,
                                           request.stream, request.content_length)
-        except ValueError as e:
-            status = 411 if not request.content_length else 413
-            return jsonify({"error": str(e)}), status
+        except (OSError, ValueError):
+            # A fixed sentence, never the exception's text: what went wrong writing the hub's
+            # own disk is not the agent's business (CodeQL, py/stack-trace-exposure).
+            return jsonify({"error": "the hub could not store that upload"}), 400
         if outcome == "need_full":
             return jsonify({"error": "base scan not held; send the full tree",
                             "need_full": True}), 409
+        if outcome == "no_length":
+            return jsonify({"error": "a Content-Length is required"}), 411
+        if outcome == "too_large":
+            return jsonify({"error": "that upload is larger than this hub accepts"}), 413
+        if outcome == "busy":
+            # The agent treats anything but 200 and 409 as "try again later", which it does
+            # five minutes on. Nothing is lost: its upload file stays until the hub takes it.
+            return jsonify({"error": "uploads for this volume are still being applied"}), 429
         return jsonify({"status": outcome}), 200
 
     return bp

@@ -53,6 +53,14 @@ from datetime import date, datetime
 #: A compressed upload larger than this is refused. A full tree of a large, busy disk is tens of
 #: megabytes; a gigabyte is a broken or hostile client.
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+#: Uploads one volume may have waiting in the spool. A full tree followed by the next day's
+#: delta is two; more than that is an agent retrying faster than the worker applies, or a
+#: client filling the hub's disk one fresh `scanned_at` at a time. Found in review.
+MAX_QUEUED_PER_VOLUME = 2
+#: Everything waiting in the spool, across the fleet. A first rollout queues one full tree per
+#: PC, tens of megabytes each; eight gigabytes is hundreds of them, and past it an agent is told
+#: to come back later rather than the hub's disk being the thing that gives.
+MAX_SPOOL_BYTES = 8 * 1024 * 1024 * 1024
 #: Lines in one upload. Twenty million is more files than NTFS volumes in this fleet hold.
 MAX_LINES = 20_000_000
 #: Longest path accepted. Windows' long-path limit is 32k, but nothing an operator browses is
@@ -111,14 +119,32 @@ _BUCKET = "(day + (7 - ((day - 1) % 7)) % 7)"
 # ================================
 # STORAGE
 # ================================
+def _inside(root, *parts):
+    """`root` joined with `parts`, refused unless the result stays inside `root`.
+
+    Every name here is already safe by construction -- a hex string and one drive letter --
+    so this never fires on a real request. It is here because those names come from a machine
+    and a query string, and the guarantee should be checked where the path is built rather
+    than argued from two functions away (CodeQL, py/path-injection).
+    """
+    base = os.path.realpath(root)
+    path = os.path.realpath(os.path.join(base, *parts))
+    if os.path.commonpath([base, path]) != base:
+        raise ValueError("path escapes the history directory")
+    return path
+
+
 def machine_dir(root, machine):
     """A machine's directory. Hex of the name: any machine name becomes a safe, reversible
     directory name, with no case-folding collisions on a case-insensitive filesystem."""
-    return os.path.join(root, str(machine).encode("utf-8").hex())
+    return _inside(root, str(machine).encode("utf-8").hex())
 
 
 def volume_path(root, machine, volume):
-    return os.path.join(machine_dir(root, machine), f"{volume[0].upper()}.db")
+    letter = str(volume or "")[:1].upper()
+    if not ("A" <= letter <= "Z"):
+        raise ValueError("volume must be a drive letter")
+    return _inside(root, str(machine).encode("utf-8").hex(), f"{letter}.db")
 
 
 def _connect(path, create=True):
@@ -224,22 +250,36 @@ def last_scanned_at(root, machine, volume):
 
 
 def accept(root, machine, volume, scanned_at, base, full, stream, length):
-    """Take one upload. Returns `"stored"`, `"duplicate"` or `"need_full"`.
+    """Take one upload. Returns one of:
 
-    Raises ValueError for an upload that is not acceptable at all (too big, no length).
-    The body is spooled to disk in 1 MB chunks and applied later by the worker.
+      * `"stored"` -- spooled; the worker applies it shortly
+      * `"duplicate"` -- this scan is already applied OR already waiting in the spool
+      * `"need_full"` -- a delta whose base this hub does not hold or have queued
+      * `"no_length"` / `"too_large"` -- refused before reading the body
+      * `"busy"` -- this volume already has MAX_QUEUED_PER_VOLUME uploads waiting, or the
+        spool is at MAX_SPOOL_BYTES; the agent retries later
+
+    Raises ValueError only when the body turns out longer than its Content-Length.
     """
     if not length or length <= 0:
-        raise ValueError("a Content-Length is required")
+        return "no_length"
     if length > MAX_UPLOAD_BYTES:
-        raise ValueError("that upload is larger than this hub accepts")
+        return "too_large"
 
+    # `last` counts what is QUEUED as well as what is applied, so a retry of an upload still
+    # waiting in the spool is a duplicate here, not a second copy for the worker to apply.
     last = last_scanned_at(root, machine, volume)
     if last is not None and scanned_at <= last:
         # The agent retried an upload that already landed. Saying "stored" lets it delete it.
         return "duplicate"
     if not full and (base is None or base != last):
         return "need_full"
+    spooled = _spooled(root)
+    if sum(1 for m in spooled if m.get("machine") == machine
+           and m.get("volume") == volume) >= MAX_QUEUED_PER_VOLUME:
+        return "busy"
+    if _spool_bytes(root) + length > MAX_SPOOL_BYTES:
+        return "busy"
 
     directory = _spool_dir(root)
     os.makedirs(directory, exist_ok=True)
@@ -266,6 +306,19 @@ def accept(root, machine, volume, scanned_at, base, full, stream, length):
                    "full": bool(full)}, handle)
     _wake.set()
     return "stored"
+
+
+def _spool_bytes(root):
+    directory = _spool_dir(root)
+    if not os.path.isdir(directory):
+        return 0
+    total = 0
+    for name in os.listdir(directory):
+        try:
+            total += os.path.getsize(os.path.join(directory, name))
+        except OSError:
+            pass
+    return total
 
 
 def _remove(path):
