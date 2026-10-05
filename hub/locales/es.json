@@ -1242,6 +1242,14 @@
         "event_retention_days": {
           "label": "Conservar los eventos recopilados durante",
           "help": "Cuánto tiempo se conservan los registros de eventos de Windows recopilados antes de eliminarlos. Es a la vez un control de privacidad y de espacio en disco: un registro del canal de seguridad nombra la cuenta para la que alguien escribió una contraseña, y esta es la única tabla que una suscripción demasiado amplia puede hacer crecer en miles de filas por hora. Eliminar un equipo borra sus eventos de inmediato, independientemente de esto."
+        },
+        "disk_usage_daily_days": {
+          "label": "Conservar el uso diario del disco durante",
+          "help": "Cada punto diario de uso del disco y los tamaños de carpeta se conservan este tiempo. El historial más antiguo conserva un punto por semana. Las listas de cambios entre análisis solo se conservan este tiempo."
+        },
+        "disk_usage_keep_days": {
+          "label": "Conservar el uso semanal del disco durante",
+          "help": "Hasta dónde llega el historial semanal antes de eliminarse. Las rutas de carpeta de este historial nombran a las personas que usan el PC, y eliminar un equipo borra su historial de inmediato, independientemente de esto."
         }
       },
       "map": {
@@ -2982,6 +2990,10 @@
       "uninstall_virtual_display": {
         "label": "Quitar la pantalla virtual",
         "description": "Desinstala el controlador de pantalla virtual."
+      },
+      "scan_disk_usage": {
+        "label": "Analizar tamaños de carpeta",
+        "description": "Mide cada carpeta del PC en su próxima conexión en lugar de esperar al análisis diario."
       }
     },
     "command_param": {
@@ -3523,7 +3535,8 @@
       "target": {
         "one": "{count} elemento seleccionado",
         "other": "{count} elementos seleccionados"
-      }
+      },
+      "size_history": "Historial de tamaño"
     },
     "open_title": "Abrir en ese PC",
     "open_help": "Iniciar {name} en ese PC.",
@@ -3543,6 +3556,77 @@
       "network": "unidad de red",
       "cdrom": "óptica",
       "ram": "disco RAM"
+    },
+    "sort_size": "Ordenar por tamaño, el mayor primero. Vuelva a hacer clic para ordenar por nombre.",
+    "sizes_from_scan": "Los tamaños de carpeta proceden del análisis diario del equipo del {when}.",
+    "sizes_not_scanned": "Los tamaños de carpeta aparecen tras el primer análisis diario del disco del equipo. «Analizar ahora» inicia uno en menos de un minuto.",
+    "sizes_need_agent": "Este equipo ejecuta el agente {version}; los tamaños de carpeta necesitan {needed} o posterior.",
+    "size_unknown": "No estaba en el último análisis -- creada desde entonces, o una carpeta que el análisis no pudo ubicar.",
+    "size_detail": "{size} en {files} archivos, {on_disk} en disco.",
+    "forecast": {
+      "full_in": {
+        "one": "Lleno en unos {count} día",
+        "other": "Lleno en unos {count} días"
+      },
+      "full_on": "Se espera que esté lleno hacia el {date}.",
+      "not_filling": "No se está llenando"
+    },
+    "scan": {
+      "button": "Analizar ahora",
+      "title": "Medir cada carpeta de este equipo en su próxima conexión en lugar de mañana.",
+      "queued": "Análisis en cola. Los tamaños de carpeta y el historial se actualizan cuando el equipo informa, normalmente en pocos minutos."
+    },
+    "history": {
+      "open": "Historial",
+      "title": "Historial de uso del disco",
+      "volume": "Unidad",
+      "chart_label": "Espacio usado en esta unidad por día, con la fecha prevista en que se llena.",
+      "used": "Usado",
+      "projection": "Previsión",
+      "capacity": "Capacidad",
+      "no_data": "Todavía no se ha registrado el uso del disco de este equipo. Se añade un punto cada día que informa.",
+      "forecast_filling": "Lleno hacia el {date}, en unos {days} días, a {rate} al día en los últimos 30 días.",
+      "forecast_not_filling": "No se está llenando: {rate} al día en los últimos 30 días.",
+      "forecast_insufficient": {
+        "one": "{count} día registrado. Una previsión necesita al menos 7 días de los últimos 30.",
+        "other": "{count} días registrados. Una previsión necesita al menos 7 días de los últimos 30."
+      },
+      "rate_week": "Esta semana: {rate} al día.",
+      "confidence": {
+        "high": "La tendencia es estable, así que esta fecha es fiable.",
+        "medium": "La tendencia es irregular, así que tome esta fecha como aproximada.",
+        "low": "El uso varía mucho, así que esta fecha es una estimación aproximada."
+      },
+      "changes_title": "Qué ha cambiado",
+      "day": "Análisis",
+      "col": {
+        "folder": "Carpeta",
+        "change": "Cambio",
+        "now": "Tamaño actual",
+        "file": "Archivo"
+      },
+      "no_scans": "Todavía no ha llegado ningún análisis de carpetas de este equipo. La previsión de arriba funciona sin él; esta lista necesita el agente 3.40.0 o posterior.",
+      "first_scan": "Es el primer análisis de esta unidad, así que aún no hay nada con qué compararlo. Los cambios aparecen tras el análisis de mañana.",
+      "no_changes": "Ninguna carpeta ha crecido ni disminuido más de 64 MB desde el análisis del {since}.",
+      "changes_since": "Cambios entre los análisis del {since} y del {when}, en disco, el mayor primero. Haga clic en una carpeta para abrirla.",
+      "large_title": "Archivos grandes nuevos",
+      "compare": "Comparar con",
+      "compare_none": "Sin comparación",
+      "path_chart_label": "Tamaño de la carpeta o archivo seleccionado por día.",
+      "path_title": "{path}: {delta} desde el {since}.",
+      "path_deleted": "{path} se eliminó el {date}.",
+      "path_unknown": "{path} todavía no tiene historial. Cada carpeta y archivo se registra desde el primer análisis de este equipo con el agente 3.40.0 o posterior.",
+      "files_title": "Archivos",
+      "files_more": "{count} archivos cambiaron en este análisis; se muestran los {shown} cambios mayores.",
+      "status": {
+        "new": "nuevo",
+        "deleted": "eliminado"
+      }
+    },
+    "compare": {
+      "col": "El {date}",
+      "not_there": "no estaba",
+      "gone": "eliminado desde entonces"
     }
   },
   "patches": {

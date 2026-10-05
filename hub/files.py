@@ -67,6 +67,12 @@ MAX_NAME_CHARS = 260
 #: `truncated` says how many were dropped rather than letting the list quietly lie.
 MAX_ENTRIES = 2000
 
+#: The folder-size fields a listing entry may carry from the disk-usage scan (roadmap #27):
+#: logical size, size on disk, and how many files sit under the folder.
+TREE_KEYS = ("tree_size", "tree_allocated", "tree_files")
+#: 1 EiB. A larger figure is a parsing bug on the machine, not a folder.
+MAX_TREE_BYTES = 1 << 60
+
 #: Most paths one operation may name. Multi-select exists so "delete these nine" is one
 #: click; it is not a bulk tool, and a request naming ten thousand files is either a mistake
 #: or a way to keep one agent busy for an hour.
@@ -502,7 +508,7 @@ def _clean_entry(raw):
     if not name:
         return None
     size = _as_int(raw.get("size"))
-    return {
+    entry = {
         "name": name,
         # Anything that is not explicitly a directory renders as a file. The failure this
         # avoids is a mislabelled folder offering a Download button that streams nothing.
@@ -517,6 +523,16 @@ def _clean_entry(raw):
         "readonly": bool(raw.get("readonly")),
         "link": bool(raw.get("link")),
     }
+    # What a FOLDER holds, from the machine's last daily disk-usage scan (roadmap #27).
+    # Separate keys rather than filling `size`, which the agent leaves absent for a folder on
+    # purpose: a console that predates these must keep rendering a dash, not a stale figure
+    # it cannot label as one. Present only on a directory, and only when sane.
+    if entry["directory"]:
+        for key in TREE_KEYS:
+            value = _as_int(raw.get(key))
+            if value is not None and 0 <= value <= MAX_TREE_BYTES:
+                entry[key] = value
+    return entry
 
 
 def record_listing(db_path, request_id, machine, payload, now=None):
@@ -563,6 +579,9 @@ def record_listing(db_path, request_id, machine, payload, now=None):
         "parent": _safe_path(payload.get("parent"), None),
         # A drive list, for the root view. Same treatment: names and labels are remote text.
         "drives": _clean_drives(payload.get("drives")),
+        # When the folder sizes above were measured (roadmap #27). None means this volume has
+        # not been scanned, which the console says rather than showing blank sizes silently.
+        "tree_scanned_at": _as_int(payload.get("tree_scanned_at")),
     }
     with get_conn(db_path) as conn:
         conn.execute(
@@ -663,6 +682,7 @@ def get_listing(db_path, request_id, machine=None):
         "drives": [],
         "truncated": 0,
         "parent": None,
+        "tree_scanned_at": None,
     }
     if row["payload_json"]:
         try:

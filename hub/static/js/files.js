@@ -70,6 +70,11 @@
     // copies and downloads perfectly well, and disabling the whole panel over the one verb it
     // cannot do would take four working tools away to explain a fifth.
     const MIN_OPEN_AGENT = '3.34.0';
+    // The daily disk-usage scan (roadmap #27): folder sizes in this list, and the Scan now
+    // button. Gates ONLY those two. The fill forecast on the drive rows and the History panel
+    // need no agent change at all -- the hub builds them from the volume sensors every agent
+    // since 3.10.0 already sends -- so an older machine still gets "full in about 40 days".
+    const MIN_DISKUSAGE_AGENT = '3.40.0';
 
     // A preview is pulled into the browser's memory whole, so this is a ceiling on what the
     // console will try rather than on what it can fetch: a 300 MB log downloads fine through
@@ -94,6 +99,12 @@
     const clipboardEl = document.getElementById('files-clipboard');
     const selectAll = document.getElementById('files-select-all');
     const fileInput = document.getElementById('files-file-input');
+    const sizesNote = document.getElementById('files-sizes-note');
+    const sizeHeader = document.getElementById('files-col-size');
+    const sortSize = document.getElementById('files-sort-size');
+    const historyBtn = document.getElementById('files-history-btn');
+    const scanBtn = document.getElementById('files-scan');
+    const compareHeader = document.getElementById('files-col-compare');
 
     // Navigation: acts on the view, always on screen, never on the menu.
     const nav = {
@@ -108,6 +119,7 @@
     const item = {
         open: document.getElementById('files-menu-open'),
         openRemote: document.getElementById('files-menu-open-remote'),
+        history: document.getElementById('files-menu-history'),
         download: document.getElementById('files-menu-download'),
         upload: document.getElementById('files-menu-upload'),
         copy: document.getElementById('files-menu-copy'),
@@ -138,6 +150,12 @@
     let previewUrl = null;          // the object URL the preview dialog is showing, if any
     let menuRow = null;             // the <tr> the action menu is open against, if any
     let focusName = null;           // which row holds the keyboard's place in the list
+    let sortBySize = false;         // false: the machine's own order (folders, then names)
+    let diskSummary = null;         // {"C:": {latest, forecast, scan}} from /api/disk-usage
+    let scanQueued = false;         // Scan now was pressed for this machine in this visit
+    // A past day the History panel is comparing with: {day, path, entries} where `entries`
+    // maps a lower-cased name to that day's entry, or is null while it loads.
+    let compare = null;
 
     // ================================================================
     // plumbing
@@ -253,6 +271,7 @@
     // ================================================================
     let tooOld = null;
     let openTooOld = null;      // the same question asked against MIN_OPEN_AGENT
+    let scanTooOld = null;      // ...and against MIN_DISKUSAGE_AGENT
 
     async function checkAgentVersion() {
         if (tooOld !== null) return;
@@ -261,9 +280,11 @@
             const version = info && info.companion_version;
             tooOld = (version && versionLess(version, MIN_FILES_AGENT)) ? version : false;
             openTooOld = (version && versionLess(version, MIN_OPEN_AGENT)) ? version : false;
+            scanTooOld = (version && versionLess(version, MIN_DISKUSAGE_AGENT)) ? version : false;
         } catch (e) {
             tooOld = false;      // unknown is not "too old"; let the command answer for itself
             openTooOld = false;
+            scanTooOld = false;
         }
     }
 
@@ -319,6 +340,8 @@
             path = answer.path === '\\' ? null : answer.path;
             listing = answer;
             render();
+            if (window.FilesHistory) window.FilesHistory.follow(path);
+            if (compare) loadCompare(compare.day);
         } catch (e) {
             if (mine !== generation) return;
             setStatus('danger', t('files.load_failed'));
@@ -358,6 +381,37 @@
         if (listing && listing.truncated > 0) {
             showNote(t('files.truncated', { count: listing.truncated }));
         }
+        renderSizesNote();
+    }
+
+    /** Say where the folder sizes came from. Silent on the drive list, which has none. */
+    function renderSizesNote() {
+        const inFolder = !!path && !!listing;
+        let text = '';
+        if (inFolder && listing.tree_scanned_at) {
+            text = t('files.sizes_from_scan', { when: formatTime(listing.tree_scanned_at) });
+        } else if (inFolder && scanTooOld) {
+            text = t('files.sizes_need_agent', { version: scanTooOld, needed: MIN_DISKUSAGE_AGENT });
+        } else if (inFolder) {
+            text = t('files.sizes_not_scanned');
+        }
+        sizesNote.textContent = text;
+        sizesNote.hidden = !text;
+    }
+
+    /** What a row weighs for sorting and for its bar: a folder's scanned total, a file's
+     *  own length, or -1 when nothing is known (sorted last, no bar). */
+    function weightOf(entry) {
+        if (entry.directory) return Number.isFinite(entry.tree_size) ? entry.tree_size : -1;
+        return Number.isFinite(entry.size) ? entry.size : -1;
+    }
+
+    function orderedEntries() {
+        const entries = (listing && listing.entries) || [];
+        if (!sortBySize) return entries;
+        // A copy: listing.entries is the machine's order, and Name order is what turning the
+        // sort off must restore.
+        return entries.slice().sort((a, b) => weightOf(b) - weightOf(a));
     }
 
     function renderCrumbs() {
@@ -404,18 +458,33 @@
 
         const drives = listing.drives || [];
         const entries = listing.entries || [];
-        if (!drives.length && !entries.length) {
+        const comparing = !!compare && !!path;
+        compareHeader.hidden = !comparing;
+        if (comparing) {
+            compareHeader.textContent = t('files.compare.col', {
+                date: new Date(`${compare.day}T00:00:00`).toLocaleDateString()
+            });
+        }
+        const gone = comparing ? goneEntries() : [];
+
+        if (!drives.length && !entries.length && !gone.length) {
             const row = el('tr');
             const cell = el('td', 'empty-state', t('files.empty'));
-            cell.colSpan = 4;
+            cell.colSpan = comparing ? 5 : 4;
             row.appendChild(cell);
             body.appendChild(row);
             selectAll.checked = false;
             return;
         }
 
+        // The bar beside a size is relative to the biggest row on screen, not to the volume:
+        // the question it answers is "which of THESE is the big one", and against a 1 TB disk
+        // every folder in a user profile would be a hairline.
+        const heaviest = entries.reduce((most, entry) => Math.max(most, weightOf(entry)), 0);
         drives.forEach((drive) => body.appendChild(driveRow(drive)));
-        entries.forEach((entry) => body.appendChild(entryRow(entry)));
+        orderedEntries().forEach((entry) => body.appendChild(entryRow(entry, heaviest)));
+        gone.forEach((entry) => body.appendChild(goneRow(entry)));
+        sizeHeader.setAttribute('aria-sort', sortBySize ? 'descending' : 'none');
         selectAll.checked = entries.length > 0 && selection.size === entries.length;
         // Somebody has to be in the tab order or the list cannot be reached from the keyboard
         // at all -- and with no toolbar, unreachable from the keyboard means unusable.
@@ -442,6 +511,8 @@
         // kind we cannot name is still a drive the operator can click.
         const kind = DRIVE_TYPES[drive.type];
         if (kind) nameCell.appendChild(el('span', 'files-badge', kind()));
+        const forecastChip = forecastBadge(drive.path);
+        if (forecastChip) nameCell.appendChild(forecastChip);
         row.appendChild(nameCell);
 
         // Free-of-total, because "how much room is left on D:" is the question this view is
@@ -450,11 +521,139 @@
             ? '—'
             : t('files.free_of', { free: formatSize(drive.free_bytes),
                                    total: formatSize(drive.total_bytes) })));
-        row.appendChild(el('td', null, '—'));
+        row.appendChild(el('td', 'files-col-modified', '—'));
         return row;
     }
 
-    function entryRow(entry) {
+    /**
+     * "Full in about 40 days" beside a drive, from the hub's forecast (roadmap #27). Amber
+     * under a month and red under a week; nothing at all while the forecast has too few days
+     * to judge, because a chip that says "unknown" on every drive for the first week is noise.
+     */
+    function forecastBadge(drivePath) {
+        const letter = String(drivePath || '').slice(0, 2).toUpperCase();
+        const info = diskSummary && diskSummary[letter];
+        const forecast = info && info.forecast;
+        if (!forecast) return null;
+        if (forecast.status === 'not_filling') {
+            return el('span', 'files-badge', t('files.forecast.not_filling'));
+        }
+        if (forecast.status !== 'filling') return null;
+        const days = Math.max(0, Math.round(forecast.days_to_full));
+        const chip = el('span', 'files-badge', tPlural('files.forecast.full_in', days));
+        if (days < 7) chip.classList.add('files-badge--danger');
+        else if (days < 30) chip.classList.add('files-badge--warn');
+        chip.title = t('files.forecast.full_on', {
+            date: new Date(`${forecast.full_on}T00:00:00`).toLocaleDateString()
+        });
+        return chip;
+    }
+
+    /** The Size cell. A folder shows what the last scan found under it, with a bar. */
+    function sizeCell(entry, heaviest) {
+        const cell = el('td', 'files-size');
+        if (!entry.directory) {
+            cell.textContent = formatSize(entry.size);
+            return cell;
+        }
+        if (!Number.isFinite(entry.tree_size)) {
+            cell.textContent = '—';
+            if (listing && listing.tree_scanned_at) cell.title = t('files.size_unknown');
+            return cell;
+        }
+        cell.appendChild(el('span', 'files-size__value', formatSize(entry.tree_size)));
+        if (heaviest > 0) {
+            const bar = el('span', 'files-size__bar');
+            const fill = el('span', 'files-size__fill');
+            fill.style.width = `${Math.max(1, Math.round(100 * entry.tree_size / heaviest))}%`;
+            bar.appendChild(fill);
+            bar.setAttribute('aria-hidden', 'true');
+            cell.appendChild(bar);
+        }
+        cell.title = t('files.size_detail', {
+            size: formatSize(entry.tree_size),
+            on_disk: formatSize(entry.tree_allocated),
+            files: Number(entry.tree_files || 0).toLocaleString()
+        });
+        return cell;
+    }
+
+    // ================================================================
+    // comparing with a past day (roadmap #27)
+    // ================================================================
+    /** The size an entry had on the compared day, with how far it has moved since. */
+    function compareCell(entry) {
+        const cell = el('td', 'files-size');
+        if (!compare.entries) { cell.textContent = '…'; return cell; }
+        const then = compare.entries.get(entry.name.toLowerCase());
+        if (!then) {
+            cell.appendChild(el('span', 'files-badge', t('files.compare.not_there')));
+            return cell;
+        }
+        cell.appendChild(el('span', 'files-size__value', formatSize(then.size)));
+        const now = entry.directory ? entry.tree_size : entry.size;
+        if (Number.isFinite(now) && Number.isFinite(then.size) && now !== then.size) {
+            const delta = now - then.size;
+            cell.appendChild(el('span', delta > 0 ? 'files-delta files-delta--up'
+                                                  : 'files-delta files-delta--down',
+                                `${delta > 0 ? '+' : '-'}${formatSize(Math.abs(delta))}`));
+        }
+        return cell;
+    }
+
+    /** Entries that were here on the compared day and are not now. */
+    function goneEntries() {
+        if (!compare || !compare.entries || !listing) return [];
+        const here = new Set((listing.entries || []).map((e) => e.name.toLowerCase()));
+        return [...compare.entries.values()].filter((e) => !here.has(e.name.toLowerCase()));
+    }
+
+    /** A row for something that has gone since the compared day. Not selectable and not on
+     *  the menu: there is nothing on the disk for any verb to act on. */
+    function goneRow(entry) {
+        const row = el('tr', 'files-row--dim');
+        row.appendChild(el('td', 'files-col-pick'));
+        const nameCell = el('td');
+        nameCell.appendChild(el('span', entry.directory ? 'files-name files-name--dir'
+                                                        : 'files-name', entry.name));
+        nameCell.appendChild(el('span', 'files-badge', t('files.compare.gone')));
+        row.appendChild(nameCell);
+        row.appendChild(el('td', null, '—'));
+        row.appendChild(el('td', 'files-size', formatSize(entry.size)));
+        row.appendChild(el('td', 'files-col-modified', '—'));
+        return row;
+    }
+
+    async function loadCompare(day) {
+        const forPath = path;
+        const machine = currentMachine();
+        compare = { day, path: forPath, entries: null };
+        renderTable();
+        if (!forPath || !/^[A-Za-z]:/.test(forPath)) return;
+        try {
+            const params = new URLSearchParams({ volume: forPath.slice(0, 2), path: forPath, day });
+            const past = await api(`/api/disk-usage/machines/${encodeURIComponent(machine)}`
+                                   + `/browse?${params}`);
+            // Superseded by a navigation, a machine switch or another day.
+            if (!compare || compare.day !== day || path !== forPath
+                || currentMachine() !== machine) return;
+            compare.entries = new Map((past.entries || []).map((e) => [e.name.toLowerCase(), e]));
+        } catch (e) {
+            if (compare && compare.day === day) compare.entries = new Map();
+            showError(e.message);
+        }
+        renderTable();
+    }
+
+    // The History panel's door into this list. It owns the day picker; this owns the rows.
+    window.FilesBrowser = {
+        setCompare(day) {
+            if (!day) { compare = null; renderTable(); return; }
+            loadCompare(day);
+        }
+    };
+
+    function entryRow(entry, heaviest) {
         const row = el('tr');
         // The name is the row's identity everywhere else in this file (the selection is a set
         // of names), so it is what the menu and the keyboard look rows up by too.
@@ -496,8 +695,9 @@
         if (entry.hidden) nameCell.appendChild(el('span', 'files-badge', t('files.badge.hidden')));
         row.appendChild(nameCell);
 
-        row.appendChild(el('td', null, entry.directory ? '—' : formatSize(entry.size)));
-        row.appendChild(el('td', null, formatTime(entry.modified)));
+        row.appendChild(sizeCell(entry, heaviest));
+        if (compare && path) row.appendChild(compareCell(entry));
+        row.appendChild(el('td', 'files-col-modified', formatTime(entry.modified)));
 
         // What a double-click has meant in every file manager the operator has ever used:
         // a folder is entered, a file is opened -- and here "opened" is the console's own
@@ -523,6 +723,10 @@
         nav.up.disabled = !idle || !path;
         nav.refresh.disabled = !idle;
         nav.go.disabled = !idle;
+        scanBtn.disabled = !!scanTooOld || scanQueued || !currentMachine();
+        scanBtn.title = scanTooOld
+            ? t('files.sizes_need_agent', { version: scanTooOld, needed: MIN_DISKUSAGE_AGENT })
+            : t('files.scan.title');
 
         // Open, here: a folder is entered, a file is fetched and shown. Enabled for both.
         item.open.disabled = !idle || picked.length !== 1;
@@ -530,6 +734,8 @@
         // entry explains nothing and shows no tooltip either, so the click is allowed through
         // and answered with the version it is waiting for. See MIN_OPEN_AGENT.
         item.openRemote.disabled = !idle || picked.length !== 1;
+        // Any one folder or file on a local volume; the history is kept for all of them.
+        item.history.disabled = !idle || picked.length !== 1 || !path || !/^[A-Za-z]:/.test(path);
         // One item, and a file: a folder download is offered too -- it arrives zipped -- so
         // the only thing ruled out here is downloading several things at once, which would
         // be several files with one Save dialog between them.
@@ -1179,6 +1385,15 @@
     onMenu(item.openRemote, (picked) => {
         if (picked.length === 1) askOpenRemote(picked[0]);
     });
+    onMenu(item.history, (picked) => {
+        if (picked.length !== 1 || !window.FilesHistory) return;
+        window.FilesHistory.showPath(entryPath(picked[0]), {
+            machine: currentMachine(),
+            path,
+            navigate: (target) => navigate(target)
+        });
+        historyBtn.setAttribute('aria-expanded', 'true');
+    });
     onMenu(item.download, (picked) => {
         if (picked.length === 1) pull(picked[0], offerDownload);
     });
@@ -1240,6 +1455,38 @@
         else navigate(null);
     });
     nav.refresh.addEventListener('click', () => navigate(path));
+
+    sortSize.addEventListener('click', () => {
+        sortBySize = !sortBySize;
+        renderTable();
+    });
+
+    historyBtn.addEventListener('click', () => {
+        if (!window.FilesHistory) return;
+        const open = window.FilesHistory.toggle({
+            machine: currentMachine(),
+            path,
+            // Clicking a folder in the change list opens it here, through the same door as
+            // every other navigation -- so the version gate, the busy flag and the stale-poll
+            // guard all apply to it too.
+            navigate: (target) => navigate(target)
+        });
+        historyBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+
+    scanBtn.addEventListener('click', async () => {
+        scanBtn.disabled = true;
+        showError('');
+        try {
+            await post(`/api/disk-usage/machines/${encodeURIComponent(currentMachine())}/scan`);
+            scanQueued = true;
+            showNote(t('files.scan.queued'));
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            renderActions();
+        }
+    });
     nav.go.addEventListener('click', () => navigate(pathInput.value.trim() || null));
     pathInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') nav.go.click();
@@ -1272,7 +1519,7 @@
     // ================================================================
     ToolPanels.register('files', {
         panelId: PANEL_ID,
-        load: () => { reset(); navigate(null); },
+        load: () => { reset(); loadDiskSummary(); navigate(null); },
         teardown: reset,
         requires: (machine) => !!machine
     });
@@ -1281,6 +1528,28 @@
     // that arrives after the operator switched machines cannot write a listing of PC-3's
     // disk into a panel now showing PC-4 -- or, far worse, leave a selection from one
     // machine pointing at paths on another with the Delete button live.
+    /**
+     * The fill forecast per volume, for the drive rows. Fetched once per machine and drawn
+     * whenever it lands -- before or after the drive list, whichever is slower. A failure is
+     * silent on purpose: the forecast decorates the drive list, and the drive list must not
+     * look broken because a decoration could not be fetched.
+     */
+    async function loadDiskSummary() {
+        // Keyed on the machine, not on `generation`: navigate() bumps that the moment it
+        // starts, which is right after this is called, so a generation check would throw
+        // away every summary as stale.
+        const mine = currentMachine();
+        try {
+            const summary = await api(`/api/disk-usage/machines/${encodeURIComponent(mine)}`);
+            if (mine !== currentMachine()) return;
+            diskSummary = {};
+            (summary.volumes || []).forEach((v) => { diskSummary[v.volume] = v; });
+            if (!path && listing) renderTable();
+        } catch (e) {
+            diskSummary = null;
+        }
+    }
+
     function reset() {
         generation++;
         clearTimers();
@@ -1301,6 +1570,15 @@
         releasePreviewUrl();
         tooOld = null;
         openTooOld = null;
+        scanTooOld = null;
+        diskSummary = null;
+        sortBySize = false;
+        scanQueued = false;
+        compare = null;
+        compareHeader.hidden = true;
+        if (window.FilesHistory) window.FilesHistory.reset();
+        historyBtn.setAttribute('aria-expanded', 'false');
+        sizesNote.hidden = true;
         body.replaceChildren();
         crumbs.replaceChildren();
         pathInput.value = '';

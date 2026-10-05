@@ -105,6 +105,43 @@ public static class StateDirectory
         }
     }
 
+    /// <summary>
+    /// Ensure <paramref name="path"/> exists and that ONLY SYSTEM and Administrators can
+    /// read it, unlike <see cref="Harden"/>, which leaves Users read access.
+    ///
+    /// For state whose content is itself sensitive. The disk-usage folder tree (roadmap #27)
+    /// names every folder on the volume, including those in other users' profiles, and a
+    /// standard user must not be able to read the names of a colleague's folders out of
+    /// %ProgramData%. Explorer would refuse them those names, so this does too.
+    ///
+    /// Rebuilt on every call rather than checked first. It runs once per scan, not on a hot
+    /// path. Never throws, for the same reason Harden does not; the caller logs the note.
+    /// </summary>
+    public static string? HardenPrivate(string path)
+    {
+        try
+        {
+            var info = Directory.CreateDirectory(path);
+            var security = new DirectorySecurity();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            foreach (var sid in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
+            {
+                security.AddAccessRule(new FileSystemAccessRule(
+                    new SecurityIdentifier(sid, null),
+                    FileSystemRights.FullControl,
+                    InheritanceFlags.ObjectInherit | InheritanceFlags.ContainerInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+            }
+            info.SetAccessControl(security);
+            return null;
+        }
+        catch (Exception e)
+        {
+            return $"Could not restrict {path} to SYSTEM and Administrators: {e.Message}";
+        }
+    }
+
     /// <summary>Does this ACL let anyone outside SYSTEM/Administrators/CREATOR OWNER write?</summary>
     private static bool GrantsNonAdminWrite(FileSystemSecurity security)
     {

@@ -272,6 +272,13 @@ REGISTRY = (
     # default and it is meant to come down further. Pruned by the DEVICE's own local day, never
     # by a hub timestamp -- see usage.prune.
     _s("data.usage_retention_days", "data", "int", 14, minimum=1, maximum=365, unit="days"),
+    # Disk usage history (roadmap #27), as one rolling window in two parts: every day is kept
+    # for the first, only Mondays from there to the second. Fresh data is never thinned, and
+    # the fill forecast reads only the last thirty days, so it always works on daily points.
+    # A year is the default horizon because "how full was this disk last spring" is the
+    # question a hardware refresh is planned around. See disk_usage.prune.
+    _s("data.disk_usage_daily_days", "data", "int", 90, minimum=30, maximum=365, unit="days"),
+    _s("data.disk_usage_keep_days", "data", "int", 365, minimum=30, maximum=1825, unit="days"),
     # Collected Windows event records (roadmap #16). BOTH kinds of retention knob at once,
     # which is why it is the shortest default on this list: the table is the only one in the
     # hub that a single misconfigured subscription can grow by thousands of rows an hour, AND

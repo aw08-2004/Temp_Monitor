@@ -692,6 +692,8 @@
    adapter card it reads its subnets from. #}
 <script src="{{ url_for('static', filename='js/discovery.js') }}"></script>
 {% if cap.ISSUE_COMMANDS in user_capabilities %}
+{# Before files.js, which calls into window.FilesHistory from its own reset(). #}
+<script src="{{ url_for('static', filename='js/files-history.js') }}"></script>
 <script src="{{ url_for('static', filename='js/files.js') }}"></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>

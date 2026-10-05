@@ -175,6 +175,114 @@ button.files-name:focus-visible {
     white-space: nowrap;
 }
 
+/* The fill forecast beside a drive (roadmap #27). Coloured only once it is close: amber under
+   a month, red under a week. A green "fine" chip on every healthy drive would be the kind of
+   reassurance nobody reads after the first day. */
+.files-badge--warn {
+    border-color: var(--warning);
+    color: var(--warning);
+}
+
+.files-badge--danger {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+/* ============ Folder sizes (roadmap #27) ============ */
+/* The size and a bar under it, relative to the biggest row on screen. The bar is what makes
+   "which of these is the big one" a glance instead of a read across forty numbers in
+   three different units. */
+.files-size {
+    min-width: 7rem;
+    white-space: nowrap;
+}
+
+.files-size__value {
+    display: block;
+}
+
+.files-size__bar {
+    display: block;
+    height: 3px;
+    margin-top: 2px;
+    border-radius: 2px;
+    background: var(--card-border);
+    overflow: hidden;
+}
+
+.files-size__fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+}
+
+/* The Size header is a button so it can sort, and should still look like a header. */
+.files-sort {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+
+#files-col-size[aria-sort="descending"] .files-sort::after {
+    content: " 93";
+}
+
+/* ============ History panel (roadmap #27) ============ */
+.files-history {
+    margin: var(--space-3) 0;
+    padding: var(--space-3);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+}
+
+.files-history__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: var(--space-2) 0;
+}
+
+.files-history__head .section-title {
+    margin-bottom: 0;
+    margin-right: auto;
+}
+
+.files-history__select {
+    width: auto;
+    min-width: 6rem;
+}
+
+/* A fixed height, because Chart.js sizes a responsive canvas from its container: without
+   one the chart either collapses to nothing or grows every time it is redrawn. */
+.files-history__chart {
+    position: relative;
+    height: 240px;
+    margin: var(--space-2) 0;
+}
+
+.files-history__chart--small {
+    height: 140px;
+}
+
+.files-delta {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.files-delta--up {
+    color: var(--warning);
+}
+
+.files-delta--down {
+    color: var(--success);
+}
+
 /* The delete dialog's list of what is about to go. Scrolls at around eight rows: a
    confirmation the operator has to scroll to reach the button of is a confirmation they
    will learn to dismiss. */
@@ -248,9 +356,10 @@ button.files-name:focus-visible {
 
 @media (max-width: 720px) {
     /* The modified column is the first thing to go on a phone: it is the widest and the
-       least often what the operator came for. Size and name stay. */
-    #files-table th:nth-child(4),
-    #files-table td:nth-child(4) {
+       least often what the operator came for. Size and name stay. By class, not by
+       position: the compare column (roadmap #27) sits before it when History compares
+       with a past day, and a positional rule hid that column instead. */
+    #files-table .files-col-modified {
         display: none;
     }
 }

@@ -165,6 +165,31 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
 
+**4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0.** Deploy the hub first. The fill forecast
+and the History chart start filling from the volume sensors straight away, with no agent change.
+Then cut the agent with `agent/release.ps1 -Version 3.40.0`. Before cutting it:
+- ~~Run `dotnet test agent/TempMonitorAgent.slnx` **from an elevated prompt** once.~~ **Done
+  2026-10-05** on the owner's PC: 10.1 s for C:, 128,363 folders and 393,823 files, 210 MB
+  peak working set, 7.0 MB full-tree upload. That run found that on-disk sizes ignored CompactOS
+  (WOF) compression, which keeps a compressed file's bytes in the WofCompressedData stream. As
+  a result the scan accounted for only 83.9 of 99.9 GB used. Fixed (on disk now counts every
+  stream, see `ACompactOsFileCountsItsWofStreamOnDisk`). **Run it elevated once more** after
+  that fix: "Accounted on disk" should now be within a couple of GB of "used". The remainder
+  is NTFS metadata streams and shadow copies.
+  `DiskUsageTests.ReadsTheSystemDriveWhenElevated` is still the only test that reads a real MFT,
+  and it prints `SKIPPED` when not elevated.
+- Check `git status` for rewritten `tests/fixtures/*.fhb`.
+
+First contact on one PC:
+- Press *Scan now*, then check `companion.log` for the scan time, the folder and file counts,
+  the number of history lines, and the peak working set on the biggest disk.
+- Check the size of the first full upload (`diskusage\<C>.upload.gz` before it is sent) and how
+  long the hub's worker takes to apply it (`logs/disk_history/`).
+- Expect the first rollout to queue one full tree per PC on the hub, applied one after another.
+- Compare three folder sizes with WizTree (or Explorer's Properties) on the same PC.
+- Confirm `%ProgramData%\FleetHub\Agent\diskusage` is not readable by a standard user.
+- After the second day's scan, check that *What changed* names the folder that actually grew.
+
 **5. Decisions only the owner can take** (left alone on purpose, not forgotten):
 - **#19 remote session recording** -- recording a colleague's screen is a policy call first.
 - **#18 Intune/Azure cross-reference** -- needs a Graph credential in the hub's secret store.
@@ -4900,6 +4925,132 @@ names, and can do what the signed-in operator can.
 - Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the
   Files tab's folder). The hook exists; no page calls it yet.
 - Whether `write`-tier routes should become an admin-editable list.
+
+---
+
+## 🚧 27. Disk usage -- folder sizes, what changed, and when the disk is full   ·   hub 1.138.0 + agent 3.40.0 (unreleased)   ·   `disk_usage.py` / `disk_usage_web.py`, `agent/.../DiskUsage/`
+
+Operators could see how full a volume is now, but not what filled it or when it will be full.
+The Files tab showed a dash beside every folder, and the only disk history was one percentage
+for one disk, kept thirty days. This entry adds three things:
+- **folder sizes in the Files tab**, at every depth
+- **a fill forecast** on every drive row
+- **a History panel** (Files tab → *History*): used space over time with a projected full date,
+  the folders and files that changed between two scans, new large files, the size history of
+  **any folder or file at any depth**, and a compare column showing the folder list as it was on
+  any past day
+
+### Built · hub 1.138.0, agent source for 3.40.0
+- **The agent reads the MFT, not the directory tree** (`MftVolumeReader.cs`,
+  `MftRecordParser.cs`). It opens `\\.\C:` as LocalSystem and streams `$MFT` sequentially at low
+  I/O priority on a below-normal thread, as WizTree does. It handles update-sequence fixups,
+  short versus long names, resident data, compressed and sparse allocation, and hard links
+  (counted once). Extension records are credited to their base record, which covers files whose
+  attributes spill into other records. The `$MFT`'s own runs follow its attribute list.
+  Fixed NTFS volumes only; ReFS, FAT and locked BitLocker volumes are reported as skipped,
+  with the reason.
+- **Daily, and the clock survives restarts** (`DiskUsageReporter.cs`). The next-scan time is
+  kept in `%ProgramData%\FleetHub\Agent\diskusage\state.json`. A machine that has never scanned
+  waits a random 5-60 minutes, so a fleet updating together does not read every disk in the
+  building at once. The scan runs on its own thread, started from the inventory loop, and
+  uploads by its own POST (`/api/agent/disk-usage`), not the heartbeat. A failed upload is
+  retried every five minutes.
+- **The full tree stays on the machine.** The agent keeps `<letter>.cur` and `<letter>.prev` and
+  answers `list_directory` with `tree_size`, `tree_allocated` and `tree_files` on each folder,
+  plus `tree_scanned_at`. A folder still never has a `size` of its own. The diff of the two
+  trees is computed on the machine, because only the machine has both:
+  - up to 200 changes over 64 MB
+  - for each change, the deepest folder that explains it (a folder is skipped when one child
+    accounts for ≥ 80% of its change)
+  - the 50 largest new files over 100 MB
+- **The tree directory is SYSTEM + Administrators only** (`StateDirectory.HardenPrivate`). It
+  names every folder in every profile, and the parent state directory gives Users read access.
+- **The hub keeps every folder and every file** (`disk_history.py`), as the operator asked:
+  full depth, regardless of size. One SQLite file per machine and volume under
+  `logs/disk_history/`, never in the main database. It is a **change log**: a row only when an
+  entry's size, size on disk or file count changed, meaning "from this day on, the value is X".
+  The agent sends exactly those rows each day (`TreeDelta.cs`, gzip NDJSON, parents first, a
+  deleted folder listing every deleted entry under it). Any day can be rebuilt from this.
+  - Every upload names its **base** (the scan it was diffed against). If the hub does not hold
+    that scan, it answers 409 and the agent resends the full tree. That repairs a lost upload, a
+    restored hub, or a re-imaged PC.
+  - Uploads are spooled and applied by a background worker, one at a time.
+  - Measured at 1.25 M paths: full tree 43 s to apply, 164 MB on disk; a daily delta of 12 k lines
+    1.4 s and about 0.3 MB; path history 2 ms; one day's file changes 150 ms; a past-day
+    folder of 1,000 entries 11 ms. A real drive's full upload is 15-40 MB compressed. The
+    first rollout means every PC sends one, applied one after another (about 45 s each).
+  - Agent cost, measured on a real 100 GB system drive: 10 s, 210 MB peak working set, a 7 MB
+    full upload (522 k lines). Once a day.
+  - On disk counts every $DATA stream, size only the unnamed one. CompactOS keeps compressed
+    bytes in a named stream, and the first live run showed that counting only the unnamed
+    stream missed 16 GB of 100.
+
+  `disk_usage.py` keeps the volume-level rows: one point per volume per day and the folder change
+  list per scan.
+
+  *History of this decision.* The first version kept a "tracked" set in the main database: the
+  root, the top level, folders up to depth 3 over 100 MB, and anything over 1 GB, capped at 2000
+  per volume. The approved plan had said "depth ≤ 3 or ≥ 1 GB"; the rule was tightened without
+  asking because depth 3 on this PC's C: is 27,660 folders, 26,464 of them in WinSxS. The operator
+  then asked for full depth, every folder and file, accepting a few hundred MB per PC. Asked how
+  to store it, they chose "weekly full snapshots plus daily diffs"; the change log above is that,
+  stored more compactly, with the same weekly thinning.
+- **The forecast works for every machine on day one.** `/api/report` already carries the
+  `/volume/<letter>` sensors (agent 3.10.0+), and the hub writes one `source='sensor'` point per
+  volume per day from them, at most hourly. A scan point always replaces a sensor point; a
+  sensor point never overwrites a scan point. The forecast itself is a least-squares fit over
+  the last 30 calendar days (gaps are not squeezed out), and needs at least 7 points. It gives a
+  date, days left and a confidence from r-squared, and shows the last 7 days' rate beside the
+  30-day one. It reads "not filling" when flat, shrinking or more than ten years out.
+- **Retention is a rolling window that never thins fresh data**:
+  - `data.disk_usage_daily_days` (90): every day is kept
+  - from there to `data.disk_usage_keep_days` (365): Mondays only. In the full-depth history a
+    week's changes are folded into its Monday; past the keep window, everything older is folded
+    into one baseline day. Folded, never cut, because an entry's value is its newest change: a
+    file untouched for two years must still have a size today.
+  - folder change lists: kept for the daily window only, because a thinned one would read as a
+    week's
+- **Gate: `issue_commands` + machine scope on every console route**, the file browser's own,
+  because the answers carry folder paths. *Scan now* queues `scan_disk_usage`, a command of
+  its own (`fleet.DISK_USAGE_COMMANDS`) rather than a file command. It names no path, so it may
+  be a favorite or a rule action ("when C: passes 90%, scan it").
+- **Console:**
+  - Size column: a folder shows its scanned size with a bar relative to the biggest row on
+    screen, and the column header sorts by size.
+  - Drive rows: a *Full in about N days* chip, amber under 30 days and red under 7.
+  - A note under the toolbar says when the sizes were measured.
+  - Right-click → *Size history* on any folder or file opens its chart (stepped, because the
+    hub stores change points).
+  - History → *Compare with* adds an "On <date>" column with each entry's size on that day and
+    the change since, marks entries that were not there, and lists entries gone since.
+  - `MIN_DISKUSAGE_AGENT = '3.40.0'` gates only the folder sizes and *Scan now*. The forecast
+    and History need no agent change.
+
+### Rejected
+- **A Rust library** (the `ntfs` / `mft` crates) behind P/Invoke or as a sidecar exe. The agent
+  is one self-contained signed .NET binary. A native DLL would need cargo and an MSVC target on
+  the release machine, and cargo-xwin in every Linux session that compiles the agent. A sidecar
+  would be a second binary for the manifest and self-updater to ship. The NTFS a size scan needs
+  is a few hundred lines.
+- **A recursive directory walk.** It takes minutes of random I/O, throws thousands of
+  access-denied exceptions, and updates last-access times on everything it passes.
+- **The full tree as rows in the main database**, and **a full snapshot file per day** (2-5 GB
+  per PC per year; a year of one file's history would open 365 files).
+- **Paths as the key of every history row.** A path is about 80 bytes and an interned entry id is
+  4. That is most of the difference between hundreds of megabytes and gigabytes per year.
+- **Inferring a child's deletion from its parent's.** A folder deleted and recreated the same day
+  would bring its old children back.
+- **Computing the change list on the hub from tracked folders.** It would miss every change below
+  the tracked set, which is exactly the deep cache folder somebody needs to find.
+- **The forecast from the `readings` blob.** It is throttled, kept thirty days, and only ever
+  read back as "the newest".
+
+### Open
+- A totals-only view (volume chart and forecast, no paths) at `view`, for the Overview's storage
+  cards.
+- Rules variables `disk.<letter>.days_to_full` and `disk.<letter>.bytes_per_day`.
+- The Linux agent: no MFT. `du`-style walks of `/home` and `/var` would be the equivalent, at a
+  very different cost.
 
 ---
 
