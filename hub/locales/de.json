@@ -1238,6 +1238,14 @@
         "event_retention_days": {
           "label": "Erfasste Ereignisse aufbewahren für",
           "help": "Wie lange erfasste Windows-Ereignisdatensätze aufbewahrt werden, bevor sie gelöscht werden. Sowohl eine Datenschutz- als auch eine Speicherplatzeinstellung: ein Datensatz aus dem Sicherheitskanal nennt das Konto, für das jemand ein Kennwort eingegeben hat, und dies ist die einzige Tabelle, die ein zu weit gefasstes Abonnement um Tausende Zeilen pro Stunde wachsen lassen kann. Beim Löschen eines Geräts werden dessen Ereignisse sofort entfernt, unabhängig hiervon."
+        },
+        "disk_usage_daily_days": {
+          "label": "Tägliche Datenträgerbelegung aufbewahren für",
+          "help": "So lange wird jeder Tagespunkt der Datenträgerbelegung samt Ordnergrößen aufbewahrt. Älterer Verlauf behält einen Punkt pro Woche. Die Änderungslisten zwischen Scans werden nur so lange aufbewahrt."
+        },
+        "disk_usage_keep_days": {
+          "label": "Wöchentliche Datenträgerbelegung aufbewahren für",
+          "help": "Wie weit der wöchentliche Verlauf zurückreicht, bevor er gelöscht wird. Ordnerpfade in diesem Verlauf nennen die Personen, die den PC nutzen; das Löschen eines Computers löscht seinen Verlauf unabhängig davon sofort."
         }
       },
       "map": {
@@ -2978,6 +2986,10 @@
       "uninstall_virtual_display": {
         "label": "Virtuelle Anzeige entfernen",
         "description": "Deinstalliert den Treiber für die virtuelle Anzeige."
+      },
+      "scan_disk_usage": {
+        "label": "Ordnergrößen scannen",
+        "description": "Misst jeden Ordner auf dem PC bei seiner nächsten Meldung, statt auf den täglichen Scan zu warten."
       }
     },
     "command_param": {
@@ -3519,7 +3531,8 @@
       "target": {
         "one": "{count} Objekt ausgewählt",
         "other": "{count} Objekte ausgewählt"
-      }
+      },
+      "size_history": "Größenverlauf"
     },
     "open_title": "Auf diesem PC öffnen",
     "open_help": "{name} auf diesem PC starten.",
@@ -3539,6 +3552,77 @@
       "network": "Netzlaufwerk",
       "cdrom": "optisch",
       "ram": "RAM-Disk"
+    },
+    "sort_size": "Nach Größe sortieren, größte zuerst. Erneut klicken für Namensreihenfolge.",
+    "sizes_from_scan": "Ordnergrößen stammen aus dem täglichen Scan des Computers vom {when}.",
+    "sizes_not_scanned": "Ordnergrößen erscheinen nach dem ersten täglichen Datenträgerscan des Computers. „Jetzt scannen“ startet einen innerhalb einer Minute.",
+    "sizes_need_agent": "Auf diesem Computer läuft Agent {version}; Ordnergrößen benötigen {needed} oder neuer.",
+    "size_unknown": "Nicht im letzten Scan -- seitdem erstellt oder ein Ordner, den der Scan nicht zuordnen konnte.",
+    "size_detail": "{size} in {files} Dateien, {on_disk} auf dem Datenträger.",
+    "forecast": {
+      "full_in": {
+        "one": "Voll in etwa {count} Tag",
+        "other": "Voll in etwa {count} Tagen"
+      },
+      "full_on": "Voraussichtlich voll um den {date}.",
+      "not_filling": "Füllt sich nicht"
+    },
+    "scan": {
+      "button": "Jetzt scannen",
+      "title": "Jeden Ordner auf diesem Computer bei seiner nächsten Meldung messen statt morgen.",
+      "queued": "Scan eingereiht. Ordnergrößen und Verlauf werden aktualisiert, sobald der Computer meldet, meist innerhalb weniger Minuten."
+    },
+    "history": {
+      "open": "Verlauf",
+      "title": "Verlauf der Datenträgerbelegung",
+      "volume": "Laufwerk",
+      "chart_label": "Belegter Speicher auf diesem Laufwerk pro Tag, mit dem voraussichtlichen Datum, an dem es voll ist.",
+      "used": "Belegt",
+      "projection": "Prognose",
+      "capacity": "Kapazität",
+      "no_data": "Für diesen Computer wurde noch keine Datenträgerbelegung aufgezeichnet. Jeden Tag, an dem er meldet, kommt ein Punkt hinzu.",
+      "forecast_filling": "Voll um den {date}, in etwa {days} Tagen, bei {rate} pro Tag über die letzten 30 Tage.",
+      "forecast_not_filling": "Füllt sich nicht: {rate} pro Tag über die letzten 30 Tage.",
+      "forecast_insufficient": {
+        "one": "{count} Tag aufgezeichnet. Eine Prognose braucht mindestens 7 Tage in den letzten 30.",
+        "other": "{count} Tage aufgezeichnet. Eine Prognose braucht mindestens 7 Tage in den letzten 30."
+      },
+      "rate_week": "Diese Woche: {rate} pro Tag.",
+      "confidence": {
+        "high": "Der Verlauf ist gleichmäßig, das Datum ist verlässlich.",
+        "medium": "Der Verlauf ist ungleichmäßig, das Datum ist ungefähr.",
+        "low": "Die Belegung schwankt stark, das Datum ist nur eine grobe Schätzung."
+      },
+      "changes_title": "Was sich geändert hat",
+      "day": "Scan",
+      "col": {
+        "folder": "Ordner",
+        "change": "Änderung",
+        "now": "Größe jetzt",
+        "file": "Datei"
+      },
+      "no_scans": "Von diesem Computer ist noch kein Ordnerscan eingetroffen. Die Prognose oben funktioniert auch ohne; diese Liste benötigt Agent 3.40.0 oder neuer.",
+      "first_scan": "Dies ist der erste Scan dieses Laufwerks, es gibt noch nichts zum Vergleichen. Änderungen erscheinen nach dem Scan von morgen.",
+      "no_changes": "Kein Ordner ist seit dem Scan vom {since} um mehr als 64 MB gewachsen oder geschrumpft.",
+      "changes_since": "Änderungen zwischen den Scans vom {since} und {when}, auf dem Datenträger, größte zuerst. Klicken Sie auf einen Ordner, um ihn zu öffnen.",
+      "large_title": "Neue große Dateien",
+      "compare": "Vergleichen mit",
+      "compare_none": "Kein Vergleich",
+      "path_chart_label": "Größe des ausgewählten Ordners oder der Datei pro Tag.",
+      "path_title": "{path}: {delta} seit {since}.",
+      "path_deleted": "{path} wurde am {date} gelöscht.",
+      "path_unknown": "Für {path} gibt es noch keinen Verlauf. Jeder Ordner und jede Datei wird ab dem ersten Scan dieses Computers mit Agent 3.40.0 oder neuer erfasst.",
+      "files_title": "Dateien",
+      "files_more": "{count} Dateien haben sich in diesem Scan geändert; die {shown} größten Änderungen werden angezeigt.",
+      "status": {
+        "new": "neu",
+        "deleted": "gelöscht"
+      }
+    },
+    "compare": {
+      "col": "Am {date}",
+      "not_there": "nicht vorhanden",
+      "gone": "seitdem entfernt"
     }
   },
   "patches": {

@@ -1310,6 +1310,14 @@
         "event_retention_days": {
           "label": "Keep collected events for",
           "help": "How long collected Windows event records are kept before being deleted. Both a privacy control and a disk-space one: a Security-channel record names the account somebody typed a password for, and this is the only table one over-broad subscription can grow by thousands of rows an hour. Deleting a machine erases its events immediately, regardless of this."
+        },
+        "disk_usage_daily_days": {
+          "label": "Keep daily disk usage for",
+          "help": "Every day's disk usage point and folder sizes are kept this long. Older history keeps one point per week. The change lists between scans are kept only this long."
+        },
+        "disk_usage_keep_days": {
+          "label": "Keep weekly disk usage for",
+          "help": "How far back the weekly disk usage history goes before it is deleted. Folder paths in this history name the people who use the PC, and deleting a machine erases its history immediately, regardless of this."
         }
       },
       "map": {
@@ -3096,6 +3104,10 @@
       "uninstall_virtual_display": {
         "label": "Remove the virtual display",
         "description": "Uninstalls the virtual display driver."
+      },
+      "scan_disk_usage": {
+        "label": "Scan folder sizes",
+        "description": "Measures every folder on the PC at its next check-in instead of waiting for the daily scan."
       }
     },
     "command_param": {
@@ -3637,7 +3649,8 @@
       "target": {
         "one": "{count} item selected",
         "other": "{count} items selected"
-      }
+      },
+      "size_history": "Size history"
     },
     "open_title": "Open it on that PC",
     "open_help": "Start {name} on that PC.",
@@ -3657,6 +3670,77 @@
       "network": "network drive",
       "cdrom": "optical",
       "ram": "RAM disk"
+    },
+    "sort_size": "Sort by size, biggest first. Click again for name order.",
+    "sizes_from_scan": "Folder sizes are from the machine's daily scan of {when}.",
+    "sizes_not_scanned": "Folder sizes appear after the machine's first daily disk scan. Scan now starts one within a minute.",
+    "sizes_need_agent": "This machine runs agent {version}; folder sizes need {needed} or newer.",
+    "size_unknown": "Not in the last scan -- created since, or a folder the scan could not place.",
+    "size_detail": "{size} in {files} files, {on_disk} on disk.",
+    "forecast": {
+      "full_in": {
+        "one": "Full in about {count} day",
+        "other": "Full in about {count} days"
+      },
+      "full_on": "Expected to be full around {date}.",
+      "not_filling": "Not filling"
+    },
+    "scan": {
+      "button": "Scan now",
+      "title": "Measure every folder on this machine at its next check-in instead of tomorrow.",
+      "queued": "Scan queued. Folder sizes and History update when the machine reports, usually within a few minutes."
+    },
+    "history": {
+      "open": "History",
+      "title": "Disk usage history",
+      "volume": "Drive",
+      "chart_label": "Used space on this drive per day, with the projected date it fills up.",
+      "used": "Used",
+      "projection": "Projection",
+      "capacity": "Capacity",
+      "no_data": "No disk usage has been recorded for this machine yet. A point is added each day it reports.",
+      "forecast_filling": "Full around {date}, in about {days} days, at {rate} a day over the last 30 days.",
+      "forecast_not_filling": "Not filling up: {rate} a day over the last 30 days.",
+      "forecast_insufficient": {
+        "one": "{count} day recorded. A forecast needs at least 7 days in the last 30.",
+        "other": "{count} days recorded. A forecast needs at least 7 days in the last 30."
+      },
+      "rate_week": "This week: {rate} a day.",
+      "confidence": {
+        "high": "The trend is steady, so this date is reliable.",
+        "medium": "The trend is uneven, so treat this date as approximate.",
+        "low": "Usage jumps around, so this date is a rough guess."
+      },
+      "changes_title": "What changed",
+      "day": "Scan",
+      "col": {
+        "folder": "Folder",
+        "change": "Change",
+        "now": "Size now",
+        "file": "File"
+      },
+      "no_scans": "No folder scan has arrived from this machine yet. The forecast above works without one; this list needs agent 3.40.0 or newer.",
+      "first_scan": "This is the first scan of this drive, so there is nothing to compare it with yet. Changes appear after tomorrow's scan.",
+      "no_changes": "No folder grew or shrank by more than 64 MB since the scan of {since}.",
+      "changes_since": "Changes between the scans of {since} and {when}, on disk, biggest first. Click a folder to open it.",
+      "large_title": "New large files",
+      "compare": "Compare with",
+      "compare_none": "No comparison",
+      "path_chart_label": "Size of the selected folder or file per day.",
+      "path_title": "{path}: {delta} since {since}.",
+      "path_deleted": "{path} was deleted on {date}.",
+      "path_unknown": "{path} has no recorded history yet. Every folder and file is recorded from this machine's first scan with agent 3.40.0 or newer.",
+      "files_title": "Files",
+      "files_more": "{count} files changed in this scan; the {shown} biggest changes are listed.",
+      "status": {
+        "new": "new",
+        "deleted": "deleted"
+      }
+    },
+    "compare": {
+      "col": "On {date}",
+      "not_there": "not there",
+      "gone": "gone since"
     }
   },
   "patches": {

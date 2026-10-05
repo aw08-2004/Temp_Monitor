@@ -407,8 +407,25 @@ public sealed class Worker : BackgroundService
                 // offline window is 90 s. Self-throttles to a minute, and does nothing at all
                 // until the hub subscribes this fleet to something.
                 TempMonitorAgent.Events.EventLogReporter.RefreshIfDue();
+                // Folder sizes (roadmap #27). Daily, and the only scan on this list that does
+                // not run here: this call only STARTS it on its own below-normal thread,
+                // because reading a whole MFT can take minutes on a busy spinning disk.
+                TempMonitorAgent.DiskUsage.DiskUsageReporter.RefreshIfDue(_log);
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
+
+            // The disk-usage report goes by its own POST, not the heartbeat: a few hundred KB
+            // of tracked folders does not belong in the call that decides whether this
+            // machine reads online. Retried every five minutes until the hub takes it.
+            try
+            {
+                var report = TempMonitorAgent.DiskUsage.DiskUsageReporter.TakePending();
+                if (report is not null && await _fleet.ReportDiskUsageAsync(report, ct))
+                    TempMonitorAgent.DiskUsage.DiskUsageReporter.AckSent(report);
+                // ...and the full-depth history, by its own gzip upload per volume.
+                await TempMonitorAgent.DiskUsage.DiskUsageReporter.UploadHistoryAsync(_fleet, _log, ct);
+            }
+            catch (Exception e) { _log.LogWarning(e, "Disk usage upload failed"); }
 
             // Hand over any BitLocker recovery passwords the hub has said it is missing
             // (roadmap #19). Here rather than on the heartbeat because reading one is several

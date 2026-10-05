@@ -437,6 +437,10 @@ public static class AgentConfig
     /// pre-rename migration list above, and correctly so: no install that predates the
     /// rename ever had one.</summary>
     public static string WatchdogStatePath => Path.Combine(ProgramDataDir, "watchdogs.json");
+    /// <summary>The disk-usage folder trees and the last-scan time (roadmap #27). Readable
+    /// by SYSTEM and Administrators only: a tree names every folder on a volume, including
+    /// other users' -- see StateDirectory.HardenPrivate.</summary>
+    public static string DiskUsageDir => Path.Combine(ProgramDataDir, "diskusage");
     public static string LogPath => Path.Combine(ProgramDataDir, "companion.log");
     public static string UpdateStagingDir => Path.Combine(ProgramDataDir, "update");
 

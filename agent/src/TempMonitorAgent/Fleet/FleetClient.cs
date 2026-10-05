@@ -1397,6 +1397,73 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     }
 
     /// <summary>
+    /// Upload one disk-usage report (roadmap #27). Returns true if the hub took it.
+    ///
+    /// On the long-timeout client, like the listing below: a report of a few thousand
+    /// tracked folders is a few hundred KB, and the 10-second client is sized for heartbeats.
+    /// The caller retries; a refusal is logged with its status so a hub that rejects the
+    /// shape is visible in companion.log rather than looking like a machine that never scans.
+    /// </summary>
+    public async Task<bool> ReportDiskUsageAsync(JsonNode payload, CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/disk-usage";
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8,
+                                            "application/json");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused a disk usage report ({Status})", (int)resp.StatusCode);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("Disk usage POST failed: {Msg}", e.Message);
+        }
+        return false;
+    }
+
+    /// <summary>What the hub said to one disk-usage history upload.</summary>
+    public enum HistoryUpload { Stored, NeedFull, Failed }
+
+    /// <summary>
+    /// Upload one volume's disk-usage history (roadmap #27): a gzip file of changed paths,
+    /// written by DiskUsage.TreeDelta.
+    ///
+    /// Streamed from disk with a Content-Length, like UploadFileAsync. A full tree of a big
+    /// drive is tens of megabytes, which must not be buffered in memory and which the 30-minute
+    /// client is sized for. 409 is not a failure: it means the hub does not hold the scan this
+    /// delta was taken against, and the caller resends a full tree.
+    /// </summary>
+    public async Task<HistoryUpload> UploadDiskHistoryAsync(string path, string volume,
+        long scannedAt, long? baseScannedAt, bool full, CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/disk-usage/history"
+                  + $"?volume={Uri.EscapeDataString(volume)}&scanned_at={scannedAt}"
+                  + (baseScannedAt is null ? "" : $"&base={baseScannedAt}")
+                  + (full ? "&full=1" : "");
+        try
+        {
+            var length = new FileInfo(path).Length;
+            using var body = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                                            1024 * 1024, useAsync: true);
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StreamContent(body);
+            req.Content.Headers.ContentLength = length;
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/gzip");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return HistoryUpload.Stored;
+            if ((int)resp.StatusCode == 409) return HistoryUpload.NeedFull;
+            _log.LogWarning("Hub refused a disk usage history upload ({Status})", (int)resp.StatusCode);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        {
+            _log.LogDebug("Disk usage history upload failed: {Msg}", e.Message);
+        }
+        return HistoryUpload.Failed;
+    }
+
+    /// <summary>
     /// Report one directory listing. Returns true if the hub took it.
     ///
     /// Sent here rather than as the command's output because a folder of two thousand

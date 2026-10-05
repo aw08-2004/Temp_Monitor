@@ -31,6 +31,13 @@
                    spellcheck="false">
             <button type="button" id="files-go" class="btn btn--ghost">{{ t('files.go') }}</button>
             <button type="button" id="files-refresh" class="btn btn--ghost">{{ t('files.refresh') }}</button>
+            {# Disk usage (roadmap #27). They sit with Up, Go and Refresh because, like them,
+               they act on the VIEW and not on a row: History opens a panel about the volume
+               being browsed, and Scan now moves the machine's daily scan to its next pass. #}
+            <button type="button" id="files-history-btn" class="btn btn--ghost"
+                    aria-controls="files-history" aria-expanded="false">{{ t('files.history.open') }}</button>
+            <button type="button" id="files-scan" class="btn btn--ghost"
+                    title="{{ t('files.scan.title') }}">{{ t('files.scan.button') }}</button>
         </div>
         <nav class="files-crumbs" id="files-crumbs" aria-label="{{ t('files.crumbs_label') }}"></nav>
 
@@ -49,6 +56,97 @@
         <p class="stat-card__meta" id="files-clipboard" hidden></p>
         <p class="setting__error" id="files-error" hidden></p>
         <p class="stat-card__meta" id="files-note" hidden></p>
+        {# Where the folder sizes came from, and how old they are. Said every time, because a
+           size from this morning's scan beside a folder somebody emptied an hour ago looks
+           like a bug unless the page says when it was measured. #}
+        <p class="stat-card__meta" id="files-sizes-note" hidden></p>
+
+        {# Disk usage history (roadmap #27): the volume over time, when it will be full, and
+           what changed between the last two scans. A section rather than a dialog: it is
+           read beside the folder list -- click a change, the browser goes there -- and a modal
+           would cover the very list it is pointing into. Drawn by files-history.js. #}
+        <section class="files-history" id="files-history" hidden aria-labelledby="files-history-title">
+            <div class="files-history__head">
+                <span class="section-title" id="files-history-title">{{ t('files.history.title') }}</span>
+                <label for="files-history-volume" class="sr-only">{{ t('files.history.volume') }}</label>
+                <select id="files-history-volume" class="input files-history__select"></select>
+                {# Puts a column beside the folder list with each entry's size on that day,
+                   and lists what has gone since. Read beside the list, which is why this
+                   is a section and not a dialog. #}
+                <label for="files-history-compare" class="stat-card__meta">{{ t('files.history.compare') }}</label>
+                <select id="files-history-compare" class="input files-history__select"></select>
+                <button type="button" id="files-history-close" class="btn btn--ghost">{{ t('common.close') }}</button>
+            </div>
+            <p class="stat-card__meta" id="files-history-forecast"></p>
+            <p class="setting__error" id="files-history-error" hidden></p>
+            <div class="files-history__chart">
+                <canvas id="files-history-chart" role="img"
+                        aria-label="{{ t('files.history.chart_label') }}"></canvas>
+            </div>
+
+            {# Any folder or file, at any depth: the folder being browsed, or whatever was
+               picked with Size history on the right-click menu. #}
+            <div id="files-history-path" hidden>
+                <p class="stat-card__meta" id="files-history-path-title"></p>
+                <div class="files-history__chart files-history__chart--small">
+                    <canvas id="files-history-path-chart" role="img"
+                            aria-label="{{ t('files.history.path_chart_label') }}"></canvas>
+                </div>
+            </div>
+
+            <div class="files-history__head">
+                <span class="section-title">{{ t('files.history.changes_title') }}</span>
+                <label for="files-history-day" class="sr-only">{{ t('files.history.day') }}</label>
+                <select id="files-history-day" class="input files-history__select"></select>
+            </div>
+            <p class="stat-card__meta" id="files-history-changes-note"></p>
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">{{ t('files.history.col.folder') }}</th>
+                            <th scope="col">{{ t('files.history.col.change') }}</th>
+                            <th scope="col">{{ t('files.history.col.now') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody id="files-history-changes"></tbody>
+                </table>
+            </div>
+
+            {# The same scan, file by file. The folder list above names where a change lives;
+               this names the files that made it. #}
+            <div id="files-history-files" hidden>
+                <span class="section-title">{{ t('files.history.files_title') }}</span>
+                <p class="stat-card__meta" id="files-history-files-note"></p>
+                <div class="table-scroll">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">{{ t('files.history.col.file') }}</th>
+                                <th scope="col">{{ t('files.history.col.change') }}</th>
+                                <th scope="col">{{ t('files.history.col.now') }}</th>
+                            </tr>
+                        </thead>
+                        <tbody id="files-history-files-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="files-history-large" hidden>
+                <span class="section-title">{{ t('files.history.large_title') }}</span>
+                <div class="table-scroll">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">{{ t('files.history.col.file') }}</th>
+                                <th scope="col">{{ t('files.col.size') }}</th>
+                            </tr>
+                        </thead>
+                        <tbody id="files-history-large-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
 
         <div class="table-scroll">
             <table class="data-table" id="files-table">
@@ -59,8 +157,16 @@
                             <input type="checkbox" id="files-select-all">
                         </th>
                         <th scope="col">{{ t('files.col.name') }}</th>
-                        <th scope="col">{{ t('files.col.size') }}</th>
-                        <th scope="col">{{ t('files.col.modified') }}</th>
+                        {# A button inside the header, not a clickable <th>: it is the
+                           control that sorts by size, so it must be reachable by Tab and
+                           announced as a button. aria-sort is kept on the cell by files.js. #}
+                        <th scope="col" id="files-col-size" aria-sort="none">
+                            <button type="button" class="files-sort" id="files-sort-size"
+                                    title="{{ t('files.sort_size') }}">{{ t('files.col.size') }}</button>
+                        </th>
+                        {# Filled by files.js while History compares with a past day. #}
+                        <th scope="col" id="files-col-compare" hidden></th>
+                        <th scope="col" class="files-col-modified">{{ t('files.col.modified') }}</th>
                     </tr>
                 </thead>
                 <tbody id="files-body"></tbody>
@@ -89,6 +195,8 @@
                     class="files-menu__item">{{ t('files.open') }}</button>
             <button type="button" role="menuitem" id="files-menu-open-remote"
                     class="files-menu__item">{{ t('files.menu.open_remote') }}</button>
+            <button type="button" role="menuitem" id="files-menu-history"
+                    class="files-menu__item">{{ t('files.menu.size_history') }}</button>
             <span class="files-menu__sep" role="separator"></span>
             <button type="button" role="menuitem" id="files-menu-download"
                     class="files-menu__item">{{ t('files.download') }}</button>

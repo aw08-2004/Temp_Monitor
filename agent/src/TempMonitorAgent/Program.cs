@@ -166,6 +166,9 @@ try
     // either as the signed-in user on their own desktop or as SYSTEM with no desktop at all.
     // The operator names which; see OpenItemExecutor for why that is not a default.
     builder.Services.AddSingleton<ICommandExecutor, OpenItemExecutor>();
+    // "Scan now" for the folder sizes (roadmap #27). It only moves the daily clock; the scan
+    // itself runs on the inventory loop's schedule and reports by its own POST.
+    builder.Services.AddSingleton<ICommandExecutor, TempMonitorAgent.DiskUsage.ScanDiskUsageExecutor>();
     // Patch installs (roadmap #14). Note what this executor does NOT do: it never reports an
     // update as installed. It stages what it can and asks for a restart; the hub decides the
     // outcome later by observing that the machine has stopped offering the update. See

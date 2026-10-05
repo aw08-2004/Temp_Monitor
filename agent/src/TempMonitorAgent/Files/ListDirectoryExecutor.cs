@@ -72,6 +72,11 @@ public sealed class ListDirectoryExecutor : ICommandExecutor
                 ["entries"] = entries,
                 ["truncated"] = truncated,
             };
+            // Folder sizes from the last daily disk-usage scan (roadmap #27), added beside
+            // the entries rather than into their "size": see Describe for why a folder never
+            // has one. Absent when this volume has not been scanned yet.
+            var scannedAt = TempMonitorAgent.DiskUsage.FolderTreeCache.Annotate(path, entries);
+            if (scannedAt is not null) payload["tree_scanned_at"] = scannedAt;
             if (!await _fleet.ReportListingAsync(requestId, payload, ct))
                 return CommandResult.Fail("The hub would not accept the listing.");
             var note = truncated > 0
@@ -166,7 +171,9 @@ public sealed class ListDirectoryExecutor : ICommandExecutor
             };
             // Deliberately absent for a folder rather than 0: the size of a directory entry
             // is not the size of what is in it, and rendering "0 bytes" beside a folder
-            // holding a gigabyte is a lie the console would have no way to detect.
+            // holding a gigabyte is a lie the console would have no way to detect. What a
+            // folder holds arrives as tree_size from the disk-usage scan (roadmap #27), a
+            // separate field so a console that predates it cannot mistake one for the other.
             if (!isDir && info is FileInfo file) entry["size"] = file.Length;
             return entry;
         }

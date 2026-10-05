@@ -319,6 +319,15 @@ FILE_COMMANDS = frozenset({
     "open_item",
 })
 
+# Folder sizes (roadmap #27, see disk_usage.py). One command, and NOT a file command: it names
+# no path and carries no one-shot id, it only moves the agent's daily scan clock forward. So
+# it is free to be a favorite, a rule action ("when C: passes 90%, scan it"), or a raw command
+# from the fleet channel -- none of the reasons FILE_COMMANDS are refused there apply. The
+# console's button is disk_usage_web's /scan route; this set is what makes the type known.
+DISK_USAGE_COMMANDS = frozenset({
+    "scan_disk_usage",
+})
+
 ALL_COMMANDS = frozenset({
     "restart",
     "shutdown",
@@ -332,7 +341,7 @@ ALL_COMMANDS = frozenset({
       | VIRTUAL_DISPLAY_COMMANDS | FIRMWARE_COMMANDS | WAKE_COMMANDS
       | PROCESS_COMMANDS | USER_MESSAGE_COMMANDS | PROBE_COMMANDS
       | FILE_COMMANDS | LOCATION_COMMANDS | WIPE_COMMANDS
-      | DISCOVERY_COMMANDS)
+      | DISCOVERY_COMMANDS | DISK_USAGE_COMMANDS)
 
 # ================================
 # COMMAND PARAMETERS

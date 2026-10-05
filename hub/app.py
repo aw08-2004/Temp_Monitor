@@ -53,6 +53,8 @@ import apps
 import capabilities
 import policy
 import usage
+import disk_usage
+import disk_history
 import wipe
 import location
 import apkhost
@@ -100,6 +102,7 @@ from location_web import create_location_blueprint
 from apps_web import create_apps_blueprint
 from policy_web import create_policy_blueprint
 from usage_web import create_usage_blueprint
+from disk_usage_web import create_disk_usage_blueprint
 from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
@@ -151,7 +154,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.136.0"
+HUB_VERSION = "1.138.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -191,6 +194,10 @@ DB_PATH = os.path.join(LOG_DIR, "temp_v2.db")
 # -- files.prune_transfers deletes anything past its hour -- so losing the directory costs at
 # most one download somebody can click again.
 FILE_SPOOL_DIR = os.path.join(LOG_DIR, "filespool")
+# Full-depth disk usage history (roadmap #27): one SQLite file per machine and volume, beside
+# the main database rather than in it. A system drive's history is millions of rows, and the
+# main database is the file every backup copies and every query shares. See disk_history.py.
+DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
 # Daily CSV archives are retired -- the DB is the single source of truth now.
 # Existing CSV files on disk are left untouched; we just stop writing new ones.
 WRITE_CSV_ARCHIVE = False
@@ -687,6 +694,55 @@ def _disk_volumes(sensors):
             "used_gb": None, "total_gb": None, "used_pct": round(float(value), 1),
         })
     return fallback
+
+
+#: When each (machine, volume) last wrote its daily disk-usage point, in-process only. The
+#: agent reports every ten seconds, and one upsert an hour is plenty for a point that only
+#: means "how full was this disk today". Lost on restart, which costs one extra write.
+_DISK_POINT_SECONDS = 3600
+_disk_point_written = {}
+_disk_point_lock = threading.Lock()
+
+
+def _volume_points(sensors):
+    """The /volume/<letter> sensors as [{letter, used_gb, total_gb}, ...].
+
+    Separate from _disk_volumes() because the forecast needs the drive LETTER, which only the
+    hardware id carries ("/volume/c"); the display name there also has the volume label.
+    """
+    points = {}
+    for s in sensors or []:
+        hardware_id = str(s.get("hardware_id") or "").lower()
+        if not hardware_id.startswith("/volume/") or s.get("type") != "Data":
+            continue
+        value = s.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        name = str(s.get("name") or "").strip().lower()
+        if name not in ("total space", "used space"):
+            continue
+        letter = hardware_id[len("/volume/"):]
+        point = points.setdefault(letter, {"letter": letter, "used_gb": None, "total_gb": None})
+        point["used_gb" if name == "used space" else "total_gb"] = float(value)
+    return [p for p in points.values() if p["used_gb"] is not None and p["total_gb"]]
+
+
+def _record_disk_points(machine, sensors, now=None):
+    """Write today's disk-usage point for each of this machine's volumes, at most hourly.
+    Never fails the report it rides on."""
+    now = time.time() if now is None else now
+    try:
+        due = []
+        with _disk_point_lock:
+            for point in _volume_points(sensors):
+                key = (machine, point["letter"])
+                if now - _disk_point_written.get(key, 0) >= _DISK_POINT_SECONDS:
+                    _disk_point_written[key] = now
+                    due.append(point)
+        if due:
+            disk_usage.record_sensor_volumes(DB_PATH, machine, due, now=now)
+    except Exception as e:
+        print(f"[disk-usage] Could not record a daily point for {machine!r}: {e}")
 
 
 def _find_sensor_exact(sensors, sensor_type, exact_name, hardware_substrs=None):
@@ -2552,6 +2608,12 @@ app.register_blueprint(create_policy_blueprint(DB_PATH, login_required, access))
 # spends the most time on their phone". See usage.py and SECURITY.MD's personal-data inventory.
 app.register_blueprint(create_usage_blueprint(DB_PATH, login_required, access))
 
+# Disk usage history, the fill forecast and the daily change summary (roadmap #27).
+# `issue_commands` + machine scope, the file browser's gate and not `view`: the answers carry
+# folder paths, which name somebody's documents. See disk_usage_web.py.
+app.register_blueprint(create_disk_usage_blueprint(DB_PATH, DISK_HISTORY_DIR, login_required,
+                                                   access))
+
 # Remote lock and remote wipe (roadmap #23 phase H). `wipe_device`, a capability of its own,
 # because the argument that keeps every other command feature under `issue_commands` -- "less
 # dangerous than the SYSTEM shell it already grants" -- is true of a reboot and false of a
@@ -3601,6 +3663,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # Usage history merges, and a collision keeps the LARGER figure: both rows describe one
     # device on one day, and usage is cumulative, so the bigger number was reported later.
     usage.rename_machine(DB_PATH, dropped, survivor)
+    # Disk usage history (roadmap #27), survivor-wins: one disk, one day, and the survivor
+    # is the identity still reporting it.
+    disk_usage.rename_machine(DB_PATH, dropped, survivor)
+    disk_history.rename_machine(DISK_HISTORY_DIR, dropped, survivor)
     # Lock and wipe history follows the survivor: it IS the merged-away device, and
     # "this handset was wiped in March" is true of it under either name.
     wipe.rename_machine(DB_PATH, dropped, survivor)
@@ -4009,6 +4075,29 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} usage row(s) before {cutoff_day}.")
             except Exception as e:
                 print(f"[retention] Usage prune failed: {e}")
+            # Disk usage history (roadmap #27). A rolling window that thins rather than only
+            # cuts: every day for the first window, Mondays after it, nothing past the second.
+            # Fresh data is never thinned -- see disk_usage.prune.
+            try:
+                dropped = disk_usage.prune(
+                    DB_PATH,
+                    settings.get_int(DB_PATH, "data.disk_usage_daily_days"),
+                    settings.get_int(DB_PATH, "data.disk_usage_keep_days"))
+                if dropped:
+                    print(f"[retention] Pruned {dropped} disk usage row(s).")
+            except Exception as e:
+                print(f"[retention] Disk usage prune failed: {e}")
+            # ...and the full-depth history, on the same two windows. Folded rather than cut:
+            # an entry's value is its newest change, so an old row is moved, never just dropped.
+            try:
+                dropped = disk_history.prune(
+                    DISK_HISTORY_DIR,
+                    settings.get_int(DB_PATH, "data.disk_usage_daily_days"),
+                    settings.get_int(DB_PATH, "data.disk_usage_keep_days"))
+                if dropped:
+                    print(f"[retention] Folded {dropped} disk history row(s).")
+            except Exception as e:
+                print(f"[retention] Disk history prune failed: {e}")
             # Collected Windows event records (roadmap #16). Its own try, like its
             # neighbours, and the THIRD prune here that is a privacy control as well as a
             # disk-space one: a Security-channel record names the account somebody typed a
@@ -4834,6 +4923,9 @@ software.init_software_db(DB_PATH)
 posture.init_posture_db(DB_PATH)
 policy.init_policy_db(DB_PATH)
 usage.init_usage_db(DB_PATH)
+disk_usage.init_disk_usage_db(DB_PATH)
+# Applies spooled full-depth uploads off the request thread; a full tree takes a minute.
+disk_history.start_worker(DISK_HISTORY_DIR)
 wipe.init_wipe_db(DB_PATH)
 apkhost.init_apkhost_db(DB_PATH)
 processes.init_processes_db(DB_PATH)
@@ -5024,6 +5116,12 @@ def report_temp():
     reported_version = data.get('companion_version')
     save_and_emit_temp(machine, temp_value, uptime_seconds, sensors,
                        timestamp_epoch=client_ts, companion_version=reported_version)
+    # One daily point per volume for the disk-usage forecast (roadmap #27). Live reports
+    # only: the agent stamps every report with client_ts, and one older than ten minutes is a
+    # reconnect backfill describing a past moment. Filing that under today would put last
+    # week's disk on today's point.
+    if sensors and (client_ts is None or client_ts >= int(time.time()) - 600):
+        _record_disk_points(machine, sensors)
     # Keep an enrolled agent's online/offline status fresh off its ordinary temp
     # reports too, so it doesn't read offline between dedicated heartbeats.
     fleet.touch_last_seen(DB_PATH, machine)
@@ -5810,6 +5908,10 @@ def delete_machine(machine):
     # erasing on deletion: this is a record of what a person did with their evenings, and it
     # has no argument at all for surviving the device.
     usage.forget_machine(DB_PATH, machine_name)
+    # And its disk usage history (roadmap #27). Tracked folder paths name the people who
+    # used the PC, and a reused hostname must not inherit them.
+    disk_usage.forget_machine(DB_PATH, machine_name)
+    disk_history.forget_machine(DISK_HISTORY_DIR, machine_name)
     # And any lock or wipe that was asked of it (roadmap #23 phase H). Kept until now
     # so the machine page could explain why the device stopped reporting; once the
     # machine is deleted there is no page, and what remains is a row a reused hostname

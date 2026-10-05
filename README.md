@@ -967,6 +967,43 @@ are deliberately refused by the generic `POST /api/fleet/commands` endpoint and 
 saved as favorites: the guards above live on the dedicated route, and a saved PID is a
 different process by tomorrow.
 
+### Disk usage in the Files tab (folder sizes, what changed, when it is full)
+
+Every Windows agent from **3.40.0** reads each fixed NTFS volume's Master File Table once a day.
+That is a sequential read at low I/O priority, the way WizTree does it, not a walk of every
+folder. Its result shows up in the machine's **Files** tab:
+
+- **Folder sizes.** Every folder in the list shows its size, with a bar against the biggest row
+  on screen. Click the **Size** header to sort biggest first. A note under the toolbar says when
+  the sizes were measured; hover a size to see it on disk and its file count.
+- **When the drive is full.** The drive list shows *Full in about N days* beside a volume that is
+  filling: amber under a month, red under a week. This works on **every** Windows agent, old ones
+  included, because the hub records one point per volume per day from the disk sensors agents
+  already send. It needs a week of points before it shows a date.
+- **History** (button in the toolbar) shows:
+  - used space per day, with the projected full date drawn on it
+  - **What changed** between two scans: up to 200 folders, each one the deepest folder that
+    explains a change, the files that grew, appeared or went away (biggest first), and new files
+    over 100 MB. Click a folder or file to open it.
+  - the size history of the folder you are browsing. **Right-click → Size history** shows it for
+    any folder or file, at any depth.
+  - **Compare with**: pick a past day and the folder list gains a column with each entry's size
+    on that day and the change since, and lists what has been deleted since.
+- **Scan now** measures at the machine's next check-in instead of tomorrow.
+
+All of it needs `issue_commands` and the machine in your scope, the same as browsing, because
+folder names are the names of somebody's documents. The hub keeps every folder and file at full
+depth, in one file per PC and drive under `logs/disk_history/` (roughly 150-300 MB per drive in
+the first year). History is kept daily for `data.disk_usage_daily_days` (90). After that one
+point per week is kept, until `data.disk_usage_keep_days` (365). Deleting a machine erases its
+history.
+
+API: `GET /api/disk-usage/machines/<m>` (volumes, latest point, forecast, last scan),
+`.../history?volume=C:`, `.../changes?volume=C:&day=YYYY-MM-DD`,
+`.../path-history?volume=C:&path=...`, `.../browse?volume=C:&path=...&day=YYYY-MM-DD`,
+`POST .../scan`. Agents post the summary to `POST /api/agent/disk-usage` and the full-depth
+history to `POST /api/agent/disk-usage/history` (gzip; 409 means "send the full tree").
+
 ## Package deployment (PDQ-style)
 
 Define an installer once — payload, silent command line, what proves it worked — then
