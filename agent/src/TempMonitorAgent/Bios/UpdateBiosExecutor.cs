@@ -252,6 +252,15 @@ public sealed class UpdateBiosExecutor(
         catch (Exception e) when (e is not OperationCanceledException)
         {
             log.LogWarning(e, "Firmware update {Id} failed", updateId);
+            if (staged)
+            {
+                // The image is staged and BitLocker must stay suspended for the restart that
+                // writes it; reporting a failure here would also overwrite the staged report
+                // the hub already holds. Whatever threw (the report, the inventory reset) is
+                // not the flash.
+                return CommandResult.Ok($"Firmware image for BIOS {toVersion} staged. It is "
+                                        + $"written during the next restart. ({e.Message})");
+            }
             ResumeIfSuspended();
             await ReportAsync(updateId, ok: false, unsupported: false, error: e.Message,
                               CancellationToken.None);
