@@ -121,6 +121,13 @@ MAX_VERSION_CHARS = 80
 MAX_MODELS = 64
 MAX_ERROR_CHARS = 1000
 MAX_ARGS_CHARS = 500
+#: The tail of the vendor tool's own log the agent sends back. Enough for the last few
+#: decisions a Dell DUP logs; the whole log stays on the machine.
+MAX_TOOL_LOG_CHARS = 4000
+#: How far a reported boot must be past the flash before it counts as "the machine has
+#: restarted since". `boot_epoch` is derived from a report time minus an uptime, so it
+#: carries a few seconds of jitter either way.
+REBOOT_SLACK_SECONDS = 120
 #: Vendor flash payloads are 10-60 MB. The cap is a guard against a mis-picked file, not a
 #: policy; `firmware.max_upload_mb` is the real knob.
 MAX_TARGETS_PER_JOB = 500
@@ -137,6 +144,11 @@ DEFAULT_FLASHING_TIMEOUT_SECONDS = 2 * 3600
 class PayloadRejected(ValueError):
     """A payload definition or a job the hub refuses to accept. Its own type so the web layer
     answers 400 while a genuine bug still becomes a 500. Mirrors bios.ChangeRejected."""
+
+
+class PayloadInUse(PayloadRejected):
+    """The payload is under a firmware job that has not finished -- a 409, not a 400:
+    nothing is wrong with the request, it is just not the right moment."""
 
 
 # ================================
@@ -215,6 +227,20 @@ def init_firmware_db(db_path):
             )
             """
         )
+        # What the vendor tool said, kept on the row (agent 3.41+). A Dell DUP exiting 2 and
+        # one exiting 0 both mean "staged" to the agent, and before these columns the hub saw
+        # nothing else -- so a fleet where no flash ever applied had no evidence anywhere of
+        # why. Added by ALTER because the table shipped without them.
+        existing = {row["name"] for row in conn.execute(
+            "PRAGMA table_info(firmware_targets)").fetchall()}
+        if "exit_code" not in existing:
+            conn.execute("ALTER TABLE firmware_targets ADD COLUMN exit_code INTEGER")
+        if "tool_log" not in existing:
+            conn.execute("ALTER TABLE firmware_targets ADD COLUMN tool_log TEXT NOT NULL "
+                         "DEFAULT ''")
+        if "bitlocker" not in existing:
+            conn.execute("ALTER TABLE firmware_targets ADD COLUMN bitlocker TEXT NOT NULL "
+                         "DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_firmware_targets_machine "
                      "ON firmware_targets(machine, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_firmware_targets_job "
@@ -262,6 +288,34 @@ def _same(left, right):
     UNKNOWN and send somebody to look at hardware that is fine.
     """
     return _clean(left).casefold() == _clean(right).casefold()
+
+
+def vendor_family(vendor):
+    """The manufacturer a vendor string names, for matching an image to a machine.
+
+    **The same company arrives spelled several ways.** WMI on a Dell reports `Dell Inc.`,
+    an operator typing an image's vendor writes `Dell`, and an HP is `HP` on one model and
+    `Hewlett-Packard` on an older one. `_same` on the raw strings refused every one of those
+    pairs: an image uploaded as `Dell` was "not for" every Dell in the fleet, with a refusal
+    that read like a hardware mismatch. Folding the vendors the agent knows how to drive into
+    one family each is safe here, because the vendor is never the check that stops a wrong
+    flash -- the exact model list is, and that stays strict.
+
+    Mirrors `FirmwareFlasher.Vendor` in the agent, which re-checks on the machine and must
+    agree with this or a payload the hub dispatched is refused at flash time.
+    """
+    text = _clean(vendor).casefold()
+    if "dell" in text:
+        return "dell"
+    if "hewlett" in text or text.startswith("hp"):
+        return "hp"
+    if "lenovo" in text:
+        return "lenovo"
+    return text
+
+
+def _same_vendor(left, right):
+    return bool(_clean(left)) and vendor_family(left) == vendor_family(right)
 
 
 def _epoch_or_none(value, field):
@@ -345,10 +399,32 @@ def validate_payload(*, name, vendor, models, to_version, sha256, install_args="
 
 
 def create_payload(db_path, *, name, vendor, models, to_version, sha256, size_bytes=0,
-                   filename="", install_args="", notes="", created_by="system"):
+                   filename="", install_args="", notes="", created_by="system",
+                   blob_root_dir=None):
+    """Record a payload. With `blob_root_dir`, **the image must already be on disk there**,
+    and its size is read from the file rather than taken from the caller.
+
+    That check is the fix for a payload that lied. The route used to accept any well-formed
+    sha256 and a caller-supplied size, so a JSON body that named the image by a key the
+    route did not read (`staging_id`, `size_bytes`) got a 201 and a row reading "0 KB" --
+    and the first anybody heard of it would have been a 410 from the agent download, in the
+    middle of a flash. Trusting the caller's size was the rejected alternative: the hub owns
+    the bytes, so the hub says how many there are.
+
+    `blob_root_dir` stays optional only so the model can be unit-tested without a store;
+    the web layer always passes it.
+    """
     fields = validate_payload(name=name, vendor=vendor, models=models,
                               to_version=to_version, sha256=sha256,
                               install_args=install_args)
+    if blob_root_dir is not None:
+        path = packages.blob_path(blob_root_dir, fields["sha256"])
+        if not os.path.isfile(path):
+            raise PayloadRejected(
+                "The hub does not hold an image with that sha256. Upload the file first "
+                "(POST /api/firmware/upload), or pass the staging_id of a finished "
+                "download.")
+        size_bytes = os.path.getsize(path)
     payload_id = uuid.uuid4().hex
     now = int(time.time())
     with get_conn(db_path) as conn:
@@ -367,6 +443,55 @@ def create_payload(db_path, *, name, vendor, models, to_version, sha256, size_by
                         "models": fields["models"], "to_version": fields["to_version"],
                         "sha256": fields["sha256"], "bytes": int(size_bytes or 0)})
     return payload_id
+
+
+#: What an operator may change on an existing payload. The image itself is not on the
+#: list -- a different file is a different payload, with its own audit trail.
+EDITABLE_PAYLOAD_FIELDS = ("name", "vendor", "models", "to_version", "install_args", "notes")
+
+
+def _open_jobs_for(conn, payload_id):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM firmware_jobs WHERE payload_id = ? AND status IN "
+        "(?, ?)", (payload_id, JOB_SCHEDULED, JOB_RUNNING)).fetchone()["n"]
+
+
+def update_payload(db_path, payload_id, changes, *, actor="system"):
+    """Change a payload's description or switches. Returns the updated payload, or None.
+
+    Exists because the only way to add `/forceit` to an image's switches was to delete it
+    and upload it again -- and the delete was refused while the job it was stuck under stayed
+    open. **Refused under the same lock as delete**: the agent reads `install_args` when it
+    fetches the update, so editing a payload with a job still open would change what a
+    half-dispatched job runs, on the one operation with no undo.
+    """
+    payload = get_payload(db_path, payload_id)
+    if payload is None:
+        return None
+    changes = changes if isinstance(changes, dict) else {}
+    merged = {key: changes.get(key, payload[key]) for key in EDITABLE_PAYLOAD_FIELDS}
+    fields = validate_payload(name=merged["name"], vendor=merged["vendor"],
+                              models=merged["models"], to_version=merged["to_version"],
+                              sha256=payload["sha256"],
+                              install_args=merged["install_args"] or "")
+    notes = _clean(merged["notes"], 500)
+    with get_conn(db_path) as conn:
+        if _open_jobs_for(conn, payload_id):
+            raise PayloadInUse("That image is being used by a firmware update that has "
+                                  "not finished. Wait for it, or cancel it, before changing "
+                                  "the image.")
+        conn.execute(
+            "UPDATE firmware_payloads SET name = ?, vendor = ?, models_json = ?, "
+            "to_version = ?, install_args = ?, notes = ? WHERE id = ?",
+            (fields["name"], fields["vendor"], json.dumps(fields["models"]),
+             fields["to_version"], fields["install_args"], notes, payload_id))
+    changed = {key: [payload[key], fields.get(key, notes)]
+               for key in EDITABLE_PAYLOAD_FIELDS
+               if payload[key] != fields.get(key, notes)}
+    fleet.audit(db_path, actor=actor, action="update_firmware_payload",
+                level=fleet.LEVEL_SECURITY, target=fields["name"],
+                detail={"payload_id": payload_id, "changed": changed})
+    return get_payload(db_path, payload_id)
 
 
 def list_payloads(db_path):
@@ -396,11 +521,8 @@ def delete_payload(db_path, payload_id, *, actor="system", blob_root_dir=None):
     if payload is None:
         return False
     with get_conn(db_path) as conn:
-        open_jobs = conn.execute(
-            "SELECT COUNT(*) AS n FROM firmware_jobs WHERE payload_id = ? AND status IN "
-            "(?, ?)", (payload_id, JOB_SCHEDULED, JOB_RUNNING)).fetchone()["n"]
-        if open_jobs:
-            raise PayloadRejected("That image is being used by a firmware update that has "
+        if _open_jobs_for(conn, payload_id):
+            raise PayloadInUse("That image is being used by a firmware update that has "
                                   "not finished. Cancel it first.")
         conn.execute("DELETE FROM firmware_payloads WHERE id = ?", (payload_id,))
         still_used = conn.execute(
@@ -445,7 +567,7 @@ def check_machine(payload, machine_info, inventory):
         # unacceptable. See bios.get_inventory on the same distinction.
         return ("This machine has not reported a manufacturer, so it cannot be matched "
                 "against the image. Update its agent, or wait for its next check-in.")
-    if not _same(manufacturer, payload["vendor"]):
+    if not _same_vendor(manufacturer, payload["vendor"]):
         return (f"This machine reports manufacturer {manufacturer!r}, and the image is for "
                 f"{payload['vendor']!r}.")
 
@@ -876,6 +998,7 @@ def ingest_result(db_path, target_id, payload):
 
     payload = payload if isinstance(payload, dict) else {}
     error = _clean(payload.get("error"), MAX_ERROR_CHARS)
+    _store_tool_evidence(db_path, target_id, payload)
     if payload.get("unsupported"):
         _finish_target(db_path, target_id, TARGET_REFUSED,
                        error=error or "this machine has no flashable firmware interface")
@@ -891,6 +1014,27 @@ def ingest_result(db_path, target_id, payload):
         _finish_target(db_path, target_id, TARGET_FAILED,
                        error=error or "the machine reported no result")
     return get_target(db_path, target_id)
+
+
+def _store_tool_evidence(db_path, target_id, payload):
+    """Keep the exit code, log tail and BitLocker state an agent sent, if it sent any.
+
+    Older agents send none of these, and that is fine: the columns stay empty rather than
+    the report being refused. Non-raising on shape, like the rest of this ingest path.
+    """
+    exit_code = payload.get("exit_code")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        exit_code = None
+    tool_log = payload.get("tool_log")
+    tool_log = tool_log[-MAX_TOOL_LOG_CHARS:] if isinstance(tool_log, str) else ""
+    bitlocker = _clean(payload.get("bitlocker"), 40)
+    if exit_code is None and not tool_log and not bitlocker:
+        return
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE firmware_targets SET exit_code = COALESCE(?, exit_code), "
+            "tool_log = ?, bitlocker = ? WHERE id = ?",
+            (exit_code, tool_log, bitlocker, target_id))
 
 
 def confirm_from_inventory(db_path, machine, bios_version):
@@ -1023,6 +1167,62 @@ def expire_stale(db_path, now=None, flashing_timeout=DEFAULT_FLASHING_TIMEOUT_SE
     return closed
 
 
+def fail_unapplied_after_reboot(db_path):
+    """Fail a staged flash once the machine has restarted and still reports its old BIOS.
+
+    `confirm_from_inventory` leaves a target REBOOTING while the machine reports the version
+    it had, because "has not restarted yet" is the normal case for hours. But it cannot tell
+    that from "restarted, and the flash did not take" -- so a machine an operator rebooted
+    by hand sat on "Waiting for restart" for a day, its job stayed open, and its image could
+    be neither edited nor deleted. That is what every Dell flash looked like before this.
+
+    The missing fact is the boot time, which the hub already has: `machine_info.boot_epoch`.
+    A target fails here when **all three** hold:
+
+      * the machine booted after the flash was staged (plus `REBOOT_SLACK_SECONDS`),
+      * its BIOS inventory was reported after that boot -- otherwise the version we hold
+        could be the pre-restart one, and the startup report is simply not in yet,
+      * and that inventory still names the version the target started from.
+
+    Run from the scheduler tick rather than from the inventory ingest alone, because the two
+    facts arrive separately: the agent's startup inventory can land before the first uptime
+    report that moves `boot_epoch`, and whichever comes second has to be able to close it.
+    The 24-hour `expire_stale` stays as the backstop for a machine that reports no uptime.
+    """
+    try:
+        with get_conn(db_path) as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT t.id, t.from_version, t.flashed_at, t.exit_code, "
+                "       m.boot_epoch, b.bios_version, b.reported_at "
+                "FROM firmware_targets t "
+                "JOIN machine_info m ON m.machine = t.machine "
+                "JOIN machine_bios b ON b.machine = t.machine "
+                "WHERE t.status = ? AND t.flashed_at IS NOT NULL "
+                "  AND m.boot_epoch IS NOT NULL "
+                "  AND m.boot_epoch > t.flashed_at + ? "
+                "  AND b.reported_at >= m.boot_epoch",
+                (TARGET_REBOOTING, REBOOT_SLACK_SECONDS))]
+    except sqlite3.OperationalError:
+        # A database without the machine tables (a unit test of this module alone, or a hub
+        # mid-migration). Nothing to decide from; the timeout still applies.
+        return 0
+
+    closed = 0
+    for row in rows:
+        if not row["from_version"] or not _same(row["bios_version"], row["from_version"]):
+            continue  # confirm_from_inventory owns every other version
+        why = (f"the machine restarted after the flash and still reports BIOS "
+               f"{row['bios_version']}, so the image was staged but never applied")
+        if row["exit_code"] is not None:
+            why += f" (the update tool exited with code {row['exit_code']})"
+        why += (". Check the tool's log on this update, the install switches, and whether "
+                "BitLocker was suspended")
+        _finish_target(db_path, row["id"], TARGET_FAILED, error=why,
+                       observed_version=row["bios_version"])
+        closed += 1
+    return closed
+
+
 # ================================
 # CANCEL
 # ================================
@@ -1053,22 +1253,29 @@ def cancel_target(db_path, target_id, *, actor="system"):
 def cancel_job(db_path, job_id, *, actor="system"):
     """Cancel every target that can still be recalled, and close the job.
 
-    Returns (cancelled, left_running). The second number is the honest half: a job cancelled
-    while six machines are already flashing has stopped nothing for those six, and the
-    console has to say so rather than showing a cancelled job over hardware that is being
-    written to right now.
+    Returns (cancelled, still_flashing, awaiting_reboot). The last two are the honest half:
+    a job cancelled while six machines are already flashing has stopped nothing for those
+    six, and the console has to say so rather than showing a cancelled job over hardware
+    that is being written to right now. They are separate numbers because they are separate
+    situations -- a machine whose image is staged and waiting on a restart is not being
+    written to, and counting it as "still flashing" sent an operator looking for a flash in
+    progress on a machine that had already rebooted.
     """
     job = get_job(db_path, job_id)
     if job is None:
-        return 0, 0
+        return 0, 0, 0
     cancelled = 0
-    left = 0
+    flashing = 0
+    rebooting = 0
     for target in job["targets"]:
         if target["status"] in TARGET_RECALLABLE:
             ok, _ = cancel_target(db_path, target["id"], actor=actor)
             cancelled += 1 if ok else 0
+        elif target["status"] == TARGET_REBOOTING:
+            rebooting += 1
         elif target["status"] not in TARGET_TERMINAL:
-            left += 1
+            flashing += 1
+    left = flashing + rebooting
     now = int(time.time())
     with get_conn(db_path) as conn:
         if left:
@@ -1080,8 +1287,9 @@ def cancel_job(db_path, job_id, *, actor="system"):
                          (JOB_CANCELLED, now, job_id))
     fleet.audit(db_path, actor=actor, action="cancel_firmware_job",
                 level=fleet.LEVEL_NOTICE, target=job.get("payload_name") or job_id,
-                detail={"job_id": job_id, "cancelled": cancelled, "still_flashing": left})
-    return cancelled, left
+                detail={"job_id": job_id, "cancelled": cancelled, "still_flashing": flashing,
+                        "awaiting_reboot": rebooting})
+    return cancelled, flashing, rebooting
 
 
 def tick(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS,
@@ -1090,6 +1298,7 @@ def tick(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS,
     """One scheduler pass: retire what nobody will answer for, then dispatch what is due.
     Returns (retired, dispatched) for the caller's log line."""
     expired = reconcile_once(db_path)
+    expired += fail_unapplied_after_reboot(db_path)
     expired += expire_stale(db_path, now=now, flashing_timeout=flashing_timeout,
                             confirm_timeout=confirm_timeout)
     dispatched = dispatch_once(db_path, now=now, ttl_seconds=ttl_seconds,

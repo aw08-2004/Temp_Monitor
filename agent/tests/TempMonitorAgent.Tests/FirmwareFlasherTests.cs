@@ -145,6 +145,33 @@ public class FirmwareFlasherTests
     }
 
     [Fact]
+    public void An_image_labelled_Dell_matches_a_machine_reporting_Dell_Inc()
+    {
+        // Seen on a real hub: "Dell" on the image refused every "Dell Inc." in the fleet.
+        // The hub's firmware.vendor_family folds the same way; the two must agree.
+        Assert.Null(FirmwareFlasher.CheckHardware("Dell Inc.", "Latitude 5540", "Dell", Models));
+        Assert.Equal(FirmwareFlasher.Vendor("Hewlett-Packard"), FirmwareFlasher.Vendor("HP"));
+        Assert.NotNull(FirmwareFlasher.CheckHardware("HP", "Latitude 5540", "Dell", Models));
+    }
+
+    [Fact]
+    public void A_Dell_flash_writes_its_own_log_unless_the_operator_named_one()
+    {
+        var plan = FirmwareFlasher.BuildPlan("Dell Inc.", "x.exe", "/s /forceit", null, null,
+                                             @"C:\ProgramData\FleetHub\Agent\firmware\logs\a.log");
+        Assert.Equal(@"/s /forceit /l=""C:\ProgramData\FleetHub\Agent\firmware\logs\a.log""",
+                     plan.Arguments);
+
+        var own = FirmwareFlasher.BuildPlan("Dell Inc.", "x.exe", @"/s /l=C:\mine.log", null,
+                                            null, @"C:\x\a.log");
+        Assert.Equal(@"/s /l=C:\mine.log", own.Arguments);
+
+        // Other vendors spell logging differently, if at all; nothing is guessed for them.
+        Assert.Equal("-s", FirmwareFlasher.BuildPlan("HP", "x.exe", null, null, null,
+                                                     @"C:\x\a.log").Arguments);
+    }
+
+    [Fact]
     public void Each_vendor_gets_its_own_silent_switch_by_default()
     {
         Assert.Equal("/s", FirmwareFlasher.BuildPlan("Dell Inc.", "x.exe", null, null, null)

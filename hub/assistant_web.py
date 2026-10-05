@@ -710,7 +710,14 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         chat = assistant.get_chat(db_path, action["chat_id"], owner)
         if chat:
             _error, _status, follow_up = _start_turn(chat, owner, None, body.get("context"))
-        return jsonify({"action": _public_action(action), "run_id": follow_up}),             (200 if ok else 400)
+        answer = {"action": _public_action(action), "run_id": follow_up}
+        if not ok:
+            # Without this the console's toast fell back to "the assistant could not
+            # answer", which is not what happened -- the assistant was fine and the hub
+            # refused the action, for a reason it had already written down.
+            reason = payload.get("error") if isinstance(payload, dict) else None
+            answer["error"] = reason or f"The hub answered HTTP {status_code}."
+        return jsonify(answer), (200 if ok else 400)
 
     @bp.route("/api/assistant/actions/<action_id>/reject", methods=["POST"])
     @login_required

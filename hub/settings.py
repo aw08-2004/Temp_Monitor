@@ -517,6 +517,13 @@ REGISTRY = (
     _s("firmware.confirm_timeout_seconds", "firmware", "int", 24 * 3600, minimum=600,
        maximum=7 * 86400, unit="seconds"),
     _s("firmware.require_ac_power", "firmware", "bool", True),
+    # Suspend BitLocker for exactly one restart before running the vendor tool. On by
+    # default because without it no Dell flash on an encrypted machine ever applied: the
+    # tool staged the image, the machine restarted on its old BIOS, and nothing anywhere
+    # said why (FCOM1109, hub 1.139.0). Dell, Microsoft's ConfigMgr and Intune all do the
+    # same. The cost is named in the help text: until that restart the volume key sits
+    # unprotected on the disk -- the reason an operator might turn this off.
+    _s("firmware.suspend_bitlocker", "firmware", "bool", True),
     _s("firmware.min_battery_percent", "firmware", "int", 30, minimum=0, maximum=100,
        unit="percent"),
 

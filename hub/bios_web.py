@@ -52,6 +52,7 @@ import permissions
 import permissions_web
 import refusals
 import settings
+import webfetch
 
 # Backwards-compatible alias so callers using the old private name keep working.
 _bearer_agent = auth_helpers.bearer_agent
@@ -423,18 +424,72 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
     @login_required
     @can_manage
     def create_firmware_payload():
+        """Describe an image: JSON name, vendor, models, to_version, install_args, notes, plus the image as sha256 + file_name (after /api/firmware/upload) or staging_id (a finished /api/webfetch/downloads).
+
+        The image must already be on the hub -- `firmware.create_payload` refuses a digest
+        the store does not hold, and reads the size from disk. That is the fix for a body
+        that named the image by keys this route never read and was answered 201 with a
+        0 KB payload.
+
+        `staging_id` moves a finished assistant download into the FIRMWARE store, through
+        the same `webfetch.promote` the package side uses, so the hub hashes the bytes
+        itself. `promote_download` would have put it in the package store, where the agent
+        image route cannot see it. A caller-supplied sha256 alongside it must agree with
+        what the hub computed.
+        """
         data = request.get_json(silent=True) or {}
+        sha256 = data.get("sha256")
+        file_name = data.get("file_name") or ""
+        staging_id = str(data.get("staging_id") or "").strip()
+        if staging_id:
+            max_bytes = settings.get_int(db_path, "firmware.max_upload_mb") * 1024 * 1024
+            try:
+                source = webfetch.promote(webfetch.staging_root(log_dir), staging_id,
+                                          image_dir, max_bytes)
+            except KeyError:
+                return jsonify({"error": f"There is no staged download {staging_id}."}), 400
+            except ValueError as e:  # FetchError, or store_blob's size cap
+                return refusals.refuse(e)
+            except OSError as e:
+                return jsonify({"error": f"Could not store the image: {e}"}), 500
+            if sha256 and str(sha256).strip().lower() != source["sha256"]:
+                return jsonify({"error": "The sha256 given does not match the downloaded "
+                                         f"file, which is {source['sha256']}."}), 400
+            sha256 = source["sha256"]
+            file_name = file_name or source.get("file_name") or ""
         try:
             payload_id = firmware.create_payload(
                 db_path, name=data.get("name"), vendor=data.get("vendor"),
                 models=data.get("models"), to_version=data.get("to_version"),
-                sha256=data.get("sha256"), size_bytes=data.get("file_size") or 0,
-                filename=data.get("file_name") or "",
+                sha256=sha256, filename=file_name,
                 install_args=data.get("install_args") or "",
-                notes=data.get("notes") or "", created_by=_current_email())
+                notes=data.get("notes") or "", created_by=_current_email(),
+                blob_root_dir=image_dir)
         except firmware.PayloadRejected as e:
             return refusals.refuse(e)
         return jsonify({"payload": firmware.get_payload(db_path, payload_id)}), 201
+
+    @bp.route("/api/firmware/payloads/<payload_id>", methods=["PATCH"])
+    @login_required
+    @can_manage
+    def update_firmware_payload(payload_id):
+        """Change an image's name, vendor, models, to_version, install_args or notes (JSON; omitted keys are kept).
+
+        Refused with 409 while a firmware update using the image is still open, for the
+        reason `firmware.update_payload` gives. The image file itself cannot be swapped --
+        upload a new one.
+        """
+        data = request.get_json(silent=True) or {}
+        try:
+            payload = firmware.update_payload(db_path, payload_id, data,
+                                              actor=_current_email())
+        except firmware.PayloadInUse as e:
+            return refusals.refuse(e, 409)
+        except firmware.PayloadRejected as e:
+            return refusals.refuse(e)
+        if payload is None:
+            return jsonify({"error": "unknown firmware image"}), 404
+        return jsonify({"payload": payload}), 200
 
     @bp.route("/api/firmware/payloads/<payload_id>", methods=["DELETE"])
     @login_required
@@ -531,9 +586,10 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
         """
         if firmware.get_job(db_path, job_id, with_targets=False) is None:
             return jsonify({"error": "unknown firmware update"}), 404
-        cancelled, still_flashing = firmware.cancel_job(db_path, job_id,
-                                                        actor=_current_email())
-        return jsonify({"cancelled": cancelled, "still_flashing": still_flashing}), 200
+        cancelled, still_flashing, awaiting_reboot = firmware.cancel_job(
+            db_path, job_id, actor=_current_email())
+        return jsonify({"cancelled": cancelled, "still_flashing": still_flashing,
+                        "awaiting_reboot": awaiting_reboot}), 200
 
     @bp.route("/api/firmware/updates/<update_id>/cancel", methods=["POST"])
     @login_required
@@ -547,11 +603,17 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
             return jsonify({"error": "You do not have access to that machine."}), 403
         ok, status = firmware.cancel_target(db_path, update_id, actor=_current_email())
         if not ok:
-            return jsonify({
-                "error": "That machine has already been handed the image and cannot be "
-                         "recalled. Its firmware may already have been written.",
-                "status": status,
-            }), 409
+            if status == firmware.TARGET_REBOOTING:
+                # Not "being flashed": the tool has finished and staged the image, and the
+                # hub is waiting on a restart. Said separately because the old single
+                # message sent an operator to look for a flash in progress that was not.
+                why = ("That machine's image is staged and waiting on a restart, so it "
+                       "cannot be recalled. Once the machine restarts it resolves on its "
+                       "own: applied if the new BIOS version appears, failed if not.")
+            else:
+                why = ("That machine has already been handed the image and cannot be "
+                       "recalled. Its firmware may already have been written.")
+            return jsonify({"error": why, "status": status}), 409
         return jsonify({"status": status}), 200
 
     # ---------------- Agent ----------------
@@ -594,6 +656,9 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
             "to_version": target["to_version"],
             "password": _password_for(machine),
             "require_ac_power": settings.get_bool(db_path, "firmware.require_ac_power"),
+            # Agent 3.41+ suspends BitLocker for one restart when this is true; older agents
+            # ignore it. Rides with the payload for the same reason the power policy does.
+            "suspend_bitlocker": settings.get_bool(db_path, "firmware.suspend_bitlocker"),
             "min_battery_percent": settings.get_int(db_path,
                                                     "firmware.min_battery_percent"),
         }), 200

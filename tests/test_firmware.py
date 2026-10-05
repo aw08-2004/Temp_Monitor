@@ -301,8 +301,8 @@ def main():
         # be written. A row reading "cancelled" over that would be worse than no cancel.
         check("a target that already holds the image cannot be recalled",
               not ok and status == firmware.TARGET_FLASHING)
-        cancelled, left = firmware.cancel_job(db_path, held_id)
-        check("cancelling its job reports it as still flashing", left == 1)
+        cancelled, left, awaiting = firmware.cancel_job(db_path, held_id)
+        check("cancelling its job reports it as still flashing", left == 1 and awaiting == 0)
         check("...and the job is NOT marked cancelled while that machine is being written",
               firmware.get_job(db_path, held_id)["status"] != firmware.JOB_CANCELLED)
 
@@ -398,6 +398,132 @@ def main():
         firmware.rename_machine(db_path, "DUPE", "PC-FIT")
         check("a merge collision drops the duplicate rather than raising",
               len(firmware.get_job(db_path, collide_id)["targets"]) == 1)
+
+        print("\n== 'Dell' on the image matches 'Dell Inc.' on the machine ==")
+        # Seen on a real hub: an image uploaded with vendor "Dell" was refused on every Dell
+        # in the fleet, because WMI says "Dell Inc.". The model list stays the real check.
+        check("Dell matches Dell Inc.",
+              firmware.check_machine(payload, *facts(manufacturer="Dell Inc.")) is None)
+        check("HP matches Hewlett-Packard",
+              firmware.vendor_family("Hewlett-Packard") == firmware.vendor_family("HP"))
+        check("a Dell image is still refused on an HP",
+              firmware.check_machine(payload, *facts(manufacturer="HP")) is not None)
+        check("and the model is still matched exactly",
+              firmware.check_machine(payload, *facts(manufacturer="Dell Inc.",
+                                                     model="Latitude 7440")) is not None)
+
+        print("\n== A payload cannot claim an image the hub does not hold ==")
+        # The silent failure: a 201 and a "0 KB" row, found out at flash time as a 410.
+        store = tempfile.mkdtemp()
+        try:
+            firmware.create_payload(
+                db_path, name="ghost", vendor="Dell", models=["Latitude 5540"],
+                to_version="9.9.9", sha256=DIGEST_B, filename="x.exe", size_bytes=999,
+                blob_root_dir=store)
+            check("a digest with no file behind it is refused", False)
+        except firmware.PayloadRejected:
+            check("a digest with no file behind it is refused", True)
+        import io
+        import packages
+        real_sha, real_size = packages.store_blob(store, io.BytesIO(b"MZ" + b"\0" * 1000),
+                                                  10 * 1024 * 1024)
+        real_id = firmware.create_payload(
+            db_path, name="real", vendor="Dell", models=["Latitude 5540"],
+            to_version="9.9.9", sha256=real_sha, filename="real.exe", size_bytes=0,
+            blob_root_dir=store)
+        check("the size comes from the stored file, not the caller",
+              firmware.get_payload(db_path, real_id)["size_bytes"] == real_size == 1002)
+
+        print("\n== A payload can be edited, but not under an open update ==")
+        edited = firmware.update_payload(db_path, real_id,
+                                         {"install_args": "/s /forceit", "notes": "n"},
+                                         actor="op@x.com")
+        check("install_args can be changed in place",
+              edited["install_args"] == "/s /forceit" and edited["notes"] == "n")
+        check("fields not named are kept",
+              edited["to_version"] == "9.9.9" and edited["sha256"] == real_sha)
+        check("editing an unknown payload answers None",
+              firmware.update_payload(db_path, "nope", {}) is None)
+        try:
+            firmware.update_payload(db_path, real_id, {"models": []})
+            check("an edit that empties the model list is refused", False)
+        except firmware.PayloadRejected:
+            check("an edit that empties the model list is refused", True)
+        busy_job, _ = firmware.create_job(db_path, payload_id=real_id, machines=["PC-FIT"],
+                                          created_by="op@x.com",
+                                          machine_facts={"PC-FIT": facts()})
+        try:
+            firmware.update_payload(db_path, real_id, {"install_args": "/s"})
+            check("an edit under an open job is refused as in-use", False)
+        except firmware.PayloadInUse:
+            check("an edit under an open job is refused as in-use", True)
+
+        print("\n== A machine that restarted on its old BIOS is failed, not left waiting ==")
+        # The FCOM1109 case: rebooted by hand, still on 1.27.0, and the target sat on
+        # "Waiting for restart" for a day with its image locked.
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS machine_info (machine TEXT PRIMARY KEY, "
+                         "manufacturer TEXT, model TEXT, boot_epoch INTEGER)")
+        check("without uptime facts nothing is decided",
+              firmware.fail_unapplied_after_reboot(db_path) == 0)
+
+        def staged(machine, flashed_at):
+            job, _ = firmware.create_job(db_path, payload_id=real_id, machines=[machine],
+                                         created_by="op@x.com",
+                                         machine_facts={machine: facts()})
+            firmware.dispatch_once(db_path)
+            target = firmware.get_job(db_path, job)["targets"][0]["id"]
+            firmware.start_target(db_path, target)
+            firmware.ingest_result(db_path, target, {"ok": True, "exit_code": 2,
+                                                     "tool_log": "x" * 9000,
+                                                     "bitlocker": "on"})
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("UPDATE firmware_targets SET flashed_at = ? WHERE id = ?",
+                             (flashed_at, target))
+            return target
+
+        def machine_state(machine, boot_epoch, version, reported_at):
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("INSERT OR REPLACE INTO machine_info(machine, boot_epoch) "
+                             "VALUES (?, ?)", (machine, boot_epoch))
+                conn.execute("INSERT OR REPLACE INTO machine_bios(machine, support, "
+                             "bios_version, reported_at) VALUES (?, 'supported', ?, ?)",
+                             (machine, version, reported_at))
+
+        t0 = int(time.time()) - 10_000
+        rebooted = staged("PC-REBOOTED", t0)
+        machine_state("PC-REBOOTED", t0 + 600, "1.20.0", t0 + 700)
+        not_yet = staged("PC-NOT-YET", t0)
+        machine_state("PC-NOT-YET", t0 - 5000, "1.20.0", t0 + 700)
+        stale_inv = staged("PC-STALE-INV", t0)
+        machine_state("PC-STALE-INV", t0 + 600, "1.20.0", t0 + 300)
+        jitter = staged("PC-JITTER", t0)
+        machine_state("PC-JITTER", t0 + 30, "1.20.0", t0 + 700)
+
+        evidence = firmware.get_target(db_path, rebooted)
+        check("the tool's exit code, log tail and BitLocker state are kept",
+              evidence["exit_code"] == 2 and evidence["bitlocker"] == "on"
+              and len(evidence["tool_log"]) == firmware.MAX_TOOL_LOG_CHARS)
+        check("one machine is closed",
+              firmware.fail_unapplied_after_reboot(db_path) == 1)
+        failed = firmware.get_target(db_path, rebooted)
+        check("a reboot after the flash with the old version is FAILED",
+              failed["status"] == firmware.TARGET_FAILED)
+        check("...saying it restarted and quoting the exit code",
+              "restarted" in failed["error"] and "code 2" in failed["error"])
+        check("a machine that has not restarted since is left waiting",
+              firmware.get_target(db_path, not_yet)["status"] == firmware.TARGET_REBOOTING)
+        check("an inventory from before the restart decides nothing",
+              firmware.get_target(db_path, stale_inv)["status"] == firmware.TARGET_REBOOTING)
+        check("a boot inside the jitter slack is not counted as a restart",
+              firmware.get_target(db_path, jitter)["status"] == firmware.TARGET_REBOOTING)
+
+        cancel_job_id = firmware.get_target(db_path, not_yet)["job_id"]
+        cancelled, flashing, awaiting = firmware.cancel_job(db_path, cancel_job_id)
+        check("cancelling a job waiting on a restart says so, not 'still flashing'",
+              flashing == 0 and awaiting == 1)
+        _ok, why = firmware.cancel_target(db_path, not_yet)
+        check("and the target itself reports rebooting", why == firmware.TARGET_REBOOTING)
 
         print("\n== The audit trail records what was aimed where ==")
         with sqlite3.connect(db_path) as conn:
