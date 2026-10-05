@@ -63,6 +63,7 @@ public sealed class UpdateBiosExecutor(
         // Evidence for the hub, filled in as far as the flash gets. Every report below
         // carries whatever is known by then.
         int? exitCode = null;
+        var staged = false;
         var toolLog = "";
         var bitlocker = "";
 
@@ -200,7 +201,10 @@ public sealed class UpdateBiosExecutor(
                 timeoutSeconds: 30 * 60, onLine: onOutput);
 
             exitCode = outcome.TimedOut ? null : outcome.ExitCode;
-            toolLog = ReadTail(logPath);
+            // Redacted before it leaves the machine: Dell takes the setup password inline
+            // (/p=), and its log can echo the command line it was given. The hub shows this
+            // log to anyone who can view the update.
+            toolLog = Redact(ReadTail(logPath), password);
             Say($"[firmware] The updater exited with code {(exitCode?.ToString() ?? "none")}.");
 
             if (outcome.TimedOut)
@@ -221,6 +225,9 @@ public sealed class UpdateBiosExecutor(
             }
 
             // Staged. NOT applied -- see the class docstring. The hub takes it from here.
+            // From this line on BitLocker must STAY suspended: the restart it was suspended
+            // for is the one that writes the image.
+            staged = true;
             Say("[firmware] The image is staged. It is written during the next restart, and "
                 + "the hub confirms it when this machine reports its new BIOS version.");
             var delivered = await ReportAsync(updateId, ok: true, unsupported: false,
@@ -252,6 +259,11 @@ public sealed class UpdateBiosExecutor(
         }
         finally
         {
+            // Every path that did not stage an image puts BitLocker back -- including a
+            // cancellation (agent stopping, command cancelled) mid-tool, which the catch
+            // above deliberately does not see. DisableCount 1 bounds it to one restart
+            // anyway; this closes even that window when there is no flash to wait for.
+            if (!staged) ResumeIfSuspended();
             TryDelete(passwordFile);
             TryDelete(imagePath);
         }
@@ -283,6 +295,12 @@ public sealed class UpdateBiosExecutor(
             return "";
         }
     }
+
+    /// <summary>The log with every occurrence of the setup password replaced.</summary>
+    internal static string Redact(string text, string? secret)
+        => string.IsNullOrEmpty(secret) || string.IsNullOrEmpty(text)
+            ? text
+            : text.Replace(secret, "********", StringComparison.Ordinal);
 
     private void PruneLogs()
     {

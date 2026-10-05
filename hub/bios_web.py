@@ -412,7 +412,8 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
         except ValueError as e:
             return refusals.refuse(e)
         except OSError as e:
-            return jsonify({"error": f"Could not store the image: {e}"}), 500
+            print(f"[firmware] could not store an uploaded image: {e}")
+            return jsonify({"error": "Could not store the image on the hub."}), 500
         fleet.audit(db_path, actor=_current_email(), action="upload_firmware_image",
                     level=fleet.LEVEL_NOTICE,
                     target=os.path.basename(upload.filename),
@@ -447,11 +448,14 @@ def create_bios_blueprint(db_path, log_dir, login_required, access, hub_url=""):
                 source = webfetch.promote(webfetch.staging_root(log_dir), staging_id,
                                           image_dir, max_bytes)
             except KeyError:
-                return jsonify({"error": f"There is no staged download {staging_id}."}), 400
+                return jsonify({"error": "There is no such staged download."}), 400
             except ValueError as e:  # FetchError, or store_blob's size cap
                 return refusals.refuse(e)
             except OSError as e:
-                return jsonify({"error": f"Could not store the image: {e}"}), 500
+                # Logged, not answered: an OSError names hub paths, which are not the
+                # caller's business. Same as webfetch_web.promote_download.
+                print(f"[firmware] could not promote staged download {staging_id}: {e}")
+                return jsonify({"error": "Could not store the image on the hub."}), 500
             if sha256 and str(sha256).strip().lower() != source["sha256"]:
                 return jsonify({"error": "The sha256 given does not match the downloaded "
                                          f"file, which is {source['sha256']}."}), 400

@@ -172,6 +172,18 @@ public class FirmwareFlasherTests
     }
 
     [Fact]
+    public void The_setup_password_never_reaches_the_hub_in_the_tool_log()
+    {
+        // Dell takes the password inline (/p=) and its log can echo the command line; the
+        // hub shows the log tail to anyone who can view the update.
+        var log = "Command: /s /p=hunter2 /l=x.log\r\nPassword hunter2 accepted";
+        var redacted = UpdateBiosExecutor.Redact(log, "hunter2");
+        Assert.DoesNotContain("hunter2", redacted);
+        Assert.Contains("/p=********", redacted);
+        Assert.Equal(log, UpdateBiosExecutor.Redact(log, null));
+    }
+
+    [Fact]
     public void Each_vendor_gets_its_own_silent_switch_by_default()
     {
         Assert.Equal("/s", FirmwareFlasher.BuildPlan("Dell Inc.", "x.exe", null, null, null)

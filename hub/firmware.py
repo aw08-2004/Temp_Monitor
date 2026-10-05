@@ -418,7 +418,14 @@ def create_payload(db_path, *, name, vendor, models, to_version, sha256, size_by
                               to_version=to_version, sha256=sha256,
                               install_args=install_args)
     if blob_root_dir is not None:
-        path = packages.blob_path(blob_root_dir, fields["sha256"])
+        # `sha256` is already held to 64 hex characters by validate_payload, so this cannot
+        # leave the store today. The containment check keeps that true if the digest format
+        # ever widens, and is the one CodeQL's path-injection rule recognises -- the same
+        # pairing webfetch._dir uses.
+        base = os.path.realpath(blob_root_dir)
+        path = os.path.realpath(packages.blob_path(base, fields["sha256"]))
+        if not path.startswith(base + os.sep):
+            raise PayloadRejected("That sha256 does not name an image in the store.")
         if not os.path.isfile(path):
             raise PayloadRejected(
                 "The hub does not hold an image with that sha256. Upload the file first "
@@ -1027,7 +1034,9 @@ def _store_tool_evidence(db_path, target_id, payload):
         exit_code = None
     tool_log = payload.get("tool_log")
     tool_log = tool_log[-MAX_TOOL_LOG_CHARS:] if isinstance(tool_log, str) else ""
-    bitlocker = _clean(payload.get("bitlocker"), 40)
+    # Wide enough for the agent's "error: DisableKeyProtectors returned 0x..." -- the
+    # detail after the colon is the part an operator acts on.
+    bitlocker = _clean(payload.get("bitlocker"), 300)
     if exit_code is None and not tool_log and not bitlocker:
         return
     with get_conn(db_path) as conn:
