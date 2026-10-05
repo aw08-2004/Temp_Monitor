@@ -569,6 +569,10 @@ def test_scope_is_the_operators():
         wait_run(scoped, r.get_json()["run_id"])
     check("...but confirming it is refused by the route, not run",
           r.status_code == 400 and command_rows("PC-02") == 0)
+    # The console's toast reads this. Without it the operator was told "the assistant could
+    # not answer" about an action the hub had refused for a reason it had written down.
+    check("...and the refusal carries the hub's reason for the console to show",
+          bool((r.get_json() or {}).get("error")))
 
 
 def test_denied_routes_stay_denied():

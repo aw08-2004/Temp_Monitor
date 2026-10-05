@@ -129,7 +129,11 @@
         newFolder: document.getElementById('files-menu-new-folder'),
         remove: document.getElementById('files-menu-delete')
     };
-    const tableScroll = pane.querySelector('.table-scroll');
+    // The scroll box around THE file list, found from the table rather than as "the first
+    // .table-scroll in the pane". The History panel (hub 1.138.0) put three more of those
+    // above the list, so the first one became the hidden History table -- and the right-click
+    // menu, which listens here, silently stopped opening anywhere in the file list.
+    const tableScroll = document.getElementById('files-table').closest('.table-scroll');
 
     const nameDialog = document.getElementById('files-name-dialog');
     const deleteDialog = document.getElementById('files-delete-dialog');

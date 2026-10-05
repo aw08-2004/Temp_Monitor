@@ -521,6 +521,14 @@
         const state = el('div', 'stat-card__meta', t(STATE_KEYS[action.state] || 'assistant.state.pending'));
         if (action.result && action.result.status) state.textContent += ` (HTTP ${action.result.status})`;
         card.appendChild(state);
+        // The hub's own sentence for a refusal. The card used to stop at "refused or failed
+        // (HTTP 400)" while the model was handed the reason -- so an operator watching Auto
+        // mode saw a dozen identical failures and could not tell "Dell answered 403" from
+        // "that is a file, not a page" without asking.
+        const reason = action.result && action.result.data && action.result.data.error;
+        if (action.state === 'failed' && typeof reason === 'string' && reason) {
+            card.appendChild(el('div', 'stat-card__meta', reason.slice(0, 500)));
+        }
 
         if (action.state === 'pending') {
             const buttons = el('div', 'asst__action-buttons');

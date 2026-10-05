@@ -183,7 +183,7 @@ public static class BitLockerReader
     /// The two failures are told apart deliberately: an absent namespace is a Home edition and
     /// a permanent, correct `unsupported`, while anything else is a provider that exists and
     /// is misbehaving, which is the only thing worth showing an operator as an error.</summary>
-    private static ManagementScope ConnectedScope()
+    internal static ManagementScope ConnectedScope()
     {
         var options = new ConnectionOptions
         {

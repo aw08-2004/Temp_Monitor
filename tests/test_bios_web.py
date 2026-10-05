@@ -30,6 +30,7 @@ import backups
 import bios
 import firmware
 import fleet
+import packages
 import permissions
 import settings
 from bios_web import create_bios_blueprint
@@ -372,6 +373,78 @@ def main():
                            "to_version": "1.0", "sha256": uploaded["sha256"]}
                      ).status_code == 400)
 
+        print("\n== A payload cannot name an image the hub does not hold ==")
+        # The silent failure from a real hub: the assistant posted staging_id + size_bytes,
+        # keys the route did not read, and got a 201 for a "0 KB" image.
+        r = c.post("/api/firmware/payloads", json={
+            "name": "ghost", "vendor": "Dell", "models": ["Latitude 5540"],
+            "to_version": "9.9.9", "sha256": "d" * 64, "file_name": "ghost.exe",
+            "size_bytes": 107915408})
+        check("a digest with no stored file -> 400, not a 0 KB payload",
+              r.status_code == 400 and "staging_id" in r.get_json()["error"])
+
+        print("\n== A finished assistant download becomes a firmware image ==")
+        import uuid
+        import webfetch
+        staging = webfetch.staging_root(log_dir)
+        staged_bytes = b"MZ" + b"\x07" * 3000
+        staging_id = uuid.uuid4().hex
+        os.makedirs(os.path.join(staging, staging_id))
+        with open(os.path.join(staging, staging_id, "file"), "wb") as fh:
+            fh.write(staged_bytes)
+        webfetch._write_meta(staging, staging_id, {
+            "id": staging_id, "status": webfetch.STATUS_DONE,
+            "file_name": "OptiPlex_7020_1.28.1.exe", "size": len(staged_bytes),
+            "sha256": hashlib.sha256(staged_bytes).hexdigest()})
+        check("a sha256 that disagrees with the staged file -> 400",
+              c.post("/api/firmware/payloads", json={
+                  "name": "x", "vendor": "Dell", "models": ["Latitude 5540"],
+                  "to_version": "1.28.1", "staging_id": staging_id,
+                  "sha256": "e" * 64}).status_code == 400)
+        # That refusal ran AFTER the promote, so the record is now promoted; stage again.
+        staging_id = uuid.uuid4().hex
+        os.makedirs(os.path.join(staging, staging_id))
+        with open(os.path.join(staging, staging_id, "file"), "wb") as fh:
+            fh.write(staged_bytes)
+        webfetch._write_meta(staging, staging_id, {
+            "id": staging_id, "status": webfetch.STATUS_DONE,
+            "file_name": "OptiPlex_7020_1.28.1.exe", "size": len(staged_bytes)})
+        r = c.post("/api/firmware/payloads", json={
+            "name": "OptiPlex 7020 1.28.1", "vendor": "Dell Inc.",
+            "models": ["OptiPlex SFF Plus 7020"], "to_version": "1.28.1",
+            "install_args": "/s", "staging_id": staging_id})
+        check("creating from staging_id -> 201", r.status_code == 201)
+        staged_payload = r.get_json()["payload"]
+        check("...with the real size, digest and file name",
+              staged_payload["size_bytes"] == len(staged_bytes)
+              and staged_payload["sha256"] == hashlib.sha256(staged_bytes).hexdigest()
+              and staged_payload["filename"] == "OptiPlex_7020_1.28.1.exe")
+        check("...and the bytes are in the FIRMWARE store, where the agent route looks",
+              os.path.exists(packages.blob_path(firmware.blob_root(log_dir),
+                                                staged_payload["sha256"])))
+        check("an unknown staging_id -> 400",
+              c.post("/api/firmware/payloads", json={
+                  "name": "x", "vendor": "Dell", "models": ["m"], "to_version": "1",
+                  "staging_id": uuid.uuid4().hex}).status_code == 400)
+
+        print("\n== An image's switches can be edited in place ==")
+        r = c.patch(f"/api/firmware/payloads/{staged_payload['id']}",
+                    json={"install_args": "/s /forceit"})
+        check("PATCH -> 200 with the new switches",
+              r.status_code == 200 and r.get_json()["payload"]["install_args"] == "/s /forceit")
+        check("...keeping everything it did not name",
+              r.get_json()["payload"]["to_version"] == "1.28.1")
+        check("PATCH on an unknown image -> 404",
+              c.patch("/api/firmware/payloads/nope", json={}).status_code == 404)
+        check("PATCH that empties the models -> 400",
+              c.patch(f"/api/firmware/payloads/{staged_payload['id']}",
+                      json={"models": []}).status_code == 400)
+        CURRENT_USER = "tech@x.com"
+        check("issue_commands cannot edit an image -> 403",
+              c.patch(f"/api/firmware/payloads/{staged_payload['id']}",
+                      json={"notes": "x"}).status_code == 403)
+        CURRENT_USER = "super@x.com"
+
         print("\n== Queueing a flash ==")
         r = c.post("/api/firmware/jobs", json={"payload_id": payload_id,
                                                "machines": ["PC-01"]})
@@ -405,6 +478,8 @@ def main():
         check("the power preconditions ride down with it",
               fetched["require_ac_power"] is True
               and isinstance(fetched["min_battery_percent"], int))
+        check("...and so does the BitLocker policy, on by default",
+              fetched["suspend_bitlocker"] is True)
         check("a redelivered command cannot fetch it twice -> 409",
               c.get(f"/api/agent/firmware/update/{target['id']}",
                     headers=auth).status_code == 409)
