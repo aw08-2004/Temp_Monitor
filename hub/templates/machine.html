@@ -38,7 +38,7 @@
 {# data-can-issue-commands decides only whether the Processes card DRAWS its End task /
    Restart buttons. The endpoints enforce the same capability themselves, so a console that
    got this wrong would be offering a 403, not a way past one. #}
-<div id="machine-config" data-machine="{{ machine }}" data-low-load-threshold="{{ low_load_threshold }}" data-live-window-seconds="{{ live_window_seconds }}" data-live-poll-seconds="{{ live_poll_seconds }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
+<div id="machine-config" data-machine="{{ machine }}" data-low-load-threshold="{{ low_load_threshold }}" data-hot-threshold-c="{{ hot_threshold_c }}" data-live-window-seconds="{{ live_window_seconds }}" data-live-poll-seconds="{{ live_poll_seconds }}" data-enabled-metrics='{{ enabled_metrics|tojson }}' data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
 
     {# The device workspace (hub 1.114.0).
        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -64,6 +64,14 @@
 
        The FLEET halves of Backup and Firmware did not come back: an image library and a
        destination list are not about one PC. They are Fleet tasks (/tools) now. #}
+    {# Where this page sits. The sidebar lights Devices for a machine page, and this says the
+       same thing in words, with the way back one click away -- the machine page is where
+       operators spend most of their time and the only page reached from a list. #}
+    <nav class="breadcrumb" aria-label="{{ t('machine.breadcrumb_label') }}">
+        <a href="{{ url_for('inventory_page') }}">{{ t('nav.inventory') }}</a>
+        <span class="breadcrumb__sep" aria-hidden="true">/</span>
+        <span aria-current="page">{{ machine }}</span>
+    </nav>
     <div class="machine-head">
         <h1 class="section-title machine-head__title">{{ machine }}</h1>
         {# <details> for the disclosure semantics and Esc/outside-click handling in
@@ -202,10 +210,9 @@
                so here it simply looks like a PC that stopped updating. #}
             <div class="stat-card__meta" id="stat-channel">{{ t('machine.channel', value=t('machine.unknown')) }}</div>
             <div class="stat-card__meta" id="stat-channel-note" hidden></div>
-            <div id="channel-picker" hidden style="margin-top: var(--space-2);">
-                <label class="setting__label" for="channel-select">{{ t('machine.channel_pin') }}</label>
-                <select class="input" id="channel-select" style="width: 100%;"></select>
-            </div>
+            {# The picker that pins the channel is under "Machine settings" further down: this
+               grid answers "what is this PC", and a form control in the middle of it made the
+               read-only overview look editable. #}
         </div>
         <div class="card stat-card identity-block">
             <div class="stat-card__label">{{ t('machine.identity') }}</div>
@@ -468,13 +475,25 @@
         <p class="stat-card__meta process-card__help">{{ t('machine.processes.help') }}</p>
     </details>
 
-    {# Per-machine primary-sensor pin. Lives here rather than in Settings because it is
-       per-machine state, like the asset tag -- Settings holds the fleet-wide preference
-       order this overrides. #}
-    <details class="card sensor-card fold" data-fold-key="machine:overview:sensor_pick" open>
+    {# Machine settings: everything on this page that CHANGES the machine's configuration
+       rather than showing it -- the release-channel pin (roadmap #21) and the primary-sensor
+       pin. Both used to sit among the readings (the channel picker inside the "At a glance"
+       grid, the sensor pin between Cooling and the charts), so the overview read as a form.
+       Closed by default: a few times a year, not every visit.
+
+       The sensor pin lives on this page rather than in Settings because it is per-machine
+       state, like the asset tag -- Settings holds the fleet-wide preference order it
+       overrides. The channel picker is only shown to an operator who may change it;
+       machine.js unhides it from /api/machines/<m>/channel's answer. #}
+    <details class="card sensor-card fold" data-fold-key="machine:overview:settings">
         <summary class="fold__summary">
-            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.sensor.title') }}</span>
+            <span class="section-title" style="margin-bottom: 0;">{{ t('machine.settings_title') }}</span>
         </summary>
+        <div id="channel-picker" class="machine-setting" hidden>
+            <h3 class="machine-setting__title"><label for="channel-select">{{ t('machine.channel_pin') }}</label></h3>
+            <select class="input" id="channel-select" style="max-width: 320px;"></select>
+        </div>
+        <h3 class="machine-setting__title">{{ t('machine.sensor.title') }}</h3>
         <div class="toolbar" style="margin-bottom: var(--space-2);">
             <label for="primary-sensor">{{ t('machine.sensor.use') }}</label>
             <select id="primary-sensor" class="select">

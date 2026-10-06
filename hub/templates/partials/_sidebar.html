@@ -21,9 +21,14 @@
        tests below, asked in the form static/js/shell.js can answer. The server can only
        decide it once, when the shell document is built; inside the shell the sidebar
        outlives every page it navigates to, so the active state has to be re-derived from a
-       path. Space-separated: Dashboard owns "/" and every "/machine/..." under it, exactly
-       as its endpoint tuple does. tests/test_shell.py pins each one against its own href so
-       the two cannot drift apart. #}
+       path. Space-separated: Devices owns "/inventory" and every "/machine/..." under it,
+       exactly as its endpoint tuple does. tests/test_shell.py pins each one against its own
+       href so the two cannot drift apart.
+
+       /machine used to light DASHBOARD -- left over from when the Dashboard was a grid of
+       machine cards and a machine page was "a card, opened". Since the Dashboard became the
+       fleet overview, every machine is reached from Devices, and lighting Dashboard while
+       looking at one PC told the operator they were somewhere they were not. #}
     {# Three sections (hub 1.114.0): Fleet is what the fleet IS, Operate is what you do to
        it, Administration is the hub itself and who may use it. Eighteen flat entries in the
        order they happened to ship had no shape to scan.
@@ -32,22 +37,29 @@
        a promise the operator's permissions cannot keep. The has_* sets below mirror the
        gates on the links inside, so when a link's gate changes, change its section's too.
 
-       Rejected: a collapsible Administration group. A folded <details> takes its icons off
-       the collapsed rail with it, and the rail is exactly where a fold would be used. #}
+       Administration folds (console review, hub 1.140.0) -- it is nine links visited a few
+       times a month, sitting under the daily ones with equal weight, which made the daily
+       ones harder to find. The objection that kept it flat still holds and is answered
+       rather than overridden: a folded <details> takes its icons off the collapsed rail, and
+       the rail is exactly where a fold would be used. So it is NOT a <details>. It is a
+       button that sets data-folded on the section, the fold is pure CSS, and the CSS ignores
+       it on the rail (components.css, .sidebar__section[data-foldable]) -- every icon stays put
+       there. It never hides the page you are on: common.js opens it whenever one of its
+       links is active. #}
     {% set has_operate = cap.VIEW in user_capabilities or cap.REMOTE_CONTROL in user_capabilities
                          or cap.DEPLOY_PACKAGES in user_capabilities
                          or cap.MANAGE_BACKUPS in user_capabilities or cap.MANAGE_FIRMWARE in user_capabilities %}
     {% set has_admin = cap.VIEW in user_capabilities or cap.VIEW_AUDIT_LOG in user_capabilities
                        or cap.MANAGE_SETTINGS in user_capabilities
                        or cap.MANAGE_PERMISSION_GROUPS in user_capabilities or cap.MANAGE_USERS in user_capabilities %}
-    <nav class="sidebar__nav">
+    <nav class="sidebar__nav" aria-label="{{ t('nav.label') }}">
         <div class="sidebar__section" role="group" aria-labelledby="nav-section-fleet">
         <div class="sidebar__section-label" id="nav-section-fleet">{{ t('nav.section.fleet') }}</div>
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('index', 'machine_page') else '' }}" data-nav-prefix="/ /machine" href="{{ url_for('index') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'index' else '' }}" data-nav-prefix="/" href="{{ url_for('index') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
             <span class="sidebar__link-label">{{ t('nav.dashboard') }}</span>
         </a>
-        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'inventory_page' else '' }}" data-nav-prefix="/inventory" href="{{ url_for('inventory_page') }}">
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('inventory_page', 'machine_page') else '' }}" data-nav-prefix="/inventory /machine" href="{{ url_for('inventory_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg>
             <span class="sidebar__link-label">{{ t('nav.inventory') }}</span>
         </a>
@@ -186,8 +198,14 @@
         {% endif %}
 
         {% if has_admin %}
-        <div class="sidebar__section" role="group" aria-labelledby="nav-section-admin">
-        <div class="sidebar__section-label" id="nav-section-admin">{{ t('nav.section.admin') }}</div>
+        <div class="sidebar__section" data-foldable role="group" aria-labelledby="nav-section-admin">
+        <div class="sidebar__section-label" id="nav-section-admin">
+            <button type="button" class="sidebar__section-toggle" aria-expanded="true" aria-controls="nav-admin-links">
+                <span>{{ t('nav.section.admin') }}</span>
+                <svg class="sidebar__section-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+        </div>
+        <div class="sidebar__section-body" id="nav-admin-links">
         {% if cap.VIEW_AUDIT_LOG in user_capabilities %}
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'audit.audit_page' else '' }}" data-nav-prefix="/audit" href="{{ url_for('audit.audit_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
@@ -247,6 +265,7 @@
             <span class="sidebar__link-label">{{ t('nav.download') }}</span>
         </a>
         {% endif %}
+        </div>
         </div>
         {% endif %}
     </nav>

@@ -241,6 +241,43 @@ def test_the_page_asks_for_what_the_endpoint_returns():
           "socket.io.js" not in read(ROOT, "hub", "templates", "index.html"))
 
 
+def test_live_readings_are_only_of_live_machines():
+    # The silent failure: the "Live readings" tiles and the Hottest list took every machine's
+    # LAST reading, so a PC switched off nine days ago at 99 C was the fleet's hottest machine
+    # and held the average up, and a sensor reading 0 C ("could not read") dragged it down.
+    # Nothing looked broken -- the numbers were just quietly about the wrong machines. Run
+    # last: it adds machines the earlier tests' exact counts do not expect.
+    print("\n-- live readings are of online machines, and of real temperatures --")
+    from datetime import datetime, timedelta
+    import settings
+
+    root = client_for("root@example.com")
+    before = fresh(root)["telemetry"]
+
+    report("SUM-STALE", 99.0, "Microsoft Windows 11 Pro", "26100")
+    window = settings.get_int(app.DB_PATH, "fleet.dashboard_online_window_seconds")
+    stale = app.to_timestamp_str(datetime.now() - timedelta(seconds=window + 3600))
+    with app.get_db_conn() as conn:
+        conn.execute("UPDATE machine_info SET updated_at=? WHERE machine='SUM-STALE'", (stale,))
+    # A headline temperature of 0 with no usable CPU sensor behind it: what an agent that
+    # could not read its sensor sends.
+    app.app.test_client().post("/api/report", json={"machine": "SUM-ZERO", "temp": 0.0})
+
+    summary = fresh(root)
+    telemetry = summary["telemetry"]
+    hottest = [row["machine"] for row in summary["attention"]["hottest"]]
+    check("an offline machine is not among the hottest", "SUM-STALE" not in hottest)
+    check("...nor is it the fleet's peak", telemetry["peak_cpu_temp"] != 99.0)
+    check("...and it still shows where offline machines belong",
+          "SUM-STALE" in [row["machine"] for row in summary["attention"]["longest_offline"]])
+    check("a 0 C reading is not averaged in", telemetry["avg_cpu_temp"] == before["avg_cpu_temp"])
+    check("...and neither machine counts as reporting",
+          telemetry["reporting"] == before["reporting"])
+    check("a 0 C machine is listed with no temperature, not 0",
+          next(r for r in root.get("/api/machines").get_json()
+               if r["machine"] == "SUM-ZERO")["temp"] is None)
+
+
 def main():
     test_the_counts_agree_with_each_other()
     test_the_thresholds_are_filters_with_their_numbers_attached()
@@ -248,6 +285,7 @@ def main():
     test_a_scoped_operator_sees_only_their_own_fleet()
     test_the_cache_is_keyed_by_scope()
     test_the_page_asks_for_what_the_endpoint_returns()
+    test_live_readings_are_only_of_live_machines()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
 

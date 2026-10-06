@@ -21,8 +21,9 @@
 </p>
 
 <div class="toolbar" style="margin-bottom: var(--space-4);">
-    <input class="input" id="inventory-search" type="search" autocomplete="off"
-           placeholder="{{ t('inventory.search_placeholder') }}" style="min-width: 320px; max-width: 100%;">
+    <input class="input inventory-search" id="inventory-search" type="search" autocomplete="off"
+           aria-label="{{ t('inventory.search_placeholder') }}" title="{{ t('inventory.search_placeholder') }}"
+           placeholder="{{ t('inventory.search_placeholder') }}">
     {# Narrow the list to a device group (hub 1.114.0), so "select all" then means that
        group. Filled by inventory.js, and left hidden while no group exists. #}
     <select class="input" id="inventory-group" aria-label="{{ t('inventory.group_filter') }}" style="display: none;">
@@ -32,9 +33,13 @@
     {# Fleet-wide wake (roadmap #10) lives here rather than on the Dashboard because this
        is the page that shows offline machines -- the ones the button is about. Each PC is
        woken by an awake peer on its OWN subnet, so this works across sites; the hub never
-       broadcasts on their behalf except as a same-subnet fallback. #}
+       broadcasts on their behalf except as a same-subnet fallback.
+
+       Starts hidden, and inventory.js shows it only while something in the list is offline:
+       it was the most prominent control on the page even with the whole fleet awake, ahead
+       of the search people actually came for. #}
     {% if cap.ISSUE_COMMANDS in user_capabilities %}
-    <button id="inventory-wake-all" type="button" class="btn btn--ghost"
+    <button id="inventory-wake-all" type="button" class="btn btn--ghost" hidden
             title="{{ t('inventory.wake_all_title') }}">{{ t('inventory.wake_all') }}</button>
     <span class="stat-card__meta" id="inventory-wake-status"></span>
     {% endif %}
@@ -43,10 +48,25 @@
     <button id="inventory-export" type="button" class="btn btn--ghost">{{ t('inventory.export_csv') }}</button>
 </div>
 
+{# Quick status filter (console review, hub 1.140.0): the four questions people open this page
+   to answer, one click each and counted, instead of sorting by Status and scanning. Combines
+   with the search and the group filter -- each narrows, none widens. Buttons with
+   aria-pressed rather than radios: exactly one is on, and "All" is the way back. #}
+<div class="segmented inventory-status-filter" id="inventory-status-filter" role="group"
+     aria-label="{{ t('inventory.filter.label') }}">
+    <button type="button" class="segmented__item" data-status="" aria-pressed="true">{{ t('inventory.filter.all') }} <span class="segmented__count"></span></button>
+    <button type="button" class="segmented__item" data-status="online" aria-pressed="false">{{ t('inventory.filter.online') }} <span class="segmented__count"></span></button>
+    <button type="button" class="segmented__item" data-status="offline" aria-pressed="false">{{ t('inventory.filter.offline') }} <span class="segmented__count"></span></button>
+    <button type="button" class="segmented__item" data-status="unenrolled" aria-pressed="false">{{ t('inventory.filter.unenrolled') }} <span class="segmented__count"></span></button>
+</div>
+
 <div class="card">
     {# Click a header to sort by it; click again to reverse. The sorted column carries
        aria-sort and a ▲/▼ glyph. inventory.js owns the sort state and persists it. #}
-    <table class="data-table data-table--sortable">
+    {# data-table--stack: below 640px each row becomes a card of label/value lines
+       (components.css) -- eleven columns were a sideways-scrolling page on a phone. The labels
+       come from data-label, which inventory.js copies off these headers. #}
+    <table class="data-table data-table--sortable data-table--stack">
         <thead>
             <tr id="inventory-head">
                 {# Not sortable, so no data-sort: onHeaderClick is only bound to th[data-sort].

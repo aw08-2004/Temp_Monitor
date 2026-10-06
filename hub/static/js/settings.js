@@ -76,6 +76,64 @@ function applySchema(doc) {
     // Let feature scripts (settings-remote.js) decorate a panel after it is (re)rendered.
     // Fired on load and after every save, since replaceChildren above wipes any injected card.
     document.dispatchEvent(new CustomEvent('settings:rendered'));
+    markChangedSections();
+    applySearch();
+}
+
+// --------------------------------------------------------------------------- search
+//
+// Filters the rendered rows across EVERY section at once: a row stays when its label, help
+// text or key contains the query, a section with no surviving row loses its tab, and if the
+// section on screen has nothing left the first one that does is opened. Matched on the row's
+// text rather than on the schema so a feature script's injected card (settings-remote.js)
+// is searchable too. Panels with no .setting rows at all (Sign-in) are matched whole.
+const searchEl = document.getElementById('settings-search');
+const searchStatusEl = document.getElementById('settings-search-status');
+
+function applySearch() {
+    if (!searchEl) return;
+    const query = searchEl.value.trim().toLowerCase();
+    let total = 0;
+    let firstVisibleTab = null;
+    let activeStillVisible = false;
+    for (const panel of document.querySelectorAll('.settings-layout .tab-panel')) {
+        const tab = document.getElementById(panel.getAttribute('aria-labelledby'));
+        const rows = panel.querySelectorAll('.setting');
+        let matches = 0;
+        if (rows.length) {
+            for (const row of rows) {
+                const hit = !query || row.textContent.toLowerCase().includes(query)
+                    || String(row.dataset.key || '').toLowerCase().includes(query);
+                row.hidden = !hit;
+                if (hit) matches += 1;
+            }
+        } else if (!query || panel.textContent.toLowerCase().includes(query)
+                   || (tab && tab.textContent.toLowerCase().includes(query))) {
+            matches = 1;
+        }
+        total += rows.length ? matches : 0;
+        if (tab) {
+            tab.hidden = Boolean(query) && matches === 0;
+            if (!tab.hidden && !firstVisibleTab) firstVisibleTab = tab;
+            if (!tab.hidden && tab.getAttribute('aria-selected') === 'true') activeStillVisible = true;
+        }
+    }
+    if (query && !activeStillVisible && firstVisibleTab) firstVisibleTab.click();
+    if (searchStatusEl) {
+        searchStatusEl.textContent = !query ? ''
+            : total ? tPlural('settings.search_count', total) : t('settings.search_none');
+    }
+}
+
+if (searchEl) searchEl.addEventListener('input', applySearch);
+
+// A dot on every section tab holding a setting that differs from its default -- "what did we
+// change on this hub" was otherwise 21 tabs of looking for a visible Reset button.
+function markChangedSections() {
+    for (const panel of document.querySelectorAll('.settings-layout .tab-panel')) {
+        const tab = document.getElementById(panel.getAttribute('aria-labelledby'));
+        if (tab) tab.classList.toggle('tabs__tab--changed', !!panel.querySelector('.setting--changed'));
+    }
 }
 
 function renderSection(section) {
@@ -94,7 +152,9 @@ function renderSection(section) {
 
 function renderField(field) {
     const row = document.createElement('div');
-    row.className = 'setting';
+    // --changed marks a value an operator has set away from the default, so a hub's
+    // customisations can be seen at a glance (and its section tab carries a dot, below).
+    row.className = field.is_default ? 'setting' : 'setting setting--changed';
     row.dataset.key = field.key;
 
     const top = document.createElement('div');
@@ -549,6 +609,8 @@ function updateResetVisibility(key) {
     if (!row) return;
     const reset = row.querySelector('[data-role="reset"]');
     if (reset) reset.hidden = field.is_default;
+    row.classList.toggle('setting--changed', !field.is_default);
+    markChangedSections();
 }
 
 function showValidationError(message, updates) {

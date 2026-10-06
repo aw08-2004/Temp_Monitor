@@ -898,3 +898,17 @@
     gap: var(--space-2);
     flex-wrap: wrap;
 }
+
+/* Machine settings (the fold that holds this PC's configuration). Each setting a small
+   heading and its control, separated like Settings' rows. */
+.machine-setting {
+    padding-bottom: var(--space-4);
+    margin-bottom: var(--space-4);
+    border-bottom: 1px solid var(--card-border);
+}
+
+.machine-setting__title {
+    margin: var(--space-4) 0 var(--space-2);
+    font-size: var(--text-base);
+    font-weight: 600;
+}

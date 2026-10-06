@@ -30,9 +30,14 @@ const THEME_STORAGE_KEY = 'tempmonitor:theme';
 const SIDEBAR_STORAGE_KEY = 'tempmonitor:sidebar';
 
 function formatUptime(seconds) {
+    // null is "no uptime reported", not zero: Number(null) is 0, which used to print "0m"
+    // for every machine whose agent never sent one.
+    if (seconds === null || seconds === undefined || seconds === '') return '--';
     const value = Number(seconds);
     if (!Number.isFinite(value)) return '--';
     const total = Math.max(0, Math.floor(value));
+    // A machine that booted seconds ago is up, not up for "0m" -- which reads as stopped.
+    if (total < 60) return '<1m';
     const days = Math.floor(total / 86400);
     const hours = Math.floor((total % 86400) / 3600);
     const minutes = Math.floor((total % 3600) / 60);
@@ -285,7 +290,120 @@ function initSidebarCollapse() {
     sync();
 }
 
-// Mobile overflow menu holding the version badges, the signed-in email and Sign out.
+// The Administration fold (see the comment above it in _sidebar.html). Remembered per browser
+// like the rail, but never allowed to hide where you ARE: a folded section holding the active
+// link opens itself, without saving that, so the operator's own choice survives the visit.
+// shell.js calls window.FleetNavFold.reveal() after every frame navigation for the same
+// reason -- the sidebar outlives the pages, so "active" changes without a reload.
+const NAV_FOLD_STORAGE_PREFIX = 'tempmonitor:nav-fold:';
+
+function initNavFold() {
+    const sections = document.querySelectorAll('.sidebar__section[data-foldable]');
+    if (!sections.length) return;
+
+    function setFolded(section, folded) {
+        const toggle = section.querySelector('.sidebar__section-toggle');
+        section.toggleAttribute('data-folded', folded);
+        if (toggle) toggle.setAttribute('aria-expanded', String(!folded));
+    }
+
+    function reveal() {
+        for (const section of sections) {
+            if (section.querySelector('.sidebar__link--active')) setFolded(section, false);
+        }
+    }
+
+    for (const section of sections) {
+        const toggle = section.querySelector('.sidebar__section-toggle');
+        if (!toggle) continue;
+        const key = NAV_FOLD_STORAGE_PREFIX + (section.getAttribute('aria-labelledby') || 'section');
+        let saved = null;
+        try { saved = localStorage.getItem(key); } catch (e) { /* private mode */ }
+        setFolded(section, saved === 'folded');
+        toggle.addEventListener('click', () => {
+            const folded = !section.hasAttribute('data-folded');
+            setFolded(section, folded);
+            try { localStorage.setItem(key, folded ? 'folded' : 'open'); }
+            catch (e) { /* the choice just does not survive the reload */ }
+        });
+    }
+    reveal();
+    window.FleetNavFold = { reveal };
+}
+
+// "Skip to content". On a classic page the #main-content fragment does the work by itself;
+// in the shell the content is a framed document, so follow the link into whichever frame is
+// on screen and focus ITS <main> -- focusing the <iframe> alone leaves the next Tab back in
+// the sidebar in some browsers.
+function initSkipLink() {
+    const link = document.querySelector('.skip-link');
+    if (!link) return;
+    link.addEventListener('click', (e) => {
+        const frame = document.querySelector('.app-frames__frame:not([hidden])');
+        if (!frame) return;              // classic page: the fragment is enough
+        e.preventDefault();
+        let target = null;
+        try {
+            target = frame.contentDocument && frame.contentDocument.getElementById('main-content');
+        } catch (err) { /* a document we may not touch: focusing the frame is the best left */ }
+        frame.focus();
+        if (target) target.focus();
+    });
+}
+
+// Page intros: the paragraph under every page's <h1>. Many are design rationale several lines
+// long ("Alerts" ran to four), set above the content, so on a phone the Devices list began a
+// quarter of the way down the screen. Clamped to two lines with a More/Less toggle, found by
+// SHAPE -- the h1 and the .stat-card__meta paragraph straight after it, the pattern every page
+// template uses -- so no page had to change. The toggle only appears when the text is
+// actually cut off; a short intro is left alone.
+function initPageIntro() {
+    const main = document.getElementById('main-content');
+    const heading = main && main.querySelector('h1');
+    const intro = heading && heading.nextElementSibling;
+    if (!intro || intro.tagName !== 'P' || !intro.classList.contains('stat-card__meta')) return;
+
+    intro.classList.add('page-intro');
+    if (!intro.id) intro.id = 'page-intro';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'page-intro__toggle';
+    toggle.setAttribute('aria-controls', intro.id);
+    toggle.hidden = true;
+    intro.after(toggle);
+
+    function render() {
+        const open = intro.classList.contains('page-intro--open');
+        toggle.textContent = t(open ? 'common.intro_less' : 'common.intro_more');
+        toggle.setAttribute('aria-expanded', String(open));
+    }
+
+    // Whether the clamp is hiding anything. Re-asked on resize, since a two-line intro on a
+    // desktop is six lines on a phone; an expanded one keeps its toggle so it can close.
+    // The intro's own bottom margin (inline on most pages, absent on some) moves to the
+    // toggle while it shows, so the pair keeps whatever gap the page gave the paragraph.
+    // Restored to the page's own inline value, not to '' -- most intros set their margin in a
+    // style attribute, and clearing the property would delete it.
+    const introMargin = getComputedStyle(intro).marginBottom;
+    const inlineMargin = intro.style.marginBottom;
+    function measure() {
+        if (intro.classList.contains('page-intro--open')) return;
+        toggle.hidden = intro.scrollHeight <= intro.clientHeight + 1;
+        intro.style.marginBottom = toggle.hidden ? inlineMargin : '0';
+        toggle.style.marginBottom = toggle.hidden ? '' : introMargin;
+    }
+
+    toggle.addEventListener('click', () => {
+        intro.classList.toggle('page-intro--open');
+        render();
+        measure();
+    });
+    render();
+    measure();
+    window.addEventListener('resize', measure);
+}
+
+// The account menu (every width): email, language, version badges and Sign out.
 function initTopbarMore() {
     const toggle = document.getElementById('topbar-more');
     const menu = document.getElementById('topbar-meta');
@@ -535,6 +653,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initMobileNav();
     initSidebarCollapse();
+    initNavFold();
+    initSkipLink();
+    initPageIntro();
     initTopbarMore();
     initAlertBadge();
     initHubUpdate();

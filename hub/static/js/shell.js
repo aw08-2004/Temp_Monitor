@@ -141,6 +141,8 @@
             if (active) link.setAttribute('aria-current', 'page');
             else link.removeAttribute('aria-current');
         }
+        // A folded nav section never hides the page on screen (common.js initNavFold).
+        if (window.FleetNavFold) window.FleetNavFold.reveal();
     }
 
     /** The topbar's live-data pill is shared by every page in the shell, so it follows

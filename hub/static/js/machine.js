@@ -6,6 +6,10 @@ const MACHINE = config.dataset.machine;
 // says anything. The fallback matches the registry default, for a page served by an older
 // hub that doesn't emit the attribute.
 const LIVE_WINDOW_MS = (Number(config.dataset.liveWindowSeconds) || 60) * 1000;
+// The temperature at which a reading is marked hot -- hub.hot_temp_threshold_c, the same
+// number behind the Dashboard's "over N °C" tile. Infinity for a page served by an older
+// hub, which marks nothing rather than guessing a threshold.
+const HOT_THRESHOLD_C = Number(config.dataset.hotThresholdC) || Infinity;
 
 const zoomPlugin = window['chartjs-plugin-zoom'];
 if (zoomPlugin) Chart.register(zoomPlugin.default || zoomPlugin);
@@ -194,6 +198,19 @@ function metricLabel(metric) {
     return typeof metric.label === 'function' ? metric.label() : String(metric.label);
 }
 
+// A reading as a number, or NaN when there is no reading. **Use this, never bare Number(),
+// on anything the server may send as null**: Number(null) is 0, and 0 passes
+// Number.isFinite -- so an absent fan duty rendered as "Driven at 0%" with an empty bar
+// beside a fan at 19,999 RPM, and a metric the machine never sent plotted a flat 0% line
+// on its live chart while hiding the panel's "no data" note. Booleans and empty strings
+// are absent too, for the same reason.
+function toNumber(value) {
+    if (value === null || value === undefined || value === '' || typeof value === 'boolean') {
+        return NaN;
+    }
+    return Number(value);
+}
+
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 // Network throughput is quoted in BITS everywhere an operator would check it against
 // something: the NIC is a 1 Gb/s card, the switch port is 100 Mb/s, the ISP sells 500 Mb/s.
@@ -219,7 +236,7 @@ function scaleBytes(bytes, base, units = BYTE_UNITS) {
 // agent reports bytes, the database stores bytes, and rule thresholds on metric.net_*_bps
 // stay in bytes. Only the two network panels pass it.
 function formatRate(bytesPerSecond, asBits) {
-    if (!Number.isFinite(Number(bytesPerSecond))) return '--';
+    if (!Number.isFinite(toNumber(bytesPerSecond))) return '--';
     const units = asBits ? BIT_UNITS : BYTE_UNITS;
     const scaled = asBits ? Number(bytesPerSecond) * 8 : Number(bytesPerSecond);
     const { value, unit } = scaleBytes(scaled, 1000, units);
@@ -233,7 +250,7 @@ function formatRate(bytesPerSecond, asBits) {
 // Absolute size (GB in, human units out) for the Storage cards. A decimal below 100 only
 // -- "412.0 GB" is false precision next to a number an operator reads as "about 400".
 function formatGb(gb) {
-    if (!Number.isFinite(Number(gb))) return '--';
+    if (!Number.isFinite(toNumber(gb))) return '--';
     const { value, unit } = scaleBytes(Number(gb) * 1024 * 1024 * 1024, 1024);
     return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`;
 }
@@ -295,7 +312,20 @@ function panelConfig(metric) {
             animation: { duration: 0 },
             interaction: { mode: 'nearest', axis: 'x', intersect: false },
             scales: {
-                x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss' }, grid: { color: chartGridColor } },
+                // At most six horizontal ticks, in the tooltip's own 24-hour format. Chart.js's
+                // defaults drew ~15 labels per panel rotated 45 degrees, in the adapter's
+                // 12-hour "5:33:01 p.m." -- a grey hatch under every chart, and a different
+                // clock from the tooltip above it. Seconds only appear once zoomed in far
+                // enough for the ticks to be seconds apart.
+                x: {
+                    type: 'time',
+                    time: {
+                        tooltipFormat: 'HH:mm:ss',
+                        displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' },
+                    },
+                    ticks: { maxTicksLimit: 6, maxRotation: 0, autoSkip: true },
+                    grid: { color: chartGridColor },
+                },
                 y: yScale,
             },
             plugins: {
@@ -415,7 +445,7 @@ async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
             const points = (series[p.metric.key] || [])
                 .map((point) => {
                     const x = toChartTimestamp(point.x ?? point.timestamp ?? point.ts_text);
-                    const y = Number(point.y);
+                    const y = toNumber(point.y);
                     if (x === null || !Number.isFinite(y)) return null;
                     return { x, y };
                 })
@@ -547,14 +577,27 @@ let lastCpuLoadPct = null;
 
 function applyTemp(temp) {
     if (temp === undefined || temp === null) return;
-    document.getElementById('stat-temp').textContent =
-        t('machine.temp_c', { value: Number(temp).toFixed(1) });
-    tempCard.classList.remove('stat-card--high-temp');
+    // 0 and below is "could not read" -- the hub's own rule (displayable_temp), applied
+    // here too because the live socket carries the raw value. Showing "-12.0 °C" as the
+    // headline contradicted the sensor picker below it, which already said no CPU sensor
+    // was reporting.
+    const value = toNumber(temp);
+    document.getElementById('stat-temp').textContent = value > 0
+        ? t('machine.temp_c', { value: value.toFixed(1) })
+        : t('machine.temp_c', { value: t('machine.unknown') });
+    tempCard.classList.toggle('stat-card--high-temp', value >= HOT_THRESHOLD_C);
 }
 
 function formatMetric(value, suffix) {
     return typeof value === 'number' && Number.isFinite(value)
         ? `${value.toFixed(1)} ${suffix}` : t('machine.unknown');
+}
+
+// Clock speeds in GHz from 1000 MHz up -- "3412.7 MHz" is five significant figures for a
+// number an operator reads as "about 3.4 GHz", and it is the unit Task Manager shows.
+function formatClock(mhz) {
+    if (typeof mhz !== 'number' || !Number.isFinite(mhz)) return t('machine.unknown');
+    return mhz >= 1000 ? `${(mhz / 1000).toFixed(2)} GHz` : `${Math.round(mhz)} MHz`;
 }
 
 // ---- Storage cards ------------------------------------------------------------
@@ -581,7 +624,7 @@ function renderDisks(disks) {
     diskEmptyEl.style.display = list.length ? 'none' : 'block';
 
     for (const disk of list) {
-        const pct = Number(disk.used_pct);
+        const pct = toNumber(disk.used_pct);
         const hasPct = Number.isFinite(pct);
 
         const tile = document.createElement('div');
@@ -610,7 +653,7 @@ function renderDisks(disks) {
         meta.className = 'stat-card__meta';
         // GB needs the agent's volume sensors (3.10.0+). Without them we still know the
         // percentage, so show the bar and say what's missing instead of an empty tile.
-        if (Number.isFinite(Number(disk.used_gb)) && Number.isFinite(Number(disk.total_gb))) {
+        if (Number.isFinite(toNumber(disk.used_gb)) && Number.isFinite(toNumber(disk.total_gb))) {
             const free = Number(disk.total_gb) - Number(disk.used_gb);
             meta.textContent = t('machine.disk_usage', {
                 used: formatGb(disk.used_gb),
@@ -641,8 +684,8 @@ function renderFans(fans) {
     fanEmptyEl.style.display = list.length ? 'none' : 'block';
 
     for (const fan of list) {
-        const rpm = Number(fan.rpm);
-        const duty = Number(fan.control_pct);
+        const rpm = toNumber(fan.rpm);
+        const duty = toNumber(fan.control_pct);
         const hasDuty = Number.isFinite(duty);
 
         // A fan at 0 RPM while the board is asking for duty is seized, unplugged, or dead --
@@ -760,17 +803,23 @@ function applyDiagnostics(diagnostics) {
     if (typeof d.mem_total_gb === 'number') updateMemoryTotal(d.mem_total_gb);
     lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
     document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');
-    document.getElementById('stat-cpu-clock').textContent = formatMetric(d.cpu_clock_mhz, 'MHz');
+    document.getElementById('stat-cpu-clock').textContent = formatClock(d.cpu_clock_mhz);
     document.getElementById('stat-cpu-power').textContent = formatMetric(d.cpu_power_w, 'W');
     // Through the catalog, like the template's server-rendered first paint: the row labels
     // ("Temp: {value}") are translated text, and hardcoding them here reverted the whole
     // card to English on the first live reading.
-    document.getElementById('stat-gpu-temp').textContent =
-        t('machine.gpu_temp', { value: formatMetric(d.gpu_temp, '°C') });
+    const gpuTempEl = document.getElementById('stat-gpu-temp');
+    gpuTempEl.textContent = t('machine.gpu_temp', { value: formatMetric(d.gpu_temp, '°C') });
+    // A GPU over the hot threshold marks its card the way a hot CPU marks the temperature
+    // card. Its readings are four small grey lines, so without this a 103 °C GPU at 99.9%
+    // load looked exactly as calm as an idle one, two cards away from a large "3.3 %".
+    const gpuHot = typeof d.gpu_temp === 'number' && d.gpu_temp >= HOT_THRESHOLD_C;
+    document.getElementById('card-gpu').classList.toggle('stat-card--high-temp', gpuHot);
+    gpuTempEl.classList.toggle('stat-card__meta--alert', gpuHot);
     document.getElementById('stat-gpu-load').textContent =
         t('machine.gpu_load', { value: formatMetric(d.gpu_load_pct, '%') });
     document.getElementById('stat-gpu-clock').textContent =
-        t('machine.gpu_clock', { value: formatMetric(d.gpu_clock_mhz, 'MHz') });
+        t('machine.gpu_clock', { value: formatClock(d.gpu_clock_mhz) });
     document.getElementById('stat-gpu-power').textContent =
         t('machine.gpu_power', { value: formatMetric(d.gpu_power_w, 'W') });
 }
@@ -1251,7 +1300,7 @@ socket.on('new_temp', (msg) => {
             p.chart.options.scales.x.min = followMax - LIVE_WINDOW_MS;
             p.chart.options.scales.x.max = followMax;
         }
-        const y = p.metric.key === 'temp' ? Number(msg.temp) : Number(diagnostics[p.metric.diag]);
+        const y = p.metric.key === 'temp' ? toNumber(msg.temp) : toNumber(diagnostics[p.metric.diag]);
         if (!Number.isFinite(y)) {
             if (followLive) p.chart.update('none');
             continue;

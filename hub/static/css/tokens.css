@@ -47,13 +47,28 @@
    - --shadow-card is per theme and much lighter. The old 0.25-alpha 30px blur was drawn for a
      dark page and turned every light-theme card into a floating slab.
 
-   Status colours are unchanged on purpose -- operators read green/amber/red at a glance, and
-   that is not the place for a refresh. */
+   Status colours keep their HUES on purpose -- operators read green/amber/red at a glance,
+   and that is not the place for a refresh. Their LIGHTNESS moved once, for contrast (WCAG AA,
+   4.5:1 for text), measured in the console review that also found the value bugs:
+
+   - Light theme: amber #ca8a04 was 2.94:1 on white and 2.66:1 on its own badge, green
+     #16a34a 3.30:1, red 3.95:1 on its badge -- the "Offline" and "Not enrolled" counts were
+     the least legible numbers on the Dashboard. Now each clears 4.5:1 on both white and its
+     own -bg. Darker shades of the same hue, not new colours.
+   - Dark theme: red text on --danger-bg was 4.32:1, so --danger is a step lighter.
+   - --accent-fill / --danger-fill are new, because ONE colour cannot be both text-on-dark
+     and the background behind white text. #3b82f6 is 4.95:1 as a link on a dark card but
+     white on it as a button was 3.68:1; #2563eb is the reverse. So links keep --accent and
+     anything with --accent-contrast on top of it uses the fill.
+   - --focus-ring is solid. At 50% alpha it was ~2.1:1 against a card in both themes, under
+     the 3:1 a focus indicator needs -- keyboard users could not find where they were.
+   - --card-border is a little heavier (8% -> 14% in dark): at 1.18:1 the card edges vanished
+     on most monitors and cards read as text floating on the page. */
 :root[data-theme="dark"] {
     --bg: #09090b;
     --surface: #0f0f12;
     --card: #151519;
-    --card-border: rgb(255 255 255 / 0.08);
+    --card-border: rgb(255 255 255 / 0.14);
     --text: #ececef;
     --muted: #8b8b95;
 
@@ -61,15 +76,18 @@
     --accent-hover: #5b93f5;
     --accent-contrast: #ffffff;
     --accent-soft: rgb(59 130 246 / 0.14);
+    --accent-fill: #2563eb;
+    --accent-fill-hover: #1d4ed8;
 
     --success: #22c55e;
     --success-bg: #123321;
     --warning: #eab308;
     --warning-bg: #3a2f0a;
-    --danger: #ef4444;
+    --danger: #f87171;
     --danger-bg: #3a1418;
+    --danger-fill: #dc2626;
 
-    --focus-ring: rgba(59, 130, 246, 0.5);
+    --focus-ring: #60a5fa;
     --control-bg: #1b1b20;
     --scrollbar: #2a2a31;
 
@@ -84,7 +102,7 @@
     --bg: #fafafa;
     --surface: #ffffff;
     --card: #ffffff;
-    --card-border: rgb(24 24 27 / 0.1);
+    --card-border: rgb(24 24 27 / 0.16);
     --text: #18181b;
     --muted: #6b6b76;
 
@@ -92,15 +110,18 @@
     --accent-hover: #1d4ed8;
     --accent-contrast: #ffffff;
     --accent-soft: rgb(37 99 235 / 0.1);
+    --accent-fill: #2563eb;
+    --accent-fill-hover: #1d4ed8;
 
-    --success: #16a34a;
+    --success: #15803d;
     --success-bg: #e8f8ee;
-    --warning: #ca8a04;
+    --warning: #975a16;
     --warning-bg: #fdf3d8;
-    --danger: #dc2626;
+    --danger: #b91c1c;
     --danger-bg: #fee2e2;
+    --danger-fill: #b91c1c;
 
-    --focus-ring: rgba(37, 99, 235, 0.35);
+    --focus-ring: #2563eb;
     --control-bg: #f4f4f5;
     --scrollbar: #e4e4e7;
 

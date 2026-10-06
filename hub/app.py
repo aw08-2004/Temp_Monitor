@@ -154,7 +154,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.139.0"
+HUB_VERSION = "1.140.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -260,6 +260,26 @@ def set_latest_temp(machine, temp):
         return
     with latest_temp_lock:
         latest_temp[str(machine).strip()] = float(temp)
+
+def displayable_temp(value):
+    """A stored CPU temperature as something to SHOW or average, or None.
+
+    The same rule _cpu_temp_candidates applies on the way in, applied on the way out: 0 and
+    below mean "could not read", never a real CPU. The headline `temp` an agent reports is
+    not held to that rule at ingest -- a non-Windows agent, or an old one, can send 0 or a
+    negative -- and it reached the console as a real reading: "-12.0 °C" as a machine's
+    headline, "0.0 °C" in Devices, and both dragging the Dashboard's fleet average down.
+
+    **Read-side, not ingest-side, on purpose.** Rejecting the report would drop its
+    heartbeat and every other metric with it, and readings.temp is NOT NULL, so there is no
+    "absent" to store. History keeps what was reported; only the summaries stop believing it.
+    Rules still see the raw value (machine_vars) -- an operator who wrote "temp below 1"
+    to catch a dead sensor is relying on exactly that.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if value > 0 else None
+
 
 def get_latest_temp(machine):
     machine_name = str(machine).strip()
@@ -1125,7 +1145,8 @@ def derive_machine_status(updated_at):
 #: The buckets a fleet is counted in. Deliberately coarse: the Dashboard's question is
 #: "what are we still running", and a breakdown by build number answers a different one
 #: (that lives on the machine page, where the exact caption and build are shown as-is).
-OS_BUCKETS = ("windows_11", "windows_10", "windows_server", "linux", "android", "unknown")
+OS_BUCKETS = ("windows_11", "windows_10", "windows_legacy", "windows_server", "linux", "android",
+              "unknown")
 
 #: Substrings that put a caption in a bucket, checked in order. Server is first because a
 #: Server caption also contains "Windows"; android is before linux because an Android device
@@ -1155,6 +1176,13 @@ _OS_MATCHES = (
     ("windows_server", ("windows server", "server 20")),
     ("windows_11", ("windows 11",)),
     ("windows_10", ("windows 10",)),
+    # Everything before 10, in one bucket. **These used to be counted as Windows 10**: no
+    # needle matched, so the caption fell through to the build check below, and build 7601
+    # is "below 22000". The machines most worth finding -- out of support, unpatched --
+    # were hidden inside the healthiest-looking bar on the Dashboard. One bucket rather
+    # than one per release because the operator's question is "how many are left", and the
+    # machine page shows the exact caption anyway.
+    ("windows_legacy", ("windows 8", "windows 7", "windows vista", "windows xp")),
     ("android", ("android",)),
     ("linux", ("linux", "ubuntu", "debian", "red hat", "rhel", "centos", "fedora",
                "suse", "alma", "rocky",
@@ -1168,6 +1196,10 @@ _OS_MATCHES = (
 
 #: The first Windows 11 build. Below it is 10, at or above it is 11 -- see normalize_os.
 _WINDOWS_11_BUILD = 22000
+#: The first Windows 10 build (10240, July 2015). Below it a build says nothing about 10 vs
+#: 11 -- it is an older Windows -- so normalize_os files it as windows_legacy rather than
+#: letting "below 22000" make it a Windows 10 machine.
+_WINDOWS_10_BUILD = 10240
 
 
 def _bucket_from_caption(caption):
@@ -1214,7 +1246,12 @@ def normalize_os(os_caption, os_build, ad_os):
             except (TypeError, ValueError):
                 build = None
             if build is not None and (bucket is not None or "windows" in caption.lower()):
-                bucket = "windows_11" if build >= _WINDOWS_11_BUILD else "windows_10"
+                if build >= _WINDOWS_11_BUILD:
+                    bucket = "windows_11"
+                elif build >= _WINDOWS_10_BUILD:
+                    bucket = "windows_10"
+                else:
+                    bucket = "windows_legacy"
         return {"bucket": bucket or "unknown", "label": caption, "source": "agent"}
 
     directory = str(ad_os or "").strip()
@@ -5192,8 +5229,13 @@ def _fleet_attention_lists(rows, top, low_disk_pct):
     Small and ranked rather than complete, deliberately -- this is the front page, and a
     list of everything is the Inventory. Each row links to its machine.
     """
+    # Online machines only. A temperature is a live reading, and an offline machine's last
+    # one is a fact about the moment it went quiet -- a PC switched off nine days ago at
+    # 61 °C sat in this list as one of the fleet's hottest. Least-free-disk below keeps
+    # offline machines on purpose: capacity does not go stale overnight the way heat does.
     hottest = sorted(
-        (r for r in rows if isinstance(r.get("temp"), (int, float))),
+        (r for r in rows if r.get("status") == "online"
+         and isinstance(r.get("temp"), (int, float))),
         key=lambda r: r["temp"], reverse=True)[:top]
 
     disks = []
@@ -5329,8 +5371,16 @@ def _build_fleet_summary(top):
         bucket = normalize_os(row.get("os_caption"), row.get("os_build"), row.get("ad_os"))
         os_tally[bucket["bucket"]] = os_tally.get(bucket["bucket"], 0) + 1
 
-        row["temp"] = get_latest_temp(row["machine"])
+        row["temp"] = displayable_temp(get_latest_temp(row["machine"]))
         row["diagnostics"] = extract_diagnostics(get_latest_sensors(row["machine"]))
+        # **The "Live readings" tiles count online machines only**, which is what their
+        # caption has always promised ("across the machines currently reporting"). They
+        # used to take every machine's LAST reading, so a PC offline for a week still fed
+        # the fleet's average temperature, its load and its free space, and was counted in
+        # "Reporting". The cached values are kept on the row either way: the ranked lists
+        # below decide for themselves which of them are still worth showing.
+        if row["status"] != "online":
+            continue
         if isinstance(row["temp"], (int, float)):
             reporting += 1
             temps.append(row["temp"])
@@ -5496,7 +5546,7 @@ def get_machines():
     enrolled = fleet.enrolled_machines(DB_PATH)
     for row in result:
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
-        row['temp'] = get_latest_temp(row['machine'])
+        row['temp'] = displayable_temp(get_latest_temp(row['machine']))
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
         row['status'] = derive_machine_status(row['updated_at'])
         row['enrolled'] = row['machine'] in enrolled
@@ -5555,7 +5605,7 @@ def machine_detail(machine):
         'ad_disabled': None, 'ad_synced_at': None,
     }
     result['uptime_seconds'] = uptime_seconds
-    result['temp'] = temp
+    result['temp'] = displayable_temp(temp)
     # _recent_sensors_for, not the in-memory cache alone: the page hides the panels for
     # hardware a machine doesn't have, and the cache is empty for every machine until it
     # reports again after a hub restart. Falling back to the stored block means an offline
@@ -6606,6 +6656,9 @@ def machine_page(machine):
     return render_template(
         "machine.html", machine=machine,
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
+        # The Dashboard's "over N °C" filter, so the machine page marks the same reading hot
+        # that the fleet view counts as hot. One setting, not a second threshold to drift.
+        hot_threshold_c=settings.get_int(DB_PATH, "hub.hot_temp_threshold_c"),
         live_window_seconds=settings.get_int(DB_PATH, "hub.live_default_window_seconds"),
         # How often the page renews its "somebody is watching this" ping. Served rather than
         # hardcoded in machine.js so the ping rate and the watch TTL it has to beat stay one

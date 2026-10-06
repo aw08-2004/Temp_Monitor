@@ -28,6 +28,7 @@
     const healthEl = document.getElementById('health-tiles');
     const osEl = document.getElementById('os-breakdown');
     const telemetryEl = document.getElementById('telemetry-tiles');
+    const coverageEl = document.getElementById('telemetry-coverage');
     const activityEl = document.getElementById('activity-tiles');
     const alertsEl = document.getElementById('activity-alerts');
     const attentionEl = document.getElementById('attention-lists');
@@ -41,6 +42,7 @@
         switch (bucket) {
             case 'windows_11': return t('dashboard.os.bucket.windows_11');
             case 'windows_10': return t('dashboard.os.bucket.windows_10');
+            case 'windows_legacy': return t('dashboard.os.bucket.windows_legacy');
             case 'windows_server': return t('dashboard.os.bucket.windows_server');
             case 'linux': return t('dashboard.os.bucket.linux');
             case 'android': return t('dashboard.os.bucket.android');
@@ -75,6 +77,12 @@
         if (href) node.href = href;
         const v = el('div', 'tile__value', num(value));
         if (tone) v.classList.add(`tile__value--${tone}`);
+        // A zero (or a dash) with no tone is "nothing to see", so it steps back and the
+        // numbers that ARE news carry the row. Every tile used to be the same 28px white,
+        // which made "0 failures" exactly as loud as "3 not enrolled".
+        else if (value === 0 || value === null || value === undefined) {
+            v.classList.add('tile__value--quiet');
+        }
         node.append(v, el('div', 'tile__label', label));
         if (hint) node.appendChild(el('div', 'tile__hint', hint));
         return node;
@@ -90,15 +98,24 @@
             // Not a fault, but the thing that most often explains "why did nothing happen
             // when I clicked that": an unenrolled agent reports telemetry and accepts no
             // commands, so it looks perfectly healthy and does nothing.
+            //
+            // Its own tone, not Offline's amber: the two shared a colour, so "1 offline" and
+            // "3 not enrolled" read as the same kind of problem, and a colour-blind operator
+            // had nothing else to tell them apart by. Info-blue says "worth knowing".
             tile(t('dashboard.health.never_enrolled'), c.never_enrolled,
-                 { tone: c.never_enrolled ? 'warn' : null,
+                 { tone: c.never_enrolled ? 'info' : null,
                    hint: t('dashboard.health.never_enrolled_hint') }),
             tile(t('dashboard.health.open_alerts'), c.open_alerts,
                  { tone: c.open_alerts ? 'warn' : null }),
-            tile(t('dashboard.health.agents_outdated'), c.agents_outdated,
-                 { hint: c.agent_latest
+            // With no published release to measure against, nothing can be "behind" -- and
+            // a 0 there read as "the whole fleet is current", the one claim the hub had no
+            // grounds for. A dash and the reason, instead.
+            tile(t('dashboard.health.agents_outdated'),
+                 c.agent_latest ? c.agents_outdated : null,
+                 { tone: c.agent_latest && c.agents_outdated ? 'warn' : null,
+                   hint: c.agent_latest
                      ? t('dashboard.health.agent_latest', { version: c.agent_latest })
-                     : null })
+                     : t('dashboard.health.agent_latest_none') })
         );
         generatedEl.textContent = summary.generated_at
             ? t('dashboard.generated_at', {
@@ -138,9 +155,9 @@
             ? DASH : t('dashboard.telemetry.gb', { value: Math.round(value) });
         telemetryEl.replaceChildren(
             tile(t('dashboard.telemetry.avg_temp'),
-                 s.avg_cpu_temp === null ? DASH : t('dashboard.telemetry.celsius', { value: s.avg_cpu_temp })),
+                 s.avg_cpu_temp === null ? DASH : celsius(s.avg_cpu_temp)),
             tile(t('dashboard.telemetry.peak_temp'),
-                 s.peak_cpu_temp === null ? DASH : t('dashboard.telemetry.celsius', { value: s.peak_cpu_temp })),
+                 s.peak_cpu_temp === null ? DASH : celsius(s.peak_cpu_temp)),
             // The threshold is IN the label, not implied by it: this is a filter somebody
             // chose in Settings, not the hub declaring these machines faulty.
             tile(t('dashboard.telemetry.over_threshold', { threshold: s.threshold_c }),
@@ -150,13 +167,16 @@
             tile(t('dashboard.telemetry.disk_free'), gb(s.disk_free_gb),
                  { hint: s.disk_total_gb ? t('dashboard.telemetry.of_total', { value: gb(s.disk_total_gb) }) : null }),
             tile(t('dashboard.telemetry.low_disk', { threshold: s.low_disk_free_pct }),
-                 s.low_disk_machines, { tone: s.low_disk_machines ? 'warn' : null }),
-            // Says how much of the fleet these averages are actually OF. An average over
-            // three of two hundred machines is not a fleet average, and a page that showed
-            // it without saying so would be quietly lying.
-            tile(t('dashboard.telemetry.reporting'), s.reporting,
-                 { hint: t('dashboard.telemetry.reporting_hint') })
+                 s.low_disk_machines, { tone: s.low_disk_machines ? 'warn' : null })
         );
+        // Says how much of the fleet these averages are actually OF. An average over three
+        // of two hundred machines is not a fleet average, and a page that showed it without
+        // saying so would be quietly lying. A sentence under the caption rather than a tile:
+        // it qualifies the six numbers rather than being a seventh.
+        if (coverageEl) {
+            coverageEl.textContent = t('dashboard.telemetry.coverage', {
+                reporting: s.reporting ?? 0, online: summary.counts.online ?? 0 });
+        }
     }
 
     function renderActivity(summary) {
@@ -187,13 +207,39 @@
                 row.appendChild(link);
             } else {
                 // A fleet-wide alert (a duplicate serial spanning several machines) has no
-                // single subject to link to.
-                row.appendChild(el('span', 'attention-list__name', t('dashboard.activity.fleet_wide')));
+                // single machine to link to -- but it does have a decision waiting on the
+                // Alerts page (which record to keep), so that is where it goes. A plain span
+                // here was a dead end on the one row that most needs acting on.
+                const link = el('a', 'attention-list__name', t('dashboard.activity.fleet_wide'));
+                link.href = '/alerts';
+                row.appendChild(link);
             }
-            row.appendChild(el('span', 'attention-list__value', alert.kind));
+            row.appendChild(el('span', 'attention-list__value', alertKindLabel(alert.kind)));
             list.appendChild(row);
         }
         alertsEl.appendChild(list);
+    }
+
+    // The alert's KIND in words. It used to print the raw enum ("duplicate_serial") -- an
+    // internal identifier, and untranslated in a console that ships German and Spanish.
+    // Literal keys, one per kind, for the reason osBucketLabel spells out above.
+    function alertKindLabel(kind) {
+        switch (kind) {
+            case 'duplicate_serial': return t('dashboard.activity.kind.duplicate_serial');
+            case 'ad_unmatched': return t('dashboard.activity.kind.ad_unmatched');
+            case 'rule': return t('dashboard.activity.kind.rule');
+            case 'watchdog': return t('dashboard.activity.kind.watchdog');
+            case 'high_temperature': return t('dashboard.activity.kind.high_temperature');
+            default: return t('dashboard.activity.kind.other');
+        }
+    }
+
+    // One decimal, like every other temperature in the console. The ranked list printed the
+    // stored float verbatim -- "55.555555 °C" beside a Devices row saying 55.6.
+    function celsius(value) {
+        const n = Number(value);
+        return Number.isFinite(n)
+            ? t('dashboard.telemetry.celsius', { value: n.toFixed(1) }) : DASH;
     }
 
     /** One ranked list: a title and up to `top` rows, each linking to its machine. */
@@ -229,7 +275,7 @@
         const a = summary.attention;
         attentionEl.replaceChildren(
             attentionList(t('dashboard.attention.hottest'), a.hottest,
-                          (r) => t('dashboard.telemetry.celsius', { value: r.temp }),
+                          (r) => celsius(r.temp),
                           t('dashboard.attention.no_readings')),
             attentionList(t('dashboard.attention.low_disk'), a.low_disk,
                           (r) => t('dashboard.attention.free_pct', { pct: r.free_pct, gb: r.free_gb }),
