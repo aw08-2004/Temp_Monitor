@@ -525,6 +525,44 @@ def main():
         _ok, why = firmware.cancel_target(db_path, not_yet)
         check("and the target itself reports rebooting", why == firmware.TARGET_REBOOTING)
 
+        print("\n== A flash whose result never arrived is applied by the new version ==")
+        # FCOM1109: the PC restarted during the flash, the agent never posted its result,
+        # and the update sat on "Flashing" over a machine already reporting 1.28.1.
+        def flashing(machine):
+            job, _ = firmware.create_job(db_path, payload_id=real_id, machines=[machine],
+                                         created_by="op@x.com",
+                                         machine_facts={machine: facts()})
+            firmware.dispatch_once(db_path)
+            target = firmware.get_job(db_path, job)["targets"][0]["id"]
+            firmware.start_target(db_path, target)
+            return target
+
+        live = flashing("PC-SILENT")
+        check("another version while flashing decides nothing (the tool may be running)",
+              firmware.confirm_from_inventory(db_path, "PC-SILENT", "1.20.0") == 0
+              and firmware.get_target(db_path, live)["status"] == firmware.TARGET_FLASHING)
+        check("the image's version arriving applies a target still marked flashing",
+              firmware.confirm_from_inventory(db_path, "PC-SILENT", "9.9.9") == 1
+              and firmware.get_target(db_path, live)["status"] == firmware.TARGET_APPLIED)
+        check("a late 'ok' from the agent does not reopen it",
+              firmware.ingest_result(db_path, live, {"ok": True})["status"]
+              == firmware.TARGET_APPLIED)
+
+        # The rows already stuck on a live hub: the version arrived BEFORE the hub knew to
+        # look, so only the stored inventory can close them -- and before expire_stale
+        # calls a machine on the new BIOS "left mid-flash".
+        stuck = flashing("PC-STUCK")
+        flashed = firmware.get_target(db_path, stuck)["flashed_at"]
+        machine_state("PC-STUCK", flashed + 600, "9.9.9", flashed + 700)
+        old_inv = flashing("PC-OLD-INV")
+        machine_state("PC-OLD-INV", None, "9.9.9",
+                      firmware.get_target(db_path, old_inv)["flashed_at"] - 60)
+        firmware.tick(db_path, now=flashed + 3 * 3600, flashing_timeout=3600)
+        check("the tick applies a stuck flash from the stored inventory, before any timeout",
+              firmware.get_target(db_path, stuck)["status"] == firmware.TARGET_APPLIED)
+        check("an inventory from before the flash does not count",
+              firmware.get_target(db_path, old_inv)["status"] != firmware.TARGET_APPLIED)
+
         print("\n== The audit trail records what was aimed where ==")
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row

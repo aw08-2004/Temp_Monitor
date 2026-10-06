@@ -1073,16 +1073,25 @@ def confirm_from_inventory(db_path, machine, bios_version):
         return 0
     with get_conn(db_path) as conn:
         rows = [dict(r) for r in conn.execute(
-            "SELECT t.id, t.from_version, p.to_version FROM firmware_targets t "
+            "SELECT t.id, t.status, t.from_version, p.to_version FROM firmware_targets t "
             "JOIN firmware_jobs j ON j.id = t.job_id "
             "LEFT JOIN firmware_payloads p ON p.id = j.payload_id "
-            "WHERE t.machine = ? AND t.status = ?", (_clean(machine), TARGET_REBOOTING))]
+            "WHERE t.machine = ? AND t.status IN (?, ?)",
+            (_clean(machine), TARGET_REBOOTING, TARGET_FLASHING))]
 
     closed = 0
     for row in rows:
         if _same(version, row["to_version"]):
             _finish_target(db_path, row["id"], TARGET_APPLIED, observed_version=version)
             closed += 1
+        elif row["status"] == TARGET_FLASHING:
+            # FLASHING is let through for one answer only: the new version. A flash whose
+            # result never arrived -- the vendor tool restarted the PC itself, and the
+            # agent died with its report unsent -- sat on "Flashing" over a machine already
+            # reporting the new BIOS (FCOM1109, 1.27.0 -> 1.28.1). Any other version while
+            # FLASHING proves nothing yet: the tool may still be running, and the flashing
+            # timeout owns that case.
+            continue
         elif _same(version, row["from_version"]):
             continue  # not back from its reboot yet
         else:
@@ -1090,6 +1099,40 @@ def confirm_from_inventory(db_path, machine, bios_version):
                 db_path, row["id"], TARGET_UNKNOWN, observed_version=version,
                 error=f"the machine came back reporting BIOS version {version!r}, which is "
                       f"neither the version it had nor the one this image installs")
+            closed += 1
+    return closed
+
+
+def confirm_from_stored_inventory(db_path):
+    """Apply open flashes whose machine's STORED BIOS version already matches the image.
+
+    `confirm_from_inventory` only runs when an inventory arrives, and the agent sends one
+    when its content changes, at startup, or every six hours. A target that could not be
+    confirmed when its version arrived -- before this module accepted FLASHING there, or
+    because the agent's report landed after the inventory -- would otherwise wait for the
+    next one, or be failed by `expire_stale` as "may have been left mid-flash" over a
+    machine running the new BIOS. Run from the tick, BEFORE `expire_stale`, for that reason.
+
+    Only an inventory reported after the flash started counts: a stale version from before
+    it says nothing about this flash.
+    """
+    try:
+        with get_conn(db_path) as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT t.id, p.to_version, b.bios_version FROM firmware_targets t "
+                "JOIN firmware_jobs j ON j.id = t.job_id "
+                "JOIN firmware_payloads p ON p.id = j.payload_id "
+                "JOIN machine_bios b ON b.machine = t.machine "
+                "WHERE t.status IN (?, ?) AND t.flashed_at IS NOT NULL "
+                "  AND b.reported_at >= t.flashed_at",
+                (TARGET_FLASHING, TARGET_REBOOTING))]
+    except sqlite3.OperationalError:
+        return 0  # no inventory table in this database; see fail_unapplied_after_reboot
+    closed = 0
+    for row in rows:
+        if _same(row["bios_version"], row["to_version"]):
+            _finish_target(db_path, row["id"], TARGET_APPLIED,
+                           observed_version=row["bios_version"])
             closed += 1
     return closed
 
@@ -1307,6 +1350,7 @@ def tick(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS,
     """One scheduler pass: retire what nobody will answer for, then dispatch what is due.
     Returns (retired, dispatched) for the caller's log line."""
     expired = reconcile_once(db_path)
+    expired += confirm_from_stored_inventory(db_path)
     expired += fail_unapplied_after_reboot(db_path)
     expired += expire_stale(db_path, now=now, flashing_timeout=flashing_timeout,
                             confirm_timeout=confirm_timeout)
