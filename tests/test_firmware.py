@@ -557,11 +557,20 @@ def main():
         old_inv = flashing("PC-OLD-INV")
         machine_state("PC-OLD-INV", None, "9.9.9",
                       firmware.get_target(db_path, old_inv)["flashed_at"] - 60)
-        firmware.tick(db_path, now=flashed + 3 * 3600, flashing_timeout=3600)
-        check("the tick applies a stuck flash from the stored inventory, before any timeout",
-              firmware.get_target(db_path, stuck)["status"] == firmware.TARGET_APPLIED)
+        # The sweep on its own first, so the old-inventory row is observed untouched rather
+        # than after expire_stale has had a go at it (review on PR #113).
+        firmware.confirm_from_stored_inventory(db_path)
         check("an inventory from before the flash does not count",
-              firmware.get_target(db_path, old_inv)["status"] != firmware.TARGET_APPLIED)
+              firmware.get_target(db_path, old_inv)["status"] == firmware.TARGET_FLASHING)
+        check("...while one from after it applies the stuck flash",
+              firmware.get_target(db_path, stuck)["status"] == firmware.TARGET_APPLIED)
+
+        resweep = flashing("PC-RESWEEP")
+        resweep_at = firmware.get_target(db_path, resweep)["flashed_at"]
+        machine_state("PC-RESWEEP", resweep_at + 600, "9.9.9", resweep_at + 700)
+        firmware.tick(db_path, now=resweep_at + 3 * 3600, flashing_timeout=3600)
+        check("the tick applies it before the flashing timeout can fail it",
+              firmware.get_target(db_path, resweep)["status"] == firmware.TARGET_APPLIED)
 
         print("\n== The audit trail records what was aimed where ==")
         with sqlite3.connect(db_path) as conn:
