@@ -37,6 +37,7 @@
     let jobs = [];
     let fleetMachines = [];
     let uploaded = null;     // {sha256, file_size, file_name} once an image is stored
+    let editing = null;      // the image being edited, or null for a new one
     let flashPayload = null; // the image the flash dialog is aimed with
     let flashTargets = [];
 
@@ -127,6 +128,13 @@
             flashBtn.type = 'button';
             flashBtn.addEventListener('click', () => openFlash(image));
             actions.appendChild(flashBtn);
+
+            // Edit exists so changing an image's switches (adding /forceit, say) is not a
+            // delete-and-upload -- which an open update made impossible anyway.
+            const edit = el('button', 'btn btn--ghost', t('common.edit'));
+            edit.type = 'button';
+            edit.addEventListener('click', () => openEditor(image));
+            actions.appendChild(edit);
 
             const del = el('button', 'btn btn--ghost', t('common.delete'));
             del.type = 'button';
@@ -233,7 +241,30 @@
             // The message is the point of a refused or failed row -- "this machine reports
             // model 'OptiPlex 7010', which this image does not list" is actionable, and
             // "refused" alone is not.
-            row.appendChild(el('td', null, target.error || ''));
+            const message = el('td');
+            message.appendChild(el('div', null, target.error || ''));
+            // What the vendor tool itself said (agent 3.41+). On a flash that staged but
+            // never applied, the exit code and the tool's own log are the only evidence of
+            // why -- the BIOS version alone says only THAT it did not take.
+            const facts = [];
+            if (target.exit_code !== null && target.exit_code !== undefined) {
+                facts.push(t('firmware.target_exit_code', { code: target.exit_code }));
+            }
+            if (target.bitlocker) {
+                facts.push(t('firmware.target_bitlocker', { state: target.bitlocker }));
+            }
+            if (facts.length) message.appendChild(el('div', 'stat-card__meta', facts.join(' · ')));
+            if (target.tool_log) {
+                const log = el('details');
+                log.appendChild(el('summary', null, t('firmware.target_tool_log')));
+                const pre = el('pre', null, target.tool_log);
+                pre.style.whiteSpace = 'pre-wrap';
+                pre.style.maxHeight = '20rem';
+                pre.style.overflow = 'auto';
+                log.appendChild(pre);
+                message.appendChild(log);
+            }
+            row.appendChild(message);
 
             const actions = el('td', 'data-table__actions');
             if (target.status === 'pending' || target.status === 'in_flight') {
@@ -277,22 +308,43 @@
         if (answer.still_flashing) {
             window.alert(t('firmware.cancel_partial', { count: answer.still_flashing }));
         }
+        // Separate from the above: a staged image waiting on a restart is not being written
+        // to, and telling an operator it was sent them looking for a flash that was not
+        // happening. It resolves by itself once the machine restarts.
+        if (answer.awaiting_reboot) {
+            window.alert(t('firmware.cancel_awaiting_reboot', { count: answer.awaiting_reboot }));
+        }
         await loadAll();
     }
 
     // ---------------------------------------------------------------- image editor
-    document.getElementById('new-image').addEventListener('click', () => {
+    const imageTitle = document.getElementById('image-title');
+    const fileGroup = document.getElementById('img-file-group');
+
+    // One dialog for new and edit. Editing hides the file picker: the image is the one
+    // thing an edit cannot change, and a different file is a different payload.
+    function openEditor(image) {
+        editing = image || null;
         uploaded = null;
-        for (const id of ['img-name', 'img-vendor', 'img-version', 'img-models',
-                          'img-args', 'img-notes']) {
-            document.getElementById(id).value = '';
-        }
+        const values = {
+            'img-name': image ? image.name : '',
+            'img-vendor': image ? image.vendor : '',
+            'img-version': image ? image.to_version : '',
+            'img-models': image ? (image.models || []).join(', ') : '',
+            'img-args': image ? image.install_args || '' : '',
+            'img-notes': image ? image.notes || '' : '',
+        };
+        for (const id of Object.keys(values)) document.getElementById(id).value = values[id];
         fileInput.value = '';
+        fileGroup.hidden = Boolean(image);
+        imageTitle.textContent = image ? imageTitle.dataset.edit : imageTitle.dataset.new;
         fileState.textContent = t('firmware.editor.file_hint',
                                   { mb: fileState.dataset.maxMb });
         imageError.hidden = true;
         imageModal.showModal();
-    });
+    }
+
+    document.getElementById('new-image').addEventListener('click', () => openEditor(null));
 
     document.getElementById('image-cancel').addEventListener('click',
                                                              () => imageModal.close());
@@ -324,29 +376,39 @@
 
     document.getElementById('image-save').addEventListener('click', async () => {
         imageError.hidden = true;
-        if (!uploaded) {
+        if (!editing && !uploaded) {
             imageError.textContent = t('firmware.editor.need_file');
             imageError.hidden = false;
             return;
         }
         const models = document.getElementById('img-models').value
             .split(',').map((m) => m.trim()).filter(Boolean);
+        const fields = {
+            name: document.getElementById('img-name').value,
+            vendor: document.getElementById('img-vendor').value,
+            to_version: document.getElementById('img-version').value,
+            models: models,
+            install_args: document.getElementById('img-args').value,
+            notes: document.getElementById('img-notes').value,
+        };
         try {
-            await api('/api/firmware/payloads', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: document.getElementById('img-name').value,
-                    vendor: document.getElementById('img-vendor').value,
-                    to_version: document.getElementById('img-version').value,
-                    models: models,
-                    install_args: document.getElementById('img-args').value,
-                    notes: document.getElementById('img-notes').value,
-                    sha256: uploaded.sha256,
-                    file_size: uploaded.file_size,
-                    file_name: uploaded.file_name,
-                }),
-            });
+            if (editing) {
+                await api(`/api/firmware/payloads/${encodeURIComponent(editing.id)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(fields),
+                });
+            } else {
+                // The size is not sent: the hub reads it from the stored file.
+                await api('/api/firmware/payloads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(Object.assign(fields, {
+                        sha256: uploaded.sha256,
+                        file_name: uploaded.file_name,
+                    })),
+                });
+            }
         } catch (e) {
             imageError.textContent = e.message;
             imageError.hidden = false;

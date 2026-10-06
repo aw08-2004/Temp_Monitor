@@ -77,7 +77,11 @@ public static class FirmwareFlasher
         _ => "",
     };
 
-    private static string Vendor(string vendor)
+    /// <summary>The vendor family a manufacturer string names: "dell", "hp", "lenovo", or the
+    /// trimmed, lower-cased string itself. Public because the hub's
+    /// <c>firmware.vendor_family</c> mirrors it, and the two must agree -- a payload the hub
+    /// dispatched as a match must not be refused here over "Dell" against "Dell Inc.".</summary>
+    public static string Vendor(string vendor)
     {
         vendor = (vendor ?? "").Trim().ToLowerInvariant();
         if (vendor.Contains("dell")) return "dell";
@@ -106,7 +110,10 @@ public static class FirmwareFlasher
         if (Norm(reportedVendor).Length == 0)
             return "this machine does not report a manufacturer, so the image cannot be matched "
                    + "to it";
-        if (!Same(reportedVendor, payloadVendor))
+        // Compared by family, not by string: WMI says "Dell Inc." and an operator types
+        // "Dell". The model list below stays exact -- that is the check that stops a wrong
+        // image, and the vendor is only ever a coarser version of it.
+        if (Vendor(reportedVendor) != Vendor(payloadVendor))
             return $"this machine reports manufacturer '{Norm(reportedVendor)}', and the image "
                    + $"is for '{Norm(payloadVendor)}'";
         if (Norm(reportedModel).Length == 0)
@@ -189,11 +196,21 @@ public static class FirmwareFlasher
     /// null); `password` is the raw value, used only by vendors with no file form.
     /// </summary>
     public static Plan BuildPlan(string vendor, string imagePath, string? operatorArgs,
-                                 string? password, string? passwordFile)
+                                 string? password, string? passwordFile,
+                                 string? logPath = null)
     {
         var args = string.IsNullOrWhiteSpace(operatorArgs)
             ? DefaultArguments(vendor)
             : operatorArgs.Trim();
+
+        // Dell's updater writes its own log when asked, and it is the only account of what
+        // the tool decided. Before this, a fleet where no Dell flash ever applied had an exit
+        // code of "staged" and nothing else anywhere. An operator's own /l= wins.
+        if (!string.IsNullOrEmpty(logPath) && Vendor(vendor) == "dell"
+            && !HasLogSwitch(args))
+        {
+            args = (args + $" /l=\"{logPath}\"").Trim();
+        }
 
         if (!string.IsNullOrEmpty(password))
         {
@@ -212,6 +229,11 @@ public static class FirmwareFlasher
             .Replace("{file}", imagePath, StringComparison.Ordinal);
         return new Plan(imagePath, args);
     }
+
+    private static bool HasLogSwitch(string args)
+        => args.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+               .Any(a => a.StartsWith("/l=", StringComparison.OrdinalIgnoreCase)
+                         || a.Equals("/l", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// What an exit code means. Returns null when the flash was staged, or the reason it was

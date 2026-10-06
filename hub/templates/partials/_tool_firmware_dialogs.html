@@ -6,13 +6,18 @@
 <dialog class="modal" id="image-modal">
     <form method="dialog" id="image-form">
         <div class="modal__head">
-            <h2 class="modal__title">{{ t('firmware.editor.title') }}</h2>
+            <h2 class="modal__title" id="image-title"
+                data-new="{{ t('firmware.editor.title') }}"
+                data-edit="{{ t('firmware.editor.edit_title') }}">{{ t('firmware.editor.title') }}</h2>
         </div>
         <div class="modal__body">
-            <label class="setting__label" for="img-file">{{ t('firmware.editor.file') }}</label>
-            <input class="input" id="img-file" type="file" style="width: 100%;">
-            <p class="setting__default" id="img-file-state"
-               data-max-mb="{{ max_upload_mb }}"></p>
+            {# Hidden when editing: the image file is the one thing an edit cannot change. #}
+            <div id="img-file-group">
+                <label class="setting__label" for="img-file">{{ t('firmware.editor.file') }}</label>
+                <input class="input" id="img-file" type="file" style="width: 100%;">
+                <p class="setting__default" id="img-file-state"
+                   data-max-mb="{{ max_upload_mb }}"></p>
+            </div>
 
             <label class="setting__label" for="img-name">{{ t('firmware.editor.name') }}</label>
             <input class="input" id="img-name" maxlength="120" autocomplete="off"

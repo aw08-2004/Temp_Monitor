@@ -1114,6 +1114,10 @@
         "label": "Wait for the new BIOS version for",
         "help": "A flash finishes during startup, so it is confirmed only when the machine reports its new BIOS version. Keep this generous: a PC flashed on a Friday evening is confirmed on Monday morning."
       },
+      "firmware.suspend_bitlocker": {
+        "label": "Suspend BitLocker for one restart",
+        "help": "Before flashing, BitLocker is suspended until the next restart, and resumed at once if the update tool fails. Without it, firmware on an encrypted machine is usually staged but never applied. Until that restart the drive key is stored unprotected on the disk."
+      },
       "firmware.require_ac_power": {
         "label": "Require mains power to flash",
         "help": "A laptop that loses power mid-flash may not start again. The agent refuses the update while it is running on battery."
@@ -2833,6 +2837,10 @@
     "cancel_job": "Cancel update",
     "cancel_target": "Cancel",
     "cancel_partial": "{count} machine(s) had already been handed the image and will finish flashing.",
+    "cancel_awaiting_reboot": "{count} machine(s) have the image staged and are waiting on a restart. They resolve on their own once restarted: applied if the new BIOS version appears, failed if not.",
+    "target_exit_code": "Update tool exit code {code}",
+    "target_bitlocker": "BitLocker: {state}",
+    "target_tool_log": "Update tool log",
     "job_meta": "Installs {version} · {machines} machine(s) · created {when}",
     "job_window": "Window {start} to {end}",
     "show_machines": "Show machines",
@@ -2869,6 +2877,7 @@
       "uploading": "Uploading…",
       "uploaded": "{name} · {size} · SHA-256 {sha256}",
       "need_file": "Choose an image file first.",
+      "edit_title": "Edit image",
       "name": "Name",
       "name_placeholder": "Latitude 5540 BIOS 1.31.0",
       "vendor": "Manufacturer",

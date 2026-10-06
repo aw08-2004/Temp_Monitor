@@ -24,8 +24,13 @@ namespace TempMonitorAgent.Bios;
 ///      old, and between the two a chassis can be swapped or a hostname reused.
 ///   3. **Download and verify** over the authenticated channel, against the digest the HUB
 ///      computed from the bytes it stored. A mismatch deletes the file and refuses.
-///   4. **Run the manufacturer's own updater** and read its exit code, where "reboot
-///      required" is the normal success.
+///   4. **Suspend BitLocker for one restart**, when the hub's policy says to -- see
+///      <see cref="TempMonitorAgent.Security.BitLockerSuspender"/> for why no Dell flash on
+///      an encrypted machine applied without it.
+///   5. **Run the manufacturer's own updater** and read its exit code, where "reboot
+///      required" is the normal success. The exit code, the tail of the tool's own log and
+///      the BitLocker state go back to the hub with the result, success or not: a staged
+///      flash that never applied used to leave no evidence anywhere of why.
 ///
 /// **Nothing here reboots the machine, and nothing here reports success.** The tool exits
 /// after STAGING the image; the firmware writes it during the next POST. So the report says
@@ -44,10 +49,47 @@ public sealed class UpdateBiosExecutor(
     /// standard user could swap out before it runs.</summary>
     private static string StagingDir => Path.Combine(AgentConfig.ProgramDataDir, "firmware");
 
+    /// <summary>The vendor tools' own logs, one per update id. Kept after the flash -- the
+    /// log is most useful exactly when the machine has restarted and the flash did not take
+    /// -- and pruned after <see cref="LogRetentionDays"/>.</summary>
+    private static string LogDir => Path.Combine(StagingDir, "logs");
+    private const int LogRetentionDays = 30;
+    private const int LogTailChars = 4000;
+
     public async Task<CommandResult> ExecuteAsync(
         FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
         void Say(string line) => onOutput?.Invoke(line + Environment.NewLine);
+        // Evidence for the hub, filled in as far as the flash gets. Every report below
+        // carries whatever is known by then.
+        int? exitCode = null;
+        var staged = false;
+        var toolLog = "";
+        var bitlocker = "";
+
+        void ResumeIfSuspended()
+        {
+            // A flash that failed before staging anything has no restart coming that needs
+            // BitLocker off, so it is put back now rather than at whenever the machine next
+            // restarts.
+            if (bitlocker == Security.BitLockerSuspender.StateSuspended)
+            {
+                Security.BitLockerSuspender.Resume();
+                bitlocker = "resumed after the update failed";
+            }
+        }
+
+        Task<bool> ReportAsync(string id, bool ok, bool unsupported, string error,
+                               CancellationToken token)
+            => fleet.ReportFirmwareUpdateAsync(id, new JsonObject
+            {
+                ["ok"] = ok,
+                ["unsupported"] = unsupported,
+                ["error"] = error,
+                ["exit_code"] = exitCode,
+                ["tool_log"] = toolLog,
+                ["bitlocker"] = bitlocker,
+            }, token);
 
         var updateId = cmd.Params.GetString("update_id") ?? "";
         if (updateId.Length == 0)
@@ -123,7 +165,7 @@ public sealed class UpdateBiosExecutor(
             }
             Say("[firmware] sha256 verified.");
 
-            // ---- 4. run the manufacturer's updater ----
+            // ---- 4. the updater's password and log ----
             var password = payload["password"]?.GetValue<string>();
             if (!string.IsNullOrEmpty(password) && FirmwareFlasher.NeedsPasswordFile(vendor))
             {
@@ -134,18 +176,41 @@ public sealed class UpdateBiosExecutor(
                 await File.WriteAllTextAsync(passwordFile, password, ct);
             }
 
+            Directory.CreateDirectory(LogDir);
+            PruneLogs();
+            var safeId = string.Concat(updateId.Where(char.IsLetterOrDigit));
+            var logPath = Path.Combine(LogDir, $"{safeId}.log");
+
+            // ---- 5. BitLocker, then the manufacturer's updater ----
+            var suspend = payload["suspend_bitlocker"]?.GetValue<bool>() ?? false;
+            bitlocker = Security.BitLockerSuspender.Prepare(suspend);
+            Say($"[firmware] BitLocker on the system volume: {bitlocker}.");
+            if (bitlocker == Security.BitLockerSuspender.StateOnKept)
+            {
+                Say("[firmware] BitLocker stays on (hub policy). The image may be staged and "
+                    + "never applied.");
+            }
+
             var plan = FirmwareFlasher.BuildPlan(vendor, imagePath,
                                                  payload["install_args"]?.GetValue<string>(),
-                                                 password, passwordFile);
+                                                 password, passwordFile, logPath);
             // The password is never echoed, including into the command log the console shows.
             Say($"[firmware] Running the {vendor} updater.");
             var outcome = await ProcessRunner.RunAsync(
                 plan.FileName, plan.Arguments, ct,
                 timeoutSeconds: 30 * 60, onLine: onOutput);
 
+            exitCode = outcome.TimedOut ? null : outcome.ExitCode;
+            // Redacted before it leaves the machine: Dell takes the setup password inline
+            // (/p=), and its log can echo the command line it was given. The hub shows this
+            // log to anyone who can view the update.
+            toolLog = Redact(ReadTail(logPath), password);
+            Say($"[firmware] The updater exited with code {(exitCode?.ToString() ?? "none")}.");
+
             if (outcome.TimedOut)
             {
                 const string why = "the manufacturer's update tool did not finish in time";
+                ResumeIfSuspended();
                 await ReportAsync(updateId, ok: false, unsupported: false, error: why, ct);
                 return CommandResult.Fail(why);
             }
@@ -153,12 +218,16 @@ public sealed class UpdateBiosExecutor(
             var exitProblem = FirmwareFlasher.ClassifyExit(vendor, outcome.ExitCode);
             if (exitProblem is not null)
             {
+                ResumeIfSuspended();
                 await ReportAsync(updateId, ok: false, unsupported: false, error: exitProblem,
                                   ct);
                 return CommandResult.Fail(exitProblem);
             }
 
             // Staged. NOT applied -- see the class docstring. The hub takes it from here.
+            // From this line on BitLocker must STAY suspended: the restart it was suspended
+            // for is the one that writes the image.
+            staged = true;
             Say("[firmware] The image is staged. It is written during the next restart, and "
                 + "the hub confirms it when this machine reports its new BIOS version.");
             var delivered = await ReportAsync(updateId, ok: true, unsupported: false,
@@ -183,12 +252,27 @@ public sealed class UpdateBiosExecutor(
         catch (Exception e) when (e is not OperationCanceledException)
         {
             log.LogWarning(e, "Firmware update {Id} failed", updateId);
+            if (staged)
+            {
+                // The image is staged and BitLocker must stay suspended for the restart that
+                // writes it; reporting a failure here would also overwrite the staged report
+                // the hub already holds. Whatever threw (the report, the inventory reset) is
+                // not the flash.
+                return CommandResult.Ok($"Firmware image for BIOS {toVersion} staged. It is "
+                                        + $"written during the next restart. ({e.Message})");
+            }
+            ResumeIfSuspended();
             await ReportAsync(updateId, ok: false, unsupported: false, error: e.Message,
                               CancellationToken.None);
             return CommandResult.Fail($"Firmware update failed: {e.Message}");
         }
         finally
         {
+            // Every path that did not stage an image puts BitLocker back -- including a
+            // cancellation (agent stopping, command cancelled) mid-tool, which the catch
+            // above deliberately does not see. DisableCount 1 bounds it to one restart
+            // anyway; this closes even that window when there is no flash to wait for.
+            if (!staged) ResumeIfSuspended();
             TryDelete(passwordFile);
             TryDelete(imagePath);
         }
@@ -201,14 +285,47 @@ public sealed class UpdateBiosExecutor(
         catch (Exception e) { log.LogDebug("Could not clean up {Path}: {Msg}", path, e.Message); }
     }
 
-    private Task<bool> ReportAsync(string updateId, bool ok, bool unsupported, string error,
-                                   CancellationToken ct)
-        => fleet.ReportFirmwareUpdateAsync(updateId, new JsonObject
+    /// <summary>The last <see cref="LogTailChars"/> characters of the vendor log, or "".
+    /// Read with sharing on: a vendor tool that left a child process behind may still hold
+    /// the file.</summary>
+    private static string ReadTail(string path)
+    {
+        try
         {
-            ["ok"] = ok,
-            ["unsupported"] = unsupported,
-            ["error"] = error,
-        }, ct);
+            if (!File.Exists(path)) return "";
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                              FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true);
+            var text = reader.ReadToEnd();
+            return text.Length <= LogTailChars ? text : text[^LogTailChars..];
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>The log with every occurrence of the setup password replaced.</summary>
+    internal static string Redact(string text, string? secret)
+        => string.IsNullOrEmpty(secret) || string.IsNullOrEmpty(text)
+            ? text
+            : text.Replace(secret, "********", StringComparison.Ordinal);
+
+    private void PruneLogs()
+    {
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-LogRetentionDays);
+            foreach (var file in Directory.EnumerateFiles(LogDir, "*.log"))
+            {
+                if (File.GetLastWriteTimeUtc(file) < cutoff) TryDelete(file);
+            }
+        }
+        catch (Exception e)
+        {
+            log.LogDebug("Could not prune firmware logs: {Msg}", e.Message);
+        }
+    }
 
     /// <summary>This machine's model, as WMI reports it -- the same string
     /// <c>save_machine_info</c> stores and the hub matched the image against.</summary>

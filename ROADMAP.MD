@@ -216,6 +216,17 @@ First contact on one PC:
 - Confirm `%ProgramData%\FleetHub\Agent\diskusage` is not readable by a standard user.
 - After the second day's scan, check that *What changed* names the folder that actually grew.
 
+**4c. Firmware flashes that never applied (#9), hub 1.139.0 then agent 3.41.0.** Deploy the
+hub first. The agent half has to be cut with `agent/release.ps1 -Version 3.41.0`. The source is
+on `main` and its tests pass on Windows (573). Then on FCOM1109, which has BitLocker on with
+TPM + PIN:
+- Edit the OptiPlex 7020 1.28.1 image's switches if needed, flash it, and restart the PC.
+- The target row should show the update tool's exit code, `BitLocker: suspended`, and the Dell
+  log. After the restart it should be **applied**. If not, the log is now the evidence.
+- Delete the 0 KB `OptiPlex_7020_1.28.1_SEMB.exe` image once its stuck update has failed on
+  its own. That happens on the first scheduler pass after the hub deploys, because the
+  machine has already restarted.
+
 **5. Decisions only the owner can take** (left alone on purpose, not forgotten):
 - **#19 remote session recording** -- recording a colleague's screen is a policy call first.
 - **#18 Intune/Azure cross-reference** -- needs a Graph credential in the hub's secret store.
@@ -1925,6 +1936,37 @@ in the fleet shows a red error forever.
   library + fleet update history), a read-only BIOS-updates panel on the machine page,
   six `firmware.*` settings, and `agent/src/TempMonitorAgent/Bios/FirmwareFlasher.cs` +
   `UpdateBiosExecutor.cs`. Resolved parameters:
+  - **No Dell flash had ever applied (hub 1.139.0 + agent 3.41.0).** Every target reached
+    `rebooting`, the PC restarted, and it came back on its old BIOS. FCOM1109 and a Latitude
+    3520 both did this, and in both cases nothing anywhere said why. The likely cause is
+    BitLocker: FCOM1109 is TPM + PIN, and a firmware change alters the measurements its key
+    is sealed to. Four changes:
+    - **BitLocker is suspended for one restart before the tool runs** (`BitLockerSuspender`,
+      `DisableKeyProtectors(1)`), and resumed at once if the tool fails. It is gated by the
+      `firmware.suspend_bitlocker` setting, on by default, whose help names the cost: until
+      that restart the volume key is on the disk in the clear. *Rejected:* an unbounded
+      suspend, because a crashed agent would leave a volume unprotected for good; and
+      leaving it to the operator, which is the procedure that produced zero applied flashes.
+    - **The evidence comes back with the result:** the exit code, the last 4 KB of the Dell
+      log (`/l=` is added unless the operator gave one), and the BitLocker state, stored on
+      the target and shown on its row.
+    - **A restart on the old version fails the target promptly.** `fail_unapplied_after_reboot`
+      fails it when `machine_info.boot_epoch` is later than the flash and the BIOS inventory
+      from after that boot still names `from_version`. Before this, it waited the full
+      24-hour confirm timeout while showing "Waiting for restart" over a machine that had
+      restarted, and the image stayed locked.
+    - **Job cancel tells "still flashing" apart from "waiting for a restart".**
+  - **Images can be edited** (`PATCH /api/firmware/payloads/<id>`), under the same open-job
+    lock as delete, because the agent reads `install_args` at fetch time. The image file is
+    not editable: a different file is a different payload.
+  - **A payload must name an image the hub holds**, and its size is read from disk. The
+    route used to answer 201 with a "0 KB" row for any well-formed sha256. **`staging_id`**
+    takes a finished assistant download straight into the firmware store, through
+    `webfetch.promote`, so the assistant has a working path. *Rejected:* trusting the
+    caller's size, and reusing `promote_download`, which writes to the package store.
+  - **Vendors are compared by family** (`vendor_family`, mirrored by the agent's
+    `FirmwareFlasher.Vendor`): an image typed as "Dell" was refused on every "Dell Inc.".
+    The model list stays exact, and it is what stops a wrong flash.
   - **The remaining open question — do firmware payloads reuse `packages.py`'s blob store
     — resolved as: the primitives yes, the ROOT no.** `packages.store_blob` /
     `blob_path` are called as-is (one tested content-addressed writer, and the hub still

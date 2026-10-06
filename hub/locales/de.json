@@ -1042,6 +1042,10 @@
         "label": "Auf die neue BIOS-Version warten",
         "help": "Ein Flash-Vorgang endet beim Start, wird also erst bestätigt, wenn der Rechner seine neue BIOS-Version meldet. Großzügig lassen: ein am Freitagabend geflashter PC wird am Montagmorgen bestätigt."
       },
+      "firmware.suspend_bitlocker": {
+        "label": "BitLocker für einen Neustart anhalten",
+        "help": "Vor dem Flashen wird BitLocker bis zum nächsten Neustart angehalten und sofort fortgesetzt, wenn das Update-Tool fehlschlägt. Ohne das wird Firmware auf einem verschlüsselten Rechner meist bereitgestellt, aber nie übernommen. Bis zu diesem Neustart liegt der Laufwerksschlüssel ungeschützt auf dem Datenträger."
+      },
       "firmware.require_ac_power": {
         "label": "Netzstrom zum Flashen verlangen",
         "help": "Ein Notebook, dem mitten im Flash-Vorgang der Strom ausgeht, startet unter Umständen nicht mehr. Der Agent lehnt das Update im Akkubetrieb ab."
@@ -2720,6 +2724,10 @@
     "cancel_job": "Update abbrechen",
     "cancel_target": "Abbrechen",
     "cancel_partial": "{count} Rechner hatten das Image bereits erhalten und flashen zu Ende.",
+    "cancel_awaiting_reboot": "{count} Rechner haben das Image bereitgestellt und warten auf einen Neustart. Nach dem Neustart wird das automatisch aufgelöst: übernommen, wenn die neue BIOS-Version erscheint, sonst fehlgeschlagen.",
+    "target_exit_code": "Exitcode des Update-Tools {code}",
+    "target_bitlocker": "BitLocker: {state}",
+    "target_tool_log": "Protokoll des Update-Tools",
     "job_meta": "Installiert {version} · {machines} Rechner · erstellt {when}",
     "job_window": "Zeitfenster {start} bis {end}",
     "show_machines": "Rechner anzeigen",
@@ -2756,6 +2764,7 @@
       "uploading": "Wird hochgeladen…",
       "uploaded": "{name} · {size} · SHA-256 {sha256}",
       "need_file": "Wähle zuerst eine Image-Datei.",
+      "edit_title": "Image bearbeiten",
       "name": "Name",
       "name_placeholder": "Latitude 5540 BIOS 1.31.0",
       "vendor": "Hersteller",
