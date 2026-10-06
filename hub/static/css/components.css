@@ -137,12 +137,59 @@
 }
 
 .sidebar__section-label {
-    font-size: 11px;
+    /* 12px, the console's floor for text (was 11px). Uppercase tracking makes small caps
+       read smaller still, and these are the only signposts in a 22-link column. */
+    font-size: var(--text-xs);
     font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     padding: 0 var(--space-3) var(--space-1);
+}
+
+.sidebar__section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* The Administration heading's fold button: the heading's own words plus a chevron, inheriting
+   its type so the section reads the same open or folded, and the click target is the word.
+   Inside the heading <div> rather than replacing it, so the div stays the group's
+   aria-labelledby target and the rail's hairline (below). */
+.sidebar__section-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sidebar__section-toggle:hover {
+    color: var(--text);
+}
+
+.sidebar__section-chevron {
+    width: 14px;
+    height: 14px;
+    transition: transform 0.15s ease;
+}
+
+.sidebar__section[data-foldable][data-folded] .sidebar__section-chevron {
+    transform: rotate(-90deg);
+}
+
+.sidebar__section[data-foldable][data-folded] .sidebar__section-body {
+    display: none;
 }
 
 .sidebar__link {
@@ -398,6 +445,19 @@
         background: var(--card-border);
     }
 
+    /* **The fold does not exist on the rail.** That is the condition under which the
+       Administration fold was allowed at all (see _sidebar.html): the rail is where the icons
+       are the whole nav, so a folded section shows them anyway. Its toggle leaves the tab
+       order -- there is nothing to click on a 1px hairline -- and the heading div around it
+       stays that hairline, like every other section's. */
+    :root[data-sidebar="collapsed"] .sidebar__section[data-foldable][data-folded] .sidebar__section-body {
+        display: flex;
+    }
+
+    :root[data-sidebar="collapsed"] .sidebar__section-toggle {
+        display: none;
+    }
+
     :root[data-sidebar="collapsed"] .sidebar__link {
         justify-content: center;
         /* position: relative so the alert badge can hang off the corner below -- with no label
@@ -482,36 +542,62 @@
     color: var(--muted);
 }
 
-/* Desktop: the wrapper isn't a box at all, its children are flex items of .topbar
-   directly, so the bar renders exactly as it did before the wrapper existed. The
-   nesting only earns its keep below the breakpoint, where it becomes a real panel. */
+/* The account menu's panel (_topbar.html), at every width. It used to be `display: contents`
+   on desktop -- its children laid out in the bar itself -- and a panel only on a phone.
+   Hangs off the bar's bottom-right edge; .topbar is sticky, which gives it the containing
+   block. Opened by common.js initTopbarMore() via .topbar__meta--open. */
 .topbar__meta {
-    display: contents;
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: var(--space-4);
+    z-index: 40;
+    min-width: 240px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-card);
 }
 
-/* display:contents costs the wrapper its DOM position, so the ordering it used to
-   provide is restored explicitly: badges (default 0), then the theme toggle, then the
-   user. Without this the toggle would jump to the far right on desktop. */
-.theme-toggle { order: 1; }
-.topbar__language,
-.topbar__email,
-.topbar__signout { order: 2; }
+.topbar__meta--open { display: flex; }
 
-/* The language picker sits with the account chrome, so it takes .topbar__email's type
-   scale rather than a form control's -- a full-size <select> in the topbar reads as a
-   filter over the page instead of a preference. `display: contents` on the wrapper for
-   the same reason the meta wrapper uses it: the <label> exists to carry the .sr-only
-   text, and must not become a box that breaks the topbar's flex row. */
+/* Search left, then the live pill, theme, account -- in DOM order now that nothing inside
+   the bar is display:contents and needs its position restored. */
+.theme-toggle { order: 1; }
+.topbar__more { order: 2; }
+
+.topbar__email {
+    /* The heading of the menu: whose console this is. Long addresses break rather than
+       widen the panel past the viewport. */
+    font-weight: 600;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
 .topbar__language {
-    display: contents;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.topbar__language-label {
+    font-size: var(--text-xs);
+    color: var(--muted);
 }
 
 .topbar__language .input {
-    padding: var(--space-1) var(--space-2);
+    width: 100%;
     font-size: var(--text-sm);
-    /* Long endonyms would otherwise stretch the topbar and push the sign-out button off
-       a narrow desktop window. */
-    max-width: 10rem;
+}
+
+.topbar__versions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
 }
 
 /* The search trigger (command-palette.js). A button that LOOKS like a field, because that is
@@ -657,14 +743,14 @@
 }
 
 .btn--primary {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--accent-fill, var(--accent));
+    border-color: var(--accent-fill, var(--accent));
     color: var(--accent-contrast);
 }
 
 .btn--primary:hover {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
+    background: var(--accent-fill-hover, var(--accent-hover));
+    border-color: var(--accent-fill-hover, var(--accent-hover));
 }
 
 .btn--icon {
@@ -684,8 +770,8 @@
 }
 
 .btn--danger:hover {
-    background: var(--danger, #f85149);
-    border-color: var(--danger, #f85149);
+    background: var(--danger-fill, var(--danger));
+    border-color: var(--danger-fill, var(--danger));
     color: #fff;
 }
 
@@ -1257,6 +1343,20 @@
     color: var(--danger);
 }
 
+/* The one reading in a list-style card that tripped the card's alert state, so the eye
+   lands on WHICH line made the card red rather than re-reading all four. */
+.stat-card__meta--alert {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+/* The pulse is an attention cue, not information -- the border and colour carry that. An
+   endless animation is exactly what a vestibular-sensitive operator turns motion off to
+   avoid, and a console left open on a hot machine all day would otherwise never stop. */
+@media (prefers-reduced-motion: reduce) {
+    .stat-card--high-temp { animation: none; }
+}
+
 @keyframes pulse {
     0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
     70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
@@ -1405,6 +1505,17 @@ label.checkbox input {
     font-size: var(--text-md);
     font-weight: 600;
     margin-bottom: var(--space-3);
+}
+
+/* A page's own h1. Bold and tight-tracked so it reads as the title over the 16px section
+   headings below it; numbers that need to be read first (dashboard tiles, --text-stat) are
+   deliberately one step larger, since on those pages they are the content. */
+.page-title {
+    font-size: var(--text-xl);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    margin-bottom: var(--space-2);
 }
 
 /* ============ Autocomplete combobox (autocomplete.js) ============ */
@@ -1561,13 +1672,13 @@ label.checkbox input {
 }
 
 /* ============ Mobile topbar controls ============ */
-/* Deliberately the last thing in the file. The hamburger and the overflow button are
-   `.btn .btn--icon` so they inherit the icon-button sizing, and `.btn { display: inline-flex }`
-   is a single class -- exactly the same specificity as `.nav-toggle`. Placed up in the
-   Topbar section these rules lost to .btn on source order and both buttons showed on
-   DESKTOP, where there is nothing for them to do. Keep them after .btn. */
-.nav-toggle,
-.topbar__more {
+/* Deliberately the last thing in the file. The hamburger is `.btn .btn--icon` so it
+   inherits the icon-button sizing, and `.btn { display: inline-flex }` is a single class --
+   exactly the same specificity as `.nav-toggle`. Placed up in the Topbar section this rule
+   lost to .btn on source order and the hamburger showed on DESKTOP, where there is nothing
+   for it to do. Keep it after .btn. (The account button beside it is on every width now,
+   so .btn's own display is the one it wants.) */
+.nav-toggle {
     display: none;
 }
 
@@ -1587,34 +1698,18 @@ label.checkbox input {
         padding: var(--space-3) var(--space-4);
     }
 
-    .nav-toggle,
-    .topbar__more {
+    .nav-toggle {
         display: inline-flex;
+        flex-shrink: 0;
+    }
+
+    .topbar__more {
         flex-shrink: 0;
     }
 
     .topbar__brand { display: block; }
 
     .nav-toggle { order: -1; }
-    .topbar__more { order: 2; }
-
-    .topbar__meta {
-        display: none;
-        position: absolute;
-        top: 100%;
-        right: var(--space-4);
-        z-index: 40;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: var(--space-3);
-        padding: var(--space-4);
-        border: 1px solid var(--card-border);
-        border-radius: var(--radius-md);
-        background: var(--surface);
-        box-shadow: var(--shadow-card);
-    }
-
-    .topbar__meta--open { display: flex; }
 }
 
 
@@ -1721,4 +1816,273 @@ label.checkbox input {
     flex-wrap: nowrap;
     gap: var(--space-2);
     justify-content: flex-end;
+}
+
+/* ============ Skip link ============
+   Off-screen until it has keyboard focus, then a plain button-like chip at the top left.
+   Not display:none/visibility:hidden -- those take it out of the tab order, which is the
+   one place it has to be. */
+.skip-link {
+    position: absolute;
+    left: var(--space-3);
+    top: -100px;
+    z-index: 100;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--accent-fill, var(--accent));
+    color: var(--accent-contrast);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.skip-link:focus {
+    top: var(--space-3);
+}
+
+/* The skip link's target. Focusable only by script (tabindex=-1), so no ring is wanted on it;
+   the content it lands on is the indication. */
+#main-content:focus {
+    outline: none;
+}
+
+/* ============ Breadcrumb ============
+   One line above a page title, saying which list it was opened from. Muted and small: it is
+   orientation, not a heading, and must not compete with the h1 under it. Long machine names
+   truncate here rather than wrap -- the h1 below spells them out in full. */
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    margin-bottom: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+.breadcrumb a {
+    color: var(--muted);
+}
+
+.breadcrumb a:hover {
+    color: var(--text);
+}
+
+.breadcrumb [aria-current="page"] {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ============ Page titles and intros ============
+   Every page's h1 is `.section-title` with an inline font-size, so the weight and tracking
+   that make it read as a TITLE (rather than as the 16px section headings under it, at the
+   same weight) are applied here by position instead of by editing thirty templates. */
+.app-shell__content h1.section-title {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+/* Clamped to two lines (common.js initPageIntro). max-width keeps a long intro at a reading
+   measure on a wide monitor instead of one 200-character line. */
+.page-intro {
+    max-width: 90ch;
+}
+
+.page-intro:not(.page-intro--open) {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
+/* Inline-looking text button under the intro it opens. Its bottom margin is the intro's
+   own, moved across by initPageIntro so the gap above the content is unchanged. */
+.page-intro__toggle {
+    display: block;
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+}
+
+.page-intro__toggle:hover {
+    text-decoration: underline;
+}
+
+.page-intro__toggle[hidden] {
+    display: none;
+}
+
+/* ============ Segmented filter ============
+   One-of-N quick filter as a row of joined buttons (aria-pressed), each with a count. First
+   used by the Devices status filter. Wraps rather than scrolls on a phone: four short words
+   fit two rows, and a horizontally scrolling control hides the choices it exists to show. */
+.segmented {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    margin-bottom: var(--space-4);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+}
+
+.segmented__item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+}
+
+.segmented__item:hover {
+    color: var(--text);
+}
+
+.segmented__item[aria-pressed="true"] {
+    background: var(--card);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--card-border);
+}
+
+.segmented__count {
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    font-weight: 400;
+}
+
+/* The Devices search box: room for its long placeholder on a desktop, the full row on a
+   phone. Was an inline min-width of 320px, which a 343px phone row could not honour beside
+   the count -- the placeholder was cut mid-word. */
+.inventory-search {
+    flex: 1 1 320px;
+    min-width: 0;
+    max-width: 480px;
+}
+
+/* ============ Stacked table (phones) ============
+   .data-table--stack: below 640px each row is a card of "label  value" lines instead of a
+   row of eleven columns. The Devices table used to force the whole page to scroll sideways
+   at phone width, with the machine name scrolled off whenever you reached the column you
+   wanted. Labels come from each cell's data-label (set by the page script from the headers).
+   The checkbox and the row menu keep their places at the card's top corners. */
+@media (max-width: 640px) {
+    .data-table--stack thead {
+        display: none;
+    }
+
+    .data-table--stack,
+    .data-table--stack tbody {
+        display: block;
+    }
+
+    .data-table--stack tr {
+        position: relative;
+        display: block;
+        padding: var(--space-3) var(--space-2) var(--space-3) 44px;
+        border-bottom: 1px solid var(--card-border);
+    }
+
+    .data-table--stack td {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--space-3);
+        padding: var(--space-1) 0;
+        border-bottom: 0;
+        overflow-wrap: anywhere;
+        text-align: right;
+    }
+
+    .data-table--stack td[data-label]::before {
+        content: attr(data-label);
+        flex: none;
+        color: var(--muted);
+        font-size: var(--text-sm);
+        text-align: left;
+    }
+
+    /* Selection box: top-left of the card. */
+    .data-table--stack td:first-child {
+        position: absolute;
+        left: var(--space-2);
+        top: var(--space-3);
+        padding: 0;
+    }
+
+    .data-table--stack td:first-child::before,
+    .data-table--stack td:nth-child(2)::before,
+    .data-table--stack td:last-child::before {
+        content: none;
+    }
+
+    /* The machine name is the card's title. */
+    .data-table--stack td:nth-child(2) {
+        font-weight: 600;
+        font-size: var(--text-md);
+        padding-right: 44px;
+        text-align: left;
+    }
+
+    /* Row menu: top-right of the card. */
+    .data-table--stack td:last-child {
+        position: absolute;
+        right: var(--space-2);
+        top: var(--space-2);
+        padding: 0;
+    }
+
+    /* "Loading" / "could not load" rows are one wide cell -- no card chrome for those. */
+    .data-table--stack td[colspan] {
+        position: static;
+        padding: var(--space-3) 0;
+        text-align: left;
+    }
+}
+
+/* ============ Settings search and "changed" markers ============ */
+.settings-search {
+    margin-bottom: var(--space-4);
+}
+
+.settings-search .input {
+    flex: 1 1 320px;
+    min-width: 0;
+    max-width: 480px;
+}
+
+/* A setting moved off its default: an accent rule down its left edge, so a hub's
+   customisations stand out from the 120-odd defaults around them. Inset, not a border, so
+   the row's content does not shift by a pixel when a save flips it. */
+.setting--changed {
+    box-shadow: inset 3px 0 0 var(--accent);
+    padding-left: var(--space-3);
+}
+
+/* ...and a dot on the section tab that holds one. */
+.tabs__tab--changed::after {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: var(--space-2);
+    border-radius: 999px;
+    background: var(--accent);
+    vertical-align: middle;
+}
+
+.tabs__tab[hidden] {
+    display: none;
 }

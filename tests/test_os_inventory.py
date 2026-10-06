@@ -112,6 +112,31 @@ def test_a_distro_that_never_says_linux_still_buckets_as_linux():
               app.normalize_os(caption, None, None)["bucket"] == expected)
 
 
+def test_older_windows_is_not_windows_10():
+    # The silent failure: no needle matched "Windows 7", so the caption fell through to the
+    # build check, and build 7601 is "below 22000" -- every Windows 7 and 8.1 machine was
+    # counted as Windows 10. The out-of-support PCs an operator most needs to find were
+    # inside the healthiest-looking bar on the Dashboard.
+    print("\n-- Windows 7/8 has its own bucket --")
+    for caption, build in (("Microsoft Windows 7 Professional", "7601"),
+                           ("Microsoft Windows 8.1 Pro", "9600"),
+                           ("Microsoft Windows 7 Enterprise", None)):
+        check(f"{caption} (build {build}) is windows_legacy",
+              app.normalize_os(caption, build, None)["bucket"] == "windows_legacy")
+    # The build decides for a caption nothing matched, too: an odd OEM caption on build 7601
+    # is still not Windows 10.
+    check("an unrecognised Windows caption on an old build is legacy",
+          app.normalize_os("Microsoft Windows Embedded Standard", "7601", None)["bucket"]
+          == "windows_legacy")
+    check("...while the first Windows 10 build is still 10",
+          app.normalize_os("Microsoft Windows 10 Enterprise LTSB", "10240", None)["bucket"]
+          == "windows_10")
+    check("the bucket is a declared one", "windows_legacy" in app.OS_BUCKETS)
+    dashboard = read(ROOT, "hub", "static", "js", "dashboard.js")
+    check("the Dashboard has a label for it",
+          "'dashboard.os.bucket.windows_legacy'" in dashboard)
+
+
 def test_nonsense_is_unknown_rather_than_wrong():
     print("\n-- garbage in, 'unknown' out --")
     for caption, build in (("", None), (None, None), ("   ", "22000"),
@@ -202,6 +227,7 @@ def main():
     test_the_build_number_beats_the_caption()
     test_the_other_buckets()
     test_a_distro_that_never_says_linux_still_buckets_as_linux()
+    test_older_windows_is_not_windows_10()
     test_nonsense_is_unknown_rather_than_wrong()
     test_the_directory_is_a_fallback_and_says_so()
     test_the_columns_and_the_wire_agree()

@@ -16,6 +16,17 @@
    for the section headings it serves, so a tab and the panel it opens cannot end up
    worded differently. Sign-in is the exception and has its own key: it has no schema
    fields and therefore no section in the registry. #}
+{# Search across every section (console review, hub 1.140.0). 131 fields in 21 sections, and
+   the usual question is "where is the setting for X" -- answered by tab-clicking until it
+   turned up. settings.js filters the rendered rows by their label, help text and key, hides
+   the sections with nothing matching, and moves to the first section that has a match. #}
+<div class="toolbar settings-search">
+    <input class="input" id="settings-search" type="search" autocomplete="off"
+           placeholder="{{ t('settings.search_placeholder') }}"
+           aria-label="{{ t('settings.search_placeholder') }}">
+    <span class="stat-card__meta" id="settings-search-status" aria-live="polite"></span>
+</div>
+
 <div class="settings-layout">
     <div class="tabs tabs--vertical" role="tablist" aria-label="{{ t('settings.sections_nav') }}"
          aria-orientation="vertical" data-tabs-key="settings">

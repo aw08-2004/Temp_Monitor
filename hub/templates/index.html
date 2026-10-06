@@ -21,7 +21,7 @@
    `new_temp` event to update, and re-fetching a fleet aggregate at 1 Hz is not viable. The
    topbar's live-data pill therefore stays dark on this page, which is honest: it is a
    thirty-second poll, not a live view. The machine page is where live belongs. #}
-<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('dashboard.heading') }}</h1>
+<h1 class="page-title">{{ t('dashboard.heading') }}</h1>
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">
     {{ t('dashboard.intro') }}
     <a href="{{ url_for('inventory_page') }}">{{ t('dashboard.intro_link') }}</a>.
@@ -34,7 +34,7 @@
         <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.health.title') }}</span>
         <span class="stat-card__meta" id="health-generated"></span>
     </summary>
-    <div class="tile-grid" id="health-tiles"></div>
+    <div class="tile-grid-host"><div class="tile-grid" id="health-tiles"></div></div>
 </details>
 
 <details class="card fold" data-fold-key="dashboard:os" open>
@@ -50,7 +50,11 @@
         <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.telemetry.title') }}</span>
     </summary>
     <p class="stat-card__meta">{{ t('dashboard.telemetry.help') }}</p>
-    <div class="tile-grid" id="telemetry-tiles"></div>
+    {# How many machines the averages below are OF. It was a seventh tile ("Reporting"),
+       which made it look like one more measurement and left it alone on a second row; it
+       qualifies the six numbers, so it sits with the caption that introduces them. #}
+    <p class="stat-card__meta dashboard__coverage" id="telemetry-coverage"></p>
+    <div class="tile-grid-host"><div class="tile-grid" id="telemetry-tiles"></div></div>
 </details>
 
 <details class="card fold" data-fold-key="dashboard:activity" open>
@@ -59,8 +63,8 @@
     </summary>
     {# data-can-deploy, not a field of /api/fleet/summary: that answer is cached per SCOPE,
        and two operators with the same machines but different capabilities share it. #}
-    <div class="tile-grid" id="activity-tiles"
-         data-can-deploy="{{ 'yes' if cap.DEPLOY_PACKAGES in user_capabilities else '' }}"></div>
+    <div class="tile-grid-host"><div class="tile-grid" id="activity-tiles"
+         data-can-deploy="{{ 'yes' if cap.DEPLOY_PACKAGES in user_capabilities else '' }}"></div></div>
     <div id="activity-alerts"></div>
 </details>
 

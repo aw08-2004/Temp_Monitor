@@ -38,7 +38,9 @@
     "events": "Eventos",
     "watchdogs": "Vigilantes",
     "reports": "Informes",
-    "assistant": "Asistente"
+    "assistant": "Asistente",
+    "label": "Principal",
+    "skip_to_content": "Saltar al contenido"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -53,6 +55,7 @@
     "sign_out": "Cerrar sesión",
     "toggle_theme": "Cambiar el tema de color",
     "more": "Más",
+    "account": "Cuenta",
     "connecting": "Conectando…",
     "language": "Idioma",
     "language_auto": "Automático (navegador)"
@@ -135,7 +138,8 @@
       "never_enrolled_hint": "Envía telemetría, no acepta comandos",
       "open_alerts": "Alertas abiertas",
       "agents_outdated": "Agentes desactualizados",
-      "agent_latest": "la última es {version}"
+      "agent_latest": "la última es {version}",
+      "agent_latest_none": "No hay versión publicada con la que comparar"
     },
     "os": {
       "title": "Sistemas operativos",
@@ -144,6 +148,7 @@
       "bucket": {
         "windows_11": "Windows 11",
         "windows_10": "Windows 10",
+        "windows_legacy": "Windows 8.1 y anteriores",
         "windows_server": "Windows Server",
         "linux": "Linux",
         "android": "Android",
@@ -160,8 +165,7 @@
       "disk_free": "Espacio libre en disco",
       "of_total": "de {value}",
       "low_disk": "Menos de {threshold} % libre",
-      "reporting": "Reportando",
-      "reporting_hint": "máquinas sobre las que se promedia",
+      "coverage": "Promedios sobre {reporting} de las {online} máquinas en línea ahora.",
       "celsius": "{value} °C",
       "percent": "{value} %",
       "gb": "{value} GB"
@@ -175,7 +179,15 @@
       "firmware_jobs": "Trabajos de firmware abiertos",
       "wake_requests": "Encendidos en curso",
       "alerts_title": "Alertas abiertas",
-      "fleet_wide": "Toda la flota"
+      "fleet_wide": "Toda la flota",
+      "kind": {
+        "duplicate_serial": "Número de serie duplicado",
+        "ad_unmatched": "No está en Active Directory",
+        "rule": "Regla cumplida",
+        "watchdog": "Watchdog",
+        "high_temperature": "Temperatura alta",
+        "other": "Alerta"
+      }
     },
     "attention": {
       "title": "Vale la pena mirar",
@@ -232,7 +244,7 @@
       "clear": "Quitar selección",
       "report": "Informe de la selección"
     },
-    "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos en línea también aparecen en el panel en vivo; los que están sin conexión permanecen aquí hasta que se eliminen. Eliminar un equipo borra de forma permanente su identidad, su historial de temperatura y su inscripción en la flota.",
+    "intro": "Todos los equipos que el hub ve o ha visto alguna vez. Los equipos sin conexión permanecen aquí hasta que se eliminen.",
     "search_placeholder": "Buscar por nombre, fabricante, etiqueta de activo, n.º de serie o service tag…",
     "col": {
       "machine": "Equipo",
@@ -264,7 +276,14 @@
     "wake_all_result": "Se solicitó el encendido de {count} PC.",
     "wake_all_none": "Todos los PC que puede ver ya están encendidos.",
     "wake_all_failed": "No se pudo solicitar un encendido para toda la flota.",
-    "os_from_directory": "Reportado por Active Directory, no por la propia máquina."
+    "os_from_directory": "Reportado por Active Directory, no por la propia máquina.",
+    "filter": {
+      "label": "Filtrar por estado",
+      "all": "Todos",
+      "online": "En línea",
+      "offline": "Fuera de línea",
+      "unenrolled": "Sin registrar"
+    }
   },
   "alerts": {
     "heading": "Alertas",
@@ -1502,7 +1521,13 @@
       "applying": "Aplicando…",
       "saved_changed": "Guardado. Actualizado: {fields}",
       "saved_unchanged": "No hay cambios que guardar."
-    }
+    },
+    "search_placeholder": "Buscar ajustes",
+    "search_count": {
+      "one": "{count} ajuste coincidente",
+      "other": "{count} ajustes coincidentes"
+    },
+    "search_none": "Ningún ajuste coincide"
   },
   "common": {
     "loading": "Cargando…",
@@ -1533,7 +1558,9 @@
     "no_matches": "Sin coincidencias",
     "no_matches_free_text": "Sin coincidencias: escribe un valor para usarlo tal cual.",
     "hub_error": "El hub devolvió un error (HTTP {status}).",
-    "request_failed": "{url} devolvió {status}"
+    "request_failed": "{url} devolvió {status}",
+    "intro_more": "Más",
+    "intro_less": "Menos"
   },
   "packages": {
     "preset": {
@@ -2652,7 +2679,9 @@
         "name": "Nombre",
         "known": "Conocido por el hub"
       }
-    }
+    },
+    "breadcrumb_label": "Ruta de navegación",
+    "settings_title": "Ajustes del equipo"
   },
   "remote": {
     "title": "Remoto",

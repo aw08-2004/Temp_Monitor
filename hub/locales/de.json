@@ -38,7 +38,9 @@
     "events": "Ereignisse",
     "watchdogs": "Wächter",
     "reports": "Berichte",
-    "assistant": "Assistent"
+    "assistant": "Assistent",
+    "label": "Hauptnavigation",
+    "skip_to_content": "Zum Inhalt springen"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -53,6 +55,7 @@
     "sign_out": "Abmelden",
     "toggle_theme": "Farbschema umschalten",
     "more": "Mehr",
+    "account": "Konto",
     "connecting": "Verbindung wird hergestellt…",
     "language": "Sprache",
     "language_auto": "Automatisch (Browser)"
@@ -135,7 +138,8 @@
       "never_enrolled_hint": "Meldet Telemetrie, nimmt keine Befehle an",
       "open_alerts": "Offene Warnungen",
       "agents_outdated": "Veraltete Agents",
-      "agent_latest": "aktuell ist {version}"
+      "agent_latest": "aktuell ist {version}",
+      "agent_latest_none": "Keine veröffentlichte Version zum Vergleich"
     },
     "os": {
       "title": "Betriebssysteme",
@@ -144,6 +148,7 @@
       "bucket": {
         "windows_11": "Windows 11",
         "windows_10": "Windows 10",
+        "windows_legacy": "Windows 8.1 und älter",
         "windows_server": "Windows Server",
         "linux": "Linux",
         "android": "Android",
@@ -160,8 +165,7 @@
       "disk_free": "Freier Speicherplatz",
       "of_total": "von {value}",
       "low_disk": "Unter {threshold} % frei",
-      "reporting": "Meldend",
-      "reporting_hint": "Rechner, über die gemittelt wird",
+      "coverage": "Mittelwerte über {reporting} der {online} Rechner, die gerade online sind.",
       "celsius": "{value} °C",
       "percent": "{value} %",
       "gb": "{value} GB"
@@ -175,7 +179,15 @@
       "firmware_jobs": "Offene Firmware-Aufträge",
       "wake_requests": "Laufende Weckvorgänge",
       "alerts_title": "Offene Warnungen",
-      "fleet_wide": "Flottenweit"
+      "fleet_wide": "Flottenweit",
+      "kind": {
+        "duplicate_serial": "Doppelte Seriennummer",
+        "ad_unmatched": "Nicht im Active Directory",
+        "rule": "Regel ausgelöst",
+        "watchdog": "Watchdog",
+        "high_temperature": "Hohe Temperatur",
+        "other": "Warnung"
+      }
     },
     "attention": {
       "title": "Einen Blick wert",
@@ -232,7 +244,7 @@
       "clear": "Auswahl aufheben",
       "report": "Bericht zur Auswahl"
     },
-    "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Online-Computer erscheinen zusätzlich in der Live-Übersicht; Offline-Computer bleiben hier, bis sie gelöscht werden. Beim Löschen werden Identität, Temperaturverlauf und Flottenregistrierung dauerhaft entfernt.",
+    "intro": "Jeder Computer, der dem Hub bekannt ist oder je bekannt war. Offline-Computer bleiben hier, bis sie gelöscht werden.",
     "search_placeholder": "Nach Name, Hersteller, Anlagenkennzeichen, Seriennummer oder Service-Tag suchen…",
     "col": {
       "machine": "Computer",
@@ -264,7 +276,14 @@
     "wake_all_result": "Aufwecken für {count} PCs angefordert.",
     "wake_all_none": "Alle für Sie sichtbaren PCs sind bereits wach.",
     "wake_all_failed": "Ein flottenweites Aufwecken konnte nicht angefordert werden.",
-    "os_from_directory": "Von Active Directory gemeldet, nicht vom Rechner selbst."
+    "os_from_directory": "Von Active Directory gemeldet, nicht vom Rechner selbst.",
+    "filter": {
+      "label": "Nach Status filtern",
+      "all": "Alle",
+      "online": "Online",
+      "offline": "Offline",
+      "unenrolled": "Nicht registriert"
+    }
   },
   "alerts": {
     "heading": "Warnungen",
@@ -1502,7 +1521,13 @@
       "applying": "Wird angewendet…",
       "saved_changed": "Gespeichert. Aktualisiert: {fields}",
       "saved_unchanged": "Keine Änderungen zu speichern."
-    }
+    },
+    "search_placeholder": "Einstellungen durchsuchen",
+    "search_count": {
+      "one": "{count} passende Einstellung",
+      "other": "{count} passende Einstellungen"
+    },
+    "search_none": "Keine passenden Einstellungen"
   },
   "common": {
     "loading": "Wird geladen…",
@@ -1533,7 +1558,9 @@
     "no_matches": "Keine Treffer",
     "no_matches_free_text": "Keine Treffer – tippe einen Wert, um ihn unverändert zu verwenden.",
     "hub_error": "Der Hub hat einen Fehler gemeldet (HTTP {status}).",
-    "request_failed": "{url} lieferte {status}"
+    "request_failed": "{url} lieferte {status}",
+    "intro_more": "Mehr",
+    "intro_less": "Weniger"
   },
   "packages": {
     "preset": {
@@ -2652,7 +2679,9 @@
         "name": "Name",
         "known": "Dem Hub bekannt"
       }
-    }
+    },
+    "breadcrumb_label": "Navigationspfad",
+    "settings_title": "Geräteeinstellungen"
   },
   "remote": {
     "title": "Remote",

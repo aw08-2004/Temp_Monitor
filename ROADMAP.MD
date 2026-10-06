@@ -62,6 +62,32 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > recursive resolver on every rule tick, for what two include selectors already express);
 > reusing `manage_rules` (editing a group changes what other people's rules reach); resolving
 > a deployment's group live (a deployment must not change targets after it was confirmed).
+>
+> **Hub 1.140.0 — console review.** A review against seeded edge-case data fixed numbers the
+> console was getting wrong and the navigation around them:
+> - **Values.** A missing reading is no longer drawn as 0 (fan "Driven at 0%", flat-0 live
+>   charts, "0m" uptime); Windows 7/8 is **Windows 8.1 and older**, not Windows 10; the
+>   Dashboard's *Live readings* and *Hottest* count online machines only; 0 °C and below
+>   is shown as no reading (history and rules still see the raw value); alert kinds are
+>   words, not enum names; "Agents behind" is a dash when there is no release to compare to.
+> - **Contrast.** Light-theme status colours, the dark-theme danger colour, a solid focus
+>   ring and heavier card borders, all to WCAG AA; buttons with white text use the new
+>   `--accent-fill` / `--danger-fill`, because one blue cannot be both link-on-dark and
+>   button-behind-white. A skip link reaches the framed page's `<main>`.
+> - **Navigation.** A machine page lights **Devices** (it lit Dashboard) and has a breadcrumb.
+>   **Administration folds** — this revisits the 1.114.0 rejection above rather than
+>   ignoring it: the fold is not a `<details>`, and on the collapsed rail it does not exist,
+>   so the objection (icons lost from the rail) no longer applies. It never hides the active
+>   page. The topbar's version badges, language and email moved into an **account menu**.
+> - **Pages.** Devices has status quick filters with counts, relative *Last seen*, Wake shown
+>   only when something is offline, and stacked cards on a phone. Settings has a search box
+>   and marks values changed from their default. The machine page's channel and sensor pins
+>   moved into a closed **Machine settings** section. Long page intros clamp to two lines.
+> *Rejected:* rejecting impossible temperatures at ingest (the report also carries the
+> heartbeat and every other metric, and `readings.temp` is NOT NULL); raising `--text-sm`
+> from 13px to 14px globally (it is the console's whole secondary scale, and 14px is
+> `--text-base` — the step between body and metadata would vanish); renaming `/inventory`
+> (still the 1.114.0 reasoning).
 
 > **Note on where things live (hub 1.87.0).** The console was reorganised around what you
 > are doing rather than which PC you are doing it to. **Terminal, Backup, Firmware and

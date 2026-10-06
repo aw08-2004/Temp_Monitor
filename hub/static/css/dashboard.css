@@ -3,11 +3,31 @@
    cards; the Asset Inventory is the page that lists machines now. */
 
 /* ---------------- Tiles: one number, one label ---------------- */
+/* Six, three or two columns -- never five or four. Every tile group on this page has six
+   tiles, and `auto-fit, minmax(150px, 1fr)` laid them out five-and-one at common laptop
+   widths, leaving "Agents behind" alone on a row as if it were a different kind of number.
+   Divisors of six can't orphan one.
+
+   A container query, not a media query: the width that matters is the card's, and that
+   moves with the sidebar (240px, the 64px rail, or none on a phone) independently of the
+   viewport. The host is a wrapper because a container can't size its own grid columns. */
+.tile-grid-host {
+    container-type: inline-size;
+}
+
 .tile-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-4);
     margin-top: var(--space-4);
+}
+
+@container (min-width: 520px) {
+    .tile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@container (min-width: 1000px) {
+    .tile-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 
 .tile {
@@ -28,17 +48,28 @@ a.tile--link:focus-visible {
     border-color: var(--accent);
 }
 
+/* --text-stat (32px), one step above the page title's 28px. The two were the same size, so
+   the h1 and twenty numbers competed and nothing on the page read as first. */
 .tile__value {
-    font-size: var(--text-xl);
+    font-size: var(--text-stat);
     font-weight: 600;
     line-height: 1.1;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Colour is applied by the caller and only when the VALUE is the news -- zero failures must
-   not be red just because the tile is about failures. */
-.tile__value--ok { color: var(--ok, #30a46c); }
-.tile__value--warn { color: var(--warn, #f5a524); }
-.tile__value--bad { color: var(--danger, #e5484d); }
+   not be red just because the tile is about failures.
+
+   These named --ok and --warn, which tokens.css has never defined, so they always fell back
+   to their hardcoded hex -- the same colour in both themes, and the amber was about 2:1 on
+   the light theme's white tiles. The real tokens are --success and --warning. */
+.tile__value--ok { color: var(--success); }
+.tile__value--warn { color: var(--warning); }
+.tile__value--bad { color: var(--danger); }
+.tile__value--info { color: var(--accent); }
+
+/* Nothing to report: a zero or a dash with no tone (dashboard.js tile()). */
+.tile__value--quiet { color: var(--muted); }
 
 .tile__label {
     font-size: var(--text-sm);
@@ -46,10 +77,14 @@ a.tile--link:focus-visible {
     margin-top: var(--space-1);
 }
 
+/* No opacity on top of --muted: at 0.8 the hint fell under 4.5:1 on both themes. */
 .tile__hint {
-    font-size: var(--text-xs, var(--text-sm));
+    font-size: var(--text-xs);
     color: var(--muted);
-    opacity: 0.8;
+    margin-top: var(--space-1);
+}
+
+.dashboard__coverage {
     margin-top: var(--space-1);
 }
 

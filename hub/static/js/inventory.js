@@ -35,6 +35,13 @@ const devicesRoot = document.getElementById('devices-root');
 const selectAllEl = document.getElementById('inventory-select-all');
 const bulkBar = document.getElementById('inventory-bulk');
 const bulkCount = document.getElementById('inventory-bulk-count');
+// Read here, not where the fleet-wake handler is wired below: render() runs on the first
+// load and needs it to decide whether the button shows.
+const wakeAllBtn = document.getElementById('inventory-wake-all');
+// Header text per column index, for the stacked phone layout's data-label. Read from the
+// rendered <th>s so it is whatever language the page was served in, and can never disagree
+// with the headers on a wide screen.
+const COLUMN_LABELS = Array.from(headRow.querySelectorAll('th'), (th) => th.textContent.trim());
 
 // Only issue_commands is read here: it decides which ROW MENU entries are built. Deploy has no
 // per-row entry; its bulk button is rendered or not by the template, and the script null-guards it.
@@ -58,6 +65,12 @@ const SEARCH_FIELDS = ['machine', 'asset_tag', 'serial_number', 'service_tag',
 // headers: an export is read by scripts and by people in other languages alike.
 const CSV_FIELDS = ['machine', 'status', 'manufacturer', 'model', 'os_label', 'serial_number',
                     'service_tag', 'asset_tag', 'temp', 'updated_at'];
+
+// The status quick filter: '' (all), 'online', 'offline' or 'unenrolled'. Persisted like the
+// sort, so the 30 s refresh and a reload keep the view the operator chose.
+const STATUS_FILTER_STORAGE_KEY = 'fleethub.inventory.status';
+const STATUS_FILTERS = ['', 'online', 'offline', 'unenrolled'];
+let statusFilter = loadStatusFilter();
 
 let allRows = [];          // the last fetch, unfiltered/unsorted
 let visibleRows = [];      // what render() last put on screen, in order
@@ -83,14 +96,41 @@ function loadSort() {
     return { key: 'status', dir: 'asc' };
 }
 
+function loadStatusFilter() {
+    try {
+        const saved = localStorage.getItem(STATUS_FILTER_STORAGE_KEY) || '';
+        return STATUS_FILTERS.includes(saved) ? saved : '';
+    } catch (e) { return ''; }
+}
+
+function matchesStatus(row, status) {
+    switch (status) {
+        case 'online': return row.status === 'online';
+        case 'offline': return row.status !== 'online';
+        case 'unenrolled': return row.enrolled === false;
+        default: return true;
+    }
+}
+
 function saveSort() {
     try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort)); } catch (e) { /* private mode */ }
 }
 
+// "3m ago" with the exact stamp as the cell's tooltip. The raw "2026-10-05 17:28:26" made
+// every row read as equally recent until you did the arithmetic, and disagreed with the
+// Dashboard's "9d" for the same machine. Same wording as the machine page (machine.ago.*).
+// updated_at is server-local time, and the hub and its operators share a timezone.
 function formatLastSeen(updatedAt) {
     if (!updatedAt) return '--';
-    // updated_at is a server-local "YYYY-MM-DD HH:MM:SS" string; show it as-is.
-    return updatedAt;
+    const then = new Date(String(updatedAt).replace(' ', 'T'));
+    if (Number.isNaN(then.getTime())) return updatedAt;
+    const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+    if (secs < 60) return t('machine.ago.seconds', { value: secs });
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return t('machine.ago.minutes', { value: mins });
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return t('machine.ago.hours', { value: hrs });
+    return t('machine.ago.days', { value: Math.floor(hrs / 24) });
 }
 
 function formatTemp(temp) {
@@ -165,6 +205,7 @@ function onHeaderClick(key) {
 function matchesSearch(row) {
     // The group filter first: a search inside a group narrows the group, never widens it.
     if (groupMembers && !groupMembers.has(String(row.machine).toLowerCase())) return false;
+    if (!matchesStatus(row, statusFilter)) return false;
     if (!searchQuery) return true;
     return SEARCH_FIELDS.some((field) => {
         const value = row[field];
@@ -389,6 +430,7 @@ function renderRow(row) {
     tempTd.textContent = formatTemp(row.temp);
     const seenTd = document.createElement('td');
     seenTd.textContent = formatLastSeen(row.updated_at);
+    if (row.updated_at) seenTd.title = row.updated_at;
 
     const actionTd = document.createElement('td');
     actionTd.className = 'data-table__actions';
@@ -409,6 +451,11 @@ function renderRow(row) {
 
     tr.append(selectTd, nameTd, statusTd, makeTd, modelTd, osTd, serialTd, serviceTd, assetTd,
               tempTd, seenTd, actionTd);
+    // The column name on every cell, for the stacked phone layout (.data-table--stack), where
+    // there is no header row above the values to say what each one is.
+    tr.querySelectorAll('td').forEach((td, i) => {
+        if (COLUMN_LABELS[i]) td.dataset.label = COLUMN_LABELS[i];
+    });
     return tr;
 }
 
@@ -421,10 +468,14 @@ function render() {
 
     visibleRows = allRows.filter(matchesSearch).sort(compareRows);
     inventoryNoMatch.style.display = (total && !visibleRows.length) ? 'block' : 'none';
+    renderStatusFilter();
+
+    // Only while there is something to wake -- see the template.
+    if (wakeAllBtn) wakeAllBtn.hidden = !allRows.some((r) => r.status !== 'online');
 
     // Pluralised through tPlural rather than a trailing `s`: the count and its noun agree
     // differently per language, and a hand-built "machine(s)" cannot be translated at all.
-    if (searchQuery && total) {
+    if ((searchQuery || statusFilter || groupMembers) && total) {
         countEl.textContent = tPlural('inventory.count_filtered', total, { visible: visibleRows.length });
     } else if (total) {
         countEl.textContent = tPlural('inventory.count', total);
@@ -487,6 +538,36 @@ function exportCsv(rows) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---- status quick filter --------------------------------------------------------
+const statusFilterEl = document.getElementById('inventory-status-filter');
+
+// The counts beside each choice are over the roster as narrowed by the group filter only --
+// not by the search or by each other -- so they answer "how many of my machines are X"
+// whatever is typed in the box.
+function renderStatusFilter() {
+    if (!statusFilterEl) return;
+    const base = groupMembers
+        ? allRows.filter((r) => groupMembers.has(String(r.machine).toLowerCase()))
+        : allRows;
+    for (const button of statusFilterEl.querySelectorAll('[data-status]')) {
+        const status = button.dataset.status;
+        button.setAttribute('aria-pressed', String(status === statusFilter));
+        const countSpan = button.querySelector('.segmented__count');
+        if (countSpan) countSpan.textContent = String(base.filter((r) => matchesStatus(r, status)).length);
+    }
+}
+
+if (statusFilterEl) {
+    statusFilterEl.addEventListener('click', (e) => {
+        const button = e.target.closest('[data-status]');
+        if (!button) return;
+        statusFilter = button.dataset.status;
+        try { localStorage.setItem(STATUS_FILTER_STORAGE_KEY, statusFilter); }
+        catch (err) { /* private mode */ }
+        render();
+    });
 }
 
 // ---- wiring -------------------------------------------------------------------
@@ -572,7 +653,6 @@ if (bulkDeployBtn && deployLink) {
 // happened: some PCs were already awake, some have no wired adapter, and some are waiting
 // for a peer on their subnet to come online. Reporting "woken" over that would be a claim
 // nothing supports -- nothing acknowledges a magic packet.
-const wakeAllBtn = document.getElementById('inventory-wake-all');
 if (wakeAllBtn) {
     const wakeStatus = document.getElementById('inventory-wake-status');
     wakeAllBtn.addEventListener('click', async () => {

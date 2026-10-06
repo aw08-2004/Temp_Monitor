@@ -48,7 +48,9 @@
     "events": "Events",
     "watchdogs": "Watchdogs",
     "reports": "Reports",
-    "assistant": "Assistant"
+    "assistant": "Assistant",
+    "label": "Main",
+    "skip_to_content": "Skip to content"
   },
   "hub_update": {
     "_note": [
@@ -68,6 +70,7 @@
     "sign_out": "Sign out",
     "toggle_theme": "Toggle color theme",
     "more": "More",
+    "account": "Account",
     "connecting": "Connecting…",
     "language": "Language",
     "_language_auto": [
@@ -160,7 +163,8 @@
       "never_enrolled_hint": "Reports telemetry, accepts no commands",
       "open_alerts": "Open alerts",
       "agents_outdated": "Agents behind",
-      "agent_latest": "latest is {version}"
+      "agent_latest": "latest is {version}",
+      "agent_latest_none": "No published release to compare against"
     },
     "os": {
       "title": "Operating systems",
@@ -169,6 +173,7 @@
       "bucket": {
         "windows_11": "Windows 11",
         "windows_10": "Windows 10",
+        "windows_legacy": "Windows 8.1 and older",
         "windows_server": "Windows Server",
         "linux": "Linux",
         "android": "Android",
@@ -185,8 +190,7 @@
       "disk_free": "Free disk space",
       "of_total": "of {value}",
       "low_disk": "Under {threshold}% free",
-      "reporting": "Reporting",
-      "reporting_hint": "machines these averages are of",
+      "coverage": "Averages over {reporting} of the {online} machines online now.",
       "celsius": "{value} °C",
       "percent": "{value}%",
       "gb": "{value} GB"
@@ -200,7 +204,15 @@
       "firmware_jobs": "Firmware jobs open",
       "wake_requests": "Wakes in flight",
       "alerts_title": "Open alerts",
-      "fleet_wide": "Fleet-wide"
+      "fleet_wide": "Fleet-wide",
+      "kind": {
+        "duplicate_serial": "Duplicate serial",
+        "ad_unmatched": "Not in Active Directory",
+        "rule": "Rule matched",
+        "watchdog": "Watchdog",
+        "high_temperature": "High temperature",
+        "other": "Alert"
+      }
     },
     "attention": {
       "title": "Worth a look",
@@ -263,7 +275,7 @@
       "clear": "Clear selection",
       "report": "Report selected"
     },
-    "intro": "Every machine that is, or ever was, visible to the hub. Online machines also appear on the live Dashboard; offline ones stay here until deleted. Deleting a machine permanently removes its identity, temperature history, and fleet enrollment.",
+    "intro": "Every machine that is, or ever was, visible to the hub. Offline machines stay here until deleted.",
     "search_placeholder": "Search name, manufacturer, asset tag, serial, service tag…",
     "col": {
       "machine": "Machine",
@@ -295,7 +307,14 @@
     "wake_all_result": "Asked for {count} PCs to be woken.",
     "wake_all_none": "Every PC you can see is already awake.",
     "wake_all_failed": "Could not request a fleet-wide wake.",
-    "os_from_directory": "Reported by Active Directory, not by the machine itself."
+    "os_from_directory": "Reported by Active Directory, not by the machine itself.",
+    "filter": {
+      "label": "Filter by status",
+      "all": "All",
+      "online": "Online",
+      "offline": "Offline",
+      "unenrolled": "Not enrolled"
+    }
   },
   "alerts": {
     "heading": "Alerts",
@@ -1584,7 +1603,13 @@
       "applying": "Applying…",
       "saved_changed": "Saved. Updated: {fields}",
       "saved_unchanged": "No changes to save."
-    }
+    },
+    "search_placeholder": "Search settings",
+    "search_count": {
+      "one": "{count} matching setting",
+      "other": "{count} matching settings"
+    },
+    "search_none": "No settings match"
   },
   "common": {
     "loading": "Loading…",
@@ -1615,7 +1640,9 @@
     "no_matches": "No matches",
     "no_matches_free_text": "No matches — type a value to use it as-is.",
     "hub_error": "The hub returned an error (HTTP {status}).",
-    "request_failed": "{url} returned {status}"
+    "request_failed": "{url} returned {status}",
+    "intro_more": "More",
+    "intro_less": "Less"
   },
   "packages": {
     "preset": {
@@ -2765,7 +2792,9 @@
         "name": "Name",
         "known": "Known to the hub"
       }
-    }
+    },
+    "breadcrumb_label": "Breadcrumb",
+    "settings_title": "Machine settings"
   },
   "remote": {
     "title": "Remote",

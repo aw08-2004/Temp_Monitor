@@ -677,7 +677,7 @@
     flex: none;
     border-radius: var(--radius-md);
     border: 0;
-    background: var(--accent);
+    background: var(--accent-fill, var(--accent));
     color: var(--accent-contrast);
     cursor: pointer;
 }

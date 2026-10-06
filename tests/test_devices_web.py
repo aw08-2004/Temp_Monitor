@@ -93,7 +93,9 @@ def test_the_page_renders_what_its_script_needs():
           and not re.search(r'<th[^>]*data-sort[^>]*>\s*<input', full))
     check("the loading row spans every column (12)", 'colspan="12"' in full)
     check("the sidebar calls the page Devices", ">Devices<" in get_shell_sidebar())
-    check("the url is still /inventory", 'data-nav-prefix="/inventory"' in get_shell_sidebar())
+    # The prefix also carries /machine since hub 1.140.0 (a machine page lights Devices), so
+    # this asks only that /inventory is still the first -- and the link's own -- path.
+    check("the url is still /inventory", 'data-nav-prefix="/inventory' in get_shell_sidebar())
 
 
 def get_shell_sidebar():

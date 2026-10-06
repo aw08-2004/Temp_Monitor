@@ -44,6 +44,13 @@
 {% if shell_mode != 'shell' %}{% block extra_head %}{% endblock %}{% endif %}
 </head>
 <body>
+{# Skip link: the first thing a keyboard reaches, before twenty-odd sidebar links. Visually
+   hidden until focused (components.css .skip-link). In the shell the content is inside a
+   frame, which an in-page #fragment cannot reach -- common.js initSkipLink() follows it into
+   the visible frame's <main> instead. Not in a framed page: the shell's copy is the one. #}
+{% if shell_mode != 'framed' %}
+<a class="skip-link" href="#main-content">{{ t('nav.skip_to_content') }}</a>
+{% endif %}
 {% if shell_mode == 'shell' %}
 {# ---------------------------------------------------------------- the shell -------------
    The document that never reloads: chrome on the outside, pages in a frame. Which url it
@@ -102,7 +109,7 @@
     {% if shell_mode != 'framed' %}{% include "partials/_sidebar.html" %}{% endif %}
     <div class="app-shell__main">
         {% if shell_mode != 'framed' %}{% include "partials/_topbar.html" %}{% endif %}
-        <main class="app-shell__content{% block content_class %}{% endblock %}">
+        <main class="app-shell__content{% block content_class %}{% endblock %}" id="main-content" tabindex="-1">
             {% block content %}{% endblock %}
         </main>
     </div>
