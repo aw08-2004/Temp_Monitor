@@ -1066,6 +1066,10 @@ def confirm_from_inventory(db_path, machine, bios_version):
                                            Confirming a flash nobody verified is the one
                                            thing this must not do.
 
+    A FLASHING target -- one whose agent never sent its result -- is closed by the
+    payload's version only; anything else leaves it to the flashing timeout, because the
+    vendor tool may still be running.
+
     Returns the number of targets closed.
     """
     version = _clean(bios_version, MAX_VERSION_CHARS)

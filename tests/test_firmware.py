@@ -558,7 +558,7 @@ def main():
         machine_state("PC-OLD-INV", None, "9.9.9",
                       firmware.get_target(db_path, old_inv)["flashed_at"] - 60)
         # The sweep on its own first, so the old-inventory row is observed untouched rather
-        # than after expire_stale has had a go at it (review on PR #113).
+        # than after expire_stale has had a go at it.
         firmware.confirm_from_stored_inventory(db_path)
         check("an inventory from before the flash does not count",
               firmware.get_target(db_path, old_inv)["status"] == firmware.TARGET_FLASHING)
