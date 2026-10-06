@@ -565,6 +565,13 @@ def main():
         check("...while one from after it applies the stuck flash",
               firmware.get_target(db_path, stuck)["status"] == firmware.TARGET_APPLIED)
 
+        # A sweep reads its rows, then closes them one by one. A target cancelled or failed
+        # in between must not be overwritten -- an APPLIED over a cancellation.
+        check("a conditional close leaves a target that has moved on alone",
+              not firmware._finish_target(db_path, stuck, firmware.TARGET_FAILED,
+                                          only_from=(firmware.TARGET_FLASHING,))
+              and firmware.get_target(db_path, stuck)["status"] == firmware.TARGET_APPLIED)
+
         resweep = flashing("PC-RESWEEP")
         resweep_at = firmware.get_target(db_path, resweep)["flashed_at"]
         machine_state("PC-RESWEEP", resweep_at + 600, "9.9.9", resweep_at + 700)

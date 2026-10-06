@@ -843,20 +843,34 @@ def get_target(db_path, target_id):
     return target
 
 
-def _finish_target(db_path, target_id, status, *, error="", observed_version=None):
+def _finish_target(db_path, target_id, status, *, error="", observed_version=None,
+                   only_from=None):
+    """Close one target. With `only_from`, only if it is still in one of those states.
+
+    The sweeps read their rows and then close them one by one, so a target an operator
+    cancelled, or another path failed, in between would otherwise be overwritten -- an
+    APPLIED written over a cancellation. `only_from` makes the UPDATE conditional, the same
+    way `start_target` is, and the return value says whether it took.
+    """
     now = int(time.time())
     with get_conn(db_path) as conn:
         row = conn.execute("SELECT job_id FROM firmware_targets WHERE id = ?",
                            (target_id,)).fetchone()
         if row is None:
             return False
-        conn.execute(
-            "UPDATE firmware_targets SET status = ?, error = ?, finished_at = ?, "
-            "observed_version = COALESCE(?, observed_version), updated_at = ? WHERE id = ?",
-            (status, _clean(error, MAX_ERROR_CHARS), now,
-             None if observed_version is None else _clean(observed_version,
-                                                          MAX_VERSION_CHARS),
-             now, target_id))
+        sql = ("UPDATE firmware_targets SET status = ?, error = ?, finished_at = ?, "
+               "observed_version = COALESCE(?, observed_version), updated_at = ? "
+               "WHERE id = ?")
+        params = [status, _clean(error, MAX_ERROR_CHARS), now,
+                  None if observed_version is None else _clean(observed_version,
+                                                               MAX_VERSION_CHARS),
+                  now, target_id]
+        if only_from:
+            sql += f" AND status IN ({','.join('?' for _ in only_from)})"
+            params.extend(only_from)
+        cursor = conn.execute(sql, params)
+        if (cursor.rowcount or 0) != 1:
+            return False
         _refresh_job_status(conn, row["job_id"], now)
     return True
 
@@ -1086,8 +1100,9 @@ def confirm_from_inventory(db_path, machine, bios_version):
     closed = 0
     for row in rows:
         if _same(version, row["to_version"]):
-            _finish_target(db_path, row["id"], TARGET_APPLIED, observed_version=version)
-            closed += 1
+            if _finish_target(db_path, row["id"], TARGET_APPLIED, observed_version=version,
+                              only_from=(TARGET_REBOOTING, TARGET_FLASHING)):
+                closed += 1
         elif row["status"] == TARGET_FLASHING:
             # FLASHING is let through for one answer only: the new version. A flash whose
             # result never arrived -- the vendor tool restarted the PC itself, and the
@@ -1099,11 +1114,12 @@ def confirm_from_inventory(db_path, machine, bios_version):
         elif _same(version, row["from_version"]):
             continue  # not back from its reboot yet
         else:
-            _finish_target(
-                db_path, row["id"], TARGET_UNKNOWN, observed_version=version,
-                error=f"the machine came back reporting BIOS version {version!r}, which is "
-                      f"neither the version it had nor the one this image installs")
-            closed += 1
+            if _finish_target(
+                    db_path, row["id"], TARGET_UNKNOWN, observed_version=version,
+                    error=f"the machine came back reporting BIOS version {version!r}, which "
+                          f"is neither the version it had nor the one this image installs",
+                    only_from=(TARGET_REBOOTING,)):
+                closed += 1
     return closed
 
 
@@ -1135,9 +1151,10 @@ def confirm_from_stored_inventory(db_path):
     closed = 0
     for row in rows:
         if _same(row["bios_version"], row["to_version"]):
-            _finish_target(db_path, row["id"], TARGET_APPLIED,
-                           observed_version=row["bios_version"])
-            closed += 1
+            if _finish_target(db_path, row["id"], TARGET_APPLIED,
+                              observed_version=row["bios_version"],
+                              only_from=(TARGET_FLASHING, TARGET_REBOOTING)):
+                closed += 1
     return closed
 
 
@@ -1273,9 +1290,10 @@ def fail_unapplied_after_reboot(db_path):
             why += f" (the update tool exited with code {row['exit_code']})"
         why += (". Check the tool's log on this update, the install switches, and whether "
                 "BitLocker was suspended")
-        _finish_target(db_path, row["id"], TARGET_FAILED, error=why,
-                       observed_version=row["bios_version"])
-        closed += 1
+        if _finish_target(db_path, row["id"], TARGET_FAILED, error=why,
+                          observed_version=row["bios_version"],
+                          only_from=(TARGET_REBOOTING,)):
+            closed += 1
     return closed
 
 
