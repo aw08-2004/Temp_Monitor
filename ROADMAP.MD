@@ -1956,6 +1956,15 @@ in the fleet shows a red error forever.
       24-hour confirm timeout while showing "Waiting for restart" over a machine that had
       restarted, and the image stayed locked.
     - **Job cancel tells "still flashing" apart from "waiting for a restart".**
+    - **First real success, and one more gap (hub 1.140.1).** FCOM1109 went from 1.27.0 to
+      1.28.1 on 2026-10-06, but its update stayed on "Flashing". The agent never posted its
+      result, most likely because the PC restarted before it could, so the target never
+      reached `rebooting`, the only state the version check looked at. A FLASHING target is
+      now applied by the image's version too, and by nothing else, because the tool may
+      still be running. The tick also applies open targets from the *stored* inventory
+      when it was reported after the flash, ahead of `expire_stale`. Without that, the rows
+      already stuck would have waited for the next inventory, or been failed as "may have
+      been left mid-flash" over a PC running the new BIOS.
   - **Images can be edited** (`PATCH /api/firmware/payloads/<id>`), under the same open-job
     lock as delete, because the agent reads `install_args` at fetch time. The image file is
     not editable: a different file is a different payload.
