@@ -107,7 +107,10 @@ def create_provisioning_blueprint(db_path, log_dir, login_required, access, *, h
                 db_path, hub_url=hub_url, enrollment_secret=enrollment_secret,
                 hosted=_hosted())
         except provisioning.ProvisioningIncomplete as e:
-            return jsonify({"error": str(e), "configured": False}), 409
+            # refusals.message rather than str(e): this 409 carries `configured` beside the
+            # sentence, so it is built here instead of by refusals.refuse(), and should still
+            # get that function's filtering.
+            return jsonify({"error": refusals.message(e), "configured": False}), 409
 
         fleet.audit(db_path, actor=permissions_web.current_actor(),
                     action="provisioning_qr", level=fleet.LEVEL_SECURITY,
@@ -169,7 +172,11 @@ def create_provisioning_blueprint(db_path, log_dir, login_required, access, *, h
         except ValueError as e:
             return refusals.refuse(e)          # too large, or empty
         except OSError as e:
-            return jsonify({"error": f"Could not store the APK: {e}"}), 500
+            # The OSError names a path under the hub's state directory; the log is where that
+            # helps somebody, the browser is where it only describes the host.
+            print(f"[provisioning] could not store the uploaded APK: {e}")
+            return jsonify({"error": "Could not store the APK on the hub -- see the hub "
+                                     "log."}), 500
 
         fleet.audit(db_path, actor=actor, action="provisioning_apk_upload",
                     level=fleet.LEVEL_SECURITY, target=record["file_name"],

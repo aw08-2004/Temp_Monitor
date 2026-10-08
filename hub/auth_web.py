@@ -88,6 +88,14 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
             # malformed discovery URL, which it only finds out at registration. Put
             # everything back before answering, so the failure costs an error message
             # rather than the ability to sign in.
+            #
+            # The reason goes out through refusals.message, not `{e}`: this catches ANY
+            # exception -- Authlib's, requests', a socket's -- so its text is whatever a
+            # library chose to put there. The sentence still reaches the admin (it is usually
+            # the useful "connection refused"), but filtered and capped like every other
+            # refusal, and the full text goes to the log.
+            print(f"[auth] new sign-in configuration rejected: {e!r}")
+            reason = refusals.message(e)
             authconfig.save(env_path, before)
             try:
                 reconfigure(before)
@@ -98,11 +106,11 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
                 print(f"[auth] ROLLBACK FAILED after a bad provider change: "
                       f"{rollback_error}. .env has been restored; RESTART THE HUB.")
                 return jsonify({"error":
-                    f"The new sign-in configuration was rejected ({e}), and restoring the "
+                    f"The new sign-in configuration was rejected ({reason}), and restoring the "
                     f"previous one also failed. The previous settings have been written "
                     f"back to .env -- restart the hub to load them."}), 500
             return jsonify({"error":
-                f"That sign-in configuration was rejected: {e}. Nothing was changed -- "
+                f"That sign-in configuration was rejected: {reason}. Nothing was changed -- "
                 f"check the issuer URL is reachable from the hub and serves a discovery "
                 f"document."}), 400
 

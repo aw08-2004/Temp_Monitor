@@ -577,7 +577,9 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
                 ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"),
             ), None
         except ValueError as e:
-            return None, str(e)
+            # refusals.message, not str(e): the caller renders this into a hand-built 400, which
+            # refusals.refuse() never sees, so it has to ask for the same filtered sentence.
+            return None, refusals.message(e)
 
     def _agent_package_url(sha256):
         """The hub URL an agent fetches a blob from. Relative to the hub's own base so it works
@@ -701,7 +703,10 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return jsonify({"error": "The TURN secret cannot contain line breaks or other "
                                      "control characters."}), 400
         except OSError as e:
-            return jsonify({"error": f"Could not write .env: {e}"}), 500
+            # The OSError names the absolute path of .env on the host; that belongs in the
+            # log for whoever has a shell there, not in a browser.
+            print(f"[remote] could not write the TURN secret to .env: {e}")
+            return jsonify({"error": "Could not write .env on the hub -- see the hub log."}), 500
         os.environ[TURN_SECRET_ENV] = value
         # Never put the secret itself in the audit detail -- only that it changed and how.
         fleet.audit(db_path, actor=_current_email(), action="remote_turn_secret_set",

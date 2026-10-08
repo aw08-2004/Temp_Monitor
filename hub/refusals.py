@@ -70,12 +70,20 @@ def refuse(exc, status=400):
     hub depends on would not answer. Guessing that from the exception type would be a lookup
     table that lies the first time a module raises ValueError for a conflict.
     """
-    return jsonify({"error": _authored_message(exc)}), status
+    return jsonify({"error": message(exc)}), status
 
 
-def _authored_message(exc):
+def message(exc):
     """The sentence a validator wrote into `exc`, or the generic one. See the module
-    docstring for why this reads `args[0]` rather than `str(exc)`."""
+    docstring for why this reads `args[0]` rather than `str(exc)`.
+
+    Public for the routes whose refusal is **not** a bare `{"error": ...}` -- a 409 that also
+    carries `configured: False`, a helper that returns `(None, error)` for its caller to
+    render, a login refusal rendered as text. Those had been writing `str(e)` by hand, which
+    is exactly the shape CodeQL's py/stack-trace-exposure flags (alerts #57-#89, #145-#148),
+    and which quietly opted them out of the traceback filter and the cap above. Calling this
+    keeps them on the one policy instead of a second, hand-copied one.
+    """
     args = getattr(exc, "args", None) or ()
     written = args[0] if args else ""
     if not isinstance(written, str):

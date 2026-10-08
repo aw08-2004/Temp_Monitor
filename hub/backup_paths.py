@@ -488,7 +488,14 @@ def preview(includes, excludes, profiles):
         try:
             clean = validate_pattern(pattern, kind="include")
         except PatternError as e:
-            problems.append(str(e))
+            # The sentence validate_pattern wrote (`args[0]`), not `str(e)`. This list rides
+            # inside 200 responses -- a machine's backup payload, the live preview -- rather
+            # than through refusals.refuse(), and CodeQL's py/stack-trace-exposure flagged
+            # every one of them (alerts #20-#27) for an exception reaching a response. Same
+            # rule refusals.message applies; not imported from there because this module is
+            # Flask-free and that one is not.
+            problems.append(e.args[0] if e.args and isinstance(e.args[0], str)
+                            else f"{pattern}: not a usable pattern.")
             continue
         resolved, reasons = _expand_with_reasons(clean, profiles)
         problems.extend(reasons)

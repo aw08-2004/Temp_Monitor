@@ -154,7 +154,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.140.1"
+HUB_VERSION = "1.140.2"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2847,7 +2847,9 @@ def _complete_login(user_info, provider):
             print(f"[invites] {email} redeemed {redeemed['label']!r} "
                   f"-> {', '.join(redeemed['groups']) or 'no surviving group'}")
         except invites.InviteError as e:
-            invite_refusal = str(e)
+            # refusals.message, not str(e): this lands in a text 403 built below, outside
+            # refusals.refuse(), and should get the same filter it would have.
+            invite_refusal = refusals.message(e)
         except Exception as e:
             # A redemption that blew up must not become a 500 on the login callback: the
             # account may well be authorized already, and turning "the invite failed" into
@@ -6284,7 +6286,12 @@ def _resolve_history_window(args):
         end_dt = parse_request_datetime(to_raw) or day_end
         start_dt = max(start_dt, day_start)
         end_dt = min(end_dt, day_end)
-        ensure_day_loaded_from_csv(date)
+        # The day as the hub formats it, never the raw query string. That string becomes a
+        # file name in LOG_DIR (CodeQL py/path-injection, alerts #3/#4), and anything
+        # parse_request_datetime accepts beyond a bare date -- "2026-10-08T05:00Z", a padded
+        # " 2026-10-08" -- named a CSV that does not exist and marked the day imported
+        # without reading the one that does.
+        ensure_day_loaded_from_csv(day_start.strftime("%Y-%m-%d"))
     else:
         end_dt = parse_request_datetime(to_raw) or datetime.now()
         start_dt = parse_request_datetime(from_raw)
@@ -6432,7 +6439,7 @@ def set_language():
         users.set_language(DB_PATH, email,
                            None if language == i18n.AUTO else language)
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return refusals.refuse(exc)
     # The response is not what applies it -- the client reloads, and the next render
     # resolves the language from the row just written.
     return jsonify({"language": language})
