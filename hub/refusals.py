@@ -43,12 +43,12 @@ tests/test_refusals.py pins. Rejected: rendering only the hub's own refusal clas
 genericising ValueError -- that is most of the 129 call sites, and the sentences are the
 product, as the paragraph above says.
 
-Flask-dependent by design, unlike the modules whose refusals it renders -- it IS the HTTP
-layer, and jsonify is the thing it exists to call.
+`refuse()` is the HTTP layer and calls jsonify; **`message()` is not, and the module imports
+Flask only inside `refuse()` so that a Flask-free model module can share the filter.**
+backup_paths needs it: its `problems` list rides inside 200 responses, and a second,
+hand-copied filter there had already lost the traceback check and the cap (review on #114).
 """
 import re
-
-from flask import jsonify
 
 GENERIC_REFUSAL = "That request was refused."
 MAX_MESSAGE_CHARS = 1000
@@ -70,6 +70,7 @@ def refuse(exc, status=400):
     hub depends on would not answer. Guessing that from the exception type would be a lookup
     table that lies the first time a module raises ValueError for a conflict.
     """
+    from flask import jsonify     # here, not at the top -- see the module docstring
     return jsonify({"error": message(exc)}), status
 
 

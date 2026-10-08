@@ -39,6 +39,8 @@ Flask-free and settings-free, like permissions.py and backups.py.
 import json
 import re
 
+import refusals
+
 # ================================
 # VOCABULARY
 # ================================
@@ -475,18 +477,23 @@ def compile_excludes(patterns, profiles):
 # PREVIEW
 # ================================
 def _pattern_problem(exc, pattern):
-    """The sentence validate_pattern wrote into `exc` (`args[0]`), never `str(exc)`.
+    """The sentence validate_pattern wrote into `exc`, through refusals.message.
 
     `problems` rides inside 200 responses -- a machine's backup payload, the live preview --
     rather than through refusals.refuse(), and CodeQL's py/stack-trace-exposure flagged every
-    one of them (alerts #20-#27) for an exception reaching a response. Same rule
-    refusals.message applies; not imported from there because this module is Flask-free and
-    that one is not.
+    one of them (alerts #20-#27) for an exception reaching a response. **The same filter, not
+    a copy of it**: an earlier hand-copied `args[0]` check here had no traceback guard and no
+    cap, so a PatternError that ever wrapped a library exception would have reached the
+    browser unfiltered (review on #114). refusals keeps Flask out of its import for this.
+
+    The one difference is the fallback: where refusals says the generic sentence, this names
+    the pattern, because the console shows the problem list without saying which field it
+    came from.
     """
-    written = exc.args[0] if exc.args else None
-    if isinstance(written, str) and written.strip():
-        return written
-    return f"{pattern}: not a usable pattern."
+    sentence = refusals.message(exc)
+    if sentence == refusals.GENERIC_REFUSAL:
+        return f"{pattern}: not a usable pattern."
+    return sentence
 
 
 def preview(includes, excludes, profiles):
