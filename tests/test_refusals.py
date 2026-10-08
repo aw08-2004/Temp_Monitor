@@ -121,11 +121,27 @@ def test_only_the_written_sentence_gets_out():
           payload["error"] == "the file must be a .pem, not C:/work/x.txt")
 
 
+def test_hand_built_responses_get_the_same_filter():
+    """CodeQL py/stack-trace-exposure, alerts #57-#89 and #145-#148. The silent failure is a
+    route whose refusal carries more than `error` -- a 409 with `configured`, a helper handing
+    back `(None, error)` -- going back to `str(e)` and skipping the filter above, because
+    refusals.refuse() could not build its body."""
+    print("\n== refusals.message is the same sentence refuse() sends ==")
+    for exc in (ValueError("monitors must be between 0 and 8"),
+                ValueError('x at File "y.py", line 3'),
+                ValueError(OSError(2, "No such file", "C:/secret/key.pem")),
+                ValueError()):
+        payload, _ = answer(exc)
+        check(f"message() matches refuse() for {exc!r}"[:90],
+              refusals.message(exc) == payload["error"])
+
+
 def main():
     test_the_message_is_what_reaches_the_operator()
     test_the_status_is_the_callers_to_choose()
     test_an_exception_with_no_message()
     test_only_the_written_sentence_gets_out()
+    test_hand_built_responses_get_the_same_filter()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)
 

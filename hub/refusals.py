@@ -43,12 +43,12 @@ tests/test_refusals.py pins. Rejected: rendering only the hub's own refusal clas
 genericising ValueError -- that is most of the 129 call sites, and the sentences are the
 product, as the paragraph above says.
 
-Flask-dependent by design, unlike the modules whose refusals it renders -- it IS the HTTP
-layer, and jsonify is the thing it exists to call.
+`refuse()` is the HTTP layer and calls jsonify; **`message()` is not, and the module imports
+Flask only inside `refuse()` so that a Flask-free model module can share the filter.**
+backup_paths needs it: its `problems` list rides inside 200 responses, and a second,
+hand-copied filter there had already lost the traceback check and the cap (review on #114).
 """
 import re
-
-from flask import jsonify
 
 GENERIC_REFUSAL = "That request was refused."
 MAX_MESSAGE_CHARS = 1000
@@ -70,12 +70,21 @@ def refuse(exc, status=400):
     hub depends on would not answer. Guessing that from the exception type would be a lookup
     table that lies the first time a module raises ValueError for a conflict.
     """
-    return jsonify({"error": _authored_message(exc)}), status
+    from flask import jsonify     # here, not at the top -- see the module docstring
+    return jsonify({"error": message(exc)}), status
 
 
-def _authored_message(exc):
+def message(exc):
     """The sentence a validator wrote into `exc`, or the generic one. See the module
-    docstring for why this reads `args[0]` rather than `str(exc)`."""
+    docstring for why this reads `args[0]` rather than `str(exc)`.
+
+    Public for the routes whose refusal is **not** a bare `{"error": ...}` -- a 409 that also
+    carries `configured: False`, a helper that returns `(None, error)` for its caller to
+    render, a login refusal rendered as text. Those had been writing `str(e)` by hand, which
+    is exactly the shape CodeQL's py/stack-trace-exposure flags (alerts #57-#89, #145-#148),
+    and which quietly opted them out of the traceback filter and the cap above. Calling this
+    keeps them on the one policy instead of a second, hand-copied one.
+    """
     args = getattr(exc, "args", None) or ()
     written = args[0] if args else ""
     if not isinstance(written, str):

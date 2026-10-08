@@ -193,6 +193,27 @@ def main():
     check("** matches zero directories", zero_dirs.matches("C:\\a\\b"))
     check("** matches many directories", zero_dirs.matches("C:\\a\\x\\y\\b"))
 
+    # The problem list rides inside 200 responses, outside refusals.refuse(). The silent
+    # failure is a PatternError that wraps something else -- a traceback, a library
+    # exception -- reaching the browser verbatim through the preview (review on #114).
+    print("\n== A pattern problem is a sentence somebody wrote ==")
+    written = backup_paths.PatternError("C:\\x\\**y: '**' must be a whole path segment.")
+    check("validate_pattern's own sentence comes through unaltered",
+          backup_paths._pattern_problem(written, "C:\\x\\**y")
+          == "C:\\x\\**y: '**' must be a whole path segment.")
+    leak = backup_paths.PatternError('Traceback (most recent call last):\n  File "x.py", line 3')
+    check("a traceback is replaced by a sentence naming the pattern",
+          backup_paths._pattern_problem(leak, "C:\\q") == "C:\\q: not a usable pattern.")
+    wrapped = backup_paths.PatternError(OSError(2, "No such file", "C:/secret/key.pem"))
+    check("a wrapped exception never reaches the list",
+          "secret" not in backup_paths._pattern_problem(wrapped, "C:\\q"))
+    check("an overlong message is capped",
+          len(backup_paths._pattern_problem(backup_paths.PatternError("x" * 5000), "C:\\q"))
+          <= 1003)
+    check("backup_paths stays importable without Flask -- refusals imports it lazily",
+          not any(line.startswith(("from flask", "import flask"))
+                  for line in open(backup_paths.refusals.__file__, encoding="utf-8")))
+
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import time
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
@@ -566,6 +567,23 @@ def test_enabled_history_metrics():
     settings.reset(app.DB_PATH, ["metrics.collect_disk"])
 
 
+def test_history_date_names_the_csv_canonically():
+    """PR #114. The silent failure: `?date=` reaching the CSV file name as typed. Anything
+    parse_request_datetime accepts beyond a bare date names a temp_v2_<date>.csv that does
+    not exist, and the day is then marked imported without the real file ever being read --
+    its history stays empty for good, with no error anywhere."""
+    print("\n-- ?date= reaches the CSV archive as YYYY-MM-DD, whatever was typed --")
+    seen = []
+    # mock.patch.object rather than pytest's monkeypatch: the house runner executes this file
+    # as a plain script, where fixtures do not exist, and the patch still undoes itself.
+    with mock.patch.object(app, "ensure_day_loaded_from_csv", seen.append):
+        # No timezone suffix: a `Z` is converted to local time first, which would make the
+        # expected day depend on the machine running the test.
+        for typed in ("2026-10-08", "2026-10-08T05:00", " 2026-10-08 ", "2026-10-08 23:59:59"):
+            app._resolve_history_window({"date": typed})
+    check("every spelling of the day loads the same CSV", seen == ["2026-10-08"] * 4)
+
+
 if __name__ == "__main__":
     test_diagnostics_extracts_all_metrics()
     test_network_matcher_ignores_disk()
@@ -584,5 +602,6 @@ if __name__ == "__main__":
     test_all_sensors_endpoint()
     test_machine_history_endpoint()
     test_enabled_history_metrics()
+    test_history_date_names_the_csv_canonically()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     sys.exit(1 if FAIL else 0)

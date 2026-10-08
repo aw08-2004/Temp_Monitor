@@ -170,7 +170,10 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         except ValueError as e:
             return refusals.refuse(e)
         except OSError as e:
-            return jsonify({"error": f"Could not store the file: {e}"}), 500
+            # The OSError names a path in the blob store; log it for the host, not the browser.
+            print(f"[packages] could not store an uploaded package file: {e}")
+            return jsonify({"error": "Could not store the file on the hub -- see the hub "
+                                     "log."}), 500
         fleet.audit(db_path, actor=_current_email(), action="upload_package_file",
                     level=fleet.LEVEL_NOTICE,
                     target=os.path.basename(upload.filename),

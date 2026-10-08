@@ -14,6 +14,7 @@ The rules under test are the ones a mistake in would be quiet and serious:
     hand out somebody else's access.
 """
 import os
+import re
 import sys
 import tempfile
 from datetime import timedelta
@@ -24,7 +25,7 @@ import permissions
 import settings
 import users
 from permissions_web import create_access
-from flask import Flask, session as flask_session, redirect, url_for
+from flask import Flask, Response, session as flask_session, redirect, url_for
 
 PASS = 0
 FAIL = 0
@@ -46,6 +47,22 @@ def check(name, cond):
 claimed_email = permissions.email_from_claims
 
 
+def _app_source_refusals_are_plain():
+    """The handler above is a reconstruction, so a test of it alone would keep passing after
+    app.py went back to `return f"...{email}...", 403` -- a bare string, which Flask sends as
+    text/html. Read the real _complete_login and pin both halves of the fix: no bare-string
+    refusal, and the nosniff header that stops a browser re-reading text/plain as a page."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "hub", "app.py")
+    with open(path, encoding="utf-8") as f:
+        source = f.read()
+    start = source.index("def _complete_login(")
+    body = source[start:source.index("\ndef ", start + 1)]
+    bare = re.search(r"return\s*\(?\s*f?[\"'].*?,\s*403\b", body, re.S)
+    return (bare is None and "_login_refusal(" in body
+            and '"X-Content-Type-Options", "nosniff"' in source)
+
+
 def build_app(db_path, access, lifetime_days=7):
     app = Flask(__name__)
     app.secret_key = "test-secret"
@@ -56,20 +73,24 @@ def build_app(db_path, access, lifetime_days=7):
         SESSION_REFRESH_EACH_REQUEST=True,
     )
 
+    def refusal(message):
+        """Mirrors app._login_refusal: text/plain, so a claim value is never markup."""
+        return Response(message, status=403, mimetype="text/plain")
+
     def complete_login(user_info, provider):
         """Mirrors app._complete_login (see the note above on why this is reconstructed)."""
         email = permissions.email_from_claims(user_info)
         if not email:
-            return f"{provider} did not provide an email address", 403
+            return refusal(f"{provider} did not provide an email address")
         if user_info.get("email_verified") is False:
-            return f"{provider} reports this account's email is unverified.", 403
+            return refusal(f"{provider} reports this account's email is unverified.")
         claimed_groups = permissions.directory_groups_from_claims(user_info)
         directory_groups = access.mapped_directory_groups(claimed_groups)
         if not access.login_allowed(email, directory_groups):
             if permissions.has_group_claim_overage(user_info):
-                return (f"Access denied: {provider} did not send this account's group "
-                        f"membership because the account is in too many groups"), 403
-            return f"Access denied: {email} is not authorized for this dashboard.", 403
+                return refusal(f"Access denied: {provider} did not send this account's "
+                               f"group membership because the account is in too many groups")
+            return refusal(f"Access denied: {email} is not authorized for this dashboard.")
         flask_session.permanent = True
         flask_session["user"] = {"email": email,
                                  "name": user_info.get("name") or email,
@@ -296,6 +317,17 @@ def main():
               claimed_email({"preferred_username": "administrator"}) == "")
         check("claims are normalized to lowercase",
               claimed_email({"email": "  Boss@X.COM "}) == "boss@x.com")
+
+        # The claim value lands in the refusal verbatim, and the "@" test is the only shape
+        # check it gets -- an issuer that lets users edit preferred_username hands this hub
+        # whatever they typed. Rendered as text/html, that was script on the hub's origin.
+        print("\n== A claim value in a refusal is never markup ==")
+        hostile = '<img src=x onerror=alert(1)>@x.com'
+        r = app.test_client().post("/fake/Okta", json={"preferred_username": hostile})
+        check("a hostile-but-@-shaped claim is still refused", r.status_code == 403)
+        check("...as text/plain, not HTML", r.mimetype == "text/plain")
+        check("...and the reconstruction above still matches app.py's refusals",
+              _app_source_refusals_are_plain())
 
         nomail = app.test_client()
         check("an account with no usable email is refused rather than guessed at",
