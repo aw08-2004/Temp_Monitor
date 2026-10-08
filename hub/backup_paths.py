@@ -474,6 +474,21 @@ def compile_excludes(patterns, profiles):
 # ================================
 # PREVIEW
 # ================================
+def _pattern_problem(exc, pattern):
+    """The sentence validate_pattern wrote into `exc` (`args[0]`), never `str(exc)`.
+
+    `problems` rides inside 200 responses -- a machine's backup payload, the live preview --
+    rather than through refusals.refuse(), and CodeQL's py/stack-trace-exposure flagged every
+    one of them (alerts #20-#27) for an exception reaching a response. Same rule
+    refusals.message applies; not imported from there because this module is Flask-free and
+    that one is not.
+    """
+    written = exc.args[0] if exc.args else None
+    if isinstance(written, str) and written.strip():
+        return written
+    return f"{pattern}: not a usable pattern."
+
+
 def preview(includes, excludes, profiles):
     """What these patterns resolve to on one machine -- the console's honest answer.
 
@@ -488,14 +503,7 @@ def preview(includes, excludes, profiles):
         try:
             clean = validate_pattern(pattern, kind="include")
         except PatternError as e:
-            # The sentence validate_pattern wrote (`args[0]`), not `str(e)`. This list rides
-            # inside 200 responses -- a machine's backup payload, the live preview -- rather
-            # than through refusals.refuse(), and CodeQL's py/stack-trace-exposure flagged
-            # every one of them (alerts #20-#27) for an exception reaching a response. Same
-            # rule refusals.message applies; not imported from there because this module is
-            # Flask-free and that one is not.
-            problems.append(e.args[0] if e.args and isinstance(e.args[0], str)
-                            else f"{pattern}: not a usable pattern.")
+            problems.append(_pattern_problem(e, pattern))
             continue
         resolved, reasons = _expand_with_reasons(clean, profiles)
         problems.extend(reasons)

@@ -91,9 +91,11 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
             #
             # The reason goes out through refusals.message, not `{e}`: this catches ANY
             # exception -- Authlib's, requests', a socket's -- so its text is whatever a
-            # library chose to put there. The sentence still reaches the admin (it is usually
-            # the useful "connection refused"), but filtered and capped like every other
-            # refusal, and the full text goes to the log.
+            # library chose to put there. When that is a plain sentence it reaches the admin,
+            # filtered and capped like every other refusal. Often it is not: requests and
+            # urllib3 wrap the cause, so `args[0]` is another exception object, and the admin
+            # gets the generic refusal plus the fixed hint below. The detail is then only in
+            # the log line, which is where to look for "connection refused" and its kin.
             print(f"[auth] new sign-in configuration rejected: {e!r}")
             reason = refusals.message(e)
             authconfig.save(env_path, before)
