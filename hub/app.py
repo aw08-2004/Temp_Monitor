@@ -20,7 +20,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import wraps
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify, redirect, session, url_for, g
+from flask import (Flask, Response, render_template, request, jsonify, redirect, session,
+                   url_for, g)
 from flask_socketio import SocketIO, join_room
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -2804,21 +2805,38 @@ def login():
     )
 
 
+def _login_refusal(message):
+    """A sign-in refusal, as **text/plain**.
+
+    These answer the OAuth callback directly, and the sentence carries values the hub did not
+    write: the email address and invite outcome an identity provider's claims produced. A bare
+    string from a Flask view goes out as text/html, so an issuer that asserted
+    `<script>...</script>@x.com` as an email would have had it rendered on the hub's origin --
+    with the session cookie a successful sign-in sets a moment later. Plain text makes every
+    value inert at once, rather than relying on each f-string remembering to escape (the next
+    refusal somebody adds would not). Escaping into HTML instead was rejected: it fixes the
+    values that are escaped today and none of the ones added tomorrow. `nosniff`, set for
+    every response in _frame_policy, keeps a browser from second-guessing the type.
+    """
+    return Response(message, status=403, mimetype="text/plain")
+
+
 def _complete_login(user_info, provider):
     """Everything after an identity provider has vouched for someone. Deliberately shared
     by every provider: the authorization decision, the audit identity and the users
     directory must not be able to differ depending on which button was pressed."""
     email = permissions.email_from_claims(user_info)
     if not email:
-        return (f"{provider} did not provide an email address for this account, so it "
-                f"cannot be matched to a permission group."), 403
+        return _login_refusal(f"{provider} did not provide an email address for this "
+                              f"account, so it cannot be matched to a permission group.")
 
     # `email_verified` absent is NOT the same as false. Google always sends it; plenty of
     # issuers (Entra among them) never do, and refusing those would rule out exactly the
     # providers this feature was added for. Present-and-false is a refusal, though: that
     # is an issuer telling us it does not stand behind the address.
     if user_info.get("email_verified") is False:
-        return f"{provider} reports this account's email address is unverified.", 403
+        return _login_refusal(f"{provider} reports this account's email address is "
+                              f"unverified.")
 
     # Directory groups the issuer asserted (roadmap #4), narrowed to the ones some
     # permission group actually maps. Only the intersection goes in the session: a user
@@ -2865,7 +2883,7 @@ def _complete_login(user_info, provider):
         # the actionable one -- "this link has expired" sends them back to whoever sent it,
         # where "not authorized" sends them to an admin who finds nothing wrong.
         if invite_refusal:
-            return f"Access denied: {invite_refusal}", 403
+            return _login_refusal(f"Access denied: {invite_refusal}")
         # An issuer that withheld the group list because the user is in too many of them
         # produces a refusal identical to "this user is in no mapped group", and only one
         # of those is a configuration error. Say which, or an admin debugs a correct
@@ -2874,11 +2892,13 @@ def _complete_login(user_info, provider):
             print(f"[auth] {provider} withheld the group claim for {email} (too many "
                   f"groups -- the issuer sent _claim_names instead). This hub cannot "
                   f"resolve that, so no directory mapping could be applied.")
-            return (f"Access denied: {provider} did not send this account's group "
-                    f"membership because the account is in too many groups, so its "
-                    f"directory-group mapping could not be applied. Grant access by "
-                    f"email address instead, or reduce the account's group count."), 403
-        return f"Access denied: {email} is not authorized for this dashboard.", 403
+            return _login_refusal(
+                f"Access denied: {provider} did not send this account's group "
+                f"membership because the account is in too many groups, so its "
+                f"directory-group mapping could not be applied. Grant access by "
+                f"email address instead, or reduce the account's group count.")
+        return _login_refusal(f"Access denied: {email} is not authorized for this "
+                              f"dashboard.")
 
     # Sessions outlive the browser (see PERMANENT_SESSION_LIFETIME). `permanent` is what
     # opts this session into that lifetime -- without it Flask issues a cookie that dies
@@ -6494,6 +6514,10 @@ def _frame_policy(response):
     """
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    # Every response, not only HTML: a browser that sniffs is what turns a text/plain sign-in
+    # refusal or a text/csv report -- both carrying values the hub did not write -- back into
+    # a page it renders. Costs nothing; every route here already sends a correct type.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
     return response
 
 
