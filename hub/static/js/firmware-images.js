@@ -329,7 +329,7 @@
             caveats.push(t('firmware.cancel_awaiting_reboot', { count: answer.awaiting_reboot }));
         }
         if (caveats.length) {
-            noticeDialog({ title: t('firmware.cancel_result_title'),
+            void noticeDialog({ title: t('firmware.cancel_result_title'),
                            message: caveats.join('\n\n') });
         }
         await loadAll();

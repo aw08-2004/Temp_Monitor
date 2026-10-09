@@ -230,6 +230,9 @@ def test_library(db, c, leads, rid):
     check("a stranger does not see it in their list",
           c.get("/api/recordings").get_json()["shared"] == [])
     check("...and cannot fetch the video", video(c, rid).status_code == 404)
+    check("a malformed id is not found, before any lookup",
+          c.get("/api/recordings/..%2F..%2Fx/video").status_code == 404
+          and c.get("/api/remote/recordings/nothex").status_code == 404)
     check("...or share it (no oracle: 404)",
           c.put(f"/api/recordings/{rid}/shares", json={"users": ["bob@x.com"]}).status_code == 404)
     as_user("tech@x.com")

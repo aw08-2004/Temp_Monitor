@@ -107,7 +107,7 @@
         function serverNow() { return Date.now() / 1000 + clockOffset; }
 
         function adopt(data) {
-            if (!data || !data.id) return;
+            if (!data?.id) return;
             rec = data;
             if (data.server_time) clockOffset = data.server_time - Date.now() / 1000;
         }
@@ -169,7 +169,7 @@
                 return;
             }
             recorder.ondataavailable = (e) => {
-                if (e.data && e.data.size) enqueue(e.data);
+                if (e.data?.size) enqueue(e.data);
             };
             recorder.start(TIMESLICE_MS);
             setState('recording', { seconds: 0 });
@@ -181,35 +181,36 @@
             queue = queue.then(() => upload(n, blob));
         }
 
+        /** What one chunk upload's answer means: true when it is settled one way or the
+         *  other, false when it is worth another try (the network, or a 5xx). */
+        function settled(res) {
+            if (!res) return false;                         // network: retry
+            if (res.ok) {
+                if (res.data.deadline) rec.deadline = res.data.deadline;
+                if (res.data.server_time) clockOffset = res.data.server_time - Date.now() / 1000;
+                return true;
+            }
+            if (res.status === 409) {
+                // Ended at the hub. Say why, and stop recording into nothing.
+                adopt(res.data.recording);
+                ended(rec.end_reason);
+                return true;
+            }
+            if (res.status >= 500 || res.status === 0) return false;
+            stopLocal();
+            setState('failed', { error: res.data.error
+                || t('common.hub_error', { status: res.status }) });
+            return true;
+        }
+
         async function upload(n, blob) {
             if (!rec || state === 'ended' || state === 'failed') return;
+            const url = `${base}${encodeURIComponent(rec.id)}/chunks/${n}`;
+            // In order and one at a time ON PURPOSE -- the hub appends to one stream -- so the
+            // await inside this loop is the design, not an oversight.
             for (let attempt = 0; attempt <= MAX_CHUNK_RETRIES; attempt++) {
-                let res;
-                try {
-                    res = await call('PUT',
-                        `${base}${encodeURIComponent(rec.id)}/chunks/${n}`, undefined, blob);
-                } catch (e) {
-                    res = null;             // network: retry
-                }
-                if (res && res.ok) {
-                    if (res.data.deadline) rec.deadline = res.data.deadline;
-                    if (res.data.server_time) {
-                        clockOffset = res.data.server_time - Date.now() / 1000;
-                    }
-                    return;
-                }
-                if (res && res.status === 409) {
-                    // Ended at the hub. Say why, and stop recording into nothing.
-                    adopt(res.data.recording);
-                    ended(rec.end_reason);
-                    return;
-                }
-                if (res && res.status < 500 && res.status !== 0) {
-                    stopLocal();
-                    setState('failed', { error: res.data.error
-                        || t('common.hub_error', { status: res.status }) });
-                    return;
-                }
+                const res = await call('PUT', url, undefined, blob).catch(() => null);
+                if (settled(res)) return;
                 await sleep(1000 * (attempt + 1));
             }
             stopLocal();
@@ -237,7 +238,7 @@
             if (Date.now() - lastStatusPoll > STATUS_POLL_MS) {
                 lastStatusPoll = Date.now();
                 const poll = await call('GET', base + encodeURIComponent(rec.id)).catch(() => null);
-                if (poll && poll.ok) {
+                if (poll?.ok) {
                     adopt(poll.data);
                     if (rec.status !== 'recording' && state === 'recording') {
                         stopLocal();
@@ -284,10 +285,10 @@
                 await queue.catch(() => {});
                 const res = await call('POST', base + encodeURIComponent(rec.id) + '/stop',
                                        { reason: reason || 'stopped' }).catch(() => null);
-                if (res && res.ok) adopt(res.data);
+                if (res?.ok) adopt(res.data);
                 setState(wasStarting ? 'failed' : 'ended',
                          wasStarting ? { error: t('recordings.cancelled') }
-                                     : { reason: (rec && rec.end_reason) || reason });
+                                     : { reason: rec?.end_reason || reason });
             })();
             return finishing;
         }

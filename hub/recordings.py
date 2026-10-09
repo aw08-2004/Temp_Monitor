@@ -167,9 +167,33 @@ def owner_folder(owner):
     return safe or "_unknown"
 
 
+_RECORDING_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def is_recording_id(value):
+    """The shape every id create() mints (uuid4().hex). Routes check it before anything else,
+    so a URL segment that could not be a recording never reaches the database or the disk."""
+    return bool(_RECORDING_ID.fullmatch(str(value or "")))
+
+
 def file_path(root, recording):
-    return os.path.join(root, owner_folder(recording["owner"]), "recordings",
-                        recording["id"] + FILE_EXTENSION)
+    """Where one recording's video lives -- and proof that it is inside `root`.
+
+    Both halves are checked rather than trusted: the id must be one create() could have
+    minted, and the resolved path must still be under the root once `..` and links are
+    resolved. owner_folder() already cannot produce a climbing name, so the containment check
+    is the second lock on the same door, kept because this path is handed to send_file and
+    os.remove (CodeQL py/path-injection, PR #116). Raises ValueError rather than returning a
+    path outside."""
+    recording_id = str(recording["id"])
+    if not is_recording_id(recording_id):
+        raise ValueError("not a recording id")
+    base = os.path.realpath(root)
+    path = os.path.realpath(os.path.join(base, owner_folder(recording["owner"]), "recordings",
+                                         recording_id + FILE_EXTENSION))
+    if not path.startswith(base + os.sep):
+        raise ValueError("recording path escapes the recordings folder")
+    return path
 
 
 # ================================
@@ -462,12 +486,9 @@ def shares(db_path, recording_id):
             "users": [r["principal"] for r in rows if r["kind"] == SHARE_USER]}
 
 
-def set_shares(db_path, rec, *, groups, users, actor, now=None):
-    """Replace a recording's shares. The caller has established that `actor` is the owner --
-    nobody else may share (no re-sharing). Unknown groups are refused rather than stored, so
-    a share cannot silently point at nothing; the owner is dropped from the user list, since
-    sharing with yourself grants nothing. Returns (added, removed) for the audit."""
-    now = int(now if now is not None else time.time())
+def _share_groups(db_path, groups):
+    """The group ids to share with, deduplicated. An unknown one is refused rather than
+    stored, so a share cannot silently point at nothing."""
     group_ids = []
     for gid in groups or []:
         gid = str(gid or "").strip()
@@ -477,6 +498,12 @@ def set_shares(db_path, rec, *, groups, users, actor, now=None):
             raise ValueError("One of the groups no longer exists.")
         if gid not in group_ids:
             group_ids.append(gid)
+    return group_ids
+
+
+def _share_users(users, owner):
+    """The people to share with, normalised and deduplicated. The owner is dropped: sharing
+    with yourself grants nothing."""
     emails = []
     for raw in users or []:
         email = permissions.normalize_email(raw)
@@ -484,10 +511,19 @@ def set_shares(db_path, rec, *, groups, users, actor, now=None):
             continue
         if "@" not in email or len(email) > 254 or any(c.isspace() for c in email):
             raise ValueError(f"'{raw}' is not an email address.")
-        if email != rec["owner"] and email not in emails:
+        if email != owner and email not in emails:
             emails.append(email)
     if len(emails) > MAX_SHARE_USERS:
         raise ValueError(f"A recording can be shared with at most {MAX_SHARE_USERS} people.")
+    return emails
+
+
+def set_shares(db_path, rec, *, groups, users, actor, now=None):
+    """Replace a recording's shares. The caller has established that `actor` is the owner --
+    nobody else may share (no re-sharing). Returns (added, removed) for the audit."""
+    now = int(now if now is not None else time.time())
+    group_ids = _share_groups(db_path, groups)
+    emails = _share_users(users, rec["owner"])
 
     before = shares(db_path, rec["id"])
     wanted = {(SHARE_GROUP, g) for g in group_ids} | {(SHARE_USER, e) for e in emails}

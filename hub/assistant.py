@@ -838,12 +838,25 @@ def _label(item):
     return None
 
 
+def _is_id_key(key):
+    return key == "id" or str(key).endswith("_id")
+
+
+def _droppable(target):
+    """The keys of a dict that may go: every one but an id's. A row whose list is already
+    down to that one row is still a row, and handing the model it without its id is the half-
+    an-id failure this whole function exists to prevent (review on #116)."""
+    return [k for k in target if not _is_id_key(k)]
+
+
 def _trim_largest_dict(data, cut, limit, current):
-    """fit_result's last resort: shorten the largest dict with more than one key, in place,
-    and record it under `cut` the way a cut list is recorded. Returns False when there is no
-    such dict, so the caller stops."""
-    candidates = [c for c in _all_dicts(data) if len(c[1][c[2]]) > 1]
-    if not candidates and isinstance(data, dict) and len(data) > 1:
+    """fit_result's last resort: shorten the largest dict that has more than one droppable
+    key, in place, and record it under `cut` the way a cut list is recorded. Returns False
+    when there is no such dict, so the caller stops."""
+    candidates = [c for c in _all_dicts(data) if len(_droppable(c[1][c[2]])) > 1]
+    if not candidates and isinstance(data, dict) and len(_droppable(data)) > 1:
+        # The same label a cut of a top-level LIST gets. No collision: an answer is a list or
+        # a dict, never both, so one call can only ever produce one of the two.
         candidates = [("(the answer itself)", None, None)]
     if not candidates:
         return False
@@ -853,16 +866,15 @@ def _trim_largest_dict(data, cut, limit, current):
 
     path, holder, key = max(candidates, key=lambda c: _size(entries(c)))
     target = entries((path, holder, key))
+    names = _droppable(target)
     size = _size(target)
     ratio = max(0.0, 1.0 - (current - limit) / max(1, size))
-    keep = max(1, min(len(target) // 2 if ratio < 0.5 else int(len(target) * ratio),
-                      len(target) - 1))
-    names = list(target)
-    record = cut.setdefault(path, {"total": len(names)})
-    dropped = [str(k)[:COMPACT_TEXT_CHARS // 4] for k in names[keep:]][:MAX_CUT_NAMES]
+    keep = max(1, min(len(names) // 2 if ratio < 0.5 else int(len(names) * ratio),
+                      len(names) - 1))
+    record = cut.setdefault(path, {"total": len(target)})
     room = limit // 4
     shown_names = []
-    for name in dropped:
+    for name in [str(k)[:COMPACT_TEXT_CHARS // 4] for k in names[keep:]][:MAX_CUT_NAMES]:
         if _size(shown_names + [name]) > room:
             break
         shown_names.append(name)

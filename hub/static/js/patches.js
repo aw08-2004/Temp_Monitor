@@ -367,7 +367,7 @@
         } catch (e) {
             // A dialog over the editor, not a toast: the editor is still open in the top
             // layer, and a toast would be painted behind it.
-            noticeDialog({ message: e.message, kind: 'error' });
+            void noticeDialog({ message: e.message, kind: 'error' });
         }
     }
 
@@ -425,7 +425,7 @@
                             // "cancelled" and "cancelled 8 of 10" are different facts --
                             // machines already restarting are not recalled, because the
                             // patches are on them. Say which happened.
-                            noticeDialog({ title: t('patches.run.cancelled_title'),
+                            void noticeDialog({ title: t('patches.run.cancelled_title'),
                                            message: t('patches.run.cancelled',
                                                       { recalled: res.recalled }) });
                             await renderRuns();
@@ -476,7 +476,7 @@
             .split('\n').map((s) => s.trim()).filter(Boolean);
         const emergency = document.getElementById('run-emergency').checked;
         if (!machines.length) {
-            noticeDialog({ message: t('patches.run.pick_machines') });
+            void noticeDialog({ message: t('patches.run.pick_machines') });
             return;
         }
         // An emergency run ignores every maintenance window, which means it restarts these
@@ -499,7 +499,7 @@
             runModal.close();
             await renderRuns();
         } catch (e) {
-            noticeDialog({ message: e.message, kind: 'error' });
+            void noticeDialog({ message: e.message, kind: 'error' });
         }
     }
 

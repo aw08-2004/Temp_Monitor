@@ -723,11 +723,15 @@ function toast(message, { kind = 'info', timeout = 6000 } = {}) {
 // Where a toast would do, use toast(). It renders under document.body, and a modal <dialog>
 // sits in the top layer above every z-index -- so a toast raised while a dialog is open is
 // painted BEHIND it. An error raised from inside an open dialog is a noticeDialog() instead.
+// Only has to be unique within this page, which a counter is -- and a counter is not the
+// pseudorandom value a reader then has to check is not guarding anything.
+let _dialogSeq = 0;
+
 function _openDialog({ title, message, buttons, initialFocus }) {
     return new Promise((resolve) => {
         const dialog = document.createElement('dialog');
         dialog.className = 'modal modal--compact';
-        const titleId = `dlg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+        const titleId = `fh-dialog-${++_dialogSeq}`;
         dialog.setAttribute('aria-labelledby', titleId);
 
         const head = document.createElement('div');

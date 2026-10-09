@@ -123,7 +123,7 @@
                 message: t('settings.ai.key_remove_confirm'),
                 confirmLabel: t('settings.ai.key_remove'),
                 danger: true,
-            })) saveKey('');
+            })) void saveKey('');
         });
         wrap.appendChild(el('div', { class: 'toolbar', style: 'margin-top: var(--space-2);' },
             [input, save, remove]));

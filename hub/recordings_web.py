@@ -60,11 +60,7 @@ def create_recordings_blueprint(db_path, login_required, access, root):
         return [g["id"] for g in access.current().get("groups") or []]
 
     def _session_live(session_id):
-        sess = remote.get_session(db_path, session_id)
-        return (sess is not None
-                and sess["status"] in (remote.STATUS_PENDING, remote.STATUS_CONNECTING,
-                                       remote.STATUS_ACTIVE)
-                and sess["expires_at"] > time.time())
+        return remote.is_session_live(db_path, session_id)
 
     def _drop_badge(rec):
         """Ask the PC to take the badge down for a recording that has ended. Best effort: if
@@ -95,6 +91,8 @@ def create_recordings_blueprint(db_path, login_required, access, root):
         return out
 
     def _owned_or_404(recording_id):
+        if not recordings.is_recording_id(recording_id):
+            return None
         rec = recordings.get(db_path, recording_id)
         if rec is None or rec["owner"] != _me():
             return None
@@ -225,7 +223,7 @@ def create_recordings_blueprint(db_path, login_required, access, root):
         return jsonify(_public(rec, owned=True)), 200
 
     # ---------------- The library (owner or share) ----------------
-    @bp.route("/recordings")
+    @bp.route("/recordings", methods=["GET"])
     @login_required
     def recordings_page():
         return render_template("recordings.html")
@@ -252,7 +250,13 @@ def create_recordings_blueprint(db_path, login_required, access, root):
     def recording_video(recording_id):
         """The file, for the player (ranged, so it can seek) or as a download (`?download=1`).
         Only once it has ended: a file still being appended to cannot be played to the end
-        or sought in, and is not yet the recording anyone was asked to keep."""
+        or sought in, and is not yet the recording anyone was asked to keep.
+
+        Watching is deliberately NOT audited; downloading is. That is the owner's decision
+        (ROADMAP #19): a download is a copy leaving the hub, while a player issues a stream of
+        range requests that would bury the audit log in rows saying the same thing."""
+        if not recordings.is_recording_id(recording_id):
+            return _not_found()
         rec = recordings.get(db_path, recording_id)
         if not recordings.can_view(db_path, rec, _me(), _my_groups()):
             return _not_found()
@@ -266,8 +270,11 @@ def create_recordings_blueprint(db_path, login_required, access, root):
         stamp = time.strftime("%Y%m%d-%H%M", time.localtime(rec["created_at"]))
         name = f"{rec['machine']}-{stamp}{recordings.FILE_EXTENSION}"
         try:
-            resp = send_file(recordings.file_path(root, rec),
-                             mimetype=rec["mime"].split(";")[0], conditional=True,
+            path = recordings.file_path(root, rec)
+        except ValueError:
+            return _not_found()
+        try:
+            resp = send_file(path, mimetype=rec["mime"].split(";")[0], conditional=True,
                              as_attachment=download, download_name=name)
         except FileNotFoundError:
             return jsonify({"error": "The video file is missing on the hub."}), 410

@@ -797,7 +797,7 @@ function messageEditor(action) {
     preset.addEventListener('change', () => {
         action.params.preset = preset.value;
         delete action.params.buttons;
-        const kept = new Set(((presets[preset.value] || {}).buttons || [])
+        const kept = new Set((presets[preset.value]?.buttons || [])
             .concat((catalog.outcomes || []).map((o) => o.name)));
         Object.keys(action.on_response || {}).forEach((outcome) => {
             if (!kept.has(outcome)) delete action.on_response[outcome];
@@ -819,7 +819,7 @@ function messageEditor(action) {
     // ids need not match any preset), else the preset's.
     const buttons = action.params.buttons
         ? action.params.buttons.map((b) => b.id)
-        : (presets[preset.value] || {}).buttons || ['ok'];
+        : presets[preset.value]?.buttons || ['ok'];
     const outcomes = buttons.concat((catalog.outcomes || []).map((o) => o.name));
     const outcomeLabel = new Map((catalog.outcomes || []).map((o) => [o.name, o.label]));
 

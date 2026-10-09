@@ -345,6 +345,15 @@ def _is_live(status):
     return status in (STATUS_PENDING, STATUS_CONNECTING, STATUS_ACTIVE)
 
 
+def is_session_live(db_path, session_id, now=None):
+    """Whether a session can still carry anything: live status AND inside its TTL. The TTL
+    half matters between sweeps, when an expired session still reads `active`. Shared by the
+    recording routes and the hub's sweep (roadmap #19), which each used to spell it out."""
+    sess = get_session(db_path, session_id)
+    now = time.time() if now is None else now
+    return sess is not None and _is_live(sess["status"]) and sess["expires_at"] > now
+
+
 def mark_status(db_path, session_id, status):
     """Advance a session's status (pending -> connecting -> active). A no-op on an already
     ended/expired session, so a late report can't reopen a closed session."""

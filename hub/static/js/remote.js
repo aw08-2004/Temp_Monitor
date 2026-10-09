@@ -61,6 +61,12 @@
         speed:    { fps: 10, bitrate_kbps: 1500, scale: 50 },
     };
 
+    /** m:ss, for the recording pill and its countdown. */
+    function clock(seconds) {
+        const total = Math.max(0, Math.floor(seconds));
+        return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+    }
+
     function clampInt(value, low, high, fallback) {
         const n = parseInt(value, 10);
         if (!Number.isFinite(n)) return fallback;
@@ -207,8 +213,7 @@
         // Offered only where it can work and is allowed: never for a borrowed PC (its owning
         // hub has no recording route for a peer, and the share was not granted for one), and
         // only in a browser that can record. Everything else is remote-recorder.js.
-        const recorder = (!options.borrowed && window.RemoteRecorder &&
-                          window.RemoteRecorder.supported())
+        const recorder = (!options.borrowed && window.RemoteRecorder?.supported())
             ? window.RemoteRecorder.create({
                 machine,
                 sessionId: () => sessionId,
@@ -218,11 +223,6 @@
             })
             : null;
         els.record.hidden = !recorder;
-
-        function clock(seconds) {
-            const total = Math.max(0, Math.floor(seconds));
-            return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
-        }
 
         function onRecordingState(state, detail) {
             const active = state === 'starting' || state === 'recording' || state === 'stopping';
@@ -664,7 +664,7 @@
             const id = sessionId;
             // A recording is flushed BEFORE the session goes: once the session has ended, the
             // hub ends the recording with it and refuses the chunk still in the browser.
-            if (recorder && recorder.isActive()) await recorder.stop('stopped');
+            if (recorder?.isActive()) await recorder.stop('stopped');
             teardown('muted');
             await stopSession(id);
         }
@@ -673,7 +673,7 @@
             running = false;
             // Any other way the session ends (the PC, the hub, an expired TTL) ends the
             // recording at the hub too; this only stops the recorder feeding a dead stream.
-            if (recorder && recorder.isActive()) recorder.stop('stopped');
+            if (recorder?.isActive()) recorder.stop('stopped');
             if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
             clearRelayTimer();
             if (relay) { relay.stop(); relay = null; }
@@ -952,7 +952,7 @@
             disposed = true;
             const id = sessionId;
             // Same order as stop(): the recording's last chunk first, then the session.
-            const flushed = recorder && recorder.isActive()
+            const flushed = recorder?.isActive()
                 ? recorder.stop('stopped') : Promise.resolve();
             flushed.finally(() => stopSession(id));
             teardown('muted');

@@ -172,7 +172,7 @@
         video.src = videoUrl(rec, false);
         player.showModal();
         const started = video.play();
-        if (started && started.catch) started.catch(() => {});
+        if (started?.catch) started.catch(() => {});
     }
 
     function closePlayer() {
@@ -225,7 +225,7 @@
         }
         shareDialog.close();
         sharing = null;
-        load();
+        void load();
     }
 
     $('recordings-share-save').addEventListener('click', saveShare);
@@ -249,8 +249,8 @@
             const data = await response.json().catch(() => ({}));
             showError(data.error || t('common.hub_error', { status: response.status }));
         }
-        load();
+        void load();
     }
 
-    load();
+    void load();
 })();

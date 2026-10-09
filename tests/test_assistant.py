@@ -1026,6 +1026,14 @@ def test_trimming_reaches_nested_lists():
     check("...keeping its first whole entries", presets and "preset_0" in presets
           and all(len(v["label"]) == 150 for v in presets.values()))
     record = parsed["truncated"]["lists"]["presets"]
+    # One row left, wide with keys: whatever goes, its id stays (review on #116).
+    row = {"ok": True, "data": {"rows": [dict({"id": "r" * 40, "machine_id": "m" * 40},
+                                              **{f"k{i}": "v" * 120 for i in range(60)})]}}
+    content = assistant.fit_result(row, limit=2500)
+    kept = json.loads(content)["data"]["rows"][0]
+    check("a lone row trimmed by key keeps its ids",
+          len(content) <= 2500 and kept.get("id") == "r" * 40
+          and kept.get("machine_id") == "m" * 40 and len(kept) < 62)
     check("...and naming every entry it left out, across passes",
           record["total"] == 60 and record["shown"] == len(presets) < 60
           and set(record.get("not_shown", [])) == {f"preset_{i}"

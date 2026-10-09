@@ -245,7 +245,15 @@ def test_storage():
     rec = new(db)
     path = recordings.file_path(root, rec)
     check("the file is under <root>/<owner>/recordings",
-          path == os.path.join(root, "ann@x.com", "recordings", rec["id"] + ".webm"))
+          path == os.path.join(os.path.realpath(root), "ann@x.com", "recordings",
+                               rec["id"] + ".webm"))
+    # The path is handed to send_file and os.remove (CodeQL py/path-injection on #116).
+    check("an id create() could not have minted is refused",
+          raises(ValueError, recordings.file_path, root, dict(rec, id="../../evil")))
+    check("...and so is one that is merely the wrong shape",
+          raises(ValueError, recordings.file_path, root, dict(rec, id="A" * 32)))
+    check("is_recording_id accepts exactly a uuid4 hex",
+          recordings.is_recording_id(rec["id"]) and not recordings.is_recording_id("x"))
     recordings.confirm_badge(db, rec["id"], "PC-01", "shown", now=1000)
     recordings.append(db, root, rec["id"], 0, b"VIDEO", now=1001)
     recordings.finish(db, rec["id"], recordings.END_STOPPED, now=1100)

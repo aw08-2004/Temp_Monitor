@@ -4507,14 +4507,6 @@ SWEEP_TICK_SECONDS = 30
 BIOS_CHANGE_TIMEOUT_SECONDS = 60 * 60
 
 
-def _recording_session_live(session_id):
-    sess = remote.get_session(DB_PATH, session_id)
-    return (sess is not None
-            and sess["status"] in (remote.STATUS_PENDING, remote.STATUS_CONNECTING,
-                                   remote.STATUS_ACTIVE)
-            and sess["expires_at"] > time.time())
-
-
 def sweep_worker():
     """Wake on a fixed cadence and run the hub's expiry/reap sweeps. Same shape and failure
     discipline as retention_pruner: each sweep is guarded on its own and errors are logged,
@@ -4532,7 +4524,7 @@ def sweep_worker():
         # deadline passed with no browser left to say so (roadmap #19). The console also
         # reconciles on every read; this is for the recording nobody is looking at.
         try:
-            recordings.reconcile(DB_PATH, _recording_session_live)
+            recordings.reconcile(DB_PATH, lambda sid: remote.is_session_live(DB_PATH, sid))
         except Exception as e:
             print(f"[recordings] Recording sweep failed: {e}")
         # Interactive terminals ride the same sweep, and here the hub is the AUTHORITY

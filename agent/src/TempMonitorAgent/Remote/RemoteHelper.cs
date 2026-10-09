@@ -718,7 +718,7 @@ public static class RemoteHelper
             }
             catch (Exception e)
             {
-                Log.Warning("reporting the recording badge ({State}) failed: {Msg}", state, e.Message);
+                Log.Warning(e, "reporting the recording badge ({State}) failed", state);
             }
         }, ct);
     }

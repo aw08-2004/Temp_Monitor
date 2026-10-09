@@ -1309,7 +1309,7 @@ document.getElementById('progress-cancel-deploy').addEventListener('click', asyn
         renderProgress(await api(
             `/api/deployments/${encodeURIComponent(openDeploymentId)}/cancel`,
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
-    } catch (e) { noticeDialog({ message: e.message, kind: 'error' }); }
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
 });
 
 document.getElementById('progress-retry').addEventListener('click', async () => {
@@ -1317,7 +1317,7 @@ document.getElementById('progress-retry').addEventListener('click', async () => 
         renderProgress(await api(
             `/api/deployments/${encodeURIComponent(openDeploymentId)}/retry`,
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
-    } catch (e) { noticeDialog({ message: e.message, kind: 'error' }); }
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
 });
 
 // ---------------------------------------------------------------- boot

@@ -264,10 +264,10 @@ async function saveImportedKey() {
     // having broken their backups.
     // A dialog, not a toast, for the same reason: it has to be read before anything else.
     if (result.credentials_error) {
-        noticeDialog({ title: t('backups.key.import_stranded_title'),
+        void noticeDialog({ title: t('backups.key.import_stranded_title'),
                        message: result.credentials_error, kind: 'error' });
     } else if (result.credentials_stranded) {
-        noticeDialog({ title: t('backups.key.import_stranded_title'),
+        void noticeDialog({ title: t('backups.key.import_stranded_title'),
                        message: t('backups.key.import_stranded',
                                   { count: result.credentials_stranded }) });
     }
