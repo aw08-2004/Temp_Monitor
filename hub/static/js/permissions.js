@@ -179,7 +179,12 @@ async function deleteGroup(group, btn) {
             members: tPlural('permissions.member_count', group.members.length),
           })
         : tPlural('permissions.confirm_delete', group.members.length, { group: group.name });
-    if (!window.confirm(warning)) return;
+    if (!await confirmDialog({
+        title: t('permissions.confirm_delete_title'),
+        message: warning,
+        confirmLabel: t('common.delete'),
+        danger: true,
+    })) return;
     btn.disabled = true;
     try {
         await api(`/api/permissions/groups/${encodeURIComponent(group.id)}`,
@@ -187,7 +192,8 @@ async function deleteGroup(group, btn) {
         await loadGroups();
     } catch (e) {
         btn.disabled = false;
-        window.alert(t('permissions.delete_failed', { group: group.name, error: e.message }));
+        toast(t('permissions.delete_failed', { group: group.name, error: e.message }),
+              { kind: 'error' });
     }
 }
 

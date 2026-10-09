@@ -203,11 +203,16 @@ function renderPackageRow(pkg) {
     const delBtn = el('button', 'btn', t('common.delete'));
     delBtn.type = 'button';
     delBtn.addEventListener('click', async () => {
-        if (!confirm(t('packages.confirm_delete', { package: pkg.name }))) return;
+        if (!await confirmDialog({
+            title: t('packages.confirm_delete_title'),
+            message: t('packages.confirm_delete', { package: pkg.name }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/packages/${encodeURIComponent(pkg.id)}`, { method: 'DELETE' });
             loadPackages();
-        } catch (e) { alert(e.message); }
+        } catch (e) { toast(e.message, { kind: 'error' }); }
     });
     actions.appendChild(delBtn);
     tr.appendChild(actions);
@@ -1291,14 +1296,20 @@ document.getElementById('progress-close').addEventListener('click', () => {
 });
 
 document.getElementById('progress-cancel-deploy').addEventListener('click', async () => {
-    if (!confirm(t('packages.deployments.confirm_cancel'))) return;
+    if (!await confirmDialog({
+        title: t('packages.deployments.confirm_cancel_title'),
+        message: t('packages.deployments.confirm_cancel'),
+        confirmLabel: t('packages.deployments.confirm_cancel_ok'),
+        cancelLabel: t('dialog.keep_running'),
+        danger: true,
+    })) return;
     try {
         // Content-Type is load-bearing, not habit: app.login_required refuses a POST
         // without it, which is what keeps a cross-site form from cancelling a deploy.
         renderProgress(await api(
             `/api/deployments/${encodeURIComponent(openDeploymentId)}/cancel`,
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
-    } catch (e) { alert(e.message); }
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
 });
 
 document.getElementById('progress-retry').addEventListener('click', async () => {
@@ -1306,7 +1317,7 @@ document.getElementById('progress-retry').addEventListener('click', async () => 
         renderProgress(await api(
             `/api/deployments/${encodeURIComponent(openDeploymentId)}/retry`,
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
-    } catch (e) { alert(e.message); }
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
 });
 
 // ---------------------------------------------------------------- boot

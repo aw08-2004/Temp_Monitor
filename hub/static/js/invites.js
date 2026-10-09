@@ -175,7 +175,7 @@ async function revokeInvite(invite, btn) {
         await load();
     } catch (e) {
         btn.disabled = false;
-        window.alert(e.message);
+        toast(e.message, { kind: 'error' });
     }
 }
 
@@ -183,7 +183,12 @@ async function deleteInvite(invite, btn) {
     // Says out loud that deleting the invite does not take anyone's access away -- the
     // redeemers are permission group members now, exactly as if they had been added by
     // hand, and that is where access is removed.
-    if (!window.confirm(t('invites.confirm_delete', { label: invite.label }))) return;
+    if (!await confirmDialog({
+        title: t('invites.confirm_delete_title'),
+        message: t('invites.confirm_delete', { label: invite.label }),
+        confirmLabel: t('common.delete'),
+        danger: true,
+    })) return;
     btn.disabled = true;
     try {
         await api(`/api/invites/${encodeURIComponent(invite.invite_id)}`,
@@ -191,7 +196,7 @@ async function deleteInvite(invite, btn) {
         await load();
     } catch (e) {
         btn.disabled = false;
-        window.alert(e.message);
+        toast(e.message, { kind: 'error' });
     }
 }
 

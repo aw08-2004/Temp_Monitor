@@ -1499,6 +1499,42 @@ the operator's scope; every session start/stop is in the audit log.
 >
 > Per-machine consent override is still a follow-up.
 
+### Session recording
+
+Record what you are seeing in a remote session, from the **Record** button in the Remote
+page's viewer (roadmap #19). Whoever may remote-view a PC may record it: the
+`remote_control` capability plus the PC in scope, and only the operator who opened the
+session. There is no separate recording permission.
+
+- **Never silent.** The PC shows a red **Recording Screen** badge in the top-left corner for
+  the whole recording, on the lock screen and the logon screen too. The hub stores no video
+  until the agent confirms that the badge is on screen. If the badge cannot follow the
+  session to a new desktop, or the remote helper restarts, the recording ends. Needs agent
+  **3.43.0** or later: an older agent never confirms the badge, and the recording fails after
+  about 25 seconds with a sentence that says so.
+- **A reason is required** at start. It goes to the audit log with who recorded which PC, and
+  for how long. Video only; keystrokes are never recorded.
+- **Ten minutes at a time.** In the last minute the viewer shows a countdown with **Extend
+  10 minutes** and **Stop recording**. With no answer, the recording ends. Extending needs no
+  new reason. The countdown is shown in the console only, never on the PC, so it is never in
+  the video.
+- **One stream per recording.** If a session falls back to the hub relay, the recording ends
+  rather than splicing two streams into one file. Start a new one if you need it.
+- **Where they are kept.** `<hub install>\data\<your email>\recordings\<id>.webm`, kept
+  until the owner deletes them. The hub locks the `data` folder to SYSTEM and Administrators
+  at every start, the same way it locks `.env`. Override the location with
+  `HUB_RECORDINGS_DIR`.
+- **The Recordings page** lists your own recordings, with their total size, and the ones
+  shared with you. You can share your own with permission groups, named people, or both. A
+  group share follows the group: whoever is a member when they open it may watch. Only the
+  owner can share or delete a recording; people it is shared with can play and download it.
+  Recordings, extensions, shares, downloads and deletes are all in the audit log
+  (`recording_*`), and so is watching: `recording_view`, once per viewer per recording per
+  half hour, because the hub cannot tell a player from a script saving the file.
+- **Checking the badge on a PC** without a hub or a session:
+  `TempMonitorAgent.exe --recording-badge-test 30` shows it for 30 seconds and follows the
+  lock screen when it runs as SYSTEM in the console session.
+
 ## Wake-on-LAN
 
 Power a sleeping machine on from the console, so an out-of-hours patch window or a remote

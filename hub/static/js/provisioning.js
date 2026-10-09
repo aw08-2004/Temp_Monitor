@@ -331,7 +331,12 @@
     });
 
     apkRemove.addEventListener('click', async () => {
-        if (!window.confirm(t('provisioning.apk.remove_confirm'))) return;
+        if (!await confirmDialog({
+            title: t('provisioning.apk.remove_confirm_title'),
+            message: t('provisioning.apk.remove_confirm'),
+            confirmLabel: t('provisioning.apk.remove'),
+            danger: true,
+        })) return;
         apkStatus.textContent = '';
         try {
             await fetch('/api/provisioning/apk', { method: 'DELETE' });

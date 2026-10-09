@@ -649,6 +649,17 @@ ACTION_LEVELS = {
     # the picture in the clear rather than as SRTP it cannot read, so the switch is recorded
     # beside the start and end of the session it happened to.
     "remote_session_relay": LEVEL_SECURITY,
+    # Session recordings (recordings.py, roadmap #19). Every step is security level: a
+    # recording is a copy of somebody's screen, and the owner's decision is that who recorded
+    # which PC, why, for how long, and who was later shown or handed the video are all on the
+    # record.
+    "recording_start": LEVEL_SECURITY,
+    "recording_end": LEVEL_SECURITY,
+    "recording_extend": LEVEL_SECURITY,
+    "recording_share": LEVEL_SECURITY,
+    "recording_download": LEVEL_SECURITY,
+    "recording_view": LEVEL_SECURITY,
+    "recording_delete": LEVEL_SECURITY,
     "remote_turn_secret_set": LEVEL_SECURITY,
     # Installing the virtual display puts a third-party driver into the DriverStore and its
     # publisher into this machine's certificate store. That is an expansion of what the

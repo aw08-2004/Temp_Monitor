@@ -154,16 +154,21 @@
     }
 
     async function revokeShare(share) {
-        if (!window.confirm(t('sharing.confirm_revoke', {
-            machine: share.machine,
-            hub: share.peer_label || t('sharing.unnamed_hub'),
-        }))) return;
+        if (!await confirmDialog({
+            title: t('sharing.confirm_revoke_title'),
+            message: t('sharing.confirm_revoke', {
+                machine: share.machine,
+                hub: share.peer_label || t('sharing.unnamed_hub'),
+            }),
+            confirmLabel: t('sharing.revoke'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/sharing/shares/${encodeURIComponent(share.share_id)}`,
                       { method: 'DELETE' });
             loadShares();
         } catch (err) {
-            window.alert(err.message);
+            toast(err.message, { kind: 'error' });
         }
     }
 
@@ -566,17 +571,22 @@
     }
 
     async function unpair(peer) {
-        if (!window.confirm(t('sharing.hubs.confirm_unpair', {
-            hub: peer.label || t('sharing.unnamed_hub'),
-            count: (peer.shares || []).length,
-        }))) return;
+        if (!await confirmDialog({
+            title: t('sharing.hubs.confirm_unpair_title'),
+            message: t('sharing.hubs.confirm_unpair', {
+                hub: peer.label || t('sharing.unnamed_hub'),
+                count: (peer.shares || []).length,
+            }),
+            confirmLabel: t('sharing.hubs.unpair'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/sharing/peers/${encodeURIComponent(peer.peer_id)}`,
                       { method: 'DELETE' });
             loadPeers();
             loadShares();
         } catch (err) {
-            window.alert(err.message);
+            toast(err.message, { kind: 'error' });
         }
     }
 
@@ -632,16 +642,21 @@
         // Says plainly that this end cannot unpair the other -- it holds no credential over
         // there. Pretending otherwise would leave an operator believing they had revoked
         // something they had not.
-        if (!window.confirm(t('sharing.hubs.confirm_remove', {
-            hub: link.label || link.base_url,
-        }))) return;
+        if (!await confirmDialog({
+            title: t('sharing.hubs.confirm_remove_title'),
+            message: t('sharing.hubs.confirm_remove', {
+                hub: link.label || link.base_url,
+            }),
+            confirmLabel: t('sharing.hubs.remove'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/sharing/links/${encodeURIComponent(link.link_id)}`,
                       { method: 'DELETE' });
             loadLinks();
             loadBorrowed();
         } catch (err) {
-            window.alert(err.message);
+            toast(err.message, { kind: 'error' });
         }
     }
 

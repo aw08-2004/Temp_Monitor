@@ -215,7 +215,12 @@ function matchesSearch(row) {
 
 // ---- actions on one machine -----------------------------------------------------
 async function deleteMachine(machine) {
-    if (!window.confirm(t('inventory.confirm_delete', { machine }))) {
+    if (!await confirmDialog({
+        title: t('inventory.confirm_delete_title'),
+        message: t('inventory.confirm_delete', { machine }),
+        confirmLabel: t('common.delete'),
+        danger: true,
+    })) {
         return;
     }
     try {

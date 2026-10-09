@@ -34,6 +34,10 @@ import pytest
 # would CREATE TABLE against the real logs/temp_v2.db.
 os.environ.setdefault("HUB_LOG_DIR", os.path.join(
     tempfile.mkdtemp(prefix="hub-pytest-session-"), "logs"))
+# And for the session recordings' folder (roadmap #19), which app.py creates and ACL-locks
+# at import: left to default it is `<checkout>/data`, a locked directory in the repo.
+os.environ.setdefault("HUB_RECORDINGS_DIR", os.path.join(
+    tempfile.mkdtemp(prefix="hub-pytest-recordings-"), "data"))
 
 # Same safety net for the settings app.py refuses to import without: a session key, a login
 # provider and a break-glass email. run_all.py seeds these for the child processes it spawns;

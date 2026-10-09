@@ -21,9 +21,16 @@
             <span class="status-pill__dot"></span>{{ t('machine.remote.secure_desktop') }}</span>
         <span class="status-pill status-pill--danger remote-badge" data-remote="headless-badge" hidden>
             <span class="status-pill__dot"></span>{{ t('machine.remote.no_display') }}</span>
+        {# Session recording (roadmap #19). Red and beside the connection pill, because it is
+           state the operator must not lose sight of: this screen is being kept. #}
+        <span class="status-pill status-pill--danger remote-badge" data-remote="rec-pill" hidden>
+            <span class="status-pill__dot"></span><span data-remote="rec-pill-text"></span></span>
         <div class="terminal__head-actions">
             <button type="button" class="btn btn--ghost" data-remote="cad" disabled
                     title="{{ t('machine.remote.cad_title') }}">{{ t('machine.remote.cad') }}</button>
+            {# Hidden until remote.js knows recording is possible here: not for a borrowed PC,
+               not in a browser without MediaRecorder, not on a page without the recorder. #}
+            <button type="button" class="btn btn--ghost" data-remote="record" hidden disabled>{{ t('recordings.record') }}</button>
             <button type="button" class="btn btn--primary" data-remote="start">{{ t('machine.remote.start') }}</button>
             <button type="button" class="btn btn--ghost" data-remote="stop" disabled>{{ t('machine.remote.stop') }}</button>
         </div>
@@ -112,8 +119,35 @@
             <button type="button" class="btn btn--ghost" data-remote="exit-fullscreen">{{ t('machine.remote.exit_fullscreen') }}</button>
         </div>
     </div>
+    {# The last minute of a recording. Drawn here, in the console, and never on the PC,
+       so the countdown is never in the video (recordings.py). #}
+    <div class="remote-rec-bar" data-remote="rec-bar" hidden>
+        <span class="remote-rec-bar__text" data-remote="rec-bar-text"></span>
+        <button type="button" class="btn btn--primary" data-remote="rec-extend">{{ t('recordings.extend') }}</button>
+        <button type="button" class="btn btn--ghost" data-remote="rec-stop">{{ t('recordings.stop_recording') }}</button>
+    </div>
     <div class="terminal__hint" data-remote="hint"></div>
     <div class="terminal__hint" data-remote="meta"></div>
+
+    {# Asked before every recording. The reason is required and goes to the audit log with
+       who recorded which PC and for how long: the owner's decision for roadmap #19. #}
+    <dialog class="modal modal--compact" data-remote="rec-dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('recordings.dialog_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <p class="stat-card__meta">{{ t('recordings.dialog_body') }}</p>
+            <label class="setting__label" style="margin-top: var(--space-4);">{{ t('recordings.reason_label') }}
+                <textarea class="input" data-remote="rec-reason" rows="3" maxlength="500"
+                          style="width: 100%; margin-top: var(--space-2);"></textarea>
+            </label>
+            <p class="setting__error" data-remote="rec-error" hidden></p>
+        </div>
+        <div class="modal__foot">
+            <button type="button" class="btn btn--ghost" data-remote="rec-cancel">{{ t('common.cancel') }}</button>
+            <button type="button" class="btn btn--danger" data-remote="rec-confirm">{{ t('recordings.start') }}</button>
+        </div>
+    </dialog>
 
     <div class="remote-vdd" data-remote="vdd" hidden>
         <div class="remote-vdd__text" data-remote="vdd-text"></div>

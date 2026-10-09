@@ -115,14 +115,20 @@ function renderUserRow(user) {
 
 async function deleteUser(user, btn) {
     const warning = t('users.confirm_delete', { user: user.full_name || user.email });
-    if (!window.confirm(warning)) return;
+    if (!await confirmDialog({
+        title: t('users.confirm_delete_title'),
+        message: warning,
+        confirmLabel: t('users.confirm_delete_ok'),
+        danger: true,
+    })) return;
     btn.disabled = true;
     try {
         await api(`/api/users/${encodeURIComponent(user.email)}`, { method: 'DELETE' });
         await loadUsers();
     } catch (e) {
         btn.disabled = false;
-        window.alert(t('users.delete_failed', { email: user.email, error: e.message }));
+        toast(t('users.delete_failed', { email: user.email, error: e.message }),
+              { kind: 'error' });
     }
 }
 

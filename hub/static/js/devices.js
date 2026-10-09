@@ -30,9 +30,14 @@
     }
 
     async function revoke(device, row) {
-        if (!window.confirm(t('devices.confirm_revoke', {
-            device: device.device_name || device.email,
-        }))) return;
+        if (!await confirmDialog({
+            title: t('devices.confirm_revoke_title'),
+            message: t('devices.confirm_revoke', {
+                device: device.device_name || device.email,
+            }),
+            confirmLabel: t('devices.confirm_revoke_ok'),
+            danger: true,
+        })) return;
 
         try {
             const resp = await fetch(`/api/tokens/${encodeURIComponent(device.token_id)}`, {

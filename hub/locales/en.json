@@ -20,6 +20,7 @@
     "inventory": "Devices",
     "alerts": "Alerts",
     "remote": "Remote",
+    "recordings": "Recordings",
     "audit_log": "Audit Log",
     "packages": "Packages",
     "patches": "Patches",
@@ -127,6 +128,7 @@
     "edit": "Edit",
     "delete": "Delete",
     "confirm_delete": "Delete the device group \"{name}\"?\n\nDeployments already created are not affected, and nothing changes on any PC.",
+    "confirm_delete_title": "Delete device group",
     "no_permission": "Only operators with Manage device groups can create or change groups.",
     "pick": "Choose a group…",
     "none_defined": "No device groups defined yet.",
@@ -135,6 +137,13 @@
   },
   "toast": {
     "dismiss": "Dismiss"
+  },
+  "dialog": {
+    "ok": "OK",
+    "confirm_title": "Are you sure?",
+    "notice_title": "Please note",
+    "error_title": "Something went wrong",
+    "keep_running": "Keep running"
   },
   "login": {
     "title": "Sign in",
@@ -300,6 +309,7 @@
       "other": "{visible} of {count} machines"
     },
     "confirm_delete": "Permanently delete \"{machine}\"?\n\nThis removes its identity, all temperature history, and its fleet enrollment. This cannot be undone.",
+    "confirm_delete_title": "Delete machine",
     "delete_failed": "Could not delete \"{machine}\": {error}",
     "load_failed": "Failed to load inventory.",
     "wake_all": "Wake offline PCs",
@@ -373,6 +383,7 @@
         "one": "Keep \"{survivor}\" and merge \"{victim}\" into it?\n\nThe merged machines' temperature history moves onto \"{survivor}\"; their duplicate records and fleet enrollments are removed. This cannot be undone.",
         "other": "Keep \"{survivor}\" and merge {count} machines into it?\n\nThe merged machines' temperature history moves onto \"{survivor}\"; their duplicate records and fleet enrollments are removed. This cannot be undone."
       },
+      "confirm_title": "Merge duplicate machines",
       "merge_failed": "Could not merge: {error}"
     },
     "unknown_kind": "Alert of an unrecognised type ({kind})",
@@ -500,6 +511,8 @@
     },
     "email_required": "An email address is required.",
     "confirm_delete": "Remove \"{user}\" from the directory?\n\nThis only removes their profile. It does NOT change what they can do or whether they can sign in — that is set by their Permission Groups.",
+    "confirm_delete_title": "Remove user",
+    "confirm_delete_ok": "Remove",
     "delete_failed": "Could not delete \"{email}\": {error}",
     "load_failed": "Could not load users: {error}",
     "views_nav": "User views",
@@ -534,6 +547,7 @@
     },
     "revoke": "Revoke",
     "confirm_delete": "Delete the invite \"{label}\"? Anyone who already joined through it keeps their access -- remove them from the permission group to revoke it.",
+    "confirm_delete_title": "Delete invite",
     "editor": {
       "title": "New invite link",
       "label": "Label",
@@ -620,6 +634,7 @@
       "one": "Delete the permission group \"{group}\"?\n\n{count} member loses the access it granted. Anyone left with no groups at all can no longer sign in.",
       "other": "Delete the permission group \"{group}\"?\n\n{count} members lose the access it granted. Anyone left with no groups at all can no longer sign in."
     },
+    "confirm_delete_title": "Delete permission group",
     "confirm_delete_directory": {
       "one": "Delete the permission group \"{group}\"?\n\n{members}, and anyone in {count} mapped directory group, lose the access it granted. Anyone left with no groups at all can no longer sign in.",
       "other": "Delete the permission group \"{group}\"?\n\n{members}, and anyone in {count} mapped directory groups, lose the access it granted. Anyone left with no groups at all can no longer sign in."
@@ -1426,6 +1441,7 @@
       "key_save": "Save key",
       "key_remove": "Remove key",
       "key_remove_confirm": "Remove the API key? Hosted providers will stop answering until a new one is saved.",
+      "key_remove_confirm_title": "Remove API key",
       "key_saved": "Key saved. It takes effect immediately.",
       "key_removed": "Key removed.",
       "key_cannot_write": "This hub cannot write its .env file, so the key has to be set as AI_API_KEY on the server."
@@ -1608,6 +1624,8 @@
       "save": "Save sign-in settings",
       "no_provider_left": "That would leave no way to sign in to this hub. Configure Google or an OIDC provider before saving.",
       "confirm": "Change how people sign in to this hub?\n\nThis takes effect immediately for new sign-ins. Existing sessions are not signed out. If the new settings are wrong, the break-glass administrators in ALLOWED_EMAILS can change them back — provided they can still sign in.",
+      "confirm_title": "Change sign-in settings",
+      "confirm_ok": "Apply changes",
       "applying": "Applying…",
       "saved_changed": "Saved. Updated: {fields}",
       "saved_unchanged": "No changes to save."
@@ -1689,6 +1707,7 @@
     "detect_version_min": "{name} ≥ {version}",
     "deploy": "Deploy",
     "confirm_delete": "Delete the package \"{package}\"? Deployment history is kept.",
+    "confirm_delete_title": "Delete package",
     "http_413": "Upload rejected as too large (HTTP 413) before it reached the hub. This is the reverse proxy in front of the hub, not the hub's own limit -- raise client_max_body_size in nginx (or the equivalent: IIS maxAllowedContentLength, Apache LimitRequestBody) and reload it.",
     "http_502": "The hub did not respond (HTTP {status}). A large upload can also hit the proxy's read timeout -- check the proxy log as well as the hub log.",
     "http_other": "HTTP {status}",
@@ -1830,6 +1849,8 @@
       "retry_failures": "Retry failures",
       "cancel": "Cancel deployment",
       "confirm_cancel": "Stop this deployment? Machines already running the installer will finish.",
+      "confirm_cancel_title": "Stop deployment",
+      "confirm_cancel_ok": "Stop deployment",
       "target_col": {
         "machine": "Machine",
         "status": "Status",
@@ -1941,6 +1962,7 @@
       "import_empty": "Paste the key you want this hub to use.",
       "import_replace_warning": "This replaces key {id}. Backups already taken with it can only be read again by importing it back, so make sure you still have it.",
       "import_stranded": "The key was imported, but {count} destination(s) had credentials this hub can no longer read. Open each one and enter its credentials again, or its next backup will fail.",
+      "import_stranded_title": "Destination credentials needed",
       "unescrowed_title": "The encryption key has never been stored anywhere else",
       "unescrowed_text": "If this server is lost, every backup it has taken becomes permanently unreadable. Reveal the key, store it in a password manager or a sealed envelope, and confirm.",
       "reveal": "Reveal key",
@@ -2077,6 +2099,7 @@
       "stored": "stored",
       "missing": "MISSING",
       "confirm_delete": "Delete destination \"{name}\"? Backups already uploaded to it are NOT deleted, but the hub will no longer be able to reach them.",
+      "confirm_delete_title": "Delete destination",
       "editor": {
         "new_title": "New destination",
         "edit_title": "Edit {name}",
@@ -2189,6 +2212,8 @@
       "menu_untick": "Untick",
       "actions_for": "Actions for {path}",
       "confirm_restore": "Restore {count} item(s) back to their ORIGINAL locations on {machine}?\n\nFiles there will be replaced{qualifier}",
+      "confirm_restore_title": "Restore to original locations",
+      "confirm_restore_ok": "Restore",
       "confirm_overwrite_all": ".",
       "confirm_overwrite_missing": " only where they no longer exist.",
       "queued": "Queued: {files} file(s) from {archives} archive(s).",
@@ -2556,6 +2581,7 @@
       "shared_by": "shared by {who}",
       "use": "Use",
       "confirm_delete": "Delete favorite \"{name}\"?",
+      "confirm_delete_title": "Delete favorite",
       "group": "{title} ({count})",
       "mine": "Mine",
       "shared_with_me": "Shared with me",
@@ -2827,6 +2853,76 @@
     "picker_all_open": "Every PC you can reach is already open.",
     "picker_none": "No machines have reported to this hub yet."
   },
+  "recordings": {
+    "record": "Record",
+    "stop_recording": "Stop recording",
+    "start": "Start recording",
+    "extend": "Extend 10 minutes",
+    "pill": "Recording {time}",
+    "pill_starting": "Recording…",
+    "starting": "Waiting for the PC to show its “Recording Screen” badge…",
+    "countdown": "This recording ends in {time}.",
+    "saved": "Recording saved. Find it under Recordings.",
+    "ended_with_reason": "The recording ended: {reason}",
+    "failed": "Recording failed: {error}",
+    "unsupported": "This browser cannot record video.",
+    "upload_failed": "The recording could not be sent to the hub, so it has stopped.",
+    "cancelled": "Recording cancelled.",
+    "dialog_title": "Record this session",
+    "dialog_body": "The PC shows a “Recording Screen” badge for as long as you record, on the lock screen too. A recording stops after 10 minutes unless you extend it, and is kept until you delete it.",
+    "reason_label": "Reason (required, written to the audit log)",
+    "reason_required": "Enter a reason for recording.",
+    "heading": "Recordings",
+    "intro": "Remote sessions recorded from the Remote page. Your own recordings can be shared with permission groups or with named people, and deleted. Recordings shared with you can be watched and downloaded. Every recording, share and download is in the audit log.",
+    "mine": "My recordings",
+    "shared": "Shared with me",
+    "empty_mine": "You have not recorded any sessions.",
+    "empty_shared": "Nothing has been shared with you.",
+    "usage": {
+      "one": "{count} recording, {size} in total",
+      "other": "{count} recordings, {size} in total"
+    },
+    "col": {
+      "started": "Started",
+      "machine": "PC",
+      "duration": "Length",
+      "size": "Size",
+      "reason": "Reason",
+      "status": "Status",
+      "shared": "Shared with",
+      "owner": "Recorded by"
+    },
+    "status": {
+      "starting": "Starting",
+      "recording": "Recording",
+      "ended": "Saved",
+      "failed": "Failed",
+      "ended_because": "Saved, ended early: {reason}"
+    },
+    "end_reason": {
+      "stopped": "stopped by the operator",
+      "time_limit": "the time limit was reached",
+      "session_ended": "the remote session ended",
+      "helper_restarted": "the remote session restarted on the PC, which took the badge down",
+      "badge_failed": "the PC could not show the recording badge",
+      "badge_timeout": "the PC did not confirm the recording badge (its agent may be too old; recording needs agent 3.43.0 or later)",
+      "stream_changed": "the connection switched to the hub relay",
+      "size_limit": "the recording reached its size limit"
+    },
+    "not_shared": "Not shared",
+    "play": "Play",
+    "download": "Download",
+    "share": "Share",
+    "player_title": "{machine}, {time}",
+    "share_title": "Share recording",
+    "share_help": "People in a group you pick can watch and download it for as long as they are in the group. Only you can change who it is shared with.",
+    "share_groups": "Permission groups",
+    "share_users": "People (email addresses)",
+    "share_users_placeholder": "name@example.com",
+    "no_groups": "There are no permission groups.",
+    "delete_title": "Delete recording",
+    "delete_confirm": "Delete the recording of {machine} from {time}? The video is removed from the hub for everyone it is shared with. This cannot be undone."
+  },
   "firmware": {
     "heading": "Firmware updates",
     "intro": "Upload a vendor's BIOS image once, say which hardware it belongs to, and flash it onto machines.",
@@ -2842,11 +2938,15 @@
     "deleted_image": "Deleted image",
     "flash_button": "Flash…",
     "confirm_delete": "Delete the image {name}? Machines already updated with it are unaffected.",
+    "confirm_delete_title": "Delete firmware image",
     "confirm_cancel_job": "Cancel this update? Machines that have already been handed the image will finish flashing.",
+    "confirm_cancel_job_title": "Cancel firmware update",
+    "confirm_cancel_job_ok": "Cancel update",
     "cancel_job": "Cancel update",
     "cancel_target": "Cancel",
     "cancel_partial": "{count} machine(s) had already been handed the image and will finish flashing.",
     "cancel_awaiting_reboot": "{count} machine(s) have the image staged and are waiting on a restart. They resolve on their own once restarted: applied if the new BIOS version appears, failed if not.",
+    "cancel_result_title": "Update cancelled",
     "target_exit_code": "Update tool exit code {code}",
     "target_bitlocker": "BitLocker: {state}",
     "target_tool_log": "Update tool log",
@@ -2949,6 +3049,8 @@
     "unnamed": "Unnamed device",
     "revoked": "Revoked",
     "confirm_revoke": "Revoke {device}? The app will stop working at once.",
+    "confirm_revoke_title": "Revoke device",
+    "confirm_revoke_ok": "Revoke",
     "col": {
       "device": "Device",
       "owner": "Signed in as",
@@ -2991,6 +3093,7 @@
     "matching": "matching now",
     "targets": "PCs targeted",
     "confirm_delete": "Delete this rule and its history?",
+    "confirm_delete_title": "Delete rule",
     "actions_disabled": "Rules are evaluating but their actions are switched off fleet-wide.",
     "commands_disabled": "Command actions are switched off fleet-wide, so this rule will evaluate but issue no command — including a command a message's answer routes to, such as restarting after the user presses Yes. Turn on \"command actions enabled\" under Settings → Rules to let it run.",
     "section_target": "Which PCs",
@@ -3212,6 +3315,9 @@
       "ok_cancel": "OK / Cancel",
       "yes_no": "Yes / No",
       "yes_no_later": "Yes / No / Later",
+      "yes_later": "Yes / Later",
+      "no_later": "No / Later",
+      "ok_later": "OK / Later",
       "accept_decline": "Accept / Decline",
       "acknowledge_only": "Acknowledge only"
     },
@@ -3428,6 +3534,7 @@
     "disable": "Disable",
     "delete": "Delete",
     "delete_confirm": "Delete the watchdog “{name}”? The machines holding it stop watching on their next heartbeat.",
+    "delete_confirm_title": "Delete watchdog",
     "show_state": "Machines",
     "state_title": "{name} -- {service}",
     "state_help": "What each machine last reported. A machine that is targeted but not listed here has not picked the watchdog up yet.",
@@ -3570,6 +3677,7 @@
     "body": "Script",
     "body_help": "Runs as SYSTEM. Use {{sys.machine}} for the machine's own values and {{input.name}} for a value the rule supplies.",
     "confirm_delete": "Delete this script?",
+    "confirm_delete_title": "Delete script",
     "delete": "Delete",
     "delete_failed": "Could not delete: {error}",
     "description": "Description",
@@ -3917,7 +4025,8 @@
       "every_day": "Every day",
       "summary": "{start} for {minutes} min",
       "disabled": "Disabled",
-      "confirm_delete": "Delete the maintenance window {name}?"
+      "confirm_delete": "Delete the maintenance window {name}?",
+      "confirm_delete_title": "Delete maintenance window"
     },
     "run": {
       "new": "Run patches",
@@ -3930,10 +4039,13 @@
       "emergency_help": "Ignores every maintenance window and installs as soon as each machine is reachable. These machines may restart during the working day.",
       "emergency_badge": "Emergency",
       "confirm_emergency": "Install now on {count} machine(s), ignoring every maintenance window? They may restart during the working day.",
+      "confirm_emergency_title": "Emergency install",
+      "confirm_emergency_ok": "Install now",
       "start": "Start run",
       "progress": "{done} of {total}",
       "cancel": "Cancel",
       "cancelled": "Cancelled. {recalled} machine(s) were recalled; any already restarting were left alone, because the patches are on them.",
+      "cancelled_title": "Run cancelled",
       "retry": "Retry failures"
     }
   },
@@ -4003,7 +4115,8 @@
       "disable": "Turn off",
       "none": "Nothing is being collected on this hub.",
       "none_manage": "Nothing is being collected yet. Add a subscription to say which event records the fleet should send.",
-      "confirm_delete": "Stop collecting \"{name}\"? Events already collected are kept."
+      "confirm_delete": "Stop collecting \"{name}\"? Events already collected are kept.",
+      "confirm_delete_title": "Delete subscription"
     }
   },
   "channels": {
@@ -4030,6 +4143,7 @@
     "borrowed_badge": "Borrowed",
     "revoke": "Stop sharing",
     "confirm_revoke": "Stop sharing {machine} with {hub}? Any session they have open on it ends immediately.",
+    "confirm_revoke_title": "Stop sharing machine",
     "lending": {
       "heading": "Machines we lend",
       "intro": "Each row is one machine, lent to one hub, carrying exactly the capabilities that were ticked. Nothing rides along: a hub that was given remote control cannot see the machine's telemetry unless it was given that too.",
@@ -4057,6 +4171,7 @@
       "generate": "Generate code",
       "unpair": "Unpair",
       "confirm_unpair": "Unpair {hub}? Its credential stops working immediately and every machine shared with it ({count}) is un-shared.",
+      "confirm_unpair_title": "Unpair hub",
       "calls_itself": "Calls itself “{name}”",
       "no_peers": "No other hub has been paired with this one.",
       "no_peers_hint": "Invite a hub to get a one-time code, then read it out to whoever runs it.",
@@ -4066,6 +4181,7 @@
       "pair": "Pair",
       "remove": "Remove",
       "confirm_remove": "Remove {hub}? This forgets its address, its credential and the machines it was lending. It does NOT unpair this hub at their end -- ask them to revoke it there as well.",
+      "confirm_remove_title": "Remove hub",
       "no_links": "No other hub is lending to this one.",
       "no_links_hint": "Ask them to invite this hub, then paste the code they give you.",
       "no_token": "Its credential cannot be read. Remove this hub and pair again.",
@@ -4174,6 +4290,7 @@
       "uploaded_ok": "Uploaded.",
       "remove": "Stop hosting",
       "remove_confirm": "Stop hosting this APK? Any code already printed will stop working.",
+      "remove_confirm_title": "Stop hosting the APK",
       "failed": "That was refused.",
       "file_name": "File",
       "size": "Size",
@@ -4262,6 +4379,7 @@
     "edit": "Edit",
     "delete": "Delete",
     "confirm_delete": "Delete the policy “{name}”? Devices it covers will have its restrictions lifted on their next check-in.",
+    "confirm_delete_title": "Delete policy",
     "column": {
       "name": "Policy",
       "mode": "Kind",
@@ -4380,6 +4498,7 @@
     "wipe_warning": "This erases everything on the device and cannot be undone. There is no dry run. The device answers once and is then gone from this console for good.",
     "confirm_label": "Type the machine's name to confirm",
     "confirm_dialog": "Erase {machine}? This cannot be undone.",
+    "confirm_dialog_title": "Erase device",
     "clear_protection": "Clear factory-reset protection",
     "clear_protection_help": "The device can be set up again by anybody. This is usually right for company-owned hardware.",
     "keep_protection_help": "The device cannot be set up again without the account that was signed in on it. This is theft protection, and it is a brick if that account was not yours.",

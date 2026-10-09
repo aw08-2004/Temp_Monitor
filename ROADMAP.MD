@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-02
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-09
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -257,13 +257,27 @@ owner's go-ahead for the download. Until it is committed, sweeps show no vendor 
 "Private address" label, which needs no table.
 
 **5. Decisions only the owner can take** (left alone on purpose, not forgotten):
-- **#19 remote session recording** -- recording a colleague's screen is a policy call first.
+- ~~**#19 remote session recording**~~ -- **decided by the owner 2026-10-08/09 and built**,
+  hub 1.142.0 + agent 3.43.0; the agent release and a lock-screen check are owed, see 6 below.
 - ~~**#18 Intune/Azure cross-reference**~~ -- **declined by the owner 2026-10-08**, see #18.
 - ~~**#18 MAC vendor (OUI) lookup**~~ -- **owner chose a committed snapshot, 2026-10-08**; built,
   see 4e.
 - ~~**#17's two residue columns**~~ -- **built 2026-10-08** with the agent half, as agreed;
   ships with agent 3.42.0 (see 4d).
 - **#11** -- the Flutter client has still never talked to a live hub.
+
+**6. Session recording (#19), owed on Windows.** Built and unit-tested 2026-10-09; the badge was
+seen on a real desktop with `--recording-badge-test`. Still owed:
+- **Cut agent 3.43.0** after hub 1.142.0 is deployed (hub first, as always). Until then every
+  recording fails cleanly with "the PC did not confirm the recording badge".
+- **The lock screen and the logon screen.** Run `TempMonitorAgent.exe --recording-badge-test 60`
+  session-injected as SYSTEM (or record a real session), press Win+L, and confirm the badge
+  is on the lock screen and stays above LogonUI; sign out and confirm it at the logon screen.
+  A desktop it cannot reach ends the recording by design -- if that happens on every lock,
+  the badge's access mask (`BadgeDesktopAccess`) is the first suspect.
+- **A real recording end to end:** start, extend at the countdown, switch PCs on the Remote
+  page, stop; play and download it from Recordings; share it with a group and check a member
+  can watch and a non-member cannot.
 
 ---
 
@@ -3557,10 +3571,10 @@ finding #10's `NicReader` produced on first contact.
 
 ---
 
-## 🚧 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0** · **shadow-AI detection hub 1.133.0**
+## ✅ 19. Endpoint security odds and ends   ·   **BitLocker key escrow hub 1.131.0** · **shadow-AI detection hub 1.133.0** · **session recording hub 1.142.0 + agent 3.43.0**
 
-Three small things from FR-06 and FR-07 that share no code but are each about a day. The
-first two are built; remote session recording is not.
+Three small things from FR-06 and FR-07 that share no code. All three are built; session
+recording's agent half waits on the 3.43.0 release (see *Owed locally*).
 
 - **BitLocker key escrow.** ✅ **Done, hub 1.131.0** — see below. Auto-enable is deliberately
   NOT part of it; see *Rejected alternatives*.
@@ -3579,10 +3593,12 @@ first two are built; remote session recording is not.
   Not done: an alert rule over findings (a `software.*` rules variable is the natural next
   step, and should be built the way #16's `event.*` variables were), and browser-based AI use,
   which no installed-software query can see.
-- **Remote session recording.** Video and keystroke capture for the audit trail, stored
-  outside the hub DB. The one with real cost, and the one with a real question attached:
-  recording a colleague's screen is a decision to take deliberately, not a default to leave
-  on.
+- **Remote session recording.** ✅ **Built, hub 1.142.0 + agent 3.43.0** (`recordings.py`,
+  `recordings_web.py`, `remote-recorder.js`, `recordings.js`, agent `RecordingBadge.cs`).
+  Originally scoped as video and keystroke capture for the audit trail, stored outside the hub
+  DB; the decisions below narrowed it to video. The one with real cost, and the one with a real
+  question attached: recording a colleague's screen is a decision to take deliberately, not a
+  default to leave on.
   **Decision (owner, 2026-10-08): never silent.** The agent shows a small "Recording Screen"
   badge, topmost, top-left, for the whole recording, and it also shows on the lock screen and
   with nobody signed in. A LocalSystem service cannot draw on a desktop from session 0, so the
@@ -3591,7 +3607,7 @@ first two are built; remote session recording is not.
   stops if the helper dies, and the audit log records who recorded which PC and for how long.
   *Rejected:* a badge only inside a signed-in user's session (the lock screen is exactly when
   nobody would see it), and a recording with no badge (the policy question above).
-  **Decisions (owner, 2026-10-08), planning only -- nothing built:**
+  **Decisions (owner, 2026-10-08), now built as decided:**
   * **Video only.** No keystroke capture. *Rejected:* keystrokes (a recording of everything
   typed is a password log by another name).
   * **Who may record:** whoever may remote-view that PC, i.e. the remote-view capability *and*
@@ -3610,10 +3626,50 @@ first two are built; remote session recording is not.
   to extend; with no answer the recording ends. The countdown is browser-side only, so it is
   never in the recorded video. *Rejected:* an unlimited recording (one left running by
   accident fills the hub's disk and is a privacy problem in itself).
-  * **Still to decide before building:** where on disk (outside the hub DB); whether a
-  recording shared with a group keeps following the group's membership or is a snapshot of it
-  (a device group is resolved live for rules but snapshotted for deployments, see
-  `device_groups.py`); whether a viewer with a share can also re-share.
+  * **Decided 2026-10-09 (owner):** recordings live in the hub install directory,
+  `<install>\data\<owner email>\recordings\<id>.webm` (`app.RECORDINGS_ROOT`,
+  overridable with `HUB_RECORDINGS_DIR`); a group share **follows the group's membership** as it
+  changes (checked against the viewer's groups on every request, like a device group in rules);
+  **no re-sharing** -- only the owner shares or deletes.
+  **How it was built, and what was rejected:**
+  * **The browser records, not the agent.** A MediaRecorder on the viewer's own stream (the
+    WebRTC MediaStream, or the hub relay's canvas) uploads webm chunks in order, as `PUT`s so
+    the CSRF token still applies without joining `CSRF_UPLOAD_ENDPOINTS`. *Rejected:* recording
+    on the agent, which is a second encoder on a PC already encoding the stream and a second
+    upload path for a picture the console already holds.
+  * **The badge gates the video.** Start puts a `record` signal on the session's existing
+    signaling channel; the helper raises the badge and answers `recording` with what it did.
+    The hub stores nothing until that answer is `shown`. An agent older than 3.43.0 never
+    answers, so its recording fails after about 25 s instead of running unannounced -- the
+    hub gates on the answer, not on a `MIN_*` version constant.
+  * **One window per desktop.** A thread that owns a window can never move desktops, so each
+    desktop the session reaches (Default, Winlogon) gets its own badge window on its own
+    thread. A desktop it cannot be put on is reported, and the hub ends the recording.
+  * **It ends with the helper.** A new helper's offer means the old badge is gone, so it ends
+    every live recording of the session (`helper_restarted`). Session end, the TTL sweep, the
+    deadline and an unconfirmed badge each end one too (`recordings.reconcile`).
+  * **One stream per recording.** A switch to the hub relay ends the recording
+    (`stream_changed`) rather than splicing a second webm header into the file.
+  * **Locked like `.env`.** `envfile.protect_directory` restricts the `data` folder to SYSTEM,
+    Administrators and the hub's own account at every start, with inheritable entries so each
+    new recording is born private. *Rejected:* a BLOB column -- every database backup would
+    copy every recording.
+  * **Gates.** Making one: `remote_control` + scope, and only the operator who opened the
+    session. Watching one: owner or share, nothing else -- a shared recording is watchable by
+    someone who cannot remote into that PC, which is the point of sharing it. Unknown, not
+    yours and not shared all answer 404. The assistant is denied every recording route: the
+    video is bytes of somebody's screen, and the list's reasons routinely name people.
+  * **Not done:** a superuser or admin override to see or delete other people's recordings
+    (the owner said recordings belong to their owner; an operator who leaves keeps their
+    recordings until someone with disk access removes them); seeking in long recordings is
+    limited, because a MediaRecorder webm carries no cue index.
+  * **Watching is audited too**, which goes one step past the decision (downloads audited).
+    Review found the video route serves the same bytes with or without `?download=1`, so
+    auditing only the Download button audited the button, not the copy. Every access now
+    writes `recording_view`, once per viewer per recording per 30 minutes so a player's
+    range requests are one row; `?download=1` still writes `recording_download` every time.
+  * **Later, with agent 3.43.0:** a `MIN_RECORDING_AGENT` constant would hide **Record** for
+    older agents instead of letting them fail after the badge timeout (review suggestion).
 
 ### BitLocker key escrow · hub 1.131.0 · `bitlocker.py` / `bitlocker_web.py`
 
@@ -6322,8 +6378,9 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     useful thing on this list. Pulled ahead of #16–#18 because it needed none of them and
     because a fleet with no escrowed keys is losing machines today rather than later. Shadow-AI
     detection now has a real prerequisite that did not exist when this was written — #25 phase
-    B's Windows software inventory — and remote session recording is still the one with a
-    question attached rather than a cost.
+    B's Windows software inventory — and remote session recording, the one that had a
+    question attached rather than a cost, was decided by the owner and built (hub 1.142.0 +
+    agent 3.43.0).
 20. ~~**#20 Self-healing watchdogs**~~ — done, hub 1.127.0, with the agent half carried
     by the 3.37.1 re-cut of 2026-09-23 rather than by 3.37.0, whose release notes predate it.
     Sequenced last on the belief that it needed the rules engine to grow a second evaluation

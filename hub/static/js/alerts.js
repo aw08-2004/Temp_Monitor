@@ -49,8 +49,13 @@ async function mergeAlert(survivor, victims, cardEl, btnEl) {
     // One whole sentence per plural form rather than a phrase spliced into the middle of
     // another: "merge X into it" and "merge N machines into it" inflect differently in the
     // languages this ships in, and a translator cannot fix a sentence built by `+`.
-    if (!window.confirm(tPlural('alerts.duplicate.confirm', victims.length,
-        { survivor, victim: victims[0] }))) {
+    if (!await confirmDialog({
+        title: t('alerts.duplicate.confirm_title'),
+        message: tPlural('alerts.duplicate.confirm', victims.length,
+                         { survivor, victim: victims[0] }),
+        confirmLabel: t('alerts.duplicate.merge'),
+        danger: true,
+    })) {
         return;
     }
     btnEl.disabled = true;
@@ -69,7 +74,7 @@ async function mergeAlert(survivor, victims, cardEl, btnEl) {
     } catch (e) {
         btnEl.disabled = false;
         btnEl.textContent = t('alerts.duplicate.merge');
-        window.alert(t('alerts.duplicate.merge_failed', { error: e.message }));
+        toast(t('alerts.duplicate.merge_failed', { error: e.message }), { kind: 'error' });
     }
 }
 
@@ -94,7 +99,7 @@ async function dismissAlert(alertId, cardEl, btnEl) {
         loadAlerts();
     } catch (e) {
         btnEl.disabled = false;
-        window.alert(t('alerts.dismiss_failed', { error: e.message }));
+        toast(t('alerts.dismiss_failed', { error: e.message }), { kind: 'error' });
     }
 }
 
@@ -388,7 +393,7 @@ function renderDuplicateSerial(alert) {
     mergeBtn.textContent = t('alerts.duplicate.merge');
     mergeBtn.addEventListener('click', () => {
         const chosen = card.querySelector(`input[name="${radioName}"]:checked`);
-        if (!chosen) { window.alert(t('alerts.duplicate.pick_first')); return; }
+        if (!chosen) { toast(t('alerts.duplicate.pick_first')); return; }
         const survivor = chosen.value;
         const victims = machines.map((m) => m.machine).filter((name) => name !== survivor);
         mergeAlert(survivor, victims, card, mergeBtn);

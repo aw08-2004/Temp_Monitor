@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.recordings') }} - FleetHub{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('recordings.heading') }}</h1>
+
+{# Session recordings (roadmap #19). Two lists and nothing else, because a recording is only
+   ever one of two things to whoever is looking: theirs, or shared with them. Theirs can be
+   shared and deleted; a shared one can only be watched and downloaded, since the owner decided
+   there is no re-sharing (recordings.py). #}
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('recordings.intro') }}</p>
+
+<div class="card" style="margin-bottom: var(--space-5);">
+    <div class="toolbar" style="margin-bottom: var(--space-3);">
+        <h2 class="section-title" style="margin-bottom: 0;">{{ t('recordings.mine') }}</h2>
+        {# Kept until deleted, by the owner's decision, so the total is what tells them when
+           to delete some. #}
+        <span class="stat-card__meta" id="recordings-usage"></span>
+    </div>
+    <div class="table-scroll">
+        <table class="data-table" id="recordings-mine">
+            <thead>
+                <tr>
+                    <th>{{ t('recordings.col.started') }}</th>
+                    <th>{{ t('recordings.col.machine') }}</th>
+                    <th>{{ t('recordings.col.duration') }}</th>
+                    <th>{{ t('recordings.col.size') }}</th>
+                    <th>{{ t('recordings.col.reason') }}</th>
+                    <th>{{ t('recordings.col.status') }}</th>
+                    <th>{{ t('recordings.col.shared') }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="recordings-mine-empty" hidden>{{ t('recordings.empty_mine') }}</p>
+</div>
+
+<div class="card">
+    <h2 class="section-title">{{ t('recordings.shared') }}</h2>
+    <div class="table-scroll">
+        <table class="data-table" id="recordings-shared">
+            <thead>
+                <tr>
+                    <th>{{ t('recordings.col.started') }}</th>
+                    <th>{{ t('recordings.col.machine') }}</th>
+                    <th>{{ t('recordings.col.owner') }}</th>
+                    <th>{{ t('recordings.col.duration') }}</th>
+                    <th>{{ t('recordings.col.reason') }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="recordings-shared-empty" hidden>{{ t('recordings.empty_shared') }}</p>
+</div>
+<p class="setting__error" id="recordings-error" hidden></p>
+
+<dialog class="modal recordings-player" id="recordings-player" aria-labelledby="recordings-player-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="recordings-player-title">{{ t('recordings.heading') }}</h2>
+    </div>
+    <div class="modal__body">
+        <video id="recordings-video" controls preload="metadata" style="width: 100%; background: #000;"></video>
+        <p class="stat-card__meta" id="recordings-player-reason"></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" class="btn btn--primary" id="recordings-player-close">{{ t('common.close') }}</button>
+    </div>
+</dialog>
+
+{# Groups and people on one recording, or both. A group share follows the group: whoever is a
+   member when they open it may watch, so nothing here needs updating as people join or
+   leave. #}
+<dialog class="modal" id="recordings-share" aria-labelledby="recordings-share-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="recordings-share-title">{{ t('recordings.share_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p class="stat-card__meta">{{ t('recordings.share_help') }}</p>
+        <div class="setting__label" style="margin-top: var(--space-4);">{{ t('recordings.share_groups') }}</div>
+        <div id="recordings-share-groups" class="recordings-share-groups"></div>
+        <label class="setting__label" for="recordings-share-users" style="margin-top: var(--space-4);">{{ t('recordings.share_users') }}</label>
+        <textarea class="input" id="recordings-share-users" rows="3" style="width: 100%;"
+                  placeholder="{{ t('recordings.share_users_placeholder') }}"></textarea>
+        <p class="setting__error" id="recordings-share-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" class="btn btn--ghost" id="recordings-share-cancel">{{ t('common.cancel') }}</button>
+        <button type="button" class="btn btn--primary" id="recordings-share-save">{{ t('common.save') }}</button>
+    </div>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/recordings.js') }}"></script>
+{% endblock %}

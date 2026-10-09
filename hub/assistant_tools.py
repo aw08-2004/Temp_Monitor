@@ -69,6 +69,14 @@ DENIED_PREFIXES = (
     "/api/fleet/pty",
     # Live remote-control signalling is a browser's WebRTC handshake, not an API call.
     "/api/remote/session/",
+    # Session recordings (roadmap #19). Making one is a browser's MediaRecorder, not a call;
+    # one recording's routes hand out video of somebody's screen (bytes with no business in a
+    # prompt) or decide who else may watch it, which the owner decided is theirs to decide.
+    # The prefix also covers the bare list, /api/recordings, and that is kept on purpose: its
+    # rows carry each recording's reason, which routinely names the person whose screen it
+    # is, and none of it needs to reach an AI provider.
+    "/api/remote/recordings/",
+    "/api/recordings/",
     # Push registration only works from a device token anyway.
     "/api/push/",
 )
@@ -85,6 +93,7 @@ DENIED_ROUTES = {
     ("GET", "/api/machines/<machine>/files/transfers/<transfer_id>/content"),
     ("GET", "/api/provisioning/apk"),
     ("GET", "/api/remote/virtual-display/payload"),
+    ("POST", "/api/remote/<machine>/recordings"),
     # The provisioning QR carries the enrollment secret.
     ("GET", "/api/provisioning/qr"),
     ("POST", "/api/bitlocker/<machine>/reveal"),

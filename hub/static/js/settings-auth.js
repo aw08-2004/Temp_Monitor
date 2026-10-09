@@ -173,7 +173,11 @@
                 note.textContent = t('settings.signin.no_provider_left');
                 return;
             }
-            if (!window.confirm(t('settings.signin.confirm'))) return;
+            if (!await confirmDialog({
+                title: t('settings.signin.confirm_title'),
+                message: t('settings.signin.confirm'),
+                confirmLabel: t('settings.signin.confirm_ok'),
+            })) return;
 
             button.disabled = true;
             note.className = 'setting__help';

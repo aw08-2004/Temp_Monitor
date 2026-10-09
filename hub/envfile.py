@@ -54,6 +54,82 @@ def protect(env_path):
     Fails soft -- a hub that cannot re-ACL its own config must still start, or this turns an
     exposure into an outage. The caller logs what comes back.
     """
+    return _restrict(env_path, container=False)
+
+
+def protect_directory(path):
+    """protect(), for a DIRECTORY whose contents must be as private as `.env` is.
+
+    Written for the session recordings (roadmap #19), which are video of people's screens and
+    live under STATE_ROOT for the same reason `.env` does -- so they inherit the same
+    `BUILTIN\\Users` read grant from C:\\Program Files. The only difference from a file is
+    that the allowed entries carry OBJECT_INHERIT | CONTAINER_INHERIT, so every recording
+    written into the folder later is born private rather than needing its own call.
+    """
+    return _restrict(path, container=True)
+
+
+# OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE: files and subfolders created later inherit it.
+_OBJECT_AND_CONTAINER_INHERIT = 0x1 | 0x2
+
+
+def _wanted_sids(win32api, win32security, ntsecuritycon):
+    """SYSTEM and Administrators...
+
+    ...plus whoever this process is, which is NOT redundant and is load-bearing.
+
+    In production it is: the hub runs as LocalSystem, so this adds nothing. In a dev checkout
+    it is the developer, and without it protect() locks the person running the hub out of the
+    .env they are editing -- an unprivileged account cannot even read the ACL back to undo it,
+    so recovery needs an elevated shell. The security property being bought here is "not
+    readable by EVERY local user", and keeping the running account's own access costs none
+    of it."""
+    wanted = [win32security.ConvertStringSidToSid(s)
+              for s in (_SYSTEM_SID, _ADMINISTRATORS_SID)]
+    token = win32security.OpenProcessToken(
+        win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+    try:
+        me = win32security.GetTokenInformation(token, ntsecuritycon.TokenUser)[0]
+    finally:
+        win32api.CloseHandle(token)
+    if not any(me == w for w in wanted):
+        wanted.append(me)
+    return wanted
+
+
+def _already_restricted(sd, wanted):
+    """Already exactly right: inheritance broken, and every ACE belongs to one of the
+    principals allowed to read this. Checked rather than blindly rewritten so the common path
+    neither churns the ACL nor logs on every restart."""
+    control, _revision = sd.GetSecurityDescriptorControl()
+    dacl = sd.GetSecurityDescriptorDacl()
+    if not control & _SE_DACL_PROTECTED or dacl is None:
+        return False
+    for i in range(dacl.GetAceCount()):
+        (_ace_type, ace_flags), _mask, sid = dacl.GetAce(i)
+        if ace_flags & _INHERITED_ACE or not any(sid == w for w in wanted):
+            return False
+    return True
+
+
+def _replacement_acl(win32security, ntsecuritycon, wanted, container):
+    """Full access for exactly `wanted`. A directory's entries are inheritable, so every file
+    created in it later is born with the same ACL."""
+    replacement = win32security.ACL()
+    for sid in wanted:
+        if container:
+            replacement.AddAccessAllowedAceEx(
+                win32security.ACL_REVISION_DS, _OBJECT_AND_CONTAINER_INHERIT,
+                ntsecuritycon.FILE_ALL_ACCESS, sid)
+        else:
+            replacement.AddAccessAllowedAce(
+                win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
+    return replacement
+
+
+def _restrict(env_path, container):
+    """protect() and protect_directory(), split into the three helpers above so each says one
+    thing; as one function it was over the PR's complexity limit."""
     if sys.platform != "win32" or not env_path or not os.path.exists(env_path):
         return None
     try:
@@ -64,60 +140,22 @@ def protect(env_path):
         return f"Could not restrict permissions on {env_path}: pywin32 is not installed."
 
     try:
-        wanted = [win32security.ConvertStringSidToSid(s)
-                  for s in (_SYSTEM_SID, _ADMINISTRATORS_SID)]
-
-        # ...plus whoever this process is, which is NOT redundant and is load-bearing.
-        #
-        # In production it is: the hub runs as LocalSystem, so this adds nothing. In a dev
-        # checkout it is the developer, and without it protect() locks the person running
-        # the hub out of the .env they are editing -- an unprivileged account cannot even
-        # read the ACL back to undo it, so recovery needs an elevated shell. The security
-        # property being bought here is "not readable by EVERY local user", and keeping the
-        # running account's own access costs none of it.
-        token = win32security.OpenProcessToken(
-            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
-        try:
-            me = win32security.GetTokenInformation(token, ntsecuritycon.TokenUser)[0]
-        finally:
-            win32api.CloseHandle(token)
-        if not any(me == w for w in wanted):
-            wanted.append(me)
-
+        wanted = _wanted_sids(win32api, win32security, ntsecuritycon)
         # The Named variants throughout, NOT Get/SetFileSecurity: the legacy pair predates
         # auto-inheritance and does not maintain its control bits. SetFileSecurity with
         # PROTECTED_DACL_SECURITY_INFORMATION does strip the inherited ACEs, but leaves
         # SE_DACL_PROTECTED clear -- so the Users read grant returns the next time Windows
-        # recomputes inheritance, and the check below can never see a settled state.
+        # recomputes inheritance, and the check above can never see a settled state.
         obj = win32security.SE_FILE_OBJECT
         info = win32security.DACL_SECURITY_INFORMATION
-        sd = win32security.GetNamedSecurityInfo(env_path, obj, info)
-        control, _revision = sd.GetSecurityDescriptorControl()
-        dacl = sd.GetSecurityDescriptorDacl()
-
-        # Already exactly right: inheritance broken, and every ACE belongs to one of the two
-        # principals allowed to read this. Checked rather than blindly rewritten so the
-        # common path neither churns the ACL nor logs on every restart.
-        if control & _SE_DACL_PROTECTED and dacl is not None:
-            extra = False
-            for i in range(dacl.GetAceCount()):
-                (_ace_type, ace_flags), _mask, sid = dacl.GetAce(i)
-                if ace_flags & _INHERITED_ACE or not any(sid == w for w in wanted):
-                    extra = True
-                    break
-            if not extra:
-                return None
-
-        replacement = win32security.ACL()
-        for sid in wanted:
-            replacement.AddAccessAllowedAce(
-                win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
+        if _already_restricted(win32security.GetNamedSecurityInfo(env_path, obj, info), wanted):
+            return None
         # PROTECTED_DACL_SECURITY_INFORMATION is what drops the inherited ACEs and keeps them
         # dropped. Without it the Users read grant comes straight back and this achieves
         # nothing.
         win32security.SetNamedSecurityInfo(
             env_path, obj, info | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
-            None, None, replacement, None)
+            None, None, _replacement_acl(win32security, ntsecuritycon, wanted, container), None)
         return (f"Restricted {env_path} to SYSTEM, Administrators and this hub's own "
                 f"account (it was readable by every local user on this machine).")
     except Exception as e:

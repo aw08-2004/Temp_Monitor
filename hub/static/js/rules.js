@@ -159,7 +159,12 @@ async function loadRules() {
             const remove = el('button', 'btn btn--ghost', t('rules.delete'));
             remove.type = 'button';
             remove.addEventListener('click', async () => {
-                if (!window.confirm(t('rules.confirm_delete'))) return;
+                if (!await confirmDialog({
+                    title: t('rules.confirm_delete_title'),
+                    message: t('rules.confirm_delete'),
+                    confirmLabel: t('rules.delete'),
+                    danger: true,
+                })) return;
                 await api(`/api/rules/${rule.id}`, { method: 'DELETE' });
                 loadRules();
             });
@@ -774,14 +779,29 @@ function messageEditor(action) {
     const presets = catalog.button_presets || {};
     const preset = el('select', 'input');
     Object.keys(presets).forEach((name) => preset.appendChild(opt(name, presets[name].label)));
-    preset.value = action.params.preset || 'yes_no_later';
+    // A saved message comes back with `buttons` and no `preset` -- the server expands the
+    // preset and keeps only the result -- so the preset is recovered from the button ids.
+    // Without this, every reopened message claimed to be Yes / No / Later whatever it was.
+    const savedIds = (action.params.buttons || []).map((b) => b.id).join(',');
+    const recognised = savedIds
+        && Object.keys(presets).find((name) => presets[name].buttons.join(',') === savedIds);
+    preset.value = action.params.preset || recognised || 'yes_no_later';
     action.params.preset = preset.value;
     // `params.buttons` used to be deleted on every render, which destroyed hand-authored
-    // button labels merely by OPENING the rule. It is left alone now: the preset is what this
-    // editor edits, and the server expands it (_validate_buttons prefers `buttons` when both
-    // are present, so a rule built by hand keeps its labels).
+    // button labels merely by OPENING the rule. It is left alone on render now, and dropped
+    // only when the operator picks a different preset -- that choice is the operator replacing
+    // the buttons. Kept, it silently won: _validate_buttons prefers `buttons` over `preset`,
+    // so the saved set survived every change made here. Follow-ups for an answer the new set
+    // cannot produce go too: their rows vanish from this editor, and left in the rule they
+    // would refuse the save with no row on screen to remove them from.
     preset.addEventListener('change', () => {
         action.params.preset = preset.value;
+        delete action.params.buttons;
+        const kept = new Set((presets[preset.value]?.buttons || [])
+            .concat((catalog.outcomes || []).map((o) => o.name)));
+        Object.keys(action.on_response || {}).forEach((outcome) => {
+            if (!kept.has(outcome)) delete action.on_response[outcome];
+        });
         renderActions();
     });
     const presetLabel = el('label', 'stat-card__meta', t('rules.message_buttons') + ' ');
@@ -795,7 +815,11 @@ function messageEditor(action) {
     // presses. `failed` is what the agent reports when the dialog could not be put on the
     // desktop at all -- the one outcome meaning "they never saw it" -- and it used to be the
     // one outcome a rule could not react to.
-    const buttons = (presets[preset.value] || {}).buttons || ['ok'];
+    // The buttons the message will really have: a kept hand-built set when there is one (its
+    // ids need not match any preset), else the preset's.
+    const buttons = action.params.buttons
+        ? action.params.buttons.map((b) => b.id)
+        : presets[preset.value]?.buttons || ['ok'];
     const outcomes = buttons.concat((catalog.outcomes || []).map((o) => o.name));
     const outcomeLabel = new Map((catalog.outcomes || []).map((o) => [o.name, o.label]));
 
@@ -1133,13 +1157,18 @@ async function saveScript() {
 }
 
 async function deleteScript(name) {
-    if (!window.confirm(t('scripts.confirm_delete'))) return;
+    if (!await confirmDialog({
+        title: t('scripts.confirm_delete_title'),
+        message: t('scripts.confirm_delete'),
+        confirmLabel: t('common.delete'),
+        danger: true,
+    })) return;
     try {
         await api('/api/rules/scripts/' + encodeURIComponent(name), { method: 'DELETE' });
         await reloadScripts();
     } catch (e) {
         // The 409 body names the rules using it, which is the whole point of refusing.
-        window.alert(t('scripts.delete_failed', { error: e.message }));
+        toast(t('scripts.delete_failed', { error: e.message }), { kind: 'error' });
     }
 }
 

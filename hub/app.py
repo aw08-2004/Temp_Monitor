@@ -39,6 +39,7 @@ import invites_web
 import packages
 import backups
 import remote
+import recordings
 import directory
 import bios
 import bitlocker
@@ -87,6 +88,7 @@ from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
+from recordings_web import create_recordings_blueprint
 from bios_web import create_bios_blueprint
 import bitlocker_web
 from bitlocker_web import create_bitlocker_blueprint
@@ -155,7 +157,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.141.0"
+HUB_VERSION = "1.142.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -199,6 +201,14 @@ FILE_SPOOL_DIR = os.path.join(LOG_DIR, "filespool")
 # the main database rather than in it. A system drive's history is millions of rows, and the
 # main database is the file every backup copies and every query shares. See disk_history.py.
 DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
+# Session recordings (roadmap #19): <root>/<owner>/recordings/<id>.webm. In the install root
+# rather than beside the database, because the owner asked for them there and because that is
+# where they belong: they are operator data, kept until somebody deletes them, not working
+# state the hub could rebuild. Overridable for the test suite, which must never write into a
+# checkout. Locked down like .env at startup (envfile.protect_directory) -- they are video of
+# people's screens, under a directory every local user can read by default.
+RECORDINGS_ROOT = os.path.abspath(
+    os.environ.get("HUB_RECORDINGS_DIR") or os.path.join(STATE_ROOT, "data"))
 # Daily CSV archives are retired -- the DB is the single source of truth now.
 # Existing CSV files on disk are left untouched; we just stop writing new ones.
 WRITE_CSV_ARCHIVE = False
@@ -2517,6 +2527,11 @@ app.register_blueprint(create_backups_blueprint(
 # facing session control (remote_control capability + machine scope). Same login_required and
 # access seam as every other blueprint.
 app.register_blueprint(create_remote_blueprint(DB_PATH, login_required, access, env_path=ENV_PATH))
+# Session recordings (roadmap #19): recording a session's picture from the viewer, and the
+# library of recordings each operator owns or has been shared. See recordings_web.py for why
+# making one and watching one sit behind different gates.
+app.register_blueprint(create_recordings_blueprint(DB_PATH, login_required, access,
+                                                   RECORDINGS_ROOT))
 
 # Active Directory sync (roadmap #4): status, the OU list the group scope picker uses,
 # and a synchronous "sync now". Same login_required + access seam as everything above.
@@ -4505,6 +4520,13 @@ def sweep_worker():
             remote.expire_sessions(DB_PATH)
         except Exception as e:
             print(f"[remote] Session expiry sweep failed: {e}")
+        # Recordings whose session just expired, whose badge was never confirmed, or whose
+        # deadline passed with no browser left to say so (roadmap #19). The console also
+        # reconciles on every read; this is for the recording nobody is looking at.
+        try:
+            recordings.reconcile(DB_PATH, lambda sid: remote.is_session_live(DB_PATH, sid))
+        except Exception as e:
+            print(f"[recordings] Recording sweep failed: {e}")
         # Interactive terminals ride the same sweep, and here the hub is the AUTHORITY
         # rather than a backstop: a session deliberately survives its operator navigating
         # away, so only the hub can tell "gone to Packages for ten minutes" from "closed
@@ -4968,6 +4990,11 @@ invites.init_invites_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
+recordings.init_recordings_db(DB_PATH)
+os.makedirs(RECORDINGS_ROOT, exist_ok=True)
+_recordings_acl_note = envfile.protect_directory(RECORDINGS_ROOT)
+if _recordings_acl_note:
+    print(f"[recordings] {_recordings_acl_note}")
 bios.init_bios_db(DB_PATH)
 bitlocker.init_bitlocker_db(DB_PATH)
 firmware.init_firmware_db(DB_PATH)
@@ -6548,7 +6575,7 @@ def inject_nav_context():
     # the language separately is how a page ends up with a Spanish sidebar and an English
     # heading. Bound to this request's language, so templates just call t('nav.alerts').
     context = {"open_alert_count": 0, "user_capabilities": set(),
-               "is_superuser": False, "cap": permissions,
+               "is_superuser": False, "cap": permissions, "show_recordings": False,
                "hub_version": HUB_VERSION,
                "shell_mode": _shell_mode(),
                "latest_agent_version": get_latest_agent_version(),
@@ -6572,6 +6599,13 @@ def inject_nav_context():
         context["user_capabilities"] = current["capabilities"]
         context["is_superuser"] = current["superuser"]
         context["open_alert_count"] = _scoped_open_alert_count()
+        # The Recordings link is for anyone who can make one, AND for someone who cannot
+        # but has been shared one -- a helpdesk lead watching a recording a technician made
+        # need not be able to remote into the PC themselves (roadmap #19).
+        context["show_recordings"] = (
+            permissions.REMOTE_CONTROL in current["capabilities"]
+            or recordings.has_shared_with(DB_PATH, current.get("email"),
+                                          [g["id"] for g in current.get("groups") or []]))
     except Exception:
         pass
     return context

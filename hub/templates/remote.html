@@ -67,6 +67,10 @@
 {# remote-relay.js before remote.js: it is the hub-relay fallback a viewer switches to when
    WebRTC cannot connect, and remote.js only offers it where window.RemoteRelay exists. #}
 <script src="{{ url_for('static', filename='js/remote-relay.js') }}"></script>
+{# remote-recorder.js before remote.js for the same reason: a viewer offers Record only where
+   window.RemoteRecorder exists, so Sharing (whose machines are borrowed and never
+   recorded) simply does not load it. Roadmap #19. #}
+<script src="{{ url_for('static', filename='js/remote-recorder.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote-workspace.js') }}"></script>
 {% endblock %}

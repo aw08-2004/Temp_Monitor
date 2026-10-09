@@ -125,7 +125,7 @@
             await post('/api/patches/approvals', { uid, decision, title });
             await load();
         } catch (e) {
-            window.alert(e.message);
+            toast(e.message, { kind: 'error' });
         }
     }
 
@@ -257,12 +257,16 @@
                 const remove = el('button', 'btn', t('common.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', async () => {
-                    if (!window.confirm(t('patches.window.confirm_delete',
-                                          { name: win.name }))) return;
+                    if (!await confirmDialog({
+                        title: t('patches.window.confirm_delete_title'),
+                        message: t('patches.window.confirm_delete', { name: win.name }),
+                        confirmLabel: t('common.delete'),
+                        danger: true,
+                    })) return;
                     try {
                         await api(`/api/patches/windows/${win.id}`, { method: 'DELETE' });
                         await renderWindows();
-                    } catch (e) { window.alert(e.message); }
+                    } catch (e) { toast(e.message, { kind: 'error' }); }
                 });
                 cell.append(edit, remove);
                 tr.append(cell);
@@ -361,7 +365,9 @@
             windowModal.close();
             await renderWindows();
         } catch (e) {
-            window.alert(e.message);
+            // A dialog over the editor, not a toast: the editor is still open in the top
+            // layer, and a toast would be painted behind it.
+            void noticeDialog({ message: e.message, kind: 'error' });
         }
     }
 
@@ -419,10 +425,11 @@
                             // "cancelled" and "cancelled 8 of 10" are different facts --
                             // machines already restarting are not recalled, because the
                             // patches are on them. Say which happened.
-                            window.alert(t('patches.run.cancelled',
-                                           { recalled: res.recalled }));
+                            void noticeDialog({ title: t('patches.run.cancelled_title'),
+                                           message: t('patches.run.cancelled',
+                                                      { recalled: res.recalled }) });
                             await renderRuns();
-                        } catch (e) { window.alert(e.message); }
+                        } catch (e) { toast(e.message, { kind: 'error' }); }
                     });
                     cell.append(cancel);
                 }
@@ -432,7 +439,7 @@
                     try {
                         await post(`/api/patches/runs/${run.id}/retry`);
                         await renderRuns();
-                    } catch (e) { window.alert(e.message); }
+                    } catch (e) { toast(e.message, { kind: 'error' }); }
                 });
                 cell.append(retry);
                 tr.append(cell);
@@ -469,13 +476,17 @@
             .split('\n').map((s) => s.trim()).filter(Boolean);
         const emergency = document.getElementById('run-emergency').checked;
         if (!machines.length) {
-            window.alert(t('patches.run.pick_machines'));
+            void noticeDialog({ message: t('patches.run.pick_machines') });
             return;
         }
         // An emergency run ignores every maintenance window, which means it restarts these
         // machines now. Naming the count is the point of the confirmation.
-        if (emergency && !window.confirm(
-                t('patches.run.confirm_emergency', { count: machines.length }))) {
+        if (emergency && !await confirmDialog({
+            title: t('patches.run.confirm_emergency_title'),
+            message: t('patches.run.confirm_emergency', { count: machines.length }),
+            confirmLabel: t('patches.run.confirm_emergency_ok'),
+            danger: true,
+        })) {
             return;
         }
         try {
@@ -488,7 +499,7 @@
             runModal.close();
             await renderRuns();
         } catch (e) {
-            window.alert(e.message);
+            void noticeDialog({ message: e.message, kind: 'error' });
         }
     }
 

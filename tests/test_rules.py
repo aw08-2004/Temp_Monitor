@@ -702,6 +702,22 @@ check("interactive message validates", err is None)
 check("preset expands to three buttons",
       err is None and [b["id"] for b in clean[0]["params"]["buttons"]] == ["yes", "no", "later"])
 
+# The "now or later" pairs. Each must expand to exactly its two buttons, and the answer it
+# deliberately leaves out must be refused as a route -- a Yes / Later message with a "no"
+# branch would look configured and never fire.
+for name, ids, absent in (("yes_later", ["yes", "later"], "no"),
+                          ("no_later", ["no", "later"], "yes"),
+                          ("ok_later", ["ok", "later"], "no")):
+    pair = copy.deepcopy(MESSAGE)
+    pair["params"]["preset"] = name
+    pair["on_response"] = {"later": [{"type": "snooze", "params": {"seconds": 14400}}]}
+    err, clean = val_actions([pair])
+    check(f"{name} expands to {ids}",
+          err is None and [b["id"] for b in clean[0]["params"]["buttons"]] == ids)
+    pair["on_response"][absent] = [{"type": "snooze", "params": {"seconds": 600}}]
+    err, _ = val_actions([pair])
+    check(f"{name} refuses a route for '{absent}'", err is not None)
+
 bad = copy.deepcopy(MESSAGE)
 bad["on_response"]["Yes"] = bad["on_response"].pop("yes")
 err, _ = val_actions([bad])

@@ -47,6 +47,7 @@
        there. It never hides the page you are on: common.js opens it whenever one of its
        links is active. #}
     {% set has_operate = cap.VIEW in user_capabilities or cap.REMOTE_CONTROL in user_capabilities
+                         or show_recordings
                          or cap.DEPLOY_PACKAGES in user_capabilities
                          or cap.MANAGE_BACKUPS in user_capabilities or cap.MANAGE_FIRMWARE in user_capabilities %}
     {% set has_admin = cap.VIEW in user_capabilities or cap.VIEW_AUDIT_LOG in user_capabilities
@@ -112,6 +113,15 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'remote_page' else '' }}" data-nav-prefix="/remote" href="{{ url_for('remote_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 20h10"/><path d="M11 14v6"/><rect x="17" y="10" width="5" height="10" rx="1.5"/></svg>
             <span class="sidebar__link-label">{{ t('nav.remote') }}</span>
+        </a>
+        {% endif %}
+        {# Shown to whoever can record AND to whoever has been shared a recording without being
+           able to make one (app.inject_nav_context). The page itself is gated per recording,
+           not by a capability; see recordings_web.py. #}
+        {% if show_recordings %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'recordings.recordings_page' else '' }}" data-nav-prefix="/recordings" href="{{ url_for('recordings.recordings_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3"/><circle cx="9" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.recordings') }}</span>
         </a>
         {% endif %}
         {% if cap.DEPLOY_PACKAGES in user_capabilities %}

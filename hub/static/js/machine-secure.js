@@ -151,9 +151,15 @@
     async function wipe() {
         if (!confirmed()) return;
         // A second, plain confirmation on top of the typed name. Redundant on purpose: this is
-        // the last moment before a device stops existing, and the browser's own dialog is the
-        // one thing on the page that cannot be clicked through by accident.
-        if (!window.confirm(t('secure.confirm_dialog', { machine: machine }))) return;
+        // the last moment before a device stops existing, and a modal is the one thing on the
+        // page that cannot be clicked through by accident -- confirmDialog's danger mode puts
+        // the focus on Cancel, so not even a stray Enter gets past it.
+        if (!await confirmDialog({
+            title: t('secure.confirm_dialog_title'),
+            message: t('secure.confirm_dialog', { machine: machine }),
+            confirmLabel: t('secure.wipe'),
+            danger: true,
+        })) return;
 
         const data = await post(`/api/wipe/machines/${encodeURIComponent(machine)}/wipe`, {
             confirm: confirmEl.value,

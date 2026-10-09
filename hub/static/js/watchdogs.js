@@ -143,19 +143,24 @@
                         await api('/api/watchdogs/' + row.id + '/enabled',
                                   json('PUT', { enabled: !row.enabled }));
                         await load();
-                    } catch (e) { window.alert(e.message); }
+                    } catch (e) { toast(e.message, { kind: 'error' }); }
                 });
                 actions.appendChild(toggle);
 
                 var remove = el('button', 'btn btn--ghost', t('watchdogs.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', async function () {
-                    if (!window.confirm(t('watchdogs.delete_confirm', { name: row.name }))) return;
+                    if (!await confirmDialog({
+                        title: t('watchdogs.delete_confirm_title'),
+                        message: t('watchdogs.delete_confirm', { name: row.name }),
+                        confirmLabel: t('watchdogs.delete'),
+                        danger: true,
+                    })) return;
                     try {
                         await api('/api/watchdogs/' + row.id, { method: 'DELETE' });
                         if (openStateFor === row.id) { statePanel.hidden = true; openStateFor = null; }
                         await load();
-                    } catch (e) { window.alert(e.message); }
+                    } catch (e) { toast(e.message, { kind: 'error' }); }
                 });
                 actions.appendChild(remove);
             }

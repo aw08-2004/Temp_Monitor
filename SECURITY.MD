@@ -59,6 +59,7 @@ inventoried separately here so that nobody has to infer it from a feature list.
 | **Installed applications** — package name, label, version, and whether each is enabled or suspended | Managed Android devices, on the inventory loop | Writing an app policy at all: blocking an app means naming a package, and nobody types `com.zhiliaoapp.musically` from memory. Also how a partly-applied policy becomes visible | `machine_apps` in the hub's SQLite database, replaced on each report | Held while the device is enrolled, replaced on each report. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
 | **App usage** — foreground seconds per package, per the device's own local day | Managed Android devices, **only where somebody has granted usage access on the device itself** | Enforcing daily screen-time budgets, and showing an operator why a budget did or did not bite | `machine_usage` in the hub's SQLite database | `data.usage_retention_days`, default **14 days**, then deleted by the retention pruner. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
 | **File and folder names, with their sizes, over time**: the full path of every folder and file on each fixed NTFS drive, including other users' profiles | Managed Windows PCs with agent 3.40.0 or newer, by a daily read of the drive's file table (roadmap #27). File contents are never read | Showing what is filling a disk and when it will be full, and comparing a folder with an earlier day | One SQLite file per machine and drive under `logs/disk_history/`, outside the main database; the latest two trees also stay on the PC in `%ProgramData%\FleetHub\Agent\diskusage`, readable by SYSTEM and Administrators only | `data.disk_usage_daily_days` (default **90 days**) daily, then weekly until `data.disk_usage_keep_days` (default **365 days**), then folded into one baseline. Deleting a machine erases it immediately | `issue_commands` **plus** the machine being in the operator's scope, the same gate as browsing the machine's files |
+| **Screen recordings** -- video of a Windows PC's screen during a remote session, with the operator's stated reason, who recorded, which PC and for how long. Video only: keystrokes are never recorded | Managed Windows PCs with agent 3.43.0 or newer, **only while an operator records a session they opened**, ten minutes at a time unless extended. The PC shows a "Recording Screen" badge throughout, on the lock and logon screens too, and the hub stores no video until the agent confirms the badge is up (roadmap #19) | Evidence of what was done on a PC, for the audit trail and for colleagues | One `.webm` file per recording under `<install>\data\<owner>\recordings\`, a folder the hub restricts to SYSTEM and Administrators at every start; metadata in `recordings` in the hub's SQLite database | **Until the owner deletes it** -- no expiry, by the owner's decision. The Recordings page shows each owner their total so they know when to delete | The operator who made it, and the permission groups and people they share it with (a group share follows the group's current membership). Only the owner shares or deletes; nobody re-shares. Every start, end, extension, share, download and delete is audited, and so is every access to the video (`recording_view`, once per viewer per recording per half hour) |
 
 Four properties of that row are deliberate and worth stating plainly:
 
@@ -104,7 +105,9 @@ and an on-device disclosure — and no more than that.
 location, no browsing history, no message or call content, no contacts,
 no photographs, no keystrokes, and no microphone or camera access of any kind. Screen sharing
 (roadmap #2) exists on Windows and requires a system prompt the person at the machine accepts
-for every session.
+for every session. Screen RECORDING (roadmap #19) is the one exception to "nothing is kept":
+it is video only, it is never silent -- the badge above is on the PC's screen for its whole
+length -- and it is in the table above for that reason.
 
 ## What a managed Android device grants, and what it does not
 
@@ -286,6 +289,10 @@ We take security seriously for:
   by that -- it already holds every agent's bearer token and can start a session on any PC an
   operator has in scope -- but frames are kept in memory only, the switch is audited, it is
   never offered for a machine borrowed from another hub, and `remote.relay_fallback` turns it off.
+- **Session recordings (`hub/recordings.py`, `recordings_web.py`, agent `RecordingBadge.cs`)** --
+  recording without the PC's badge on screen, video readable by anyone but its owner and the
+  people it is shared with, a share changed by anyone but the owner, or the recordings folder
+  readable by local users on the hub server.
 - **Audit Logging** — Tampering, omission, or integrity issues
 
 ### Out of Scope

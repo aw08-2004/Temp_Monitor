@@ -1,4 +1,7 @@
 logs
+# Session recordings (roadmap #19): app.py keeps them in <install>/data, which in a
+# checkout is here. Video of people's screens -- never committed.
+/data/
 .venv
 __pycache__
 .env

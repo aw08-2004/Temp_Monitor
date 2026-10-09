@@ -624,7 +624,7 @@ function showValidationError(message, updates) {
     const target = match || keys[0];
     const slot = document.getElementById(errorId(target));
     if (slot) slot.textContent = message;
-    else window.alert(message);
+    else toast(message, { kind: 'error' });
 }
 
 function clearError(key) {
@@ -645,7 +645,7 @@ async function resetField(key, btn) {
         applySchema(body.settings);
     } catch (e) {
         btn.disabled = false;
-        window.alert(t('settings.reset_failed', { error: e.message }));
+        toast(t('settings.reset_failed', { error: e.message }), { kind: 'error' });
     }
 }
 

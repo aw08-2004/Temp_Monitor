@@ -30,6 +30,11 @@ PAGES = (
      "open and recent alerts, correlated bundles and recommended fixes"),
     ("remote", "/remote", "nav.remote", permissions.REMOTE_CONTROL,
      "remote view and control sessions"),
+    # The sidebar also shows Recordings to someone who has only been SHARED a recording; that
+    # is a per-recording grant this capability list cannot express, so the assistant offers
+    # the page to those who can make one (roadmap #19).
+    ("recordings", "/recordings", "nav.recordings", permissions.REMOTE_CONTROL,
+     "session recordings: your own (share, download, delete) and ones shared with you"),
     ("packages", "/packages", "nav.packages", permissions.DEPLOY_PACKAGES,
      "software packages and deployments"),
     ("patches", "/patches", "nav.patches", permissions.VIEW,

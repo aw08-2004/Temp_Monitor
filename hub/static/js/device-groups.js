@@ -119,7 +119,12 @@
     }
 
     async function removeGroup(group) {
-        if (!window.confirm(t('device_groups.confirm_delete', { name: group.name }))) return;
+        if (!await confirmDialog({
+            title: t('device_groups.confirm_delete_title'),
+            message: t('device_groups.confirm_delete', { name: group.name }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/device-groups/${group.id}`, { method: 'DELETE' });
             load();
